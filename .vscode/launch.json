@@ -4,36 +4,6 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Blender Agent Debug",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.gaia.agents.Blender.app",
-            "args": ["--debug-prompts", "--example", "2"],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "subProcess": true,
-            "stopOnEntry": false,
-        },
-        {
-            "name": "UI Debug",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "src.gaia.interface.widget",
-            "args": [],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "subProcess": true,
-            "stopOnEntry": false,
-        },
-        {
             "name": "Chat Agent Debug - Interactive",
             "type": "debugpy",
             "request": "launch",
@@ -53,8 +23,8 @@
             "name": "Chat Agent Debug - Model Selection",
             "type": "debugpy",
             "request": "launch",
-            "module": "gaia_agent_chat.app",
-            "args": ["--query", "hi"],
+            "module": "gaia.cli",
+            "args": ["chat", "--query", "hi"],
             "cwd": "${workspaceFolder}",
             "env": {
                 "PYTHONPATH": "${workspaceFolder}/src"
@@ -63,7 +33,7 @@
             "justMyCode": false,
             "subProcess": true,
             "stopOnEntry": true,
-            "purpose": ["Stops at entry to set breakpoints", "Use to debug model selection", "Set breakpoint in chat/agent.py line 222 (model_id variable)"]
+            "purpose": ["Stops at entry to set breakpoints", "Use to debug model selection", "Set breakpoint on model_id in hub/agents/gaia/python/gaia_agent/chat_agent.py"]
         },
         {
             "name": "Chat Agent Debug - With Query",
@@ -169,48 +139,6 @@
             "stopOnEntry": false,
         },
         {
-            "name": "Jira App Debug",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "gaia.cli",
-            "args": [
-                "jira",
-                "show me my projects"
-            ],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "subProcess": true,
-            "stopOnEntry": false,
-        },
-        {
-            "name": "GAIA Pytest Debug",
-            "type": "debugpy",
-            "request": "launch",
-            "module": "pytest",
-            "args": [
-                "tests/test_gaia.py",
-                "-v",
-                "-s",
-                "-k",
-                "test_model_sweep[llama3.2:1b-Who"
-            ],
-            "cwd": "${workspaceFolder}",
-            "env": {
-                "PYTHONPATH": "${workspaceFolder}",
-                "PYTEST_DISABLE_BENCHMARK": "1",
-                "PYTHONBREAKPOINT": "debugpy.breakpoint",
-                "PYTHONDEBUG": "1"
-            },
-            "console": "integratedTerminal",
-            "justMyCode": false,
-            "subProcess": true,
-            "stopOnEntry": false
-        },
-        {
             "name": "API Server Debug",
             "type": "debugpy",
             "request": "launch",
@@ -248,21 +176,6 @@
             "type": "cppvsdbg",
             "request": "launch",
             "program": "${workspaceFolder}/cpp/build/Release/wifi_agent.exe",
-            "args": [],
-            "stopAtEntry": false,
-            "cwd": "${workspaceFolder}",
-            "environment": [
-                { "name": "GAIA_CPP_BASE_URL", "value": "${input:gaiaCppBaseUrl}" },
-                { "name": "GAIA_CPP_CTX_SIZE", "value": "32768" }
-            ],
-            "console": "integratedTerminal",
-            "preLaunchTask": "C++: Build"
-        },
-        {
-            "name": "C++ Simple Agent Debug",
-            "type": "cppvsdbg",
-            "request": "launch",
-            "program": "${workspaceFolder}/cpp/build/Release/simple_agent.exe",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

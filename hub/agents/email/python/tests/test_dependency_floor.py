@@ -52,6 +52,7 @@ def test_pyproject_floor_covers_email_runtime_imports():
 def test_email_query_routes_imports_newest_core_symbols():
     """The module-level query route imports are covered by the package floor."""
     import gaia_agent_email.query_routes  # noqa: F401
+
     from gaia.agents.base.history import fit_pushed_history
     from gaia.utils.sqlite_wal import enable_wal
 

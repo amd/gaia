@@ -1,7 +1,7 @@
 # Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# The full RAG retrieval benchmark: FinanceBench, public AMD documents, XQuAD
+# The full RAG retrieval benchmark: public AMD documents, an arXiv paper, XQuAD
 # and Wikipedia distractors, with answer generation and the 10/100/1000-document
 # scale tiers. Too slow for pull requests; the offline `pr` subset gates those
 # from test_rag.yml. This run reports rather than gates: it fails only when the
@@ -25,7 +25,7 @@ on:
         required: false
         default: 'full'
       extra_args:
-        description: 'Extra flags for gaia eval retrieval, e.g. --no-scale or --datasets financebench'
+        description: 'Extra flags for gaia eval retrieval, e.g. --no-scale or --datasets technical_docs'
         required: false
         default: ''
 

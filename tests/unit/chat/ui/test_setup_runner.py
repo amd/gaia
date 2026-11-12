@@ -20,9 +20,15 @@ from fastapi.testclient import TestClient
 
 from gaia.llm import lemonade_choice, lemonade_client, lemonade_launcher
 from gaia.ui import setup_runner as sr
+from gaia.ui.database import ChatDatabase
 from gaia.ui.routers import setup as setup_router
 
 _REAL_SERVER_PROBLEM = sr.server_problem
+
+
+def _local_chat(run):
+    """The model the app's chat opens on, for runs that don't test that choice."""
+    return "Gemma-4-E4B-it-GGUF"
 
 
 @pytest.fixture(autouse=True)
@@ -55,6 +61,8 @@ def test_run_args_never_prompt_or_rebuild_the_running_ui():
     args = sr.run_args(False)
     assert args[:3] == ["init", "--profile", "gaia"]
     assert "--yes" in args and "--skip-webui-build" in args
+    # The app ships its packages; its setup never pip-installs.
+    assert "--skip-pip-extras" in args
     assert "--skip-chat-model" not in args
     assert sr.run_args(True)[-1] == "--skip-chat-model"
 
@@ -72,8 +80,16 @@ def test_run_args_switch_to_gaias_own_server():
 
 def test_run_args_server_only_downloads_nothing():
     args = sr.run_args(False, server_only=True)
-    assert "--skip-models" in args and "--download-model" not in args
+    assert "--server-only" in args and "--download-model" not in args
     assert "--skip-models" not in sr.run_args(False)
+
+
+def test_run_args_upgrade_replaces_only_the_embedded_server():
+    args = sr.run_args(False, upgrade_embedded=True)
+    assert "--server-only" in args
+    assert "--skip-models" not in args
+    assert "--force-reinstall" not in args
+    assert "--download-model" not in args
 
 
 def test_run_args_pull_each_ticked_extra_model():
@@ -117,13 +133,36 @@ def test_parse_status_no_json_names_the_last_line():
 # ── check ──────────────────────────────────────────────────────────────────
 
 
-def _fake_run(monkeypatch, returncode, stdout="", stderr="", calls=None):
-    def run(argv, **kwargs):
+class _CheckProc:
+    """A ``gaia init --check`` child: answers once, records its wait in *kwargs*."""
+
+    def __init__(self, kwargs, returncode, stdout, stderr, times_out=False):
+        self._kwargs, self.returncode = kwargs, returncode
+        self._out, self._times_out, self.killed = (stdout, stderr), times_out, False
+
+    def communicate(self, timeout=None):
+        if timeout is not None:
+            self._kwargs["timeout"] = timeout
+        if self._times_out and not self.killed:
+            raise subprocess.TimeoutExpired("gaia", timeout)
+        return self._out
+
+    def kill(self):
+        self.killed = True
+
+    def poll(self):
+        return None if not self.killed else -9
+
+
+def _fake_run(
+    monkeypatch, returncode, stdout="", stderr="", calls=None, times_out=False
+):
+    def popen(argv, **kwargs):
         if calls is not None:
             calls.append((argv, kwargs))
-        return subprocess.CompletedProcess(argv, returncode, stdout, stderr)
+        return _CheckProc(kwargs, returncode, stdout, stderr, times_out)
 
-    monkeypatch.setattr(sr.subprocess, "run", run)
+    monkeypatch.setattr(sr.subprocess, "Popen", popen)
 
 
 def test_check_ready_marks_initialized(monkeypatch):
@@ -162,13 +201,20 @@ def test_check_unexpected_exit_is_an_error_not_not_ready(monkeypatch):
         sr.check()
 
 
-def test_check_timeout_is_an_error(monkeypatch):
-    def run(argv, **kwargs):
-        raise subprocess.TimeoutExpired(argv, kwargs["timeout"])
-
-    monkeypatch.setattr(sr.subprocess, "run", run)
+def test_check_timeout_is_an_error_and_stops_the_check(monkeypatch):
+    calls = []
+    _fake_run(monkeypatch, 0, calls=calls, times_out=True)
+    procs = []
     with pytest.raises(sr.SetupError, match="took too long"):
-        sr.check()
+        sr.check(on_start=procs.append)
+    assert procs[0].killed
+
+
+def test_check_hands_its_process_to_the_caller(monkeypatch):
+    _fake_run(monkeypatch, 0, '{"ready": true}')
+    procs = []
+    sr.check(on_start=procs.append)
+    assert len(procs) == 1
 
 
 # ── marker ─────────────────────────────────────────────────────────────────
@@ -201,7 +247,7 @@ def test_desktop_setup_error_is_the_reason_init_gave(gaia_home):
 def test_desktop_setup_error_without_a_reason_points_at_the_log(gaia_home):
     _desktop_state(gaia_home, json.dumps({"state": "ready", "init": "failed"}))
     error = sr.desktop_setup_error()
-    assert "gaia init --profile gaia" in error
+    assert "setup did not finish" in error and "gaia init" not in error
     assert "electron-install.log" in error
 
 
@@ -440,7 +486,10 @@ class _FakeProc:
         if isinstance(self.stdout, _BlockingStdout):
             self.stdout.killed.set()
 
-    def wait(self):
+    def poll(self):
+        return -9 if self.killed else self.returncode
+
+    def wait(self, timeout=None):
         return -9 if self.killed else self.returncode
 
 
@@ -475,13 +524,15 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     calls, checks = [], []
     _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)), calls)
 
-    def check(skip_chat_model, load):
+    def check(skip_chat_model, load, **_k):
         checks.append((skip_chat_model, load))
         return {"ready": True}
 
     monkeypatch.setattr(sr, "check", check)
     runner = sr.SetupRunner()
-    first = runner.start(skip_chat_model=True)
+    first = runner.start(
+        skip_chat_model=True, chat_model_for=lambda run: "fireworks.deepseek-v4p1-flash"
+    )
     assert first["state"] == "running"
     view = _wait_done(runner)
     assert view["state"] == "ready"
@@ -491,6 +542,36 @@ def test_a_clean_run_is_verified_then_ready(monkeypatch):
     assert argv[3:] == sr.run_args(True)
     assert kwargs["stdin"] is subprocess.DEVNULL
     assert "[====] 100% (5 MB/5 MB)" in view["log_tail"]
+
+
+def test_a_cloud_run_tests_a_chat_on_the_cloud_model(monkeypatch):
+    turns = []
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
+    monkeypatch.setattr(
+        sr, "_agent_turn_problem", lambda model_id=None: turns.append(model_id)
+    )
+    runner = sr.SetupRunner()
+    runner.start(
+        skip_chat_model=True, chat_model_for=lambda run: "fireworks.deepseek-v4p1-flash"
+    )
+    view = _wait_done(runner)
+    assert view["state"] == "ready"
+    assert turns == ["fireworks.deepseek-v4p1-flash"]
+    assert [t["job"] for t in view["tests"] if t["state"] == "passed"][-1] == "agent"
+
+
+def test_a_cloud_run_with_no_saved_cloud_model_fails_its_chat_test(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
+    monkeypatch.setattr(
+        sr, "_agent_turn_problem", lambda model_id=None: pytest.fail("no turn expected")
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=True, chat_model_for=_local_chat)
+    view = _wait_done(runner)
+    assert view["state"] == "failed"
+    assert view["error"] == sr.NO_CLOUD_MODEL
 
 
 def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):
@@ -506,12 +587,40 @@ def test_a_server_only_run_is_ready_without_loading_models(monkeypatch):
 
     monkeypatch.setattr(sr, "check", check)
     runner = sr.SetupRunner()
-    runner.start(skip_chat_model=False, server_only=True)
+    runner.start(skip_chat_model=False, server_only=True, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "ready" and view["server_only"] is True
     assert [s["key"] for s in view["steps"]] == ["server"]
     assert view["steps"][0]["status"] == "done"
-    assert "--skip-models" in calls[0][0]
+    assert "--server-only" in calls[0][0]
+
+
+def test_an_embedded_upgrade_ends_ready_without_loading_models(monkeypatch):
+    calls = []
+    _popen(
+        monkeypatch,
+        _FakeProc(io.BytesIO(b"Step 1/2: Starting Lemonade Server...\n")),
+        calls,
+    )
+
+    def check(*_a, **_k):
+        raise AssertionError("an embedded upgrade preserves the existing model cache")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(
+        skip_chat_model=False, upgrade_embedded=True, chat_model_for=_local_chat
+    )
+    view = _wait_done(runner)
+    assert view["state"] == "ready" and view["upgrade_embedded"] is True
+    assert view["text"] == "Lemonade Server upgraded"
+    assert "--server-only" in calls[0][0]
+    assert "--skip-models" not in calls[0][0]
+    assert "--force-reinstall" not in calls[0][0]
+    # One step, the server's: no "Download the models" or "Check that the models load" marked done.
+    assert [(s["label"], s["status"]) for s in view["steps"]] == [
+        ("Update the local model server", "done")
+    ]
 
 
 def test_an_extra_model_with_no_load_check_ends_ready(monkeypatch):
@@ -534,7 +643,11 @@ def test_an_extra_model_with_no_load_check_ends_ready(monkeypatch):
         },
     )
     runner = sr.SetupRunner()
-    runner.start(skip_chat_model=False, extra_models=["gpt-oss-20b-GGUF"])
+    runner.start(
+        skip_chat_model=False,
+        extra_models=["gpt-oss-20b-GGUF"],
+        chat_model_for=_local_chat,
+    )
     view = _wait_done(runner)
     assert view["state"] == "ready"
     assert {m["id"]: m["state"] for m in view["models"]} == {
@@ -568,7 +681,7 @@ def test_only_extras_skip_the_load_check(monkeypatch):
         },
     )
     runner = sr.SetupRunner()
-    runner.start(skip_chat_model=False)
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     states = {m["id"]: m["state"] for m in view["models"]}
     assert states["Gemma-4-E4B-it-GGUF"] == "ready"
@@ -579,7 +692,7 @@ def test_a_failed_server_only_run_fails_like_any_run(monkeypatch):
     _popen(monkeypatch, _FakeProc(io.BytesIO("\u274c Port in use\n".encode()), 1))
     monkeypatch.setattr(sr, "server_problem", lambda: None)
     runner = sr.SetupRunner()
-    runner.start(skip_chat_model=False, server_only=True)
+    runner.start(skip_chat_model=False, server_only=True, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed" and "Port in use" in view["error"]
 
@@ -596,7 +709,7 @@ def test_a_run_follows_the_chat_model_and_the_users_server(monkeypatch):
         sr, "users_lemonade_url", lambda: "http://localhost:13305/api/v1"
     )
     runner = sr.SetupRunner()
-    runner.start(skip_chat_model=False)
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["chat_model"] == "Qwen3.6-35B-A3B-GGUF"
     assert view["steps"][0]["label"] == "Use your Lemonade Server"
@@ -611,7 +724,7 @@ def test_init_error_lines_are_not_wrapped_at_80_columns(monkeypatch):
     _popen(monkeypatch, _FakeProc(io.BytesIO(b"")), calls)
     monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     _wait_done(runner)
 
     env = calls[0][1]["env"]
@@ -627,7 +740,7 @@ def test_progress_follows_the_output(monkeypatch):
     proc = _FakeProc(stdout)
     _popen(monkeypatch, proc)
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     deadline = time.time() + 3
     while time.time() < deadline:
         view = runner.status()
@@ -649,7 +762,7 @@ def test_a_failed_run_reports_the_error_line(monkeypatch):
         sr, "check", lambda *a, **k: pytest.fail("a failed run is not verified")
     )
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed"
     assert "exit 1" in view["error"]
@@ -662,7 +775,7 @@ def test_a_failed_run_without_an_error_line_names_the_last_output(monkeypatch):
         monkeypatch, _FakeProc(io.BytesIO(b"Step 1/5: Starting Lemonade...\nboom\n"), 2)
     )
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed"
     assert view["error"].endswith("boom")
@@ -673,7 +786,7 @@ _UNREACHABLE = {
     "message": "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
     "start": "Start Lemonade Server from the Lemonade tray icon.",
     "use_gaia": True,
-    "switch_hint": None,
+    "env_url": None,
 }
 _RAW_ERROR = (
     "Lemonade Server at http://127.0.0.1:9/api/v1 is not reachable: Request "
@@ -686,7 +799,7 @@ def test_an_unanswering_server_fails_in_plain_words(monkeypatch):
     _popen(monkeypatch, _FakeProc(io.BytesIO(out), returncode=1))
     monkeypatch.setattr(sr, "server_problem", lambda: _UNREACHABLE)
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed"
     assert view["error"] == _UNREACHABLE["message"]
@@ -703,7 +816,7 @@ def test_a_later_failure_is_not_blamed_on_the_server(monkeypatch):
         sr, "server_problem", lambda: pytest.fail("the server step passed")
     )
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["problem"] is None
     assert "embeddinggemma" in view["error"]
@@ -717,7 +830,7 @@ def test_use_gaias_own_runs_init_with_the_switch(monkeypatch):
     monkeypatch.setattr(sr, "users_lemonade_url", lambda: "http://127.0.0.1:9/api/v1")
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
     runner = sr.SetupRunner()
-    first = runner.start(False, gaia_lemonade=True)
+    first = runner.start(False, gaia_lemonade=True, chat_model_for=_local_chat)
     # Setup now installs GAIA's own, not the user's server it was set to.
     assert first["steps"][0]["label"] == "Install the local model server"
     assert first["command"] == "gaia init --profile gaia --gaia-lemonade"
@@ -737,7 +850,7 @@ def test_a_failed_switch_to_gaias_own_keeps_its_own_error(monkeypatch):
     )
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
     runner = sr.SetupRunner()
-    runner.start(False, gaia_lemonade=True)
+    runner.start(False, gaia_lemonade=True, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["problem"] is None
     assert "Could not download" in view["error"]
@@ -751,21 +864,42 @@ def test_a_switch_is_applied_even_when_the_check_then_fails(monkeypatch):
     monkeypatch.setattr(sr, "_forget_previous_server", lambda: forgot.append(1))
     monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
     runner = sr.SetupRunner()
-    runner.start(False, gaia_lemonade=True)
+    runner.start(False, gaia_lemonade=True, chat_model_for=_local_chat)
     assert _wait_done(runner)["state"] == "failed"
     assert forgot == [1]
 
 
-def test_use_gaias_own_is_refused_while_lemonade_base_url_picks_the_server(
-    monkeypatch,
-):
+def test_use_gaias_own_overrides_a_lemonade_base_url_from_the_app(monkeypatch):
+    """The env server isn't answering; the app's choice must not dead-end on it."""
+    from gaia.config import GaiaConfig
+
+    calls = []
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)), calls)
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": True})
+    monkeypatch.setattr(sr, "_forget_previous_server", lambda: None)
     monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9")
     monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
-    monkeypatch.setattr(
-        sr.subprocess, "Popen", lambda *_a, **_k: pytest.fail("nothing starts")
-    )
-    with pytest.raises(sr.SetupError, match="Unset it and restart GAIA"):
-        sr.SetupRunner().start(False, gaia_lemonade=True)
+    runner = sr.SetupRunner()
+    runner.start(False, gaia_lemonade=True, chat_model_for=_local_chat)
+    # Saved before init runs, so it and the daemon set up GAIA's own.
+    assert GaiaConfig.load().lemonade_env_url_ignored == "http://127.0.0.1:9"
+    assert lemonade_choice.configured_source() is None
+    assert _wait_done(runner)["state"] == "ready"
+    assert calls[0][0][-1] == "--gaia-lemonade"
+
+
+def test_a_plain_retry_does_not_override_lemonade_base_url(monkeypatch):
+    from gaia.config import GaiaConfig
+
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    monkeypatch.setattr(sr, "check", lambda *_a, **_k: {"ready": True})
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.delenv("GAIA_LEMONADE_EMBEDDED", raising=False)
+    runner = sr.SetupRunner()
+    runner.start(False, chat_model_for=_local_chat)
+    _wait_done(runner)
+    assert GaiaConfig.load().lemonade_env_url_ignored is None
+    assert lemonade_choice.configured_source() == "env"
 
 
 def test_verify_not_ready_fails_with_the_reasons(monkeypatch):
@@ -774,7 +908,7 @@ def test_verify_not_ready_fails_with_the_reasons(monkeypatch):
         sr, "check", lambda *a, **k: {"ready": False, "reasons": ["a", "b"]}
     )
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed"
     assert view["error"] == "a; b"
@@ -789,7 +923,7 @@ def test_verify_error_fails_the_run(monkeypatch):
 
     monkeypatch.setattr(sr, "check", check)
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed"
     assert view["error"] == "Checking setup took too long."
@@ -803,7 +937,7 @@ def test_an_unexpected_error_fails_the_run_and_frees_the_runner(monkeypatch):
 
     monkeypatch.setattr(sr, "check", check)
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed"
     # The cause stays in the server log, never in what the browser is sent.
@@ -812,17 +946,65 @@ def test_an_unexpected_error_fails_the_run_and_frees_the_runner(monkeypatch):
     # Not stranded in "verifying": a retry is allowed.
     monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
     _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     assert _wait_done(runner)["state"] == "ready"
+
+
+def test_an_unexpected_error_is_named_in_the_report_but_not_on_screen(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+
+    def check(*_a, **_k):
+        raise OSError("marker file is read-only")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(False, chat_model_for=_local_chat)
+    assert "marker file" not in _wait_done(runner)["error"]
+    every = [line for lines in runner.report()["logs"].values() for line in lines]
+    assert "Setup failed: OSError: marker file is read-only" in every
+
+
+def test_a_report_asked_for_as_the_failure_record_starts_waits_for_it(monkeypatch):
+    # report() ran between the record thread being published and started, and
+    # joining an unstarted thread raises.
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+
+    def check(*_a, **_k):
+        raise OSError("marker file is read-only")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    errors = []
+    real_thread = threading.Thread
+
+    def ask_for_report():
+        try:
+            runner.report()
+        except RuntimeError as e:
+            errors.append(e)
+
+    class ReportFirst(real_thread):
+        def start(self):
+            if getattr(self, "_target", None) == runner._record_failure:
+                asker = real_thread(target=ask_for_report)
+                asker.start()
+                asker.join(timeout=0.5)  # it gets in first, if nothing stops it
+            super().start()
+
+    monkeypatch.setattr(sr.threading, "Thread", ReportFirst)
+    runner.start(False, chat_model_for=_local_chat)
+    _wait_done(runner)
+    runner.report()
+    assert errors == []
 
 
 def test_only_one_run_at_a_time_and_cancel(monkeypatch):
     proc = _FakeProc(_BlockingStdout())
     _popen(monkeypatch, proc)
     runner = sr.SetupRunner()
-    runner.start(False)
+    runner.start(False, chat_model_for=_local_chat)
     with pytest.raises(sr.SetupError, match="already running"):
-        runner.start(False)
+        runner.start(False, chat_model_for=_local_chat)
     assert runner.cancel() is True
     assert proc.killed
     view = _wait_done(runner)
@@ -841,8 +1023,8 @@ def test_a_command_that_cannot_start_is_an_error(monkeypatch):
 
     monkeypatch.setattr(sr.subprocess, "Popen", popen)
     runner = sr.SetupRunner()
-    with pytest.raises(sr.SetupError, match="Run it in a terminal"):
-        runner.start(False)
+    with pytest.raises(sr.SetupError, match="Could not start setup"):
+        runner.start(False, chat_model_for=_local_chat)
     assert runner.status() is None
 
 
@@ -860,7 +1042,9 @@ def users_server(monkeypatch):
 
         def probe(base, api_key=None, **_kw):
             probed.append(base)
-            return lemonade_choice.ProbeResult(base, status)
+            return lemonade_choice.ProbeResult(
+                base, status, version="9.0.0", minimum="10.0.0"
+            )
 
         monkeypatch.setattr(lemonade_choice, "probe", probe)
         monkeypatch.setattr(
@@ -884,9 +1068,11 @@ def test_an_env_server_that_does_not_answer_says_so_plainly(users_server):
     assert probed == ["http://127.0.0.1:9/api/v1"]
     assert problem["message"] == "Your Lemonade Server at 127.0.0.1:9 isn't answering."
     assert problem["start"] == "Start it from the tray."
-    # LEMONADE_BASE_URL outranks the saved choice: switching here can't work.
-    assert problem["use_gaia"] is False
-    assert "unset it and restart GAIA" in problem["switch_hint"]
+    # Choosing GAIA's own here overrides LEMONADE_BASE_URL: no env to edit,
+    # and the screen names the value it will ignore.
+    assert problem["use_gaia"] is True
+    assert problem["env_url"] == "http://127.0.0.1:9"
+    assert "switch_hint" not in problem
     assert "lemonade-server serve" not in str(problem)
 
 
@@ -894,7 +1080,37 @@ def test_a_saved_server_that_does_not_answer_offers_gaias_own(users_server):
     users_server("http://localhost:13305/api/v1", "config")
     problem = _REAL_SERVER_PROBLEM()
     assert problem["use_gaia"] is True
-    assert problem["switch_hint"] is None
+    assert problem["env_url"] is None
+    assert "switch_hint" not in problem
+
+
+def test_a_saved_server_that_is_too_old_names_both_versions_and_offers_gaias_own(
+    users_server,
+):
+    users_server("http://localhost:13305/api/v1", "config", lemonade_choice.TOO_OLD)
+    problem = _REAL_SERVER_PROBLEM()
+    assert problem["kind"] == "server_too_old"
+    assert "v9.0.0" in problem["message"] and "v10.0.0" in problem["message"]
+    # Upgrading happens outside GAIA: no start hint, and no command anywhere.
+    assert problem["start"] is None
+    assert problem["use_gaia"] is True
+    assert "gaia config" not in str(problem)
+
+
+def test_a_too_old_env_server_offers_gaias_own(users_server):
+    users_server("http://127.0.0.1:13305", "env", lemonade_choice.TOO_OLD)
+    problem = _REAL_SERVER_PROBLEM()
+    assert problem["kind"] == "server_too_old"
+    assert problem["use_gaia"] is True
+    assert "LEMONADE_BASE_URL" not in str(problem)
+
+
+@pytest.mark.parametrize(
+    "status", [lemonade_choice.OK, lemonade_choice.NEEDS_KEY, lemonade_choice.BAD_KEY]
+)
+def test_a_server_that_answers_well_enough_is_not_the_problem(users_server, status):
+    users_server("http://localhost:13305/api/v1", "config", status)
+    assert _REAL_SERVER_PROBLEM() is None
 
 
 def test_no_start_hint_when_this_pc_has_no_lemonade_to_start(users_server):
@@ -954,6 +1170,7 @@ def client(monkeypatch):
     monkeypatch.setattr(setup_router.plan_api, "run_disk_warning", lambda **_k: None)
     app = FastAPI()
     app.include_router(setup_router.router)
+    app.state.db = ChatDatabase(":memory:")
     return TestClient(app, headers={"X-Gaia-UI": "1"}), runner
 
 
@@ -961,7 +1178,7 @@ def test_check_route_adds_the_steps(client, monkeypatch):
     test_client, _ = client
     seen = {}
 
-    def check(skip_chat_model, load):
+    def check(skip_chat_model, load, **_k):
         seen.update(skip_chat_model=skip_chat_model, load=load)
         return {"ready": False, "stage": "models", "reasons": ["x"]}
 
@@ -1022,7 +1239,8 @@ def test_check_route_unanswered_is_503(client, monkeypatch):
     assert resp.status_code == 503
     detail = resp.json()["detail"]
     assert "exit 2" not in detail
-    assert "gaia init --check" in detail and "server log" in detail
+    assert "Try again" in detail and "server log" in detail
+    assert "gaia init" not in detail
 
 
 def test_status_route_idle(client):
@@ -1181,6 +1399,23 @@ def test_a_full_disk_fails_the_model_with_what_to_do():
     assert runner.status()["overall"]["failed"] == 1
 
 
+def test_a_path_too_long_for_windows_says_so_instead_of_pointing_at_a_log():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event(
+        {
+            "event": "error",
+            "model": QWEN,
+            "message": "Failed to create directory 'C:/Users/you/.cache/huggingface/"
+            "hub/models--x/snapshots/abc': The filename or extension is too long.",
+        }
+    )
+    qwen = _models(runner)[QWEN]
+    assert qwen["state"] == "failed" and qwen["error_kind"] == "path_too_long"
+    assert "path to the models folder is too long" in qwen["error"]
+    assert "server log" not in qwen["error"]
+
+
 def test_keep_trying_shows_the_wait_not_a_failure():
     runner = sr.SetupRunner()
     runner._on_event(json.loads(_plan_event()))
@@ -1200,6 +1435,8 @@ def test_a_finished_run_marks_what_loaded_ready_and_what_did_not_failed():
     rows = _models(runner)
     assert rows[EMBED]["state"] == "ready"
     assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "verify"
+    # Details shows the row's log, so the reason is there, not only in the error.
+    assert "Failed to load: would not load" in rows[QWEN]["log"]
     assert rows[GEMMA]["state"] == "skipped"
 
 
@@ -1241,7 +1478,7 @@ def test_the_init_child_never_inherits_the_daemons_broker_url(monkeypatch):
     seen = []
     proc = _FakeProc(io.BytesIO(b""))
     _popen(monkeypatch, proc, calls=seen)
-    sr.SetupRunner().start(skip_chat_model=False)
+    sr.SetupRunner().start(skip_chat_model=False, chat_model_for=_local_chat)
     env = seen[0][1]["env"]
     assert BROKER_URL_ENV_VAR not in env
     assert env["NO_COLOR"] == "1" and env["GAIA_HARNESS_MARK"] == "kept"
@@ -1304,6 +1541,8 @@ def test_a_failed_single_download_says_why_and_can_retry():
     assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "failed")
     row = _models(runner)[GEMMA]
     assert row["error_kind"] == "network" and row["can_retry"]
+    assert row["log"][0].startswith(f"Downloading {GEMMA} through Lemonade")
+    assert row["log"][-1].startswith("Failed:")
 
 
 def test_one_model_cannot_download_twice_or_during_a_run():
@@ -1313,7 +1552,7 @@ def test_one_model_cannot_download_twice_or_during_a_run():
     with pytest.raises(sr.SetupError, match="already downloading"):
         runner.download_model(_PullClient([]), GEMMA)
     with pytest.raises(sr.SetupError, match="still downloading"):
-        runner.start(False)
+        runner.start(False, chat_model_for=_local_chat)
     gate.set()
     assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
     runner._run = sr.SetupRun(skip_chat_model=False)
@@ -1329,6 +1568,7 @@ def test_cancelling_one_download_marks_it_cancelled_and_resumable():
     gate.set()
     assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "cancelled")
     assert _models(runner)[GEMMA]["can_retry"]
+    assert _models(runner)[GEMMA]["log"][-1] == "Cancelled"
     assert runner.cancel("not-downloading") is False
 
 
@@ -1360,7 +1600,6 @@ def test_the_run_bar_still_moves_when_init_reports_progress_as_json():
     "error, status, words",
     [
         (sr.SetupBusy("secret path C:/x"), 409, "already running"),
-        (sr.LemonadeOverridden("secret path C:/x"), 409, "LEMONADE_BASE_URL"),
         (sr.SetupError("Could not start: [WinError 2] C:/secret"), 500, "server log"),
     ],
 )
@@ -1387,7 +1626,9 @@ def test_a_failed_pull_shows_fixed_words_and_logs_lemonades(caplog):
     )
     row = _models(runner)[QWEN]
     assert row["error_kind"] == "lemonade"
-    assert "/secret/path" not in row["error"] and "server log" in row["error"]
+    assert "/secret/path" not in row["error"] and "download log" in row["error"]
+    # The row's own log, under its chevron, has Lemonade's words.
+    assert "Failed: HTTP 500 at /secret/path" in row["log"]
     assert "/secret/path" in caplog.text
 
 
@@ -1472,7 +1713,7 @@ def test_a_later_download_failing_keeps_the_earlier_models(monkeypatch):
         sr, "check", lambda *_a, **_k: pytest.fail("a failed run is not load-checked")
     )
     runner = sr.SetupRunner()
-    runner.start(skip_chat_model=False)
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed"
     rows = {m["id"]: m for m in view["models"]}
@@ -1494,7 +1735,7 @@ def test_a_run_that_stopped_for_another_reason_names_no_model(monkeypatch):
         _FakeProc(io.BytesIO((chr(10).join(lines) + chr(10)).encode()), returncode=1),
     )
     runner = sr.SetupRunner()
-    runner.start(skip_chat_model=False)
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed" and view["model_failed"] is False
 
@@ -1508,7 +1749,7 @@ def test_a_load_check_that_never_ran_leaves_models_unchecked(monkeypatch):
 
     monkeypatch.setattr(sr, "check", broken)
     runner = sr.SetupRunner()
-    runner.start(skip_chat_model=False)
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
     view = _wait_done(runner)
     assert view["state"] == "failed"
     assert {m["id"]: m["state"] for m in view["models"]}[QWEN] == "unchecked"
@@ -1630,3 +1871,872 @@ def test_a_brand_new_single_download_is_not_called_resumed():
     runner.download_model(client, GEMMA)
     assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
     assert _models(runner)[GEMMA]["downloaded_before_gb"] is None
+
+
+# ── Stage logs and the troubleshooting report ──────────────────────────────
+
+
+def test_a_failed_piece_reports_whether_a_retry_may_help():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "component", "component": "server", "state": "done"})
+    runner._on_event({"event": "component", "component": "agent", "state": "active"})
+    runner._on_event(
+        {"event": "component", "component": "agent", "state": "failed", "kind": "other"}
+    )
+    view = run.view()
+    assert view["components"] == {"server": "done", "agent": "failed"}
+    assert view["component_kinds"] == {"agent": "other"}
+
+    runner._on_event({"event": "component", "component": "agent", "state": "done"})
+    assert run.view()["component_kinds"] == {}
+
+
+def test_each_stage_keeps_its_own_log():
+    runner = sr.SetupRunner()
+    check = sr.SetupRun(skip_chat_model=False, server_only=True)
+    runner._run = check
+    runner._consume(check, "Starting Lemonade Server...")
+    runner._on_event({"event": "component", "component": "server", "state": "done"})
+
+    # The full run replaces the server's run; the checks' log stays.
+    runner._check_log = list(check.stage_logs["check"])
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "m", "downloaded": False}]})
+    runner._on_event({"event": "model_done", "model": "m"})
+    runner._on_event(
+        {
+            "event": "test",
+            "job": "chat",
+            "subject": "m",
+            "state": "failed",
+            "error": "boom",
+            "seconds": 1.5,
+        }
+    )
+    runner._consume(run, "after the tests")
+
+    logs = runner.status()["logs"]
+    assert logs["check"] == ["Starting Lemonade Server...", "server: done"]
+    assert logs["download"] == ["Plan: m", "m: downloaded"]
+    assert logs["test"] == ["Test chat m: failed in 1.5 s: boom", "after the tests"]
+
+
+def test_the_screen_gets_the_tail_and_the_report_gets_everything():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    for i in range(sr.STAGE_LOG_SHOWN + 50):
+        runner._consume(run, f"line {i}")
+
+    assert len(runner.status()["logs"]["download"]) == sr.STAGE_LOG_SHOWN
+    assert runner.status()["logs"]["download"][-1] == f"line {sr.STAGE_LOG_SHOWN + 49}"
+    assert len(runner.report()["logs"]["download"]) == sr.STAGE_LOG_SHOWN + 50
+
+
+def test_a_cancelled_run_says_so_in_its_log(monkeypatch):
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+        stdout=subprocess.DEVNULL,
+    )
+    assert runner.cancel()
+    runner._proc.wait(timeout=10)
+    assert run.stage_logs["download"][-1] == "Stopped by the user"
+
+
+def test_report_route_bundles_setups_record(client, gaia_home, monkeypatch):
+    http, runner = client
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._consume(run, "something went wrong")
+    monkeypatch.setattr(setup_router, "build_plan", lambda: {"profile": "gaia"})
+    written = {}
+
+    def fake_diagnostics(argv, **_kw):
+        out = argv[argv.index("--output") + 1]
+        written["record"] = json.loads((gaia_home / sr.SETUP_REPORT).read_text())
+        with open(out, "wb") as f:
+            f.write(b"tgz")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    monkeypatch.setattr(sr.subprocess, "run", fake_diagnostics)
+    res = http.post("/api/setup/report")
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert sr.REPORT_NAME_RE.fullmatch(body["name"])
+    assert written["record"]["logs"]["download"] == ["something went wrong"]
+    assert written["record"]["plan"] == {"profile": "gaia"}
+
+    got = http.get(f"/api/setup/report/{body['name']}")
+    assert got.status_code == 200
+    assert got.content == b"tgz"
+
+
+@pytest.mark.parametrize("name", ["../config.json", "gaia.log", "diagnostics-1.tgz"])
+def test_report_route_serves_nothing_but_a_report(client, gaia_home, name):
+    http, _ = client
+    gaia_home.mkdir(parents=True, exist_ok=True)
+    (gaia_home / "gaia.log").write_text("secret")
+    assert http.get(f"/api/setup/report/{name}").status_code == 404
+
+
+def test_report_route_names_a_failed_bundle(client, monkeypatch):
+    http, _ = client
+    monkeypatch.setattr(setup_router, "build_plan", lambda: {})
+    monkeypatch.setattr(
+        sr.subprocess,
+        "run",
+        lambda argv, **_kw: subprocess.CompletedProcess(
+            argv, 1, "", "❌ Error writing x: disk full"
+        ),
+    )
+    res = http.post("/api/setup/report")
+    assert res.status_code == 500
+    assert "disk full" in res.json()["detail"]
+
+
+# ── Each download's own log ────────────────────────────────────────────────
+
+
+def test_each_download_keeps_its_own_lines_and_one_progress_bar():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event(
+        {
+            "event": "plan",
+            "models": [{"id": "a-GGUF"}, {"id": "b-GGUF", "downloaded": True}],
+        }
+    )
+    runner._consume(run, "Step 2/5: Downloading models for 'gaia' profile...")
+    runner._consume(run, "Downloading: a-GGUF")
+    for pct in (10, 40, 90):
+        runner._consume(run, f"[====------] {pct}% ({pct} MB/100 MB)")
+    runner._on_event({"event": "model_done", "model": "a-GGUF"})
+    runner._consume(run, "Step 3/5: Installing Python dependencies...")
+
+    rows = {m["id"]: m for m in runner.status()["models"]}
+    assert rows["a-GGUF"]["log"] == [
+        "Downloading: a-GGUF",
+        "[====------] 90% (90 MB/100 MB)",
+        "Downloaded",
+    ]
+    assert rows["b-GGUF"]["log"] == ["Already on this PC"]
+
+
+def test_a_failed_download_says_why_on_its_row():
+    runner = sr.SetupRunner()
+    runner._run = sr.SetupRun(skip_chat_model=False)
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._on_event(
+        {"event": "progress", "model": "a-GGUF", "bytes_done": 1, "bytes_total": 9}
+    )
+    runner._on_event({"event": "retrying", "model": "a-GGUF", "until": 1})
+    runner._on_event(
+        {"event": "error", "model": "a-GGUF", "message": "connection reset"}
+    )
+    log = runner.status()["models"][0]["log"]
+    assert log == ["Connection dropped; still trying", "Failed: connection reset"]
+
+
+def test_the_row_shows_the_tail_and_the_report_keeps_the_rest():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._consume(run, "Downloading: a-GGUF")
+    for i in range(sr.MODEL_LOG_SHOWN + 20):
+        runner._consume(run, f"note {i}")
+    assert len(runner.status()["models"][0]["log"]) == sr.MODEL_LOG_SHOWN
+    assert len(runner.report()["models"][0]["log"]) == sr.MODEL_LOG_SHOWN + 21
+
+
+def test_an_error_with_a_percent_is_kept_beside_the_progress_bar():
+    m = sr.ModelProgress(id="a-GGUF")
+    m.add_log("[=====>    ] 45%")
+    m.add_log("Error: disk 95% full")
+    m.add_log("[======>   ] 46%")
+    assert m.log == ["[=====>    ] 45%", "Error: disk 95% full", "[======>   ] 46%"]
+    m.add_log("Disk check: 40% of drive free")
+    m.add_log("Lemonade: resuming at 12% done")
+    assert m.log[-2:] == [
+        "Disk check: 40% of drive free",
+        "Lemonade: resuming at 12% done",
+    ]
+
+
+def test_output_after_a_failed_download_is_not_put_on_its_row():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._consume(run, "Downloading: a-GGUF")
+    runner._on_event({"event": "error", "model": "a-GGUF", "message": "boom"})
+    runner._consume(run, "Testing chat model inference...")
+    assert runner._models["a-GGUF"].log == ["Downloading: a-GGUF", "Failed: boom"]
+
+
+def test_a_new_run_forgets_which_model_the_last_one_was_downloading(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(b""), returncode=1))
+    runner = sr.SetupRunner()
+    runner._log_model = "a-GGUF"
+    runner.start(False, chat_model_for=_local_chat)
+    assert runner._log_model is None
+
+
+def test_the_where_to_look_hint_stays_with_the_failed_download():
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(skip_chat_model=False)
+    runner._run = run
+    runner._on_event({"event": "plan", "models": [{"id": "a-GGUF"}]})
+    runner._consume(run, "Downloading: a-GGUF")
+    runner._on_event({"event": "error", "model": "a-GGUF", "message": "boom"})
+    runner._consume(
+        run, "   Read /home/you/.gaia/lemonade/lemonade.log for the server's own error."
+    )
+    runner._consume(run, "Testing chat model inference...")
+    assert runner._models["a-GGUF"].log == [
+        "Downloading: a-GGUF",
+        "Failed: boom",
+        "Read /home/you/.gaia/lemonade/lemonade.log for the server's own error.",
+    ]
+
+
+def test_gaias_own_console_bar_collapses_too():
+    m = sr.ModelProgress(id="a-GGUF")
+    m.add_log("   [━━━━──────]  40%  2.00 GB / 5.00 GB")
+    m.add_log("   [━━━━━━────]  60%  3.00 GB / 5.00 GB")
+    assert m.log == ["   [━━━━━━────]  60%  3.00 GB / 5.00 GB"]
+
+
+def _check_held_until_cancelled(monkeypatch, result):
+    """A load check that waits for Cancel, then answers *result* (or raises it)."""
+    entered, release = threading.Event(), threading.Event()
+
+    def check(*_a, **_k):
+        entered.set()
+        release.wait(5)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(sr, "check", check)
+    return entered, release
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {"ready": False, "reasons": ["Gemma would not load"], "models": []},
+        sr.SetupError("Setup could not be checked (exit 2)."),
+    ],
+    ids=["not-ready", "check-error"],
+)
+def test_a_check_that_ends_after_cancel_leaves_the_run_cancelled(monkeypatch, result):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    entered, release = _check_held_until_cancelled(monkeypatch, result)
+    runner = sr.SetupRunner()
+    runner.start(False, chat_model_for=_local_chat)
+    assert entered.wait(5)
+    assert runner.cancel() is True
+    release.set()
+    runner._thread.join(5)
+    view = runner.status()
+    assert view["state"] == "cancelled"
+    assert view["error"] is None
+
+
+def test_try_again_waits_for_a_cancelled_check_to_finish(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    entered, release = _check_held_until_cancelled(
+        monkeypatch, {"ready": False, "reasons": ["late"], "models": []}
+    )
+    runner = sr.SetupRunner()
+    runner.start(False, chat_model_for=_local_chat)
+    assert entered.wait(5)
+    runner.cancel()
+    old = runner._thread
+    threading.Timer(0.3, release.set).start()
+    monkeypatch.setattr(sr, "check", lambda *a, **k: {"ready": True})
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    runner.start(False, chat_model_for=_local_chat)
+    assert not old.is_alive()
+    assert _wait_done(runner)["state"] == "ready"
+
+
+def test_cancel_stops_the_running_load_check(monkeypatch):
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+    check_proc = _CheckProc({}, 0, "", "")
+    entered, release = threading.Event(), threading.Event()
+
+    def check(*_a, on_start=None, **_k):
+        on_start(check_proc)
+        entered.set()
+        release.wait(5)
+        raise sr.SetupError("Setup could not be checked (exit -9).")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(False, chat_model_for=_local_chat)
+    assert entered.wait(5)
+    runner.cancel()
+    assert check_proc.killed
+    release.set()
+    runner._thread.join(5)
+    assert runner.status()["state"] == "cancelled"
+
+
+# ── an extra model's failed test: re-download only when the file is broken ──
+
+VOICE = "kokoro-v1"
+
+
+def _extra_run(monkeypatch, kind, error, job="voice"):
+    """A run whose ticked extra *VOICE* failed its test with *kind*."""
+    lines = [
+        {
+            "event": "plan",
+            "models": [
+                {"id": GEMMA, "bytes_total": 10, "downloaded": True},
+                {"id": VOICE, "bytes_total": 10, "downloaded": True},
+            ],
+        },
+        {"event": "test", "job": job, "subject": VOICE, "state": "running"},
+        {
+            "event": "test",
+            "job": job,
+            "subject": VOICE,
+            "state": "failed",
+            "error": error,
+            "kind": kind,
+            "seconds": 2.0,
+        },
+    ]
+    out = "".join(json.dumps(line) + "\n" for line in lines).encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(out)))
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_a, **_k: {"ready": True, "models": [{"id": GEMMA, "loaded": True}]},
+    )
+    monkeypatch.setattr(sr, "_agent_turn_problem", lambda model_id=None: None)
+    runner = sr.SetupRunner()
+    runner.start(
+        skip_chat_model=False, extra_models=[VOICE], chat_model_for=_local_chat
+    )
+    view = _wait_done(runner)
+    return runner, {m["id"]: m for m in view["models"]}[VOICE]
+
+
+class _NoPullClient:
+    """Lemonade for a retest: any download or delete is a test failure."""
+
+    def get_system_info(self, timeout=None):
+        return {}
+
+    def ensure_model_downloaded(self, *_a, **_k):
+        pytest.fail("a model whose file is fine must not be downloaded again")
+
+    def delete_model(self, *_a, **_k):
+        pytest.fail("a model whose file is fine must not be deleted")
+
+
+@pytest.mark.parametrize(
+    "kind,error,said",
+    [
+        ("memory", "Not enough free memory to load kokoro-v1", "enough free memory"),
+        ("answer", "No audio came back", "nothing usable back (No audio came back)"),
+        ("stuck", "It didn't finish within 5 minutes", "didn't answer"),
+        ("window", "Context 4096 < 65536 required", "smaller context window"),
+    ],
+)
+def test_an_extra_that_failed_its_test_for_a_fine_file_is_not_offered_a_redownload(
+    monkeypatch, kind, error, said
+):
+    _runner, row = _extra_run(monkeypatch, kind, error)
+    assert row["state"] == "failed" and row["can_retry"]
+    assert row["error_kind"] == kind and row["error_kind"] != "verify"
+    assert said in row["error"]
+    assert "would not load" not in row["error"]
+    assert "nothing is downloaded again" in row["error"]
+    # Details keeps the test's own words, not only the friendly line.
+    assert f"Test voice: {error}" in row["log"]
+
+
+def test_an_extra_whose_file_did_not_load_is_still_offered_a_redownload(monkeypatch):
+    runner, row = _extra_run(monkeypatch, "broken", "llama-server failed to start")
+    assert row["state"] == "failed" and row["error_kind"] == "verify"
+    assert "would not load: llama-server failed to start" in row["error"]
+    # Retry is a download, not a retest.
+    client = _PullClient([])
+    runner.download_model(client, VOICE)
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "ready")
+    assert [c[0] for c in client.calls] == [VOICE]
+
+
+def test_retry_on_a_fine_file_tests_it_again_without_downloading(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _extra_run(monkeypatch, "memory", "Not enough free memory")
+    gate, calls = threading.Event(), []
+
+    def retest(client, model_id, job=None):
+        calls.append((model_id, job))
+        gate.wait(5)
+        return (True, None, None)
+
+    monkeypatch.setattr(init_command, "retest_model", retest)
+    view = runner.download_model(_NoPullClient(), VOICE)
+    row = {m["id"]: m for m in view["models"]}[VOICE]
+    assert row["state"] == "verifying" and row["error"] is None
+    # Remove must not delete a model under test.
+    assert runner.busy_with(VOICE)
+    gate.set()
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "ready")
+    assert calls == [(VOICE, "voice")]
+    row = _models(runner)[VOICE]
+    assert row["error_kind"] is None and row["log"][-1] == "Test passed"
+    test_row = next(t for t in runner.status()["tests"] if t["subject"] == VOICE)
+    assert test_row["state"] == "passed"
+
+
+def test_a_second_timeout_on_model_retry_offers_a_redownload(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _extra_run(monkeypatch, "stuck", "It didn't finish")
+    assert runner._test_failures[VOICE] == 1
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (False, "It timed out again", "stuck"),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "failed")
+    row = _models(runner)[VOICE]
+    assert runner._test_failures[VOICE] == 2
+    assert row["error_kind"] == "verify"
+    assert "would not load" in row["error"]
+
+
+def test_a_passing_model_retest_clears_its_timeout_count(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _extra_run(monkeypatch, "stuck", "It didn't finish")
+    assert runner._test_failures[VOICE] == 1
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "ready")
+    assert VOICE not in runner._test_failures
+
+
+def _failed_run_waiting_on_one_model_retest(only_test_failure):
+    runner = sr.SetupRunner()
+    runner._run = sr.SetupRun(
+        skip_chat_model=False,
+        state="failed",
+        error=(
+            "The final chat test failed"
+            if not only_test_failure
+            else "Model test failed"
+        ),
+        failed_by_tests=only_test_failure,
+        chat_model_for=lambda _run: VOICE,
+    )
+    runner._models[VOICE] = sr.ModelProgress(
+        id=VOICE,
+        state="failed",
+        error_kind="stuck",
+        test_job="voice",
+    )
+    runner._record_test(
+        runner._run,
+        {
+            "job": "voice",
+            "subject": VOICE,
+            "state": "failed",
+            "error": "It timed out",
+            "kind": "stuck",
+        },
+    )
+    return runner
+
+
+def test_the_last_model_retest_rechecks_setup_before_marking_ready(
+    monkeypatch, gaia_home
+):
+    from gaia.installer import init_command
+
+    runner = _failed_run_waiting_on_one_model_retest(only_test_failure=True)
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+    checks, turns = [], []
+
+    def check(*_args, **_kwargs):
+        checks.append(1)
+        return {"ready": True, "models": [{"id": VOICE, "loaded": True}]}
+
+    monkeypatch.setattr(sr, "check", check)
+    monkeypatch.setattr(
+        sr, "_agent_turn_problem", lambda model_id: turns.append(model_id)
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: runner.status()["state"] == "ready")
+    assert checks == [1] and turns == [VOICE]
+    assert runner.status()["error"] is None
+    assert (gaia_home / "chat" / "initialized").exists()
+
+
+def test_a_retest_keeps_setup_failed_when_final_verification_fails(
+    monkeypatch, gaia_home
+):
+    from gaia.installer import init_command
+
+    runner = _failed_run_waiting_on_one_model_retest(only_test_failure=True)
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_args, **_kwargs: {
+            "ready": True,
+            "models": [{"id": VOICE, "loaded": True}],
+        },
+    )
+    monkeypatch.setattr(sr, "_agent_turn_problem", lambda _model_id: "no answer")
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: runner.status()["state"] == "failed")
+    assert "got no answer" in runner.status()["error"]
+    assert not (gaia_home / "chat" / "initialized").exists()
+
+
+def test_a_model_retest_does_not_hide_another_setup_failure(monkeypatch, gaia_home):
+    from gaia.installer import init_command
+
+    runner = _failed_run_waiting_on_one_model_retest(only_test_failure=False)
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (True, None, None),
+    )
+
+    runner.download_model(_NoPullClient(), VOICE)
+
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "ready")
+    view = runner.status()
+    assert view["state"] == "failed"
+    assert view["error"] == "The final chat test failed"
+    assert not (gaia_home / "chat" / "initialized").exists()
+
+
+def test_a_retest_that_finds_the_file_broken_then_offers_a_redownload(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _extra_run(monkeypatch, "stuck", "It didn't finish")
+    monkeypatch.setattr(
+        init_command,
+        "retest_model",
+        lambda client, model_id, job=None: (False, "bad magic", "broken"),
+    )
+    runner.download_model(_NoPullClient(), VOICE)
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "failed")
+    row = _models(runner)[VOICE]
+    assert row["error_kind"] == "verify"
+    assert "would not load: bad magic" in row["error"]
+
+
+def test_a_retest_that_crashes_is_never_left_verifying(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _extra_run(monkeypatch, "answer", "No audio came back")
+
+    def retest(*_a, **_k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(init_command, "retest_model", retest)
+    runner.download_model(_NoPullClient(), VOICE)
+    assert _wait_until(lambda: _models(runner)[VOICE]["state"] == "failed")
+    row = _models(runner)[VOICE]
+    # Still a fine file: Retry tests again, and the reason names the crash.
+    assert row["error_kind"] in sr.TEST_KINDS
+    assert "RuntimeError: boom" in row["error"]
+    assert not runner.busy_with(VOICE)
+
+
+def test_settle_takes_a_kind_per_model():
+    runner = sr.SetupRunner()
+    runner._on_event(json.loads(_plan_event()))
+    runner._on_event({"event": "model_done", "model": QWEN, "downloaded": True})
+    with runner._lock:
+        runner._settle_models(
+            {EMBED}, {QWEN: "short of memory"}, kinds={QWEN: "memory"}
+        )
+    rows = _models(runner)
+    assert rows[QWEN]["state"] == "failed" and rows[QWEN]["error_kind"] == "memory"
+    assert "Failed its test: short of memory" in rows[QWEN]["log"]
+
+
+def test_cancel_during_the_load_check_leaves_no_row_verifying(monkeypatch):
+    plan = json.dumps(
+        {
+            "event": "plan",
+            "models": [{"id": GEMMA, "bytes_total": 10, "downloaded": True}],
+        }
+    )
+    _popen(monkeypatch, _FakeProc(io.BytesIO((plan + "\n").encode())))
+    check_proc = _CheckProc({}, 0, "", "")
+    entered, release = threading.Event(), threading.Event()
+
+    def check(*_a, on_start=None, **_k):
+        on_start(check_proc)
+        entered.set()
+        release.wait(5)
+        raise sr.SetupError("Setup could not be checked (exit -9).")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    runner.start(False, chat_model_for=_local_chat)
+    assert entered.wait(5)
+    assert _models(runner)[GEMMA]["state"] == "verifying"
+    runner.cancel()
+    release.set()
+    runner._thread.join(5)
+    assert _models(runner)[GEMMA]["state"] == "unchecked"
+
+
+# ── a main-plan model's failed load: re-download only when the file is broken ──
+
+
+def _load_failed_run(monkeypatch, kind, error="raw load error"):
+    """A run whose load check failed Gemma, from the plan, with *kind*."""
+    plan = json.dumps(
+        {
+            "event": "plan",
+            "models": [
+                {"id": GEMMA, "bytes_total": 10, "downloaded": True},
+                {"id": EMBED, "bytes_total": 10, "downloaded": True},
+            ],
+        }
+    )
+    _popen(monkeypatch, _FakeProc(io.BytesIO((plan + "\n").encode())))
+    monkeypatch.setattr(
+        sr,
+        "check",
+        lambda *_a, **_k: {
+            "ready": False,
+            "stage": "load",
+            "reasons": [f"Model '{GEMMA}' failed"],
+            "models": [
+                {"id": EMBED, "loaded": True},
+                {"id": GEMMA, "loaded": False, "error": error, "kind": kind},
+            ],
+        },
+    )
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
+    view = _wait_done(runner)
+    rows = {m["id"]: m for m in view["models"]}
+    assert rows[EMBED]["state"] == "ready"
+    assert all(m["state"] != "verifying" for m in view["models"])
+    return runner, rows[GEMMA]
+
+
+@pytest.mark.parametrize(
+    "kind, said",
+    [
+        ("memory", "enough free memory"),
+        ("stuck", "didn't answer"),
+        ("answer", "nothing usable back"),
+        ("window", "smaller context window"),
+    ],
+)
+def test_a_plan_model_that_failed_its_load_for_a_fine_file_is_not_offered_a_redownload(
+    monkeypatch, kind, said
+):
+    _runner, row = _load_failed_run(monkeypatch, kind)
+    assert row["state"] == "failed" and row["can_retry"]
+    assert row["error_kind"] == kind
+    assert said in row["error"] and "would not load" not in row["error"]
+    assert "Load check: raw load error" in row["log"]
+
+
+@pytest.mark.parametrize("kind", ["broken", None])
+def test_a_plan_model_whose_file_did_not_load_is_still_offered_a_redownload(
+    monkeypatch, kind
+):
+    _runner, row = _load_failed_run(monkeypatch, kind, "bad magic")
+    assert row["error_kind"] == "verify"
+    assert "would not load: bad magic" in row["error"]
+
+
+def test_retry_on_a_plan_model_repeats_its_load_without_downloading(monkeypatch):
+    from gaia.installer import init_command
+
+    runner, _row = _load_failed_run(monkeypatch, "memory")
+    calls = []
+
+    def retest(client, model_id, job=None):
+        calls.append((model_id, job))
+        return (True, None, None)
+
+    monkeypatch.setattr(init_command, "retest_model", retest)
+    runner.download_model(_NoPullClient(), GEMMA)
+    assert _wait_until(lambda: _models(runner)[GEMMA]["state"] == "ready")
+    assert calls == [(GEMMA, init_command.LOAD_CHECK_JOB)]
+    assert not runner.busy_with(GEMMA)
+    # The load check is no Test-step row; a retest of it must not add one.
+    assert not any(t["subject"] == GEMMA for t in runner.status()["tests"])
+
+
+def test_report_waits_for_a_failed_runs_problem_report(monkeypatch):
+    """A report asked for the moment a run fails still names its problem report."""
+    runner = sr.SetupRunner()
+    run = sr.SetupRun(False, state="failed")
+    runner._run = run
+    saving = threading.Event()
+
+    def slow_record(_run, _cause):
+        saving.set()
+        time.sleep(0.5)
+        return "GF-20261104-192233-3f2a"
+
+    monkeypatch.setattr(sr, "_record_setup_failure", slow_record)
+    with runner._lock:
+        runner._recording = threading.Thread(
+            target=runner._record_failure, args=(run, None), daemon=True
+        )
+    runner._recording.start()
+    assert saving.wait(5)
+
+    report = runner.report()
+
+    assert any(
+        "GF-20261104-192233-3f2a" in line
+        for line in report["log_tail"]
+        + [line for lines in report["logs"].values() for line in lines]
+    )
+    assert "problem_report" not in report
+
+
+def test_report_says_when_the_problem_report_is_still_saving(monkeypatch):
+    runner = sr.SetupRunner()
+    runner._run = sr.SetupRun(False, state="failed")
+    release = threading.Event()
+    monkeypatch.setattr(sr, "_RECORD_WAIT_S", 0.1)
+    runner._recording = threading.Thread(target=release.wait, args=(5,), daemon=True)
+    runner._recording.start()
+    try:
+        assert "still being saved" in runner.report()["problem_report"]
+    finally:
+        release.set()
+
+
+def test_failed_model_test_from_init_sets_failed_by_tests(monkeypatch):
+    """The retry eligibility flag must come from real init progress, not fixtures."""
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "event": "plan",
+                    "models": [{"id": VOICE, "bytes_total": 10, "downloaded": True}],
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "test",
+                    "job": "voice",
+                    "subject": VOICE,
+                    "state": "failed",
+                    "error": "It did not finish",
+                    "kind": "stuck",
+                }
+            ),
+            "",
+        ]
+    ).encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(output), returncode=1))
+    monkeypatch.setattr(sr, "_record_setup_failure", lambda *_args: None)
+
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
+    view = _wait_done(runner)
+
+    assert view["state"] == "failed"
+    assert view["model_failed"] is False
+    assert view["tests"][0]["state"] == "failed"
+    assert view["tests"][0]["subject"] == VOICE
+    row = _models(runner)[VOICE]
+    assert row["state"] == "failed"
+    assert row["error_kind"] == "stuck"
+    assert (
+        view["failed_by_tests"]
+        if "failed_by_tests" in view
+        else runner._run.failed_by_tests
+    )
+
+
+def test_failed_model_test_does_not_hide_a_failed_component(monkeypatch):
+    """A component failure keeps setup failed even when a model test also failed."""
+    output = "\n".join(
+        [
+            json.dumps(
+                {
+                    "event": "plan",
+                    "models": [{"id": VOICE, "bytes_total": 10, "downloaded": True}],
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "component",
+                    "component": "server",
+                    "state": "failed",
+                    "kind": "other",
+                }
+            ),
+            json.dumps(
+                {
+                    "event": "test",
+                    "job": "voice",
+                    "subject": VOICE,
+                    "state": "failed",
+                    "error": "It did not finish",
+                    "kind": "stuck",
+                }
+            ),
+            "",
+        ]
+    ).encode()
+    _popen(monkeypatch, _FakeProc(io.BytesIO(output), returncode=1))
+    monkeypatch.setattr(sr, "_record_setup_failure", lambda *_args: None)
+
+    runner = sr.SetupRunner()
+    runner.start(skip_chat_model=False, chat_model_for=_local_chat)
+    view = _wait_done(runner)
+
+    assert view["state"] == "failed"
+    assert view["model_failed"] is False
+    assert runner._run.failed_by_tests is False
+    assert view["components"] == {"server": "failed"}
+    assert _models(runner)[VOICE]["state"] == "failed"

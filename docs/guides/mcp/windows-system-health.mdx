@@ -22,7 +22,7 @@ icon: "heart-pulse"
 ## See It In Action
 
 ```bash
-uv run examples/mcp_windows_system_health_agent.py
+uv run --no-project examples/mcp_windows_system_health_agent.py
 ```
 
 ```
@@ -44,9 +44,9 @@ The agent gathers metrics via PowerShell, formats a report, and pastes it into N
 <Steps>
   <Step title="Run the agent">
     ```bash
-    uv run examples/mcp_windows_system_health_agent.py
+    uv run --no-project examples/mcp_windows_system_health_agent.py
     ```
-    The agent auto-installs the Windows MCP server via `uvx` on first run. `uvx` runs the server in its own isolated environment, so GAIA's Python version does not need to match the server's.
+    The agent auto-installs the Windows MCP server via `uvx` on first run. `uvx` runs the server in its own isolated environment, so GAIA's Python version does not need to match the server's. `--no-project` stops uv from warning that the workspace has no `requires-python`; the example still runs in the `.venv` where you installed GAIA.
   </Step>
 
   <Step title="Ask about your system">
@@ -132,7 +132,7 @@ If you see `Failed to connect to MCP server 'windows'`:
   </Step>
 </Steps>
 
-See the [MCP Client guide](/guides/mcp/client) for configuration files and `gaia mcp` commands.
+See the [MCP Client guide](/sdk/sdks/mcp) for configuration files and `gaia mcp` commands.
 
 ## Security Considerations
 

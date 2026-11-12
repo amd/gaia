@@ -8,7 +8,6 @@ import sys
 import types
 
 import pytest
-
 from gaia_agent import entry
 
 

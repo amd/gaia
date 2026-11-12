@@ -23,6 +23,18 @@ describe('ScheduleManager', () => {
         expect(useChatStore.getState().showSchedules).toBe(false);
     });
 
+    it('takes focus when it opens and gives it back when it closes', () => {
+        const trigger = document.createElement('button');
+        document.body.appendChild(trigger);
+        trigger.focus();
+        const { unmount } = render(<ScheduleManager />);
+
+        expect(screen.getByRole('dialog', { name: /Schedule/ }).contains(document.activeElement)).toBe(true);
+        unmount();
+        expect(trigger).toHaveFocus();
+        trigger.remove();
+    });
+
     it("an unparsed schedule shows the parser's reason", async () => {
         vi.mocked(api.parseScheduleInput).mockResolvedValue({
             valid: false,
@@ -32,6 +44,6 @@ describe('ScheduleManager', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         fireEvent.change(screen.getByPlaceholderText(/Describe your schedule/), { target: { value: 'whenever the moon is blue' } });
         expect(await screen.findByText(/didn.t understand that schedule/, {}, { timeout: 3000 })).toBeInTheDocument();
-        expect(screen.getByText(/every 30m/)).toHaveClass('schedule-parsed-hint');
+        expect(screen.getByText(/every 30m/).closest('.schedule-parsed-hint')).not.toBeNull();
     });
 });

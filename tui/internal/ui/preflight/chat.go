@@ -13,6 +13,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
@@ -291,8 +292,8 @@ func (m Model) chooserLines(w, budget int) []string {
 			title = stepText(n, m.rep.StepCount(), "where should chat run?")
 		}
 		out := []string{
-			pad(labelStyle.Render(title)),
-			pad(dimStyle.Render(truncate("Change it any time: p on this screen, /provider in chat.", w-2*indentW))),
+			components.Pad(labelStyle.Render(title)),
+			components.Pad(dimStyle.Render(truncate("Change it any time: p on this screen, /provider in chat.", w-2*indentW))),
 		}
 		if tight == 0 {
 			out = append(out, "")
@@ -308,13 +309,18 @@ func (m Model) chooserLines(w, budget int) []string {
 				style = dimStyle
 				detail = []string{o.Unavailable, o.TradeOff}
 			}
-			out = append(out, pad(cursor+style.Render(fmt.Sprintf("%d. %s", i+1, o.Label))))
+			out = append(out, components.Pad(cursor+style.Render(fmt.Sprintf("%d. %s", i+1, o.Label))))
 			if !selected {
-				detail = detail[:max(0, 2-tight)]
+				// An unavailable option keeps its reason however tight it gets.
+				keep := max(0, 2-tight)
+				if o.Unavailable != "" {
+					keep = max(1, keep)
+				}
+				detail = detail[:keep]
 			}
 			for _, d := range detail {
 				for _, l := range wrap(d, textW) {
-					out = append(out, pad("     "+dimStyle.Render(l)))
+					out = append(out, components.Pad("     "+dimStyle.Render(l)))
 				}
 			}
 			if tight == 0 {
@@ -322,7 +328,7 @@ func (m Model) chooserLines(w, budget int) []string {
 			}
 		}
 		if m.note != "" {
-			out = append(out, indentAll(wrap(m.note, w-2*indentW), indentW)...)
+			out = append(out, components.IndentAll(wrap(m.note, w-2*indentW), indentW)...)
 		}
 		return out
 	}

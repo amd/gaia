@@ -11,10 +11,10 @@
 const fs = require("fs");
 const path = require("path");
 
-const main = fs.readFileSync(
-  path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"),
-  "utf8"
-);
+// The slicing below matches "\n"; a CRLF checkout would never match it.
+const main = fs
+  .readFileSync(path.join(__dirname, "..", "..", "src", "gaia", "apps", "webui", "main.cjs"), "utf8")
+  .replace(/\r\n/g, "\n");
 
 function body(name) {
   const start = main.indexOf(`async function ${name}(`);
@@ -24,6 +24,16 @@ function body(name) {
 
 test("a download's Save dialog is titled, not named after its blob: URL", () => {
   expect(main).toMatch(/session\.defaultSession\.on\("will-download"[\s\S]{0,200}setSaveDialogOptions\(\{\s*title: "Save from GAIA"/);
+});
+
+test("a missing Downloads folder still opens the Save dialog instead of crashing the app", () => {
+  const start = main.indexOf("function saveFolderFor(");
+  expect(start).toBeGreaterThan(-1);
+  const fn = main.slice(start, main.indexOf("\n}\n", start));
+  expect(fn).toMatch(/try \{\s*return path\.join\(app\.getPath\("downloads"\), filename\);\s*\} catch/);
+  expect(fn).toMatch(/console\.warn/);
+  // The only Downloads lookup in the main process goes through the guarded helper.
+  expect(main.match(/getPath\("downloads"\)/g)).toHaveLength(1);
 });
 
 test("the will-download listener is added once, not on every window reopen", () => {
@@ -39,23 +49,4 @@ test("the will-download listener is added once, not on every window reopen", () 
 test("the backend-crash dialog is shown with the main window as its owner", () => {
   const fn = body("handleBackendCrash");
   expect(fn).toMatch(/showBackendCrashDialog\(\{[\s\S]*parent: mainWindow/);
-});
-
-test("the Lemonade question is shown with the progress window as its owner", () => {
-  expect(main).toMatch(/chooseLemonade: \(found\) => chooseLemonadeInDialog\(found, progress\.window\)/);
-  const fn = body("chooseLemonadeInDialog");
-  expect(fn).toMatch(/dialog\.showMessageBox\(owner, box\)/);
-  expect(fn).toMatch(/owner\.focus\(\)/);
-});
-
-test("the Lemonade question restores and raises its owner, flashing only when focus is refused", () => {
-  const fn = body("chooseLemonadeInDialog");
-  const restore = fn.indexOf("owner.restore()");
-  const raise = fn.indexOf("owner.moveTop()");
-  const flash = fn.indexOf("if (!owner.isFocused()) owner.flashFrame(true)");
-  const ask = fn.indexOf("dialog.showMessageBox(owner, box)");
-  expect(Math.min(restore, raise, flash)).toBeGreaterThan(-1);
-  expect(restore).toBeLessThan(raise);
-  expect(flash).toBeLessThan(ask);
-  expect(fn.indexOf("owner.flashFrame(false)")).toBeGreaterThan(ask);
 });

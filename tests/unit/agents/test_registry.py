@@ -463,9 +463,37 @@ class TestEntryPointDiscovery:
         assert agent.kind == "created"
         assert agent._gaia_namespaced_agent_id == "installed:hub-chat"
 
+    @pytest.mark.parametrize(
+        "dist, expected",
+        [(SimpleNamespace(version="0.1.0"), "0.1.0"), (None, None)],
+    )
+    def test_entry_point_records_its_package_version(self, monkeypatch, dist, expected):
+        registration = AgentRegistration(
+            id="my-agent",
+            name="My Agent",
+            description="",
+            source="installed",
+            conversation_starters=[],
+            factory=lambda **kw: None,
+            agent_dir=None,
+            models=[],
+        )
+        entry_point = self._entry_point("my-agent", lambda: registration)
+        entry_point.dist = dist
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            self._entry_points(entry_point),
+        )
+
+        registry = AgentRegistry()
+        registry._discover_installed_agents()
+
+        assert registry.get("my-agent").version == expected
+
     def test_entry_point_does_not_override_existing_agent(self, monkeypatch):
         existing = AgentRegistration(
-            id="chat",
+            id="hub-chat",
             name="Existing Chat",
             description="Existing registration",
             source="builtin",
@@ -473,10 +501,10 @@ class TestEntryPointDiscovery:
             factory=lambda **kw: "existing",
             agent_dir=None,
             models=[],
-            namespaced_agent_id="builtin:chat",
+            namespaced_agent_id="builtin:hub-chat",
         )
         replacement = AgentRegistration(
-            id="chat",
+            id="hub-chat",
             name="Replacement Chat",
             description="Should not replace existing registrations",
             source="installed",
@@ -485,7 +513,7 @@ class TestEntryPointDiscovery:
             agent_dir=None,
             models=[],
         )
-        entry_point = self._entry_point("chat", lambda: replacement)
+        entry_point = self._entry_point("hub-chat", lambda: replacement)
         monkeypatch.setattr(
             registry_module.importlib.metadata,
             "entry_points",
@@ -496,8 +524,94 @@ class TestEntryPointDiscovery:
         registry._register(existing)
         registry._discover_installed_agents()
 
-        assert registry.get("chat").name == "Existing Chat"
-        assert registry.create_agent("chat") == "existing"
+        assert registry.get("hub-chat").name == "Existing Chat"
+        assert registry.create_agent("hub-chat") == "existing"
+
+    @pytest.mark.parametrize("legacy_id", ["chat", "doc", "file", "chat-lite"])
+    def test_a_leftover_chat_package_cannot_take_a_retired_id(
+        self, monkeypatch, caplog, legacy_id
+    ):
+        """An old gaia-agent-chat install still advertises the retired ids;
+        they must keep opening the flagship, with a warning naming the package."""
+        stale = AgentRegistration(
+            id=legacy_id,
+            name="Stale Chat",
+            description="Left behind by an old gaia-agent-chat install",
+            source="installed",
+            conversation_starters=[],
+            factory=lambda **kw: "stale",
+            agent_dir=None,
+            models=[],
+        )
+        entry_point = self._entry_point(legacy_id, lambda: stale)
+        entry_point.dist = SimpleNamespace(name="gaia-agent-chat", version="0.1.0")
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            self._entry_points(entry_point),
+        )
+
+        registry = AgentRegistry()
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            registry._discover_installed_agents()
+
+        assert legacy_id not in registry._agents
+        assert registry.canonical_id(legacy_id) == "gaia"
+        assert "gaia-agent-chat" in caplog.text
+
+    def test_a_retired_entry_point_is_rejected_without_importing_it(
+        self, monkeypatch, caplog
+    ):
+        def _import_would_fail():
+            raise AssertionError("the stale package must not be imported")
+
+        entry_point = SimpleNamespace(
+            name="chat",
+            value="gaia_agent_chat:build_registration",
+            load=_import_would_fail,
+            dist=SimpleNamespace(name="gaia-agent-chat", version="0.1.0"),
+        )
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            self._entry_points(entry_point),
+        )
+
+        registry = AgentRegistry()
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            registry._discover_installed_agents()
+
+        assert "chat" not in registry._agents
+        assert "retired" in caplog.text
+        assert "Failed to load" not in caplog.text
+
+    def test_a_renamed_entry_point_still_cannot_register_a_retired_id(
+        self, monkeypatch, caplog
+    ):
+        stale = AgentRegistration(
+            id="doc",
+            name="Stale Doc",
+            description="",
+            source="installed",
+            conversation_starters=[],
+            factory=lambda **kw: "stale",
+            agent_dir=None,
+            models=[],
+        )
+        entry_point = self._entry_point("doc-agent", lambda: stale)
+        monkeypatch.setattr(
+            registry_module.importlib.metadata,
+            "entry_points",
+            self._entry_points(entry_point),
+        )
+
+        registry = AgentRegistry()
+        with caplog.at_level("WARNING", logger="gaia.agents.registry"):
+            registry._discover_installed_agents()
+
+        assert "doc" not in registry._agents
+        assert registry.canonical_id("doc") == "gaia"
+        assert "retired" in caplog.text
 
     def test_bad_entry_point_is_skipped_with_warning(self, monkeypatch, caplog):
         entry_point = self._entry_point("broken-agent", object())

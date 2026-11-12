@@ -107,12 +107,12 @@ func TestSmallTerminalsDegradeCleanly(t *testing.T) {
 	}
 }
 
-// Below 60 columns the purpose column becomes letters with a legend.
-func TestNarrowWindowShortensThePurposeColumn(t *testing.T) {
+// Below 60 columns the support label moves from its column into the note.
+func TestNarrowWindowMovesTheLabelIntoTheNote(t *testing.T) {
 	h := newHarness(t, ModeFirstRun, &f.Fake{P: coldPlan(), G: discreteGPU()})
 	h.send(tea.WindowSizeMsg{Width: 56, Height: 24})
-	h.expect("C chat · V vision · D documents")
-	h.expectNot("Documents  ")
+	h.expect("Verified. Answers your chats.")
+	h.expectNot("Verified 23.3")
 }
 
 // Too short: one line, and only esc does anything.
@@ -351,9 +351,6 @@ func TestBarGrowsInEighthsAndKeepsItsWidth(t *testing.T) {
 
 func TestNumbersReadAsPeopleSayThem(t *testing.T) {
 	cases := map[string]string{
-		formatGB(23.3):                             "23.3 GB",
-		formatGB(0.33):                             "330 MB",
-		formatGB(0.0001):                           "1 MB",
 		formatGBShort(27.1):                        "27.1 GB",
 		formatGBShort(8.0):                         "8.0 GB",
 		formatGBShort(5.5):                         "5.5 GB",

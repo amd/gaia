@@ -162,7 +162,7 @@ td:nth-child(3) {
 </head>
 <body>
 <h1>Email Triage Agent
-  <span class="version-badge">Contract schema_version: 2.14</span>
+  <span class="version-badge">Contract schema_version: 2.16</span>
 </h1>
 <p class="subtitle">
   REST endpoint specification derived from the frozen #1262 contract
@@ -321,6 +321,12 @@ td:nth-child(3) {
     (<code>POST /v1/email/draft</code> to mint a single-use token, then
     <code>POST /v1/email/send</code>). Server-side resume is not wired yet;
     <code>confirm_url</code> is omitted.</p>
+  <p class="desc"><b>Errors before the stream opens:</b> <b>400</b> if
+    <code>provider</code> is anything but <code>lemonade</code>; <b>409</b> if the
+    session already has a turn in progress or <code>run_id</code> is already in
+    flight; <b>502</b> if the agent cannot be built or switched to the requested
+    <code>model</code>; <b>500</b> if the run fails to start after that. Once the
+    stream is open, a failure arrives as an <code>error</code> event instead.</p>
 </div>
 
 <div class="endpoint-block">
@@ -563,7 +569,7 @@ td:nth-child(3) {
 </div>
 
 <div class="footer">
-  GAIA Email Triage Agent &mdash; schema_version 2.14 &mdash; amd-gaia.ai
+  GAIA Email Triage Agent &mdash; schema_version 2.16 &mdash; amd-gaia.ai
 </div>
 </body>
 </html>

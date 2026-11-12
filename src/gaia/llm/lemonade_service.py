@@ -48,9 +48,17 @@ from gaia.llm.lemonade_supervisor import (
     _probe,
 )
 from gaia.llm.retry import http_body_text
+from gaia.llm.surface_hints import APP_RESTART_HINT, APP_SERVICE_DOWN_HINT
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
+
+
+def _where_to_look() -> str:
+    from gaia.daemon.paths import log_path
+
+    return f"Where to look: the GAIA background service's log at {log_path()}"
+
 
 __all__ = [
     "LemonadeStartError",
@@ -105,9 +113,8 @@ def ensure_lemonade_running(
 
     Args:
         ctx_size: the machine's profile window
-            (``lemonade_client.profile_ctx_size``). Only the legacy
-            Lemonade CLI takes it at start; modern Lemonade reads
-            no start-time window and gets it on each ``/load`` instead.
+            (``lemonade_client.profile_ctx_size``), logged only: Lemonade
+            reads no start-time window and gets it on each ``/load``.
         timeout: how long a freshly started server gets to answer.
         base_url: which server to check; omit for the ``LEMONADE_BASE_URL``
             environment default.
@@ -171,8 +178,7 @@ def _ask_the_daemon(
         raise LemonadeStartError(
             "The GAIA background service answered without saying where the "
             f"local model server listens: {body}\n"
-            "To fix: restart it with `gaia daemon stop` then `gaia daemon start`.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         )
     return LemonadeState(
         base_url=served_url,
@@ -509,8 +515,7 @@ def _post_start(payload: dict, timeout: float) -> dict:
         raise LemonadeStartError(
             "The local model server is not running, and neither is the GAIA "
             "background service that owns it — so nothing can start it.\n"
-            "To fix: run `gaia daemon start`, then retry.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_SERVICE_DOWN_HINT}\n{_where_to_look()}"
         )
 
     url = f"http://{inst.host}:{inst.port}{API_PREFIX}/lemonade/start"
@@ -524,8 +529,7 @@ def _post_start(payload: dict, timeout: float) -> dict:
         raise LemonadeStartError(
             "The local model server is not running, and the request asking the "
             f"background service to start it failed: {e}\n"
-            "To fix: check it with `gaia daemon status`, then retry.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         ) from e
 
     if resp.status_code == 200:
@@ -543,7 +547,6 @@ def _post_start(payload: dict, timeout: float) -> dict:
         or (
             f"The background service refused to start the local model server "
             f"(HTTP {resp.status_code}).\n"
-            "To fix: check it with `gaia daemon status`.\n"
-            "Where to look: `gaia daemon logs`"
+            f"To fix: {APP_RESTART_HINT}\n{_where_to_look()}"
         )
     )

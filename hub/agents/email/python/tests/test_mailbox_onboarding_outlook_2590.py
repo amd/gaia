@@ -24,9 +24,9 @@ from __future__ import annotations
 import json
 
 import pytest
+from gaia_agent_email.tools import onboarding_tools as ob
 from onboarding_fakes import FakeAgent as _FakeAgent
 from onboarding_fakes import ScriptedConsole as _ScriptedConsole
-from gaia_agent_email.tools import onboarding_tools as ob
 
 OUTLOOK_SCOPES = [
     "https://graph.microsoft.com/Mail.ReadWrite",
@@ -226,9 +226,7 @@ def test_full_walkthrough_and_device_connect_never_mentions_secret_either(
     walkthrough + device-code sign-in — never once asks for a secret."""
     ms_connectors["connection"] = None
     ms_connectors["client_id"] = ""
-    agent = _FakeAgent(
-        answers=["yes", *_WALKTHROUGH_DONE_ANSWERS, VALID_GUID]
-    )
+    agent = _FakeAgent(answers=["yes", *_WALKTHROUGH_DONE_ANSWERS, VALID_GUID])
 
     out = _run(agent, provider="microsoft")
 

@@ -189,7 +189,9 @@ def test_an_unsaved_recording_is_reported_before_the_end(built, monkeypatch):
     } in events
 
 
-@pytest.mark.parametrize("failure", [RuntimeError, ValueError, OSError, fs.SnapshotError])
+@pytest.mark.parametrize(
+    "failure", [RuntimeError, ValueError, OSError, fs.SnapshotError]
+)
 def test_a_failed_turn_keeps_its_error_when_undo_cannot_finish(
     built, monkeypatch, caplog, failure
 ):

@@ -56,7 +56,7 @@ beforeEach(() => {
 });
 
 async function openPicker() {
-    fireEvent.click(screen.getByRole('button', { name: /Gemma|kimi|Model/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Gemma|kimi|auto|Model/ }));
     return screen.findByRole('dialog', { name: 'Choose a model' });
 }
 
@@ -89,6 +89,50 @@ describe('ModelChip', () => {
         render(<ModelChip />);
         const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF · Fireworks AI/ });
         expect(chip.getAttribute('title')).toBe('Sent to Fireworks AI.');
+    });
+
+    it('collapses unranked Fireworks variants until the user asks to see all', async () => {
+        const fireworks: ProviderInfo = { ...FIREWORKS, models_discovered: true };
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks], active: LOCAL_ACTIVE, lemonade_error: null });
+        mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
+            ? {
+                provider: 'fireworks',
+                models: [
+                    model('fireworks.recommended', { rank: 1, note: 'best overall' }),
+                    model('fireworks.auto'),
+                    model('fireworks.spot'),
+                ],
+            }
+            : { provider: 'local', models: [model('Gemma-4-E4B-it-GGUF')] }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        expect(within(dialog).getByRole('option', { name: /recommended/ })).toBeInTheDocument();
+        expect(within(dialog).queryByRole('option', { name: /fireworks\.auto/ })).not.toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: 'Show all models' })).toBeInTheDocument();
+
+        fireEvent.click(within(dialog).getByRole('option', { name: 'Show all models' }));
+        expect(await within(dialog).findByRole('option', { name: /^auto$/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: /^spot$/ })).toBeInTheDocument();
+    });
+
+    it('keeps the active unranked Fireworks model visible while collapsed', async () => {
+        const activeCloud = { ...CLOUD_ACTIVE, model: 'fireworks.auto' };
+        useModelStore.setState({ active: activeCloud });
+        const fireworks: ProviderInfo = { ...FIREWORKS, models_discovered: true };
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, fireworks], active: activeCloud, lemonade_error: null });
+        mockedApi.listProviderModels.mockImplementation(async (id) => (id === 'fireworks'
+            ? {
+                provider: 'fireworks',
+                models: [model('fireworks.recommended', { rank: 1 }), model('fireworks.auto'), model('fireworks.other')],
+            }
+            : { provider: 'local', models: [model('Gemma-4-E4B-it-GGUF')] }));
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        expect(within(dialog).getByRole('option', { name: /^recommended$/ })).toBeInTheDocument();
+        expect(within(dialog).getByRole('option', { name: /^auto$/ })).toBeInTheDocument();
+        expect(within(dialog).queryByRole('option', { name: /^other$/ })).not.toBeInTheDocument();
     });
 
     it('shows the model name in the tooltip without Markdown backticks', () => {
@@ -192,6 +236,19 @@ describe('ModelChip', () => {
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.accounts/fireworks/models/kimi-k2'));
         await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
         expect(screen.getByRole('button', { name: /kimi-k2 · Fireworks AI/ })).toBeInTheDocument();
+    });
+
+    it('shows the cloud notice under the clicked row and scrolls it into view', async () => {
+        const scrolled = vi.spyOn(HTMLElement.prototype, 'scrollIntoView');
+        render(<ModelChip />);
+        const dialog = await openPicker();
+        const row = await within(dialog).findByRole('option', { name: /^kimi-k2/ });
+        fireEvent.click(row);
+
+        const notice = within(dialog).getByRole('alert');
+        expect(row.closest('.popover-row')?.nextElementSibling).toBe(notice);
+        expect(scrolled.mock.contexts).toContain(notice);
+        scrolled.mockRestore();
     });
 
     it('switches between local models without a notice', async () => {
@@ -460,6 +517,13 @@ describe('ModelChip keyboard', () => {
         await within(dialog).findByRole('option', { name: /^kimi-k2/ });
         return dialog;
     }
+    async function openLocalWithKeyboard(user: ReturnType<typeof userEvent.setup>) {
+        screen.getByRole('button', { name: /Gemma|kimi|Model/ }).focus();
+        await user.keyboard('{Enter}');
+        const dialog = await screen.findByRole('dialog', { name: 'Choose a model' });
+        await within(dialog).findByRole('option', { name: /^Gemma-4-E4B-it-GGUF/ });
+        return dialog;
+    }
     const option = (dialog: HTMLElement, name: RegExp) => within(dialog).getByRole('option', { name });
 
     it('opens on the current model, scrolled into view, as the only Tab stop', async () => {
@@ -500,6 +564,26 @@ describe('ModelChip keyboard', () => {
         expect(option(dialog, /^kimi-k2/)).toHaveFocus();
         expect(option(dialog, /^kimi-k2/).tabIndex).toBe(0);
         expect(option(dialog, /^Gemma-4-E4B-it-GGUF/).tabIndex).toBe(-1);
+    });
+
+    it('makes the expanded Fireworks list keyboard-reachable and focuses its first new row', async () => {
+        mockedApi.listProviderModels.mockImplementation(async (id) => ({
+            provider: id,
+            models: id === 'local'
+                ? [model('Gemma-4-E4B-it-GGUF')]
+                : [model('fireworks.recommended', { rank: 1 }), model('fireworks.auto')],
+        }));
+        const user = userEvent.setup();
+        render(<ModelChip />);
+        const dialog = await openLocalWithKeyboard(user);
+        await waitFor(() => expect(option(dialog, /^Gemma-4-E4B-it-GGUF/)).toHaveFocus());
+
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^recommended$/)).toHaveFocus();
+        await user.keyboard('{ArrowDown}');
+        expect(option(dialog, /^Show all models$/)).toHaveFocus();
+        await user.keyboard('{Enter}');
+        await waitFor(() => expect(option(dialog, /^auto$/)).toHaveFocus());
     });
 
     it('picks the focused row on Enter', async () => {

@@ -24,13 +24,13 @@ from fastapi import HTTPException
 import gaia.ui._chat_helpers as chat_helpers_module
 from gaia.agents.base.agent import Agent
 from gaia.agents.registry import AgentRegistry
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.hub.installer import register_installed_sidecars
 from gaia.ui import followups
 from gaia.ui import permissions as session_permissions
 from gaia.ui._chat_helpers import _stream_chat_impl
 from gaia.ui.database import ChatDatabase
 from gaia.ui.email_sidecar import daemon_client as daemon_client_module
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
@@ -243,7 +243,7 @@ def live_gaia_sidecar(monkeypatch):
         lambda: {
             "base_url": "http://lemonade.invalid/api/v1",
             "reachable": True,
-            "version": "99.0.0",
+            "version": "9999.0.0",
             "present": True,
             "ctx_size": None,
             "model_id": "m",
