@@ -1,0 +1,13 @@
+{
+  "kind": "stream",
+  "finding": "F36 (amd/gaia#7205)",
+  "why": "Only a whole envelope is a tool call: a model merely quoting its first characters is still talking to the user.",
+  "chunks": [
+    "{\"__tool_calls__\": is the key the provider uses for native calls."
+  ],
+  "expect": {
+    "shown_has": [
+      "is the key the provider uses"
+    ]
+  }
+}

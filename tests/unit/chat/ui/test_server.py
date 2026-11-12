@@ -1206,6 +1206,79 @@ class TestCustomModelIsTheChosenModel:
         assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
         assert db.get_setting("custom_model") is None
 
+    def test_a_cloud_model_only_the_server_lists_is_refused_under_local_only(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.config import GaiaConfig
+        from gaia.llm import lemonade_client, local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        GaiaConfig.save_keys({"last_model": "Qwen3.6-35B-A3B-GGUF"})
+        asked = []
+
+        def model_list(method, path, payload=None):
+            asked.append((method, path))
+            listed = {"id": "othercloud.big-model", "recipe": "cloud"}
+            return 200, {"data": [listed]}
+
+        monkeypatch.setattr(providers, "_lemonade", model_list)
+        try:
+            resp = client.put(
+                "/api/settings", json={"custom_model": "othercloud.big-model"}
+            )
+        finally:
+            lemonade_client.record_cloud_models({"data": []})
+
+        assert resp.status_code == 409
+        detail = resp.json()["detail"]
+        assert "Can't switch to big-model · othercloud: Local only is on." in detail
+        assert "Settings > Privacy" in detail and "gaia config" not in detail
+        assert asked == [("GET", "models?show_all=true")]
+        assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
+        assert db.get_setting("custom_model") is None
+
+    def test_a_listed_cloud_model_retyped_in_another_case_is_refused_under_local_only(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.llm import lemonade_client, local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        listed = {"id": "othercloud.big-model", "recipe": "cloud"}
+        monkeypatch.setattr(
+            providers, "_lemonade", lambda *a, **k: (200, {"data": [listed]})
+        )
+        try:
+            resp = client.put(
+                "/api/settings", json={"custom_model": "user.OtherCloud.Big-Model"}
+            )
+        finally:
+            lemonade_client.record_cloud_models({"data": []})
+
+        assert resp.status_code == 409
+        assert "Local only is on" in resp.json()["detail"]
+        assert db.get_setting("custom_model") is None
+
+    def test_a_local_model_is_saved_under_local_only_without_asking_the_server(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.llm import local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        monkeypatch.setattr(
+            providers, "_lemonade", lambda *a, **k: pytest.fail("asked the server")
+        )
+
+        resp = client.put("/api/settings", json={"custom_model": "Qwen3-4B-GGUF"})
+
+        assert resp.status_code == 200
+        assert db.get_setting("custom_model") == "Qwen3-4B-GGUF"
+
     def test_saving_a_custom_model_clears_a_failed_restore_notice(
         self, client, monkeypatch
     ):
