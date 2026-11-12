@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A new chat starts about 45 s sooner once memory has changed.** Each chat
+  rendered the memory section of its system prompt afresh, and on Gemma-4 any
+  change there made the model re-read the whole ~19K-token prompt, tool
+  schemas included. New chats in the same agent process now reuse the section
+  for up to an hour; what was learned since still reaches them through
+  per-turn recall, and a memory forgotten, edited, marked sensitive or moved
+  anywhere (including the Memory page) is never shown from the shared copy.
 - **One MCP server with a bad repeat-call declaration no longer takes the
   others down.** An MCP server tool can name the arguments the repeat-call
   guard compares, in its `_meta` under `ai.amd-gaia/dedup_key`. A server whose

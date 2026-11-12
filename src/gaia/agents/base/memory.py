@@ -550,6 +550,46 @@ EXTRACTION_EXIT_WAIT_S = 15.0
 #: local model with the conversation, so a turn sent while it runs queues behind it.
 EXTRACTION_IDLE_S = 3.0
 
+#: The stable memory section, shared by every session of this process that
+#: reads the same store, memory context, project, model and local date:
+#: (monotonic render time, prompt, memory ids, lesson ids,
+#: {id: (row version, rendered line)}). A new chat
+#: would otherwise re-render it, and on Gemma-4 any change there makes the
+#: server re-read the whole ~19K-token prompt (~45 s).
+#: Reused only while every line of it is still current.
+_SHARED_STABLE_PROMPTS: Dict[tuple, tuple] = {}
+_OMITTED_COUNT_LINE = re.compile(r"^\(\d+ more stored .+ not listed here;")
+_SHARED_STABLE_GUARD = threading.Lock()
+#: Facts learned since reach new chats through per-turn recall meanwhile.
+SHARED_STABLE_TTL_S = 3600.0
+
+
+def _local_today():
+    """Today's local calendar day; due dates are compared against it."""
+    return datetime.now().astimezone().date()
+
+
+def _row_version(item: Dict, *, lesson: bool = False) -> tuple:
+    """Every field that decides whether and how a memory row is rendered."""
+    version = tuple(
+        item.get(field)
+        for field in (
+            "content",
+            "category",
+            "context",
+            "sensitive",
+            "superseded_by",
+            "due_at",
+            "source",
+            "created_at",
+            "updated_at",
+            "metadata",
+        )
+    )
+    # A lesson's line shows its confidence; a personal memory's doesn't.
+    return version + (item.get("confidence"),) if lesson else version
+
+
 #: How often a running extraction checks whether a user turn wants the model.
 EXTRACTION_CANCEL_POLL_S = 0.1
 
@@ -3128,7 +3168,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         # The session's frozen memory section is taken after upkeep, before the
         # first request that carries it.
-        self._refresh_stable_memory_prompt()
+        self._refresh_stable_memory_prompt(share=True)
 
     # ==================================================================
     # Conversation Consolidation
@@ -3641,10 +3681,11 @@ class MemoryMixin(ProceduralMemoryMixin):
         per-turn via get_memory_dynamic_context() to keep this prompt frozen for
         LLM KV-cache reuse.
 
-        Rendered once per session. The store changes under it every turn
+        Rendered once per session, and new sessions of this process reuse it
+        for up to ``SHARED_STABLE_TTL_S``. The store changes under it every turn
         (extraction, auto-stored tool errors, confidence bumps), and any prompt
         recomposition would otherwise carry that drift into the system prompt
-        and force a full re-read. What is stored mid-session reaches the model
+        and force a full re-read. What is stored since reaches the model
         through the per-turn recall instead. A context switch, a session reset,
         or an explicit edit of an item shown here re-renders it.
         """
@@ -3657,9 +3698,78 @@ class MemoryMixin(ProceduralMemoryMixin):
             getattr(self, "_stable_memory_prompt", None) is None
             or getattr(self, "_stable_memory_model", None) != model
         ):
-            self._stable_memory_prompt = self._build_stable_memory_prompt()
+            key = self._shared_stable_key()
+            fresh = self._build_stable_memory_prompt()
+            with _SHARED_STABLE_GUARD:
+                shared = _SHARED_STABLE_PROMPTS.get(key)
+            if (
+                shared is not None
+                and time.monotonic() - shared[0] < SHARED_STABLE_TTL_S
+                and self._shared_section_still_true(shared, fresh)
+            ):
+                _, prompt, memory_ids, lesson_ids, _ = shared
+                self._stable_memory_ids = set(memory_ids)
+                self._stable_lesson_ids = set(lesson_ids)
+                self._stable_memory_prompt = prompt
+            else:
+                self._stable_memory_prompt = fresh
+                with _SHARED_STABLE_GUARD:
+                    _SHARED_STABLE_PROMPTS[key] = (
+                        time.monotonic(),
+                        fresh,
+                        frozenset(getattr(self, "_stable_memory_ids", set())),
+                        frozenset(getattr(self, "_stable_lesson_ids", set())),
+                        dict(getattr(self, "_stable_rows", {})),
+                    )
             self._stable_memory_model = model
         return self._stable_memory_prompt
+
+    def _shared_section_still_true(self, shared: tuple, fresh: str) -> bool:
+        """Whether a new chat may show *shared* instead of *fresh*.
+
+        Every memory in the shared copy must still exist exactly as it was
+        rendered, and a line missing from the fresh render must be the exact
+        line of one that was only pushed out by a section's size cap. So a
+        removed, forgotten, hidden or edited memory never reaches a new chat.
+        """
+        rows = shared[4]
+        for knowledge_id, (version, _line) in rows.items():
+            item = self._memory_store.get_item(knowledge_id)
+            if item is None:
+                return False
+            # Rendered rows were redacted on the way out; compare like with like.
+            item = self._redact_credentials([item])[0]
+            if _row_version(item, lesson=knowledge_id in shared[3]) != version:
+                return False
+        missing = {
+            line
+            for line in set(shared[1].splitlines()) - set(fresh.splitlines())
+            # The "(N more stored memories ...)" count may be stale; it names none.
+            if not _OMITTED_COUNT_LINE.match(line)
+        }
+        if not missing:
+            return True
+        shown_now = getattr(self, "_stable_memory_ids", set()) | getattr(
+            self, "_stable_lesson_ids", set()
+        )
+        pushed_out = {
+            text
+            for knowledge_id in rows.keys() - shown_now
+            for text in rows[knowledge_id][1].splitlines()
+        }
+        return missing <= pushed_out
+
+    def _shared_stable_key(self) -> tuple:
+        """Every per-chat input that decides which rows the section renders."""
+        store = self._memory_store
+        return (
+            str(getattr(store, "_db_path", id(store))),
+            getattr(self, "_memory_context", "global"),
+            self._lesson_context(),
+            getattr(self, "model_id", None),
+            # Reminders drop out once their day passes.
+            _local_today(),
+        )
 
     def _replayable_now(self, item: Dict) -> bool:
         """False for a tool-recorded error another chat model saw.
@@ -3672,9 +3782,19 @@ class MemoryMixin(ProceduralMemoryMixin):
         recorded = (item.get("metadata") or {}).get("model")
         return recorded == getattr(self, "model_id", None)
 
-    def _refresh_stable_memory_prompt(self) -> None:
-        """Re-render the stable memory section now and recompose the prompt."""
+    def _refresh_stable_memory_prompt(self, *, share: bool = False) -> None:
+        """Re-render the stable memory section now and recompose the prompt.
+
+        ``share=True`` takes the section other sessions of this process already
+        render, so a new chat's system prompt — and the ~19K tokens of tool
+        schemas the chat template places after it — stay cached. Every other
+        caller is an explicit change (an edit, an erase, a context switch, a
+        reset) and drops the shared copy too.
+        """
         self._stable_memory_prompt = None
+        if not share and getattr(self, "_memory_store", None) is not None:
+            with _SHARED_STABLE_GUARD:
+                _SHARED_STABLE_PROMPTS.pop(self._shared_stable_key(), None)
         if hasattr(self, "rebuild_system_prompt"):
             self.rebuild_system_prompt()
 
@@ -3756,6 +3876,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         #     never show up in another project.
         lessons = self._workspace_lessons(limit=LESSONS_IN_PROMPT)
         self._stable_lesson_ids = {item["id"] for item in lessons}
+        self._stable_rows = {
+            item["id"]: (_row_version(item, lesson=True), self._lesson_lines([item]))
+            for item in lessons
+        }
         advice = [i for i in lessons if (i.get("metadata") or {}).get("advice")]
         observed = [i for i in lessons if i not in advice]
         if advice:
@@ -3850,7 +3974,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         saying how many were left out so the model knows to ``recall`` them.
         """
         ctx = self._memory_context
-        today = datetime.now().astimezone().date()
+        today = _local_today()
         pools = {
             category: [
                 item
@@ -3896,6 +4020,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 used += cost
                 chosen[category].append(line)
                 ids.add(item["id"])
+                self._stable_rows[item["id"]] = (_row_version(item), line)
             position += 1
 
         blocks = [

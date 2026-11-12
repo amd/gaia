@@ -864,7 +864,7 @@ The system prompt is split into two parts to allow LLM inference engines to reus
 
 ### Stable Prefix
 
-`get_memory_system_prompt()` -- injected once via `Agent._get_mixin_prompts()`. Contains nothing time-sensitive (no timestamps, no due dates). Stays frozen for the entire session so KV-cache can be reused: rendered once after the first turn's upkeep, and re-rendered only on a context switch, a session reset, or a `forget`/`update_memory` of an item it shows. Memories stored mid-session reach the model through the dynamic suffix.
+`get_memory_system_prompt()` -- injected once via `Agent._get_mixin_prompts()`. Contains nothing time-sensitive (no timestamps, no due dates). Stays frozen for the entire session so KV-cache can be reused: rendered once after the first turn's upkeep, and re-rendered only on a context switch, a session reset, or a `forget`/`update_memory` of an item it shows. Later sessions in the same process with the same memory context, project (lesson workspace), chat model and local date reuse the rendered text for up to an hour (`SHARED_STABLE_TTL_S`), as long as every memory in it is unchanged and any line a fresh render no longer has is the exact line of a memory only pushed out by the size cap, so a new chat keeps the cached prompt. Memories stored since reach the model through the dynamic suffix.
 
 ```python
 def get_memory_system_prompt(self) -> str:
