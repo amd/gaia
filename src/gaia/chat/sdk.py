@@ -28,6 +28,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
 from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.retry import stopped_by_user
 from gaia.logger import get_logger
 from gaia.utils import perf_trace
 
@@ -743,7 +744,10 @@ class AgentSDK:
                 f"Failed to connect to LLM server (streaming): {e}"
             ) from e
         except Exception as e:
-            self.log.error(f"Error in send_messages_stream: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages_stream stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages_stream: {e}")
             raise
         finally:
             # Cancelling closes this generator at the yield; without this the

@@ -78,6 +78,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
     sleep_unless_cancelled,
+    stopped_by_user,
     tag_http_failure,
 )
 from gaia.llm.stream_watchdog import (
@@ -7020,7 +7021,10 @@ class LemonadeClient:
             down = self._server_down_error(e, model)
             if down is not None:
                 raise down from e
-            self.log.error(f"Error using OpenAI client for streaming: {str(e)}")
+            if stopped_by_user(e):
+                self.log.info("Streaming stopped by the user: %s", e)
+            else:
+                self.log.error(f"Error using OpenAI client for streaming: {str(e)}")
             label = _endpoint_label(self.base_url)
             # An inner error from this client already names the server.
             where = "" if label and label in str(e) else self._from_server()

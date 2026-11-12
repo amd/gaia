@@ -209,6 +209,7 @@ from gaia.llm.retry import (
     describe_retry_state,
     model_retry_notices,
     retry_state_of,
+    stopped_by_user,
 )
 from gaia.llm.surface_hints import TUI_SERVER_RESTART_HINT as SERVER_RESTART_HINT
 from gaia.logger import get_logger
@@ -11727,7 +11728,10 @@ Do NOT wrap conversational replies in JSON.
                         cancelled_by_console = True
                         break
                     except Exception as e:
-                        logger.error(f"Unexpected error during streaming: {e}")
+                        if stopped_by_user(e):
+                            logger.info("Streaming stopped by the user: %s", e)
+                        else:
+                            logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
                         # Same rule as the non-streaming branch: only the probe
