@@ -959,6 +959,11 @@
     text-decoration: none;
 }
 
+.update-download-link,
+.update-download-link:hover {
+    text-decoration: none;
+}
+
 [dir='rtl'] .messaging-link-icon {
     transform: scaleX(-1);
 }
