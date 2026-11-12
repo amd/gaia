@@ -17,6 +17,12 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `/model` switch the agent stops sending it, so a new model never receives
   another model's reasoning.
 
+- **The agent reserves about 0.3 GB of memory instead of about 5 GB.** The
+  OpenBLAS that numpy and FAISS bundle reserved memory for every CPU thread when
+  it loaded, so a dozen GAIA processes could run a 32-thread Windows PC out of
+  memory. Each process now gives it 2 threads unless `OPENBLAS_NUM_THREADS`,
+  `GOTO_NUM_THREADS` or `OMP_NUM_THREADS` is set. Search speed is unchanged.
+
 - **The terminal header recognizes cloud models with custom IDs.** After a
   `/model` switch, the status uses the live client’s catalog provider, matching
   the switch notice instead of reporting a custom-prefixed cloud model as local.

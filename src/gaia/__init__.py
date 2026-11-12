@@ -15,6 +15,11 @@ import typing as _typing
 # The REAL process environment, captured before ``.env`` is merged in.
 _PRE_DOTENV_ENVIRON = dict(_os.environ)
 
+# Before anything can load numpy or faiss: their OpenBLAS sizes its pool at load.
+from gaia.blas_threads import cap_blas_threads as _cap_blas_threads
+
+_cap_blas_threads()
+
 
 def pre_dotenv_env(name: str) -> "_typing.Optional[str]":
     """Read a variable from the process environment as it was at startup.
