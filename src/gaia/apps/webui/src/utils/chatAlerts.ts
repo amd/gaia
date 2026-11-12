@@ -5,6 +5,8 @@
 
 import type { AlertEvent, AlertSettings } from '../stores/notificationStore';
 import type { AwaitingUser, Session } from '../types';
+import { DEFAULT_LOCALE } from '../i18n/registry';
+import type { Translate } from '../i18n/useT';
 
 /** A chat's turn state as the alert logic sees it. */
 export type ChatPhase = 'running' | 'permission' | 'question';
@@ -115,6 +117,11 @@ export function playChime(): void {
         osc.stop(t + i * 0.12 + 0.2);
     });
     setTimeout(() => void ctx.close(), 600);
+}
+
+/** A place in the GPU line: "3rd" in English, a plain 3 in a language without those suffixes. */
+export function placeInLine(t: Translate, key: 'row.queuePlace' | 'live.queued', n: number): string {
+    return t.compose((say, code) => say(key, { place: code === DEFAULT_LOCALE ? ordinal(n) : n }));
 }
 
 /** 1 → '1st', 2 → '2nd', 11 → '11th'. */

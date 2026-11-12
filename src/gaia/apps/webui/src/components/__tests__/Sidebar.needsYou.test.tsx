@@ -9,6 +9,7 @@ import { Sidebar } from '../Sidebar';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import { useNotificationStore } from '../../stores/notificationStore';
+import { stripIsolates } from '../../i18n/registry';
 import * as api from '../../services/api';
 import type { GaiaNotification } from '../../types/agent';
 import type { Session } from '../../types';
@@ -108,6 +109,25 @@ describe('row status', () => {
         expect(screen.getByRole('button', { name: 'Fresh reply, Done, unread' })).toBeInTheDocument();
         // A read reply needs no dot.
         expect(screen.getByRole('button', { name: 'Old reply' })).toBeInTheDocument();
+    });
+
+    it('says a queued chat\'s place in line in Arabic, on a line of its own under the title', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        try {
+            useChatStore.setState({
+                sessions: [chat('b', 'Weekly grocery plan for the family')],
+                runningSessionIds: ['b'], queuedSessionIds: ['b'],
+            });
+            render(<Sidebar onNewChat={vi.fn()} />);
+            const note = document.querySelector('.sb-row-queue')!;
+            expect(stripIsolates(note.textContent!)).toBe('رقم 1 في الدور (1st in line)');
+            // The note sits under the title, not beside it in the title's row.
+            expect(note.parentElement).toBe(screen.getByText('Weekly grocery plan for the family').parentElement);
+            expect(note.parentElement!.className).toBe('sb-row-text');
+        } finally {
+            act(() => useChatStore.getState().setLocale('en'));
+            localStorage.removeItem('gaia-chat-locale');
+        }
     });
 
     it('reopening a chat clears its unread state', async () => {
