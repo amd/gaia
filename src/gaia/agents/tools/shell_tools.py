@@ -1877,28 +1877,145 @@ _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 _BYPASS_PUNCTUATION = ";&|<>\n"
 
 
-def _heredoc_start(line: str) -> Optional[tuple]:
-    """``(delimiter, strip_tabs)`` for the heredoc *line* opens, else None.
+#: Syntax the heredoc scan does not model. Outside a body, any of it means the
+#: scan cannot be sure it reads the line as sh does, so nothing is stripped.
+_HEREDOC_UNMODELLED = ("`", "$(", "${", "$[", "$'", '$"', "((", "[[", "<<<", "<(", ">(")
 
-    Tokenised with the same lexer the gates use, so a ``<<`` inside quotes is
-    data and ``<<<`` (a here-string, no body) never opens one.
+#: The delimiters the scan trusts to end a body.
+_HEREDOC_WORD = re.compile(r"[A-Za-z0-9_.-]+")
+
+#: Characters that end an unquoted word for sh.
+_SHELL_METACHARS = " \t|&;()<>"
+
+
+class _UnreadableHeredoc(Exception):
+    """The heredoc scan met shell text it cannot read the way sh does."""
+
+
+def _read_heredoc_word(line: str, index: int) -> Tuple[str, bool, int]:
+    """``(delimiter, quoted, end)`` for the word after ``<<`` at *index*."""
+    while index < len(line) and line[index] in " \t":
+        index += 1
+    chars: list = []
+    quoted = False
+    while index < len(line) and line[index] not in _SHELL_METACHARS:
+        char = line[index]
+        if char in "'\"":
+            close = line.find(char, index + 1)
+            inner = line[index + 1 : close]
+            if close < 0 or (char == '"' and any(c in inner for c in "$`\\")):
+                raise _UnreadableHeredoc
+            chars.append(inner)
+            quoted = True
+            index = close + 1
+        elif char == "\\" and index + 1 < len(line):
+            chars.append(line[index + 1])
+            quoted = True
+            index += 2
+        elif char in "$`\\":
+            raise _UnreadableHeredoc
+        else:
+            chars.append(char)
+            index += 1
+    word = "".join(chars)
+    if not _HEREDOC_WORD.fullmatch(word):
+        raise _UnreadableHeredoc
+    return word, quoted, index
+
+
+def _scan_heredoc_bodies(lines: list) -> list:
+    """The ``(first, terminator)`` line ranges of every heredoc body in *lines*.
+
+    Reads quotes, escapes, comments and line continuations the way sh does, so
+    a ``<<`` sh takes as data — quoted, commented out, in arithmetic — never
+    opens a body here. Raises ``_UnreadableHeredoc`` rather than guess.
     """
-    try:
-        tokens = _tokenize(line, bypass_gates=True)
-    except ValueError:
-        return None
-    for index, token in enumerate(tokens):
-        if token not in ("<<", "<<-") or index + 1 >= len(tokens):
+    spans: list = []
+    pending: list = []
+    quote: Optional[str] = None
+    # True at the start of a word, "redirect" right after < or >, else False.
+    word_start: Any = True
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        continued = False
+        col = 0
+        while col < len(line):
+            char = line[col]
+            if quote == "'":
+                quote = None if char == "'" else quote
+                col += 1
+                continue
+            if quote == '"':
+                if char == "`" or line.startswith(("$(", "${", "$["), col):
+                    raise _UnreadableHeredoc
+                if char == '"':
+                    quote = None
+                col += 2 if char == "\\" else 1
+                continue
+            if line.startswith(_HEREDOC_UNMODELLED, col):
+                raise _UnreadableHeredoc
+            if char == "\\":
+                continued = col + 1 == len(line)
+                word_start = False
+                col += 2
+                continue
+            if char in "'\"":
+                quote = char
+                word_start = False
+            elif char == "#" and word_start:
+                if word_start == "redirect":
+                    raise _UnreadableHeredoc
+                break
+            elif line.startswith("<<", col):
+                strip_tabs = line.startswith("<<-", col)
+                word, quoted, col = _read_heredoc_word(line, col + 2 + strip_tabs)
+                pending.append((word, strip_tabs, quoted))
+                word_start = False
+                continue
+            elif char in "<>" or (char == "&" and word_start == "redirect"):
+                word_start = "redirect"
+            else:
+                word_start = char in " \t|&;()"
+            col += 1
+        index += 1
+        if continued or quote is not None:
+            if pending:
+                raise _UnreadableHeredoc
             continue
-        word = tokens[index + 1]
-        strip_tabs = token == "<<-"
-        if word == "-" and index + 2 < len(tokens):
-            word, strip_tabs = tokens[index + 2], True
-        elif word.startswith("-") and len(word) > 1:
-            word, strip_tabs = word[1:], True
-        if word and all(ch not in _BYPASS_PUNCTUATION for ch in word):
-            return word, strip_tabs
-    return None
+        word_start = True
+        for word, strip_tabs, quoted in pending:
+            first = index
+            while index < len(lines):
+                body_line = lines[index].lstrip("\t") if strip_tabs else lines[index]
+                if body_line == word:
+                    break
+                # sh joins an unquoted body's backslash-newline before matching.
+                if not quoted and body_line.endswith("\\"):
+                    raise _UnreadableHeredoc
+                index += 1
+            if index == len(lines):
+                raise _UnreadableHeredoc
+            spans.append((first, index))
+            index += 1
+        pending = []
+    if quote is not None or pending:
+        raise _UnreadableHeredoc
+    return spans
+
+
+def _heredoc_body_spans(command: str) -> list:
+    """The heredoc body line ranges in *command*, or ``[]`` to strip nothing.
+
+    ``[]`` whenever the scan cannot be sure, so every line is then walked as
+    a command: the gates may over-refuse an odd heredoc, never miss a command.
+    """
+    if "<<" not in command:
+        return []
+    try:
+        return _scan_heredoc_bodies(command.split("\n"))
+    except _UnreadableHeredoc:
+        return []
 
 
 def _strip_heredoc_bodies(command: str) -> str:
@@ -1907,62 +2024,35 @@ def _strip_heredoc_bodies(command: str) -> str:
     A body is input to the command that opened it, not a command, so the gates
     must not walk ``print(1+1)`` as a binary or choke on an apostrophe in it.
     Only the text used to pick out which binaries run is affected — the caller
-    keeps the original for the step it actually executes. An unterminated body
-    is left in place, so the gates see it and refuse what they cannot parse.
+    keeps the original for the step it actually executes. A body the scan
+    cannot place is left in place, so the gates see it and refuse what they
+    cannot parse.
     """
-    if "<<" not in command:
+    spans = _heredoc_body_spans(command)
+    if not spans:
         return command
-    kept: list = []
     lines = command.split("\n")
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        kept.append(line)
-        index += 1
-        opened = _heredoc_start(line)
-        if opened is None:
-            continue
-        word, strip_tabs = opened
-        end = index
-        while end < len(lines):
-            body_line = lines[end].lstrip("\t") if strip_tabs else lines[end]
-            if body_line == word:
-                break
-            end += 1
-        if end == len(lines):
-            kept.extend(lines[index:])
-            break
-        index = end + 1
-    return "\n".join(kept)
+    hidden = {i for first, last in spans for i in range(first, last + 1)}
+    return "\n".join(line for i, line in enumerate(lines) if i not in hidden)
 
 
 def _mask_heredoc_connectors(command: str) -> str:
     """*command* with ``;``, ``&``, ``|`` inside heredoc bodies neutralised.
 
     ``_split_connectors`` cannot tell a heredoc body from three chained
-    commands — ``python3 - <<'EOF'\\nimport os; os.getcwd()\\nEOF`` would
+    commands — ``python3 - <<'EOF'\nimport os; os.getcwd()\nEOF`` would
     otherwise fracture mid-script. Masking is position-preserving (same
     length, same lines, quotes untouched) so a split point found here is
     valid on the original command too.
     """
-    if "<<" not in command:
+    spans = _heredoc_body_spans(command)
+    if not spans:
         return command
     lines = command.split("\n")
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        index += 1
-        opened = _heredoc_start(line)
-        if opened is None:
-            continue
-        word, strip_tabs = opened
-        while index < len(lines):
-            body_line = lines[index].lstrip("\t") if strip_tabs else lines[index]
-            if body_line == word:
-                break
-            for ch in ";&|":
-                lines[index] = lines[index].replace(ch, "x")
-            index += 1
+    for first, last in spans:
+        for i in range(first, last):
+            for char in ";&|":
+                lines[i] = lines[i].replace(char, "x")
     return "\n".join(lines)
 
 

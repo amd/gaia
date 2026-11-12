@@ -59,6 +59,7 @@ from gaia.agents.tools.shell_tools import (
     TIER_REFUSE,
     ShellToolsMixin,
     _is_lone_granted_segment,
+    _strip_heredoc_bodies,
 )
 
 # ---------------------------------------------------------------------------
@@ -1077,6 +1078,72 @@ class TestHeredocUnderBypass:
         # they must see the text and refuse it rather than guess.
         command = "python3 - <<'EOF'\nprint(1 + 1)"
         assert check(command, bypass=True) is not None
+
+
+class TestHeredocCannotHideARefusedCommand:
+    """The developer-set refusal must hold for every line sh executes.
+
+    The body stripper used to open a heredoc wherever a ``<<`` token appeared,
+    including where sh reads it as data — so lines sh runs as commands were
+    dropped from the walk as if they were body text, and a refused binary
+    on them was never checked (#4464)."""
+
+    #: Shapes where sh runs ``rm -rf x`` as a command.
+    HIDING_SHAPES = [
+        # '<<' after a '#' is a comment to sh: no heredoc opens.
+        "echo hi # <<EOF\nrm -rf x\nEOF",
+        "echo hi;# <<EOF\nrm -rf x\nEOF",
+        # Arithmetic shift, not a heredoc.
+        "echo $((1<<2))\nrm -rf x\n2))",
+        "echo $((1 << EOF ))\nrm -rf x\nEOF",
+        "((x = 1 << EOF))\nrm -rf x\nEOF",
+        # Inside a parameter expansion.
+        "echo ${x:-<<EOF}\nrm -rf x\nEOF}",
+        # Inside a quote that spans lines.
+        'echo "x\n<<EOF\n" ; rm -rf x ; echo "\nEOF\n"',
+        "echo 'x\n<<EOF\n' ; rm -rf x ; echo '\nEOF\n'",
+        # A here-string has no body.
+        "cat <<<EOF\nrm -rf x\nEOF",
+        # The delimiter is '-', so EOF is an argument and rm runs.
+        "cat << - EOF\n-\nrm -rf x\nEOF",
+        # sh joins an unquoted body's backslash-newline into the terminator.
+        "cat <<EOF\nEO\\\nF\nrm -rf x\nEOF",
+        # The opener is continued onto the next line.
+        "cat <<EOF \\\n\nrm -rf x\nEOF",
+        # ANSI-C quoting escapes its own quote.
+        "echo $'\\'\ncat <<EOF\n'; rm -rf x; echo '\nEOF\n'",
+        # A line after the body runs.
+        "cat <<'EOF' > out.txt\nhello\nEOF\nrm -rf x",
+        # The second heredoc's body ends before rm.
+        "cat <<'A' <<'B'\none\nA\ntwo\nB\nrm -rf x",
+    ]
+
+    @pytest.mark.parametrize("command", HIDING_SHAPES)
+    def test_a_refused_binary_around_heredoc_syntax_is_still_refused(self, command):
+        assert check(command, bypass=True) is not None
+
+    @pytest.mark.parametrize("command", HIDING_SHAPES)
+    def test_the_executed_line_stays_in_the_walk(self, command):
+        # The gates and the audit record are built from this walk.
+        assert "rm -rf x" in _strip_heredoc_bodies(command)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "cat <<EOF > notes.txt\nhello $USER; it's done\nEOF",
+            "cat <<'EOF' > notes.txt\nrm -rf / && echo it's fine | tee x\nEOF",
+            'cat <<"EOF" > notes.txt\nline\nEOF',
+            "cat > notes.txt <<-EOF\n\tindented; body\n\tEOF",
+            "cat<<EOF>notes.txt\nx\nEOF",
+            "python3 - <<'PY'\nimport os; print(os.getcwd())  # rm\nPY",
+            "cat <<'A' <<'B'\nrm one\nA\nrm two\nB",
+            "cat <<'EOF' > a.txt\none\nEOF\ncat <<'EOF' > b.txt\ntwo\nEOF",
+            "cat <<EOF > f.txt # write the file\nbody\nEOF",
+            "cat <<'EOF' > script.sh\nmake \\\n  all\nEOF",
+        ],
+    )
+    def test_ordinary_heredocs_still_run(self, command):
+        assert check(command, bypass=True) is None
 
 
 class TestReadOnlySubGuardsLiftUnderBypassOnly:
