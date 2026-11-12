@@ -150,3 +150,52 @@ def test_a_memory_moved_to_another_context_is_not_shown(store):
     assert "Northwind" in _new_chat(store, "home").get_memory_system_prompt()
     store.update(moved, context="work")
     assert "Northwind" not in _new_chat(store, "home").get_memory_system_prompt()
+
+
+def _past_due():
+    from datetime import datetime, timedelta
+
+    return (datetime.now().astimezone() - timedelta(days=30)).isoformat()
+
+
+def _two_notes(store):
+    """The kept note holds the "Notes:" header, so only the edited line drops."""
+    store.store("note", "Water the plants on Fridays.", source="user")
+    return store.store("note", "Renew the passport 4417.", source="user")
+
+
+def test_a_due_date_edited_since_is_not_shown_from_the_shared_copy(store):
+    """A due-date edit hides a note without touching its text."""
+    note = _two_notes(store)
+    assert "4417" in _new_chat(store).get_memory_system_prompt()
+    store.update(note, due_at=_past_due())
+    assert "4417" not in _new_chat(store).get_memory_system_prompt()
+
+
+def test_an_edit_landing_during_the_render_is_not_hidden(store, monkeypatch):
+    """The render time is taken before rendering, so a concurrent edit counts."""
+    note = _two_notes(store)
+    build = MemoryMixin._build_stable_memory_prompt
+
+    def build_then_edit(self):
+        text = build(self)
+        monkeypatch.setattr(MemoryMixin, "_build_stable_memory_prompt", build)
+        store.update(note, due_at=_past_due())
+        return text
+
+    monkeypatch.setattr(MemoryMixin, "_build_stable_memory_prompt", build_then_edit)
+    assert "4417" in _new_chat(store).get_memory_system_prompt()
+    assert "4417" not in _new_chat(store).get_memory_system_prompt()
+
+
+@pytest.mark.parametrize("stamp", ["2020-01-01T00:00:00", "not a date", ""])
+def test_an_unreadable_update_stamp_renders_fresh(store, stamp):
+    """A legacy offset-less or garbled stamp can't be ordered; never crash on it."""
+    note = _two_notes(store)
+    assert "4417" in _new_chat(store).get_memory_system_prompt()
+    store.update(note, due_at=_past_due())
+    store._conn.execute(
+        "UPDATE knowledge SET updated_at = ? WHERE id = ?", (stamp, note)
+    )
+    store._conn.commit()
+    assert "4417" not in _new_chat(store).get_memory_system_prompt()

@@ -551,15 +551,29 @@ EXTRACTION_EXIT_WAIT_S = 15.0
 EXTRACTION_IDLE_S = 3.0
 
 #: The stable memory section, shared by every session of this process that
-#: reads the same store, context and model: (rendered_at, prompt, memory ids,
-#: lesson ids, rendered at). A new chat would otherwise re-render it, and on Gemma-4 any
-#: change there makes the server re-read the whole ~19K-token prompt (~45 s).
+#: reads the same store, context and model: (monotonic render time, prompt,
+#: memory ids, lesson ids, wall-clock render start). A new chat would otherwise
+#: re-render it, and on Gemma-4 any change there makes the server re-read the
+#: whole ~19K-token prompt (~45 s).
 #: Reused only while every line of it is still current.
 _SHARED_STABLE_PROMPTS: Dict[tuple, tuple] = {}
 _OMITTED_COUNT_LINE = re.compile(r"^\(\d+ more stored .+ not listed here;")
 _SHARED_STABLE_GUARD = threading.Lock()
 #: Facts learned since reach new chats through per-turn recall meanwhile.
 SHARED_STABLE_TTL_S = 3600.0
+
+
+def _edited_before(updated_at, rendered_at: datetime) -> bool:
+    """Whether a row's ``updated_at`` is provably no later than *rendered_at*.
+
+    An unreadable or offset-less stamp can't be ordered, so it counts as newer.
+    """
+    try:
+        stamp = datetime.fromisoformat(str(updated_at))
+    except ValueError:
+        return False
+    return stamp.tzinfo is not None and stamp <= rendered_at
+
 
 #: How often a running extraction checks whether a user turn wants the model.
 EXTRACTION_CANCEL_POLL_S = 0.1
@@ -3670,6 +3684,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             or getattr(self, "_stable_memory_model", None) != model
         ):
             key = self._shared_stable_key()
+            # Taken before the render, so an edit landing during it counts as newer.
+            rendered_at = datetime.now().astimezone()
             fresh = self._build_stable_memory_prompt()
             with _SHARED_STABLE_GUARD:
                 shared = _SHARED_STABLE_PROMPTS.get(key)
@@ -3690,7 +3706,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                         fresh,
                         frozenset(getattr(self, "_stable_memory_ids", set())),
                         frozenset(getattr(self, "_stable_lesson_ids", set())),
-                        datetime.now().astimezone(),
+                        rendered_at,
                     )
             self._stable_memory_model = model
         return self._stable_memory_prompt
@@ -3722,7 +3738,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 or item.get("sensitive")
                 or item.get("context") not in ("global", self._memory_context)
                 # Any edit since (a category, a due date) may be why it dropped.
-                or datetime.fromisoformat(item["updated_at"]) > shared[4]
+                or not _edited_before(item.get("updated_at"), shared[4])
             ):
                 return False
             kept.append(item["content"])
