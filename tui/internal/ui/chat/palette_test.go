@@ -379,6 +379,11 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	if !known["/update"] {
 		t.Error("paletteCommands does not offer /update")
 	}
+	// /discord and its sub-forms go through handleDiscordCommand (discord.go).
+	seen["/discord"] = true
+	if !known["/discord"] {
+		t.Error("paletteCommands does not offer /discord")
+	}
 	// /read-aloud and /voice take arguments too (readaloud.go).
 	for _, cmd := range []string{"/read-aloud", "/voice"} {
 		seen[cmd] = true

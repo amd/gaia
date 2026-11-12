@@ -29,10 +29,10 @@ export function showAddedDocuments(sessionId: string, added: Document[]): void {
     attachInList(sessionId, added.map((d) => d.id));
 }
 
-/** A dropped file that didn't make it: not uploaded, or uploaded but not attached. */
+/** A dropped file that didn't make it: not uploaded, uploaded but unreadable, or not attached. */
 export interface DropFailure {
     name: string;
-    stage: 'upload' | 'attach';
+    stage: 'upload' | 'unreadable' | 'attach';
     error: unknown;
 }
 
@@ -51,7 +51,11 @@ export async function addDroppedFiles(sessionId: string | null, files: File[]): 
         log.doc.info(`Dropped on chat view: ${file.name}`);
         try {
             const doc = await api.uploadDocumentBlob(file);
-            if (sessionId && doc?.id) {
+            if (doc?.indexing_status === 'failed') {
+                // Attaching it would promise the chat a file it can't search.
+                log.doc.warn(`"${file.name}" couldn't be read; not attaching it`);
+                failures.push({ name: file.name, stage: 'unreadable', error: doc.last_error ?? null });
+            } else if (sessionId && doc?.id) {
                 try {
                     await api.attachDocument(sessionId, doc.id);
                     attachInList(sessionId, [doc.id]);

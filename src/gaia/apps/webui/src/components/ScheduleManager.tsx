@@ -7,7 +7,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useScheduleStore } from '../stores/scheduleStore';
 import { log } from '../utils/logger';
 import type { Schedule, ScheduleResult, ParsedSchedule, ScheduleDescription } from '../types';
-import { parseScheduleInput } from '../services/api';
+import { ApiError, parseScheduleInput } from '../services/api';
 import { isMessageKey, stripIsolates, type MessageKey, type Say } from '../i18n/registry';
 import { dateLocale, tEn, translator, useT, type Translate } from '../i18n/useT';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
@@ -280,7 +280,7 @@ function ScheduleCard({ schedule, onEdit }: { schedule: Schedule; onEdit: (sched
                 <span>{t('schedules.card.runs', { n: schedule.run_count })}</span>
                 {schedule.error_count > 0 && <span>{t('schedules.card.errors', { n: schedule.error_count })}</span>}
                 <span>{t.compose((say) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(t)) }))}</span>
-                <span>{t.compose((say) => say('schedules.card.next', { when: formatNextRun(schedule.next_run_at, now, say, dateLocale(t)) }))}</span>
+                <span>{t.compose((say) => say('schedules.card.next', { when: schedule.status === 'paused' ? say('schedules.status.paused') : formatNextRun(schedule.next_run_at, now, say, dateLocale(t)) }))}</span>
             </div>
             {schedule.last_error && (
                 <div className="schedule-card-error">{t('schedules.card.lastFailed', { error: schedule.last_error })}</div>
@@ -364,12 +364,17 @@ export function ScheduleManager() {
     // The schedule the form is changing; null when it makes a new one.
     const [editing, setEditing] = useState<string | null>(null);
     const formRef = useRef<HTMLDivElement>(null);
+    const [nameTaken, setNameTaken] = useState(false);
     const fieldId = useId();
     const scheduleFieldId = `${fieldId}-when`;
     const scheduleErrorId = `${fieldId}-when-error`;
+    const scheduleHintId = `${fieldId}-when-hint`;
     const nameFieldId = `${fieldId}-name`;
+    const nameErrorId = `${fieldId}-name-error`;
     const promptFieldId = `${fieldId}-prompt`;
     const scheduleRejected = !parsing && parsed !== null && !parsed.valid;
+    // The parser's reason is English; with no English in the input, the hint says what to fix.
+    const showRejectReason = scheduleRejected && /[A-Za-z]/.test(nlInput);
 
     // Debounced parse of NL input
     const parseTimerRef = useRef<number | null>(null);
@@ -416,6 +421,7 @@ export function ScheduleManager() {
         setShowCreate(false);
         setEditing(null);
         setFormError(null);
+        setNameTaken(false);
         setParsed(null);
         setNlInput('');
         setScheduleName('');
@@ -441,6 +447,7 @@ export function ScheduleManager() {
         if (!canCreate) return;
         setCreating(true);
         setFormError(null);
+        setNameTaken(false);
         try {
             // Pass the raw NL input as interval - backend will re-parse it
             if (editing) {
@@ -452,7 +459,8 @@ export function ScheduleManager() {
             }
             closeForm();
         } catch (err) {
-            setFormError(err instanceof Error ? err.message : t(editing ? 'schedules.editFailed' : 'schedules.createFailed'));
+            if (!editing && err instanceof ApiError && err.httpStatus === 409) setNameTaken(true);
+            else setFormError(err instanceof Error ? err.message : t(editing ? 'schedules.editFailed' : 'schedules.createFailed'));
         } finally {
             setCreating(false);
         }
@@ -501,10 +509,11 @@ export function ScheduleManager() {
                                         value={nlInput}
                                         onChange={(e) => setNlInput(e.target.value)}
                                         aria-invalid={scheduleRejected}
-                                        aria-describedby={scheduleRejected ? scheduleErrorId : undefined}
+                                        aria-describedby={scheduleRejected ? `${scheduleErrorId} ${scheduleHintId}` : scheduleHintId}
                                         autoFocus
                                         rows={2}
                                     />
+                                    <div id={scheduleHintId} className="schedule-field-hint">{t('schedules.whenHint')}</div>
                                 </div>
 
                                 {/* Parsed preview */}
@@ -524,7 +533,7 @@ export function ScheduleManager() {
                                                 ) : (
                                                     <div id={scheduleErrorId}>
                                                         <div className="schedule-parsed-description">{t('schedules.notUnderstood')}</div>
-                                                        <div className="schedule-parsed-hint"><bdi>{parsed.description}</bdi></div>
+                                                        {showRejectReason && <div className="schedule-parsed-hint"><bdi>{parsed.description}</bdi></div>}
                                                     </div>
                                                 )}
                                                 {parsed.valid && parsed.next_run_at && (
@@ -565,11 +574,14 @@ export function ScheduleManager() {
                                             type="text"
                                             placeholder={t('schedules.namePlaceholder')}
                                             value={scheduleName}
-                                            onChange={(e) => setScheduleName(e.target.value)}
+                                            onChange={(e) => { setScheduleName(e.target.value); setNameTaken(false); }}
                                             readOnly={editing !== null}
                                             className={!scheduleName.trim() && nlInput.trim() ? 'schedule-field-missing' : ''}
+                                            aria-invalid={nameTaken}
+                                            aria-describedby={nameTaken ? nameErrorId : undefined}
                                         />
                                     </div>
+                                    {nameTaken && <p id={nameErrorId} className="schedule-form-error" role="alert">{t('schedules.nameTaken')}</p>}
                                 </div>
                                 <div className="schedule-field">
                                     <label className="schedule-field-label" htmlFor={promptFieldId}>{t('schedules.prompt')}</label>

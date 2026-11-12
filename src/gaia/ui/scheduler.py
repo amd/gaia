@@ -248,6 +248,10 @@ _INTERVAL_WORDS = {
 }
 
 
+class DuplicateScheduleName(ValueError):
+    """A task with this name already exists."""
+
+
 class _ScheduleInputError(ValueError):
     """The schedule text can't be read exactly as written."""
 
@@ -1030,7 +1034,7 @@ class Scheduler:
 
         async with self._lock:
             if name in self._tasks:
-                raise ValueError(f"Task with name '{name}' already exists")
+                raise DuplicateScheduleName(f"Task with name '{name}' already exists")
 
             task_id = str(uuid.uuid4())
             now = datetime.now(timezone.utc)
