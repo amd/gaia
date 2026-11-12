@@ -143,11 +143,11 @@ describe('ModelChip', () => {
 
     it('shows the model name in the tooltip without Markdown backticks', () => {
         useChatStore.setState({
-            sessions: [{ ...SESSION, inference_remote: false, inference_description: 'Runs here, model `Qwen3`.' }],
+            sessions: [{ ...SESSION, inference_remote: true, inference_provider_name: 'Fireworks AI', inference_description: 'Runs there, model `Qwen3`.' }],
         });
         render(<ModelChip />);
         const chip = screen.getByRole('button', { name: /Gemma-4-E4B-it-GGUF/ });
-        expect(chip.getAttribute('title')).toBe('Runs here, model Qwen3.');
+        expect(chip.getAttribute('title')).toBe('Runs there, model Qwen3.');
     });
 
     it('labels a cloud model with its provider', () => {
