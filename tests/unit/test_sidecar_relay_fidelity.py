@@ -351,9 +351,16 @@ def test_a_relative_write_reaches_the_ui_prompt_as_its_full_path():
 @pytest.mark.parametrize(
     "version, expected", [("2.18", True), ("3.0", True), ("2.17", False), (None, False)]
 )
-def test_only_a_flagship_at_2_18_takes_memory(version, expected):
+def test_flagship_memory_floor_is_2_18(version, expected):
     assert memory_supported(GAIA_PROFILE, version) is expected
-    assert memory_supported(EMAIL_PROFILE, "9.9") is False
+
+
+@pytest.mark.parametrize(
+    "version, expected",
+    [("2.16", True), ("2.18", True), ("2.15", False), (None, False)],
+)
+def test_email_memory_floor_is_2_16(version, expected):
+    assert memory_supported(EMAIL_PROFILE, version) is expected
 
 
 @pytest.mark.parametrize(
@@ -468,7 +475,7 @@ def test_every_profile_without_a_memory_floor_explains_the_refusal():
             assert profile.memory_upgrade_message.strip(), agent_id
 
 
-@pytest.mark.parametrize("version", ["2.4", "2.18", "9.9"])
+@pytest.mark.parametrize("version", ["2.4", "2.15"])
 @pytest.mark.parametrize("memory", ["private", "off"])
 def test_email_refuses_private_turns_before_init_or_query(monkeypatch, version, memory):
     init_calls = []
@@ -484,16 +491,19 @@ def test_email_refuses_private_turns_before_init_or_query(monkeypatch, version, 
     assert "not sent" in message
 
 
-@pytest.mark.parametrize("version", ["2.4", "2.18", "9.9"])
-def test_email_with_memory_on_still_runs_without_an_unsupported_field(
-    monkeypatch, version
+@pytest.mark.parametrize(
+    "version, expected_memory",
+    [("2.4", None), ("2.15", None), ("2.16", "on"), ("2.18", "on"), ("9.9", "on")],
+)
+def test_email_memory_mode_is_relayed_only_after_the_contract_floor(
+    monkeypatch, version, expected_memory
 ):
     init_calls = []
     proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
     events, calls = _dispatch(monkeypatch, version, "on", "email", proxy)
 
     assert init_calls == [True]
-    assert len(calls) == 1 and calls[0]["memory"] is None
+    assert len(calls) == 1 and calls[0]["memory"] == expected_memory
     assert not [event for event in events if event["type"] == "agent_error"]
 
 
@@ -596,6 +606,32 @@ def test_a_relayed_call_the_user_denied_contacted_nothing():
     )
     assert summary["sites"] == []
     assert summary["live_data"] == {"attempted": 0, "failed": 0}
+
+
+def test_a_relayed_download_refused_before_it_ran_is_not_a_failed_lookup():
+    summary = _relayed_summary(
+        "download_file",
+        {"url": "https://example.com/", "save_to": "~/.ssh"},
+        {
+            "executed": False,
+            "status": "error",
+            "error": "Write blocked: '~/.ssh' is inside protected directory",
+        },
+    )
+    assert summary["sites"] == []
+    assert summary["live_data"] == {"attempted": 0, "failed": 0}
+
+
+@pytest.mark.parametrize("executed", [None, True, "false", 0])
+def test_a_relayed_download_that_ran_and_failed_is_still_a_failed_lookup(executed):
+    """Only a literal ``executed: False`` marks a call as refused before it ran."""
+    result = {"status": "error", "error": "HTTP 404 from example.com"}
+    if executed is not None:
+        result["executed"] = executed
+    summary = _relayed_summary(
+        "download_file", {"url": "https://example.com/missing.pdf"}, result
+    )
+    assert summary["live_data"] == {"attempted": 1, "failed": 1}
 
 
 # ── automatic memory writes ────────────────────────────────────────────────

@@ -18,6 +18,7 @@ const LOCAL_ACTIVE: ActiveModel = {
 };
 const CLOUD_ACTIVE: ActiveModel = {
     provider: 'fireworks', model: 'fireworks.deepseek-v4p1-flash', label: 'DeepSeek', remote: true, is_default: false,
+    provider_name: 'Fireworks AI',
 };
 const FIREWORKS_SENTENCE =
     'Using deepseek-v4p1-flash on Fireworks AI (cloud). Your messages, and anything read from '
@@ -56,6 +57,14 @@ describe('inferencePlace', () => {
         const place = inferencePlace(CLOUD_ACTIVE, { inference_remote: false });
         expect(place?.remote).toBe(true);
         expect(place?.label).toBe('Fireworks AI');
+    });
+
+    it('names a cloud provider GAIA has no tab for (#7216)', () => {
+        const opencode: ActiveModel = {
+            provider: 'local', model: 'opencode.big-model', label: 'big-model · opencode',
+            remote: true, is_default: false, provider_name: 'opencode',
+        };
+        expect(inferencePlace(opencode, undefined)).toEqual({ remote: true, label: 'opencode', description: null });
     });
 
     it.each([

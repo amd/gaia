@@ -2,7 +2,6 @@ package client
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,17 +37,23 @@ const closeGrace = 2 * time.Second
 // nothing to save exits at once, so this only costs time when it is needed.
 const agentExitGrace = 20 * time.Second
 
-var subprocessLemonadePorts = []string{"13305", "8000"}
+var subprocessLemonadePorts = []string{"13305"}
+
+// markEmbedded reports whether the URL handed to the child is GAIA's own
+// server, which moves port and key when the daemon restarts it.
+func markEmbedded() bool {
+	return lemonade.EnvBaseURL() == "" && lemonade.ReadEmbedded() != nil
+}
 
 // detectLemonadeURL resolves configured and embedded endpoints before probing
-// legacy ports. An unrelated local server cannot override the private runtime.
+// the default port. An unrelated local server cannot override the private runtime.
 func detectLemonadeURL() string {
 	// The user's own server: the child reads the saved choice itself, so
 	// pinning a URL here could only point it somewhere else.
 	if lemonade.ExternalModeActive() {
 		return ""
 	}
-	if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) != "" || lemonade.ReadEmbedded() != nil {
+	if lemonade.EnvBaseURL() != "" || lemonade.ReadEmbedded() != nil {
 		return lemonade.ResolveBaseURL("")
 	}
 	// GAIA's own server is restarting. A probed port would reach the child as
@@ -185,7 +190,7 @@ type SubprocessClient struct {
 	proc    *procHandle
 	stdin   io.WriteCloser
 	stdout  *bufio.Scanner
-	stderr  *bytes.Buffer
+	stderr  *tailBuffer
 	started bool
 	// turnDone is closed by the in-flight turn's reader when it exits. nil when
 	// no turn is running.
@@ -291,7 +296,7 @@ type turnState struct {
 	stdin    io.WriteCloser
 	scanner  *bufio.Scanner
 	proc     *procHandle
-	stderr   *bytes.Buffer
+	stderr   *tailBuffer
 	turnDone chan struct{}
 	// notice is non-empty when this turn is the first against a REPLACEMENT
 	// child, and says what the replacement no longer knows.
@@ -331,7 +336,7 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 	}
 
 	cmd := exec.Command(s.path, s.spawnArgs(s.fullAccess)...)
-	stderr := &bytes.Buffer{}
+	stderr := newTailBuffer(agentStderrCap)
 	cmd.Stderr = stderr
 
 	// Created before Start so a POSIX child is forked straight into its own
@@ -347,12 +352,12 @@ func (s *SubprocessClient) startLocked() (turnState, error) {
 		return turnState{}, err
 	}
 	// Resolve once for the child so provider setup and Python use the same
-	// endpoint, even when a second server answers on a legacy port.
+	// endpoint.
 	if url := detectLemonadeURL(); url != "" {
 		cmd.Env = append(os.Environ(), "LEMONADE_BASE_URL="+url)
 		// GAIA's own server moves port and key when the daemon restarts it; the
 		// marker tells the child this URL is that server's, so it follows it.
-		if strings.TrimSpace(os.Getenv("LEMONADE_BASE_URL")) == "" && lemonade.ReadEmbedded() != nil {
+		if markEmbedded() {
 			cmd.Env = append(cmd.Env, "GAIA_LEMONADE_EMBEDDED=1")
 		}
 		s.debugf("Lemonade endpoint: %s", url)
@@ -610,7 +615,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	return ch, nil
 }
 
-// exitedOutputLabel heads the stderr a dead child wrote over its whole life.
+// exitedOutputLabel heads the tail of the stderr a dead child wrote.
 const exitedOutputLabel = "Output from the process that exited:"
 
 // isTerminalEvent reports whether evt ends a turn in either dialect.

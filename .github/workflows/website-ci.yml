@@ -107,9 +107,13 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}/")
           echo "/ -> ${code}"
           [ "${code}" = 200 ] || { echo "::error::/ returned ${code} from the production start command"; exit 1; }
-          # The retired /hub pages redirect home (public/serve.json) so old links don't 404.
-          for route in /hub /hub/email; do
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}/hub")
+          echo "/hub -> ${code}"
+          [ "${code}" = 200 ] || { echo "::error::/hub returned ${code} from the production start command"; exit 1; }
+          # Redirects in public/serve.json: retired /hub/<agent> pages and /roadmap.
+          for pair in "/hub/email /hub" "/roadmap /docs/roadmap"; do
+            route="${pair% *}"; target="${pair#* }"
             out=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "http://localhost:${PORT}${route}")
             echo "${route} -> ${out}"
-            [ "${out%% *}" = 301 ] && [[ "${out#* }" == */#install ]] || { echo "::error::${route} did not redirect to /#install (${out})"; exit 1; }
+            [ "${out%% *}" = 301 ] && [[ "${out#* }" == *"${target}" ]] || { echo "::error::${route} did not redirect to ${target} (${out})"; exit 1; }
           done

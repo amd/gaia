@@ -88,7 +88,37 @@ class TestClaudeClientInit:
         client = ClaudeClient(model="claude-sonnet-4-6")
         assert client.model == "claude-sonnet-4-6"
         assert client.api_key == "test-key-123"
+
         mock_anthropic.Anthropic.assert_called_once()
+
+    @pytest.mark.parametrize("from_dotenv", [False, True])
+    def test_says_which_key_it_uses_without_showing_it(
+        self, monkeypatch, capsys, from_dotenv
+    ):
+        import gaia
+        from gaia import env as gaia_env
+
+        secret = "sk-ant-api03-SHOULD-NOT-PRINT"
+        monkeypatch.setattr(gaia_env, "_install_tree_dotenv", lambda: None)
+        monkeypatch.setattr(gaia_env, "_working_dir_credentials", {})
+        monkeypatch.setattr(gaia_env, "_working_dir_credential_files", {})
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        if from_dotenv:
+            gaia_env._working_dir_credentials["ANTHROPIC_API_KEY"] = secret
+            gaia_env._working_dir_credential_files["ANTHROPIC_API_KEY"] = "/p/.env"
+        else:
+            monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "ANTHROPIC_API_KEY", secret)
+            monkeypatch.setenv("ANTHROPIC_API_KEY", secret)
+        monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
+        monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
+
+        from gaia.eval.claude import ClaudeClient
+
+        assert ClaudeClient().api_key == secret
+        err = capsys.readouterr().err
+        where = "/p/.env" if from_dotenv else "the environment"
+        assert f"Claude judge: using ANTHROPIC_API_KEY from {where}" in err
+        assert secret not in err and secret[-8:] not in err
 
 
 # ---------------------------------------------------------------------------
@@ -118,16 +148,14 @@ class TestCalculateCost:
         assert cost["input_cost"] == pytest.approx(100 / 1_000_000 * 3.0, abs=1e-6)
         assert cost["output_cost"] == pytest.approx(50 / 1_000_000 * 15.0, abs=1e-6)
 
-    def test_unknown_model_uses_default(self, monkeypatch):
+    def test_unknown_model_is_refused_before_any_call(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.setattr("gaia.eval.claude.anthropic", _make_mock_anthropic())
         monkeypatch.setattr("gaia.eval.claude.BeautifulSoup", MagicMock())
         from gaia.eval.claude import ClaudeClient
 
-        c = ClaudeClient(model="claude-future-9000")
-        cost = c.calculate_cost(1_000_000, 1_000_000)
-        # Default pricing matches Sonnet: $3/$15
-        assert cost["total_cost"] == pytest.approx(18.0, abs=1e-4)
+        with pytest.raises(ValueError, match="claude-future-9000"):
+            ClaudeClient(model="claude-future-9000")
 
 
 # ---------------------------------------------------------------------------
@@ -226,8 +254,7 @@ class TestCountTokens:
 # The judge's own sampling must be pinnable via a `temperature` constructor
 # kwarg, forwarded to every `messages.create` call site *only* when set —
 # leaving it unset must reproduce today's behavior exactly (no `temperature`
-# kwarg at all), since a non-judge caller (pdf_document_generator.py) relies
-# on the API default for fixture-generation diversity.
+# kwarg at all), so non-judge callers keep the API default.
 # ---------------------------------------------------------------------------
 
 
@@ -435,6 +462,8 @@ class TestJudgeFactoryTemperature:
         """
         monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
         monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        # A CLI login comes before the key, so take the CLI off PATH.
+        monkeypatch.setattr("gaia.eval.claude_credential.shutil.which", lambda _: None)
 
     def test_action_item_quality_sends_no_temperature(self, monkeypatch):
         spy = MagicMock()

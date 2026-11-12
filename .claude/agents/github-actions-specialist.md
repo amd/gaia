@@ -54,7 +54,6 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 | File | Scope |
 |------|-------|
 | `build_cpp.yml`, `benchmark_cpp.yml` | Native build |
-| `build-electron-apps.yml` | Electron packaging |
 | `build-installers.yml` | Installers |
 | `publish.yml`, `pypi.yml`, `update-release-branch.yml` | Release |
 
@@ -77,7 +76,7 @@ on:
     paths: ["src/**", "tests/**", ".github/workflows/<self>.yml"]
   pull_request:  # no `branches:` — it filters the BASE branch (util/check_workflow_triggers.py rejects it)
     paths: ["src/**", "tests/**", ".github/workflows/<self>.yml"]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]  # `labeled`: adding ready_for_ci must start CI (util/check_workflow_triggers.py enforces it)
   merge_group:
   workflow_dispatch:
 

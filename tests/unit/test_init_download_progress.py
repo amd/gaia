@@ -41,7 +41,10 @@ def test_a_failed_stream_is_reported_once_with_its_reason(client):
 
     client.pull_model_stream = stream
     seen = []
-    assert not client.ensure_model_downloaded("m", on_progress=seen.append)
+    with pytest.raises(
+        LemonadeClientError, match="Failed to download model 'm': Read timed out"
+    ):
+        client.ensure_model_downloaded("m", on_progress=seen.append)
     assert seen[-1] == {"event": "error", "error": "Read timed out"}
 
 
@@ -52,7 +55,11 @@ def test_a_server_error_event_is_not_reported_twice(client):
 
     client.pull_model_stream = stream
     seen = []
-    assert not client.ensure_model_downloaded("m", on_progress=seen.append)
+    with pytest.raises(
+        LemonadeClientError,
+        match="Failed to download model 'm': Failed to open file for writing",
+    ):
+        client.ensure_model_downloaded("m", on_progress=seen.append)
     assert [e["event"] for e in seen] == ["error"]
 
 
@@ -127,6 +134,48 @@ def test_a_pull_outlasts_the_servers_silent_hash_check(client):
     assert idle >= 15 * 60
 
 
+def test_polling_timeout_raises_with_the_model_name(client):
+    client.list_models.return_value = {"data": []}
+    with patch("gaia.llm.lemonade_client.time.sleep"):
+        with pytest.raises(
+            LemonadeClientError,
+            match="Download of 'm' did not finish within 1 seconds",
+        ):
+            client._wait_for_model_download("m", timeout=1, show_progress=False)
+
+
+def test_a_stream_that_ends_without_complete_raises(client):
+    client.pull_model_stream = MagicMock(
+        return_value=iter([{"event": "progress", "percent": 99}])
+    )
+    with pytest.raises(
+        LemonadeClientError, match="Download did not complete for model 'm'"
+    ):
+        client.ensure_model_downloaded("m", on_progress=lambda _e: None)
+
+
+def test_an_unexpected_error_raises_with_its_cause(client):
+    client.list_models.side_effect = KeyError("data")
+    with pytest.raises(LemonadeClientError, match="Failed to ensure model 'm'") as info:
+        client.ensure_model_downloaded("m", show_progress=False)
+    assert isinstance(info.value.__cause__, KeyError)
+
+
+def test_a_failed_non_streamed_pull_raises_instead_of_returning_false(client):
+    client.pull_model.side_effect = ConnectionError("Connection refused")
+    with pytest.raises(LemonadeClientError, match="Connection refused"):
+        client.ensure_model_downloaded("m", show_progress=False)
+
+
+def test_a_status_check_blip_keeps_polling_until_downloaded(client):
+    client.list_models.side_effect = [
+        ConnectionError("blip"),
+        {"data": [{"id": "m", "downloaded": True}]},
+    ]
+    with patch("gaia.llm.lemonade_client.time.sleep"):
+        assert client._wait_for_model_download("m", timeout=120, show_progress=False)
+
+
 def test_a_cancelled_stream_is_not_converted_to_a_failed_download(client):
     def stream(*_args, **_kwargs):
         yield {"event": "progress", "percent": 10}
@@ -137,3 +186,36 @@ def test_a_cancelled_stream_is_not_converted_to_a_failed_download(client):
     with pytest.raises(ModelDownloadCancelledError):
         client.ensure_model_downloaded("m", on_progress=seen.append)
     assert seen == [{"event": "progress", "percent": 10}]
+
+
+def test_a_progress_redraw_keeps_its_carriage_return_under_rich():
+    """Setup splits gaia init's output on \r; without it the redraws pile up."""
+    import io
+
+    from rich.console import Console
+
+    from gaia.installer.init_command import InitCommand
+
+    out = io.StringIO()
+    cmd = InitCommand(profile="gaia", yes=True)
+    cmd.console = Console(file=out, width=1000, force_terminal=False)
+    cmd._download_progress(1, 4)
+    cmd._download_progress(4, 4)
+
+    assert out.getvalue().count("\r") == 2
+    assert out.getvalue().endswith("100% (0.0 MB/0.0 MB)")
+
+
+def test_the_header_box_fits_its_text_at_setups_width():
+    import io
+
+    from rich.console import Console
+
+    from gaia.installer.init_command import InitCommand
+
+    out = io.StringIO()
+    cmd = InitCommand(profile="gaia", yes=True)
+    cmd.console = Console(file=out, width=1000, force_terminal=False)
+    cmd._print_header()
+
+    assert max(len(line) for line in out.getvalue().splitlines()) < 40

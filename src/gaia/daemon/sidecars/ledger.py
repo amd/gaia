@@ -3,7 +3,9 @@
 """``sidecars.json`` — the daemon's spawn ledger, for crash-reap (#2142 D-4a).
 
 Every sidecar spawn is recorded (``agent_id``, ``pid``, ``port``, ``mode``,
-``argv``, ``started_at`` — NEVER the token); a clean stop removes the entry.
+``argv``, ``started_at`` — NEVER the token), one entry per pid; a clean stop
+removes that pid's entry. An earlier spawn of the same agent that survived its
+shutdown keeps its own entry, so the next daemon start can still reap it.
 After a hard daemon death (SIGKILL / OOM / power loss) the next daemon start
 runs :func:`reap_stale`: a live recorded pid is killed only on a cmdline
 identity match; a dead leader whose port still serves our service gets a
@@ -22,6 +24,7 @@ import json
 import os
 import subprocess
 import threading
+from pathlib import Path
 from typing import Optional
 
 from gaia.daemon import paths
@@ -72,7 +75,11 @@ def record_spawn(
     argv: "list[str]",
     started_at: float,
 ) -> None:
-    """Record (or replace) the spawn entry for *agent_id*. Never records tokens."""
+    """Record the spawn of *pid* for *agent_id*. Never records tokens.
+
+    Keyed by pid: a respawn of the same agent appends rather than replacing,
+    so a predecessor that outlived its shutdown stays reapable.
+    """
     entry = {
         "agent_id": agent_id,
         "pid": pid,
@@ -82,15 +89,23 @@ def record_spawn(
         "started_at": started_at,
     }
     with _LEDGER_LOCK:
-        entries = [e for e in read_entries() if e.get("agent_id") != agent_id]
+        entries = [e for e in read_entries() if e.get("pid") != pid]
         entries.append(entry)
         _write_entries(entries)
 
 
-def remove_entry(agent_id: str) -> None:
-    """Drop *agent_id*'s entry after a clean stop."""
+def remove_entry(agent_id: str, pid: int) -> None:
+    """Drop *agent_id*'s *pid* entry after that process is confirmed gone.
+
+    Only that pid's entry goes: an earlier spawn of the same agent that is
+    still alive keeps its entry for the next crash-reap.
+    """
     with _LEDGER_LOCK:
-        entries = [e for e in read_entries() if e.get("agent_id") != agent_id]
+        entries = [
+            e
+            for e in read_entries()
+            if not (e.get("agent_id") == agent_id and e.get("pid") == pid)
+        ]
         _write_entries(entries)
 
 
@@ -128,7 +143,13 @@ def _pid_cmdline(pid: int) -> Optional[str]:
 
     try:
         return " ".join(psutil.Process(pid).cmdline())
-    except (psutil.NoSuchProcess, psutil.AccessDenied):
+    # SystemError: psutil's macOS cmdline read can raise it for a live process.
+    except (psutil.NoSuchProcess, psutil.AccessDenied, SystemError) as e:
+        logger.info(
+            "sidecar ledger: cannot read pid=%s's command line (%s)",
+            pid,
+            type(e).__name__,
+        )
         return None
 
 
@@ -167,10 +188,70 @@ def _group_kill(pid: int) -> None:
         pass
 
 
-def _cmdline_matches(cmdline: Optional[str], argv: list, port) -> bool:
-    return bool(
-        cmdline and argv and str(argv[0]) in cmdline and f"--port {port}" in cmdline
+def _pid_exe(pid: int) -> Optional[str]:
+    """The live process's executable, or None when it cannot be read."""
+    import psutil
+
+    try:
+        return psutil.Process(pid).exe()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, SystemError):
+        return None
+
+
+def _framework_version_dir(path: Path) -> Optional[Path]:
+    """``…/Python.framework/Versions/<v>`` when *path* is inside one."""
+    parts = path.parts
+    for i in range(len(parts) - 2):
+        if parts[i] == "Python.framework" and parts[i + 1] == "Versions":
+            return Path(*parts[: i + 3])
+    return None
+
+
+def _same_program(recorded: str, live_exe: Optional[str]) -> bool:
+    """Whether *live_exe* is the interpreter or binary *recorded* launched."""
+    if not live_exe:
+        return False
+    recorded_real = Path(os.path.realpath(recorded))
+    live_real = Path(os.path.realpath(live_exe))
+    if os.path.normcase(str(recorded_real)) == os.path.normcase(str(live_real)):
+        return True
+    # python.org's macOS build runs Versions/<v>/bin/python as that version's
+    # Python.app binary, so the live argv[0] is not the recorded path.
+    version_dir = _framework_version_dir(recorded_real)
+    return (
+        version_dir is not None
+        and recorded_real.parent == version_dir / "bin"
+        and live_real
+        == version_dir / "Resources" / "Python.app" / "Contents" / "MacOS" / "Python"
     )
+
+
+def _has_tokens(cmdline: str, text: str) -> bool:
+    """Whether *text* appears in *cmdline* on whitespace boundaries."""
+    return f" {text} " in f" {cmdline} "
+
+
+def _cmdline_matches(pid: int, cmdline: Optional[str], argv: list, port) -> bool:
+    if not (cmdline and argv and _has_tokens(cmdline, f"--port {port}")):
+        return False
+    if str(argv[0]) in cmdline:
+        return True
+    # A matching executable alone is any same-interpreter process, so the
+    # recorded arguments must be on the live command line too.
+    rest = " ".join(map(str, argv[1:]))
+    return _has_tokens(cmdline, rest) and _same_program(str(argv[0]), _pid_exe(pid))
+
+
+def _mismatch(cmdline: Optional[str], argv: list, port) -> str:
+    """Which recorded part the live cmdline lacks; never the cmdline itself."""
+    if not cmdline:
+        return "its command line could not be read"
+    missing = []
+    if not argv or str(argv[0]) not in cmdline:
+        missing.append("the recorded executable")
+    if not _has_tokens(cmdline, f"--port {port}"):
+        missing.append(f"--port {port}")
+    return "its command line lacks " + " and ".join(missing)
 
 
 def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
@@ -179,8 +260,11 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
     Kill gates, per entry (D-4a as amended — pid identity and port identity
     are separate pieces of evidence and never conflated):
 
-    - pid ALIVE → kill (tree-kill) iff the CMDLINE gate passes: the recorded
-      ``argv[0]`` AND ``--port <port>`` both appear in the live cmdline. A live
+    - pid ALIVE → kill (tree-kill) iff the CMDLINE gate passes: ``--port
+      <port>`` appears as whole tokens in the live cmdline AND the recorded
+      ``argv[0]`` either appears there too or is the process's own executable
+      (the same file, or a macOS framework Python's ``bin/`` interpreter and
+      its Python.app) with the rest of the recorded argv on the cmdline. A live
       pid is NEVER killed on port evidence alone — the pid may have been reused
       by an innocent process while our orphaned child still serves the port.
       If the cmdline gate fails but the port probe confirms our service, log a
@@ -192,6 +276,10 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
       pgid (it was the session leader via ``start_new_session``), then re-probe
       and log the outcome. Windows: no group survives the parent — log the
       survivor loudly as a known gap, never guess-kill.
+
+    An entry whose agent has no spec any more (uninstalled since the spawn)
+    still takes the cmdline-gated kill for a live pid; with no service id to
+    check the port against, a dead one is only logged.
 
     The ledger is truncated to ``[]`` afterwards regardless — no silent
     adoption.
@@ -205,11 +293,35 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
             port = entry.get("port")
             argv = entry.get("argv") or []
             spec = specs.get(agent_id)
-            if spec is None or pid is None or port is None:
+            if pid is None or port is None:
                 logger.warning("sidecar ledger: skipping unreapable entry %r", entry)
                 continue
+            if spec is None:
+                if _pid_alive(pid) and _cmdline_matches(
+                    pid, _pid_cmdline(pid), argv, port
+                ):
+                    logger.info(
+                        "sidecar ledger: reaping stale sidecar of unregistered "
+                        "agent %s pid=%s port=%s",
+                        agent_id,
+                        pid,
+                        port,
+                    )
+                    _tree_kill(pid)
+                    killed.append(pid)
+                else:
+                    logger.warning(
+                        "sidecar ledger: agent %s is no longer registered and "
+                        "pid=%s is gone or not ours; if port %s still answers, "
+                        "stop that process manually",
+                        agent_id,
+                        pid,
+                        port,
+                    )
+                continue
             if _pid_alive(pid):
-                if _cmdline_matches(_pid_cmdline(pid), argv, port):
+                cmdline = _pid_cmdline(pid)
+                if _cmdline_matches(pid, cmdline, argv, port):
                     logger.info(
                         "sidecar ledger: reaping stale %s sidecar pid=%s port=%s",
                         agent_id,
@@ -232,10 +344,11 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
                     )
                 else:
                     logger.info(
-                        "sidecar ledger: pid=%s no longer matches %s (reused); "
-                        "leaving it alone",
+                        "sidecar ledger: pid=%s no longer matches %s (%s; pid "
+                        "reused?); leaving it alone",
                         pid,
                         agent_id,
+                        _mismatch(cmdline, argv, port),
                     )
                 continue
             # pid dead — check whether a re-parented child still owns the port.
@@ -276,3 +389,29 @@ def reap_stale(specs: "dict[str, AgentSidecarSpec]") -> "list[int]":
                     logger.info("sidecar ledger: port %s freed after group-kill", port)
         _write_entries([])
         return killed
+
+
+def reap_after_stop(timeout: float = 5.0) -> "tuple[list[int], list[int]]":
+    """Once the daemon is gone, kill the sidecars it left running.
+
+    A daemon that was terminated, or whose shutdown hung, never ran
+    ``shutdown_all``, so its agents outlive it. Same identity gates as
+    :func:`reap_stale`. Call only when no daemon is running: a live daemon's
+    sidecars pass those gates too.
+
+    Returns ``(killed, survivors)``: the pids reaped, and those of them still
+    alive after *timeout* seconds.
+    """
+    import time
+
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    killed = reap_stale(builtin_specs())
+    survivors = list(killed)
+    deadline = time.monotonic() + timeout
+    while survivors:
+        survivors = [pid for pid in survivors if _pid_alive(pid)]
+        if not survivors or time.monotonic() >= deadline:
+            break
+        time.sleep(0.1)
+    return killed, survivors

@@ -21,6 +21,11 @@ from gaia.llm.lemonade_service import (
     install_supervisor,
 )
 from gaia.llm.lemonade_supervisor import LemonadeState
+from gaia.llm.surface_hints import (
+    APP_SERVICE_DOWN_HINT,
+    CLI_SERVICE_DOWN_HINT,
+    surface_wording,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -149,7 +154,21 @@ def test_no_daemon_is_a_loud_error_naming_how_to_start_it(monkeypatch, down_clie
         ensure_lemonade_running(ctx_size=65536)
 
     assert "background service" in str(e.value)
-    assert "gaia daemon start" in str(e.value)
+    assert APP_SERVICE_DOWN_HINT in str(e.value)
+
+
+def test_no_daemon_tells_a_cli_user_to_start_it(monkeypatch, down_client):
+    """`gaia daemon status` cannot start a service that is not running."""
+    monkeypatch.setattr("gaia.daemon.client.attach", lambda: None)
+
+    with pytest.raises(LemonadeStartError) as e:
+        ensure_lemonade_running(ctx_size=65536)
+
+    cli_text = surface_wording(str(e.value), "cli")
+    assert CLI_SERVICE_DOWN_HINT in cli_text
+    assert "gaia daemon start" in cli_text
+    assert "gaia daemon status" not in cli_text
+    assert "close GAIA" not in cli_text.lower()
 
 
 def test_a_readiness_check_never_boots_a_daemon(monkeypatch, down_client):

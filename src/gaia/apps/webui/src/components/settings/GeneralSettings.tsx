@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useChatStore } from '../../stores/chatStore';
+import { useResourceMonitorStore } from '../../stores/resourceMonitorStore';
 import type { ThemePreference } from '../../utils/theme';
 import { DesktopAppSettings } from './DesktopAppSettings';
+import { SettingsDisclosure } from './SettingsDisclosure';
 import { UpdatesSection } from './UpdatesSection';
 import { DEFAULT_CUSTOM, PALETTES, type CustomColors, type PaletteId } from '../../utils/palette';
 import { formatShortcut } from '../../utils/platform';
@@ -49,6 +51,8 @@ export function GeneralSettings() {
     const setPalette = useChatStore((s) => s.setPalette);
     const custom = useChatStore((s) => s.customColors);
     const setCustom = useChatStore((s) => s.setCustomColors);
+    const showResources = useResourceMonitorStore((s) => s.visible);
+    const setShowResources = useResourceMonitorStore((s) => s.setVisible);
     const pick = (key: keyof CustomColors) => (e: React.ChangeEvent<HTMLInputElement>) =>
         setCustom({ ...custom, [key]: e.target.value.toUpperCase() });
 
@@ -88,10 +92,23 @@ export function GeneralSettings() {
                     ))}
                 </div>
             </div>
-            <DesktopAppSettings />
-            <UpdatesSection />
             <div className="settings-field">
-                <span className="settings-label" id="palette-label">{t('settings.colors')}</span>
+                <label className="setting-row">
+                    <span>{t('resources.settings')}</span>
+                    <span className="toggle-switch">
+                        <input
+                            type="checkbox"
+                            checked={showResources}
+                            onChange={(e) => setShowResources(e.target.checked)}
+                            aria-label={t('resources.settings')}
+                            aria-describedby="resources-hint"
+                        />
+                        <span className="toggle-track" />
+                    </span>
+                </label>
+                <span className="settings-hint" id="resources-hint">{t('resources.settingsHint')}</span>
+            </div>
+            <SettingsDisclosure title={t('settings.colors')} titleId="palette-label" defaultOpen={palette === 'custom'}>
                 <div className="palette-grid" role="radiogroup" aria-labelledby="palette-label">
                     {PALETTES.map((p) => (
                         <button
@@ -136,9 +153,10 @@ export function GeneralSettings() {
                         <p className="settings-hint">{t('settings.colors.hint')}</p>
                     </div>
                 )}
-            </div>
-            <div className="settings-field">
-                <span className="settings-label">{t('settings.shortcuts')}</span>
+            </SettingsDisclosure>
+            <DesktopAppSettings />
+            <UpdatesSection />
+            <SettingsDisclosure title={t('settings.shortcuts')}>
                 <dl className="shortcut-list">
                     {SHORTCUTS.map(([keys, what]) => (
                         <div key={keys} className="shortcut-row">
@@ -147,7 +165,7 @@ export function GeneralSettings() {
                         </div>
                     ))}
                 </dl>
-            </div>
+            </SettingsDisclosure>
         </div>
     );
 }

@@ -47,7 +47,6 @@ class TalkConfig:
 
     # General settings
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Removed; True raises migration guidance
     claude_model: str = DEFAULT_CLAUDE_MODEL  # Claude model when use_claude=True
     base_url: Optional[str] = (
         None  # Lemonade server base URL (None = use LEMONADE_BASE_URL env var)
@@ -110,6 +109,9 @@ class TalkSDK:
 
         Args:
             config: Configuration options. If None, uses defaults.
+
+        Raises:
+            RuntimeError: A requested RAG document could not be indexed.
         """
         self.config = config or TalkConfig()
         self.log = get_logger(__name__)
@@ -125,7 +127,6 @@ class TalkSDK:
             show_stats=self.config.show_stats,
             logging_level=self.config.logging_level,
             use_claude=self.config.use_claude,
-            use_chatgpt=self.config.use_chatgpt,
             claude_model=self.config.claude_model,
             base_url=self.config.base_url,
         )
@@ -140,7 +141,6 @@ class TalkSDK:
             enable_tts=self.config.enable_tts,
             logging_level=self.config.logging_level,
             use_claude=self.config.use_claude,
-            use_chatgpt=self.config.use_chatgpt,
             system_prompt=self.config.system_prompt,
             model=self.config.model,
             claude_model=self.config.claude_model,
@@ -150,9 +150,15 @@ class TalkSDK:
         self.show_stats = self.config.show_stats
         self._voice_session_active = False
 
-        # Enable RAG if documents are provided
-        if self.config.rag_documents:
-            self.enable_rag(documents=self.config.rag_documents)
+        # Explicitly requested documents must be available before voice chat starts.
+        if self.config.rag_documents and not self.enable_rag(
+            documents=self.config.rag_documents
+        ):
+            raise RuntimeError(
+                "Could not index the requested documents for voice chat. "
+                "Check the RAG error above and retry. "
+                "See https://amd-gaia.ai/docs/guides/talk#document-qa-with-voice"
+            )
 
         self.log.info("TalkSDK initialized with AgentSDK integration")
 
@@ -385,7 +391,8 @@ class TalkSDK:
             return enabled
         except ImportError:
             self.log.warning(
-                'RAG dependencies not available. Install with: uv pip install -e ".[rag]"'
+                "RAG dependencies not available. "
+                'Install with: uv pip install "amd-gaia[talk,rag]"'
             )
             return False
         except Exception as e:

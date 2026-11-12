@@ -20,11 +20,13 @@ import gaia.config
 from gaia.installer import model_choice
 from gaia.installer.init_command import InitCommand
 from gaia.llm import lemonade_client
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_CHECKPOINT,
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
     LARGE_DEFAULT_MODEL_NAME,
+    NPU_DEFAULT_MODEL_NAME,
     LemonadeClient,
 )
 from gaia.ui import setup_plan as sp
@@ -43,9 +45,12 @@ class FakeLemonade(LemonadeClient):
     sends: the model name and the registration fields beside it.
     """
 
-    def __init__(self, store, downloaded=(), vram_gb=12, free_gb=500.0, extra=()):
+    def __init__(
+        self, store, downloaded=(), vram_gb=12, free_gb=500.0, extra=(), npu=False
+    ):
         super().__init__(base_url=URL, verbose=False)
         self.store, self.vram_gb, self.free_gb = str(store), vram_gb, free_gb
+        self.npu = npu
         self.entries = {
             m: {
                 "id": m,
@@ -70,13 +75,18 @@ class FakeLemonade(LemonadeClient):
         self.deleted = []
 
     def health_check(self):
-        return {"status": "ok", "version": "11.8.0"}
+        return {"status": "ok", "version": "2026.44.1"}
 
     def get_system_info(self, timeout=None):
-        return {
-            "devices": {"amd_igpu": {"available": True, "vram_gb": self.vram_gb}},
+        devices = {"amd_igpu": {"available": True, "vram_gb": self.vram_gb}}
+        info = {
+            "devices": devices,
             "model_storage": {"free_bytes": self.free_gb * GB, "path": self.store},
         }
+        if self.npu:
+            devices["amd_npu"] = {"available": True, "family": "XDNA2"}
+            info["Physical Memory"] = "64 GB"
+        return info
 
     def list_models(self, show_all=False):
         return {"data": [dict(e) for e in self.entries.values()]}
@@ -135,6 +145,9 @@ def home(tmp_path, monkeypatch):
 @pytest.fixture
 def lemonade(monkeypatch, tmp_path):
     """Point init and the setup plan at a :class:`FakeLemonade`."""
+    # These tests exercise model selection; keep the independent flagship
+    # installation prerequisite satisfied unless a readiness test opts into it.
+    monkeypatch.setattr(InitCommand, "_is_hub_agent_available", lambda *_: True)
     store = tmp_path / "hub"
     store.mkdir()
 
@@ -190,7 +203,7 @@ def test_warm_lemonade_pulls_nothing_and_asks_nothing(lemonade, monkeypatch):
 def test_flm_only_user_picks_their_npu_model_and_gets_no_gguf_chat_model(
     lemonade, home, capsys
 ):
-    fake = lemonade(downloaded=[FLM])
+    fake = lemonade(downloaded=[FLM], npu=True)
     sp.choose_chat_model(FLM)
     assert _config(home)["default_model"] == FLM
 
@@ -201,7 +214,7 @@ def test_flm_only_user_picks_their_npu_model_and_gets_no_gguf_chat_model(
 
 
 def test_flm_only_user_who_also_skips_the_embedder_downloads_nothing(lemonade, home):
-    fake = lemonade(downloaded=[FLM])
+    fake = lemonade(downloaded=[FLM], npu=True)
     sp.choose_chat_model(FLM)
     sp.set_model_skipped(DEFAULT_EMBEDDING_MODEL, True)
     assert _download(InitCommand(profile="gaia", yes=True))
@@ -340,11 +353,41 @@ def test_a_model_too_big_for_this_pc_needs_confirming(lemonade, home):
     with pytest.raises(sp.NeedsAcknowledgement) as ask:
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
     assert ask.value.detail["code"] == "no_fit"
-    assert ask.value.detail["capacity_gb"] == 12
+    assert ask.value.detail["capacity_gb"] == round(12 * GB_PER_GIB, 1)
     assert ask.value.detail["need_gb"] > 23
     assert "default_model" not in _config(home)
     sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
     assert _config(home)["default_model"] == LARGE_DEFAULT_MODEL_NAME
+
+
+def test_large_model_chosen_on_a_busy_pc_is_kept_and_downloaded(
+    lemonade, home, monkeypatch
+):
+    """Capacity picks Qwen, free memory picks Gemma; the user's Qwen must stick."""
+    from gaia.installer.init_command import resolve_init_chat_model
+    from gaia.llm.model_fit import FreeMemory
+
+    monkeypatch.setattr(
+        lemonade_client, "_free_memory_snapshot", lambda url: (FreeMemory(10, 10), {})
+    )
+    fake = lemonade(vram_gb=48)
+    # Free memory is only judged on a local server; the snapshot itself is faked.
+    fake.base_url = "http://127.0.0.1:9/api/v1"
+    assert (
+        lemonade_client.recommend_default_chat_model(fake, judge_free_memory=False)[0]
+        == LARGE_DEFAULT_MODEL_NAME
+    )
+    assert lemonade_client.recommend_default_chat_model(fake)[0] == DEFAULT_MODEL_NAME
+    with pytest.raises(sp.NeedsAcknowledgement, match="free memory"):
+        sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
+
+    sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    assert _config(home)["default_model"] == LARGE_DEFAULT_MODEL_NAME
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=True)
+    assert (choice.model_id, choice.user_set) == (LARGE_DEFAULT_MODEL_NAME, True)
+    assert _download(InitCommand(profile="gaia", yes=True))
+    assert LARGE_DEFAULT_MODEL_NAME in _pulled(fake)
+    assert DEFAULT_MODEL_NAME not in _pulled(fake)
 
 
 def test_skipping_a_model_setup_does_not_download_is_refused(lemonade, home):
@@ -372,6 +415,69 @@ def test_check_does_not_count_a_skipped_model_as_missing(lemonade, home, monkeyp
     assert check_setup_status("gaia").ready
     lemonade(downloaded=[EMBEDDER])
     home.write_text(json.dumps({"skipped_models": [DEFAULT_EMBEDDING_MODEL]}))
+    assert not check_setup_status("gaia").ready
+
+
+def test_check_accepts_the_local_model_picked_after_a_cloud_setup(
+    lemonade, home, monkeypatch
+):
+    """Cloud setup sets no default_model; the local model picked later counts."""
+    from gaia.installer.init_command import check_setup_status
+
+    lemonade(downloaded=[EMBEDDER, FLM])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    assert check_setup_status("gaia").ready
+
+
+def test_npu_profile_ignores_a_downloaded_gpu_last_model(lemonade, home, monkeypatch):
+    """An NPU setup must not silently select the GPU model from the last chat."""
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    fake = lemonade(downloaded=[EMBEDDER, DEFAULT_MODEL_NAME, FLM], npu=True)
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(
+        json.dumps({"last_provider": "local", "last_model": DEFAULT_MODEL_NAME})
+    )
+
+    choice = resolve_init_chat_model(
+        fake, reset_corrupt=False, enforce_fit=True, profile="npu"
+    )
+    assert choice.model_id == NPU_DEFAULT_MODEL_NAME
+    assert choice.user_set is False
+
+    # The guard drops only GPU models, not every saved one.
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    choice = resolve_init_chat_model(
+        fake, reset_corrupt=False, enforce_fit=True, profile="npu"
+    )
+    assert (choice.model_id, choice.user_set) == (FLM, True)
+
+
+def test_init_keeps_the_local_model_picked_after_a_cloud_setup(lemonade, home):
+    """`gaia init` must agree with the check and not pull the hardware default."""
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    fake = lemonade(downloaded=[EMBEDDER, FLM])
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=True)
+    assert (choice.model_id, choice.user_set) == (FLM, True)
+    assert _download(InitCommand(profile="gaia", yes=True))
+    assert DEFAULT_MODEL_NAME not in _pulled(fake)
+    assert LARGE_DEFAULT_MODEL_NAME not in _pulled(fake)
+
+
+def test_check_ignores_a_last_model_that_is_not_downloaded_or_not_local(
+    lemonade, home, monkeypatch
+):
+    from gaia.installer.init_command import check_setup_status
+
+    lemonade(downloaded=[EMBEDDER])
+    monkeypatch.setenv("LEMONADE_BASE_URL", URL)
+    home.write_text(json.dumps({"last_provider": "local", "last_model": FLM}))
+    assert not check_setup_status("gaia").ready
+    lemonade(downloaded=[EMBEDDER, FLM])
+    home.write_text(json.dumps({"last_provider": "fireworks", "last_model": FLM}))
     assert not check_setup_status("gaia").ready
 
 
@@ -415,7 +521,7 @@ def test_download_model_fetches_vision_for_a_user_whose_chat_model_replaced_it(
     lemonade, home
 ):
     """The caveat says `gaia init --download-model Gemma`; it must work."""
-    fake = lemonade(downloaded=[FLM, EMBEDDER])
+    fake = lemonade(downloaded=[FLM, EMBEDDER], npu=True)
     sp.choose_chat_model(FLM)
     cmd = InitCommand(profile="gaia", yes=True, extra_models=[DEFAULT_MODEL_NAME])
     assert _download(cmd)
@@ -444,11 +550,18 @@ def test_every_model_skipped_fails_loudly_and_still_sends_the_plan(
 
 
 def test_npu_profile_can_skip_its_own_flm_model(lemonade, home):
-    lemonade()
+    lemonade(npu=True, extra=[(NPU_DEFAULT_MODEL_NAME, 9.1, ["chat"], "flm")])
     with pytest.raises(sp.UnknownModel):
-        sp.set_model_skipped(FLM, True)  # not one of the gaia profile's models
-    sp.set_model_skipped(FLM, True, profile="npu")
-    assert _config(home)["skipped_models"] == [FLM]
+        # Not one of the gaia profile's models.
+        sp.set_model_skipped(NPU_DEFAULT_MODEL_NAME, True)
+    sp.set_model_skipped(NPU_DEFAULT_MODEL_NAME, True, profile="npu")
+    assert _config(home)["skipped_models"] == [NPU_DEFAULT_MODEL_NAME]
+
+
+def test_npu_plan_on_a_pc_without_an_npu_says_so(lemonade, home):
+    lemonade()
+    with pytest.raises(sp.SetupPlanError, match="no available AMD NPU"):
+        sp.build_plan("npu")
 
 
 def test_download_later_with_the_chat_model_skipped_succeeds_on_its_own_pull(

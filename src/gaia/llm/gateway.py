@@ -41,7 +41,9 @@ from gaia.llm.lemonade_client import (
     CLOUD_RECIPE,
     LemonadeClient,
     LemonadeClientError,
+    LemonadeVersionError,
     catalog_context_window,
+    check_lemonade_version,
     lemonade_auth_headers,
     resolve_lemonade_api_key,
 )
@@ -52,8 +54,9 @@ from gaia.llm.local_only import (
     local_only_key_message,
 )
 from gaia.llm.retry import http_body_text
+from gaia.llm.surface_hints import TUI_GATEWAY_KEY_HINT, TUI_MODEL_SWITCH_HINT
 from gaia.logger import get_logger
-from gaia.version import LEMONADE_GATEWAY_MIN_VERSION
+from gaia.version import LEMONADE_MIN_VERSION
 
 log = get_logger(__name__)
 
@@ -130,6 +133,8 @@ GATEWAY_STATE_FILE = Path(
 )
 
 _REQUEST_TIMEOUT = 30
+# Reading Lemonade's auth state on the Claude route must not stall a chat turn.
+STATUS_PROBE_TIMEOUT = 5
 # Registration and auth trigger upstream model discovery, which is slower.
 _DISCOVERY_TIMEOUT = 60
 # Bounds the wait on a mistyped host: a DNS failure to a non-existent domain
@@ -240,11 +245,8 @@ class GatewayState:
     # When a model's tool-calling probe last failed, ``{model_id: "<UTC ISO>"}``,
     # so a down gateway is not re-probed at every start.
     tool_calling_probe_failures: Dict[str, str] = field(default_factory=dict)
-    # Native-capable models seen writing their own tool-call markup on the
-    # in-text format; only these get ``tools=``, the rest stay in-text.
-    own_tool_markup_models: List[str] = field(default_factory=list)
     # Whether a model reasons when sent ``reasoning_effort``, learned the same
-    # way: the gateway's catalog says nothing, and DeepSeek reasons only if asked.
+    # way: the gateway's catalog says nothing about it.
     reasoning_models: List[str] = field(default_factory=list)
     no_reasoning_models: List[str] = field(default_factory=list)
     reasoning_probe_failures: Dict[str, str] = field(default_factory=dict)
@@ -290,7 +292,8 @@ class GatewayState:
                 str(k): str(v)
                 for k, v in (raw.get("tool_calling_probe_failures") or {}).items()
             },
-            own_tool_markup_models=list(raw.get("own_tool_markup_models") or []),
+            # ``own_tool_markup_models`` is not read: own markup switches only
+            # the session that wrote it, never later ones.
             reasoning_models=list(raw.get("reasoning_models") or []),
             no_reasoning_models=list(raw.get("no_reasoning_models") or []),
             reasoning_probe_failures={
@@ -317,7 +320,6 @@ class GatewayState:
             "tool_calling_probe_failures": dict(
                 sorted(self.tool_calling_probe_failures.items())
             ),
-            "own_tool_markup_models": sorted(self.own_tool_markup_models),
             "reasoning_models": sorted(self.reasoning_models),
             "no_reasoning_models": sorted(self.no_reasoning_models),
             "reasoning_probe_failures": dict(
@@ -373,7 +375,7 @@ def clear_default_model_if(model_id: Optional[str]) -> bool:
         # operation that triggered it.
         raise GatewayError(
             f"Removed the gateway model but could not clear GAIA's default "
-            f"model ({e}). Run `gaia config set default_model <id>` to fix it."
+            f"model ({e}). {TUI_MODEL_SWITCH_HINT}"
         ) from e
 
 
@@ -562,6 +564,15 @@ def gateway_claude_upstream_id(model_id: Optional[str]) -> Optional[str]:
     return upstream if upstream.startswith("claude-") else None
 
 
+def is_amd_gateway(base_url: Optional[str]) -> bool:
+    """True when *base_url* is on AMD's gateway host."""
+    if not base_url:
+        return False
+    return (
+        urlparse(base_url).hostname == urlparse(AMD_GATEWAY_ANTHROPIC_BASE_URL).hostname
+    )
+
+
 def gateway_anthropic_base_url(state: Optional[GatewayState] = None) -> str:
     """Base URL of the gateway's Anthropic Messages route.
 
@@ -578,10 +589,7 @@ def gateway_anthropic_base_url(state: Optional[GatewayState] = None) -> str:
             )
         return override.rstrip("/")
     registered = (state or GatewayState.load()).base_url
-    if (
-        urlparse(registered).hostname
-        == urlparse(AMD_GATEWAY_ANTHROPIC_BASE_URL).hostname
-    ):
+    if is_amd_gateway(registered):
         return AMD_GATEWAY_ANTHROPIC_BASE_URL
     raise GatewayError(
         f"Claude gateway models are sent to the gateway's Anthropic Messages "
@@ -592,27 +600,156 @@ def gateway_anthropic_base_url(state: Optional[GatewayState] = None) -> str:
     )
 
 
-def resolve_gateway_token() -> str:
-    """The gateway token GAIA itself sends, for routes Lemonade doesn't carry.
+STORED_TOKEN_SOURCE = "OS credential store"
 
-    Same sources as the rest of GAIA, in order: ``LEMONADE_AMD_API_KEY``,
-    ``GAIA_GATEWAY_TOKEN``, then the OS credential store.
+_TOKEN_SOURCE_LABELS = {
+    GATEWAY_ENV_VAR: f"{GATEWAY_ENV_VAR} from GAIA's environment",
+    "GAIA_GATEWAY_TOKEN": "GAIA_GATEWAY_TOKEN from GAIA's environment",
+    STORED_TOKEN_SOURCE: "the gateway key GAIA stored in the OS credential store",
+}
+
+
+def describe_token_source(source: str) -> str:
+    """A token source name as a user reads it. Never the token itself."""
+    return _TOKEN_SOURCE_LABELS.get(source, source)
+
+
+def _env_gateway_token() -> Optional[tuple[str, str]]:
+    """GAIA's gateway token from its own environment, with the variable's name."""
+    for name in (GATEWAY_ENV_VAR, "GAIA_GATEWAY_TOKEN"):
+        value = os.getenv(name)
+        if value and value.strip():
+            return value.strip(), name
+    return None
+
+
+def resolve_gateway_token_with_source() -> tuple[str, str]:
+    """GAIA's one gateway token, and the non-secret name of where it came from.
+
+    Order: ``LEMONADE_AMD_API_KEY`` then ``GAIA_GATEWAY_TOKEN`` in GAIA's
+    environment, then the OS credential store. The Claude route sends this
+    token, and ``GatewayManager.ensure_authenticated`` hands Lemonade the same
+    one, so the two routes share a single source.
     """
-    # No prompt to fall back on here, so a broken store must say so.
-    token = (
-        os.getenv(GATEWAY_ENV_VAR)
-        or os.getenv("GAIA_GATEWAY_TOKEN")
-        or read_stored_token()
+    from_env = _env_gateway_token()
+    if from_env:
+        return from_env
+    token = read_stored_token()
+    if token and token.strip():
+        return token.strip(), STORED_TOKEN_SOURCE
+    raise GatewayError(
+        f"No AMD LLM gateway key found, and Claude gateway models need one "
+        f"saved where GAIA itself can read it. {TUI_GATEWAY_KEY_HINT} Or set "
+        f"{GATEWAY_ENV_VAR} or GAIA_GATEWAY_TOKEN in GAIA's environment. "
+        f"See https://amd-gaia.ai/docs/guides/llm-gateway."
     )
-    if not token or not token.strip():
-        raise GatewayError(
-            f"No AMD LLM gateway token found, and Claude gateway models need one "
-            f"in GAIA's own process. Run `gaia gateway auth` (without "
-            f"--no-remember) to store it in the OS credential store, or set "
-            f"{GATEWAY_ENV_VAR} or GAIA_GATEWAY_TOKEN in GAIA's environment. "
-            f"See https://amd-gaia.ai/docs/guides/llm-gateway."
+
+
+def lemonade_token_with_source(
+    recall: Optional[Callable[[], Optional[str]]] = None,
+    lemonade_url: Optional[str] = None,
+    *,
+    warn: bool = True,
+) -> Optional[tuple[str, str]]:
+    """The token to hand Lemonade, and the non-secret name of where it came from.
+
+    GAIA's environment token is the one for AMD's gateway, so, as on the Claude
+    route, it goes to Lemonade only while the registered gateway is AMD's (and
+    *lemonade_url*, the gateway Lemonade reports, when given). Any other
+    gateway gets only the stored token, which ``gaia gateway install`` drops
+    when the gateway URL changes. *recall* replaces :func:`recall_token`;
+    *warn* False skips the warning about an environment token left unused.
+    """
+    from_env = _env_gateway_token()
+    if from_env:
+        registered = GatewayState.load().base_url
+        if is_amd_gateway(registered) and (
+            lemonade_url is None or is_amd_gateway(lemonade_url)
+        ):
+            return from_env
+        if warn:
+            log.warning(
+                f"{from_env[1]} in GAIA's environment is used only with AMD's "
+                f"gateway, and the registered one is {lemonade_url or registered}, "
+                f"so GAIA did not give it to Lemonade. Run `gaia gateway auth` "
+                f"with a token for that gateway."
+            )
+    token = (recall or recall_token)()
+    return (token, STORED_TOKEN_SOURCE) if token else None
+
+
+def lemonade_key_conflict(source: str, status: GatewayStatus) -> Optional[str]:
+    """Why a token from *source* may not be the key Lemonade uses, else None.
+
+    Lemonade's own ``LEMONADE_AMD_API_KEY`` beats any token GAIA hands it, and
+    no API reads it back, so the one copy GAIA can share with it is the same
+    variable in GAIA's environment. Any other source is a second copy, which
+    may match today and drift later.
+    """
+    if not status.env_var_set or source == GATEWAY_ENV_VAR:
+        return None
+    return (
+        f"Claude gateway models send {describe_token_source(source)}, while "
+        f"your other gateway models use the {GATEWAY_ENV_VAR} Lemonade reads "
+        f"from its own environment, which GAIA cannot see. These are two "
+        f"copies that can drift apart. To make them one, set {GATEWAY_ENV_VAR} "
+        f"to the same key in GAIA's environment. "
+        f"See https://amd-gaia.ai/docs/guides/llm-gateway."
+    )
+
+
+def warn_if_claude_token_may_drift(source: str) -> None:
+    """Warn when the Claude route's token is a second copy of Lemonade's key.
+
+    Only a warning: GAIA can't read Lemonade's key, so the copies may well
+    match. A 401 then names this cause (``explain_rejected_token``).
+    """
+    try:
+        status = GatewayManager().status(timeout=STATUS_PROBE_TIMEOUT)
+    except GatewayError as e:
+        # No Lemonade answering means no other gateway model is either; a 401
+        # re-checks once it is back.
+        log.debug(f"Could not read Lemonade's gateway auth state: {e}")
+        return
+    conflict = lemonade_key_conflict(source, status)
+    if conflict:
+        log.warning(conflict)
+
+
+def explain_rejected_token(
+    source: Optional[str], status: Optional[GatewayStatus]
+) -> str:
+    """What to do when the gateway rejects the Claude route's token.
+
+    *status* is Lemonade's gateway auth state, or None when it couldn't be read.
+    """
+    generic = (
+        f"{TUI_GATEWAY_KEY_HINT} If you set {GATEWAY_ENV_VAR} or "
+        f"GAIA_GATEWAY_TOKEN, update it too."
+    )
+    if not source:
+        return generic
+    if status is not None:
+        conflict = lemonade_key_conflict(source, status)
+        if conflict:
+            return (
+                f"If other gateway models still work, those copies differ. {conflict}"
+            )
+    used = f"Claude used {describe_token_source(source)}."
+    if status is None or not status.installed:
+        return f"{used} {generic}"
+    if status.env_var_set:
+        return (
+            f"{used} Lemonade reads {GATEWAY_ENV_VAR} from its own environment, "
+            f"so if other gateway models still work, the value there differs from "
+            f"the one in GAIA's environment. Set the same current key in both."
         )
-    return token.strip()
+    if status.runtime_key_set:
+        return (
+            f"{used} If other gateway models still work, the token Lemonade holds "
+            f"is current and GAIA's has gone stale. {TUI_GATEWAY_KEY_HINT}"
+        )
+    return f"{used} {generic}"
 
 
 class GatewayManager:
@@ -711,13 +848,17 @@ class GatewayManager:
                 f"{GATEWAY_ENV_VAR} is already set in Lemonade's environment, "
                 f"so Lemonade refuses to accept a different token at runtime. "
                 f"Either keep using that key, or unset {GATEWAY_ENV_VAR} and "
-                f"restart Lemonade before setting one here."
+                f"restart Lemonade before setting one here. Claude gateway "
+                f"models send the token from GAIA itself, so to keep that key "
+                f"they need {GATEWAY_ENV_VAR} set to it in GAIA's environment too."
             )
         if response.status_code == 404 and "cloud" in url:
+            from gaia.llm.lemonade_launcher import describe_upgrade_hint
+
             return GatewayError(
-                f"Lemonade at {self.base_url} has no cloud-provider API "
-                f"(needs >= {LEMONADE_GATEWAY_MIN_VERSION}). "
-                f"Upgrade with `gaia init` and re-run this command."
+                f"Lemonade at {self.base_url} has no cloud-provider API, so it "
+                f"is older than v{LEMONADE_MIN_VERSION}, the oldest version GAIA "
+                f"supports. {describe_upgrade_hint(self.base_url)}"
             )
         return GatewayError(
             f"{method} {url} failed with HTTP {response.status_code}"
@@ -835,27 +976,43 @@ class GatewayManager:
                 raise GatewayBlockedError(local_only_key_message("AMD LLM Gateway"))
             payload["api_key"] = api_key
 
+        self._refuse_an_unsupported_server()
         result = self._request(
             "POST", "install", payload=payload, timeout=_DISCOVERY_TIMEOUT, redact=True
         )
-        self._reject_server_without_cloud_offload(result, api_key)
+        self._reject_key_that_discovered_nothing(result, api_key)
         state = GatewayState.load()
         state.base_url = payload["base_url"]
         state.save()
         return result
 
-    def _reject_server_without_cloud_offload(
+    def _refuse_an_unsupported_server(self) -> None:
+        """Refuse a Lemonade GAIA does not support before registering with it.
+
+        An old one can answer the install 200 and discover nothing, which
+        would otherwise read as a rejected key.
+        """
+        base_url = self.base_url
+        try:
+            health = self.client.health_check()
+        except LemonadeClientError as e:
+            raise GatewayError(
+                f"Lemonade at {base_url} did not answer its health check, so the "
+                f"gateway was not registered: {e}"
+            ) from e
+        version = health.get("version") if isinstance(health, dict) else None
+        try:
+            check_lemonade_version(version, base_url)
+        except LemonadeVersionError as e:
+            raise GatewayError(str(e)) from e
+
+    def _reject_key_that_discovered_nothing(
         self, install_result: Dict[str, Any], api_key: Optional[str]
     ) -> None:
-        """Fail loudly when the running Lemonade predates cloud offload.
+        """Fail loudly when Lemonade took the key but the gateway listed nothing.
 
-        The 404 check in ``_http_error`` cannot catch this. A pre-11.8 server
-        answers the cloud routes with 200, reports ``status: success``, lists
-        the provider in ``system-info`` — and discovers nothing. It also has no
-        ``version`` field to compare, so a version check reads ``None`` and
-        skips. Observed on 11.5.0: every signal said the gateway was registered
-        while zero models existed, and the user is then sent to debug a token
-        that is fine.
+        Lemonade stores a key without validating it, so a ``status: success``
+        with zero models means the gateway refused the key.
 
         Only decides when a key was supplied. Without one, zero models is the
         expected pre-auth state and means nothing about the server.
@@ -868,13 +1025,10 @@ class GatewayManager:
         if not (auth.get("runtime_key_set") or auth.get("env_var_set")):
             return
         raise GatewayError(
-            f"Lemonade accepted the gateway registration but discovered no "
-            f"models. The usual cause is a Lemonade older than "
-            f"{LEMONADE_GATEWAY_MIN_VERSION}: cloud offload arrived in that "
-            f"release, and earlier servers answer these routes with success "
-            f"while doing nothing. Check with `lemonade --version` and upgrade "
-            f"via `gaia init`. If the server is new enough, the gateway "
-            f"rejected the key — run scripts/diagnose-gateway-auth.ps1."
+            "Lemonade accepted the gateway registration but discovered no "
+            "models, so the gateway rejected the key. Check that the key is "
+            "current; scripts/diagnose-gateway-auth.ps1 shows what the gateway "
+            "answered."
         )
 
     def uninstall(self) -> Dict[str, Any]:
@@ -931,10 +1085,15 @@ class GatewayManager:
     def ensure_authenticated(
         self, recall: Optional[Callable[[], Optional[str]]] = None
     ) -> bool:
-        """Give Lemonade the remembered token if it has none.
+        """Give Lemonade GAIA's gateway token if it has none.
 
         Lemonade forgets its token on restart, so without this every restart
         means re-entering it. Returns True when the gateway is usable.
+
+        The token is the one the Claude route sends: GAIA's environment first,
+        then the remembered one, so both routes authenticate with one key. The
+        environment token goes only to AMD's gateway
+        (:func:`lemonade_token_with_source`).
 
         "Usable" means models were discovered, not merely that Lemonade holds a
         key: it stores one without validating it, so a revoked token reports
@@ -972,31 +1131,33 @@ class GatewayManager:
                 f"auth`, or unset {GATEWAY_ENV_VAR} if it is stale."
             )
             return False
-        token = (recall or recall_token)()
-        if not token:
+        found = lemonade_token_with_source(recall, status.base_url)
+        if not found:
             return False
+        token = found[0]
+        del found
         try:
             result = self.set_token(token)
         except GatewayError as e:
             # A remembered token that the gateway now rejects is worth saying
             # out loud — silently prompting again hides a revoked key.
-            self.log.warning(f"The remembered gateway token was not accepted: {e}")
+            self.log.warning(f"GAIA's gateway token was not accepted: {e}")
             return False
         del token
         # Lemonade stores a key without checking it, so this — not the 200 — is
         # where a revoked token first shows.
         if not (result or {}).get("models_discovered"):
             self.log.warning(
-                "The remembered gateway token was stored but discovered no "
+                "GAIA's gateway token was stored but discovered no "
                 "models, which means the gateway rejected it. Re-run "
                 "`gaia gateway auth` with a current token."
             )
             return False
         return True
 
-    def status(self) -> GatewayStatus:
+    def status(self, *, timeout: int = _REQUEST_TIMEOUT) -> GatewayStatus:
         """Registration and auth state for the gateway provider."""
-        info = self._request("GET", "system-info")
+        info = self._request("GET", "system-info", timeout=timeout)
         providers = (info.get("cloud") or {}).get("providers") or []
         for entry in providers:
             if entry.get("name") != GATEWAY_PROVIDER:

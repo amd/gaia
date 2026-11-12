@@ -114,6 +114,9 @@ var toolPhrases = map[string]toolPhrase{
 
 	// Not a tool: the agent asking to reach a path outside the session.
 	"allow_path_access": {With: "Asking for access to %s", Without: "Asking for access to a location", Arg: "path"},
+
+	// Not a tool: the agent asking whether to read a folder's CLAUDE.md, AGENTS.md and skills.
+	"trust_project_folder": {With: "Asking to trust %s", Without: "Asking to trust this folder", Arg: "folder"},
 }
 
 // verbForms turns a tool name's leading token into a present-participle phrase,

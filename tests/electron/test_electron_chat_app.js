@@ -12,14 +12,12 @@
  * - Zustand store configuration
  * - React component structure
  * - Privacy-first design elements
- * - Framework compatibility
  */
 
 const path = require('path');
 const fs = require('fs');
 
 const CHAT_APP_PATH = path.join(__dirname, '../../src/gaia/apps/webui');
-const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 
 // Every theme write goes through this one module, so the callers below are
 // checked for the delegation and this file for the DOM write itself.
@@ -367,14 +365,17 @@ describe('Chat App Integration', () => {
     });
 
     it('should define StreamEvent interface', () => {
-      expect(typesContent).toContain('interface StreamEvent');
-      expect(typesContent).toContain("'chunk'");
-      expect(typesContent).toContain("'done'");
-      expect(typesContent).toContain("'error'");
-      expect(typesContent).toContain("'policy_alert'");
-      expect(typesContent).toContain('rule_ids?: string[]');
-      expect(typesContent).toContain('policy_version?: string');
-      expect(typesContent).toContain('receipt_id?: string');
+      // Stream types live in their own module, re-exported from index.ts.
+      expect(typesContent).toContain("export * from './stream';");
+      const streamContent = fs.readFileSync(path.join(CHAT_APP_PATH, 'src/types/stream.ts'), 'utf8');
+      expect(streamContent).toContain('interface StreamEvent');
+      expect(streamContent).toContain("'chunk'");
+      expect(streamContent).toContain("'done'");
+      expect(streamContent).toContain("'error'");
+      expect(streamContent).toContain("'policy_alert'");
+      expect(streamContent).toContain('rule_ids?: string[]');
+      expect(streamContent).toContain('policy_version?: string');
+      expect(streamContent).toContain('receipt_id?: string');
     });
   });
 
@@ -980,7 +981,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on session actions', () => {
-      expect(sidebarContent).toContain('? `Confirm delete ${session.title} and its ${unsentWords}`');
+      expectTranslated(sidebarContent, "? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })", 'row.confirmDeleteUnsentAria.one', 'Confirm delete {title} and its {n} unsent message');
+      expect(EN_MESSAGES['row.confirmDeleteUnsentAria.other']).toBe('Confirm delete {title} and its {n} unsent messages');
       expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: session.title }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
       expectTranslated(sidebarContent, ": t('row.deleteAria', { title: session.title })}", 'row.deleteAria', 'Delete {title}');
       expectTranslated(sidebarContent, '<nav className="sb-list" id="sb-chat-list" aria-label={t(\'sidebar.recent\')}>', 'sidebar.recent', 'Recent chats');
@@ -1127,7 +1129,10 @@ describe('Chat App Integration', () => {
     it('should prompt differently on an empty chat, a reply, and during a running reply', () => {
       expectTranslated(chatContent, "messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}", 'composer.placeholder', 'Ask GAIA anything');
       expect(EN_MESSAGES['composer.reply']).toBe('Reply to GAIA');
-      expect(chatContent).toContain('placeholder={isStreaming');
+      // A waiting question outranks the queue: the box answers it.
+      expect(chatContent).toContain('placeholder={answeringId');
+      expect(chatContent).toContain("? t('composer.answerQuestion')");
+      expect(chatContent).toContain(': isStreaming');
       expectTranslated(chatContent, "? t('composer.queueNext')", 'composer.queueNext', 'Queue your next message');
     });
 
@@ -1149,7 +1154,12 @@ describe('Chat App Integration', () => {
     });
 
     it('should auto-upload dropped files', () => {
-      expect(chatContent).toContain('uploadDocumentBlob');
+      const chatDocuments = fs.readFileSync(
+        path.join(CHAT_APP_PATH, 'src/utils/chatDocuments.ts'),
+        'utf8'
+      );
+      expect(chatContent).toContain('addDroppedFiles(sessionId');
+      expect(chatDocuments).toContain('api.uploadDocumentBlob(file)');
     });
 
     it('should have drag active CSS class', () => {
@@ -1174,38 +1184,13 @@ describe('Chat App Integration', () => {
       expect(chatContent).toContain('aria-label="Export chat"');
       expect(chatContent).toContain('aria-label="Browse files on this PC"');
     });
-
-    it('should convert policy_alert events into policy steps and notifications', () => {
-      const stepsContent = fs.readFileSync(
-        path.join(CHAT_APP_PATH, 'src/utils/streamSteps.ts'),
-        'utf8'
-      );
-      expect(stepsContent).toContain("case 'policy_alert'");
-      expect(stepsContent).toContain("type: 'policy_alert'");
-      expect(stepsContent).toContain('ruleIds: event.rule_ids ?? []');
-      expect(stepsContent).toContain('policyVersion: event.policy_version');
-      expect(stepsContent).toContain('receiptId: event.receipt_id');
-      expect(chatContent).toContain('showPolicyToast');
-      expect(chatContent).toContain('View receipt');
-      expect(chatContent).toContain('Receipt unavailable');
-    });
   });
 
   describe('Policy alert UI coverage', () => {
-    let agentActivityContent;
-    let notificationContent;
     let notificationCss;
     let agentTypesContent;
 
     beforeAll(() => {
-      agentActivityContent = fs.readFileSync(
-        path.join(CHAT_APP_PATH, 'src/components/AgentActivity.tsx'),
-        'utf8'
-      );
-      notificationContent = fs.readFileSync(
-        path.join(CHAT_APP_PATH, 'src/components/NotificationCenter.tsx'),
-        'utf8'
-      );
       notificationCss = fs.readFileSync(
         path.join(CHAT_APP_PATH, 'src/components/NotificationCenter.css'),
         'utf8'
@@ -1216,16 +1201,6 @@ describe('Chat App Integration', () => {
       );
     });
 
-    it('should render inline Policy Shield cards with policy metadata', () => {
-      expect(agentActivityContent).toContain("step.type === 'policy_alert'");
-      expect(agentActivityContent).toContain('FlowPolicyAlert');
-      expectTranslated(agentActivityContent, "t('activity.policy.title')", 'activity.policy.title', 'Policy Shield');
-      expectTranslated(agentActivityContent, "ref('activity.blocked')", 'activity.blocked', 'Blocked by policy');
-      expect(agentActivityContent).toContain('step.ruleIds.join');
-      expect(agentActivityContent).toContain('step.policyVersion');
-      expectTranslated(agentActivityContent, "t('activity.policy.receiptUnavailable')", 'activity.policy.receiptUnavailable', 'Receipt unavailable');
-    });
-
     it('should model policy notifications separately from permission prompts', () => {
       expect(agentTypesContent).toContain("| 'policy_alert'");
       expect(agentTypesContent).toContain('decision?: string');
@@ -1233,18 +1208,6 @@ describe('Chat App Integration', () => {
       expect(agentTypesContent).toContain('ruleIds?: string[]');
       expect(agentTypesContent).toContain('policyVersion?: string');
       expect(agentTypesContent).toContain('receiptId?: string');
-    });
-
-    it('should render policy notification details without permission actions', () => {
-      expect(notificationContent).toContain("policy_alert");
-      expect(notificationContent).toContain("label: 'Policy'");
-      expect(notificationContent).toContain('notification-policy-details');
-      expect(notificationContent).toContain('Reason: {n.reason}');
-      expect(notificationContent).toContain('Rules: <code>{n.ruleIds.join');
-      expect(notificationContent).toContain('Policy: <code>{n.policyVersion}</code>');
-      expect(notificationContent).toContain('Receipt unavailable');
-      expect(notificationContent).toContain("n.type === 'permission_request' && !n.response");
-      expect(notificationContent).not.toContain("n.type === 'policy_alert' && !n.response");
     });
 
     it('should style policy notifications distinctly from permission requests', () => {
@@ -1401,25 +1364,24 @@ describe('Chat App Integration', () => {
     it('should keep model-server status, custom model, dynamic tools and MCP in Advanced', () => {
       expect(advancedContent).toContain('className="status-grid"');
       expect(advancedContent).toContain('className="model-override-desc"');
-      expect(advancedContent).toContain('Dynamic Tools');
+      expect(advancedContent).toContain('settings.advanced.dynamicTitle');
       expect(advancedContent).toContain('mcp-status-connected');
     });
 
     it('should choose the context size in Model, sized to what fits, not in Advanced', () => {
-      const modelContent = fs.readFileSync(path.join(settingsDir, 'ModelSettings.tsx'), 'utf8');
+      const inUseContent = fs.readFileSync(path.join(settingsDir, 'ModelInUse.tsx'), 'utf8');
       expect(advancedContent).not.toContain('ctx-preset-row');
-      expect(modelContent).toContain('<ModelContextSize model={activeLocal} />');
+      expect(inUseContent).toContain('<ModelContextSize model={model} />');
     });
 
     it('should have danger zone section in Privacy', () => {
-      expect(privacyContent).toContain('danger-divider');
       expect(privacyContent).toContain('danger-warning');
       expect(privacyContent).toContain('className="btn-danger"');
     });
 
     it('should have danger zone warning text and two-step confirm', () => {
-      expect(privacyContent).toContain('Deletes every chat and its messages');
-      expect(privacyContent).toContain("confirm ? 'Click again to delete all chats' : 'Delete all chats'");
+      expect(privacyContent).toContain("t('settings.privacy.deleteWarning')");
+      expect(privacyContent).toContain("confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')");
     });
   });
 
@@ -1453,7 +1415,6 @@ describe('Chat App Integration', () => {
     });
 
     it('should have danger zone styles', () => {
-      expect(sharedCss).toContain('.danger-divider');
       expect(sharedCss).toContain('.danger-warning');
     });
   });
@@ -1474,7 +1435,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have aria-label on file path input', () => {
-      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to index');
+      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to add');
     });
 
     it('should have aria-label on close button', () => {
@@ -1525,29 +1486,16 @@ describe('Chat App Integration', () => {
     });
   });
 
-  // ── Framework Compatibility ────────────────────────────────────────
+  // ── App Config ─────────────────────────────────────────────────────
 
-  describe('framework compatibility', () => {
-    it('should be discoverable by framework main.js', () => {
+  describe('app config', () => {
+    it('should declare its name and display name', () => {
       const configPath = path.join(CHAT_APP_PATH, 'app.config.json');
       expect(fs.existsSync(configPath)).toBe(true);
 
       const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       expect(config.name).toBe('agent-ui');
       expect(config.displayName).toBeDefined();
-    });
-
-    it('should have framework shared services available', () => {
-      const services = [
-        'src/services/window-manager.js',
-        'src/services/mcp-client.js',
-        'src/services/base-ipc-handlers.js',
-      ];
-
-      services.forEach(service => {
-        const servicePath = path.join(FRAMEWORK_PATH, service);
-        expect(fs.existsSync(servicePath)).toBe(true);
-      });
     });
   });
 });

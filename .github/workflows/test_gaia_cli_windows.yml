@@ -15,7 +15,7 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
       - '.github/actions/setup-ffmpeg/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # The Lemonade launch scripts depend on each other, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -60,13 +60,13 @@ on:
       - 'tests/test_lemonade_client.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_gaia_cli_windows.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
       - '.github/actions/setup-ffmpeg/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # The Lemonade launch scripts depend on each other, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'

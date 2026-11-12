@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef } from 'react';
-import { AlertTriangle, Lightbulb, ExternalLink, X, AlertCircle, Bug } from 'lucide-react';
+import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
+import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
 import './UnsupportedFeature.css';
 
-const GITHUB_ISSUES_URL = 'https://github.com/amd/gaia/issues';
 const GITHUB_NEW_ISSUE_URL = 'https://github.com/amd/gaia/issues/new';
 const GITHUB_FEATURE_REQUEST_URL = `${GITHUB_NEW_ISSUE_URL}?template=feature_request.md`;
 const GITHUB_BUG_REPORT_URL = `${GITHUB_NEW_ISSUE_URL}?template=bug_report.md`;
@@ -32,23 +32,21 @@ const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
     },
     {
         label: 'Video',
-        extensions: new Set(['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v']),
-        message: 'Video files are not supported for indexing.',
+        extensions: VIDEO_EXTENSIONS,
+        message: 'Video files can\'t go in the document library.',
         alternatives: [
-            'Extract subtitles or transcripts from videos and index those',
-            'Use GAIA\'s voice/talk mode for audio: gaia talk',
+            'Attach the video to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support video file indexing',
+        featureTitle: 'Support video files in the document library',
     },
     {
         label: 'Audio',
-        extensions: new Set(['.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus']),
-        message: 'Audio files are not supported for indexing.',
+        extensions: AUDIO_EXTENSIONS,
+        message: 'Audio files can\'t go in the document library.',
         alternatives: [
-            'Use GAIA\'s voice mode for speech interaction: gaia talk',
-            'Transcribe audio to text first, then index the transcript',
+            'Attach the recording to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support audio file transcription and indexing',
+        featureTitle: 'Support audio files in the document library',
     },
     {
         label: 'Archive',
@@ -343,61 +341,6 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
             <button className="upload-error-dismiss" onClick={onDismiss} aria-label="Dismiss">
                 <X size={14} />
             </button>
-        </div>
-    );
-}
-
-// ── Inline Unsupported Feature Banner (for chat messages) ────────────────
-
-interface UnsupportedFeatureBannerProps {
-    /** Short title of the unsupported feature. */
-    title: string;
-    /** Description of what the user asked for. */
-    description: string;
-    /** Things the user can do instead. */
-    alternatives?: string[];
-    /** Pre-filled feature request title for GitHub. */
-    featureTitle?: string;
-}
-
-/**
- * Rendered inside assistant messages when the agent detects an unsupported feature.
- * Shows what's available instead and links to GitHub for feature requests.
- */
-export function UnsupportedFeatureBanner({ title, description, alternatives, featureTitle }: UnsupportedFeatureBannerProps) {
-    const issueUrl = featureTitle
-        ? featureRequestUrl(featureTitle)
-        : `${GITHUB_ISSUES_URL}`;
-
-    return (
-        <div className="unsupported-banner">
-            <div className="unsupported-banner-header">
-                <AlertTriangle size={16} />
-                <span>{title}</span>
-            </div>
-            <div className="unsupported-banner-body">
-                <p>{description}</p>
-                {alternatives && alternatives.length > 0 && (
-                    <>
-                        <p><strong>What you can do instead:</strong></p>
-                        <ul className="unsupported-alternatives">
-                            {alternatives.map((alt, i) => (
-                                <li key={i}>{alt}</li>
-                            ))}
-                        </ul>
-                    </>
-                )}
-            </div>
-            <div className="unsupported-feature-request">
-                <Lightbulb size={14} />
-                <span>
-                    Want this feature?{' '}
-                    <a href={issueUrl} target="_blank" rel="noopener noreferrer">
-                        Request it on GitHub
-                        <ExternalLink size={10} style={{ marginLeft: 3, verticalAlign: 'middle' }} />
-                    </a>
-                </span>
-            </div>
         </div>
     );
 }

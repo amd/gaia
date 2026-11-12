@@ -4,6 +4,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import * as api from '../services/api';
 import type { TurnChanges } from '../types/changes';
+import { requestErrorParam } from '../utils/requestErrors';
+import type { Param } from '../i18n/registry';
 
 /**
  * One listing per chat, shared by every message in it. A message the cached
@@ -62,7 +64,7 @@ export function useTurnChanges(sessionId: string, messageId: number) {
     const [turn, setTurn] = useState<TurnChanges | null>(
         () => cache.get(sessionId)?.byMessage.get(messageId) ?? null,
     );
-    const [error, setError] = useState<string | null>(null);
+    const [error, setError] = useState<Param | null>(null);
 
     useEffect(() => {
         if (messageId <= 0) return;
@@ -76,7 +78,7 @@ export function useTurnChanges(sessionId: string, messageId: number) {
                 (err: unknown) => {
                     // Let a later mount of this message try again.
                     entry.checked.delete(messageId);
-                    setError(err instanceof Error ? err.message : String(err));
+                    setError(requestErrorParam(err));
                 },
             );
         } else {

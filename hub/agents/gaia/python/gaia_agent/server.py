@@ -16,7 +16,8 @@ Scope note: the surfaces here are ``/init`` (readiness preflight), ``/query``,
 ``/query/{run_id}/cancel``, ``/query/{run_id}/respond``,
 ``/query/{run_id}/followup``, ``/query/{run_id}/tool_decision`` (contract >=
 2.14), ``/sessions/{session_id}/bypass``, ``/sessions/{session_id}/internet``
-(contract >= 2.23) and ``/sessions/{session_id}/grants`` (contract >= 2.26).
+(contract >= 2.23), ``/sessions/{session_id}/grants`` (contract >= 2.26) and
+``/sessions/{session_id}/tools`` (contract >= 2.27).
 ``needs_input`` is answered over
 ``/respond`` on the run's existing stream; ``needs_confirmation`` is answered
 the same way over ``/tool_decision`` — but only when there is a session to
@@ -94,8 +95,9 @@ AGENT_ID = "gaia"
 #: 2.24 added ``working_directory`` to ``/query``.
 #: 2.25 added ``/query``'s ``turns`` field and ``final.model_messages``.
 #: 2.26 added ``GET``/``DELETE /sessions/{id}/grants`` to list and revoke a
-#: session's "always" answers.
-API_VERSION = "2.26"
+#: session's "always" answers, and ``/skills``' ``claude-project`` source.
+#: 2.27 added ``GET /sessions/{id}/tools``: the tools the session's agent has.
+API_VERSION = "2.27"
 
 #: How long ``final`` waits for the turn's context measurement before going without.
 _CONTEXT_WAIT_SECONDS = 15.0
@@ -521,6 +523,24 @@ class GrantsResponse(_Strict):
     grants: List[GrantView]
 
 
+class ToolView(_Strict):
+    name: str = Field(description="The tool's registered name.")
+    description: str = Field(description="What it does, as the model is told.")
+    category: str = Field(
+        description=(
+            "Where it comes from: a KNOWN_TOOLS mixin name (rag, file_io, ...), "
+            "mcp, skill, or agent for a tool the agent defines itself."
+        )
+    )
+
+
+class ToolsResponse(_Strict):
+    """The tools a session's agent can call (contract >= 2.27)."""
+
+    session_id: str
+    tools: List[ToolView]
+
+
 class _QueryRun:
     """One in-flight run: the agent, its output handler, and its cancel flag."""
 
@@ -662,27 +682,33 @@ def _worded(event: Dict[str, Any], surface: str) -> Dict[str, Any]:
 def _terminal_error_detail(exc: BaseException) -> str:
     """Actionable copy for a run-killing exception.
 
-    Lemonade being unreachable is by far the most common failure and its raw
-    urllib3 repr tells a user nothing, so it gets named copy with the fix.
-    Anything else is surfaced verbatim — a generic 'something went wrong' would
-    hide the one detail that makes a bug reportable.
+    A model-server failure gets its classified wording, which names the fix in
+    the caller's front-end. Anything else is surfaced verbatim — a generic
+    'something went wrong' would hide the one detail that makes a bug
+    reportable.
     """
-    text = f"{type(exc).__name__}: {exc}"
-    lowered = text.lower()
-    if any(
-        s in lowered
-        for s in (
-            "connection refused",
-            "max retries",
-            "failed to establish",
-            "newconnectionerror",
+    from gaia_agent.stdio import model_server_failure, model_server_message
+
+    typed = model_server_failure(exc)
+    if typed is not None:
+        return model_server_message(typed)
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _start_failure(exc: BaseException, surface: str) -> HTTPException:
+    """The HTTP error for a run that failed before its loop started."""
+    from gaia_agent.stdio import model_server_failure, model_server_message
+
+    typed = model_server_failure(exc)
+    if typed is None:
+        return HTTPException(
+            status_code=500, detail=f"Failed to start the query run: {exc}"
         )
-    ):
-        return (
-            f"Local Lemonade Server is not reachable. {start_advice()} "
-            f"See {_DOCS_URL}. (underlying error: {text})"
-        )
-    return text
+    logger.warning("%s /query could not start: %s", AGENT_ID, exc)
+    # Not the caller's fault and not a bug: the model server is unavailable.
+    return HTTPException(
+        status_code=503, detail=surface_wording(model_server_message(typed), surface)
+    )
 
 
 def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -692,6 +718,8 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
     message rather than raising, so a run can finish with no ``answer`` event.
     Surfacing that message beats inventing a generic error.
     """
+    from gaia.llm.providers.lemonade import MODEL_SERVER_DOWN
+
     if isinstance(result, dict):
         if result.get("status") == "cancelled":
             # Stopped mid-generation: the loop returns no text by design, and
@@ -703,6 +731,8 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
                 final: Dict[str, Any] = {"type": "final", "answer": value}
                 if result.get("model_failed"):
                     final["failed"] = True
+                    if result.get("model_server_down"):
+                        final["failure"] = MODEL_SERVER_DOWN
                 return final
         error = result.get("error")
         if isinstance(error, str) and error.strip():
@@ -736,9 +766,13 @@ def _measure_turn_context(
     pushed: List[Dict[str, Any]],
     query: str,
     result: Optional[Dict[str, Any]],
+    received_turns: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """What the next model call holds: the pushed history plus this turn.
 
+    With *received_turns* (a caller that sends ``turns``), the measurement is
+    over those whole turns plus this turn as recorded, tool results included:
+    the same turns, in the same budget, the next ``/query`` is fitted from.
     None for a turn with no answer (stopped, or the model failed), which adds
     nothing the caller's next push would carry.
     """
@@ -747,11 +781,15 @@ def _measure_turn_context(
     answer = _run_answer(result)
     if answer is None:
         return None
-    messages = list(pushed) + [
+    exchange = [
         {"role": "user", "content": query},
         {"role": "assistant", "content": answer},
     ]
-    turns = pushed_turns(messages)
+    if received_turns is not None:
+        recorded = result.get("model_messages") if isinstance(result, dict) else None
+        turns = list(received_turns) + _as_model_turns(agent, [recorded or exchange])
+    else:
+        turns = pushed_turns(list(pushed) + exchange)
     model_id = getattr(agent, "model_id", None)
     box: Dict[str, Any] = {}
 
@@ -830,7 +868,19 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     )
     rag = agent.rag
     lines: List[str] = []
-    for doc in pending:
+    cancel = getattr(agent, "_cancel_event", None)
+    stopped = False
+    for position, doc in enumerate(pending):
+        # Stop ends the loading here; what is left stays pending for the next turn.
+        if cancel is not None and cancel.is_set():
+            left = len(pending) - position
+            lines.append(
+                "Stopped: "
+                + ("1 document was" if left == 1 else f"{left} documents were")
+                + " not loaded. They load with your next message."
+            )
+            stopped = True
+            break
         name = Path(doc).name
         reason = (
             "document search is not available in this session"
@@ -857,6 +907,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     if succeeded:
         agent.rebuild_system_prompt()
     all_indexed = succeeded == len(pending)
+    status = "stopped" if stopped else "indexed" if all_indexed else "not all indexed"
     handler._emit(
         {
             "type": "tool_result",
@@ -865,7 +916,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             "success": all_indexed,
             # The status/message shape is what a relaying host summarizes from.
             "result_data": {
-                "status": "indexed" if all_indexed else "not all indexed",
+                "status": status,
                 "message": "; ".join(lines),
                 "success": all_indexed,
             },
@@ -1032,10 +1083,12 @@ async def init() -> Dict[str, Any]:
             f"See {_DOCS_URL}."
         )
     elif compatible is False:
+        from gaia.llm.lemonade_launcher import describe_upgrade_hint
+
+        upgrade = await asyncio.to_thread(describe_upgrade_hint, probe["base_url"])
         hint = (
             f"Lemonade {probe['version']} is older than the required "
-            f"{LEMONADE_MIN_VERSION}. Run `gaia init --force-reinstall`, then "
-            "re-check."
+            f"{LEMONADE_MIN_VERSION}. {upgrade}"
         )
     elif not probe["present"]:
         # `gaia download` takes no positional model — argparse exits 2 on it.
@@ -1289,21 +1342,26 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
 _TURN_RECORD_WAIT_SECONDS = 15.0
 
 
+def _as_model_turns(
+    agent: Any, turns: List[List[Dict[str, Any]]]
+) -> List[List[Dict[str, Any]]]:
+    """*turns* as *agent*'s model reads them: tool calls as text without native tools."""
+    from gaia.agents.base.history import text_tool_history
+
+    uses_native = getattr(agent, "_uses_native_tool_calls", None)
+    if callable(uses_native) and not uses_native():
+        return text_tool_history(turns)
+    return turns
+
+
 def _history_from_turns(
     agent: Any, turns: List[List[Dict[str, Any]]], query: str, handler: Any
 ) -> List[Dict[str, Any]]:
     """The newest whole *turns* that fit *agent*'s window, as its model reads them."""
-    from gaia.agents.base.history import (
-        history_budget,
-        select_history,
-        text_tool_history,
-    )
+    from gaia.agents.base.history import history_budget, select_history
 
-    uses_native = getattr(agent, "_uses_native_tool_calls", None)
-    if callable(uses_native) and not uses_native():
-        turns = text_tool_history(turns)
     return select_history(
-        turns,
+        _as_model_turns(agent, turns),
         history_budget(agent, query),
         lambda cut: handler._emit({"type": "status", "message": cut.notice}),
     )
@@ -1362,12 +1420,15 @@ _QUERY_SSE_RESPONSES = {
         "description": (
             "Server-Sent Events stream (text/event-stream). Each `data:` line is "
             "one canonical event discriminated on `type`: status {message, "
-            "phase?, queue?} | token {delta} | tool_call {tool, args} | "
-            "tool_result {tool, data, render?} | needs_confirmation {run_id, "
-            "action, summary, confirm_id?, always_scope?, risk?, tool_label?, "
-            "args?, args_truncated?, prompt_context?} | needs_input {run_id, "
-            "request_id, question, options, allow_free_text, sensitive, "
-            "respond_url, timeout_seconds?} | final {answer, usage?, failed?, model_messages?} | "
+            "level?, phase?, queue?, retracts_answer?} | token {delta} | "
+            "reasoning {delta, retracts_answer?} | "
+            "tool_call {tool, args} | tool_result {tool, data, render?} | "
+            "needs_confirmation {run_id, action, summary, confirm_id?, "
+            "always_scope?, risk?, tool_label?, args?, args_truncated?, "
+            "prompt_context?} | needs_input {run_id, request_id, question, "
+            "options, allow_free_text, sensitive, respond_url, "
+            "timeout_seconds?} | final {answer, usage?, failed?, failure?, "
+            "performance?, context?, context_error?, model_messages?} | "
             "error {detail, status}. A needs_confirmation's `args` are exactly "
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
@@ -1440,6 +1501,9 @@ async def query(request: QueryRequest):
             close_agent(one_shot_agent)
 
     try:
+        warm_up = _startup_warm_up
+        if not warm_up.done.is_set():
+            await asyncio.to_thread(warm_up.note_turn, _turn_model(request))
         kwargs: Dict[str, Any] = {}
         if _effective_provider(request) == _CLAUDE_PROVIDER:
             # ``model`` names a CLAUDE model here, not a Lemonade one — putting
@@ -1616,9 +1680,7 @@ async def query(request: QueryRequest):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         _unwind_setup()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to start the query run: {exc}"
-        ) from exc
+        raise _start_failure(exc, _wording_surface(request)) from exc
 
     def _process() -> None:
         if request.documents:
@@ -1637,6 +1699,11 @@ async def query(request: QueryRequest):
                 lambda cut: handler.print_warning(cut.notice),
             )
         pushed = list(getattr(agent, "conversation_history", None) or [])
+        received_turns = (
+            _as_model_turns(agent, request.turns)
+            if request.turns is not None and hasattr(agent, "conversation_history")
+            else None
+        )
         try:
             if request.max_steps is not None:
                 run.result = agent.process_query(
@@ -1646,7 +1713,7 @@ async def query(request: QueryRequest):
                 run.result = agent.process_query(request.query)
             try:
                 run.context = _measure_turn_context(
-                    agent, pushed, request.query, run.result
+                    agent, pushed, request.query, run.result, received_turns
                 )
             except Exception as exc:  # the answer stands; the meter says why it's blank
                 logger.exception("Context measurement failed for run_id=%s", run.run_id)
@@ -1775,7 +1842,9 @@ async def query(request: QueryRequest):
 
     async def _stream():
         translator = CanonicalTranslator(
-            request.run_id, agent_id=AGENT_ID, reasoning=request.reasoning
+            request.run_id,
+            agent_id=AGENT_ID,
+            reasoning=request.reasoning,
         )
         terminated = False
         last_write = time.monotonic()
@@ -2085,6 +2154,28 @@ async def list_grants(session_id: str) -> GrantsResponse:
     return GrantsResponse(session_id=session_id, grants=session.permissions.grants())
 
 
+@router.get("/sessions/{session_id}/tools", response_model=ToolsResponse)
+async def list_tools(session_id: str) -> ToolsResponse:
+    """The tools the session's agent can call now, skills loaded so far included.
+
+    Read from the session's own agent, so it is what the next turn is offered.
+    An unknown session is a 404: building an agent just to list tools would
+    describe a different agent than the one the chat talks to.
+    """
+    _require_valid_session_id(session_id)
+    session = session_registry.get(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No session {session_id!r} exists, so it has no agent to list "
+                "tools for. Send a query on that session first."
+            ),
+        )
+    tools = await asyncio.to_thread(session.agent.describe_tools)
+    return ToolsResponse(session_id=session_id, tools=tools)
+
+
 @router.delete("/sessions/{session_id}/grants", response_model=GrantsResponse)
 async def revoke_grants(session_id: str, key: Optional[str] = None) -> GrantsResponse:
     """Revoke one "always" answer (``?key=``), or all of them.
@@ -2161,9 +2252,12 @@ def build_app() -> FastAPI:
         Without this the first turn pays the model load *and* the first pass
         over a large system prompt, which reads as a 60-90s "Getting started"
         hang on a freshly opened chat. Backgrounded so readiness is not
-        delayed, and never fatal — a cold first turn is slow, not broken.
+        delayed, and never fatal — a cold first turn is slow, not broken. A
+        turn on another model stops it (:class:`_StartupWarmUp`).
         """
         _log_caller_auth_state(auth_config)
+        global _startup_warm_up
+        _startup_warm_up = _StartupWarmUp()
         task = asyncio.create_task(asyncio.to_thread(_warmup_blocking))
         # Held so it is not garbage-collected while in flight.
         _app.state.warmup_task = task
@@ -2204,30 +2298,103 @@ def build_app() -> FastAPI:
     return app
 
 
-def _default_model_is_servable() -> bool:
-    """Whether warming the default model would load it rather than download it.
+def _model_to_warm() -> Optional[str]:
+    """The model the first turn runs on, or None when the warm-up should skip.
 
-    Building the warm-up agent preloads its model, and Lemonade downloads a
-    missing one on load — gigabytes the user never asked for when they chose
-    a cloud model and skipped the local one.
+    That is the model chat reopens on (``last_model``, else ``default_model``),
+    as in the Agent UI and TUI: warming any other one makes Lemonade, which
+    keeps one chat model loaded, evict the user's pick for it. Skipped like the
+    Agent UI's own warm-up on a PC small enough to load on the first message,
+    for Claude, and for a model not downloaded: Lemonade downloads a missing
+    one on load, gigabytes the user never asked for.
     """
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         cloud_model_provider,
-        resolve_default_chat_model,
+        resolve_chat_model,
     )
+    from gaia.ui.warmup import preload_skip_reason
 
-    model = resolve_default_chat_model()
+    low_memory = preload_skip_reason()
+    if low_memory:
+        logger.info("GAIA sidecar: warm-up skipped (%s)", low_memory)
+        return None
+    model = resolve_chat_model()
+    if model.startswith("claude-"):
+        logger.info("GAIA sidecar: warm-up skipped (chat runs on Claude, %s)", model)
+        return None
     if cloud_model_provider(model):
-        return True
+        return model
     if not LemonadeClient(verbose=False).get_model_info(model)["downloaded"]:
         logger.info(
             "GAIA sidecar: warm-up skipped (%s is not downloaded; a turn that "
             "uses it downloads it)",
             model,
         )
-        return False
-    return True
+        return None
+    return model
+
+
+class _StartupWarmUp:
+    """The start-up warm-up's model, and the switch that stops it for a turn
+    on any other model.
+
+    The model server reads one prompt at a time, so a turn on a cloud or other
+    local model would wait out the whole warm-up, and a warm-up that then loads
+    its model would evict the one that turn uses. A turn on the warmed model
+    leaves it running and reads the prefix it caches.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._model: Optional[str] = None
+        self._turn_models: List[str] = []
+        self.cancel = threading.Event()
+        self.done = threading.Event()
+
+    def aim(self, model: str) -> None:
+        """Record the model the warm-up loads."""
+        with self._lock:
+            self._model = model
+            self._stop_for_another_model()
+
+    def note_turn(self, model: Optional[str]) -> None:
+        """A turn starts on *model*; None runs ``default_model``, which need not
+        be the warm-up's (that follows the user's last pick)."""
+        if self.done.is_set():
+            return
+        if model is None:
+            from gaia.llm.lemonade_client import resolve_default_chat_model
+
+            model = resolve_default_chat_model()
+        with self._lock:
+            self._turn_models.append(model)
+            self._stop_for_another_model()
+
+    def _stop_for_another_model(self) -> None:
+        from gaia.llm.lemonade_client import _model_ids_match
+
+        if self._model is None or self.cancel.is_set():
+            return
+        for model in self._turn_models:
+            if not _model_ids_match(model, self._model):
+                logger.info(
+                    "GAIA sidecar: stopping the warm-up of %s; a turn uses %s",
+                    self._model,
+                    model,
+                )
+                self.cancel.set()
+                return
+
+
+_startup_warm_up = _StartupWarmUp()
+
+
+def _turn_model(request: "QueryRequest") -> Optional[str]:
+    """The model *request* runs on, or None for the sidecar's default."""
+    if _effective_provider(request) == _CLAUDE_PROVIDER:
+        return f"{_CLAUDE_PROVIDER}:{request.model or ''}"
+    return request.model or None
 
 
 def _warmup_blocking() -> None:
@@ -2241,14 +2408,33 @@ def _warmup_blocking() -> None:
     the first question in any session reads it from Lemonade's cache.
 
     Never fatal — a cold first turn is slow, not broken — but a failure is
-    logged as a warning with its cause, not hidden.
+    logged as a warning with its cause, not hidden. Stops as soon as a turn
+    starts on another model (:class:`_StartupWarmUp`).
     """
+    state = _startup_warm_up
+    try:
+        _warm_chat_model(state)
+    finally:
+        state.done.set()
+
+
+def _warm_chat_model(state: _StartupWarmUp) -> None:
     from gaia_agent.session_registry import build_session_agent
 
+    from gaia.chat.sdk import LLMCallCancelled
+    from gaia.llm.lemonade_client import cloud_model_provider
+
     try:
-        if not _default_model_is_servable():
+        model = _model_to_warm()
+        if model is None:
             return
-        agent = build_session_agent()
+        state.aim(model)
+        if state.cancel.is_set():
+            return
+        # No preload while building: only warm_up's load can be stopped by a turn.
+        agent = build_session_agent(
+            model_id=model, skip_lemonade=not cloud_model_provider(model)
+        )
     except Exception as e:  # noqa: BLE001 - reported, and chat still works
         logger.warning(
             "GAIA sidecar: warm-up failed before the model was reached (%s). "
@@ -2259,13 +2445,27 @@ def _warmup_blocking() -> None:
         )
         return
     try:
-        result = agent.warm_up()
+        result = agent.warm_up(cancel=state.cancel)
+        if result.get("primed") is False:
+            logger.info(
+                "GAIA sidecar: loaded %s in %ss (its prompt is read by the first "
+                "turn: FastFlowLM keeps no cache a new chat can reuse)",
+                getattr(agent, "model_id", "?"),
+                result.get("seconds"),
+            )
+            return
         logger.info(
             "GAIA sidecar: warmed %s in %ss (%s of %s prompt tokens cached)",
             getattr(agent, "model_id", "?"),
             result.get("seconds"),
             result.get("cached_tokens", "?"),
             result.get("prompt_tokens", "?"),
+        )
+    except LLMCallCancelled as e:
+        logger.info(
+            "GAIA sidecar: warm-up of %s stopped for a turn on another model (%s)",
+            getattr(agent, "model_id", "?"),
+            e,
         )
     except Exception as e:  # noqa: BLE001 - reported, and chat still works
         logger.warning(

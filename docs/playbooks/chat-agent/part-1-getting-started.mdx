@@ -20,7 +20,7 @@ icon: "book-open-reader"
 ## Why Build This Agent?
 
 <Info>
-**Privacy-First AI:** This agent runs entirely on your AI PC with Ryzen AI. All processing happens locally—document content never leaves your machine.
+**Privacy-First AI:** This agent runs on your AI PC with Ryzen AI. With a local model, all processing happens locally and document content never leaves your machine; if you pick a cloud model, the conversation goes to that provider.
 </Info>
 
 If you have hundreds of PDF documents spread across your system—manuals, reports, specifications—finding specific information is tedious. You need to remember which file contains what, open each one, search manually, and piece together information from multiple sources.
@@ -31,7 +31,7 @@ This agent automates that process entirely on your AI PC:
 2. Indexes them with vector embeddings (NPU-accelerated on Ryzen AI)
 3. Searches semantically using cosine similarity
 4. Returns specific information with source citations
-5. Runs completely locally—no cloud, no data leaving your machine
+5. Runs locally by default—with a local model, no data leaves your machine
 
 **What you're building:**
 
@@ -104,7 +104,7 @@ Get a working agent running to understand the basic flow.
         ```
 
         <Info>
-        Create your agent scripts in this folder. `ChatAgent` ships in the flagship `gaia-agent-gaia` package (`gaia_agent.chat_agent`); its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. The `rag` extra adds document-processing dependencies (faiss, PyMuPDF).
+        Create your agent scripts in this folder. `ChatAgent` ships in the flagship `gaia-agent-gaia` package (`gaia_agent.chat_agent`); its PyPI publishing is paused ([#2240](https://github.com/amd/gaia/issues/2240)), so install it from the repository subdirectory. The `rag` extra adds document-processing dependencies (faiss, pypdf, pypdfium2).
         </Info>
 
         <Note>
@@ -171,7 +171,7 @@ Get a working agent running to understand the basic flow.
     ```
 
     **What happens:**
-    1. PDF text extraction (PyMuPDF)
+    1. PDF text extraction (pypdf)
     2. Chunking into 500-token segments
     3. Embedding generation (EmbeddingGemma 300M running on NPU/iGPU)
     4. FAISS index creation
@@ -603,7 +603,7 @@ Add RAG capability to enable document search and retrieval.
 DocQAAgent(documents=["manual.pdf"])
   → RAGSDK instance created
   → For each PDF:
-      → PyMuPDF extracts text
+      → pypdf extracts text
       → Text split into 500-token chunks (100 overlap)
       → EmbeddingGemma 300M generates embeddings (768 dimensions, runs on NPU/iGPU)
       → Embeddings stored in FAISS index (in-memory)

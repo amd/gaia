@@ -804,8 +804,17 @@ def test_side_request_reaches_lemonade_with_thinking_off(monkeypatch, stream):
         # No thinking switch registered: the template's own mode, nothing sent.
         ("Gemma-4-E4B-it-GGUF", {}),
         (_QWEN3_30B, {}),
-        # No template kwargs for a cloud model; no default reasoning effort either.
-        ("fireworks.deepseek-v4p1-flash", {"reasoning_effort": None}),
+        # Cloud models generally reject template kwargs; GLM returns HTTP 400.
+        # None adds no configured effort: the provider's own mode.
+        ("fireworks.glm-5p3-flash", {"reasoning_effort": None}),
+        # DeepSeek honors the switch: measured at 0 reasoning tokens with it.
+        (
+            "fireworks.deepseek-v4p1-flash",
+            {
+                "chat_template_kwargs": {"enable_thinking": False},
+                "reasoning_effort": None,
+            },
+        ),
         (None, {}),
     ],
 )

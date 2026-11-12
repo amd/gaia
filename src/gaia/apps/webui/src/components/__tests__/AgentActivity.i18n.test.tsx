@@ -8,6 +8,7 @@ import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentActivity, stepsSummary, thoughtLabel, toolRowText, type ActivityRow } from '../AgentActivity';
 import { stripIsolates } from '../../i18n/registry';
+import { readsAs } from '../../test/readsAs';
 import { translator } from '../../i18n/useT';
 import { useChatStore } from '../../stores/chatStore';
 import type { AgentStep } from '../../types';
@@ -57,6 +58,30 @@ describe('folded-run summary', () => {
         expect(stepsSummary([skill])).toBe('Used meeting-notes skill');
         expect(plain(stepsSummary([skill], ar))).toBe('استخدم مهارة meeting-notes (Used meeting-notes skill)');
     });
+
+    it('names a skill GAIA picked up for the model the same way', () => {
+        const skill = tool(1, 'use_skill', { detail: 'analyze-recording', narration: 'Using skill: analyze-recording' });
+        expect(stepsSummary([skill])).toBe('Used analyze-recording skill');
+        expect(plain(stepsSummary([skill], ar))).toBe('استخدم مهارة analyze-recording (Used analyze-recording skill)');
+    });
+
+    it('names a skill that could not be loaded', () => {
+        const failed = tool(1, 'load_skill', { narration: 'Loading skill: meeting-notes', success: false });
+        expect(stepsSummary([failed])).toBe('Could not use meeting-notes skill');
+        expect(plain(stepsSummary([failed], ar))).toBe('تعذّر استخدام مهارة meeting-notes (Could not use meeting-notes skill)');
+    });
+});
+
+describe('skill in use row', () => {
+    const skill = tool(1, 'use_skill', { detail: 'analyze-recording', narration: 'Using skill: analyze-recording' });
+
+    it('says which skill in English', () => {
+        expect(toolRowText(skill)).toBe('Using skill: analyze-recording');
+    });
+
+    it('says it in Arabic, not in the English narration', () => {
+        expect(plain(toolRowText(skill, ar))).toBe('يستخدم مهارة: analyze-recording (Using skill: analyze-recording)');
+    });
 });
 
 describe('thought label', () => {
@@ -84,7 +109,6 @@ describe('tool rows', () => {
     it('renders the folded summary in Arabic in the timeline', () => {
         act(() => useChatStore.getState().setLocale('ar'));
         render(<AgentActivity steps={[tool(1, 'index_documents'), tool(2, 'query_specific_file')]} isActive={false} />);
-        expect(screen.getByText((content) => plain(content) === 'فهرس المستندات، استعلم في ملف (Indexed documents, queried file)'))
-            .toBeInTheDocument();
+        expect(screen.getByText(readsAs('فهرس المستندات، استعلم في ملف (Indexed documents, queried file)'))).toBeInTheDocument();
     });
 });

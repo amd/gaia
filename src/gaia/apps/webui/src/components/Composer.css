@@ -56,6 +56,18 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    container: composer-row / inline-size;
+}
+
+/* A narrow row gives way in this order before the model name is cut:
+   the day's spend, then the context bar (its % stays), then the folder's name (its icon stays). */
+@container composer-row (max-width: 600px) {
+    .spend-meter-today { display: none; }
+}
+
+@container composer-row (max-width: 540px) {
+    .context-meter .context-meter-bar { display: none; }
+    .folder-chip .composer-chip-label { display: none; }
 }
 
 .composer-row-left,
@@ -161,6 +173,10 @@
     background: var(--danger-dim);
 }
 
+.composer-attachment svg {
+    flex-shrink: 0;
+}
+
 .composer-attachment-thumb {
     width: 20px;
     height: 20px;
@@ -198,6 +214,26 @@
     flex: 1;
 }
 
+/* A recording's status gets its own line too, so a long name is never squeezed out.
+   justify-self keeps an Arabic name in an English UI from sitting at the far edge. */
+.composer-attachment.is-media {
+    display: inline-grid;
+    grid-template-columns: max-content minmax(0, 1fr) max-content;
+    max-width: min(340px, 100%);
+}
+
+.composer-attachment.is-media .composer-attachment-name {
+    justify-self: start;
+    max-width: 100%;
+}
+
+.composer-attachment.is-media .composer-attachment-state {
+    grid-row: 2;
+    grid-column: 2 / -1;
+    padding-block: 0 2px;
+    padding-inline: 0 4px;
+}
+
 .composer-attachment .composer-icon-btn {
     width: 22px;
     height: 22px;
@@ -226,6 +262,11 @@
 .composer-chip-label {
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+/* Too long to sit beside the other chips on a phone; the eye icon carries the state. */
+@media (max-width: 480px) {
+    .composer-chip-memory .composer-chip-label { display: none; }
 }
 
 .composer-chip.is-warning {

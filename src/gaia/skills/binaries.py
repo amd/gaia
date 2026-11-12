@@ -119,10 +119,15 @@ class InvocationDecision:
             returns to the model. For CONFIRM, why the call needs a human —
             what :func:`validate_invocation` hands back to a caller that only
             knows two tiers, so it must read as an explanation, not a refusal.
+        never_offered: For REFUSE only — set when not even a one-time approval
+            may run the call, because it ends, lands or deletes someone else's
+            work (``gh issue close``). False for an ordinary REFUSE, which a
+            host may still offer the user once.
     """
 
     outcome: str
     message: str = ""
+    never_offered: bool = False
 
     @property
     def allowed(self) -> bool:
@@ -156,6 +161,10 @@ class Subcommand:
             (``gh api **repos/amd/gaia**``), so it is not matched against
             *actions*. ``denied_actions`` still applies.
         denied_actions: Action tokens refused even under ``free_form``.
+        never_offered_actions: ``{action: reason}`` refused even with the
+            user's approval, so no prompt is ever raised for them
+            (``gh issue close``). Every other unlisted action is refused too,
+            but may be offered once.
         denied_flags: Flags refused outright, checked BEFORE the action is
             classified — so a denied flag refuses a confirmable write too, and
             no prompt is raised for it.
@@ -241,6 +250,7 @@ class Subcommand:
     confirm_actions: frozenset[str] = frozenset()
     free_form: bool = False
     denied_actions: frozenset[str] = frozenset()
+    never_offered_actions: Mapping[str, str] = field(default_factory=dict)
     denied_flags: frozenset[str] = frozenset()
     flag_values: Mapping[str, frozenset[str]] = field(default_factory=dict)
     value_flags: frozenset[str] = frozenset()
@@ -259,6 +269,14 @@ class Subcommand:
     script_args: bool = False
 
     def __post_init__(self) -> None:
+        offered = (self.actions | self.confirm_actions) & set(
+            self.never_offered_actions
+        )
+        if offered:
+            raise ValueError(
+                f"Subcommand action {sorted(offered)} is both offered and "
+                "never_offered; one rule cannot both run it and refuse it."
+            )
         overlap = self.actions & self.confirm_actions
         if overlap:
             raise ValueError(
@@ -445,20 +463,23 @@ class BinaryPolicy:
 # The table. One entry per CLI a skill may declare.
 # ---------------------------------------------------------------------------
 #
-# HARD-REFUSED for `gh` — never confirmable, so no prompt is ever raised for
-# them. Each is an escalation of a DIFFERENT kind than "this writes to a repo",
-# which is why they are not merely writes the user could approve:
+# OUTSIDE the table for `gh` — never pre-approved, never "always". Each is an
+# escalation of a DIFFERENT kind than "this writes to a repo", so the shell
+# tool offers it at most once, with the exact line and a risk note:
 #   auth token prints the credential itself (hence auth allows `status` only)
 #   alias      defines an arbitrary shell command under a gh name
 #   extension  installs and runs third-party code
 #   config     sets the editor/pager, i.e. command execution
 #   codespace  opens a remote shell
 #   secret / variable / ssh-key / gpg-key   credential surfaces
-#   api -X POST|PATCH|DELETE, -f/--field, --input, graphql
+#   api -X POST|PATCH, -f/--field, --input, graphql
 #              the generic surface: one prompt cannot describe "any resource,
 #              any method". The named write subcommands below can.
-#   pr merge / repo delete / release delete / label delete
-#              irreversible on someone else's work; land or destroy, not triage
+#
+# NEVER OFFERED, even once: irreversible on someone else's work.
+#   issue close / pr close / pr merge   `never_offered` below
+#   any delete (repo, release, label, api -X DELETE)   the shell tool's
+#              destroys check, which covers every CLI
 #
 # ALLOWED but worth knowing: `gh issue create -T/--template` seeds the body from
 # the repo's own .github/ISSUE_TEMPLATE. It reads a local file, so it is the
@@ -473,6 +494,10 @@ class BinaryPolicy:
 # command and runs only on approval. Scope creep here is the risk the table
 # guards: a write earns a place only if a single line of prompt text can
 # honestly describe what it does.
+
+_GH_CLOSES_ISSUE = "closing an issue ends someone else's thread"
+_GH_CLOSES_PR = "closing a pull request ends someone else's contribution"
+_GH_MERGES_PR = "merging a pull request lands code on someone else's branch"
 
 _GH_API = Subcommand(
     free_form=True,
@@ -645,8 +670,11 @@ def _gh(
     *,
     denied_flags: frozenset[str] = _GH_READ_DENIED_FLAGS,
     denied_flag_reasons: Mapping[str, str] = _GH_WRITE_DENIED_FLAG_REASONS,
+    never_offered: Mapping[str, str] | None = None,
 ) -> Subcommand:
     """One gh subcommand: reads that run unasked, plus writes the user approves.
+
+    *never_offered* maps an action to why it is refused even with approval.
 
     *confirm* is empty for a purely read-only subcommand; its flags are then an
     ALLOWLIST, so an unreviewed flag is refused rather than passed through.
@@ -658,6 +686,7 @@ def _gh(
     subcommand whose flags mean something different (``gh auth status -t``).
     """
     confirm_actions = frozenset(confirm)
+    never_offered_actions = dict(never_offered or {})
     if not confirm_actions:
         return Subcommand(
             actions=frozenset(actions),
@@ -665,6 +694,7 @@ def _gh(
             allowed_flags=_GH_READ_ALLOWED_FLAGS,
             denied_flags=denied_flags,
             denied_flag_reasons=denied_flag_reasons,
+            never_offered_actions=never_offered_actions,
         )
     return Subcommand(
         actions=frozenset(actions),
@@ -672,6 +702,7 @@ def _gh(
         value_flags=_GH_COMMON_VALUE_FLAGS | _GH_WRITE_VALUE_FLAGS,
         denied_flags=_GH_WRITE_DENIED_FLAGS,
         denied_flag_reasons=_GH_WRITE_DENIED_FLAG_REASONS,
+        never_offered_actions=never_offered_actions,
     )
 
 
@@ -1347,18 +1378,24 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             "with 'gh auth login'. Verify with 'gh auth status'."
         ),
         subcommands={
-            # `close`/`reopen` are deliberately absent: the triage skill's own
-            # rule is "never close an issue on your own judgement", and closing
-            # is the one issue write that silently ends someone else's thread.
-            "issue": _gh({"list", "view", "status"}, {"create", "comment", "edit"}),
+            # `close` is never offered: the triage skill's own rule is "never
+            # close an issue on your own judgement", and closing is the one
+            # issue write that silently ends someone else's thread.
+            "issue": _gh(
+                {"list", "view", "status"},
+                {"create", "comment", "edit"},
+                never_offered={"close": _GH_CLOSES_ISSUE},
+            ),
             # `create` and `comment`. `merge` lands code and `close` kills a
             # contribution — neither is triage, and both are irreversible in
-            # ways a one-line prompt understates. `create` is neither: it
-            # opens a proposal on a branch that already exists, and the
-            # alternative is an agent that does the work and then cannot hand
-            # it over.
+            # ways a one-line prompt understates, so neither is offered.
+            # `create` is neither: it opens a proposal on a branch that already
+            # exists, and the alternative is an agent that does the work and
+            # then cannot hand it over.
             "pr": _gh(
-                {"list", "view", "diff", "checks", "status"}, {"create", "comment"}
+                {"list", "view", "diff", "checks", "status"},
+                {"create", "comment"},
+                never_offered={"merge": _GH_MERGES_PR, "close": _GH_CLOSES_PR},
             ),
             "repo": _gh({"list", "view"}),
             "release": _gh({"list", "view"}),
@@ -2386,6 +2423,37 @@ def _refuse(message: str) -> InvocationDecision:
     return InvocationDecision(REFUSE, message)
 
 
+def _never_offered(
+    policy: BinaryPolicy, subcommand: str, rule: Subcommand, rest: Sequence[str]
+) -> InvocationDecision | None:
+    """The refusal for an action no approval may run, else None.
+
+    Checked before any flag or shape refusal, since those may be offered once.
+    With a flag in front the action is unknowable, so every bare word is read
+    as it: an over-read that only refuses a line already refused.
+    """
+    if not rest:
+        return None
+    candidates = (
+        [token for token in rest if not token.startswith("-")]
+        if rest[0].startswith("-")
+        else [rest[0]]
+    )
+    action = next(
+        (word for word in candidates if word.lower() in rule.never_offered_actions),
+        None,
+    )
+    if action is None:
+        return None
+    reason = rule.never_offered_actions[action.lower()]
+    return InvocationDecision(
+        REFUSE,
+        f"'{policy.binary} {subcommand} {action.lower()}' is not permitted for "
+        f"GAIA: {reason}.",
+        never_offered=True,
+    )
+
+
 def _escaping_value(policy: BinaryPolicy, name: str, value: str | None) -> str:
     """The refusal for a path-valued flag aimed outside the checkout."""
     spelled = " ".join(filter(None, (name, value)))
@@ -2497,6 +2565,10 @@ def classify_invocation(
         )
 
     rest = tokens[index + 1 :]
+
+    never = _never_offered(policy, subcommand, rule, rest)
+    if never is not None:
+        return never
 
     # The action must be the FIRST token after the subcommand. Not a style rule
     # — it is what keeps GAIA's verdict and cobra's dispatch on the same token.

@@ -9,6 +9,7 @@ model's trained 'max_context_window', so an unrelated small model, or an
 unreachable target, made a real overflow look like a bad load.
 """
 
+import logging
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +21,17 @@ from gaia.llm.lemonade_client import LemonadeClientError
 
 OWN_MODEL = "Qwen3-4B-GGUF"
 EXPECTED = 65536
+HEALTH_URL = "http://localhost:13305/api/v0/health"
+
+
+def _probe_warning(caplog):
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "Loaded-context probe" in r.getMessage()
+    ]
+    assert len(warnings) == 1, warnings
+    return warnings[0]
 
 
 def _entry(name, ctx, ceiling=None, type_="llm"):
@@ -129,11 +141,15 @@ def test_unknown_ctx_size_is_not_undersized(entry):
     assert _probe([entry]) is False
 
 
-def test_non_200_health_response_returns_false():
-    assert (
-        _probe_raw({"all_models_loaded": [_entry(OWN_MODEL, 4096)]}, status=500)
-        is False
-    )
+def test_non_200_health_response_returns_false(caplog):
+    with caplog.at_level(logging.WARNING, logger="gaia.agents.base.agent"):
+        assert (
+            _probe_raw({"all_models_loaded": [_entry(OWN_MODEL, 4096)]}, status=500)
+            is False
+        )
+    warning = _probe_warning(caplog)
+    assert "HTTP 500" in warning
+    assert HEALTH_URL in warning
 
 
 # 4. Probe failures fall back to trimming instead of raising.
@@ -147,10 +163,21 @@ def test_non_200_health_response_returns_false():
     ],
     ids=["connect_error", "timeout", "bad_json", "lemonade_client_error"],
 )
-def test_probe_failure_returns_false(kwargs):
-    assert (
-        _probe_raw({"all_models_loaded": [_entry(OWN_MODEL, 4096)]}, **kwargs) is False
-    )
+def test_probe_failure_returns_false(kwargs, caplog):
+    with caplog.at_level(logging.WARNING, logger="gaia.agents.base.agent"):
+        assert (
+            _probe_raw({"all_models_loaded": [_entry(OWN_MODEL, 4096)]}, **kwargs)
+            is False
+        )
+    error = kwargs.get("get_error") or kwargs.get("json_error")
+    warning = _probe_warning(caplog)
+    assert HEALTH_URL in warning
+    assert type(error).__name__ in warning
+
+
+def test_unexpected_probe_error_propagates():
+    with pytest.raises(KeyError):
+        _probe_raw({"all_models_loaded": []}, get_error=KeyError("bug"))
 
 
 @pytest.mark.parametrize(

@@ -14,12 +14,16 @@ The endpoint accepts WAV only; decode other containers with
 
 from __future__ import annotations
 
+import array
 import contextlib
+import json
 import os
 import re
+import sys
 import tempfile
 import wave
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
@@ -27,6 +31,7 @@ import requests
 
 from gaia.audio.lemonade_service import LemonadeAudioService
 from gaia.logger import get_logger
+from gaia.tool_cancellation import run_cancellable
 
 log = get_logger(__name__)
 
@@ -67,6 +72,16 @@ MAX_CHUNK_SECONDS = 40 * 60
 # known, accepted imperfection of this pipeline, same category as diarization
 # accuracy.
 CHUNK_OVERLAP_SECONDS = 30.0
+
+# Whisper can lock onto one line and repeat it a second apart to the end of
+# the window, swallowing the speech underneath. A cold re-decode of that span
+# usually recovers it; what still loops is collapsed and reported as unclear.
+LOOP_MIN_REPEATS = 5
+LOOP_REPAIR_PASSES = 3
+# Whisper fills silence with a looped line too, so a loop is re-decoded only
+# where the audio is louder than this, and dropped where it is all quiet.
+SILENCE_DBFS = -50.0
+QUIET_GAP_SECONDS = 3.0
 
 _FLM_RE = re.compile(r"(?:^|[-_.])flm(?:$|[-_.])", re.IGNORECASE)
 
@@ -129,6 +144,9 @@ class Transcript:
     model: str
     # Server-provided full text, used when the model returns no segments.
     raw_text: str = ""
+    # (start, end) seconds where Whisper kept repeating itself even after a
+    # re-decode, so the speech there is missing from the text.
+    unclear_spans: List[tuple[float, float]] = field(default_factory=list)
 
     @property
     def text(self) -> str:
@@ -285,6 +303,130 @@ def _write_chunk_wav(source: Path, chunk: _Chunk, dest: Path) -> None:
         writer.writeframes(frames)
 
 
+_LEADING_JOINER = re.compile(r"^(?:and|but|so|or) ")
+
+
+def _loop_key(text: str) -> str:
+    return _LEADING_JOINER.sub("", " ".join(re.findall(r"\w+", text.lower())))
+
+
+def _same_line(key: str, other: str) -> bool:
+    # A loop drifts a little between copies ("...career." / "...in the career.").
+    return key == other or SequenceMatcher(None, key, other).ratio() >= 0.8
+
+
+def _find_loop(
+    segments: List[Segment], after: float = 0.0
+) -> Optional[tuple[int, int]]:
+    """``(first, stop)`` of the first run of near-identical segments starting
+    at or after *after* seconds, at least ``LOOP_MIN_REPEATS`` long.
+
+    Punctuation-only segments between the copies (Whisper splits a looped
+    line's final "." into its own segment) don't break the run."""
+    index = 0
+    while index < len(segments):
+        key = _loop_key(segments[index].text)
+        if not key:
+            index += 1
+            continue
+        stop, repeats = index + 1, 1
+        while stop < len(segments):
+            other = _loop_key(segments[stop].text)
+            if other and not _same_line(key, other):
+                break
+            if other:
+                key, repeats = other, repeats + 1
+            stop += 1
+        while not _loop_key(segments[stop - 1].text):
+            stop -= 1
+        if repeats >= LOOP_MIN_REPEATS and segments[index].start >= after:
+            return index, stop
+        index = stop
+    return None
+
+
+def _loud_parts(source: Path, start: float, end: float) -> List[tuple[float, float]]:
+    """The stretches of [start, end) in *source* that aren't silence, as
+    ``(start, end)`` seconds; pauses shorter than QUIET_GAP_SECONDS are kept."""
+    with wave.open(str(source), "rb") as reader:
+        if reader.getsampwidth() != 2:
+            return [(start, end)]
+        rate, channels = reader.getframerate(), reader.getnchannels()
+        reader.setpos(min(int(start * rate), reader.getnframes()))
+        frames = reader.readframes(max(0, int((end - start) * rate)))
+    samples = array.array("h", frames)
+    if sys.byteorder == "big":
+        samples.byteswap()
+    window = rate * channels
+    floor = (32768 * 10 ** (SILENCE_DBFS / 20)) ** 2
+    parts: List[tuple[float, float]] = []
+    for second, offset in enumerate(range(0, len(samples), window)):
+        chunk = samples[offset : offset + window]
+        if sum(s * s for s in chunk) / len(chunk) <= floor:
+            continue
+        lo, hi = start + second, min(start + second + 1, end)
+        if parts and lo - parts[-1][1] < QUIET_GAP_SECONDS:
+            parts[-1] = (parts[-1][0], hi)
+        else:
+            parts.append((lo, hi))
+    return parts
+
+
+def _shift(segment: Segment, offset: float) -> Segment:
+    return Segment(
+        start=segment.start + offset,
+        end=segment.end + offset,
+        text=segment.text,
+        avg_logprob=segment.avg_logprob,
+        words=[
+            Word(w.word, w.start + offset, w.end + offset, w.probability)
+            for w in segment.words
+        ],
+        speaker=segment.speaker,
+    )
+
+
+def _chunk_file(checkpoint_dir: os.PathLike | str, chunk: _Chunk) -> Path:
+    return Path(checkpoint_dir) / f"chunk-{chunk.index:04d}.json"
+
+
+def _load_chunk(
+    checkpoint_dir: Optional[os.PathLike | str], chunk: _Chunk
+) -> Optional[Dict[str, Any]]:
+    """A chunk's saved response, or None if it still has to be transcribed."""
+    if checkpoint_dir is None:
+        return None
+    path = _chunk_file(checkpoint_dir, chunk)
+    if not path.is_file():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        log.warning(
+            "Re-transcribing chunk %d: %s is unreadable: %s", chunk.index, path, e
+        )
+        return None
+
+
+def _save_chunk(
+    checkpoint_dir: Optional[os.PathLike | str],
+    chunk: _Chunk,
+    payload: Dict[str, Any],
+) -> None:
+    """Keep a finished chunk. Written whole, so a crash never leaves half of one."""
+    if checkpoint_dir is None:
+        return
+    path = _chunk_file(checkpoint_dir, chunk)
+    partial = path.with_suffix(".part")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial.write_text(json.dumps(payload), encoding="utf-8")
+        partial.replace(path)
+    except OSError as e:
+        # Resuming is an optimisation; the transcript in hand is still good.
+        log.warning("Could not checkpoint chunk %d to %s: %s", chunk.index, path, e)
+
+
 def _merge_chunks(
     transcripts: List["Transcript"], chunks: List[_Chunk]
 ) -> "Transcript":
@@ -397,18 +539,23 @@ class LemonadeASRClient(LemonadeAudioService):
             and entry.get("id")
         )
 
-    def ensure_model(self, say: Optional[Callable[[str], None]] = None) -> None:
+    def ensure_model(
+        self,
+        say: Optional[Callable[[str], None]] = None,
+        on_percent: Optional[Callable[[int], None]] = None,
+    ) -> None:
         """Make the transcription model servable, pulling it if it is not yet.
 
         Lemonade would pull it inside the first request instead, which leaves a
-        live caller waiting on a download it was never told about.
+        live caller waiting on a download it was never told about. *on_percent*
+        receives the download's progress.
 
         Raises:
             ConnectionError: Lemonade Server is not reachable.
             LemonadeASRError: The model is not in this server's catalog, or the
                 pull failed.
         """
-        self.ensure_model_pulled("transcription", say=say)
+        self.ensure_model_pulled("transcription", say=say, on_percent=on_percent)
 
     def transcribe(
         self,
@@ -416,6 +563,8 @@ class LemonadeASRClient(LemonadeAudioService):
         language: Optional[str] = None,
         require_timestamps: bool = True,
         progress: Optional[Callable[[str], None]] = None,
+        checkpoint_dir: Optional[os.PathLike | str] = None,
+        on_chunk_done: Optional[Callable[[float], None]] = None,
     ) -> Transcript:
         """Transcribe a 16 kHz mono WAV file.
 
@@ -431,6 +580,12 @@ class LemonadeASRClient(LemonadeAudioService):
                 request (see ``MAX_CHUNK_SECONDS``) — a multi-chunk upload of a
                 long recording can run for many minutes otherwise silent.
                 Never called for a file that fits in a single request.
+            checkpoint_dir: Keep each finished chunk here, and skip chunks
+                already there, so a failure late in a long recording does not
+                cost the earlier chunks. The caller keys it to this recording
+                and removes it once the transcript is safe.
+            on_chunk_done: Called after each chunk with the fraction of the
+                recording finished, ``0..1``.
 
         Returns:
             Transcript: Segments, words, confidence, detected language, duration.
@@ -510,10 +665,18 @@ class LemonadeASRClient(LemonadeAudioService):
                         files={"file": (path.name, handle, "audio/wav")},
                         data=data,
                     )
-                return self._parse_transcript(payload)
+                return self._repair_loops(
+                    self._parse_transcript(payload), path, data, progress
+                )
 
             transcripts = []
             for chunk in chunks:
+                saved = _load_chunk(checkpoint_dir, chunk)
+                if saved is not None:
+                    transcripts.append(self._parse_transcript(saved))
+                    if on_chunk_done:
+                        on_chunk_done(chunk.end / chunks[-1].end)
+                    continue
                 if progress:
                     progress(
                         f"Transcribing chunk {chunk.index + 1} of {len(chunks)} "
@@ -532,9 +695,109 @@ class LemonadeASRClient(LemonadeAudioService):
                             data=data,
                         )
                     transcripts.append(self._parse_transcript(payload))
+                    _save_chunk(checkpoint_dir, chunk, payload)
+                    if on_chunk_done:
+                        on_chunk_done(chunk.end / chunks[-1].end)
                 finally:
                     tmp_path.unlink(missing_ok=True)
-        return _merge_chunks(transcripts, chunks)
+            return self._repair_loops(
+                _merge_chunks(transcripts, chunks), path, data, progress
+            )
+
+    def _repair_loops(
+        self,
+        transcript: Transcript,
+        source: Path,
+        data: Dict[str, str],
+        progress: Optional[Callable[[str], None]],
+    ) -> Transcript:
+        """Re-decode each span where Whisper repeated one line, from a cold start."""
+        after = 0.0
+        for _ in range(LOOP_REPAIR_PASSES):
+            found = _find_loop(transcript.segments, after)
+            if found is None:
+                break
+            first, stop = found
+            start = transcript.segments[first].start
+            end = transcript.segments[stop - 1].end
+            # Past this loop's start, so a re-decode that loops in the same
+            # place can't be retried forever.
+            after = start + 0.001
+            parts = _loud_parts(source, start, end)
+            if not parts:
+                log.info(
+                    "Dropped a looped line Whisper wrote over silence at "
+                    "%.0f-%.0fs of %s",
+                    start,
+                    end,
+                    source.name,
+                )
+                del transcript.segments[first:stop]
+                continue
+            log.warning(
+                "Whisper repeated one line %d times at %.0f-%.0fs of %s; "
+                "re-transcribing that span",
+                stop - first,
+                start,
+                end,
+                source.name,
+            )
+            if progress:
+                progress(
+                    f"Re-transcribing {_fmt_minutes(start)}-{_fmt_minutes(end)}, "
+                    "where the speech model repeated itself..."
+                )
+            # Only the sound is re-decoded: a pause inside the span is what
+            # sends Whisper back into the loop.
+            replaced: List[Segment] = []
+            for part_start, part_end in parts:
+                redo = self._transcribe_span(source, part_start, part_end, data)
+                for segment in redo.segments:
+                    segment = _shift(segment, part_start)
+                    # Whisper can stamp past the end of a short clip.
+                    if segment.start < part_end:
+                        segment.end = min(segment.end, part_end)
+                        replaced.append(segment)
+            transcript.segments[first:stop] = replaced
+
+        while (found := _find_loop(transcript.segments)) is not None:
+            first, stop = found
+            parts = _loud_parts(
+                source,
+                transcript.segments[first].start,
+                transcript.segments[stop - 1].end,
+            )
+            if not parts:
+                del transcript.segments[first:stop]
+                continue
+            span = (parts[0][0], parts[-1][1])
+            log.warning(
+                "Speech at %.0f-%.0fs of %s is still a repetition loop after "
+                "re-transcribing; keeping one copy and reporting it as unclear",
+                *span,
+                source.name,
+            )
+            transcript.unclear_spans.append(span)
+            transcript.segments[first + 1 : stop] = []
+        return transcript
+
+    def _transcribe_span(
+        self, source: Path, start: float, end: float, data: Dict[str, str]
+    ) -> Transcript:
+        fd, tmp_name = tempfile.mkstemp(suffix=".wav")
+        os.close(fd)
+        tmp_path = Path(tmp_name)
+        try:
+            _write_chunk_wav(source, _Chunk(index=0, start=start, end=end), tmp_path)
+            with tmp_path.open("rb") as handle:
+                payload = self._post_multipart(
+                    self.transcriptions_url,
+                    files={"file": (source.name, handle, "audio/wav")},
+                    data=data,
+                )
+            return self._parse_transcript(payload)
+        finally:
+            tmp_path.unlink(missing_ok=True)
 
     @contextlib.contextmanager
     def _slot_lease(self):
@@ -586,12 +849,15 @@ class LemonadeASRClient(LemonadeAudioService):
 
     def _post_multipart(self, url: str, files: Dict, data: Dict) -> Dict[str, Any]:
         try:
-            response = self._session.post(
-                url,
-                files=files,
-                data=data,
-                headers=self._headers(),
-                timeout=self.timeout,
+            # One chunk can run for minutes; Stop must not wait for it.
+            response = run_cancellable(
+                lambda: self._session.post(
+                    url,
+                    files=files,
+                    data=data,
+                    headers=self._headers(),
+                    timeout=self.timeout,
+                )
             )
         except requests.ConnectionError as e:
             raise self._unreachable(e) from e

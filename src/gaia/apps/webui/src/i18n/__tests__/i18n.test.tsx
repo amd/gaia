@@ -3,18 +3,17 @@
 
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { enMessages } from '../locales/en';
 import { LOCALES, getLocale, localeOptionLabel, ref, stripIsolates, translate, type MessageKey } from '../registry';
 import { PALETTES } from '../../utils/palette';
 import { translator, useT } from '../useT';
 import { readLocale, useChatStore } from '../../stores/chatStore';
+import { readsAs } from '../../test/readsAs';
 import { GeneralSettings } from '../../components/settings/GeneralSettings';
 
 const EN_KEYS = Object.keys(enMessages).sort();
-/** Matches rendered text as read, ignoring the invisible bidi isolates. */
-const plain = (text: string) => (content: string) => stripIsolates(content) === text;
-const ar = (key: MessageKey, params?: Parameters<typeof translate>[2]) => stripIsolates(translate('ar', key, params));
+const ar =(key: MessageKey, params?: Parameters<typeof translate>[2]) => stripIsolates(translate('ar', key, params));
 const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
 
 afterEach(() => {
@@ -28,7 +27,9 @@ describe('locale registry', () => {
         for (const key of EN_KEYS as MessageKey[]) {
             expect(locale.messages[key].trim(), key).not.toBe('');
             // A dropped or misspelled {param} would render raw or throw at runtime.
-            expect(placeholders(locale.messages[key]), key).toEqual(placeholders(enMessages[key]));
+            // A plural form for one exact number may leave {n} out ("دقيقتين", two minutes).
+            const own = (text: string) => placeholders(text).filter((p) => p !== 'n' || !/\.(zero|one|two)$/.test(key));
+            expect(own(locale.messages[key]), key).toEqual(own(enMessages[key]));
         }
     });
 
@@ -41,6 +42,18 @@ describe('locale registry', () => {
 
     it('refuses an unregistered code instead of guessing', () => {
         expect(() => getLocale('xx')).toThrow(/Unknown UI locale "xx"/);
+    });
+});
+
+describe('right-to-left messages keep a Latin phrase in order', () => {
+    const rtl = LOCALES.filter((l) => l.meta.dir === 'rtl');
+    it.each(rtl.map((l) => [l.meta.code, l] as const))('%s writes sizes and versions so they read left to right', (_code, locale) => {
+        for (const [key, text] of Object.entries(locale.messages)) {
+            // "412 MB" in an RTL line reads "MB 412": a size comes as one {param}, which is isolated.
+            expect(text, key).not.toMatch(/(\d|\})\s?(KB|MB|GB|TB)\b/);
+            // "GAIA {version}" reads "0.25.4 GAIA" unless the pair is one left-to-right island.
+            expect(text, key).not.toMatch(/(?<!⁦)(GAIA \{|\bv\{)/);
+        }
     });
 });
 
@@ -66,10 +79,10 @@ describe('translate', () => {
     });
 
     it('resolves a message param in each language, without nested brackets', () => {
-        expect(ar('tool.failed', { label: ref('tool.semantic_search.active') }))
-            .toBe('تعذّر: البحث في المستندات (Searching documents failed)');
-        expect(translate('en', 'tool.failed', { label: ref('tool.semantic_search.active') }))
-            .toBe('Searching documents failed');
+        expect(ar('tool.failed', { label: ref('tool.query_documents.active') }))
+            .toBe('تعذّر: الاستعلام في المستندات (Querying documents failed)');
+        expect(translate('en', 'tool.failed', { label: ref('tool.query_documents.active') }))
+            .toBe('Querying documents failed');
     });
 
     it('fails loudly when a param is missing', () => {
@@ -94,7 +107,7 @@ describe('useT and the language setting', () => {
         render(<Label k="sidebar.newChat" />);
         expect(screen.getByText('New chat')).toBeInTheDocument();
         act(() => useChatStore.getState().setLocale('ar'));
-        expect(screen.getByText(plain('محادثة جديدة (New chat)'))).toBeInTheDocument();
+        expect(screen.getByText(readsAs('محادثة جديدة (New chat)'))).toBeInTheDocument();
     });
 
     it('flips the document to right-to-left, and back', () => {
@@ -112,6 +125,22 @@ describe('useT and the language setting', () => {
         expect(readLocale()).toBe('ar');
     });
 
+    it("starts a first run in the PC's own language when GAIA has it, else English", () => {
+        const languages = vi.spyOn(navigator, 'languages', 'get');
+        try {
+            languages.mockReturnValue(['ar-SA', 'en-US']);
+            expect(readLocale()).toBe('ar');
+            languages.mockReturnValue(['fr-FR', 'de-DE']);
+            expect(readLocale()).toBe('en');
+            // A saved choice always wins over the PC's.
+            localStorage.setItem('gaia-chat-locale', 'en');
+            languages.mockReturnValue(['ar-SA']);
+            expect(readLocale()).toBe('en');
+        } finally {
+            languages.mockRestore();
+        }
+    });
+
     it('reads a saved code that is no longer registered as English', () => {
         localStorage.setItem('gaia-chat-locale', 'xx');
         expect(readLocale()).toBe('en');
@@ -123,9 +152,9 @@ describe('useT and the language setting', () => {
         expect([...select.options].map((o) => stripIsolates(o.textContent ?? ''))).toEqual(['English', 'العربية (Arabic)']);
         await userEvent.selectOptions(select, 'ar');
         expect(useChatStore.getState().locale).toBe('ar');
-        expect(screen.getByLabelText(plain('اللغة (Language)'))).toHaveValue('ar');
-        expect(screen.getByRole('heading', { name: plain('عام (General)') })).toBeInTheDocument();
-        expect(screen.getByText(plain('رمادي دافئ (Warm gray)'))).toBeInTheDocument();
+        expect(screen.getByLabelText(readsAs('اللغة (Language)'))).toHaveValue('ar');
+        expect(screen.getByRole('heading', { name: readsAs('عام (General)') })).toBeInTheDocument();
+        expect(screen.getByText(readsAs('رمادي دافئ (Warm gray)'))).toBeInTheDocument();
     });
 
     it('names every palette in English exactly as the palette list does', () => {

@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import gaia.config
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     DEFAULT_MODEL_NAME,
@@ -23,6 +24,7 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.model_fit import MachineCapacity
 from gaia.ui import setup_plan as sp
+from gaia.ui.database import ChatDatabase
 from gaia.ui.routers import setup as setup_router
 
 _REAL_LEMONADE = sp._lemonade
@@ -48,7 +50,7 @@ def config_file(tmp_path, monkeypatch):
 class _FakeLemonade:
     """A running Lemonade on a PC with *capacity*; *downloaded* models are on disk."""
 
-    def __init__(self, capacity, downloaded=(), version="11.8.0"):
+    def __init__(self, capacity, downloaded=(), version="2026.44.1"):
         self.capacity = capacity
         self.downloaded = set(downloaded)
         self.version = version
@@ -58,8 +60,10 @@ class _FakeLemonade:
 
     def get_system_info(self, timeout=None):
         return {
+            "Physical Memory": f"{self.capacity.memory_gb + 64:.2f} GB",
             "devices": {
-                "amd_igpu": {"available": True, "vram_gb": self.capacity.memory_gb}
+                "amd_igpu": {"available": True, "vram_gb": self.capacity.memory_gb},
+                "amd_npu": {"available": True},
             },
             "model_storage": {"free_bytes": self.capacity.disk_free_gb * 1e9},
         }
@@ -81,7 +85,7 @@ class _FakeLemonade:
 def running(monkeypatch):
     """Point the plan at a fake running server on *capacity*."""
 
-    def use(capacity, downloaded=(), version="11.8.0"):
+    def use(capacity, downloaded=(), version="2026.44.1"):
         fake = _FakeLemonade(capacity, downloaded, version)
         monkeypatch.setattr(sp, "_client", lambda url: fake)
         return fake
@@ -104,6 +108,80 @@ def _plan_ids(plan):
     return [m["id"] for m in plan["models"]]
 
 
+@pytest.mark.parametrize("warm_cache", [False, True])
+def test_runtime_cloud_chat_is_not_planned_as_a_local_download(monkeypatch, warm_cache):
+    from gaia.installer import model_choice
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    catalog = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+    reads = []
+
+    def list_models(self):
+        reads.append(True)
+        record_cloud_models(catalog)
+        return catalog
+
+    monkeypatch.setattr(LemonadeClient, "list_models", list_models)
+    monkeypatch.setattr(sp, "_lemonade", lambda: {"mode": "gaia", "url": None})
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.resolve_chat_model", lambda: "opencode.big-model"
+    )
+    record_cloud_models(catalog if warm_cache else {"data": []})
+    try:
+        assert sp._job_model(model_choice.ROLE_CHAT) is None
+        assert sp.model_need(model_choice.ROLE_CHAT)["needed"] is False
+        assert len(reads) == (0 if warm_cache else 1)
+    finally:
+        record_cloud_models({"data": []})
+
+
+def test_registered_dotted_local_chat_model_does_not_need_catalog(
+    no_server, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from gaia.installer import model_choice
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(
+        lc,
+        "resolve_chat_model",
+        lambda: "user.Llama-3.2-3B-GGUF",
+    )
+    monkeypatch.setattr(
+        lc,
+        "find_model_requirement",
+        lambda model: (
+            SimpleNamespace(feature_tier="full")
+            if model == "user.Llama-3.2-3B-GGUF"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        lc.LemonadeClient,
+        "list_models",
+        lambda self, **kwargs: pytest.fail("catalog should not be queried"),
+    )
+
+    assert sp._job_model(model_choice.ROLE_CHAT) == "user.Llama-3.2-3B-GGUF"
+    assert sp.model_need(model_choice.ROLE_CHAT)["needed"] is False
+
+
+def test_unclassifiable_chat_model_is_a_plan_error_not_a_crash(no_server, monkeypatch):
+    from gaia.installer import model_choice
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(lc, "resolve_chat_model", lambda: "opencode.big-model")
+
+    def unavailable(self, **_kwargs):
+        raise lc.LemonadeClientError("catalog unavailable")
+
+    monkeypatch.setattr(lc.LemonadeClient, "list_models", unavailable)
+    lc.record_cloud_models({"data": []})
+    with pytest.raises(sp.SetupPlanError, match="opencode.big-model"):
+        sp.model_need(model_choice.ROLE_CHAT)
+
+
 def test_cold_pc_names_the_starting_model_and_says_the_pick_comes_later(no_server):
     plan = sp.build_plan()
     assert plan["lemonade"]["reachable"] is False
@@ -120,6 +198,18 @@ def test_cold_pc_with_a_cloud_default_still_names_a_local_model(no_server, confi
     plan = sp.build_plan()
     assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
     assert plan["chat_model"]["user_set"] is False
+
+
+def test_cold_pc_after_picking_a_local_model_still_builds_a_plan(
+    no_server, config_file
+):
+    """With no server, nobody can say the last local model is downloaded."""
+    config_file.write_text(
+        json.dumps({"last_provider": "local", "last_model": "gemma4-it-e4b-FLM"})
+    )
+    plan = sp.build_plan()
+    assert plan["chat_model"]["id"] == DEFAULT_MODEL_NAME
+    assert plan["decided_after_server"] is True
 
 
 def test_cold_pc_with_a_local_default_names_it_and_skips_the_hardware_pick(
@@ -148,7 +238,7 @@ def test_use_mine_on_a_big_pc_names_the_large_model_and_its_real_size(running):
     # The hardware's pick keeps Gemma beside it for images: what gaia init pulls.
     assert set(_plan_ids(plan)) >= {LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME}
     assert plan["download_gb"] == pytest.approx(23.3 + 5.6 + 0.3)
-    assert plan["memory_gb"] == 96
+    assert plan["memory_gb"] == round(96 * GB_PER_GIB)
 
 
 def test_an_already_downloaded_model_costs_nothing(running):
@@ -170,17 +260,6 @@ def test_options_show_the_catalog_size(running):
     running(BIG_GPU)
     options = {o["id"]: o for o in sp.build_plan()["options"]}
     assert options[DEFAULT_MODEL_NAME]["size_gb"] == 5.6
-
-
-def test_a_model_this_lemonade_is_too_old_for_is_not_offered(running):
-    """It fits the PC, but setup would refuse it on this server's version."""
-    running(BIG_GPU, version="10.9.1")
-    options = {o["id"]: o for o in sp.build_plan()["options"]}
-    assert options[LARGE_DEFAULT_MODEL_NAME]["fits"] is False
-    assert "Lemonade" in options[LARGE_DEFAULT_MODEL_NAME]["reason"]
-    assert options[DEFAULT_MODEL_NAME]["fits"] is True
-    with pytest.raises(sp.NeedsAcknowledgement, match="Lemonade v11"):
-        sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
 
 
 def test_picking_the_smaller_model_saves_it_and_drops_the_large_download(
@@ -242,6 +321,23 @@ def test_a_busy_big_pc_shows_why_the_large_model_does_not_fit_now(running, free_
     assert large["fits"] is False and "free memory" in large["reason"]
     with pytest.raises(sp.NeedsAcknowledgement, match="free memory"):
         sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME)
+
+
+def test_picking_the_large_model_on_a_busy_pc_is_kept_for_setup(
+    running, free_gb, config_file
+):
+    """It matches the memory recommendation, but setup would pick by free memory."""
+    from gaia.installer.init_command import resolve_init_chat_model
+
+    fake = running(BIG_GPU)
+    free_gb(fake, 10)
+    sp.choose_chat_model(LARGE_DEFAULT_MODEL_NAME, acknowledge_no_fit=True)
+    assert (
+        json.loads(config_file.read_text())["default_model"] == LARGE_DEFAULT_MODEL_NAME
+    )
+    choice = resolve_init_chat_model(fake, reset_corrupt=False, enforce_fit=False)
+    assert choice.model_id == LARGE_DEFAULT_MODEL_NAME
+    assert choice.user_set is True
 
 
 def test_picking_gemma_on_a_busy_pc_survives_a_later_idle_run(
@@ -363,6 +459,7 @@ def test_picking_a_model_before_gaias_own_runs_says_to_start_setup(lemonade_targ
 def client():
     app = FastAPI()
     app.include_router(setup_router.router)
+    app.state.db = ChatDatabase(":memory:")
     return TestClient(app)
 
 
@@ -393,7 +490,8 @@ def test_chat_model_endpoint_asks_to_confirm_a_model_that_may_not_fit(client, ru
     r = client.post("/api/setup/chat-model", json=body, headers=UI)
     assert r.status_code == 409
     detail = r.json()["detail"]
-    assert detail["code"] == "no_fit" and detail["capacity_gb"] == 12
+    assert detail["code"] == "no_fit"
+    assert detail["capacity_gb"] == round(12 * GB_PER_GIB, 1)
     assert "may not run" in detail["message"]
     r = client.post(
         "/api/setup/chat-model",
@@ -481,6 +579,46 @@ def test_catalog_offers_the_users_flm_model_but_not_speech_or_strays(flm_box):
     assert not _entry(plan, DEFAULT_EMBEDDING_MODEL)["chat_choice"]
 
 
+def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
+    flm_box, monkeypatch
+):
+    fake = flm_box()
+    listed = fake.list_models
+    cloud = {
+        "id": "fireworks.deepseek-v4p1-flash",
+        "downloaded": True,
+        "recipe": "cloud",
+        "labels": ["chat", "cloud"],
+    }
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [cloud]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert FLM in ids
+    assert cloud["id"] not in ids
+
+
+@pytest.mark.parametrize(
+    "entry, kept",
+    [
+        ({"id": "fireworks.glm-5p3-flash", "labels": ["chat"]}, False),
+        ({"id": "openrouter.some-model", "labels": ["chat", "cloud"]}, False),
+        ({"id": "user.My-Local-GGUF", "labels": ["chat"], "device": "none"}, True),
+    ],
+)
+def test_catalog_tells_a_local_model_from_a_cloud_one(
+    flm_box, monkeypatch, entry, kept
+):
+    fake = flm_box()
+    listed = fake.list_models
+    row = {"downloaded": True, "recipe": "llamacpp", **entry}
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [row]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert (row["id"] in ids) is kept
+
+
 def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
     flm_box()
     plan = sp.build_plan()
@@ -490,8 +628,10 @@ def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):
     assert "images" in gemma["if_skipped"]
     qwen = _entry(plan, LARGE_DEFAULT_MODEL_NAME)
     assert not qwen["recommended"] and not qwen["selected"]
-    assert qwen["fits"] is False and qwen["capacity_gb"] == 12
-    assert qwen["need_gb"] > 23 and "12 GB" in qwen["fit_reason"]
+    assert qwen["fits"] is False and qwen["capacity_gb"] == round(12 * GB_PER_GIB, 1)
+    assert qwen["need_gb"] > 23
+    # The sentence and capacity_gb read the same number.
+    assert "this PC has 12.9 GB" in qwen["fit_reason"]
 
 
 def test_big_pc_recommends_the_large_model_and_keeps_gemma_for_vision(running):
@@ -643,7 +783,7 @@ def test_run_endpoint_asks_before_downloading_past_the_free_space(
     monkeypatch.setattr(
         setup_router.runner,
         "start",
-        lambda *a, **k: seen.append(k) or {"state": "running"},
+        lambda *a, chat_model_for, **k: seen.append(k) or {"state": "running"},
     )
     r = client.post("/api/setup/run", json={}, headers=UI)
     assert r.status_code == 409
@@ -651,7 +791,168 @@ def test_run_endpoint_asks_before_downloading_past_the_free_space(
     assert seen == []
     r = client.post("/api/setup/run", json={"acknowledge_low_disk": True}, headers=UI)
     assert r.status_code == 200
-    assert seen == [{"allow_low_disk": True, "keep_trying": False}]
+    assert seen == [
+        {
+            "allow_low_disk": True,
+            "keep_trying": False,
+            "extra_models": [],
+            "server_only": False,
+            "upgrade_embedded": False,
+        }
+    ]
+
+
+def test_run_endpoint_pulls_ticked_extras_and_counts_them_against_the_disk(
+    client, flm_box, monkeypatch
+):
+    flm_box(capacity=BIG_GPU, downloaded=(FLM, DEFAULT_MODEL_NAME), free_gb=10.0)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    body = {"extra_models": [LARGE_DEFAULT_MODEL_NAME.lower()]}
+    r = client.post("/api/setup/run", json=body, headers=UI)
+    # Gemma is on disk; the ticked 23 GB model alone overflows 10 GB free.
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "low_disk"
+    assert LARGE_DEFAULT_MODEL_NAME in r.json()["detail"]["drop"]
+    r = client.post(
+        "/api/setup/run", json={**body, "acknowledge_low_disk": True}, headers=UI
+    )
+    assert r.status_code == 200
+    # Sent as the catalog names it, so `gaia init` matches it exactly.
+    assert seen[0]["extra_models"] == [LARGE_DEFAULT_MODEL_NAME]
+
+
+def test_run_endpoint_refuses_an_extra_model_nobody_has(client, flm_box, monkeypatch):
+    flm_box()
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post("/api/setup/run", json={"extra_models": ["nope-GGUF"]}, headers=UI)
+    assert r.status_code == 422 and "nope-GGUF" in r.json()["detail"]
+
+
+def test_a_failed_extras_check_is_not_a_422_and_leaks_nothing(client, monkeypatch):
+    def broken(_ids):
+        raise sp.SetupPlanError("secret path C:/Users/x/.gaia/config.json is broken")
+
+    monkeypatch.setattr(sp, "check_extra_models", broken)
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run", json={"extra_models": [DEFAULT_MODEL_NAME]}, headers=UI
+    )
+    assert r.status_code == 503
+    assert "secret path" not in r.json()["detail"]
+    assert "couldn't work out the setup plan" in r.json()["detail"]
+
+
+def test_server_only_run_skips_the_disk_check_and_takes_no_extras(
+    client, flm_box, monkeypatch
+):
+    flm_box(downloaded=(), free_gb=0.1)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: seen.append(k) or {"state": "running"},
+    )
+    r = client.post("/api/setup/run", json={"server_only": True}, headers=UI)
+    assert r.status_code == 200 and seen[0]["server_only"] is True
+    r = client.post(
+        "/api/setup/run",
+        json={"server_only": True, "extra_models": [DEFAULT_MODEL_NAME]},
+        headers=UI,
+    )
+    assert r.status_code == 422 and len(seen) == 1
+
+
+def test_upgrade_embedded_run_uses_no_model_downloads(client, flm_box, monkeypatch):
+    flm_box(downloaded=(DEFAULT_MODEL_NAME,), free_gb=0.1)
+    seen = []
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, chat_model_for, **k: seen.append(k) or {"state": "running"},
+    )
+    r = client.post("/api/setup/run", json={"upgrade_embedded": True}, headers=UI)
+    assert r.status_code == 200
+    assert seen == [
+        {
+            "allow_low_disk": False,
+            "keep_trying": False,
+            "extra_models": [],
+            "server_only": False,
+            "upgrade_embedded": True,
+        }
+    ]
+
+
+def test_setup_run_rejects_extra_models_during_embedded_upgrade(client, monkeypatch):
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run",
+        json={"upgrade_embedded": True, "extra_models": [DEFAULT_MODEL_NAME]},
+        headers=UI,
+    )
+    assert r.status_code == 422
+    assert "no extra_models" in r.json()["detail"]
+
+
+def test_setup_run_rejects_conflicting_server_only_and_upgrade(client, monkeypatch):
+    monkeypatch.setattr(
+        setup_router.runner,
+        "start",
+        lambda *a, **k: pytest.fail("must not start"),
+    )
+    r = client.post(
+        "/api/setup/run",
+        json={"server_only": True, "upgrade_embedded": True},
+        headers=UI,
+    )
+    assert r.status_code == 422
+    assert "not both" in r.json()["detail"]
+
+
+def test_catalog_separates_gaias_models_from_ones_only_in_lemonade(flm_box):
+    flm_box()
+    plan = sp.build_plan()
+    assert _entry(plan, FLM)["gaia_model"] is False
+    assert _entry(plan, DEFAULT_MODEL_NAME)["gaia_model"] is True
+    assert _entry(plan, LARGE_DEFAULT_MODEL_NAME)["gaia_model"] is True
+    assert _entry(plan, DEFAULT_EMBEDDING_MODEL)["gaia_model"] is True
+
+
+def test_each_model_has_the_name_the_picker_and_sidebar_show(flm_box):
+    from gaia.ui.local_models import friendly_name
+
+    flm_box()
+    for entry in sp.build_plan()["catalog"]:
+        assert entry["name"] == friendly_name(entry["id"]), entry["id"]
+    assert _entry(sp.build_plan(), DEFAULT_MODEL_NAME)["name"] == "Gemma 4 E4B"
+
+
+def test_a_lemonade_only_chat_model_stays_in_the_lemonade_list(flm_box):
+    flm_box()
+    sp.choose_chat_model(FLM)
+    plan = sp.build_plan()
+    assert plan["chat_model"]["id"] == FLM
+    entry = _entry(plan, FLM)
+    # Now planned (it is the chat model), but still not one of GAIA's own.
+    assert entry["planned"] is True and entry["gaia_model"] is False
+    assert _entry(plan, DEFAULT_EMBEDDING_MODEL)["gaia_model"] is True
+    assert _entry(plan, DEFAULT_MODEL_NAME)["gaia_model"] is True
 
 
 def test_plan_counts_a_model_downloaded_beside_the_profile(flm_box):
@@ -708,3 +1009,220 @@ def test_unreadable_free_memory_is_fit_unknown_not_the_error_text(running, monke
     )
     assert large["fits"] is None
     assert "secret" not in large["reason"] and "free memory" in large["reason"]
+
+
+# ── units: the plan's memory numbers are decimal GB, verdicts unchanged ───
+
+
+@pytest.mark.parametrize("memory_gib", [6, 8, 12, 16, 24, 27, 32, 48, 64, 96, 120])
+@pytest.mark.parametrize(
+    "model_id, size_gb",
+    [
+        (LARGE_DEFAULT_MODEL_NAME, 23.3),
+        (DEFAULT_MODEL_NAME, 5.6),
+        ("Qwen3-VL-4B-Instruct-GGUF", 3.3),
+    ],
+)
+def test_decimal_numbers_keep_every_fit_verdict(memory_gib, model_id, size_gb):
+    from gaia.installer import model_choice
+    from gaia.llm.lemonade_client import find_model_requirement, kv_cache_for
+    from gaia.llm.model_fit import check_fit
+
+    capacity = MachineCapacity(memory_gib, "AMD iGPU", None)
+    mr = find_model_requirement(model_id)
+    kv = kv_cache_for(mr, capacity) if mr else 0.0
+    before = check_fit(size_gb, capacity, kv).fits
+    fit = model_choice.memory_fit(model_id, size_gb, capacity)
+    assert fit["fits"] is before
+    assert fit["capacity_gb"] == round(memory_gib * GB_PER_GIB, 1)
+    # The numbers shown agree with the verdict shown (to the 0.1 they round to).
+    if before:
+        assert fit["need_gb"] <= fit["capacity_gb"] + 0.1
+    else:
+        assert fit["need_gb"] >= fit["capacity_gb"] - 0.1
+
+
+class _IgpuLemonade(_FakeLemonade):
+    """A Strix Halo-class iGPU reporting its carve-out and shared memory, in GiB."""
+
+    def __init__(self, carve_gib, shared_gib):
+        super().__init__(MachineCapacity(carve_gib + shared_gib, "AMD iGPU", 500))
+        self.carve_gib, self.shared_gib = carve_gib, shared_gib
+
+    def get_system_info(self, timeout=None):
+        return {
+            "Physical Memory": "128 GB",
+            "devices": {
+                "amd_igpu": {
+                    "available": True,
+                    "name": "AMD Radeon 8060S",
+                    "vram_gb": self.carve_gib,
+                    "virtual_mem_gb": self.shared_gib,
+                }
+            },
+            "model_storage": {"free_bytes": 500e9},
+        }
+
+
+@pytest.mark.parametrize(
+    "carve_gib, shared_gib", [(16, 0), (0.5, 15.5), (32, 31.5), (64, 0)]
+)
+def test_plan_memory_matches_the_gpu_memory_pane(
+    running, monkeypatch, tmp_path, carve_gib, shared_gib
+):
+    from gaia.llm import gpu_memory
+
+    fake = _IgpuLemonade(carve_gib, shared_gib)
+    monkeypatch.setattr(sp, "_client", lambda url: fake)
+    monkeypatch.setattr(gpu_memory, "_load_state", lambda: None)
+    # The pane exists only on Windows and Linux; run it as Linux on any CI host.
+    monkeypatch.setattr(gpu_memory, "_platform", lambda: "linux")
+    (tmp_path / "meminfo").write_text(
+        "MemTotal:       124500000 kB\n", encoding="ascii"
+    )
+    monkeypatch.setattr(gpu_memory, "PATHS", gpu_memory.SystemPaths(proc=tmp_path))
+    monkeypatch.setattr(
+        gpu_memory,
+        "_linux_setup",
+        lambda: gpu_memory._LinuxSetup(
+            gpu_memory.METHOD_GUIDED, "", "ttm", "modprobe", None
+        ),
+    )
+    plan = sp.build_plan()
+    pane = gpu_memory.describe(fake.get_system_info())
+    assert pane["applies"] is True
+    # Settings shows both: the same machine must read the same number.
+    assert plan["capacity_gb"] == pane["gpu_gb"]
+
+
+def test_a_pc_with_an_npu_is_offered_gaias_npu_chat_model(running):
+    """Lemonade lists no FLM model until its backend is in, so setup names it."""
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    entry = next(
+        (e for e in sp.build_plan()["catalog"] if e["id"] == NPU_DEFAULT_MODEL_NAME),
+        None,
+    )
+    assert entry is not None and entry["chat_choice"]
+    assert entry["support"] == "verified" and entry["fits"] is True
+    # What the screen keys NPU on, though Lemonade doesn't list the model yet.
+    assert entry["recipe"] == "flm" and entry["in_lemonade"] is False
+
+
+def test_a_pc_without_an_npu_is_not_offered_one(running):
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    fake = running(BIG_GPU)
+    report = fake.get_system_info
+
+    def no_npu(timeout=None):
+        info = report(timeout)
+        info["devices"].pop("amd_npu")
+        return info
+
+    fake.get_system_info = no_npu
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert NPU_DEFAULT_MODEL_NAME not in ids
+
+
+def _flm_backend(fake, state, message=None):
+    """Lemonade sees the NPU, and reports its FastFlowLM backend in *state*."""
+    report = fake.get_system_info
+
+    def info(timeout=None):
+        out = report(timeout)
+        backend = {"state": state, **({"message": message} if message else {})}
+        out["recipes"] = {"flm": {"backends": {"npu": backend}}}
+        return out
+
+    fake.get_system_info = info
+
+
+def test_an_npu_model_fastflowlm_cant_run_here_does_not_fit_and_says_why(running):
+    """An NPU with room is not enough: Settings checks the backend, and so must setup (#6632)."""
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported", "FLM does not support this kernel")
+    entry = _entry(sp.build_plan(), NPU_DEFAULT_MODEL_NAME)
+    assert entry["fits"] is False and entry["fit_code"] == "npu"
+    assert "Ryzen AI NPU" in entry["fit_reason"]
+    assert "FLM does not support this kernel" in entry["fit_reason"]
+    # Its memory numbers stay: the reason is the backend, not the size.
+    assert entry["need_gb"] is not None
+
+
+@pytest.mark.parametrize("state", ["installed", "installable", "update_required"])
+def test_an_npu_model_whose_backend_runs_or_installs_still_fits(running, state):
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, state)
+    entry = _entry(sp.build_plan(), NPU_DEFAULT_MODEL_NAME)
+    assert entry["fits"] is True and entry["fit_code"] is None
+
+
+def test_a_model_too_big_for_memory_says_memory(flm_box):
+    flm_box()
+    qwen = _entry(sp.build_plan(), LARGE_DEFAULT_MODEL_NAME)
+    assert qwen["fits"] is False and qwen["fit_code"] == "memory"
+
+
+def test_choosing_an_npu_model_that_cant_run_here_is_refused_not_confirmed(
+    client, running
+):
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported")
+    body = {"model_id": NPU_DEFAULT_MODEL_NAME, "acknowledge_no_fit": True}
+    r = client.post("/api/setup/chat-model", json=body, headers=UI)
+    assert r.status_code == 409
+    assert "can't run on this PC" in r.json()["detail"]
+    assert GaiaConfig.load().default_model is None
+
+
+def test_setup_refuses_to_start_on_a_saved_npu_model_this_pc_cant_run(
+    client, running, monkeypatch
+):
+    """`gaia init --profile npu` saved the NPU model; FastFlowLM can't run here (#6632)."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    GaiaConfig.save_key("default_model", NPU_DEFAULT_MODEL_NAME)
+    GaiaConfig.save_key("last_model", NPU_DEFAULT_MODEL_NAME)
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported", "FLM does not support this kernel")
+    started = []
+    monkeypatch.setattr(
+        setup_router.runner, "start", lambda *a, **k: started.append(k) or {}
+    )
+    # Acknowledging low disk confirms the disk, not a model nothing here runs.
+    for body in ({}, {"acknowledge_low_disk": True}):
+        r = client.post("/api/setup/run", json=body, headers=UI)
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert "can't run on this PC" in detail
+        assert "Ryzen AI NPU" in detail and "Choose another chat model" in detail
+        assert "gaia " not in detail
+    assert started == []
+
+
+def test_a_cloud_setup_is_not_refused_for_a_saved_npu_model(
+    client, running, monkeypatch
+):
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import NPU_DEFAULT_MODEL_NAME
+
+    GaiaConfig.save_key("default_model", NPU_DEFAULT_MODEL_NAME)
+    fake = running(MachineCapacity(96, "AMD iGPU", 500, npu_memory_gb=64))
+    _flm_backend(fake, "unsupported")
+    started = []
+    monkeypatch.setattr(
+        setup_router.runner, "start", lambda *a, **k: started.append(a) or {}
+    )
+    r = client.post("/api/setup/run", json={"skip_chat_model": True}, headers=UI)
+    assert r.status_code == 200
+    assert len(started) == 1

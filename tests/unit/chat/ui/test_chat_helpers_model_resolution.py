@@ -38,7 +38,6 @@ def _make_session(model=_DB_DEFAULT, agent_type="bot"):
 
 def _make_db(custom_model=None):
     db = MagicMock()
-    db.get_recent_messages.return_value = []
     db.get_setting.return_value = custom_model
     db.list_documents.return_value = []
     db.update_session.return_value = None
@@ -306,31 +305,17 @@ class TestStaticRegressionGuard:
 
 
 class TestDynamicToolsContractShape:
-    """#1798: prove the Beta tool-loader toggle isn't a no-op — the persisted
-    ``dynamic_tools`` setting must reach the outgoing factory kwargs on BOTH
-    chat paths, so the loader-active doc agent actually sees it.
+    """The UI must not pass ``dynamic_tools``: an explicit kwarg would beat
+    ``~/.gaia/config.json``, the one place the sidecar reads too, and the two
+    paths to the same agent would disagree."""
 
-    "Mocks prove the call is valid, not just invoked": we assert the SHAPE of
-    the create_agent kwargs (does it carry ``dynamic_tools``?), not merely that
-    create_agent was called (CLAUDE.md contract-shape guard)."""
-
-    @staticmethod
-    def _db_with_settings(settings: dict):
+    def test_factory_kwargs_leave_the_setting_to_the_config_file(self):
+        registry, captured = _make_registry()
         db = MagicMock()
-        db.get_recent_messages.return_value = []
         db.list_documents.return_value = []
         db.update_session.return_value = None
         db.get_session.return_value = {}
-        db.get_setting.side_effect = lambda key, default=None: settings.get(
-            key, default
-        )
-        return db
-
-    def test_non_streaming_forwards_persisted_true(self):
-        """Persisted dynamic_tools="true" ⇒ create_agent receives
-        dynamic_tools=True (non-streaming registered/doc path)."""
-        registry, captured = _make_registry()
-        db = self._db_with_settings({"dynamic_tools": "true"})
+        db.get_setting.side_effect = lambda _key, default=None: default
         session = _make_session(model=_DB_DEFAULT)
 
         with (
@@ -339,48 +324,7 @@ class TestDynamicToolsContractShape:
         ):
             _call_non_streaming(session, db)
 
-        assert captured["kwargs"].get("dynamic_tools") is True
-
-    def test_non_streaming_forwards_default_false(self):
-        """Cold state (no dynamic_tools key) ⇒ create_agent receives
-        dynamic_tools=False — byte-identical to the pre-#1798 default-off path."""
-        registry, captured = _make_registry()
-        db = self._db_with_settings({})  # nothing persisted
-        session = _make_session(model=_DB_DEFAULT)
-
-        with (
-            patch("gaia.ui._chat_helpers._agent_registry", registry),
-            patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
-        ):
-            _call_non_streaming(session, db)
-
-        assert captured["kwargs"].get("dynamic_tools") is False
-
-    def test_streaming_registered_agent_forwards_dynamic_tools(self):
-        """Streaming registered-agent path threads dynamic_tools into
-        _session_agent_kwargs. Source-shape (like the double-index guard):
-        the streaming generator needs Lemonade HTTP + SSE + a background
-        thread to drive, so a source assertion gives the same ratcheting
-        regression cover at a fraction of the cost."""
-        import re
-
-        src = (Path(__file__).parents[4] / "src/gaia/ui/_chat_helpers.py").read_text()
-        m = re.search(
-            r"registry\.create_agent\(\s*agent_type,\s*\*\*_build_create_kwargs\("
-            r"[^)]*?streaming=True[^)]*?\),\s*\*\*_session_agent_kwargs\(([^)]+)\)",
-            src,
-            re.DOTALL,
-        )
-        assert m, (
-            "Could not locate the streaming registered-agent factory call in "
-            "_chat_helpers.py. Did the call-site structure change?"
-        )
-        block = m.group(1).replace(" ", "").replace("\n", "")
-        assert "dynamic_tools=dynamic_tools" in block, (
-            "Streaming registered-agent branch must forward "
-            "dynamic_tools=dynamic_tools into _session_agent_kwargs, or the "
-            "#1798 toggle is a no-op on the streaming doc path."
-        )
+        assert "dynamic_tools" not in captured["kwargs"]
 
 
 class TestPostConstructionPreflight:
@@ -442,9 +386,9 @@ class TestDeviceModelOverride:
             _call_non_streaming(session, db)
 
         kwargs = captured["kwargs"]
-        assert kwargs.get("model_id") == "gemma4-it-e2b-FLM"
+        assert kwargs.get("model_id") == "gemma4-it-e4b-FLM"
         assert kwargs.get("device") == "npu"
-        assert kwargs.get("min_context_size") == 32768
+        assert kwargs.get("min_context_size") == 65536
 
     def test_explicit_npu_overrides_session_pinned_model(self):
         """A non-GPU device wins even over a session-pinned model (it can't run there)."""
@@ -459,7 +403,7 @@ class TestDeviceModelOverride:
         ):
             _call_non_streaming(session, db)
 
-        assert captured["kwargs"].get("model_id") == "gemma4-it-e2b-FLM"
+        assert captured["kwargs"].get("model_id") == "gemma4-it-e4b-FLM"
 
     def test_gpu_device_does_not_clobber_pinned_model(self):
         """On the default GPU device, an agent's own model preference is kept."""
@@ -519,7 +463,7 @@ class TestChatAgentGoesThroughTheRegistry:
 
     def test_a_missing_chat_registration_is_not_silently_substituted(self):
         """No direct `from gaia_agent.chat_agent import ChatAgent` left to fall
-        back on: an unregistered `chat` surfaces the install hint instead."""
+        back on: an unregistered `chat` points the user at Setup instead."""
         registry, _ = _make_registry()
         registry.get.return_value = None
         registry.get_load_error.return_value = None
@@ -529,9 +473,8 @@ class TestChatAgentGoesThroughTheRegistry:
         with (
             patch("gaia.ui._chat_helpers._agent_registry", registry),
             patch("gaia.ui._chat_helpers._maybe_load_expected_model"),
-            patch("gaia.ui._chat_helpers.importlib.util.find_spec", return_value=None),
         ):
             result = _call_non_streaming(session, db, agent_type_override=None)
 
         registry.create_agent.assert_not_called()
-        assert "gaia-agent-gaia" in str(result)
+        assert "GAIA's assistant isn't installed" in str(result)

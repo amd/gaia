@@ -1,18 +1,21 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { ensureModel } from '../stores/modelNeededStore';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { requestErrorParam } from '../utils/requestErrors';
 import { formatSize } from '../utils/format';
 import { examplePath } from '../utils/platform';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document, IndexFolderResponse } from '../types';
-import { useT, type Translate } from '../i18n/useT';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { IndexingProgress } from './IndexingProgress';
 import './DocumentLibrary.css';
 
@@ -82,7 +85,7 @@ function formatTimestamp(isoString: string, t: Translate): string {
         if (diffDay < 7) return t('time.daysAgo', { n: diffDay });
 
         // Older than a week: show date + time
-        return date.toLocaleDateString(undefined, {
+        return date.toLocaleDateString(dateLocale(t), {
             month: 'short',
             day: 'numeric',
             hour: 'numeric',
@@ -94,11 +97,11 @@ function formatTimestamp(isoString: string, t: Translate): string {
 }
 
 /** Format an ISO timestamp as a full local date/time for tooltips. */
-function formatFullTimestamp(isoString: string): string {
+function formatFullTimestamp(isoString: string, t: Translate): string {
     try {
         const date = new Date(isoString);
         if (isNaN(date.getTime())) return '';
-        return date.toLocaleString(undefined, {
+        return date.toLocaleString(dateLocale(t), {
             year: 'numeric',
             month: 'short',
             day: 'numeric',
@@ -122,10 +125,13 @@ export function DocumentLibrary() {
     const targetSessionId = target === 'chat' ? currentSessionId : null;
     const targetChatName = `“${currentSession?.title || t('docs.untitledChat')}”`;
     const [notice, setNotice] = useState('');
+    /** The document the notice is about, so removing it takes the notice with it. */
+    const noticeDocId = useRef<string | null>(null);
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
     const dialogRef = useRef<HTMLDivElement>(null);
     useFocusTrap(dialogRef, true);
+    useDialogFocus(dialogRef, true);
     const [isDragOver, setIsDragOver] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
     const [uploadStatus, setUploadStatus] = useState('');
@@ -134,6 +140,10 @@ export function DocumentLibrary() {
     const [uploadError, setUploadError] = useState<{ filename: string; error: string; status?: number; kind?: string | null } | null>(null);
     // Outcome of indexing a folder typed into the path box
     const [folderNotice, setFolderNotice] = useState<string | null>(null);
+    // Why the last remove, cancel or open-folder failed
+    const [actionError, setActionError] = useState<string | null>(null);
+    // The library couldn't be listed: an empty list would look like the documents are gone
+    const [loadError, setLoadError] = useState<{ err: unknown } | null>(null);
     // Documents with a reindex in flight — guards double-click and shows progress
     const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
     // Pages read / chunks embedded, per document being indexed right now
@@ -143,10 +153,10 @@ export function DocumentLibrary() {
     // Force re-render for elapsed time updates
     const [, setTick] = useState(0);
 
-    // Load documents on mount
-    useEffect(() => {
+    const loadDocuments = useCallback(() => {
         log.doc.info('Loading document library...');
         const timer = log.doc.time();
+        setLoadError(null);
         api.listDocuments()
             .then((data) => {
                 const docs = data.documents || [];
@@ -155,9 +165,12 @@ export function DocumentLibrary() {
             })
             .catch((err) => {
                 log.doc.error('Failed to load documents', err);
-                setDocuments([]);
+                setLoadError({ err });
             });
     }, [setDocuments]);
+
+    // Load documents on mount
+    useEffect(loadDocuments, [loadDocuments]);
 
     // Poll for indexing status on documents that are still 'indexing'
     const hasIndexingDocs = documents.some(
@@ -249,8 +262,10 @@ export function DocumentLibrary() {
                     setDocuments(freshDocs);
                     log.doc.debug('Document list refreshed (server-side changes detected)');
                 }
-            } catch {
-                // Ignore refresh errors
+                setLoadError(null);
+            } catch (err) {
+                // The next refresh asks again; the list keeps what it last showed.
+                log.doc.warn('Document list refresh failed', err);
             }
         }, 15000); // Refresh every 15 seconds
 
@@ -258,10 +273,10 @@ export function DocumentLibrary() {
     }, [setDocuments]);
 
     const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
-    const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
+        noticeDocId.current = docId;
         if (!targetSessionId) {
             addDraftDocuments([docId]);
             setNotice(t('docs.willAttach', { name: filename }));
@@ -315,6 +330,7 @@ export function DocumentLibrary() {
         uploader: () => Promise<Document>,
         onFolder?: () => Promise<void>,
     ) => {
+        if (!(await ensureModel('embedding'))) return;
         const ext = filename.includes('.') ? '.' + filename.split('.').pop()?.toLowerCase() : '';
         const unsupportedMessage = ext && !isExtensionSupported(ext)
             ? (getUnsupportedCategory(ext)?.message ?? `The file type "${ext}" is not supported for indexing.`)
@@ -423,42 +439,56 @@ export function DocumentLibrary() {
     }, [uploadFileBlob]);
 
     const handleDeleteDoc = useCallback(async (id: string) => {
-        const doc = documents.find((d) => d.id === id);
-        log.doc.info(`Deleting document: ${doc?.filename || id}`);
+        const name = documents.find((d) => d.id === id)?.filename || id;
+        log.doc.info(`Deleting document: ${name}`);
+        setActionError(null);
         try {
             await api.deleteDocument(id);
-            indexingStartTimes.current.delete(id);
-            removeDraftDocument(id);
-            setDocuments(documents.filter((d) => d.id !== id));
-            log.doc.info(`Deleted document: ${doc?.filename || id}`);
         } catch (err) {
-            log.doc.error(`Failed to delete document: ${doc?.filename || id}`, err);
+            log.doc.error(`Failed to delete document: ${name}`, err);
+            setActionError(t('docs.deleteFailed', { name, error: requestErrorParam(err) }));
+            return;
         }
-    }, [documents, setDocuments, removeDraftDocument]);
+        indexingStartTimes.current.delete(id);
+        removeDraftDocument(id);
+        if (noticeDocId.current === id) setNotice('');
+        // The list now, not when the click happened: a poll may have refreshed it meanwhile.
+        setDocuments(useChatStore.getState().documents.filter((d) => d.id !== id));
+        log.doc.info(`Deleted document: ${name}`);
+    }, [documents, setDocuments, removeDraftDocument, t]);
 
     const handleOpenFolder = useCallback(async (filepath: string, filename: string) => {
         log.doc.info(`Opening folder for: ${filepath}`);
+        setActionError(null);
         try {
             await api.openFileOrFolder(filepath, true);
         } catch (err) {
             log.doc.error(`Failed to open folder for: ${filename}`, err);
+            setActionError(t('docs.openFolderFailed', { name: filename, error: requestErrorParam(err) }));
         }
-    }, []);
+    }, [t]);
 
     const handleCancelIndexing = useCallback(async (id: string) => {
-        const doc = documents.find((d) => d.id === id);
-        log.doc.info(`Cancelling indexing for: ${doc?.filename || id}`);
+        const name = documents.find((d) => d.id === id)?.filename || id;
+        log.doc.info(`Cancelling indexing for: ${name}`);
+        setActionError(null);
         try {
             await api.cancelIndexing(id);
-            indexingStartTimes.current.delete(id);
-            // Refresh
+        } catch (err) {
+            log.doc.error(`Failed to cancel indexing: ${name}`, err);
+            setActionError(t('docs.cancelFailed', { name, error: requestErrorParam(err) }));
+            return;
+        }
+        indexingStartTimes.current.delete(id);
+        log.doc.info(`Cancelled indexing for: ${name}`);
+        try {
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
-            log.doc.info(`Cancelled indexing for: ${doc?.filename || id}`);
         } catch (err) {
-            log.doc.error(`Failed to cancel indexing: ${doc?.filename || id}`, err);
+            // The periodic refresh shows the cancelled row on its next pass.
+            log.doc.warn('Could not refresh the documents after cancelling', err);
         }
-    }, [documents, setDocuments]);
+    }, [documents, setDocuments, t]);
 
     const handleReindex = useCallback(async (id: string) => {
         if (reindexingIds.has(id)) return; // guard against double-click
@@ -516,7 +546,7 @@ export function DocumentLibrary() {
         const status = doc.indexing_status || 'complete';
         const startTime = indexingStartTimes.current.get(doc.id);
         const indexedTime = doc.indexed_at ? formatTimestamp(doc.indexed_at, t) : '';
-        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at) : '';
+        const indexedTimeFull = doc.indexed_at ? formatFullTimestamp(doc.indexed_at, t) : '';
 
         switch (status) {
             case 'indexing':
@@ -601,7 +631,7 @@ export function DocumentLibrary() {
             default:
                 return (
                     <span className="doc-meta">
-                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi> &middot; {t.plural('docs.chunks', doc.chunk_count)}
+                        <bdi dir="ltr">{formatSize(doc.file_size)}</bdi>
                         {indexedTime && (
                             <span className="doc-timestamp" title={t('docs.indexedAt', { time: indexedTimeFull })}>
                                 <Clock size={10} />
@@ -632,8 +662,8 @@ export function DocumentLibrary() {
                                     value={target}
                                     onChange={(e) => { setTarget(e.target.value as 'chat' | 'next'); setNotice(''); }}
                                 >
-                                    <option value="chat">{t('docs.thisChat', { chat: targetChatName })}</option>
-                                    <option value="next">{t('docs.nextChat')}</option>
+                                    <option value="chat">{t.bare('docs.thisChat', { chat: targetChatName })}</option>
+                                    <option value="next">{t.bare('docs.nextChat')}</option>
                                 </select>
                             </label>
                         ) : (
@@ -702,6 +732,26 @@ export function DocumentLibrary() {
                         />
                     )}
 
+                    {loadError && documents.length > 0 && (
+                        <div className="doc-folder-notice doc-action-error" role="alert">
+                            <AlertCircle size={14} />
+                            <span>{t('docs.loadFailed', { error: requestErrorParam(loadError.err) })}</span>
+                            <button type="button" className="btn-secondary" onClick={loadDocuments}>
+                                {t('docs.loadRetry')}
+                            </button>
+                        </div>
+                    )}
+
+                    {actionError && (
+                        <div className="doc-folder-notice doc-action-error" role="alert">
+                            <AlertCircle size={14} />
+                            <span>{actionError}</span>
+                            <button className="btn-icon-sm" onClick={() => setActionError(null)} aria-label={t('docs.dismissError')}>
+                                <X size={12} />
+                            </button>
+                        </div>
+                    )}
+
                     {folderNotice && (
                         <div className="doc-folder-notice" role="status">
                             <CheckCircle size={14} />
@@ -717,15 +767,22 @@ export function DocumentLibrary() {
                         <div className="doc-stats">
                             <span>{t.plural('docs.count', documents.length)}</span>
                             <span>&middot;</span>
-                            <span>{t.plural('docs.chunks', totalChunks)}</span>
-                            <span>&middot;</span>
                             <bdi dir="ltr">{formatSize(totalSize)}</bdi>
                         </div>
                     )}
 
                     {/* Document list */}
                     <div className="doc-list">
-                        {documents.length === 0 && !isUploading && (
+                        {loadError && documents.length === 0 && (
+                            <div className="empty-docs doc-load-error" role="alert">
+                                <AlertCircle size={32} strokeWidth={1} />
+                                <p>{t('docs.loadFailed', { error: requestErrorParam(loadError.err) })}</p>
+                                <button type="button" className="btn-secondary" onClick={loadDocuments}>
+                                    {t('docs.loadRetry')}
+                                </button>
+                            </div>
+                        )}
+                        {documents.length === 0 && !isUploading && !loadError && (
                             <div className="empty-docs">
                                 <FileText size={32} strokeWidth={1} />
                                 <p>{t('docs.empty')}</p>

@@ -24,12 +24,29 @@ log = get_logger(__name__)
 ROLE_CHAT = "chat"
 ROLE_VISION = "vision"
 ROLE_EMBEDDING = "embedding"
+ROLE_SPEECH = "speech"
+ROLE_VOICE = "voice"
+ROLE_IMAGE_CREATION = "image_creation"
 
 _PURPOSE = {
     ROLE_CHAT: "Answers your messages and runs GAIA's tools",
     ROLE_VISION: "Reads images and screenshots",
     ROLE_EMBEDDING: "Searches your documents and remembers things",
+    ROLE_SPEECH: "Turns speech and recordings into text",
+    ROLE_VOICE: "Reads answers aloud",
+    ROLE_IMAGE_CREATION: "Creates pictures from a description",
 }
+
+#: Optional models setup offers, off by default. A test pins them to the audio
+#: and image defaults, which import heavy packages this module must not.
+OPTIONAL_MODELS = {
+    "Whisper-Large-v3-Turbo": ROLE_SPEECH,
+    "kokoro-v1": ROLE_VOICE,
+    "SDXL-Turbo": ROLE_IMAGE_CREATION,
+}
+
+#: Vision-only models the user can pick besides a chat model that reads images.
+VISION_ONLY_MODELS = ("Qwen3-VL-4B-Instruct-GGUF",)
 
 #: How long an opted-in "keep trying" waits out a dropped connection.
 KEEP_TRYING_S = 120
@@ -57,6 +74,10 @@ _NETWORK_RE = re.compile(
     r"temporarily unavailable|name resolution|unreachable|remote end closed",
     re.IGNORECASE,
 )
+# Windows' 260-character path limit; retrying can never get past it.
+_PATH_TOO_LONG_RE = re.compile(
+    r"filename or extension is too long|winerror 206", re.IGNORECASE
+)
 _DISK_FULL_RE = re.compile(
     r"no space|disk full|not enough (disk|space)|insufficient disk|enospc",
     re.IGNORECASE,
@@ -73,10 +94,6 @@ class NeedsAcknowledgement(Exception):
     def __init__(self, detail: Dict[str, Any]):
         super().__init__(detail["message"])
         self.detail = detail
-
-
-class ModelChoiceError(Exception):
-    """A model choice that cannot be made, with what to do instead."""
 
 
 def ids_match(a: Optional[str], b: Optional[str]) -> bool:
@@ -103,13 +120,49 @@ def roles_for(model_id: str, chat_model: Optional[str]) -> List[str]:
 
     if is_embedding_model_id(model_id):
         return [ROLE_EMBEDDING]
+    optional = optional_role(model_id)
+    if optional:
+        return [optional]
     roles = []
     if chat_model and ids_match(model_id, chat_model):
         roles.append(ROLE_CHAT)
-    # The image tools load Gemma by name, whatever the chat model is.
-    if ids_match(model_id, DEFAULT_MODEL_NAME):
+    if ids_match(model_id, DEFAULT_MODEL_NAME) or is_vision_only(model_id):
         roles.append(ROLE_VISION)
     return roles or [ROLE_CHAT]
+
+
+def optional_role(model_id: str) -> Optional[str]:
+    """Speech, voice or image creation for one of :data:`OPTIONAL_MODELS`."""
+    return next((r for m, r in OPTIONAL_MODELS.items() if ids_match(model_id, m)), None)
+
+
+def is_vision_only(model_id: str) -> bool:
+    return any(ids_match(model_id, m) for m in VISION_ONLY_MODELS)
+
+
+def support_label(model_id: str) -> Optional[str]:
+    """``verified`` for a model GAIA's evals cover, ``untested`` for any other
+    chat or vision model, None for an optional model, which has no such label."""
+    from gaia.llm.lemonade_client import VERIFIED_MODELS
+
+    if optional_role(model_id):
+        return None
+    verified = any(ids_match(model_id, m) for m in VERIFIED_MODELS)
+    return "verified" if verified else "untested"
+
+
+def reads_images(model_id: str) -> bool:
+    """Whether GAIA reads images with *model_id* itself, so no second model loads."""
+    from gaia.llm.lemonade_client import VISION_CHAT_MODELS
+
+    return any(ids_match(model_id, m) for m in VISION_CHAT_MODELS)
+
+
+def feature_tier(model_id: str) -> str:
+    from gaia.llm.lemonade_client import find_model_requirement
+
+    requirement = find_model_requirement(model_id)
+    return requirement.feature_tier if requirement else "full"
 
 
 def purpose(roles: Iterable[str]) -> str:
@@ -173,32 +226,127 @@ def set_skipped(model_id: str, skipped: bool) -> List[str]:
 # ── fit and disk ───────────────────────────────────────────────────────────
 
 
+def to_decimal_gb(model_fit_gb: float) -> float:
+    """A model_fit memory figure (Lemonade's GiB) in decimal GB, as the plan reports it.
+
+    A need and the memory it is judged against both come from model_fit in
+    the same unit, so scaling both keeps every verdict as it was.
+    """
+    from gaia.llm.gpu_memory import GB_PER_GIB
+
+    return model_fit_gb * GB_PER_GIB
+
+
+def memory_reason(need_gb: float, capacity) -> str:
+    """Why a model may not fit, in the decimal GB the plan reports, rounded to
+    0.1 like ``need_gb`` and ``capacity_gb`` so the sentence and numbers agree."""
+    return (
+        f"needs about {to_decimal_gb(need_gb):.1f} GB of memory; this PC has "
+        f"{to_decimal_gb(capacity.memory_gb):.1f} GB ({capacity.memory_source})"
+    )
+
+
+#: Why a model doesn't fit: too little memory, no usable NPU, or no backend for its kind.
+FIT_MEMORY, FIT_NPU, FIT_BACKEND = "memory", "npu", "backend"
+
+
+def cant_run_reason(fit: Dict[str, Any]) -> Optional[str]:
+    """Why nothing on this PC can run the model *fit* describes, or None.
+
+    Only a missing NPU or backend counts. A memory shortfall is an estimate
+    the user may accept, so it is never a reason to refuse the model.
+    """
+    if fit.get("fit_code") in (FIT_NPU, FIT_BACKEND):
+        return fit["fit_reason"]
+    return None
+
+
 def memory_fit(model_id: str, size_gb: Optional[float], capacity) -> Dict[str, Any]:
-    """``fits`` / ``need_gb`` / ``capacity_gb`` / ``fit_reason`` for one model.
+    """``fits`` / ``need_gb`` / ``capacity_gb`` / ``fit_reason`` / ``fit_code`` for one model.
 
     Memory only: a model already on disk costs no disk, so disk is judged on
     the whole selection instead (:func:`disk_shortfall`). ``fits`` is None
-    when either the size or this PC's memory is unknown.
+    when either the size or this PC's memory is unknown. The verdict is
+    model_fit's; the numbers are converted to decimal GB.
     """
-    from gaia.llm.lemonade_client import find_model_requirement, kv_cache_for
-    from gaia.llm.model_fit import MachineCapacity, check_fit, required_memory_gb
+    from gaia.llm.lemonade_client import (
+        find_model_requirement,
+        kv_cache_for,
+        runs_on_npu,
+    )
+    from gaia.llm.model_fit import (
+        MachineCapacity,
+        check_fit,
+        npu_capacity,
+        npu_not_ready_reason,
+        required_memory_gb,
+    )
 
     if capacity is None or not size_gb:
         return {
             "fits": None,
             "need_gb": None,
-            "capacity_gb": round(capacity.memory_gb, 1) if capacity else None,
+            "capacity_gb": (
+                round(to_decimal_gb(capacity.memory_gb), 1) if capacity else None
+            ),
             "fit_reason": None,
+            "fit_code": None,
         }
+    if runs_on_npu(model_id):
+        capacity = npu_capacity(capacity)
+        if capacity is None:
+            return {
+                "fits": False,
+                "need_gb": None,
+                "capacity_gb": None,
+                "fit_reason": "runs on a Ryzen AI NPU, and Lemonade reports none "
+                "on this PC",
+                "fit_code": FIT_NPU,
+            }
+        not_ready = npu_not_ready_reason(capacity)
+        if not_ready:
+            return {
+                "fits": False,
+                "need_gb": None,
+                "capacity_gb": None,
+                "fit_reason": not_ready,
+                "fit_code": FIT_NPU,
+            }
     mr = find_model_requirement(model_id)
     kv = kv_cache_for(mr, capacity) if mr else 0.0
     memory_only = MachineCapacity(capacity.memory_gb, capacity.memory_source, None)
     verdict = check_fit(float(size_gb), memory_only, kv)
+    need = required_memory_gb(float(size_gb), kv)
     return {
         "fits": verdict.fits,
-        "need_gb": round(required_memory_gb(float(size_gb), kv), 1),
-        "capacity_gb": round(capacity.memory_gb, 1),
-        "fit_reason": verdict.reason or None,
+        "need_gb": round(to_decimal_gb(need), 1),
+        "capacity_gb": round(to_decimal_gb(capacity.memory_gb), 1),
+        "fit_reason": None if verdict.fits else memory_reason(need, capacity),
+        "fit_code": None if verdict.fits else FIT_MEMORY,
+    }
+
+
+def backend_fit(
+    fit: Dict[str, Any], recipe: Optional[str], system_info
+) -> Dict[str, Any]:
+    """*fit* from :func:`memory_fit`, unless no backend for *recipe* runs here.
+
+    Lemonade can see an NPU with room for a model while its FastFlowLM backend
+    can't run on this PC; such a model doesn't fit, whatever its size.
+    *system_info* None (unread) leaves the memory verdict as it is.
+    """
+    from gaia.llm.model_device import NPU_RECIPES, recipe_unavailable_reason
+
+    if system_info is None:
+        return fit
+    reason = recipe_unavailable_reason(recipe, system_info)
+    if reason is None:
+        return fit
+    return {
+        **fit,
+        "fits": False,
+        "fit_reason": reason,
+        "fit_code": FIT_NPU if recipe in NPU_RECIPES else FIT_BACKEND,
     }
 
 
@@ -213,11 +361,11 @@ def _hf_hub_cache() -> Path:
 def _free_gb_at(path: Path) -> Optional[float]:
     """Free GB on the drive holding *path*, which need not exist yet."""
     probe = path
-    while not probe.exists():
-        if probe.parent == probe:
-            return None
-        probe = probe.parent
     try:
+        while not probe.exists():
+            if probe.parent == probe:
+                return None
+            probe = probe.parent
         return shutil.disk_usage(probe).free / 1e9
     except OSError as e:
         log.warning("Could not read free space at %s: %s", probe, e)
@@ -293,9 +441,11 @@ def disk_shortfall(
 
 
 def error_kind(message: Optional[str]) -> Optional[str]:
-    """``disk_full`` / ``network`` / ``lemonade`` for a failed pull's message."""
+    """Why a pull failed: disk_full, path_too_long, network or lemonade."""
     if not message:
         return None
+    if _PATH_TOO_LONG_RE.search(message):
+        return "path_too_long"
     if _DISK_FULL_RE.search(message):
         return "disk_full"
     if _NETWORK_RE.search(message):
@@ -332,6 +482,11 @@ def pull_model(
     most *keep_trying_s* after it first fails, and Lemonade resumes from the
     partial file. *on_retry* is told the deadline before each wait.
     """
+    from gaia.llm.lemonade_client import (
+        LemonadeClientError,
+        ModelDownloadCancelledError,
+    )
+
     last_error: Dict[str, Optional[str]] = {"message": None}
 
     def track(event: Dict[str, Any]) -> None:
@@ -342,7 +497,21 @@ def pull_model(
     deadline = None
     while True:
         last_error["message"] = None
-        if client.ensure_model_downloaded(model_id, on_progress=track, **pull_kwargs):
+        try:
+            downloaded = client.ensure_model_downloaded(
+                model_id, on_progress=track, **pull_kwargs
+            )
+        except ModelDownloadCancelledError:
+            raise
+        except LemonadeClientError as exc:
+            # The client now raises after reporting streamed failures. Keep the
+            # old installer contract here so retry and per-model setup can
+            # classify the failure and continue with later models.
+            if not last_error["message"]:
+                last_error["message"] = str(exc)
+                on_progress({"event": "error", "error": str(exc)})
+            downloaded = False
+        if downloaded:
             return True
         if keep_trying_s <= 0 or error_kind(last_error["message"]) != "network":
             return False

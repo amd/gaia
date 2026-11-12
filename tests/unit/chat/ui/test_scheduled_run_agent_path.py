@@ -7,7 +7,7 @@ A desktop install ships the flagship only as a daemon sidecar binary, so a
 scheduled run that imported the in-process package failed every time with a
 "not installed" message naming an install command that did not work. These
 pin that a scheduled run relays to the sidecar when that is how the flagship
-runs, that a missing flagship points at ``gaia init``, and that a failed run's
+runs, that a missing flagship points at re-running setup, and that a failed run's
 error reaches the schedules API.
 """
 
@@ -224,29 +224,75 @@ def test_a_relayed_run_that_ends_without_an_answer_fails_loudly(
         )
 
 
-def test_a_relayed_tool_prompt_is_denied_since_nobody_can_answer(
+def _prompt(action="write_file", confirm_id="c-1"):
+    return {
+        "type": "needs_confirmation",
+        "action": action,
+        "summary": "Write heartbeat.txt?",
+        "confirm_id": confirm_id,
+    }
+
+
+@pytest.mark.parametrize(
+    "action, label",
+    [
+        ("write_file", "Writing file"),
+        ("run_shell_command", "Running a shell command"),
+        ("run_python", "Running Python"),
+    ],
+)
+def test_a_relayed_run_that_needs_approval_fails_saying_so(
+    monkeypatch, sidecar_flagship, db, action, label
+):
+    """Nobody can approve a scheduled run's step: a failed run that says why."""
+    proxy, _ = _sidecar_answers(monkeypatch, [_prompt(action), _final("never read")])
+
+    with pytest.raises(RuntimeError) as exc:
+        server._run_scheduled_prompt(
+            db, "write a heartbeat", console=SSEOutputHandler(background_mode=True)
+        )
+
+    message = str(exc.value)
+    assert label in message
+    assert "approval" in message and "chat" in message
+    # Autonomous goals relay the same way, so the text can't say "scheduled" only.
+    assert "scheduled tasks and autonomous goals" in message
+    assert "out of date" not in message and "Update GAIA" not in message
+    # Nothing is posted to a run that has nobody to answer for.
+    assert proxy.decisions == []
+    assert len(proxy.cancelled) == 1
+
+
+class _EndedRunProxy(_FakeProxy):
+    """The sidecar ending the run itself, so a decision for it 404s."""
+
+    def tool_decision(self, run_id, decision, confirm_id):
+        from gaia.daemon.sidecars.errors import SidecarHTTPError
+
+        self.decisions.append((run_id, decision, confirm_id))
+        raise SidecarHTTPError(
+            404,
+            f"No run {run_id!r} is in flight.",
+            path=f"/v1/gaia/query/{run_id}/tool_decision",
+            agent_id="gaia",
+        )
+
+
+def test_a_run_needing_approval_never_reads_as_an_out_of_date_agent(
     monkeypatch, sidecar_flagship, db
 ):
-    proxy, _ = _sidecar_answers(
-        monkeypatch,
-        [
-            {
-                "type": "needs_confirmation",
-                "action": "run_shell_command",
-                "summary": "Run 'ls'?",
-                "confirm_id": "c-1",
-            },
-            _final("I could not run that unattended."),
-        ],
-    )
+    """The rc18 failure: the deny raced the sidecar's own end of the run."""
+    proxy = _EndedRunProxy([_prompt(), _final("I stopped before running it.")])
+    handle = SimpleNamespace(api_version="2.18", proxy=lambda: proxy)
+    monkeypatch.setattr(daemon_client_module, "acquire_handle", lambda _id: handle)
 
-    answer = server._run_scheduled_prompt(
-        db, "list my files", console=SSEOutputHandler(background_mode=True)
-    )
+    with pytest.raises(RuntimeError) as exc:
+        server._run_scheduled_prompt(
+            db, "write a heartbeat", console=SSEOutputHandler(background_mode=True)
+        )
 
-    assert answer == "I could not run that unattended."
-    [(_, decision, confirm_id)] = proxy.decisions
-    assert (decision, confirm_id) == ("deny", "c-1")
+    assert "out of date" not in str(exc.value)
+    assert "Writing file" in str(exc.value)
 
 
 def test_a_stopped_scheduled_run_is_not_sent(monkeypatch, sidecar_flagship, db):
@@ -316,7 +362,7 @@ def test_an_in_process_run_whose_model_failed_is_a_failed_run(monkeypatch, db):
 # ── A missing flagship ──────────────────────────────────────────────────────
 
 
-def test_no_flagship_at_all_says_to_run_gaia_init(monkeypatch, db):
+def test_no_flagship_at_all_says_to_run_setup_again(monkeypatch, db):
     registry = AgentRegistry()
     registry._agents.clear()
     monkeypatch.setattr(registry, "refresh_installed", lambda: None)
@@ -326,11 +372,11 @@ def test_no_flagship_at_all_says_to_run_gaia_init(monkeypatch, db):
         server._run_scheduled_prompt(db, "hi")
 
     message = str(exc.value)
-    assert "gaia init" in message
+    assert "Run setup again" in message and "gaia init" not in message
     assert "git+" not in message and "pip install" not in message
 
 
-def test_a_registered_flagship_whose_package_is_gone_says_to_run_gaia_init(
+def test_a_registered_flagship_whose_package_is_gone_says_to_run_setup_again(
     monkeypatch, db
 ):
     registry = SimpleNamespace(
@@ -345,7 +391,7 @@ def test_a_registered_flagship_whose_package_is_gone_says_to_run_gaia_init(
         server._run_scheduled_prompt(db, "hi")
 
     message = str(exc.value)
-    assert "gaia init" in message
+    assert "Run setup again" in message and "gaia init" not in message
     assert "git+" not in message
 
 

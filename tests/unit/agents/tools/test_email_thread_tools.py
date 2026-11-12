@@ -148,6 +148,8 @@ def test_graph_get_thread_filters_on_conversation_without_orderby():
     assert req.url.params["$top"] == "100"
     select = req.url.params["$select"].split(",")
     assert {"body", "conversationId", "receivedDateTime", "isDraft"} <= set(select)
+    # Auto-reply detection in waiting-on-you needs the real Graph headers.
+    assert "internetMessageHeaders" in select
     assert [m["id"] for m in thread["messages"]] == ["a1", "s1", "a2"]
 
 

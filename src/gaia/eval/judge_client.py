@@ -8,17 +8,19 @@ the transport layer:
 
 * ``ANTHROPIC_API_KEY`` — a console API key. Driven straight against the
   Messages API by :class:`gaia.eval.claude.ClaudeClient`, billed per token.
-* ``CLAUDE_CODE_OAUTH_TOKEN`` — a Claude Code subscription token, which
-  authenticates the ``claude`` CLI. It is driven through ``claude -p``, the same
-  transport :mod:`gaia.eval.runner` already uses to run eval scenarios.
+* A Claude Code subscription — ``CLAUDE_CODE_OAUTH_TOKEN``, or the login the
+  ``claude`` CLI already holds. It is driven through ``claude -p``, the same
+  transport :mod:`gaia.eval.runner` uses to run eval scenarios, and like the
+  runner it needs no environment variable when the CLI is logged in.
 
 Both yield an object exposing ``get_completion(prompt)`` that returns a list of
 content blocks with a ``.text`` attribute, so the three judge factories
 (``draft_quality`` / ``action_item_quality`` / ``briefing_quality``) consume
 either without caring which is in play.
 
-There is no fallback between them: whichever credential is present is used, and
-a rejected credential raises rather than degrading to a weaker scorer.
+Which one is used follows :mod:`gaia.eval.claude_credential`: the subscription
+first, then ``ANTHROPIC_API_KEY`` from the environment, then from a ``.env``.
+A rejected credential raises rather than retrying on the next one.
 """
 
 from __future__ import annotations
@@ -33,7 +35,16 @@ import tempfile
 from dataclasses import dataclass
 
 from gaia.env import load_env
-from gaia.eval.config import DEFAULT_CLAUDE_MODEL
+from gaia.eval.claude_credential import (  # noqa: F401  # pylint: disable=unused-import
+    API_KEY_VAR,
+    MISSING_CREDENTIAL_ERROR,
+    TOKEN_WITHOUT_CLI_ERROR,
+    announce,
+    credential_present,
+    resolve_claude_credential,
+)
+from gaia.eval.claude_usage import TOKEN_FIELDS, usage_from_cli
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL, claude_pricing
 from gaia.llm.local_only import assert_provider_permitted
 from gaia.logger import get_logger
 
@@ -44,10 +55,6 @@ log = get_logger(__name__)
 #: Seconds a single judge call may take. Judge prompts carry a full case inbox,
 #: and the CLI pays a process cold-start the SDK does not.
 DEFAULT_CLI_TIMEOUT = 300.0
-
-#: Env vars that can carry a judge credential, in the order they are preferred
-#: by :func:`make_judge_client`.
-JUDGE_CREDENTIAL_VARS = ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")
 
 #: Replaces Claude Code's agent system prompt so the CLI judge scores from the
 #: rubric alone, like the SDK judge whose baselines are committed.
@@ -63,23 +70,6 @@ _DISALLOWED_TOOLS = (
     "Bash,Read,Write,Edit,Glob,Grep,WebFetch,WebSearch,Task,TodoWrite,NotebookEdit"
 )
 
-MISSING_CREDENTIAL_ERROR = (
-    "No Claude judge credential found: neither CLAUDE_CODE_OAUTH_TOKEN nor "
-    "ANTHROPIC_API_KEY is set.\n\n"
-    "The judged evals (drafting, action-item, briefing) score every case with a "
-    "Claude judge and cannot produce a result without one. Set either:\n"
-    "  1. SUBSCRIPTION (recommended if you have Claude Code Max):\n"
-    "     Run `claude setup-token`, then export the printed token:\n"
-    "       export CLAUDE_CODE_OAUTH_TOKEN=<token>\n"
-    "     This drives the judge through the `claude` CLI, so the CLI must be on\n"
-    "     PATH (`npm install -g @anthropic-ai/claude-code`).\n"
-    "  2. API KEY (billed to your Anthropic console):\n"
-    "       export ANTHROPIC_API_KEY=sk-ant-...\n"
-    "Either can also live in a `.env` file in the repo root.\n"
-    "In CI, add the matching repository secret — see the judge-credential "
-    "preflight in .github/workflows/test_email_agent_eval.yml.\n"
-)
-
 
 def judge_credential_present() -> bool:
     """True when some credential could drive the judge.
@@ -88,7 +78,7 @@ def judge_credential_present() -> bool:
     deliberately does not say whether the credential will be *accepted* — for
     that, probe it (see :func:`probe_judge_credential`).
     """
-    return any((os.getenv(var) or "").strip() for var in JUDGE_CREDENTIAL_VARS)
+    return credential_present()
 
 
 @dataclass(frozen=True)
@@ -101,22 +91,23 @@ class TextBlock:
 class ClaudeCliClient:
     """A judge transport that shells out to ``claude -p``.
 
-    Used when the credential is a Claude Code subscription token, which
-    authenticates the CLI rather than the Messages API.
+    Used for a Claude Code subscription: ``CLAUDE_CODE_OAUTH_TOKEN`` or the
+    CLI's own login, which authenticate the CLI rather than the Messages API.
     """
 
     def __init__(self, model: str | None = None, timeout: float = DEFAULT_CLI_TIMEOUT):
         self._bin = shutil.which("claude")
         if not self._bin:
             raise RuntimeError(
-                "CLAUDE_CODE_OAUTH_TOKEN is set but the `claude` CLI is not on "
-                "PATH, so the judge has no transport.\n"
+                "The subscription judge runs through the `claude` CLI, which is "
+                "not on PATH (CLAUDE_CODE_OAUTH_TOKEN alone cannot drive it).\n"
                 "Install it with `npm install -g @anthropic-ai/claude-code`, or "
                 "set ANTHROPIC_API_KEY instead to judge over the Messages API.\n"
                 "See src/gaia/eval/judge_client.py for how the transport is "
                 "selected."
             )
         self.model = model or DEFAULT_CLAUDE_MODEL
+        claude_pricing(self.model)
         self.timeout = timeout
         # An empty cwd is what keeps the repo's CLAUDE.md out of the judge's
         # context. Cleanup errors are ignored because Windows can still hold a
@@ -124,9 +115,7 @@ class ClaudeCliClient:
         self._workdir = tempfile.TemporaryDirectory(
             prefix="gaia-judge-", ignore_cleanup_errors=True
         )
-        log.info(
-            "Judge transport: `claude -p` (subscription token), model %s", self.model
-        )
+        log.info("Judge transport: `claude -p` (subscription), model %s", self.model)
 
     def _argv(self) -> list[str]:
         return [
@@ -157,6 +146,39 @@ class ClaudeCliClient:
 
     def get_completion(self, prompt: str) -> list[TextBlock]:
         """Run one judge prompt and return its reply as content blocks."""
+        text, _payload = self._complete(prompt)
+        return [TextBlock(text=text)]
+
+    def get_completion_with_usage(self, prompt: str) -> dict:
+        """``get_completion`` plus token usage and cost, shaped like ``ClaudeClient``'s.
+
+        ``total_cost`` is what the CLI reported (on a subscription, the list
+        price of the tokens, not money spent); it is split into input and
+        output by the model's per-token prices.
+        """
+        text, payload = self._complete(prompt)
+        record = usage_from_cli(payload)
+        if record is None:
+            raise RuntimeError(
+                f"{self._failure_preamble()} Its JSON carried no `usage` block, so "
+                "the tokens this call used are unknown. Update the CLI "
+                "(`npm install -g @anthropic-ai/claude-code`)."
+            )
+        output_tokens = record["output_tokens"]
+        input_tokens = sum(record[f] for f in TOKEN_FIELDS) - output_tokens
+        return {
+            "content": [TextBlock(text=text)],
+            "usage": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": input_tokens + output_tokens,
+            },
+            "cost": _split_cost(
+                self.model, input_tokens, output_tokens, record["cost_usd"]
+            ),
+        }
+
+    def _complete(self, prompt: str) -> tuple[str, dict]:
         assert_provider_permitted("the Claude Code CLI")
         # The prompt goes over stdin, not argv: a judge prompt carries a whole
         # case inbox and would blow the Windows command-line length limit.
@@ -170,6 +192,8 @@ class ClaudeCliClient:
                 errors="replace",
                 timeout=self.timeout,
                 cwd=self._workdir.name,
+                # The CLI prefers an inherited API key to the subscription.
+                env={k: v for k, v in os.environ.items() if k != API_KEY_VAR},
                 check=False,
             )
         except subprocess.TimeoutExpired as e:
@@ -210,34 +234,53 @@ class ClaudeCliClient:
                 "result, so this case cannot be scored. Re-run; if it persists, "
                 "check the CLI with `claude -p 'reply with: ok'`."
             )
-        return [TextBlock(text=text)]
+        return text, payload
 
     def _failure_preamble(self) -> str:
         return (
             f"The Claude judge failed (`claude -p --model {self.model}`). Check "
-            "that CLAUDE_CODE_OAUTH_TOKEN is set and unexpired (regenerate with "
+            "that the CLI is logged in (`claude`, then `/login`) or that "
+            "CLAUDE_CODE_OAUTH_TOKEN is set and unexpired (regenerate with "
             "`claude setup-token`), and that the model id is one your account can "
             "reach."
         )
 
 
-def make_judge_client(model: str | None = None):
-    """Build the judge client the available credential can actually drive.
+def _split_cost(model: str, input_tokens: int, output_tokens: int, total: float):
+    """``total`` split into input and output in proportion to their list price."""
+    pricing = claude_pricing(model)
+    weight_in = input_tokens * pricing["input_per_mtok"]
+    weight_out = output_tokens * pricing["output_per_mtok"]
+    weight = weight_in + weight_out
+    input_cost = total * weight_in / weight if weight else 0.0
+    return {
+        "input_cost": round(input_cost, 6),
+        "output_cost": round(total - input_cost, 6),
+        "total_cost": round(total, 6),
+    }
 
-    ``ANTHROPIC_API_KEY`` wins when both are set — the workflow blanks it when
-    it wants the subscription path, matching every other Claude workflow here.
-    Raises when neither credential is present; never returns a degraded scorer.
+
+def make_judge_client(model: str | None = None, max_tokens: int | None = None):
+    """Build the judge client for the first available Claude credential.
+
+    Order: Claude Code subscription, then ``ANTHROPIC_API_KEY`` (env, then ``.env``).
+    The subscription runs through ``claude -p``, a key through the Messages API.
+    Prints which one it uses. Raises when none is available; never returns a
+    degraded scorer. ``max_tokens`` applies to the API transport only.
     """
-    api_key = (os.getenv("ANTHROPIC_API_KEY") or "").strip()
-    oauth_token = (os.getenv("CLAUDE_CODE_OAUTH_TOKEN") or "").strip()
-
-    if api_key:
-        from gaia.eval.claude import ClaudeClient
-
-        return ClaudeClient(model=model)
-    if oauth_token:
+    credential = resolve_claude_credential()
+    if credential.is_subscription:
+        announce(credential)
         return ClaudeCliClient(model=model)
-    raise ValueError(MISSING_CREDENTIAL_ERROR)
+    return _api_judge(model, max_tokens)
+
+
+def _api_judge(model: str | None, max_tokens: int | None):
+    from gaia.eval.claude import ClaudeClient  # pylint: disable=import-outside-toplevel
+
+    if max_tokens is None:
+        return ClaudeClient(model=model)
+    return ClaudeClient(model=model, max_tokens=max_tokens)
 
 
 def probe_judge_credential(model: str | None = None) -> str:

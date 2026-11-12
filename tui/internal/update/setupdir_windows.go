@@ -7,7 +7,7 @@ import "golang.org/x/sys/windows/registry"
 
 // setupInstallDir reads the folder gaia-setup.nsi records on install.
 func setupInstallDir() string {
-	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\GAIA\TerminalHub`, registry.QUERY_VALUE)
+	k, err := registry.OpenKey(registry.CURRENT_USER, `Software\GAIA\gaia-tui`, registry.QUERY_VALUE)
 	if err != nil {
 		return "" // not installed by the setup
 	}

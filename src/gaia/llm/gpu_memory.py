@@ -74,13 +74,22 @@ PENDING_NOT_APPLIED = "not_applied"
 WINDOWS_STEPS = (
     "Right-click the desktop and open AMD Software: Adrenalin Edition.",
     "Go to Performance > Tuning and find Variable Graphics Memory.",
-    "Choose Custom and set it to {gib} GiB, or the closest option above it. "
-    "AMD Software counts in GiB (1 GiB is 1.07 GB) and labels them GB, so "
-    "{gib} there is the {gb} GB GAIA shows.",
+    "Choose Custom and set it to {amd} GB, as AMD Software shows it, or the "
+    "closest option above it. {why}",
     "Restart your PC, then come back here. GAIA reads the new split.",
-    "No Variable Graphics Memory option? Set UMA Frame Buffer Size to {gib} "
-    "GiB (shown as {gib} GB) in your PC's BIOS instead. With AMD Software, "
-    "leave the BIOS on Auto.",
+    "No Variable Graphics Memory option? Set UMA Frame Buffer Size in your "
+    "PC's BIOS to the same value instead. With AMD Software, leave the BIOS "
+    "on Auto.",
+)
+#: Why the AMD value is smaller than the GPU total: with Windows' shared memory,
+#: and without it (AMD Software's "GB" are larger than GAIA's).
+WINDOWS_WHY_SHARED = (
+    "That is less than the {gpu} GB GPU total GAIA shows, because the total "
+    "also counts memory Windows shares with the GPU."
+)
+WINDOWS_WHY_UNITS = (
+    "AMD Software's GB are a little larger than GAIA's, so its number is a "
+    "little smaller than the {gpu} GB GAIA shows."
 )
 LINUX_MODPROBE_STEPS = (
     "Run: echo 'options {module} pages_limit={pages}' | "
@@ -88,7 +97,6 @@ LINUX_MODPROBE_STEPS = (
     "Rebuild the boot image. Ubuntu: sudo update-initramfs -u · "
     "Fedora: sudo dracut --regenerate-all -f",
     "Restart your PC, then come back here. GAIA reads the new split.",
-    "Or use AMD's tool, which counts in GiB: amd-ttm --set {gib}",
 )
 LINUX_CMDLINE_STEPS = (
     "Set {module}.pages_limit={pages} on the kernel command line, replacing "
@@ -413,9 +421,12 @@ class _Machine:
     @property
     def max_setting_gb(self) -> float:
         if self.os == "windows":
-            cap = min(
-                self.total_gb * WINDOWS_VGM_MAX_FRACTION, self.total_gb - RESERVE_GB
-            )
+            # Keep cpu_gb (what the GPU can never use) at RESERVE_GB or more.
+            if self.windows_shared:
+                room = self.total_gb - 2 * RESERVE_GB
+            else:
+                room = self.total_gb - RESERVE_GB - self.shared_gb
+            cap = min(self.total_gb * WINDOWS_VGM_MAX_FRACTION, room)
         else:
             cap = self.total_gb - RESERVE_GB - self.carve_out_gb
             if self.os_visible_gb is not None:
@@ -451,7 +462,14 @@ def _total_ram_gb(info: Dict[str, Any], carve_out_gb: float) -> float:
 
     reported = physical_memory_gb(info)
     if reported > 0:
-        return reported * GB_PER_GIB
+        reported_gb = reported * GB_PER_GIB
+        # Linux Lemonade reports MemTotal (RAM left visible to the OS), whereas
+        # the GPU fit calculation needs installed RAM. Identify that shape from
+        # the memory readings, not an OS-version string: distro builds such as
+        # Fedora do not all use the same string format.
+        if _platform() == "linux" and abs(reported_gb - _meminfo_total_gb()) < 1:
+            return reported_gb + carve_out_gb
+        return reported_gb
     if _platform() == "linux":
         # The OS doesn't count the carve-out; installed RAM does.
         return _meminfo_total_gb() + carve_out_gb
@@ -514,7 +532,7 @@ def _models(machine: _Machine) -> List[Dict[str, Any]]:
                 (
                     float(s)
                     for s in grid
-                    if s > machine.setting_gb
+                    if _offerable(machine, s)
                     and _fit(model_id, mr, machine.gpu_gb_at(s))[0]
                 ),
                 None,
@@ -532,14 +550,22 @@ def _models(machine: _Machine) -> List[Dict[str, Any]]:
     return out
 
 
+def _offerable(machine: _Machine, setting_gb: float) -> bool:
+    """A raise GAIA may suggest: one apply and record_pending accept."""
+    return (
+        MIN_SETTING_GB <= setting_gb <= machine.max_setting_gb
+        and setting_gb > machine.setting_gb + TOOK_EFFECT_TOLERANCE_GB
+    )
+
+
 def _presets(machine: _Machine, models: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     top = machine.max_setting_gb
     values = [
         PRESET_STEP_GB * k
         for k in range(1, int(top // PRESET_STEP_GB) + 1)
-        if PRESET_STEP_GB * k > machine.setting_gb + TOOK_EFFECT_TOLERANCE_GB
+        if _offerable(machine, PRESET_STEP_GB * k)
     ]
-    if top > machine.setting_gb + TOOK_EFFECT_TOLERANCE_GB and top not in values:
+    if _offerable(machine, top) and top not in values:
         values.append(top)
     return [
         {
@@ -557,20 +583,27 @@ def _presets(machine: _Machine, models: List[Dict[str, Any]]) -> List[Dict[str, 
 
 def _guided_steps(
     machine: _Machine, setup: Optional[_LinuxSetup], gb: float
-) -> List[str]:
+) -> Tuple[List[str], str]:
+    """The steps for a setting of *gb*, and the one value they ask the user to enter.
+
+    On Windows that value is in AMD Software's own units: it counts GiB and
+    labels them GB, rounded up to a whole number.
+    """
     if machine.os == "windows":
-        gib = _fmt(math.ceil(gb * GB / GIB))
-        return [s.format(gb=_fmt(gb), gib=gib) for s in WINDOWS_STEPS]
+        amd = _fmt(math.ceil(gb * GB / GIB))
+        # 0.1 GB, as gpu_gb and the presets give it, so the steps read the same number.
+        gpu = f"{round(machine.gpu_gb_at(gb), 1):.1f}"
+        shared = machine.gpu_gb_at(gb) - gb >= TOOK_EFFECT_TOLERANCE_GB
+        why = (WINDOWS_WHY_SHARED if shared else WINDOWS_WHY_UNITS).format(gpu=gpu)
+        return [s.format(amd=amd, why=why) for s in WINDOWS_STEPS], amd
     module = setup.module if setup else "ttm"
     pages = pages_for(gb)
     steps = {
         "cmdline": LINUX_CMDLINE_STEPS,
         "ostree": LINUX_OSTREE_STEPS,
     }.get(setup.steps if setup else "modprobe", LINUX_MODPROBE_STEPS)
-    gib = _fmt(round(pages * PAGE_BYTES / GIB, 1))
-    return [s.format(module=module, pages=pages, gib=gib) for s in steps] + [
-        LINUX_BIOS_STEP
-    ]
+    text = [s.format(module=module, pages=pages) for s in steps]
+    return text + [LINUX_BIOS_STEP], str(pages)
 
 
 def _fmt(gb: float) -> str:
@@ -772,8 +805,8 @@ def describe(
     else:
         method = METHOD_GUIDED
         reason = (
-            "On Windows this is set in AMD Software. AMD's way to set it from "
-            "an app restarts the PC by itself, so GAIA shows you where instead."
+            "On Windows this is changed in AMD Software, and it needs a restart. "
+            "GAIA shows you where."
         )
     models = _models(machine)
     presets = _presets(machine, models)
@@ -788,11 +821,14 @@ def describe(
     state = _load_state()
     linux_record = (state or {}).get("linux")
     gpu = machine.gpu_gb_at(machine.setting_gb)
+    # With nothing above the current setting to offer, steps would only lower it.
     steps_gb = (
-        setting_gb
-        or recommended
-        or (presets[-1]["setting_gb"] if presets else machine.max_setting_gb)
+        setting_gb or recommended or (presets[-1]["setting_gb"] if presets else None)
     )
+    if steps_gb is not None:
+        steps, guided_value = _guided_steps(machine, setup, steps_gb)
+    else:
+        steps, guided_value = [], None
     return {
         "applies": True,
         "show_in_setup": recommended is not None,
@@ -826,7 +862,8 @@ def describe(
                 state.get("previous_setting_gb") if linux_record else None
             ),
         },
-        "guided_steps": _guided_steps(machine, setup, steps_gb),
+        "guided_steps": steps,
+        "guided_value": guided_value,
     }
 
 
