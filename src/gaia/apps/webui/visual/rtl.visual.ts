@@ -2668,6 +2668,11 @@ const CHANGE_PROMPTS = {
         type: 'permission_request', tool: 'edit_file', tool_label: 'editing file', confirm_id: 'c-edit',
         args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\notes.txt', old_content: '- owner: Dana\n', new_content: '- owner: Dana\nreviewed\n' },
     },
+    // A right-to-left override would draw the line reversed; it shows as a code instead.
+    hidden: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-hidden',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\run.py', content: 'ok = 1\n# \u202Eevil()\n' },
+    },
 };
 
 for (const locale of ['ar', 'en'] as const) {
