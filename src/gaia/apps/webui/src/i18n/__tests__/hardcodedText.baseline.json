@@ -10,7 +10,7 @@
   "components/ContextPanel.tsx": 1,
   "components/DocumentLibrary.tsx": 1,
   "components/FileBrowser.tsx": 32,
-  "components/FolderChip.tsx": 9,
+  "components/FolderChip.tsx": 2,
   "components/MemoryDashboard.tsx": 1,
   "components/MessageBubble.tsx": 3,
   "components/MobileAccessModal.tsx": 21,
