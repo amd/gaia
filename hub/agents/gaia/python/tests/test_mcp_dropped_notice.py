@@ -146,7 +146,25 @@ def test_a_server_that_fails_to_start_is_named(configured_home):
     assert "weatherbox" in warning
     assert "cannot find the file" in warning
     assert "github" not in warning
-    assert "Settings > Connectors" in warning
+    # A hand-added server isn't listed in Settings > Connectors: name its file.
+    assert "Settings > Connectors" not in warning
+    assert f"weatherbox is set up in {configured_home / 'mcp_servers.json'}" in warning
+
+
+def test_a_failed_connector_points_at_settings_and_a_hand_added_one_at_its_file(
+    configured_home,
+):
+    manager = _Manager(
+        {},
+        failed={"mcp-github": "exited with code 1", "weatherbox": "no such command"},
+    )
+    agent = _skeleton(manager)
+    agent._load_mcp_tools()
+    agent.report_mcp_dropped()
+
+    [warning] = agent.console.warnings
+    assert "Check GitHub in Settings > Connectors." in warning
+    assert f"weatherbox is set up in {configured_home / 'mcp_servers.json'}" in warning
 
 
 def test_servers_within_the_limit_load_without_a_notice(configured_home):

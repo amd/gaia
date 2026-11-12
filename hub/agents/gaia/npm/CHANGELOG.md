@@ -13,7 +13,8 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   Agent UI as a plain progress line, so it never appeared in the window, and a
   server whose command failed to start was not reported at all. A `status`
   event that warns the user now carries `level: "warning"`, and a server that
-  could not start is named with its error.
+  could not start is named with its error and where it is set up: Settings >
+  Connectors for a connector, the `mcp_servers.json` file for one added by hand.
 
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's

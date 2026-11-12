@@ -5014,6 +5014,25 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 ),
                             }
                         )
+                elif (
+                    event_type == "status"
+                    and event.get("status") == "warning"
+                    and event.get("message")
+                    # With a phase it drives the live line (an answer restart), not a row.
+                    and not event.get("phase")
+                ):
+                    # A warning is part of the turn's record, not only its live line.
+                    step_id += 1
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "status",
+                            "label": event["message"],
+                            "active": False,
+                            "success": False,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
                 elif event_type == "agent_error" and _echoes_failed_tool(
                     event, captured_steps
                 ):
