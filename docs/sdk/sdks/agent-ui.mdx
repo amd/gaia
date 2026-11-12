@@ -1338,7 +1338,7 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="POST /api/documents/upload-path">
-    Index a document by file path. The file is hashed for deduplication -- if the same file was already indexed, the existing document is returned.
+    Index a document by file path. The file is hashed for deduplication -- if the same file was already indexed, the existing document is returned. A file already in the library at the same path but with new content keeps its row, updated to the new content.
 
     **Request:**
     ```json
