@@ -543,10 +543,10 @@ describe('first-run setup', () => {
     }
 
     it('a first task picked at the end of setup starts the first chat', async () => {
-        await finishSetupWith({ skill: 'check-in', title: 'Check in', note: '', prompt: 'Good morning. Let us check in.', needs_input: false });
+        await finishSetupWith({ skill: 'coding', title: 'Work on code', note: '', prompt: 'Look around w and tell me what this project does.', needs_input: false });
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
-        expect(mocked.sendMessageStream.mock.calls[0][1]).toBe('Good morning. Let us check in.');
+        expect(mocked.sendMessageStream.mock.calls[0][1]).toBe('Look around w and tell me what this project does.');
     });
 
     it('a first task that needs a subject opens a new chat with it typed in', async () => {
@@ -579,7 +579,7 @@ describe('first-run setup', () => {
 
         expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         // Setup reads as progress: the check's reason is not shown as a problem.
-        expect(screen.getByText('This takes a few seconds. Nothing downloads yet.')).toBeInTheDocument();
+        expect(screen.getByText('This takes a few seconds. No models download yet.')).toBeInTheDocument();
         expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });

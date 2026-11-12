@@ -11,7 +11,7 @@ import { act, render, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChatView } from '../ChatView';
 import { useChatStore } from '../../stores/chatStore';
-import type { Session, SystemStatus } from '../../types';
+import type { Session, StreamEvent, SystemStatus } from '../../types';
 import * as api from '../../services/api';
 
 vi.mock('../../services/api');
@@ -24,6 +24,7 @@ const SESSION: Session = {
 };
 const READY = { lemonade_running: true, initialized: true, init_state: 'ready', init_tasks: [] } as unknown as SystemStatus;
 const QUESTION = 'Give me three tips for better sleep.';
+const ANSWER = 'Keep a fixed wake time.';
 
 let finishLoad: () => void = () => {};
 
@@ -68,5 +69,35 @@ describe('the first message of a new chat', () => {
 
         expect(bubbles()).toEqual([QUESTION]);
         expect(document.querySelector('.msg-user')).toBe(shown);
+    });
+
+    it('keeps its bubble through the saved ids, and its answer settles in place', async () => {
+        let callbacks: api.StreamCallbacks | null = null;
+        mockedApi.sendMessageStream.mockImplementation((_sid, _msg, cbs) => {
+            callbacks = cbs as api.StreamCallbacks;
+            return new AbortController();
+        });
+        mockedApi.getSession.mockResolvedValue({ ...SESSION, title: 'Sleep tips', message_count: 2 });
+        render(<ChatView sessionId={SESSION.id} />);
+        const shown = document.querySelector('.msg-user');
+
+        await act(async () => { finishLoad(); });
+        await waitFor(() => expect(callbacks).not.toBeNull());
+        mockedApi.getMessages.mockResolvedValue({
+            messages: [
+                { id: 41, session_id: SESSION.id, role: 'user', content: QUESTION, created_at: '', rag_sources: null },
+                { id: 42, session_id: SESSION.id, role: 'assistant', content: ANSWER, created_at: '', rag_sources: null },
+            ],
+            total: 2,
+        });
+        await act(async () => {
+            callbacks!.onDone({ type: 'done', message_id: 42, content: ANSWER } as StreamEvent);
+        });
+
+        await waitFor(() => expect(document.querySelector('[data-message-id="42"]')).not.toBeNull());
+        await waitFor(() => expect(document.querySelector('[data-message-id="41"]')).not.toBeNull());
+        expect(bubbles()).toEqual([QUESTION]);
+        expect(document.querySelector('.msg-user')).toBe(shown);
+        expect(document.querySelector('[data-message-id="42"]')?.classList.contains('msg-settled')).toBe(true);
     });
 });

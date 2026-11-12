@@ -258,6 +258,37 @@ class TestKnowledgeCRUD:
         resp = client.delete("/api/memory/knowledge/no-such-id")
         assert resp.status_code == 404
 
+    def test_delete_of_the_visible_copy_takes_the_sensitive_one(
+        self, client, test_store
+    ):
+        """Forget on the Memory page must not leave the hidden sensitive row."""
+        hidden = test_store.store(
+            category="fact",
+            content="My blood type is O negative.",
+            sensitive=True,
+            entity="person:user",
+            source="tool",
+        )
+        # A pair as rc18 stored it: the copy went in as its own, unflagged row.
+        visible = test_store.store(
+            category="fact",
+            content="User's blood type is O negative (sensitive medical info).",
+            entity="user",
+            context="apart",
+            source="llm_extract",
+        )
+        test_store._conn.execute(
+            "UPDATE knowledge SET context = 'global', sensitive = 0 WHERE id = ?",
+            (visible,),
+        )
+        test_store._conn.commit()
+
+        resp = client.delete(f"/api/memory/knowledge/{visible}")
+
+        assert resp.status_code == 200
+        assert set(resp.json()["knowledge_ids"]) == {hidden, visible}
+        assert test_store._conn.execute("SELECT 1 FROM knowledge").fetchall() == []
+
     def test_delete_takes_every_copy_of_the_fact(self, client, test_store):
         """A copy saved under another context must not keep the fact alive."""
         kid = test_store.store(

@@ -1666,7 +1666,13 @@ def _index_rag_with_progress(
     idx_start = _time.time()
     doc_stats = []
     total_chunks = 0
+    cancelled = getattr(sse_handler, "cancelled", None)
+    left = 0
     for i, fpath in enumerate(fpath_list, 1):
+        # Stop ends the loading here; what is left is picked up on the next turn.
+        if cancelled is not None and cancelled.is_set():
+            left = n - i + 1
+            break
         doc_name = Path(fpath).name
         sse_handler._emit(
             {
@@ -1718,8 +1724,13 @@ def _index_rag_with_progress(
                 }
             )
     idx_elapsed = round(_time.time() - idx_start, 1)
+    headline = (
+        f"Stopped: {left} of {n} {label} not loaded. They load with your next message."
+        if left
+        else f"Indexed {n} {label} in {idx_elapsed}s"
+    )
     summary_lines = [
-        f"Indexed {n} {label} in {idx_elapsed}s",
+        headline,
         f"Total: {total_chunks} chunks in index",
         "",
     ] + doc_stats
@@ -1728,7 +1739,7 @@ def _index_rag_with_progress(
             "type": "tool_result",
             "title": "Index Documents",
             "summary": "\n".join(summary_lines),
-            "success": True,
+            "success": not left,
         }
     )
 
@@ -2199,10 +2210,13 @@ def _relayed_history(
     )
     context = select_history(turns, budget, cuts.append, reporter)
 
-    # select_history returns the turns' own message dicts, so identity says
-    # which clipped messages the model still sees.
+    # select_history returns the turns' own answer dicts (a question may be a
+    # copy carrying the hidden-turns note), so identity says which turns, and
+    # so which clipped messages, the model still sees.
     in_view = {id(message) for message in context}
-    shown = {key for key in clipped if id(turns[key[0]][key[1]]) in in_view}
+    visible = {pair for pair, turn in enumerate(turns) if id(turn[1]) in in_view}
+    sse_handler.relay_hidden_turns = len(turns) - len(visible)
+    shown = {key for key in clipped if key[0] in visible}
     seen = _relay_clips.get(session_id, set()) if session_id else set()
     if session_id:
         _relay_clips[session_id] = shown
@@ -2247,7 +2261,8 @@ def _relayed_turns(
     """The chat's recorded turns that fit *model_id*'s history budget, kept whole.
 
     A turn larger than the whole budget is sent shortened (#5864); turns newly
-    out of the model's view stream a ``history_cut`` status.
+    out of the model's view stream a ``history_cut`` status, and how many turns
+    were left out is kept on *sse_handler* for the sidecar's measurement.
     """
     from gaia.agents.base.history import CutReporter, fit_turns, relayed_history_budget
 
@@ -2269,7 +2284,9 @@ def _relayed_turns(
             }
         )
 
-    return fit_turns(turns, budget, on_cut, reporter)
+    kept = fit_turns(turns, budget, on_cut, reporter)
+    sse_handler.relay_hidden_turns = len(turns) - len(kept)
+    return kept
 
 
 #: What a stopped turn's reply is saved as when it wrote no text.
@@ -2975,6 +2992,14 @@ def _find_last_tool_step(steps: list) -> dict | None:
         if steps[i].get("type") == "tool":
             return steps[i]
     return None
+
+
+def _declined_call(event: dict) -> bool:
+    """A ``tool_result`` for a call the user said no to; a relayed one nests it in ``data``."""
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    status = event.get("status", data.get("status"))
+    timed_out = event.get("timed_out") is True or data.get("timed_out") is True
+    return status == "denied" and not timed_out
 
 
 def _insert_skill_step(steps: list, step: dict) -> None:
@@ -4169,7 +4194,12 @@ async def _get_chat_response(
             if isinstance(result, dict)
             else {}
         )
-        spending.record_turn(db, model_id, counts)
+        spending.record_turn(
+            db,
+            model_id,
+            counts,
+            failed=isinstance(result, dict) and bool(result.get("model_failed")),
+        )
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -5000,6 +5030,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
+                        if _declined_call(event):
+                            tool_step["declined"] = True
                         # Persist MCP tool latency
                         if event.get("latency_ms") is not None:
                             tool_step["latencyMs"] = event["latency_ms"]
@@ -5184,6 +5216,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Only a Stop (run_manager.cancel() or POST /api/chat/cancel) sets
         # ``cancelled`` before this point, so True means not a normal completion.
         turn_cancelled = sse_handler.cancelled.is_set()
+        # Reply text reached the user (a failure notice isn't one), before any error is added.
+        turn_replied = bool(full_response.strip()) and not (
+            isinstance(answer_event, dict) and answer_event.get("failed")
+        )
 
         # Signal cancellation (handles client disconnect) then wait for producer.
         await _cleanup_stream()
@@ -5421,7 +5457,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
             if link_warning:
                 yield _undo_link_warning_event(link_warning)
-            spending.record_turn(db, model_id, inference_stats)
+            # A begun answer may be billed even if stopped; one that failed unanswered is not.
+            spending.record_turn(
+                db,
+                model_id,
+                inference_stats,
+                failed=turn_failed and not turn_replied,
+            )
             # Fire-and-forget auto-titling, on the model this turn ran on.
             _spawn_after_turn_title(
                 _maybe_update_session_title(
