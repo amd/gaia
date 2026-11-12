@@ -2202,7 +2202,7 @@ export const enMessages = {
     'connectors.microsoft_work.client_secret.label': 'Client Secret (confidential apps only)',
     'connectors.microsoft_work.client_secret.help': 'Leave blank for the standard public-client (desktop) flow — Microsoft forbids a secret there. Only set this if you registered a confidential web app. Stored encrypted in your OS keyring.',
     'connectors.microsoft_work.tenant_id.label': 'Directory (tenant) ID',
-    'connectors.microsoft_work.tenant_id.help': "Optional. Leave blank to use the multi-tenant 'organizations' authority (any work/school account). Set this to your Azure AD / Entra ID Directory (tenant) ID GUID if your app registration is single-tenant — required for the daemon to refresh correctly with no environment variables set (#2616). The Overview page shows three GUIDs; copy the one labeled 'Directory (tenant) ID', not 'Application (client) ID' or 'Object ID'. Unvalidated here — an incorrect value fails loudly at Microsoft's sign-in page, not silently.",
+    'connectors.microsoft_work.tenant_id.help': "Optional. Leave blank to sign in with any work or school account. If your organization's app is limited to a single organization, enter its Directory (tenant) ID. In the Azure portal, open your app's Overview page and copy the value labeled 'Directory (tenant) ID', not 'Application (client) ID' or 'Object ID'. A wrong ID shows an error on Microsoft's sign-in page.",
     'connectors.mcp-github.description': 'Repos, PRs, issues, workflows — full GitHub access.',
     'connectors.mcp-tavily.description': 'Web search and content extraction for agents through the Tavily API.',
     'connectors.mcp-memory.description': 'Knowledge graph-based persistent memory for agents.',

@@ -638,3 +638,14 @@ class TestNoImportSideEffects:
         monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_ID", raising=False)
         reload_module(ms_mod)
         assert "microsoft" not in providers._registry  # type: ignore[attr-defined]
+
+
+class TestTenantIdHelp:
+    def test_help_has_no_issue_numbers_or_developer_terms(self):
+        from gaia.connectors.catalog.microsoft import MICROSOFT_WORK_SPEC
+
+        field = next(
+            f for f in MICROSOFT_WORK_SPEC.oauth_setup_fields if f.key == "tenant_id"
+        )
+        for banned in ("#2616", "daemon", "environment variable", "loudly"):
+            assert banned not in field.help_md

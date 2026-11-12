@@ -2203,7 +2203,7 @@ const messages: Messages = {
     'connectors.microsoft_work.client_secret.label': 'سر العميل (للتطبيقات السرية فقط)',
     'connectors.microsoft_work.client_secret.help': 'اتركه فارغًا في التدفق القياسي للعميل العام (تطبيقات سطح المكتب)، إذ لا تسمح Microsoft بسر فيه. لا تملأه إلا إذا سجّلت تطبيق ويب سريًا. يُخزَّن مشفرًا في سلسلة مفاتيح النظام.',
     'connectors.microsoft_work.tenant_id.label': 'معرّف الدليل (المستأجر)',
-    'connectors.microsoft_work.tenant_id.help': 'اختياري. اتركه فارغًا لاستخدام جهة المصادقة organizations متعددة المستأجرين (أي حساب عمل أو مؤسسة تعليمية). إذا كان تسجيل تطبيقك لمستأجر واحد، فأدخل هنا معرّف الدليل (المستأجر) من Azure AD / Entra ID بصيغة GUID، وهو مطلوب كي تجدّد خدمة GAIA الخلفية تسجيل الدخول دون ضبط متغيرات البيئة (#2616). تعرض صفحة Overview ثلاث قيم GUID؛ انسخ القيمة المعنونة «Directory (tenant) ID»، لا «Application (client) ID» ولا «Object ID». لا يُتحقق من القيمة هنا، لكن القيمة الخاطئة تُظهر خطأً واضحًا في صفحة تسجيل الدخول لدى Microsoft ولا تمر بصمت.',
+    'connectors.microsoft_work.tenant_id.help': 'اختياري. اتركه فارغًا لتسجيل الدخول بأي حساب عمل أو مؤسسة تعليمية. إذا كان تطبيق مؤسستك مقصورًا على مؤسسة واحدة، فأدخل معرّف الدليل (المستأجر) الخاص بها. في بوابة Azure، افتح صفحة Overview لتطبيقك وانسخ القيمة المعنونة «Directory (tenant) ID»، لا «Application (client) ID» ولا «Object ID». القيمة الخاطئة تُظهر خطأً في صفحة تسجيل الدخول لدى Microsoft.',
     'connectors.mcp-github.description': 'المستودعات وطلبات الدمج والمشكلات وسير العمل — وصول كامل إلى GitHub.',
     'connectors.mcp-tavily.description': 'البحث في الويب واستخراج المحتوى للوكلاء عبر واجهة Tavily البرمجية.',
     'connectors.mcp-memory.description': 'ذاكرة دائمة للوكلاء قائمة على رسم بياني معرفي.',

@@ -57,6 +57,15 @@ afterEach(() => {
     act(() => useChatStore.getState().setLocale('en'));
 });
 
+describe('connector setup help in English', () => {
+    it('explains the tenant ID without issue numbers or developer terms', async () => {
+        await openTile(workRow());
+        const help = enMessages['connectors.microsoft_work.tenant_id.help'];
+        expect(shown()).toContain(help);
+        expect(help).not.toMatch(/#\d+|daemon|environment variable|loudly/i);
+    });
+});
+
 describe('connector catalog text in Arabic', () => {
     beforeEach(() => {
         act(() => useChatStore.getState().setLocale('ar'));
