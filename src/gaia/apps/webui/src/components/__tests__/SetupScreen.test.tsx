@@ -9,7 +9,7 @@ import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
 import type { LemonadeFound, LemonadeTarget, PreflightReport, SetupPlan, SetupRunStatus, SetupStep, SetupTest, StartScreen } from '../../types';
 import {
-    COLD_BIG, COMPONENTS, EMBED, FLM, GEMMA, GEMMA_CHAT, QWEN, QWEN_READS, WHISPER, gpuStatus, plan, progress, runStatus,
+    COLD_BIG, COMPONENTS, EMBED, FLM, GEMMA, GEMMA_CHAT, GPT_OSS, QWEN, QWEN_READS, WHISPER, gpuStatus, plan, progress, runStatus,
 } from '../setup/__tests__/fixtures';
 import { NO_BACKENDS, NO_GPU_SPLIT } from '../../test/setupApiMocks';
 
@@ -182,6 +182,23 @@ describe('SetupScreen: checking this PC', () => {
         await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
         expect(screen.getByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         expect(screen.getByRole('region', { name: 'What setup found' })).toBeInTheDocument();
+    });
+
+    it("says what's already on this PC once the checks are done", async () => {
+        const on = (e: typeof QWEN) => ({ ...e, downloaded: true, size_gb: 0 });
+        const lede = () => screen.findByText(/^Here's what setup found\./);
+        renderSetup();
+        expect(await lede()).toHaveTextContent('No models have downloaded yet.');
+        cleanup();
+
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, on(GEMMA), EMBED, GPT_OSS]));
+        renderSetup();
+        expect(await lede()).toHaveTextContent('Some of your models are already on this PC.');
+        cleanup();
+
+        mockedApi.getSetupPlan.mockResolvedValue(plan([on(QWEN), on(GEMMA), on(EMBED)]));
+        renderSetup();
+        expect(await lede()).toHaveTextContent('Your models are already on this PC.');
     });
 
     it('keeps going when the hardware could not be read, and says why on Check this PC', async () => {
