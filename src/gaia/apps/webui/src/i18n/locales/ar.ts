@@ -414,6 +414,8 @@ const messages: Messages = {
     'activity.thinking': 'جارٍ التفكير',
     'activity.thought': 'فكّر',
     'activity.thoughtFor': 'فكّر لمدة {time}',
+    'activity.thinkingFor': 'جارٍ التفكير · {time}',
+    'activity.thoughtFirst': 'فكّر أولًا؛ افتح الخطوة لقراءة تفكيره',
     'activity.waiting': 'بانتظارك',
     'activity.usedSkill': 'استخدم مهارة {name}',
     'activity.skillFailed': 'تعذّر استخدام مهارة {name}',
