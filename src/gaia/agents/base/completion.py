@@ -166,8 +166,15 @@ _NOT_REQUEST = re.compile(
 )
 # Quoting allows spaces; bare paths are scanned as tokens, never suffix matches.
 _TARGET = re.compile(r"`([^`\n]+)`|\"([^\"\n]+)\"|'([^'\n]+)'|([^\s`\"'<>]+)")
-# Write-tool errors from the path allowlist or the overwrite prompt (security.py).
-_PERMISSION_REFUSALS = ("Access denied:", "User declined to overwrite")
+# Write-tool errors from the path allowlist, the write blocklist or the
+# overwrite prompt (security.py, browser_tools.py).
+_PERMISSION_REFUSALS = (
+    "Access denied:",
+    "User declined to overwrite",
+    "Write blocked:",
+    "Downloaded file blocked by security policy:",
+)
+_DOWNLOAD_TOOL = "download_file"
 _REFUSED = ", so nothing was saved there."
 _UNCONFIRMED = f"{_REFUSED} Nobody refused it, so it can be tried again."
 # The answer owns up that the write did not happen.
@@ -493,6 +500,8 @@ class CompletionEvidence:
         self.uninspectable: dict[str, str] = {}
         # Writes the permission boundary turned down: key -> what to tell the user.
         self.refused: dict[str, str] = {}
+        # Refused folders whose file was never named (a download's save_to).
+        self.refused_folders: set[str] = set()
         # The subset of refused reasons that were prompts nobody answered.
         self.unconfirmed: set[str] = set()
         self.requested, self.save_requested = save_obligations(query)
@@ -741,9 +750,17 @@ class CompletionEvidence:
 
     def _record_refusal(self, tool: str, args: dict, result: Any) -> None:
         """Remember a write the user or the path allowlist turned down."""
-        if tool not in WRITE_TOOLS:
+        folder_only = False
+        if tool == _DOWNLOAD_TOOL:
+            path = args.get("save_to") or "~/Downloads"
+            name = args.get("filename")
+            folder_only = not (isinstance(name, str) and name)
+            if isinstance(path, str) and not folder_only:
+                path = os.path.join(path, name)
+        elif tool in WRITE_TOOLS:
+            path = args.get("file_path") or args.get("path")
+        else:
             return
-        path = args.get("file_path") or args.get("path")
         if not isinstance(path, str) or "\x00" in path:
             return
         data = _payload(result)
@@ -757,7 +774,10 @@ class CompletionEvidence:
             reason = f"Writing `{path}` was not permitted{_REFUSED}"
         else:
             return  # A preflight like "read it first" is a step, not a refusal.
-        self.refused[self.key(path, args.get("project_dir"))] = reason
+        key = self.key(path, args.get("project_dir"))
+        self.refused[key] = reason
+        if folder_only:
+            self.refused_folders.add(key)
 
     def read_by_framework(self, key: str) -> None:
         """The framework read this output in full after its latest write."""
@@ -989,7 +1009,12 @@ class CompletionEvidence:
                     key == path
                     or _inside(key, path)
                     or (
-                        path in bare and os.path.basename(key) == os.path.basename(path)
+                        path in bare
+                        and (
+                            os.path.basename(key) == os.path.basename(path)
+                            # The file meant for a refused folder, named bare.
+                            or key in self.refused_folders
+                        )
                     )
                 ):
                     return reason
