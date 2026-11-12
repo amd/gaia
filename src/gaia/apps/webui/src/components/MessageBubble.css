@@ -751,3 +751,18 @@
     vertical-align: -2px;
     margin-inline-end: 3px;
 }
+
+.msg-run-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-block: 8px;
+    font-size: 12px;
+    color: var(--text-muted, #888);
+}
+.msg-run-divider::before,
+.msg-run-divider::after {
+    content: '';
+    flex: 1;
+    border-block-start: 1px solid var(--border, rgba(128, 128, 128, 0.3));
+}

@@ -290,6 +290,7 @@ const messages: Messages = {
     // A message and its actions
     'msg.sent': 'أُرسلت في {time}',
     'msg.replied': 'تم الرد في {time}',
+    'msg.scheduledRun': 'التشغيل المجدول {n} \u00b7 {time}',
     'msg.thinking': 'جارٍ التفكير...',
     'live.readingRequest': 'جارٍ قراءة طلبك',
     'live.readingResults': 'جارٍ قراءة نتائج الأدوات',

@@ -545,6 +545,8 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
     );
 }
 
+const SCHEDULE_RUN_MARKER = /^\[schedule-run\] Run #(\d+) \u00b7 (.+)$/;
+
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
@@ -645,6 +647,11 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const hoverTimestamp = message.created_at
         ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at, t) })
         : undefined;
+
+    const runMarker = message.role === 'system' ? SCHEDULE_RUN_MARKER.exec(message.content) : null;
+    if (runMarker) {
+        return <div className="msg-run-divider" role="separator">{t('msg.scheduledRun', { n: runMarker[1], time: runMarker[2] })}</div>;
+    }
 
     return (
         <div

@@ -290,6 +290,7 @@ export const enMessages = {
     // A message and its actions
     'msg.sent': 'Sent {time}',
     'msg.replied': 'Replied {time}',
+    'msg.scheduledRun': 'Scheduled run {n} \u00b7 {time}',
     'msg.thinking': 'Thinking...',
     'live.readingRequest': 'Reading your request',
     'live.readingResults': 'Reading the tool results',
