@@ -134,7 +134,8 @@ export function PrivacySettings() {
             <SettingsDisclosure title={t('settings.privacy.undo')}>
                 <UndoHistorySettings />
             </SettingsDisclosure>
-            <section className="settings-card" aria-label={t('settings.privacy.deleteTitle')}>
+            <section className="settings-card" aria-labelledby="privacy-delete-title">
+                <h3 className="settings-label" id="privacy-delete-title">{t('settings.privacy.deleteTitle')}</h3>
                 <p className="danger-warning">
                     {sessions.length === 0 ? t('settings.privacy.nothingToDelete') : t('settings.privacy.deleteWarning')}
                 </p>

@@ -74,6 +74,12 @@ describe('PrivacySettings delete all chats', () => {
         expect(useChatStore.getState().sessions).toEqual([TRIP, TAXES]);
     });
 
+    it('titles the card where everyone can see it', () => {
+        render(<PrivacySettings />);
+        expect(screen.getByRole('heading', { name: 'Delete chats' })).toBeVisible();
+        expect(screen.getByRole('region', { name: 'Delete chats' })).toContainElement(screen.getByRole('button', { name: 'Delete all chats' }));
+    });
+
     it('a second click on the same button does not delete', () => {
         render(<PrivacySettings />);
         askToDelete();
