@@ -153,6 +153,23 @@ class TestMCPConfigStacking:
         assert config.load_report["mode"] == "explicit"
         assert "explicit_server" in config.get_servers()
 
+    def test_a_corrupt_file_is_refused_in_words_a_user_can_act_on(self, tmp_path):
+        """The warning is shown in the apps, so it names no internal function."""
+        import pytest
+
+        from gaia.connectors.errors import ConnectorsError
+
+        broken = tmp_path / "mcp_servers.json"
+        broken.write_text('{"mcpServers": ', encoding="utf-8")
+
+        with pytest.raises(ConnectorsError) as raised:
+            MCPConfig(config_file=str(broken))
+
+        text = str(raised.value)
+        assert str(broken) in text and "is corrupt" in text
+        assert "remove it to start fresh" in text
+        assert "configure()" not in text and "framework" not in text
+
     def test_overrides_reported_correctly(self, tmp_path, monkeypatch):
         """load_report lists servers overridden by local config."""
         global_path = tmp_path / ".gaia" / "mcp_servers.json"
