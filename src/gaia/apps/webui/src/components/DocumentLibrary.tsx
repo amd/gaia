@@ -138,6 +138,7 @@ export function DocumentLibrary() {
     const closeLibrary = useCallback(() => setShowDocLibrary(false), [setShowDocLibrary]);
     useEscapeToClose(true, closeLibrary);
     const dialogRef = useRef<HTMLDivElement>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
     useFocusTrap(dialogRef, true);
     useDialogFocus(dialogRef, true);
     const [isDragOver, setIsDragOver] = useState(false);
@@ -458,6 +459,14 @@ export function DocumentLibrary() {
         }
     }, [uploadFileBlob]);
 
+    const handlePickedFiles = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const files = Array.from(e.target.files ?? []);
+        e.target.value = '';
+        for (const file of files) {
+            await uploadFileBlob(file);
+        }
+    }, [uploadFileBlob]);
+
     const commitRemoval = useCallback(async ({ id, name }: PendingRemoval) => {
         log.doc.info(`Deleting document: ${name}`);
         try {
@@ -729,7 +738,18 @@ export function DocumentLibrary() {
                         onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
                         onDragLeave={() => setIsDragOver(false)}
                         onDrop={handleDrop}
+                        role="button"
+                        tabIndex={isUploading ? -1 : 0}
+                        aria-label={t('docs.drop')}
+                        onClick={() => { if (!isUploading) fileInputRef.current?.click(); }}
+                        onKeyDown={(e) => {
+                            if (!isUploading && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+                                e.preventDefault();
+                                fileInputRef.current?.click();
+                            }
+                        }}
                     >
+                        <input ref={fileInputRef} type="file" multiple hidden onClick={(e) => e.stopPropagation()} onChange={handlePickedFiles} />
                         {isUploading ? (
                             <>
                                 <div className="upload-spinner" />
