@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Cloud, Info, Loader2 } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Cloud, Eye, EyeOff, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
-import { shortModelName, useModelStore } from '../stores/modelStore';
+import { displayModelName, shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
 import { CloudPrices } from './settings/CloudPrices';
 import './settings/CloudSpending.css';
@@ -16,6 +16,7 @@ import { isMessageKey, type MessageKey } from '../i18n/registry';
 import { ConfirmSheet } from './setup/ConfirmSheet';
 import { DownloadContents } from './setup/DownloadContents';
 import { DownloadProgress, downloadsActive } from './setup/DownloadProgress';
+import { RunActivity } from './setup/RunActivity';
 import { formatFitGb, formatSize, totalMemory } from './setup/format';
 import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
 import { tooBigText } from './setup/ModelChecklist';
@@ -93,6 +94,8 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound, canInstall
     const [busy, setBusy] = useState<'external' | 'gaia' | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [chosen, setChosen] = useState<'external' | 'gaia' | null>(null);
+    // GAIA's own runs the version GAIA is tested with, so it is the one preselected.
+    const [pick, setPick] = useState<'external' | 'gaia'>('gaia');
 
     const live = useRef(true);
     const detect = useCallback(async () => {
@@ -198,15 +201,37 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound, canInstall
             </p>
         );
     }
+    const options: Array<{ mode: 'gaia' | 'external'; title: MessageKey; note: MessageKey }> = [
+        { mode: 'gaia', title: 'setup.offer.useOwn', note: 'setup.offer.ownNote' },
+        { mode: 'external', title: 'setup.offer.useMine', note: 'setup.offer.mineNote' },
+    ];
     return (
-        <form id="setup-lemonade-form" className="setup-lemonade" aria-label={t('setup.offer.label')} onSubmit={(e) => { e.preventDefault(); void choose('external'); }}>
-            <span className="setup-choice-title">{t('setup.offer.title')}</span>
-            <span className="setup-choice-note"><bdi dir="ltr">Lemonade{found.version ? ` ${found.version}` : ''} · {found.url}</bdi></span>
+        <form id="setup-lemonade-form" className="setup-lemonade" aria-label={t('setup.offer.label')} onSubmit={(e) => { e.preventDefault(); void choose(pick); }}>
+            <fieldset className="setup-choices" disabled={!!busy}>
+                <legend className="setup-choice-title">{t('setup.offer.title')}</legend>
+                {options.map((o) => (
+                    <label key={o.mode} className={`setup-choice${pick === o.mode ? ' is-active' : ''}`}>
+                        <input type="radio" name="setup-server" value={o.mode} checked={pick === o.mode} onChange={() => { setPick(o.mode); setError(null); }} />
+                        <span>
+                            <span className="setup-choice-title">
+                                {t(o.title)}
+                                {o.mode === 'gaia' && <span className="setup-choice-tag">{t('setup.offer.recommended')}</span>}
+                            </span>
+                            <span className="setup-choice-note">{t(o.note)}</span>
+                        </span>
+                    </label>
+                ))}
+            </fieldset>
             <button type="button" className="setup-log-toggle setup-offer-more" onClick={() => setMore((m) => !m)} aria-expanded={more} aria-controls="setup-offer-detail">
                 <ChevronRight size={13} className={more ? 'is-open' : ''} aria-hidden="true" /> {t('setup.offer.whatGaiaDoes')}
             </button>
-            {more && <p className="setup-choice-note" id="setup-offer-detail">{t('setup.offer.whatGaiaDoesText')}</p>}
-            {needsKey && (
+            {more && (
+                <div id="setup-offer-detail">
+                    <p className="setup-choice-note"><bdi dir="ltr">Lemonade{found.version ? ` ${found.version}` : ''} · {found.url}</bdi></p>
+                    <p className="setup-choice-note">{t('setup.offer.whatGaiaDoesText')}</p>
+                </div>
+            )}
+            {pick === 'external' && needsKey && (
                 <input
                     className="settings-input"
                     type="password"
@@ -218,15 +243,12 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound, canInstall
                 />
             )}
             {/* A rejected key names the setting it came from; say what to do instead. */}
-            {error && (needsKey
+            {error && (needsKey && pick === 'external'
                 ? <p className="setup-error" role="alert">{t('setup.offer.keyRejected')}</p>
                 : <SetupAlert text={error} />)}
             <SetupFooter>
-                <button type="submit" form="setup-lemonade-form" className="btn-secondary" disabled={!!busy || (needsKey && !key.trim())}>
-                    {busy === 'external' && <Loader2 size={13} className="spin" />} {t('setup.offer.useMine')}
-                </button>
-                <button type="button" className="btn-primary" disabled={!!busy} onClick={() => void choose('gaia')}>
-                    {busy === 'gaia' && <Loader2 size={13} className="spin" />} {t('setup.offer.useOwn')}
+                <button type="submit" form="setup-lemonade-form" className="btn-primary" disabled={!!busy || (pick === 'external' && needsKey && !key.trim())}>
+                    {busy && <Loader2 size={13} className="spin" />} {t('setup.continue')}
                 </button>
             </SetupFooter>
         </form>
@@ -293,7 +315,7 @@ function RunError({ run }: { run: SetupRunStatus }) {
     }
     return (
         <div className="setup-error" role="alert">
-            {/* GAIA's own AI engine is downloaded first, so a failure there is usually the internet. */}
+            {/* GAIA's own model server is downloaded first, so a failure there is usually the internet. */}
             <p>{t(run.components?.server === 'failed' ? 'setup.server.ownFailed' : 'setup.stopped')}</p>
             {run.error && (
                 <details className="dl-details">
@@ -373,6 +395,11 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [actionError, setActionError] = useState<string | null>(null);
     const [resumeOffer, setResumeOffer] = useState(false);
     const [cloudModel, setCloudModel] = useState<string | null>(null);
+    /** The cloud model the user picked from the price list; null keeps the provider's top pick. */
+    const [cloudPick, setCloudPick] = useState<string | null>(null);
+    /** The price list's top row, shown as chosen until another is picked; null without a priced list. */
+    const [cloudDefault, setCloudDefault] = useState<string | null>(null);
+    const [showKey, setShowKey] = useState(false);
     const [firstTasks, setFirstTasks] = useState<StartCard[]>([]);
     // Optional models added from the Download step, fetched and tested after the run.
     const [queued, setQueued] = useState<string[]>([]);
@@ -406,6 +433,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         ? chosenProvider
         : undefined;
     const cloudProviderBlocked = (id: ProviderId) => !!providerFor(id)?.blocked;
+    // The gateway is for AMD's network: hidden once it is known not to answer, unless already chosen.
+    const gatewayShown = gateway?.reachable !== false || choice === 'amd';
+    // Only a key GAIA or the server already holds can be left blank.
+    const savedKey = chosenProvider?.key_source === 'stored' || chosenProvider?.key_source === 'lemonade';
+    // Local only is on: no cloud provider can be picked, so the cloud card says why instead.
+    const cloudBlocked = cloudProviderBlocked('fireworks') && cloudProviderBlocked('amd');
     const unavailable = (id: ProviderId) => cloudProviderBlocked(id) || (id === 'amd' && gateway?.reachable === false);
     const unavailableNote = (id: ProviderId) => cloudProviderBlocked(id)
         ? t('settings.privacy.localOnlyBlocked')
@@ -683,6 +716,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         stepTo('models');
     }, [stepTo, running, viewing]);
 
+    // The plan screen's two ways to run GAIA; this PC is the one recommended.
+    const [where, setWhere] = useState<'local' | 'cloud'>('local');
+
     const toCloud = useCallback((provider: 'fireworks' | 'amd') => {
         if (running && viewing != null) return;
         setCustomizing(false);
@@ -788,8 +824,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 () => !mounted.current,
             );
             const { models } = await api.listProviderModels(choice);
-            const pick = models.find((m) => m.rank === 1) ?? models[0];
-            if (!pick) throw new Error(t('setup.key.noModels'));
+            // Connect the row shown as chosen; only a provider with no price list (the gateway) takes its top pick.
+            const wanted = cloudPick ?? cloudDefault;
+            const pick = wanted
+                ? models.find((m) => m.id === wanted)
+                : models.find((m) => m.rank === 1) ?? models[0];
+            if (!pick) throw new Error(wanted ? t('setup.key.modelNotOffered', { model: shortModelName(wanted) }) : t('setup.key.noModels'));
             await selectModel(pick.id);
             setCloudModel(pick.id);
             setKey('');
@@ -798,11 +838,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         } catch (err) {
             setKeyState({ busy: false, error: errorText(err), done: false });
         }
-    }, [choice, key, selectModel, usersServer, download, t, running]);
+    }, [choice, key, cloudPick, cloudDefault, selectModel, usersServer, download, t, running]);
 
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
         setChoice(id);
+        setCloudPick(null);
+        setCloudDefault(null);
         setKeyState({ busy: false, error: null, done: false });
     }, []);
 
@@ -849,6 +891,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     }, [plan]);
 
     const runFailed = run?.state === 'failed' || run?.state === 'cancelled';
+    // A step that went wrong opens "Having trouble?" by itself.
+    const stepFailed = (run?.state === 'failed') || !!startError || !!planError || !!hardwareError || !!lostContact || !!actionError;
+    // A first run has no earlier chat to pick up, so "Check in" waits for one.
+    const readyTasks = again ? firstTasks : firstTasks.filter((c) => c.skill !== 'check-in');
     const downloadDone = fullRun && (fullRun.state === 'failed' || fullRun.state === 'cancelled')
         && (fullRun.models ?? []).length > 0
         && (fullRun.models ?? []).every((m) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked')
@@ -877,8 +923,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             firstStage.current = false;
             return;
         }
-        const inner = document.querySelector('.setup-inner');
-        if (inner) inner.scrollTop = 0;
+        const scroller = document.querySelector('.setup-scroll');
+        if (scroller) scroller.scrollTop = 0;
         document.getElementById('setup-title')?.focus({ preventScroll: true });
     }, [stage]);
     // One flat line of steps; Customize, the cloud key and GPU memory are screens of the step they open from.
@@ -966,6 +1012,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     }
     expectedTests.push('agent');
 
+    // The key worked: say so, and which model answers, before the download list.
+    const keyAccepted = cloud && keyState.done && cloudModel ? (
+        <p className="setup-ok setup-key-accepted" role="status">
+            <Check size={14} aria-hidden="true" /> {t('setup.key.accepted', { model: shortModelName(cloudModel) })}
+        </p>
+    ) : null;
+
     const optional = selection && !cloud ? catalog.filter((e) => isOptional(e) && !selection.ticked.has(e.id) && !e.downloaded
         && (canCreateImages(chatEntry) || !e.roles.includes('image_creation'))) : [];
     const biggerOption = catalog.find((e) => e.fit_code === 'memory' && e.chat_choice && e.support === 'verified');
@@ -975,6 +1028,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             <SetupRail steps={railSteps} />
             <SetupFooterSlot value={footerSlot}>
             <div className="setup-pane">
+            {/* The whole pane scrolls, so the scrollbar sits at the window's edge. */}
+            <div className="setup-scroll">
             <div className="setup-inner">
                 {shownAt >= 0 && (
                     <nav className="setup-topnav" aria-label={t('setup.nav.label')}>
@@ -1007,6 +1062,14 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t(checksDone ? 'setup.check.headingDone' : 'setup.check.heading')}</h1>
                             <p className="setup-lede">{t(checksDone ? 'setup.check.ledeDone' : 'setup.check.lede')}</p>
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
+                            {serverRun?.state === 'running' && (
+                                <>
+                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} />
+                                    <SetupFooter>
+                                        <button type="button" className="btn-secondary" onClick={() => void cancel()}>{t('setup.progress.cancel')}</button>
+                                    </SetupFooter>
+                                </>
+                            )}
                             {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} onChangeMemory={showGpu && viewing == null ? () => openGpu('check') : undefined} />}
                             {checksDone && viewing == null && !(lemonadeFound && !lemonadeSettled) && (
                                 <SetupFooter>
@@ -1058,47 +1121,73 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.plan.title')}</h1>
                             <p className="setup-lede">{t('setup.plan.lede')}</p>
-                            <section className="setup-hero" aria-label={t('setup.plan.label')}>
-                                <p className="setup-eyebrow">{selection.chatChosen ? t('setup.plan.yours') : t('setup.plan.recommended')}</p>
-                                <p className="setup-hero-title"><bdi>{t('setup.plan.run', { name: chatEntry?.name ?? '' })}</bdi></p>
-                                <dl className="setup-facts">
-                                    <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection).downloadGb ?? 0)}</bdi></dd></div>
-                                    <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{chatEntry && isNpu(chatEntry) ? t('setup.checks.npu') : hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
-                                    <div><dt>{t('setup.plan.diskAfter')}</dt><dd><bdi dir="ltr">{totals(plan, selection).afterGb != null ? formatSize(Math.max(0, totals(plan, selection).afterGb as number)) : '—'}</bdi></dd></div>
-                                </dl>
-                                <ul className="setup-reasons">
-                                    {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
-                                    {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
-                                        <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
-                                    )}
-                                    <li>{t('setup.plan.why.private')}</li>
-                                    {chatEntry && isNpu(chatEntry) && <li>{t('setup.plan.why.noImagesNpu')}</li>}
-                                    {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
-                                        <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
-                                    )}
-                                </ul>
-                                <SetupFooter>
+                            <div className="setup-where">
+                                <section className={`setup-hero setup-where-card${where === 'local' ? ' is-active' : ''}`} aria-label={t('setup.plan.label')} onClick={() => !runGoing && setWhere('local')}>
+                                    <p className="setup-eyebrow">{selection.chatChosen ? t('setup.plan.yours') : t('setup.plan.recommended')}</p>
+                                    <p className="setup-hero-title">
+                                        <input type="radio" name="setup-where" checked={where === 'local'} onChange={() => setWhere('local')} disabled={runGoing} aria-labelledby="setup-where-local" />
+                                        <bdi id="setup-where-local">{t('setup.plan.run', { name: chatEntry?.name ?? '' })}</bdi>
+                                    </p>
+                                    <dl className="setup-facts">
+                                        <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection).downloadGb ?? 0)}</bdi></dd></div>
+                                        <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{chatEntry && isNpu(chatEntry) ? t('setup.checks.npu') : hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
+                                        <div><dt>{t('setup.plan.diskAfter')}</dt><dd><bdi dir="ltr">{totals(plan, selection).afterGb != null ? formatSize(Math.max(0, totals(plan, selection).afterGb as number)) : '—'}</bdi></dd></div>
+                                    </dl>
+                                    <ul className="setup-reasons">
+                                        {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
+                                        {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
+                                            <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
+                                        )}
+                                        <li>{t('setup.plan.why.private')}</li>
+                                        {chatEntry && isNpu(chatEntry) && <li>{t('setup.plan.why.noImagesNpu')}</li>}
+                                        {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
+                                            <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
+                                        )}
+                                    </ul>
+                                    {pending.length > 0 && <p className="setup-hint">{t('setup.plan.cancelAnytime')}</p>}
+                                </section>
+                                <section className={`setup-hero setup-where-card${where === 'cloud' ? ' is-active' : ''}${cloudBlocked ? ' is-disabled' : ''}`} aria-label={t('setup.plan.cloudLabel')} onClick={() => !runGoing && !cloudBlocked && setWhere('cloud')}>
+                                    <p className="setup-hero-title">
+                                        <input type="radio" name="setup-where" checked={where === 'cloud'} onChange={() => setWhere('cloud')} disabled={runGoing || cloudBlocked} aria-labelledby="setup-where-cloud" />
+                                        <span id="setup-where-cloud">{t('setup.plan.cloud')}</span>
+                                    </p>
+                                    {cloudBlocked
+                                        ? <p className="setup-hint">{t('settings.privacy.localOnlyBlocked')}</p>
+                                        : (
+                                            <ul className="setup-reasons">
+                                                <li>{t('setup.plan.cloudWhy.noDownload')}</li>
+                                                <li>{t('setup.plan.cloudWhy.key')}</li>
+                                                <li>{t('setup.plan.cloudWhy.sent')}</li>
+                                            </ul>
+                                        )}
+                                </section>
+                            </div>
+                            <SetupFooter>
+                                <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>
+                                {where === 'cloud' ? (
+                                    <button type="button" className="btn-primary" onClick={useCloud} disabled={runGoing}>{t('setup.continue')}</button>
+                                ) : (
                                     <button type="button" className="btn-primary" onClick={() => (short ? setConfirm({ kind: 'low_disk' }) : void commit(false))} disabled={busy || blocked || runGoing}>
                                         {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {pending.length ? t('setup.plan.start') : t('setup.plan.startNoDownload')}
                                     </button>
-                                </SetupFooter>
-                                <div className="setup-row">
-                                    <button type="button" className="link-btn" onClick={customize} disabled={runGoing}>{t('setup.plan.customize')}</button>
-                                    <button type="button" className="link-btn" onClick={useCloud} disabled={runGoing}>{t('setup.plan.cloud')}</button>
-                                    {onClose && <button type="button" className="link-btn" onClick={onClose}>{t('setup.backToGaia')}</button>}
-                                </div>
-                                {blocked && (
-                                    <div className="setup-error" role="alert">
-                                        <p>{t('setup.blocked')}</p>
-                                        <details className="dl-details">
-                                            <summary>{t('setup.progress.details')}</summary>
-                                            <pre dir="ltr">{hardware?.blockers.join('\n')}</pre>
-                                        </details>
-                                    </div>
                                 )}
-                                {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
-                                {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
-                            </section>
+                            </SetupFooter>
+                            {onClose && (
+                                <div className="setup-row">
+                                    <button type="button" className="link-btn" onClick={onClose}>{t('setup.backToGaia')}</button>
+                                </div>
+                            )}
+                            {blocked && (
+                                <div className="setup-error" role="alert">
+                                    <p>{t('setup.blocked')}</p>
+                                    <details className="dl-details">
+                                        <summary>{t('setup.progress.details')}</summary>
+                                        <pre dir="ltr">{hardware?.blockers.join('\n')}</pre>
+                                    </details>
+                                </div>
+                            )}
+                            {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
+                            {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
                             <details className="setup-disclosure">
                                 <summary>{t('setup.plan.whatDownloads')}</summary>
                                 <DownloadContents plan={plan} models={pending} />
@@ -1155,7 +1244,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <form id="setup-key-form" onSubmit={(e) => { e.preventDefault(); void connect(); }} className="setup-form">
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.key.title')}</h1>
                             <div className="setup-choices" role="radiogroup" aria-label={t('setup.key.provider')}>
-                                {CHOICES.filter((c) => c.id !== 'local').map((c) => (
+                                {CHOICES.filter((c) => c.id !== 'local' && (c.id !== 'amd' || gatewayShown)).map((c) => (
                                     <button
                                         key={c.id}
                                         type="button"
@@ -1174,7 +1263,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </button>
                                 ))}
                             </div>
-                            {gateway?.reachable === false && (
+                            {gateway?.reachable === false && gatewayShown && (
                                 <button type="button" className="link-btn setup-start" onClick={recheckGateway}>{t('setup.key.checkAgain')}</button>
                             )}
 
@@ -1196,19 +1285,32 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <p className="setup-hint"><a href={GATEWAY_GUIDE_URL} target="_blank" rel="noreferrer">{t('setup.key.gatewayHelp')}</a></p>
                                 </section>
                             )}
-                            {!cloudProviderBlocked(choice) && <CloudPrices provider={choice} limit={3} />}
+                            {!cloudProviderBlocked(choice) && (
+                                <CloudPrices provider={choice} limit={3} picked={cloudPick} onPick={setCloudPick} onDefault={setCloudDefault} pickDisabled={keyState.busy || runGoing} />
+                            )}
+                            {!usersServer && (
+                                <>
+                                    <label className="setup-key-label" htmlFor="setup-key-input">
+                                        {t('setup.key.labelFor', { provider: choiceTitle(CHOICES.find((c) => c.id === choice) ?? CHOICES[1], t) })}
+                                    </label>
+                                    <div className="setup-row setup-key-row">
+                                        <input
+                                            id="setup-key-input"
+                                            className="settings-input"
+                                            type={showKey ? 'text' : 'password'}
+                                            autoComplete="off"
+                                            spellCheck={false}
+                                            value={key}
+                                            onChange={(e) => setKey(e.target.value)}
+                                            placeholder={savedKey ? t('setup.key.placeholder') : t('setup.key.placeholderNew')}
+                                        />
+                                        <button type="button" className="btn-secondary setup-key-show" aria-label={t(showKey ? 'setup.key.hide' : 'setup.key.show')} title={t(showKey ? 'setup.key.hide' : 'setup.key.show')} onClick={() => setShowKey((s) => !s)}>
+                                            {showKey ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+                                        </button>
+                                    </div>
+                                </>
+                            )}
                             <p className="setup-hint">{usersServer ? t('setup.key.usersServer') : t('setup.key.where')}</p>
-                            <div className="setup-row">
-                                {!usersServer && <input
-                                    className="settings-input"
-                                    type="password"
-                                    autoComplete="off"
-                                    value={key}
-                                    onChange={(e) => setKey(e.target.value)}
-                                    placeholder={t('setup.key.placeholder')}
-                                    aria-label={t('setup.key.label')}
-                                />}
-                            </div>
                             {envKey && !usersServer && !key && (
                                 <p className="setup-hint" role="status">{t('setup.key.foundEnv', { name: envKey.name, hint: envKey.key_hint ?? '' })}</p>
                             )}
@@ -1229,6 +1331,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
                             <p className="setup-lede">{t('setup.download.lede')}</p>
+                            {keyAccepted}
                             <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.starting')}</p>
                         </>
                     )}
@@ -1237,6 +1340,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
                             <p className="setup-lede">{t('setup.download.lede')}</p>
+                            {keyAccepted}
                             {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} run={fullRun} onRetry={retryRun} retryDisabled={busy} /></section>}
                             {(fullRun.models?.length ?? 0) > 0 ? (
                                 <div className={lostContact ? 'is-stale' : undefined}>
@@ -1256,7 +1360,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     />
                                 </div>
                             ) : running ? (
-                                <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.working')}</p>
+                                <>
+                                    <RunActivity run={fullRun} plan={plan} idle={t('setup.download.working')} />
+                                    <SetupFooter>
+                                        <button type="button" className="btn-secondary" onClick={() => void cancel()} disabled={busy}>{t('setup.progress.cancel')}</button>
+                                    </SetupFooter>
+                                </>
                             ) : null}
                             {optional.length > 0 && (
                                 <section className="setup-card" aria-label={t('setup.optional.title')}>
@@ -1362,7 +1471,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     {/* The heading already says GAIA is ready; this says what answers. */}
                                     {answering && (
                                         <p>
-                                            {t(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? shortModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? shortModelName(answering)) })}
+                                            {t(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? displayModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? displayModelName(answering)) })}
                                         </p>
                                     )}
                                 </div>
@@ -1383,10 +1492,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         {t('setup.ready.extraNotFetched', { names: notFetched.map((id) => names[id] ?? id).join(', ') })}
                                     </p>
                                 )}
-                                {firstTasks.length > 0 && (
+                                {readyTasks.length > 0 && (
                                     <>
                                         <p className="setup-hint">{t('setup.ready.tasks')}</p>
-                                        <StartCards cards={firstTasks} onPick={(card) => void finish(card)} />
+                                        <StartCards cards={readyTasks} onPick={(card) => void finish(card)} />
                                     </>
                                 )}
                             </div>
@@ -1402,7 +1511,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 {runGoing && (choiceStep || stage === 'plan') && (
                     <p className="setup-hint" role="status">{t('setup.nav.runGoing')}</p>
                 )}
-                <StageLogs run={run} before={{ check: checkNotes }} />
+                <StageLogs run={run} before={{ check: checkNotes }} failed={stepFailed} />
+            </div>
             </div>
             <div className="setup-footer" ref={setFooterSlot} />
             </div>

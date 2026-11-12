@@ -1723,6 +1723,106 @@ def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
     return None
 
 
+# The user told this turn not to act: "use no tools", "don't do anything
+# yet", "answer only with a plan". "Don't run anything yet" forbids running,
+# not writing the files asked for; "don't do anything else" limits the work.
+# "Don't touch anything, just read config.py": the ban is followed by work.
+_NO_ACTION_THEN_WORK = (
+    r"(?:read|open|look|check|inspect|run|execute|fix|edit|write|update|change"
+    r"|create|save|delete|remove|move|install|search|grep|list|modify|apply)"
+)
+_NO_ACTION_BAN = r"\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?"
+_NO_ACTION_BAN_END = (
+    rf"(?![\s,;:—–-]*(?:(?:just|only|but|and|then)\s+)?{_NO_ACTION_THEN_WORK}\b)"
+    r"(?=\s*(?:$|[.,;:!?)\]—–-]|(?:in\s+this\s+turn|yet|now|for\s+now|until"
+    r"|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b))"
+)
+_NO_ACTION_REQUEST_PATTERN = re.compile(
+    rf"(?P<forbid>{_NO_ACTION_BAN}"
+    r"(?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing))"
+    rf"\s+(?:any\s+tools?|tools){_NO_ACTION_BAN_END}"
+    # "Fix foo.py but don't touch anything" limits the work; it does not stop it.
+    rf"|(?<!\bbut\s)(?<!\band\s)(?<!\bthen\s){_NO_ACTION_BAN}"
+    r"(?:do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+"
+    rf"(?:anything|any\s+files?){_NO_ACTION_BAN_END})"
+    r"|\b(?:answer|reply|respond)\s+(?:only|just)\s+with\s+(?:a|an|the|your)\s+"
+    r"(?:[\w-]+\s+){0,3}plan\b"
+    r"|\b(?:only|just)\s+(?:give|write|show|send|outline)\s+(?:me\s+)?"
+    r"(?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}plan\b"
+    # "Plan only." stands as its own clause, not "the plan only covers X".
+    r"|(?:^|[.;:!?(]\s*|\b(?:give|send|show)\s+me\s+)(?:(?:a|the|your)\s+)?"
+    r"plan\s+only\b(?=\s*(?:$|[.,;:!?)]|please\b))"
+    r"|(?<!\bnot\s)\bonly\s+(?:a|the)\s+plan\b"
+    r"(?=\s*(?:$|[.,;:!?)]|please\b|for\s+now\b|then\b))"
+    r"|\b(?:use|call|run)\s+no\s+tools\b",
+    re.IGNORECASE,
+)
+
+# "... until you've read X", "... but that one", "... except config.yaml": the
+# ban has a way out that the request itself wants taken.
+_NO_ACTION_EXCEPTION_PATTERN = re.compile(
+    r"\s*,?\s*(?:(?:until|till|before|unless)\s+you\b"
+    r"|(?:except|besides|other\s+than|apart\s+from)\b"
+    r"|but\s+(?:for\s+)?(?:that|this|the|those|these)\b)",
+    re.IGNORECASE,
+)
+
+# "Last time you answered without reading any files": a report, not a ban.
+_NARRATED_PAST_PATTERN = re.compile(
+    r"\b(?:you|we|i|it|they)\s+(?:\w+\s+)?(?:\w+ed|did|got|gave|wrote|said|ran"
+    r"|went|made)\b[^.!?\n]*$",
+    re.IGNORECASE,
+)
+
+# "... then do step 1", "and then carry it out": the plan is only the start.
+_PLAN_THEN_ACT_PATTERN = re.compile(
+    r"\b(?:then|after\s+that|afterwards?|next)\s*,?\s+(?:you\s+(?:can|should|may)\s+)?"
+    r"(?:do|carry|execute|run|go|start|implement|apply|proceed|make|create"
+    r"|write|perform|begin|continue|follow)\b",
+    re.IGNORECASE,
+)
+
+
+def _no_action_requests(request: str) -> List[bool]:
+    """Each way the user's own words this turn forbid acting; True for a plan ask.
+
+    A ban the request lifts itself, a report of an earlier turn, and a plan
+    followed by "then do it" are not such a request.
+    """
+    text = (request or "").replace("’", "'")
+    found = []
+    for match in _NO_ACTION_REQUEST_PATTERN.finditer(text):
+        after = text[match.end() :]
+        if match.group("forbid"):
+            if _NO_ACTION_EXCEPTION_PATTERN.match(after):
+                continue
+            narrative = match.group().lower().startswith(("without", "never"))
+            if narrative and _NARRATED_PAST_PATTERN.search(text[: match.start()]):
+                continue
+        elif _PLAN_THEN_ACT_PATTERN.search(after):
+            continue
+        found.append("plan" in match.group().lower())
+    return found
+
+
+def _asks_for_no_action(request: str) -> bool:
+    """Whether the user's own words this turn forbid acting.
+
+    Such a request wins over GAIA's nudges to look first or to do an
+    announced step.
+    """
+    return bool(_no_action_requests(request))
+
+
+def _asks_for_a_plan_only(request: str) -> bool:
+    """Whether this turn asked for a plan and nothing else ("answer only with a plan").
+
+    "Use no tools" alone still wants an answer: one that states a file's
+    contents unread keeps its note. A plan names files it has yet to read.
+    """
+    return any(_no_action_requests(request))
+
+
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
     """Split a narrated answer into (what came before, the announced step).
 
@@ -3013,6 +3113,8 @@ Do NOT wrap conversational replies in JSON.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
         self._turn_ungrounded: List[str] = []
+        # The user's own words this turn ask only for a plan, not an answer.
+        self._turn_plan_only_requested = False
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
@@ -10429,6 +10531,7 @@ Do NOT wrap conversational replies in JSON.
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
+            plan_only=getattr(self, "_turn_plan_only_requested", False),
         )
 
     def _deliverable_findings(
@@ -11097,6 +11200,12 @@ Do NOT wrap conversational replies in JSON.
         )
         # Grounding gates that already asked for one correction this turn.
         grounding_fired: set = set()
+        # "Do not run anything, answer only with a plan": no nudge to act.
+        request_text = self._request_text(user_input)
+        no_action_requested = _asks_for_no_action(request_text)
+        self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
+        if no_action_requested:
+            grounding_fired.add(LOOK)
 
         steps_taken = 0
         final_answer = None
@@ -13279,6 +13388,9 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 unfinished_kind = _unfinished_answer_kind(answer_candidate)
+                if no_action_requested and unfinished_kind == "narration":
+                    # A plan or a stated next step is what this turn asked for.
+                    unfinished_kind = None
                 can_reprompt_unfinished = (
                     steps_taken < steps_limit - 1
                     and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
@@ -13325,6 +13437,7 @@ Do NOT wrap conversational replies in JSON.
                 # Plan steps run outside tool_call_log; the turn record has them.
                 if (
                     not look_first_reprompted
+                    and not no_action_requested
                     and not tool_call_log
                     and not self._turn_tool_executions
                     and steps_taken < steps_limit - 1
@@ -13377,6 +13490,7 @@ Do NOT wrap conversational replies in JSON.
                 # The honest ending quotes the announcement; it is final, not planning.
                 is_planning_text = (
                     not stopped_on_announced_step
+                    and not no_action_requested
                     and len(answer_candidate) < 500
                     and any(
                         phrase in answer_candidate.lower()

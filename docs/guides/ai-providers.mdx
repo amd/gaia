@@ -243,7 +243,9 @@ split, shows which models a bigger share would fit, and never suggests a value
 that leaves less than 16 GB the GPU can't use. The GPU and CPU figures add up
 to the PC's memory. If the PC has nothing more to give, there are no steps. Either way the change needs administrator rights and a restart, and
 GAIA never restarts the PC itself. After the restart it reads the split again
-and says whether the change took effect.
+and says whether the change took effect. The sizes start with **Keep** at
+the current share; when the default model already fits, that is the one
+picked, and **Keep as is** moves on without changing anything.
 
 - **Linux:** GAIA sets it for you after you confirm. It writes
   `options ttm pages_limit=<pages>` to `/etc/modprobe.d/ttm.conf` (the setting

@@ -263,7 +263,8 @@ colour support, and the TUI then emits no escape sequences at all. It reads as
 - **Check which screen you are on** before sending keys. Keys sent to the wrong
   screen do nothing and read as "the binding is broken".
 - **Grep for the right words.** The confirmation prompt's first line is a
-  risk badge (`READ`, `WRITE`, `RUNS CODE`, `DESTRUCTIVE`) and a question. A
+  risk badge (`READ`, `WRITE`, `RUNS CODE`, `DESTRUCTIVE`, or `ACCESS` on a
+  prompt to use a file or folder outside the chat's) and a question. A
   tool the TUI knows gets a plain question — a shell command reads
   `RUNS CODE Run this command?`, a file write `WRITE Write this file?` — and
   any other tool reads `Allow <tool>?`. There is no `Confirm: <tool>` line.
