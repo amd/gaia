@@ -517,6 +517,59 @@ def test_the_check_target_is_the_command_with_whitespace_collapsed():
     )
 
 
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        # rc18: the fix's rerun trimmed its output differently.
+        ("python -m pytest -q 2>&1 | tail -40", "python -m pytest -q 2>&1 | tail -20"),
+        ("pytest -q", "pytest -q 2>&1 | head -50"),
+        ("pytest -q > out.txt 2>&1", "pytest -q"),
+        ("pytest -q | tee log.txt", "pytest -q 2>&1"),
+        ("pytest -q | Select-Object -Last 20", "pytest -q"),
+        ("pytest -q 2>/dev/null | tail -n 5", "pytest -q"),
+    ],
+)
+def test_trimming_a_checks_output_is_the_same_check(before, after):
+    assert verification_check_target(
+        "run_shell_command", {"command": before}
+    ) == verification_check_target("run_shell_command", {"command": after})
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ("pytest tests/ | tail -5", "pytest tests/test_cart.py | tail -5"),
+        # A filter that picks tests, or a later command, changes what ran.
+        ("pytest -q | tail -5", "pytest -q -k cart | tail -5"),
+        ("pytest -q && ruff check . | tail", "pytest -q"),
+        ("pytest -q | tail -5; pytest tests/e2e", "pytest -q"),
+        ("pytest -q | grep -v slow", "pytest -q 2>&1 | tail"),
+    ],
+)
+def test_a_different_command_stays_a_different_check(first, second):
+    assert verification_check_target(
+        "run_shell_command", {"command": first}
+    ) != verification_check_target("run_shell_command", {"command": second})
+
+
+def test_loop_says_nothing_when_the_fixed_rerun_trims_differently(agent):
+    """rc18: "I haven't confirmed this works - 1 of 2 pytest runs didn't pass"."""
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "success", "return_code": 0, "stdout": "5 passed"},
+            "python -m pytest -q 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] == "verified"
+    _assert_no_note(result["result"])
+
+
 def test_a_named_check_tool_is_targeted_by_its_arguments():
     assert verification_check_target(
         "run_tests", {"path": "tests/"}
