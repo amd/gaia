@@ -174,7 +174,10 @@ describe('ModelSettings custom models', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'Remove Qwen3-4B Q4_K_M' }));
         expect(mockedApi.removeCustomModel).not.toHaveBeenCalled();
-        fireEvent.click(screen.getByRole('button', { name: 'Remove and delete download' }));
+        const ask = screen.getByRole('alertdialog', { name: 'Remove Qwen3-4B Q4_K_M?' });
+        expect(ask).toHaveTextContent('Its downloaded files are deleted from this PC.');
+        expect(within(ask).getByRole('button', { name: 'Keep' })).toHaveFocus();
+        fireEvent.click(within(ask).getByRole('button', { name: 'Remove and delete download' }));
 
         await waitFor(() => expect(mockedApi.removeCustomModel).toHaveBeenCalledWith(ADDED));
         expect(await screen.findByText('Removed Qwen3-4B Q4_K_M and its download.')).toBeInTheDocument();

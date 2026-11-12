@@ -15,18 +15,16 @@ interface Props {
     remote: boolean;
     /** What the page is doing: a model id, or `dl:<id>` / `rm:<id>`. */
     busy: string | null;
-    confirmingRemove: boolean;
     onUse: () => void;
     onDownload: () => void;
+    /** Opens the page's confirmation; the row never removes on its own. */
     onAskRemove: () => void;
-    onKeep: () => void;
-    onRemove: () => void;
     /** Read the model list again, after the user fixed what stops the NPU. */
     onNpuRecheck?: () => void;
 }
 
 /** One model: its name and chips, with the long facts one click away. */
-export function ModelRow({ model: m, label, current, remote, busy, confirmingRemove, onUse, onDownload, onAskRemove, onKeep, onRemove, onNpuRecheck }: Props) {
+export function ModelRow({ model: m, label, current, remote, busy, onUse, onDownload, onAskRemove, onNpuRecheck }: Props) {
     const t = useT();
     const progress = isDownloading(m) ? m.download_progress : null;
     const placement = m.placement?.label;
@@ -76,27 +74,16 @@ export function ModelRow({ model: m, label, current, remote, busy, confirmingRem
             </div>
             <div className="model-row-actions">
                 {m.custom && !current && !progress && (
-                    confirmingRemove ? (
-                        <>
-                            <button type="button" className="btn-danger" onClick={onRemove} disabled={busy !== null}>
-                                {busy === `rm:${m.id}` ? <Loader2 size={13} className="spin" /> : null}
-                                {m.downloaded ? t('settings.model.removeDownload') : t('settings.models.remove')}
-                            </button>
-                            <button type="button" className="btn-secondary" onClick={onKeep} disabled={busy !== null}>
-                                {t('settings.models.keep')}
-                            </button>
-                        </>
-                    ) : (
-                        <button
-                            type="button"
-                            className="btn-secondary"
-                            onClick={onAskRemove}
-                            disabled={busy !== null}
-                            aria-label={t('settings.models.removeAria', { name: label })}
-                        >
-                            {t('settings.models.remove')}
-                        </button>
-                    )
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={onAskRemove}
+                        disabled={busy !== null}
+                        aria-label={t('settings.models.removeAria', { name: label })}
+                    >
+                        {busy === `rm:${m.id}` ? <Loader2 size={13} className="spin" /> : null}
+                        {t('settings.models.remove')}
+                    </button>
                 )}
                 {current && m.available === false ? (
                     <span className="model-row-current is-blocked">{t('settings.model.inUseBlocked')}</span>
