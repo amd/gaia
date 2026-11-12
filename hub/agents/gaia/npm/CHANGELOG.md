@@ -113,6 +113,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Changed
 
+- **GAIA uses emoji only when there's feeling.** A plain question gets none.
+  On Discord, the emoji becomes a reaction on your message, and replies there
+  read like a person texting.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,
