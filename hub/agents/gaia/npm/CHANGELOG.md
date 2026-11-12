@@ -12,7 +12,8 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   that server stopped answering, a run's `error` ended with this machine's
   start instruction, which on a PC with no Lemonade of its own read "Lemonade
   Server is not installed. Run `gaia init`". The `error` now says the model
-  server isn't answering and that it is its owner's to start, with no command.
+  server didn't answer: send the message again, and if it keeps failing the
+  server is its owner's to start, with no command.
 - **Add skills from a pasted link (`/skills`).** On the stdio transport,
   `/skills add <link>` lists the skills in a GitHub repository or folder, a
   skills.sh page or an https `.zip`, with what each one is allowed to do (its

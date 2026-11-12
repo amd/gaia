@@ -107,9 +107,12 @@ APP_SERVER_DOWN_HINT = (
 
 #: The same for a model server GAIA doesn't run: only its owner can start it.
 #: No command: the apps can't know how a server they didn't start is started.
-APP_OTHER_SERVER_DOWN_HINT = (
+APP_OTHER_SERVER_START_HINT = (
     "GAIA doesn't run this model server, so it can't start it. Start it the "
-    "way you usually do, then send your message again."
+    "way you usually do"
+)
+APP_OTHER_SERVER_DOWN_HINT = (
+    f"{APP_OTHER_SERVER_START_HINT}, then send your message again."
 )
 
 #: When GAIA's background service is not running at all, so the CLI must start

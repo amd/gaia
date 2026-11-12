@@ -1555,7 +1555,7 @@ def model_server_message(typed: Any) -> str:
         LemonadeNetworkError,
         LemonadeServerUnreachableError,
     )
-    from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT
+    from gaia.llm.surface_hints import APP_OTHER_SERVER_START_HINT
 
     if (
         isinstance(typed, LemonadeNetworkError)
@@ -1563,7 +1563,12 @@ def model_server_message(typed: Any) -> str:
         and not isinstance(typed, LemonadeServerUnreachableError)
         and not gaia_runs_lemonade()
     ):
-        return f"The model server isn't answering. {APP_OTHER_SERVER_DOWN_HINT}"
+        # Also a running server whose request failed, so sending again comes first.
+        return (
+            "The model server didn't answer. It may be loading or briefly busy, "
+            "so send your message again. If it keeps failing, it may have "
+            f"stopped. {APP_OTHER_SERVER_START_HINT}."
+        )
     return typed.user_message
 
 

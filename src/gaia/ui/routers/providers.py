@@ -32,6 +32,7 @@ from pydantic import BaseModel
 from gaia.llm.local_only import cloud_blocked, local_only_key_message
 from gaia.llm.surface_hints import (
     AGENT_UI_LOCAL_ONLY_HINT,
+    APP_OTHER_SERVER_START_HINT,
     APP_RESTART_HINT,
     surface_wording,
 )
@@ -146,14 +147,14 @@ def _lemonade(
             allow_redirects=False,
         )
     except requests.RequestException as e:
-        from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
+        from gaia.llm.lemonade_launcher import gaia_runs_lemonade
 
         logger.warning("Model server at %s not reachable: %s", base, e)
         # GAIA restarts its own server; one the user runs is theirs to start.
         advice = (
             APP_RESTART_HINT
             if gaia_runs_lemonade(base)
-            else describe_start_hint().instruction
+            else f"{APP_OTHER_SERVER_START_HINT}, then try again."
         )
         raise ProviderError(
             f"The local model server is not reachable at {base}. {advice}",

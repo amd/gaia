@@ -14,7 +14,11 @@ from gaia.llm.providers.lemonade import (
     LemonadeNetworkError,
     LemonadeServerUnreachableError,
 )
-from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT, APP_SERVER_DOWN_HINT
+from gaia.llm.surface_hints import (
+    APP_OTHER_SERVER_DOWN_HINT,
+    APP_OTHER_SERVER_START_HINT,
+    APP_SERVER_DOWN_HINT,
+)
 from gaia.ui.database import ChatDatabase
 
 from .test_spending_failed_turns import FLASH, _stream_turn, _StreamAgent
@@ -56,7 +60,7 @@ def test_an_app_is_never_given_a_terminal_command(monkeypatch, no_install_found,
 @pytest.mark.parametrize(
     "failure", [LemonadeNetworkError(), LemonadeServerUnreachableError()]
 )
-def test_the_sidecar_says_the_server_is_not_answering(
+def test_the_sidecar_never_names_a_command_or_a_missing_install(
     monkeypatch, no_install_found, failure
 ):
     stdio = pytest.importorskip("gaia_agent.stdio")
@@ -64,11 +68,34 @@ def test_the_sidecar_says_the_server_is_not_answering(
 
     message = stdio.model_server_message(failure)
 
-    assert "model server isn't answering" in message
     assert "not installed" not in message
     assert "`" not in message and "gaia init" not in message
     assert "local LLM" not in message
     assert "send" in message.lower() and "message again" in message
+
+
+def test_the_sidecar_says_a_server_that_refuses_is_not_answering(monkeypatch):
+    stdio = pytest.importorskip("gaia_agent.stdio")
+    monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
+
+    message = stdio.model_server_message(LemonadeServerUnreachableError())
+
+    assert "model server isn't answering" in message
+
+
+def test_a_failed_request_to_a_running_server_says_to_send_again_first(monkeypatch):
+    """This error also covers a server that answered with a failure: it is up,
+    so "isn't answering, start it" would be wrong."""
+    stdio = pytest.importorskip("gaia_agent.stdio")
+    monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
+
+    message = stdio.model_server_message(LemonadeNetworkError())
+
+    assert "isn't answering" not in message
+    assert "send your message again" in message
+    assert "If it keeps failing" in message
+    assert message.index("send your message again") < message.index("Start it")
+    assert message.endswith(f"{APP_OTHER_SERVER_START_HINT}.")
 
 
 class _RelayedFailure(_StreamAgent):
