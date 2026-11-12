@@ -1140,6 +1140,15 @@ def _classify_embedding_failure(exc: Exception) -> str:
     return MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE
 
 
+#: What remember / update_memory say when they refuse a secret. Unsaid, the
+#: model took "not stored" as "gone" and denied a secret still on screen.
+_CREDENTIAL_NOT_STORED = (
+    "Not stored — this looks like a credential (API key, password, or similar "
+    "secret). GAIA does not keep secrets in memory, so a new chat won't know "
+    "it. The user's message is still in this chat, as it was sent."
+)
+
+
 class MemoryMixin(ProceduralMemoryMixin):
     """
     Mixin that gives any Agent persistent memory across sessions (v2).
@@ -5788,11 +5797,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
                 return {
                     "status": "skipped",
-                    "message": (
-                        "Not stored — this looks like a credential (API key, "
-                        "password, or similar secret). GAIA does not keep "
-                        "secrets in memory; use a password manager instead."
-                    ),
+                    "message": _CREDENTIAL_NOT_STORED
+                    + " Use a password manager instead.",
                 }
 
             if category not in UNSOURCED_CATEGORIES and mixin._unrequested_material(
@@ -6090,11 +6096,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     )
                     return {
                         "status": "skipped",
-                        "message": (
-                            "Not stored — this looks like a credential (API "
-                            "key, password, or similar secret). GAIA does not "
-                            "keep secrets in memory."
-                        ),
+                        "message": _CREDENTIAL_NOT_STORED,
                     }
                 # Untruncated: the store checks it for markup, then truncates.
                 kwargs["content"] = content
