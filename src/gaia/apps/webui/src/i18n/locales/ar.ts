@@ -397,6 +397,7 @@ const messages: Messages = {
     'activity.thoughtFor': 'فكّر لمدة {time}',
     'activity.waiting': 'بانتظارك',
     'activity.usedSkill': 'استخدم مهارة {name}',
+    'activity.skillFailed': 'تعذّر استخدام مهارة {name}',
     'activity.usingSkill': 'يستخدم مهارة: {name}',
     'activity.blocked': 'محظور بموجب السياسة',
     'activity.hitError': 'واجه خطأ',

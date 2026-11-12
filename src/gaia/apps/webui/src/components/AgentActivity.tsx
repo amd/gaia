@@ -387,11 +387,10 @@ export function toTimeline(rows: ActivityRow[], answer = ''): TimelineItem[] {
     return items;
 }
 
-/** "Used meeting-notes skill" for a skill pickup whose narration names the skill. */
-function skillUsed(row: ActivityRow): MessageRef | undefined {
+/** The skill a skill pickup's narration names. */
+function skillName(row: ActivityRow): string | undefined {
     if (!SKILL_USE_TOOLS.has(row.tool ?? '')) return undefined;
-    const name = /:\s*(.+)$/.exec(row.narration ?? '')?.[1]?.trim();
-    return name ? ref('activity.usedSkill', { name }) : undefined;
+    return /:\s*(.+)$/.exec(row.narration ?? '')?.[1]?.trim() || undefined;
 }
 
 /** Most kinds of step named in a folded run before "and N more". */
@@ -405,8 +404,9 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
         let failedLabel: MessageRef | undefined;
         if (row.type === 'tool') {
             const meta = getToolMeta(row.tool, row);
-            label = skillUsed(row) ?? meta.label;
-            failedLabel = ref('tool.failed', { label: meta.activeLabel });
+            const skill = skillName(row);
+            label = skill ? ref('activity.usedSkill', { name: skill }) : meta.label;
+            failedLabel = skill ? ref('activity.skillFailed', { name: skill }) : ref('tool.failed', { label: meta.activeLabel });
         }
         else if (row.type === 'policy_alert') label = ref('activity.blocked');
         else if (row.type === 'error') label = ref('activity.hitError');
