@@ -585,6 +585,12 @@ button.setup-rail-step:hover {
     background: var(--accent);
 }
 
+.setup-activity {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
 .setup-log {
     margin-top: 16px;
 }

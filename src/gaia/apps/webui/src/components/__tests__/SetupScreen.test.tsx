@@ -271,6 +271,21 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);
     });
 
+    it("says it is getting GAIA's model server ready, with Cancel in the bottom bar that stops it", async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+        mockedApi.startSetup.mockResolvedValue({ ...SERVER_RUNNING, percent: 40 });
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' })
+            .mockResolvedValue({ state: 'cancelled', server_only: true, steps: [] });
+        mockedApi.cancelSetup.mockResolvedValue({ cancelled: true });
+        renderSetup();
+        expect(await screen.findByText("Getting GAIA's model server ready…")).toBeInTheDocument();
+        expect(screen.getByRole('progressbar', { name: "Getting GAIA's model server ready…" })).toHaveAttribute('value', '40');
+        const bar = document.querySelector('.setup-footer') as HTMLElement;
+        fireEvent.click(within(bar).getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(mockedApi.cancelSetup).toHaveBeenCalledWith());
+        expect(await screen.findByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    });
+
     // Product bug: the auto-start reads "no run yet" before the status read answers, and starts a second one.
     it('waits for the status read before starting the server, so a reopen attaches to the run under way', async () => {
         let answer!: (s: SetupRunStatus) => void;
@@ -321,6 +336,7 @@ describe('SetupScreen: the recommendation', () => {
         mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
         await open();
         const hero = within(await planScreen());
+        expect(hero.getByText(/You can cancel the download at any time/)).toBeInTheDocument();
         expect(hero.getByText('Recommended for this PC')).toBeInTheDocument();
         expect(hero.getByText('Run Qwen3.6-35B-A3B on this PC')).toBeInTheDocument();
         expect(hero.getByText('29.6 GB')).toBeInTheDocument();
@@ -855,6 +871,20 @@ describe('SetupScreen: downloading', () => {
         // Going back only looks at an earlier step; the download keeps going.
         fireEvent.click(screen.getByRole('button', { name: 'Previous step' }));
         expect(mockedApi.cancelSetup).not.toHaveBeenCalled();
+    });
+
+    it('names the part being set up before any model row, with its download and Cancel', async () => {
+        const run: SetupRunStatus = { state: 'running', steps: [], models: [], components: { server: 'done', backend: 'active' }, percent: 45 };
+        mockedApi.getSetupPlan.mockResolvedValue({ ...COLD_BIG(), components: COMPONENTS });
+        mockedApi.startSetup.mockResolvedValue(run);
+        mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(run);
+        mockedApi.cancelSetup.mockResolvedValue({ cancelled: true });
+        await startLocal();
+        const line = (await screen.findByText('Now: Graphics support')).closest('p') as HTMLElement;
+        expect(line).toHaveTextContent('Now: Graphics support · 45% · 2 of 3 parts ready');
+        expect(screen.queryByText('Setting things up…')).toBeNull();
+        fireEvent.click(within(document.querySelector('.setup-footer') as HTMLElement).getByRole('button', { name: 'Cancel' }));
+        await waitFor(() => expect(mockedApi.cancelSetup).toHaveBeenCalledWith());
     });
 
     it('lists every component coming to this PC, with its state from the run', async () => {

@@ -16,6 +16,7 @@ import { isMessageKey, type MessageKey } from '../i18n/registry';
 import { ConfirmSheet } from './setup/ConfirmSheet';
 import { DownloadContents } from './setup/DownloadContents';
 import { DownloadProgress, downloadsActive } from './setup/DownloadProgress';
+import { RunActivity } from './setup/RunActivity';
 import { formatFitGb, formatSize, totalMemory } from './setup/format';
 import { GpuMemoryPanel } from './setup/GpuMemoryPanel';
 import { tooBigText } from './setup/ModelChecklist';
@@ -1007,6 +1008,14 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t(checksDone ? 'setup.check.headingDone' : 'setup.check.heading')}</h1>
                             <p className="setup-lede">{t(checksDone ? 'setup.check.ledeDone' : 'setup.check.lede')}</p>
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
+                            {serverRun?.state === 'running' && (
+                                <>
+                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} />
+                                    <SetupFooter>
+                                        <button type="button" className="btn-secondary" onClick={() => void cancel()}>{t('setup.progress.cancel')}</button>
+                                    </SetupFooter>
+                                </>
+                            )}
                             {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} onChangeMemory={showGpu && viewing == null ? () => openGpu('check') : undefined} />}
                             {checksDone && viewing == null && !(lemonadeFound && !lemonadeSettled) && (
                                 <SetupFooter>
@@ -1077,6 +1086,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
                                     )}
                                 </ul>
+                                {pending.length > 0 && <p className="setup-hint">{t('setup.plan.cancelAnytime')}</p>}
                                 <SetupFooter>
                                     <button type="button" className="btn-primary" onClick={() => (short ? setConfirm({ kind: 'low_disk' }) : void commit(false))} disabled={busy || blocked || runGoing}>
                                         {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {pending.length ? t('setup.plan.start') : t('setup.plan.startNoDownload')}
@@ -1256,7 +1266,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     />
                                 </div>
                             ) : running ? (
-                                <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.working')}</p>
+                                <>
+                                    <RunActivity run={fullRun} plan={plan} idle={t('setup.download.working')} />
+                                    <SetupFooter>
+                                        <button type="button" className="btn-secondary" onClick={() => void cancel()} disabled={busy}>{t('setup.progress.cancel')}</button>
+                                    </SetupFooter>
+                                </>
                             ) : null}
                             {optional.length > 0 && (
                                 <section className="setup-card" aria-label={t('setup.optional.title')}>

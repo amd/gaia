@@ -128,6 +128,8 @@ const RUN = {
     ],
     overall: { bytes_done: 2.33e9, bytes_total: 6.3e9, speed_bps: 0, eta_s: null, percent: 36, failed: 0 },
 };
+// Before any model row: the run is still fetching the parts around the models.
+const RUN_PARTS = { ...RUN, models: [], overall: undefined, percent: 45, size: '63 MB of 141 MB' };
 const RUN_ROW_FAILED = {
     ...RUN,
     components: { server: 'done', backend: 'failed' },
@@ -312,6 +314,9 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: async (page) => {
             await expect(page.locator('.setup-result.is-done').first()).toBeVisible();
             await expect(page.locator('.setup-result.is-active').first()).toBeVisible();
+            // A wait never leaves the bottom bar empty: it says what is going on and offers Cancel.
+            await expect(page.locator('.setup-activity')).toBeVisible();
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
         },
     },
     {
@@ -495,6 +500,15 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.setup-contents')).toBeVisible();
             await expect(page.getByRole('button', { pressed: false }).first()).toBeVisible();
             // A running download keeps a way out in the same bar every step's actions sit in.
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+        },
+    },
+    {
+        name: 'download-parts',
+        answers: { status: RUN_PARTS },
+        reach: async (page) => {
+            await expect(page.locator('.setup-contents')).toBeVisible();
+            await expect(page.locator('.setup-activity progress')).toBeVisible();
             await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
         },
     },
