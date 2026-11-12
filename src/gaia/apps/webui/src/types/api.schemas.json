@@ -525,6 +525,17 @@
         ],
         "title": "Success"
       },
+      "timedOut": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Timedout"
+      },
       "timestamp": {
         "default": 0,
         "title": "Timestamp",
