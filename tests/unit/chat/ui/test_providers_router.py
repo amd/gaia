@@ -1860,6 +1860,22 @@ def test_restore_waits_when_lemonade_answers_system_info_with_a_5xx(
     )
 
 
+def test_restore_waits_when_lemonade_answers_the_model_list_with_a_5xx(
+    client, lemonade, keys, db
+):
+    """A proxy in front of a stopped server answers 502; that isn't a verdict either."""
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+    lemonade.answers[("GET", "models?show_all=true")] = (502, {})
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {"status": "pending", "message": None}
+    del lemonade.answers[("GET", "models?show_all=true")]
+    assert client.get("/api/providers/active").json()["restore"]["status"] == (
+        "restored"
+    )
+
+
 def test_select_supersedes_a_failed_restore_notice(client, lemonade, keys, db):
     _write_config({"last_model": "fireworks.gone-model"})
     lemonade.models = _CATALOG

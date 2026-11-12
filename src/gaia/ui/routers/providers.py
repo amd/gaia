@@ -83,6 +83,10 @@ class ProviderError(Exception):
         self.status = status
 
 
+class _ModelListFailed(ProviderError):
+    """The model server answered ``/models`` with a 5xx: its own state, no verdict on a model."""
+
+
 # ── Lemonade access ────────────────────────────────────────────────────────
 
 
@@ -476,7 +480,8 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
 
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
-        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+        failed = _ModelListFailed if status >= 500 else ProviderError
+        raise failed(f"Lemonade answered /models with HTTP {status}.")
     offered: List[str] = []
     if provider == LOCAL:
         offered = [*_suggested_local_models()]
@@ -812,7 +817,7 @@ def _check_model_available(model_id: str) -> Optional[str]:
         # Refuse only what nothing here can run; a memory estimate stays a caveat.
         return _local_unavailable(models, model_id)
     except ProviderError as e:
-        if e.status == 503:
+        if e.status == 503 or isinstance(e, _ModelListFailed):
             raise _ServerNotReady(str(e)) from e
         return str(e)
     except CloudKeyError as e:

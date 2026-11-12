@@ -1281,6 +1281,8 @@ export const enMessages = {
     'setup.unknown.failed': 'Could not check whether GAIA is set up: {error}',
     'setup.unknown.modelUnread': 'GAIA could not read which model it uses ({error})',
     'setup.unknown.retry': 'Check again',
+    'setup.serverDown.notice': "GAIA's model server isn't answering, so it can't reply yet. Your chats are still here.",
+    'setup.serverDown.setup': 'Open setup',
     'setup.check.title': 'Check this PC',
     'setup.where.title': 'Choose where GAIA runs',
     'setup.where.local': 'On this PC',

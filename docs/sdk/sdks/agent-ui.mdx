@@ -2501,6 +2501,10 @@ plan and make one set of choices.
   <Accordion title="GET /api/setup/check">
     Runs `gaia init --check --profile gaia --json` and returns its result plus
     the step list: `{"ready": bool, "stage": ..., "reasons": [...], "steps": [...]}`.
+    `initialized` is true once setup was seen ready on this PC. With it, a
+    `"server"` stage (the model server isn't answering) is an outage, not a
+    first run: the app keeps its chats, says so, and re-checks when the server
+    answers.
 
     **Query params:** `skip_chat_model` (the chat runs on a cloud provider, so
     only the embedding model is needed locally), `load` (also check that the
