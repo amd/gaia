@@ -84,7 +84,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
                         {failed
                             ? <AlertCircle size={9} className="doc-pill-icon" aria-hidden="true" />
                             : <FileText size={9} className="doc-pill-icon" aria-hidden="true" />}
-                        <span className="doc-pill-name" dir="auto">{d.filename}</span>
+                        <span className="doc-pill-name" dir="ltr">{d.filename}</span>
                         <button
                             className="doc-pill-remove"
                             onClick={(e) => handleRemoveDocument(e, d.id)}

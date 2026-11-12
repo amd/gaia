@@ -120,7 +120,7 @@ export function Composer({
                             {a.isImage && a.url
                                 ? <img src={a.url} alt="" className="composer-attachment-thumb" />
                                 : <Icon size={14} aria-hidden="true" />}
-                            <span className="composer-attachment-name" title={a.name} dir="auto">{middleTruncate(a.name)}</span>
+                            <span className="composer-attachment-name" title={a.name} dir="ltr">{middleTruncate(a.name)}</span>
                             {a.uploading && (
                                 <span className="composer-attachment-state">
                                     {a.progress === undefined

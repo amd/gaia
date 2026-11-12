@@ -826,6 +826,10 @@ textarea:focus-visible {
     .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
     text-align: right;
 }
+/* A library name reads left to right so its extension stays last; it still sits on the row's own edge. */
+:root[dir="rtl"] .doc-name[dir="ltr"] {
+    text-align: right;
+}
 /* The mirror: an Arabic name in a left-to-right UI stays on the left. */
 :root:not([dir="rtl"]) :is(.doc-name, .sb-location-name, .composer-chip-label,
     .new-chat-folder-name, .sp-item-name, .connection-banner__text, .schedule-card-name, .schedule-card-prompt)[dir="auto"] {
