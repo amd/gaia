@@ -64,6 +64,12 @@ describe('folded-run summary', () => {
         expect(stepsSummary([skill])).toBe('Used analyze-recording skill');
         expect(plain(stepsSummary([skill], ar))).toBe('استخدم مهارة analyze-recording (Used analyze-recording skill)');
     });
+
+    it('names a skill that could not be loaded', () => {
+        const failed = tool(1, 'load_skill', { narration: 'Loading skill: meeting-notes', success: false });
+        expect(stepsSummary([failed])).toBe('Could not use meeting-notes skill');
+        expect(plain(stepsSummary([failed], ar))).toBe('تعذّر استخدام مهارة meeting-notes (Could not use meeting-notes skill)');
+    });
 });
 
 describe('skill in use row', () => {

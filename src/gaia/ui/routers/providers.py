@@ -237,6 +237,8 @@ _MIN_KEY_LENGTH_FOR_HINT = 16
 
 #: ``key_state`` while the OS holds the stored-key read for the user's permission.
 KEY_WAITING = "waiting_for_os_permission"
+#: ``key_state`` once the user closed the store's unlock prompt; GAIA holds off asking.
+KEY_LOCKED = "store_locked"
 
 
 def _key_slot(provider: str) -> str:
@@ -352,7 +354,10 @@ def _key_hint(
 
 
 def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    from gaia.connectors.credential_wait import CredentialStoreWaiting
+    from gaia.connectors.credential_wait import (
+        CredentialStoreLocked,
+        CredentialStoreWaiting,
+    )
     from gaia.llm.cloud_keys import env_var_for
 
     view: Dict[str, Any] = {
@@ -370,6 +375,8 @@ def _provider_view(provider: str, entry: Optional[Dict[str, Any]]) -> Dict[str, 
             "read",
             None,
         )
+    except CredentialStoreLocked as e:
+        key_source, key_state, key_message = None, KEY_LOCKED, str(e)
     except CredentialStoreWaiting as e:
         # Unknown, not absent: the UI must not offer "Add your key" here.
         key_source, key_state, key_message = None, KEY_WAITING, str(e)
@@ -921,7 +928,10 @@ def _known(provider: str) -> None:
 @router.get("/api/providers", dependencies=[Depends(require_ui_header)])
 def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
     """Every provider with its connection state, and the active model."""
-    from gaia.connectors.credential_wait import CredentialStoreWaiting
+    from gaia.connectors.credential_wait import (
+        CredentialStoreLocked,
+        CredentialStoreWaiting,
+    )
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
     providers = [_provider_view(LOCAL, None)]
@@ -944,8 +954,11 @@ def list_providers(db: ChatDatabase = Depends(get_db)) -> Dict[str, Any]:
                     if not found:
                         view["error"] = _no_models_message(provider, view)
                 except CredentialStoreWaiting as e:
+                    locked = isinstance(e, CredentialStoreLocked)
                     view.update(
-                        key_source=None, key_state=KEY_WAITING, key_message=str(e)
+                        key_source=None,
+                        key_state=KEY_LOCKED if locked else KEY_WAITING,
+                        key_message=str(e),
                     )
                 except (ProviderError, CloudKeyError, requests.RequestException) as e:
                     view["error"] = str(e)
@@ -1084,6 +1097,10 @@ def connect_provider(
             status_code=403,
             detail="Enter provider keys on the PC running GAIA, not over mobile access.",
         )
+    from gaia.connectors.store import retry_keyring
+
+    # Connecting needs the key store, so it may ask the OS again.
+    retry_keyring()
     if key:
         from gaia.connectors.credential_wait import discard
 
@@ -1128,10 +1145,16 @@ def connect_provider(
                 except CloudKeyError as e:
                     remember_error = str(e)
         else:
-            from gaia.connectors.credential_wait import CredentialStoreWaiting
+            from gaia.connectors.credential_wait import (
+                CredentialStoreLocked,
+                CredentialStoreWaiting,
+            )
 
             try:
                 ensure_authenticated(provider, recall=lambda: _usable_key(provider))
+            except CredentialStoreLocked as e:
+                # Not 409: the screen would ask again, reopening the prompt.
+                raise ProviderError(str(e), 423) from e
             except CredentialStoreWaiting as e:
                 # 409, not a failure: the screen shows this and asks again.
                 raise ProviderError(str(e), 409) from e
@@ -1142,6 +1165,8 @@ def connect_provider(
             ):
                 try:
                     stored = _usable_key(provider)
+                except CredentialStoreLocked as e:
+                    raise ProviderError(str(e), 423) from e
                 except CredentialStoreWaiting as e:
                     raise ProviderError(str(e), 409) from e
                 if stored:
@@ -1174,10 +1199,26 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
     from gaia.llm.fireworks_known_models import KnownModelsError, use_known_models
     from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+    from gaia.llm.lemonade_tls import ca_store_problem
     from gaia.llm.providers.fireworks import ModelListState, check_model_list
 
     name = _NAMES[provider]
+    runs_lemonade = gaia_runs_lemonade(_base_url())
+    ca_problem = ca_store_problem() if runs_lemonade else None
+    if ca_problem:
+        raise ProviderError(ca_problem, 503)
     check = check_model_list(key) if provider == FIREWORKS else None
+    if check is not None and check.state is ModelListState.OK:
+        from gaia.llm import lemonade_client
+
+        log = lemonade_client.embedded_lemonade_log_path(_base_url())
+        where = str(log) if log else "The model server's log"
+        raise ProviderError(
+            f"{name} accepted that key, but the model server discovered no "
+            f"models with it, so the key is not the problem. {where} says why; "
+            "paste the key again once that is fixed.",
+            502,
+        )
     if check is None or check.state is not ModelListState.FAILING:
         raise ProviderError(
             f"{name} did not accept that key (no models were discovered). "
@@ -1202,7 +1243,7 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
             else "It was not copied into GAIA's credential store."
         )
     )
-    if not gaia_runs_lemonade(_base_url()):
+    if not runs_lemonade:
         raise ProviderError(f"{outage} {kept} Connect again when {name} recovers.", 503)
     try:
         use_known_models(EmbeddedLemonade())
@@ -1293,6 +1334,17 @@ def forget_provider_key(provider: str) -> Dict[str, Any]:
     except ConnectorsError as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
     return {"removed": removed}
+
+
+@router.post(
+    "/api/providers/key-store/retry", dependencies=[Depends(require_ui_header)]
+)
+def retry_key_store() -> Dict[str, Any]:
+    """Let the next read ask the OS to unlock the key store again (Try again)."""
+    from gaia.connectors.store import retry_keyring
+
+    retry_keyring()
+    return {"retrying": True}
 
 
 @router.get("/api/providers/{provider}/models")
@@ -1454,12 +1506,21 @@ def select_model(
         raise HTTPException(status_code=422, detail="No model given.")
     refuse_blocked_cloud_model(model_id)
     from gaia.config import GaiaConfigError
-    from gaia.connectors.credential_wait import CredentialStoreWaiting
+    from gaia.connectors.credential_wait import (
+        CredentialStoreLocked,
+        CredentialStoreWaiting,
+    )
+    from gaia.connectors.store import retry_keyring
 
+    if provider_of(model_id) != LOCAL:
+        # Picking a cloud model needs its key, so it may ask the OS again.
+        retry_keyring()
     try:
         reason = _check_model_available(model_id)
     except _ServerNotReady as e:
         raise HTTPException(status_code=503, detail=str(e)) from e
+    except CredentialStoreLocked as e:
+        raise HTTPException(status_code=423, detail=str(e)) from e
     except CredentialStoreWaiting as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     except GaiaConfigError as e:
