@@ -2113,6 +2113,31 @@ class ChatDatabase:
                 ),
             )
 
+    def edit_scheduled_task(
+        self,
+        task_id: str,
+        *,
+        prompt: str,
+        interval_seconds: int,
+        schedule_config: str,
+        next_run_at: str | None,
+    ) -> None:
+        """Change what a scheduled task asks and when it runs.
+
+        Raises:
+            KeyError: if no task has *task_id*.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                """UPDATE scheduled_tasks
+                   SET prompt = ?, interval_seconds = ?, schedule_config = ?,
+                       next_run_at = ?
+                   WHERE id = ?""",
+                (prompt, interval_seconds, schedule_config, next_run_at, task_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"Scheduled task '{task_id}' not found")
+
     def claim_scheduled_run(
         self, task_id: str, expected_next_run_at: str | None, next_run_at: str
     ) -> bool:
@@ -2128,12 +2153,14 @@ class ChatDatabase:
             )
             return cursor.rowcount == 1
 
-    def scheduled_task_timing(self, task_id: str) -> Dict[str, Any]:
-        """The task's stored ``status`` and ``next_run_at``, as another server
-        may have set them."""
+    def scheduled_task_state(self, task_id: str) -> Dict[str, Any]:
+        """The task's stored ``status``, ``next_run_at``, ``prompt``,
+        ``interval_seconds`` and ``schedule_config``, as another server may
+        have set them."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT status, next_run_at FROM scheduled_tasks WHERE id = ?",
+                "SELECT status, next_run_at, prompt, interval_seconds, "
+                "schedule_config FROM scheduled_tasks WHERE id = ?",
                 (task_id,),
             ).fetchone()
         if row is None:

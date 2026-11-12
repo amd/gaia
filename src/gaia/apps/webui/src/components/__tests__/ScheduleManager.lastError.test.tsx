@@ -9,6 +9,7 @@ import { useScheduleStore } from '../../stores/scheduleStore';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const base: Schedule = {
     id: 's1',

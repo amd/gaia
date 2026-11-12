@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import * as api from '../../services/api';
+import * as api from '../../services/scheduleApi';
 import { useScheduleStore } from '../scheduleStore';
 import type { Schedule, ScheduleResult } from '../../types';
 
-vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 function schedule(over: Partial<Schedule> = {}): Schedule {
     return {

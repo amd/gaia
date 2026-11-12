@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleManager } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
-import * as api from '../../services/api';
+import * as api from '../../services/scheduleApi';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const news: Schedule = {
     id: 's1',
