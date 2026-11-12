@@ -831,6 +831,19 @@ test('settings in the dark theme', async ({ page }) => {
 });
 
 for (const [locale, theme] of [['ar', 'light'], ['ar', 'dark'], ['en', 'light']] as const) {
+    test(`image creation settings (${locale}, ${theme})`, async ({ page }) => {
+        await open(page, '', locale, undefined, theme);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="images"]').click();
+        await expect(page.locator('#image-size')).toHaveValue('1280x720');
+        const notice = page.locator('.settings-notice');
+        await expect(notice).toBeVisible();
+        // The notice hugs its two lines and button, never a stretched empty box.
+        const { height } = (await notice.boundingBox())!;
+        expect(height).toBeLessThan(160);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`read-aloud settings (${locale}, ${theme})`, async ({ page }) => {
         await open(page, '', locale, undefined, theme);
         await page.getByRole('button', { name: /Settings/ }).first().click();

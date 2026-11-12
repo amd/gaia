@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from gaia.agents.base.file_snapshots import SnapshotError, before_change
+from gaia.agents.tools import path_access
 from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
@@ -134,6 +135,8 @@ class SDToolsMixin:
         default_cfg: Optional[float] = None,
         enable_3d_tools: bool = False,
         enable_variation_tools: bool = False,
+        enable_edit_tools: bool = True,
+        follow_user_settings: bool = False,
     ) -> None:
         """
         Initialize SD tools and register them with the agent.
@@ -152,6 +155,13 @@ class SDToolsMixin:
             enable_3d_tools: Register the opt-in image-to-3D tool.
             enable_variation_tools: Register the opt-in
                 ``create_image_variation`` tool.
+            enable_edit_tools: Register edit and upscale tools. Standalone
+                SD profiles default to enabled; flagship callers opt in separately.
+            follow_user_settings: Take the model, size and steps from the
+                user's ``image_model`` / ``image_size`` / ``image_steps`` in
+                ``~/.gaia/config.json``, read at every generation, ahead of
+                the defaults above. A request that names a model uses only
+                that model's own defaults.
 
         Example:
             # Fast generation with defaults (SDXL-Turbo)
@@ -185,6 +195,8 @@ class SDToolsMixin:
         self.sd_generations = []  # Instance-level list for session history
         self.sd_enable_3d_tools = enable_3d_tools
         self.sd_enable_variation_tools = enable_variation_tools
+        self.sd_enable_edit_tools = enable_edit_tools
+        self.sd_follow_user_settings = follow_user_settings
 
         logger.debug(
             f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}"
@@ -217,7 +229,7 @@ class SDToolsMixin:
             Args:
                 prompt: Text description of the image.
                 model: Exact image model ID from list_sd_models(), including
-                    TheNoise models. Omit to use the legacy SDXL-Turbo default.
+                    TheNoise models. Omit to use the user's chosen image model.
                 size: Optional WIDTHxHEIGHT; otherwise model defaults apply.
                 steps: Optional steps; otherwise model defaults apply.
                 cfg_scale: Optional guidance; otherwise model defaults apply.
@@ -228,6 +240,26 @@ class SDToolsMixin:
                 {"status": "error", "error": str}.
             """
             return self._generate_image(prompt, model, size, steps, cfg_scale, seed)
+
+        if self.sd_enable_edit_tools:
+
+            @tool(atomic=True, timeout=900)
+            def edit_image(
+                image_path: str,
+                prompt: str,
+                model: Optional[str] = None,
+                size: Optional[str] = None,
+                n: int = 1,
+            ) -> Dict[str, Any]:
+                """Edit a local PNG or JPEG with a text prompt using Lemonade."""
+                return self._edit_image(image_path, prompt, model, size, n)
+
+            @tool(atomic=True, timeout=900)
+            def upscale_image(
+                image_path: str, model: Optional[str] = None
+            ) -> Dict[str, Any]:
+                """Upscale a local PNG with Lemonade's image-upscale endpoint."""
+                return self._upscale_image(image_path, model)
 
         @tool(atomic=True)
         def list_sd_models() -> Dict[str, Any]:
@@ -254,10 +286,11 @@ class SDToolsMixin:
                         speed=self._estimate_generation_time(name, defaults["size"]),
                     )
                 listed.append(entry)
+            saved = self._saved_image_settings()
             return {
                 "status": "success",
                 "models": listed,
-                "default_model": self.sd_default_model,
+                "default_model": saved["model"] if saved else self.sd_default_model,
             }
 
         @tool(
@@ -288,9 +321,7 @@ class SDToolsMixin:
                 model must already be downloaded in Lemonade. The output is saved
                 beside generated images and is never silently downloaded.
                 """
-                from gaia.agents.tools.path_access import read_access_error
-
-                refusal = read_access_error(self, image_path)
+                refusal = path_access.read_access_error(self, image_path)
                 if refusal:
                     return refusal
                 source = Path(image_path).expanduser()
@@ -384,6 +415,123 @@ class SDToolsMixin:
 
         # Tools are automatically registered by the @tool decorator above.
 
+    def _image_source_or_error(
+        self, image_path: str
+    ) -> tuple[Optional[Path], Optional[Dict[str, Any]]]:
+        """Check read scope and resolve one local source image."""
+        path = Path(image_path).expanduser()
+        denied = path_access.read_access_error(self, path)
+        if denied:
+            return None, denied
+        invalid = path_access.image_file_error(path, image_path)
+        if invalid:
+            return None, invalid
+        try:
+            return path.resolve(strict=True), None
+        except OSError as exc:
+            return None, {"status": "error", "error": f"Cannot read image: {exc}"}
+
+    def _save_image_reply(
+        self, response: Any, *, prefix: str, source: Path, model: str
+    ) -> tuple[Optional[List[str]], Optional[str]]:
+        """Validate every returned image before saving any of them."""
+        data = response.get("data") if isinstance(response, dict) else None
+        if not isinstance(data, list) or not data:
+            return None, "Lemonade returned no image data."
+        images: List[bytes] = []
+        for index, item in enumerate(data, start=1):
+            image_bytes, problem = decode_image_response({"data": [item]})
+            if problem is None:
+                problem = image_problem(image_bytes)
+            if problem is not None:
+                return None, f"Lemonade returned an unusable image {index}: {problem}"
+            images.append(image_bytes)
+        try:
+            paths = [
+                str(
+                    self._save_image(
+                        f"{prefix}_{source.stem}_{index}", image_bytes, model
+                    )
+                )
+                for index, image_bytes in enumerate(images, start=1)
+            ]
+        except (OSError, SnapshotError) as exc:
+            return None, f"Could not save image output: {exc}"
+        return paths, None
+
+    def _edit_image(
+        self,
+        image_path: str,
+        prompt: str,
+        model: Optional[str] = None,
+        size: Optional[str] = None,
+        n: int = 1,
+    ) -> Dict[str, Any]:
+        """Edit an approved source image and save the returned PNGs."""
+        source, error = self._image_source_or_error(image_path)
+        if error:
+            return error
+        selected_model = model or LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL
+        try:
+            response = self.sd_client.edit_image(
+                source,
+                prompt,
+                model=selected_model,
+                size=size,
+                n=n,
+                timeout=900,
+            )
+        except LemonadeClientError as exc:
+            return {"status": "error", "error": str(exc)}
+        paths, error = self._save_image_reply(
+            response, prefix="edited", source=source, model=selected_model
+        )
+        if error:
+            return {"status": "error", "error": error}
+        result = {
+            "status": "success",
+            "image_path": paths[0],
+            "image_paths": paths,
+            "source_image": str(source),
+            "prompt": prompt,
+            "model": selected_model,
+            "count": len(paths),
+            "display_message": "Saved " + ", ".join(paths),
+        }
+        self.sd_generations.append({**result, "created_at": datetime.now().isoformat()})
+        return result
+
+    def _upscale_image(
+        self, image_path: str, model: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Upscale an approved PNG source image and save the returned PNGs."""
+        source, error = self._image_source_or_error(image_path)
+        if error:
+            return error
+        selected_model = model or LemonadeClient.IMAGE_UPSCALE_DEFAULT_MODEL
+        try:
+            response = self.sd_client.upscale_image(
+                source, model=selected_model, timeout=900
+            )
+        except LemonadeClientError as exc:
+            return {"status": "error", "error": str(exc)}
+        paths, error = self._save_image_reply(
+            response, prefix="upscaled", source=source, model=selected_model
+        )
+        if error:
+            return {"status": "error", "error": error}
+        result = {
+            "status": "success",
+            "image_path": paths[0],
+            "image_paths": paths,
+            "source_image": str(source),
+            "model": selected_model,
+            "count": len(paths),
+            "display_message": "Saved " + ", ".join(paths),
+        }
+        self.sd_generations.append({**result, "created_at": datetime.now().isoformat()})
+        return result
+
     def _create_image_variation(
         self,
         image_path: str,
@@ -392,9 +540,7 @@ class SDToolsMixin:
         n: int = 1,
     ) -> Dict[str, Any]:
         """Vary *image_path* through Lemonade and save each result as a PNG."""
-        from gaia.agents.tools.path_access import read_access_error
-
-        refusal = read_access_error(self, image_path)
+        refusal = path_access.read_access_error(self, image_path)
         if refusal:
             return refusal
         try:
@@ -512,6 +658,12 @@ class SDToolsMixin:
         import time
 
         # Apply instance defaults first
+        saved = self._saved_image_settings()
+        # Naming the saved model, as list_sd_models suggests, keeps its saved size and steps.
+        if saved and (not model or model == saved["model"]):
+            model = saved["model"]
+            size = size or saved["size"]
+            steps = steps if steps is not None else saved["steps"]
         model = model or self.sd_default_model
         size = size or self.sd_default_size
         steps = steps if steps is not None else self.sd_default_steps
@@ -524,6 +676,14 @@ class SDToolsMixin:
             try:
                 models = self.sd_client.list_sd_models()
                 if not any(m.get("id") == model for m in models):
+                    if saved and model == saved["model"]:
+                        return {
+                            "status": "error",
+                            "error": f"{model}, the image model chosen in GAIA's "
+                            "image settings, is not downloaded on this Lemonade. "
+                            "Choose another model in those settings, or download "
+                            f"{model} in Settings › Model.",
+                        }
                     return {
                         "status": "error",
                         "error": f"Invalid model '{model}' or model not downloaded. "
@@ -728,6 +888,28 @@ class SDToolsMixin:
             logger.error(error_msg, exc_info=True)
             return {"status": "error", "error": error_msg}
 
+    def _saved_image_settings(self) -> Optional[Dict[str, Any]]:
+        """The user's saved image model, size and steps, when this agent follows them.
+
+        Read fresh so a change in either app's settings applies to the next
+        image. None when not following, or when no model was saved.
+
+        Raises:
+            GaiaConfigError: config.json exists but cannot be read.
+        """
+        if not getattr(self, "sd_follow_user_settings", False):
+            return None
+        from gaia.config import GaiaConfig
+
+        config = GaiaConfig.load()
+        if not config.image_model:
+            return None
+        return {
+            "model": config.image_model,
+            "size": config.image_size,
+            "steps": config.image_steps,
+        }
+
     @staticmethod
     def _describe_client_error(error: Exception, model: str) -> str:
         """Turn a Lemonade client error into something the user can act on.
@@ -794,12 +976,13 @@ class SDToolsMixin:
         Returns:
             Path to saved image file
         """
-        # Create safe filename from prompt
+        # Both prompt and model can originate in a tool call: neither may
+        # introduce path segments or control whitespace into an output name.
         safe_prompt = re.sub(r"\s+", "_", re.sub(r"[^\w\s-]", "", prompt[:40]).strip())
+        safe_model = re.sub(r"\.{2,}|[^A-Za-z0-9_.-]", "_", model[:80])
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Content hash: two fast Turbo runs of one prompt land in the same second.
         digest = hashlib.sha256(image_bytes).hexdigest()[:8]
-        safe_model = re.sub(r"[^A-Za-z0-9_.-]", "_", model)
         filename = f"{safe_prompt}_{safe_model}_{timestamp}_{digest}.png"
 
         image_path = self.sd_output_dir / filename

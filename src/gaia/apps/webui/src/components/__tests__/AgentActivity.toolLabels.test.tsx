@@ -90,8 +90,14 @@ it('leaves hidden memory steps out of a folded summary', () => {
 });
 
 it('names a tool it has no label for, rather than "Used tool"', () => {
+    render(<AgentActivity steps={[step('shuffle_tiles')]} isActive={false} />);
+
+    expect(screen.getByText('Used shuffle tiles')).toBeInTheDocument();
+    expect(screen.queryByText('Used tool')).toBeNull();
+});
+
+it('says an image was created, in plain words', () => {
     render(<AgentActivity steps={[step('generate_image')]} isActive={false} />);
 
-    expect(screen.getByText('Used generate image')).toBeInTheDocument();
-    expect(screen.queryByText('Used tool')).toBeNull();
+    expect(screen.getByText('Created an image')).toBeInTheDocument();
 });

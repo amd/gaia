@@ -172,6 +172,10 @@ func (m ChatModel) handleClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, openURL(u)
 		}
 	}
+	if idx := m.messageAt(msg.Y); idx >= 0 && idx < len(m.messages) && m.messages[idx].ImagePath != "" {
+		m.lastClickRow, m.lastClickAt = -1, time.Time{}
+		return m, openImage(m.messages[idx].ImagePath)
+	}
 
 	double := msg.Y == m.lastClickRow && time.Since(m.lastClickAt) <= doubleClickWindow
 	m.lastClickRow, m.lastClickAt = msg.Y, time.Now()

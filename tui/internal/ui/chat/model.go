@@ -410,6 +410,9 @@ type ChatModel struct {
 	lemonadeUp      bool
 	lemonadeVersion string
 	lemonadeBaseURL string
+	// lastImagePath is the newest image the agent created this session, for
+	// /image open.
+	lastImagePath string
 	// lemonadeDownRefused makes the "local server is down" pre-refusal fire
 	// once per down report instead of forever. Nothing refreshes lemonadeUp
 	// between pings, so a sticky refusal would outlive the problem — see
@@ -1039,6 +1042,9 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case updateSavedMsg:
 		return m.handleUpdateSaved(msg)
+
+	case imageResultMsg:
+		return m.handleImageResult(msg)
 
 	case slackDeclinedMsg:
 		return m.handleSlackDeclined(msg)
@@ -1839,6 +1845,10 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// dispatched before the exact-match switch.
 	if isUpdateCommand(query) {
 		return m.runUpdateCommand(updateCommandArg(query))
+	}
+	// `/image` takes free-form arguments too: a model id, a size.
+	if isImageCommand(query) {
+		return m.runImageCommand(query)
 	}
 	// Free-form arguments too (a voice id, a speed), so also before the switch.
 	if isReadAloudCommand(query) {
@@ -2959,7 +2969,11 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		if m.width > 0 {
 			body = components.WrapText(body, max(m.cardWidth()-2, 1))
 		}
-		return statusMsgStyle.Render("  " + strings.ReplaceAll(body, "\n", "\n  "))
+		out := statusMsgStyle.Render("  " + strings.ReplaceAll(body, "\n", "\n  "))
+		if msg.ImagePath != "" {
+			out = linkImagePath(out, msg.ImagePath, m.width)
+		}
+		return out
 
 	default:
 		return msg.Content
