@@ -3223,6 +3223,8 @@ Do NOT wrap conversational replies in JSON.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
         self._turn_ungrounded: List[str] = []
+        # The answer the scope note is being written for.
+        self._turn_scoped_answer = ""
         # The user's own words this turn ask only for a plan, not an answer.
         self._turn_plan_only_requested = False
         self._deliverable_cache: Dict[tuple, list] = {}
@@ -10775,6 +10777,7 @@ Do NOT wrap conversational replies in JSON.
             unchecked_change=changed,
             has_tests=has_tests,
             ungrounded=getattr(self, "_turn_ungrounded", ()),
+            answer=getattr(self, "_turn_scoped_answer", ""),
         )
 
     def verification_state(self) -> Dict[str, Any]:
@@ -10803,6 +10806,7 @@ Do NOT wrap conversational replies in JSON.
         if not answer or not answer.strip():
             return answer
         body = strip_verification_scope(answer)
+        self._turn_scoped_answer = body
         statement = self.verification_scope_statement()
         if not body.strip():
             # Never surface the stale echo as this turn's answer.
@@ -11569,6 +11573,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_planted_sources: List[Tuple[str, int]] = []
         self._has_tests_cache = {}
         self._turn_ungrounded = []
+        self._turn_scoped_answer = ""
         self._deliverable_cache = {}
         self._completion_evidence = CompletionEvidence(
             self._request_text(user_input),
