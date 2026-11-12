@@ -2157,7 +2157,7 @@ class SSEOutputHandler(OutputHandler):
         if scope is not None:
             request["always_scope"] = scope.label
             # ``always_scope`` is matched as-is by the MCP control; this is its wording.
-            always_label = grant_phrase(tool_name, scope.subject)
+            always_label = scope.phrase or grant_phrase(tool_name, scope.subject)
             if always_label:
                 request["always_label"] = always_label
         # What this call does — `pytest` is not `rm -rf` — so the prompt's label

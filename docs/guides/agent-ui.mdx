@@ -750,9 +750,11 @@ The question appears above the message box with three answers:
 
 - **Allow once**
 - **Always allow** the same kind of action in this chat. For a host-resolved
-  file write, this covers files in that folder; unresolved or safety-sensitive
-  paths stay exact and continue to prompt (e.g. *writing notes.md*), and so
-  does a file whose real location is outside that folder
+  file write or edit, this covers changes to files in that folder: writing,
+  editing, and a plain rename that keeps the file in the folder. Unresolved or
+  safety-sensitive paths stay exact and continue to prompt (e.g. *writing
+  notes.md*), and so do a subfolder, a file whose real location is outside the
+  folder, and a move out of it
 - **Deny**
 
 When the same question comes back after you allowed it once, the prompt says
