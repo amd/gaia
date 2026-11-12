@@ -16,6 +16,7 @@ by .github/workflows/test_scale.yml.
 from __future__ import annotations
 
 import json
+import os
 import time
 from collections import Counter
 from pathlib import Path
@@ -30,15 +31,17 @@ from gaia.ui.server import create_app
 from tests.fixtures.fake_lemonade import FakeLemonade
 
 EMBEDDER = "user.embeddinggemma-300m-GGUF"
-FILES = 300
+#: 300 is the size rc18 failed at. GAIA_SCALE_FILES lowers it for a lane that
+#: cannot afford the reloads #7288 still costs per file.
+FILES = int(os.environ.get("GAIA_SCALE_FILES") or 300)
 MEMORIES = 500
-#: Seconds 300 small files may take against a server that answers at once.
-INDEX_BUDGET_S = 240
+#: Seconds the index may take against a server that answers at once.
+INDEX_BUDGET_S = 0.8 * FILES
 
 
 @pytest.fixture(scope="module")
 def indexed(tmp_path_factory):
-    """One 300-file folder index, in its own home, against a recording server."""
+    """One large folder index, in its own home, against a recording server."""
     root = tmp_path_factory.mktemp("scale")
     home = root / "home"
     home.mkdir()
@@ -78,7 +81,7 @@ def client():
     return TestClient(create_app(db_path=":memory:"))
 
 
-def test_a_300_file_folder_is_indexed_whole_with_one_row_each(indexed):
+def test_a_large_folder_is_indexed_whole_with_one_row_each(indexed):
     result = indexed["result"]
 
     assert result["failed"] == 0, result["errors"][:3]
@@ -89,7 +92,7 @@ def test_a_300_file_folder_is_indexed_whole_with_one_row_each(indexed):
 
 
 @pytest.mark.xfail(reason="amd/gaia#7288, fixed by open PR amd/gaia#7310", strict=True)
-def test_a_300_file_folder_loads_the_embedder_once_and_is_quick(indexed):
+def test_a_large_folder_loads_the_embedder_once_and_is_quick(indexed):
     loads, unloads = indexed["loads"], indexed["unloads"]
 
     assert len(loads) <= 2 and len(unloads) <= 2, (
