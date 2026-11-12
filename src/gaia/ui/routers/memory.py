@@ -1248,8 +1248,10 @@ def _scan_or_reason(source_key: str, scanner) -> Tuple[List[Dict], Optional[str]
         ``(items, message)``. `message` is a user-facing line to stream when the
         source cannot run or failed, and is None when the scan succeeded.
     """
-    from gaia.agents.base.discovery import unsupported_reason
+    from gaia.agents.base.discovery import covered_by_twin, unsupported_reason
 
+    if covered_by_twin(source_key):
+        return [], None
     reason = unsupported_reason(source_key)
     if reason:
         return [], f"  {reason}"
@@ -1292,6 +1294,7 @@ def stream_discovery():
         try:
             from gaia.agents.base.discovery import (
                 SystemDiscovery,
+                covered_by_twin,
                 unsupported_reason,
             )
 
@@ -1317,6 +1320,8 @@ def stream_discovery():
 
             total = 0
             for source_key in _DISCOVERY_SOURCES:
+                if covered_by_twin(source_key):
+                    continue
                 label = _DISCOVERY_SOURCE_LABELS.get(source_key, source_key)
                 yield _sse({"type": "log", "message": f"Scanning {label}..."})
                 reason = unsupported_reason(source_key)

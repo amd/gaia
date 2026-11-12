@@ -70,6 +70,7 @@ import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
+import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 import { useOpeningMessage } from '../hooks/useOpeningMessage';
 import { getT, useT } from '../i18n/useT';
 
@@ -552,6 +553,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             // Don't double-attach if a stream is already live in this view.
             if (isStreaming && !reconnect) return false;
         } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
+            // Asked now: a queued send skips the check below, and the image would reach a turn that can't see it.
+            if (hasImage && !modelKnownReady('vision') && !(await ensureModel('vision'))) return false;
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
             const queued = takeDraft();
             setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
@@ -572,6 +575,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (!(await ensureModel('chat')) || (hasImage && !(await ensureModel('vision')))) return false;
             } finally {
                 checkingModelRef.current = false;
+            }
+            // The user opened another chat during the check: this chat's queue sends it, out of that chat's view.
+            if (isStale()) {
+                const queued = takeDraft();
+                if (fromComposer && !session?.private) clearSavedDraft(chatDraftKey(sessionId));
+                setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
+                return true;
             }
         }
 
@@ -1572,10 +1582,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setActionError(null);
         const failures = await addDroppedFiles(sessionId, documents);
         if (failures.length > 0) {
-            setActionError(failures.map(({ name, stage, error }) => t(
-                stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
-                { name, error: requestErrorParam(error) },
-            )).join(' '));
+            setActionError(failures.map(({ name, stage, error }) => (stage === 'unreadable'
+                ? t('docsBar.failedTitle', { name })
+                : t(
+                    stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
+                    { name, error: requestErrorParam(error) },
+                ))).join(' '));
         }
     }, [sessionId, attach, t]);
 

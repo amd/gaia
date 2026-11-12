@@ -8,6 +8,7 @@ import { create } from 'zustand';
 import * as api from '../services/api';
 import { useChatStore } from './chatStore';
 import { log } from '../utils/logger';
+import { tEn, useT, type Translate } from '../i18n/useT';
 import type { ActiveModel, Session, WarmUpStatus } from '../types';
 
 /** Why a pick's load failed: the backend's own reason, or a translated one when GAIA lost track. */
@@ -312,7 +313,16 @@ export interface InferencePlace {
 export function inferencePlace(
     active: ActiveModel | null,
     location: InferenceLocation | undefined,
+    t: Translate = tEn,
 ): InferencePlace | null {
+    const local = (backendSentence: string | null | undefined): InferencePlace => {
+        const model = location?.effective_model || active?.model;
+        return {
+            remote: false,
+            label: t.bare('modelStatus.local'),
+            description: backendSentence && model ? t.bare('modelStatus.localNotice', { model: displayModelName(model) }) : null,
+        };
+    };
     // The chat names a model this window's pick doesn't (another window or the TUI
     // changed it): its own location goes with that name, or the chip contradicts itself.
     const pickIsStale =
@@ -332,11 +342,11 @@ export function inferencePlace(
         };
     }
     if (location?.inference_remote === false) {
-        return { remote: false, label: 'Local', description: location.inference_description ?? null };
+        return local(location.inference_description);
     }
     // No chat yet: the backend's answer for where a new chat would run.
     if (location === undefined && active?.inference_remote === false) {
-        return { remote: false, label: 'Local', description: active.inference_description ?? null };
+        return local(active.inference_description);
     }
     return null;
 }
@@ -348,7 +358,8 @@ export const UNKNOWN_PLACE_TITLE =
 export function useInferencePlace(): InferencePlace | null {
     const active = useModelStore((s) => s.active);
     const location = useChatStore((s) => selectInferenceLocation(s.sessions, s.currentSessionId));
-    return inferencePlace(active, location);
+    const t = useT();
+    return inferencePlace(active, location, t);
 }
 
 /**

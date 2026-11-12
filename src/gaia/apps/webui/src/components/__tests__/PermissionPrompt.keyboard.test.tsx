@@ -9,13 +9,13 @@ import { useNotificationStore } from '../../stores/notificationStore';
 const originalRespond = useNotificationStore.getState().respondToPermission;
 const respond = vi.fn().mockResolvedValue(undefined);
 
-function raise(timeoutSeconds?: number) {
+function raise(timeoutSeconds?: number, expiresAt?: number) {
     useNotificationStore.getState().addNotification({
         id: 'perm-1', type: 'permission_request', agentId: 's', sessionId: 's', agentName: 'GAIA',
         title: 'Allow write_file?', message: 'The agent wants to execute: write_file',
         timestamp: 1, read: false, dismissed: false, priority: 'high',
         tool: 'write_file', toolArgs: { file_path: 'C:\\Users\\me\\notes.txt' },
-        timeoutSeconds,
+        timeoutSeconds, expiresAt,
     });
 }
 
@@ -88,7 +88,7 @@ describe('PermissionPrompt countdown', () => {
         expect(screen.getByText('1s')).toBeInTheDocument();
 
         act(() => { vi.advanceTimersByTime(1_000); });
-        expect(screen.getByText('No answer in time, so GAIA was told no.')).toBeInTheDocument();
+        expect(screen.getByText('Timed out with no answer. Nothing ran.')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Allow once' })).not.toBeInTheDocument();
         expect(respond).not.toHaveBeenCalled();
     });
@@ -104,6 +104,15 @@ describe('PermissionPrompt countdown', () => {
         });
 
         expect(screen.getByText('4:59')).toBeInTheDocument();
+    });
+
+    it('keeps counting from the original deadline when the prompt comes back after a reload', () => {
+        vi.useFakeTimers();
+        raise(600, Date.now() + 90_000);
+        render(<PermissionPrompt sessionId="s" />);
+
+        expect(screen.getByText('1:30')).toBeInTheDocument();
+        expect(screen.queryByText('10:00')).not.toBeInTheDocument();
     });
 
     it('shows no countdown when the backend sent no timeout', () => {

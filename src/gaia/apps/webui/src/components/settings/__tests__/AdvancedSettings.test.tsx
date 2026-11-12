@@ -227,6 +227,33 @@ describe('AdvancedSettings', () => {
             expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
         });
 
+        it('still carries the note when Settings is opened again on the saved bad ID', async () => {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.getSettings.mockResolvedValue({
+                custom_model: 'fireworks.no-such-model',
+                model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+
+            expect(await screen.findByDisplayValue('fireworks.no-such-model')).toBeInTheDocument();
+            expect(await screen.findByText(/the model server doesn't list “fireworks.no-such-model”/)).toBeInTheDocument();
+            expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        });
+
+        it('opens with no note on a saved ID the model server lists', async () => {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.getSettings.mockResolvedValue({
+                custom_model: 'Qwen3-4B-GGUF',
+                model_status: { found: true, checked: true, downloaded: true, loaded: false },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+
+            await screen.findByDisplayValue('Qwen3-4B-GGUF');
+            expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
+        });
+
         it('drops the note once the ID is edited', async () => {
             await save('fireworks.no-such-model', { found: false, checked: true });
             await screen.findByText(/Saved, but the model server/);
