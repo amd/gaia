@@ -70,7 +70,8 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `prompt_context.script`: `{ text, hidden_lines }` with up to 400 lines (48,000
   characters) of the file as it was when the prompt was built, or
   `{ unreadable }` (`missing`, `not_text`, `too_large`, `unreadable`) when there
-  is nothing to show. `summary` shows the first lines under the path. If the
+  is nothing to show. `summary` shows the first lines under the path and, when
+  it leaves lines out, the file's full path to read them at. If the
   file changes after the prompt was built, the run is refused and the agent
   asks again with the new content. `args` still holds exactly the model's
   arguments.

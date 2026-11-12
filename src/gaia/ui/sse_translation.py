@@ -962,33 +962,45 @@ _UNREADABLE_SCRIPT = {
 }
 
 
-def _code_summary(code: str, unseen: int = 0) -> str:
+def _code_summary(code: str, unseen: int = 0, where: str = "") -> str:
     """*code* cut to :data:`SUMMARY_CODE_LINES`, counting every line left out.
 
     *unseen* is how many more lines follow *code* that the prompt was never
     given; the end of the code is then not on hand, so only its start shows.
+    *where* is the file the code was read from: a cut then names it, since a
+    terminal prompt has no way to show the rest.
     """
-    lines = code.strip("\n").splitlines() or [""]
+    lines = [
+        _elide_middle(line, SUMMARY_COMMAND_CHARS)
+        for line in code.strip("\n").splitlines() or [""]
+    ]
+    read_it = f": open {where} to read them" if where else ""
     if unseen:
         hidden = max(len(lines) - SUMMARY_CODE_LINES, 0) + unseen
-        lines = lines[:SUMMARY_CODE_LINES] + [f"…[{hidden} more lines not shown]"]
+        lines = lines[:SUMMARY_CODE_LINES] + [
+            f"…[{hidden} more lines not shown{read_it}]"
+        ]
     elif len(lines) > SUMMARY_CODE_LINES:
         hidden = len(lines) - SUMMARY_CODE_LINES
         lines = (
-            lines[: SUMMARY_CODE_LINES - 4] + [f"…[{hidden} more lines]…"] + lines[-4:]
+            lines[: SUMMARY_CODE_LINES - 4]
+            + [f"…[{hidden} more lines{read_it}]…"]
+            + lines[-4:]
         )
-    return "\n".join(_elide_middle(line, SUMMARY_COMMAND_CHARS) for line in lines)
+    return "\n".join(lines)
 
 
-def _script_summary(script: Any) -> str:
-    """The lines a file-running prompt shows under the file's path."""
+def _script_summary(script: Any, path: str = "") -> str:
+    """The lines a file-running prompt shows under the file's *path*."""
     if not isinstance(script, dict):
         return ""
     if isinstance(script.get("text"), str):
         if not script["text"].strip():
             return "This file is empty."
         hidden = script.get("hidden_lines")
-        return _code_summary(script["text"], hidden if isinstance(hidden, int) else 0)
+        return _code_summary(
+            script["text"], hidden if isinstance(hidden, int) else 0, path
+        )
     return _UNREADABLE_SCRIPT.get(
         str(script.get("unreadable")), _UNREADABLE_SCRIPT["unreadable"]
     )
@@ -1071,7 +1083,7 @@ def render_command_summary(
             path = str(args.get("file_path") or "")
             body = _short_location(path, workspace) or os.path.basename(path)
             # A path does not say what the file does: its code follows.
-            script = _script_summary(args.get(SCRIPT_ARG))
+            script = _script_summary(args.get(SCRIPT_ARG), path)
         location = ""
     else:
         command = str(args.get("command") or "").strip()

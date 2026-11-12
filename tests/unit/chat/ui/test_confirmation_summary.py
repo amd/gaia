@@ -201,10 +201,12 @@ def test_a_command_run_in_the_home_folder_keeps_its_paths_home_rooted():
     assert summary == "ls -d ~/*/src/app; ls -d ~/src/app"
 
 
+SCRIPT = os.path.join(WS, "build_recon.py")
+
+
 def _file_summary(script):
-    path = os.path.join(WS, "build_recon.py")
     return render_command_summary(
-        "execute_python_file", {"file_path": path, SCRIPT_ARG: script}, workspace=WS
+        "execute_python_file", {"file_path": SCRIPT, SCRIPT_ARG: script}, workspace=WS
     )
 
 
@@ -225,7 +227,10 @@ def test_a_long_script_keeps_its_first_and_last_lines_like_code():
     lines = _file_summary({"text": code, "hidden_lines": 0}).splitlines()
 
     assert lines[1] == "print(0)" and lines[-1] == "print(29)"
-    assert f"…[{30 - SUMMARY_CODE_LINES} more lines]…" in lines
+    # A terminal prompt cannot show the rest, so the cut says where it is.
+    assert (
+        f"…[{30 - SUMMARY_CODE_LINES} more lines: open {SCRIPT} to read them]…" in lines
+    )
 
 
 def test_a_capped_script_counts_every_line_it_does_not_show():
@@ -233,7 +238,9 @@ def test_a_capped_script_counts_every_line_it_does_not_show():
     lines = _file_summary({"text": code, "hidden_lines": 250}).splitlines()
 
     assert lines[1] == "print(0)"
-    assert lines[-1] == f"…[{650 - SUMMARY_CODE_LINES} more lines not shown]"
+    assert lines[-1] == (
+        f"…[{650 - SUMMARY_CODE_LINES} more lines not shown: open {SCRIPT} to read them]"
+    )
     assert len(lines) == SUMMARY_CODE_LINES + 2
 
 
