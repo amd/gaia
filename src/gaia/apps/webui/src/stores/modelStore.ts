@@ -55,6 +55,7 @@ export const MODEL_RETRY_INITIAL_MS = 1_000;
 export const MODEL_RETRY_MAX_MS = 30_000;
 let restoreRetries = 0;
 let restoreTimer: ReturnType<typeof setTimeout> | null = null;
+let dismissedRestore: string | null = null;
 let namesRequested = false;
 let failRetryTimer: ReturnType<typeof setTimeout> | null = null;
 let failRetryMs = MODEL_RETRY_INITIAL_MS;
@@ -77,6 +78,7 @@ export function resetModelRetryForTests(): void {
     clearRestoreRetry();
     failRetryMs = MODEL_RETRY_INITIAL_MS;
     restoreRetries = 0;
+    dismissedRestore = null;
     namesRequested = false;
     pickLoadWatch += 1;
 }
@@ -151,10 +153,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
             }
             const recovered = (r?.status === 'restored' || r?.status === 'none') && !r.message
                 && get().restoreNotice?.ok === false;
+            const dismissed = r?.status !== 'restored' && r?.message === dismissedRestore;
             set({
                 active,
                 error: null,
-                ...(r && r.status !== 'none' && r.message
+                ...(r && r.status !== 'none' && r.message && !dismissed
                     ? { restoreNotice: { ok: r.status === 'restored', message: r.message } }
                     : recovered ? { restoreNotice: null } : {}),
             });
@@ -178,6 +181,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         forgetModelChecks();
         clearRestoreRetry();
         const active = await api.selectModel(model);
+        dismissedRestore = null;
         // Sessions name the model they run; refetch so the chip doesn't lag a poll behind.
         let sessions: Session[] | null = null;
         try {
@@ -215,7 +219,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
         for (const m of models) if (m.display_name) next[m.id] = m.display_name;
         set({ names: next });
     },
-    dismissRestoreNotice: () => set({ restoreNotice: null }),
+    dismissRestoreNotice: () => {
+        const notice = get().restoreNotice;
+        if (notice && !notice.ok) dismissedRestore = notice.message;
+        set({ restoreNotice: null });
+    },
     retryPickLoad: async () => {
         const model = get().pickLoad?.model;
         if (!model) return;

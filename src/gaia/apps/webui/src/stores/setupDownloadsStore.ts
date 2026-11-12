@@ -71,6 +71,8 @@ export function scopedStatus(status: SetupRunStatus | null, started: readonly st
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
+// Outlives status polls; only a successful start or a new request clears it.
+let startError: string | null = null;
 
 function errorText(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
@@ -94,8 +96,10 @@ export const useSetupDownloads = create<SetupDownloadsState>((set, get) => {
         set({ queue: rest });
         try {
             set({ status: await api.downloadSetupModel(head.id, head), error: null });
+            startError = null;
         } catch (err) {
-            set({ error: errorText(err) });
+            startError = errorText(err);
+            set({ error: startError });
         }
     };
 
@@ -106,7 +110,7 @@ export const useSetupDownloads = create<SetupDownloadsState>((set, get) => {
         started: [],
         refresh: async () => {
             try {
-                set({ status: await api.getSetupStatus(), error: null });
+                set({ status: await api.getSetupStatus(), error: startError });
             } catch (err) {
                 set({ error: `Lost contact with GAIA: ${errorText(err)}` });
             }
@@ -114,6 +118,7 @@ export const useSetupDownloads = create<SetupDownloadsState>((set, get) => {
             schedule();
         },
         enqueue: async (ids, options = {}) => {
+            startError = null;
             const add = ids.map((id) => ({ id, acknowledgeLowDisk: !!options.acknowledgeLowDisk, keepTrying: !!options.keepTrying }));
             set((s) => ({
                 queue: [...s.queue.filter((q) => !ids.includes(q.id)), ...add],
@@ -139,5 +144,6 @@ export const useSetupDownloads = create<SetupDownloadsState>((set, get) => {
 export function resetSetupDownloads(): void {
     if (timer) clearInterval(timer);
     timer = null;
+    startError = null;
     useSetupDownloads.setState({ status: null, error: null, queue: [], started: [] });
 }

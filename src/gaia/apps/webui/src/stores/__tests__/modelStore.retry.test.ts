@@ -98,4 +98,27 @@ describe('modelStore restore notice', () => {
         expect(mocked.getActiveModel).toHaveBeenCalledTimes(1);
         expect(useModelStore.getState().restoreNotice).toBeNull();
     });
+
+    it('keeps a dismissed warning dismissed while the restore is checked again', async () => {
+        mocked.getActiveModel.mockResolvedValue({ ...LOCAL, restore: FAILED } as never);
+        await useModelStore.getState().refresh();
+        useModelStore.getState().dismissRestoreNotice();
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(mocked.getActiveModel).toHaveBeenCalledTimes(2);
+        expect(useModelStore.getState().restoreNotice).toBeNull();
+        await useModelStore.getState().refresh();
+        expect(useModelStore.getState().restoreNotice).toBeNull();
+    });
+
+    it('shows a later failure again once the user picks a model', async () => {
+        mocked.getActiveModel.mockResolvedValue({ ...LOCAL, restore: FAILED } as never);
+        mocked.selectModel.mockResolvedValue(ACTIVE);
+        mocked.listSessions.mockResolvedValue({ sessions: [] } as never);
+        mocked.getWarmUp.mockResolvedValue({ state: 'idle' } as never);
+        await useModelStore.getState().refresh();
+        useModelStore.getState().dismissRestoreNotice();
+        await useModelStore.getState().select('Gemma-4-E4B-it-GGUF');
+        await useModelStore.getState().refresh();
+        expect(useModelStore.getState().restoreNotice).toEqual({ ok: false, message: FAILED.message });
+    });
 });
