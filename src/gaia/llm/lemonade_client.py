@@ -2067,8 +2067,7 @@ MODELS = {
     # (UD-Q4_K_XL + BF16 vision projector + DFlash draft), so it is
     # pulled by name. Its template sets reasoning from ``reasoning_strength``
     # (default "high"), not ``reasoning_effort``, so turns run at the default.
-    # It cannot be switched off: on a one-line question "low" reasons for ~160
-    # tokens where the default spends ~450.
+    # It cannot be switched off: "low" reasons less than the default, not zero.
     "muse-glimmer-30b": ModelRequirement(
         model_type=ModelType.LLM,
         model_id=MUSE_GLIMMER_MODEL_NAME,
@@ -2448,8 +2447,8 @@ def reasoning_headroom(model_id: Optional[str]) -> int:
     """Tokens a short side call adds to ``max_tokens`` for a local model that
     reasons even at its least, so the reasoning does not eat the answer.
 
-    Measured on one-line questions: gpt-oss at "low" used a few tokens, Muse
-    Glimmer at "low" about 160. 0 for every other model.
+    gpt-oss at "low" reasons only briefly; Muse Glimmer at "low" still reasons
+    at length. 0 for every other model.
     """
     mr = find_model_requirement(model_id) if isinstance(model_id, str) else None
     if mr is None or cloud_model_provider(model_id):

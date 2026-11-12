@@ -334,8 +334,7 @@ class TestMuseGlimmer:
         assert lc.requested_reasoning_effort(lc.MUSE_GLIMMER_MODEL_NAME) is None
 
     def test_side_calls_ask_for_its_least_reasoning(self):
-        """It cannot stop reasoning: "low" took ~160 tokens on a one-line
-        question where the default took ~450 (measured)."""
+        """It cannot stop reasoning; "low" only shortens it."""
         assert lc.no_thinking_kwargs(lc.MUSE_GLIMMER_MODEL_NAME) == {
             "chat_template_kwargs": {"reasoning_strength": "low"}
         }
@@ -344,8 +343,8 @@ class TestMuseGlimmer:
         assert lc.reasoning_headroom(None) == 0
 
     def test_reads_images_itself(self):
-        """Handing an image to Gemma evicted it and took ~2.5 min (measured);
-        its own encoder read the same kind of image in ~12 s."""
+        """Handing an image to Gemma would evict it and reload both; its own
+        encoder answers without a swap."""
         from gaia.installer import model_choice
 
         assert lc.MUSE_GLIMMER_MODEL_NAME in lc.VISION_CHAT_MODELS

@@ -115,12 +115,11 @@ summarizing a document, memory upkeep) and on `gaia llm`. It needs ~24 GB
 for models at a 64K window (21 GB of weights, vision projector and draft model, plus
 a small context cache), so a 32 GB GPU or a 64 GB+ Strix Halo holds it at its full
 128K window; a 24 GB card does not. It is dense rather than a mixture of experts, so
-on a Strix Halo it reads prompts about 3x and writes about 2x more slowly than Qwen3.6.
-The first reply after GAIA starts takes longest: on a 128 GB Strix Halo, reading GAIA's
-instructions into the model took about four minutes, and the app says so while it waits.
-On GAIA's task suites it passed about as many tasks as Qwen3.6 (33 of 56 against 31)
-in about 1.3x the time, and it more often saved plain text under a `.docx` or `.xlsx`
-name instead of a real Office file.
+on a Strix Halo it reads prompts and writes text noticeably more slowly than Qwen3.6.
+The first reply after GAIA starts takes longest, while the model reads GAIA's
+instructions, and the app says so while it waits.
+On our agent tasks it did about as well as Qwen3.6 but somewhat more slowly, and it more
+often saved plain text under a `.docx` or `.xlsx` name instead of a real Office file.
 
 The TUI's model picker lists it and marks it **won't fit** on a PC that cannot hold
 it. The Agent UI offers it in Settings for download only on a PC that holds it.

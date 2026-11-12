@@ -1189,8 +1189,8 @@ class TestSessionTitleRequest:
         assert sent["max_tokens"] > 24
 
     def test_a_model_that_grades_reasoning_its_own_way_gets_room_too(self):
-        """Muse Glimmer reasoned for ~160 tokens at its lowest strength
-        (measured), so 24 tokens named no chat."""
+        """Muse Glimmer still reasons at its lowest strength, so a 24-token
+        budget named no chat."""
         from gaia.llm.lemonade_client import MUSE_GLIMMER_MODEL_NAME
 
         sent = self._sent_kwargs(MUSE_GLIMMER_MODEL_NAME)
