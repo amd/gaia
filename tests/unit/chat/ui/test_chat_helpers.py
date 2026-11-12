@@ -1169,6 +1169,69 @@ class TestSessionTitleRequest:
         prompt = client.chat_completions.call_args.args[1][0]["content"]
         assert "in the language the user wrote in" in prompt
 
+    @staticmethod
+    def _title_for(user_msg, reply):
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client("Gemma-4-E4B-it-GGUF", reply)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            return asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    "Gemma-4-E4B-it-GGUF",
+                    user_msg,
+                    "ok",
+                )
+            )
+
+    def test_a_title_in_another_script_falls_back_to_the_question(self):
+        """An English request was titled 'retention_days 改为 30' (#7197)."""
+        from gaia.ui import _chat_helpers as ch
+
+        question = "Change retention_days to 30 in C:/work/sync.toml"
+        title = self._title_for(question, "retention_days 改为 30")
+        assert title == ch._title_from_question(question)
+
+    def test_a_title_in_the_users_script_is_kept(self):
+        assert self._title_for("خطط لرحلة إلى لشبونة", "رحلة لشبونة") == "رحلة لشبونة"
+
+    def test_an_english_title_for_an_arabic_question_falls_back(self):
+        from gaia.ui import _chat_helpers as ch
+
+        question = "خطط لرحلة إلى لشبونة"
+        assert self._title_for(question, "Lisbon trip plan") == (
+            ch._title_from_question(question)
+        )
+
+    def test_a_title_naming_a_file_the_user_named_in_its_own_script_is_kept(self):
+        """The check is per script the user used, not per main language."""
+        question = "Rename 报告.docx to report.docx"
+        assert self._title_for(question, "Rename 报告 file") == "Rename 报告 file"
+
+    def test_a_title_with_no_letters_is_kept(self):
+        assert self._title_for("خطط لميزانية 2027", "2027") == "2027"
+
+    def test_the_users_later_message_counts_as_their_script(self):
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client("Gemma-4-E4B-it-GGUF", "Lisbon trip plan")
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            title = asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    "Gemma-4-E4B-it-GGUF",
+                    "مرحبا",
+                    "ok",
+                    "Plan 3 days in Lisbon",
+                )
+            )
+        assert title == "Lisbon trip plan"
+
+    def test_the_prompt_pins_the_title_to_the_users_message_language(self):
+        from gaia.ui import _chat_helpers as ch
+
+        assert "never translate" in ch._TITLE_INSTRUCTION.lower()
+
     def test_a_model_with_no_registered_switch_titles_with_thinking_off(self):
         """Gemma 4 reasoned through all 24 tokens on "hi" (measured)."""
         sent = self._sent_kwargs("Gemma-4-E4B-it-GGUF")

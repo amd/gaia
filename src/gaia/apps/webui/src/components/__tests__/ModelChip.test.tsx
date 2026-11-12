@@ -19,6 +19,7 @@ const LOCAL_ACTIVE: ActiveModel = {
 };
 const CLOUD_ACTIVE: ActiveModel = {
     provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false,
+    provider_name: 'Fireworks AI',
 };
 
 const LOCAL: ProviderInfo = { id: 'local', name: 'Local', remote: false, privacy_notice: 'Runs on this PC.' };
