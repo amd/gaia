@@ -1158,6 +1158,18 @@ class TestHeredocCannotHideARefusedCommand:
         "cat > \"${OUT}/$(date +%s).log\" <<'EOF'\nhello world\nEOF",
         "cat > '${OUT}' <<'EOF'\nhello world\nEOF",
         "git commit -m \"$(cat <<'EOF'\nfix: thing\n\nhello body\nEOF\n)\"",
+        # Operator-form expansions end where sh ends them, too.
+        "cat > \"${OUT:-.}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${VAR%/}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > ${1:-out}.txt <<'EOF'\nhello world\nEOF",
+        "cat > \"${FILE:?msg}\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${BASE/.md/.txt}\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${name,,}.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"part${#x}.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"part$((i+1)).txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${OUT:-${HOME}/out}/$(date +%s).log\" <<'EOF'\nhello world\nEOF",
+        'cat > "$(dirname "$(pwd)")/a.txt" <<\'EOF\'\nhello world\nEOF',
+        "cat > \"part$(( (i + 1) * 2 )).txt\" <<'EOF'\nhello world\nEOF",
     ]
 
     @pytest.mark.parametrize("command", EXPANSION_OPENERS)
@@ -1193,12 +1205,106 @@ class TestHeredocCannotHideARefusedCommand:
         "echo ${OUT}${x:-<<EOF}\nrm -rf x\nEOF",
         # Shells disagree on whether a continued line can end the body.
         "cat <<EOF\nhello \\\nEOF\nrm -rf x",
+        # A '<<' inside any expansion, quote or arithmetic is not an opener.
+        "echo `cat <<EOF`\nrm -rf x\nEOF",
+        'echo "${x:-<<EOF}"\nrm -rf x\nEOF',
+        "echo $(( $(cat) <<EOF ))\nrm -rf x\nEOF",
+        "[[ a <<EOF ]]\nrm -rf x\nEOF",
+        "cat <(cat <<EOF\nrm -rf x\nEOF\n)",
+        "echo $[1<<EOF]\nrm -rf x\nEOF",
+        # A comment inside $( ) can swallow its ')'.
+        "echo $(echo # ) <<EOF\nrm -rf x\nEOF\n)",
+        # Shells disagree on a quote inside ${ } inside double quotes.
+        'echo "${x:-"}"}" <<EOF\nrm -rf x\nEOF',
+        # Shells disagree on a brace inside ${ }.
+        "echo ${x:-{}<<EOF}\nrm -rf x\nEOF",
+        # A $(( closed by a single ')' is a subshell, not arithmetic.
+        "echo $((echo a) ; (echo b)) <<EOF\nrm -rf x\nEOF",
+        # Never balanced.
+        "echo ${x:-a <<EOF\nrm -rf x\nEOF",
+        "echo $(echo a <<EOF\nrm -rf x\nEOF",
     ]
 
     @pytest.mark.parametrize("command", UNREADABLE_SHAPES)
     def test_an_unreadable_expansion_or_continuation_is_still_walked(self, command):
         assert "rm -rf x" in _strip_heredoc_bodies(command)
         assert check(command, bypass=True) is not None
+
+    #: Real-world heredocs main runs under full access; none may regress.
+    MAIN_ALLOWS_UNDER_FULL_ACCESS = [
+        'cat > Dockerfile <<EOF\nFROM python:${PY_VERSION}-slim\nWORKDIR /app\nCOPY . .\nRUN pip install -r requirements.txt && \\n    rm -rf /root/.cache\nCMD ["python", "app.py"]\nEOF',
+        "cat > Makefile <<'EOF'\nCC=gcc\nall: app\n\napp: main.o\n\t$(CC) -o $@ $^\n\nclean:\n\trm -f *.o app\nEOF",
+        "cat > .github/workflows/ci.yml <<'EOF'\nname: CI\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: pytest -q | tee out.txt\nEOF",
+        'cat > config.json <<EOF\n{\n  "name": "$NAME",\n  "version": "1.0.0",\n  "home": "${HOME}/app"\n}\nEOF',
+        "python - <<'PY'\nimport json, sys\nd = {'a': 1}; print(json.dumps(d))\nif d['a'] > 0 and True: print('ok')\nPY",
+        "git commit -m \"$(cat <<'EOF'\nfix(shell): read heredocs right\n\nBody line with it's apostrophe; and semicolons & pipes |.\nEOF\n)\"",
+        "cat > out.sh <<-EOF\n\t#!/bin/sh\n\techo hi; echo there\n\tEOF",
+        "cat > a.txt <<'EOF'\nalpha\nEOF\ncat > b.txt <<'EOF'\nbeta\nEOF\nls -la",
+        'cat > env.sh <<EOF\nexport PATH="$PATH:/opt/bin"\nexport BUILD=$(git rev-parse --short HEAD)\nEOF',
+        "cat <<'EOF' | grep -v '^#'\n# comment\nkeep me\nEOF",
+        "cat > a.py <<'EOF'\nprint('hi')\nEOF\npython a.py && echo done",
+        "cd build && cat > CMakeLists.txt <<'EOF'\ncmake_minimum_required(VERSION 3.10)\nproject(App)\nadd_executable(app main.cpp)\nEOF",
+        'cat > README.md <<"EOF"\n# Title\n`code` and $VAR stay literal\nEOF',
+        "cat > script.py <<'END_OF_SCRIPT'\nfor i in range(3):\n    print(i)\nEND_OF_SCRIPT",
+        "cat <<EOF >> ~/.bashrc\nalias ll='ls -la'\nEOF",
+        "python3 <<'EOF'\nimport re\nprint(re.sub(r'\\s+', ' ', 'a   b'))\nEOF",
+        "cat > notes.txt <<EOF\n    indented line\n  another\nEOF",
+        "node <<'JS'\nconst x = [1,2,3].map(n => n * 2);\nconsole.log(x.join(','));\nJS",
+        "cat > Dockerfile <<'EOF'\nFROM node:20\nRUN npm ci \\n && npm run build\nEOF",
+        "git commit -F - <<'EOF'\nchore: bump\n\nDetails here.\nEOF",
+        'gh pr create --title "fix: x" --body "$(cat <<\'EOF\'\n## Summary\n- one\n- two\nEOF\n)"',
+        'cat > run.sh <<EOF\nPORT=${PORT:-8080}\necho "listening on \\$PORT"\nEOF',
+        "cat > \"${OUT:-.}/x.txt\" <<'EOF'\nhello\nEOF",
+        "cat <<EOF\nhi\nEOF\n",
+        "python - <<'EOF'\nname = 'x'  # comment << not heredoc\nprint(f'{name}')\nEOF",
+        "cat > n.txt <<EOF\ncount=$((1 + 2))\nEOF",
+        "cat > n.txt <<EOF\nnow=`date`\nEOF",
+        "cat > \"${OUT:-.}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"${OUT_DIR%/}/x.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > \"$1\" <<'EOF'\nhello world\nEOF",
+        "cat > \"$HOME/.config/app.toml\" <<'EOF'\nhello world\nEOF",
+        "cat > ~/.config/app.toml <<'EOF'\nhello world\nEOF",
+        'export NAME=demo\ncat > "$NAME.txt" <<EOF\n$NAME\nEOF',
+        "cat > \"$(git rev-parse --show-toplevel)/.env\" <<'EOF'\nKEY=1\nEOF",
+        "cat > out.txt <<EOF\nlines: $(wc -l < in.txt)\nEOF",
+        "cat > out.txt <<EOF\n`whoami`\nEOF",
+        'cat >"$OUT" <<EOF\nhello world\nEOF',
+        "cat <<EOF | python -\nprint('${X:-y}')\nEOF",
+        "python - \"$@\" <<'EOF'\nimport sys; print(sys.argv)\nEOF",
+        "cat > \"${DIR}/a b.txt\" <<'EOF'\nhello world\nEOF",
+        "cat > ${1:-out}.txt <<'EOF'\nhello world\nEOF",
+        "cat > \"$TMPDIR/$(date +%Y%m%d).log\" <<'EOF'\nhello world\nEOF",
+        "cat > x.sh <<'EOF'\n#!/usr/bin/env bash\nset -euo pipefail\necho \"${1:-none}\" | tr a-z A-Z\nEOF",
+        "cat > x.py <<'EOF'\nprint(\"a\" << 2 if False else 1)\nEOF",
+        "git commit -m \"$(cat <<'EOF'\nfeat: x\n\nUses ${VAR} and $(cmd) in text.\nEOF\n)\"",
+        "git tag -a v1 -m \"$(cat <<'EOF'\nRelease v1\nEOF\n)\"",
+        'cat <<EOF > "${OUT}"\nhello world\nEOF',
+    ]
+
+    def test_a_test_bracket_before_the_opener_keeps_the_body_out(self):
+        command = "[[ -d out ]] && cat > out/a.txt <<'EOF'\nhello world\nEOF"
+        assert "hello world" not in _strip_heredoc_bodies(command)
+
+    @pytest.mark.parametrize("command", MAIN_ALLOWS_UNDER_FULL_ACCESS)
+    def test_every_heredoc_main_runs_still_runs(self, command):
+        assert check(command, bypass=True) is None
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            'cat > "' + "${OUT:-x}" * 100 + "/a.txt\" <<'EOF'\nhello\nEOF",
+            'cat > "' + "${a:-" * 100 + "x" + "}" * 100 + "\" <<'EOF'\nhello\nEOF",
+            "echo $((" + "(" * 100 + "1" + ")" * 100 + "))",
+            'cat > "' + "$(" * 100 + "x" + ")" * 100 + "\" <<'EOF'\nhello\nEOF",
+            # Many long names inside an unclosed or rejected $( ).
+            'echo "$(' + " $LONG_VARIABLE_NAME_" * 100 + ' <x" <<EOF\nhello\nEOF',
+            "echo $(" + " $LONG_VARIABLE_NAME_" * 100 + " <x <<EOF\nhello\nEOF",
+        ],
+    )
+    def test_the_scan_stays_linear(self, command):
+        start = time.perf_counter()
+        _strip_heredoc_bodies(command)
+        assert time.perf_counter() - start < 0.05
 
 
 class TestReadOnlySubGuardsLiftUnderBypassOnly:

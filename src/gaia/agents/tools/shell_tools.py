@@ -1899,39 +1899,27 @@ _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 _BYPASS_PUNCTUATION = ";&|<>\n"
 
 
-#: Syntax the heredoc scan does not model. Outside a body, any of it means the
-#: scan cannot be sure it reads the line as sh does, so nothing is stripped.
-_HEREDOC_UNMODELLED = ("`", "$(", "${", "$[", "$'", '$"', "((", "[[", "<<<", "<(", ">(")
-
 #: The delimiters the scan trusts to end a body.
 _HEREDOC_WORD = re.compile(r"[A-Za-z0-9_.-]+")
 
 #: Characters that end an unquoted word for sh.
 _SHELL_METACHARS = " \t|&;()<>"
 
-_PLAIN_PARAM = (
-    r"\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\})"
-)
+#: Bash reads these as ANSI-C quoting and arithmetic, dash as ``$`` followed
+#: by a quote or a glob, so the two shells end them in different places.
+_HEREDOC_SHELL_DEPENDENT = ("$'", "$[")
 
-#: Expansions the scan can skip because sh ends them where it does: a plain
-#: ``${NAME}``, or a one-line ``$(...)`` with no parens, heredoc, comment,
-#: backslash or backtick that could move where sh closes it.
-_HEREDOC_SAFE_EXPANSION = re.compile(
-    r"\$\{(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}"
-    r"|\$\((?:[^()'\"`$\\<#\n]|'[^'\n]*'"
-    r"|\"(?:[^\"`$\\\n]|" + _PLAIN_PARAM + r")*\"|" + _PLAIN_PARAM + r")*\)"
-)
+#: A ``case`` pattern's bare ``)`` would close an enclosing ``$(`` early.
+_CASE_WORD = re.compile(r"case(?![\w-])")
 
-#: A ``case`` pattern's bare ``)`` would close the ``$(`` early.
-_CASE_WORD = re.compile(r"(?<![\w-])case(?![\w-])")
+#: Expansions that nest, longest first, and the context each one opens.
+_HEREDOC_EXPANSIONS = (("$((", "$(("), ("$(", "$("), ("${", "${"), ("`", "`"))
 
+#: Contexts whose text sh reads as commands.
+_COMMAND_CONTEXTS = (None, "$(", "(", "[[")
 
-def _safe_expansion_end(line: str, col: int) -> Optional[int]:
-    """Where a plain expansion at *col* ends, or None if there is none."""
-    match = _HEREDOC_SAFE_EXPANSION.match(line, col)
-    if match is None or _CASE_WORD.search(match.group()):
-        return None
-    return match.end()
+#: Contexts that read as arithmetic.
+_ARITHMETIC_CONTEXTS = ("$((", "((", "a(")
 
 
 def _continues(line: str) -> bool:
@@ -2002,16 +1990,23 @@ def _read_heredoc_word(line: str, index: int) -> Tuple[str, bool, int]:
     return word, quoted, index
 
 
+def _end_of_word(line: str, col: int) -> bool:
+    """Whether *col* is past the end of *line* or at a character ending a word."""
+    return col >= len(line) or line[col] in _SHELL_METACHARS
+
+
 def _scan_heredoc_bodies(lines: list) -> list:
     """The ``(first, terminator)`` line ranges of every heredoc body in *lines*.
 
-    Reads quotes, escapes, comments and line continuations the way sh does, so
-    a ``<<`` sh takes as data — quoted, commented out, in arithmetic — never
-    opens a body here. Raises ``_UnreadableHeredoc`` rather than guess.
+    A single left-to-right pass that tracks quotes and nested ``${...}``,
+    ``$(...)``, ``$((...))``, backticks and ``((``/``[[`` on a stack, so each
+    character is read once. A ``<<`` opens a body only outside all of them;
+    one inside any of them, or text the pass cannot balance, raises
+    ``_UnreadableHeredoc`` rather than guess.
     """
     spans: list = []
     pending: list = []
-    quote: Optional[str] = None
+    stack: list = []
     # True at the start of a word, "redirect" right after < or >, else False.
     word_start: Any = True
     index = 0
@@ -2020,57 +2015,142 @@ def _scan_heredoc_bodies(lines: list) -> list:
         continued = False
         col = 0
         while col < len(line):
+            top = stack[-1] if stack else None
+            if stack and line.startswith("<<", col):
+                raise _UnreadableHeredoc
             char = line[col]
-            if quote == "'":
-                quote = None if char == "'" else quote
+            if top == "'":
+                if char == "'":
+                    stack.pop()
                 col += 1
                 continue
-            end = _safe_expansion_end(line, col) if char == "$" else None
-            if quote == '"':
-                if end is not None:
-                    col = end
-                    continue
-                if char == "`" or line.startswith(("$(", "${", "$["), col):
-                    raise _UnreadableHeredoc
-                if char == '"':
-                    quote = None
+            if top == "`":
+                if char == "`":
+                    stack.pop()
                 col += 2 if char == "\\" else 1
                 continue
-            if end is not None:
-                col = end
-                word_start = False
-                continue
-            if line.startswith(_HEREDOC_UNMODELLED, col):
-                raise _UnreadableHeredoc
             if char == "\\":
                 continued = col + 1 == len(line)
+                if top is None or top in _COMMAND_CONTEXTS:
+                    word_start = False
+                col += 2
+                continue
+            # Inside double quotes both shells read $' as a literal $ and quote.
+            if line.startswith(_HEREDOC_SHELL_DEPENDENT[top == '"' :], col):
+                raise _UnreadableHeredoc
+            opened = next(
+                (
+                    kind
+                    for token, kind in _HEREDOC_EXPANSIONS
+                    if line.startswith(token, col)
+                ),
+                None,
+            )
+            if opened is not None:
+                stack.append(opened)
+                word_start = opened == "$("
+                col += len(opened)
+                continue
+            if top == '"':
+                if char == '"':
+                    stack.pop()
+                col += 1
+                continue
+            if top == "${":
+                if char == "}":
+                    stack.pop()
+                elif char == "{" or (char in "'\"" and '"' in stack):
+                    raise _UnreadableHeredoc
+                elif char in "'\"":
+                    stack.append(char)
+                col += 1
+                continue
+            if top in _ARITHMETIC_CONTEXTS:
+                if char == "(":
+                    stack.append("a(")
+                elif char == ")":
+                    if top == "a(":
+                        stack.pop()
+                    elif line.startswith("))", col):
+                        stack.pop()
+                        col += 1
+                    else:
+                        raise _UnreadableHeredoc
+                elif char == "'" or (char == "#" and "((" in stack):
+                    raise _UnreadableHeredoc
+                elif char == '"':
+                    stack.append(char)
+                col += 1
+                continue
+            # A command context: the top level, $( ), a nested ( ), or [[ ]].
+            if char in "'\"":
+                stack.append(char)
+                word_start = False
+            elif char == "#" and word_start:
+                if word_start == "redirect" or stack:
+                    raise _UnreadableHeredoc
+                break
+            elif stack and word_start is True and _CASE_WORD.match(line, col):
+                raise _UnreadableHeredoc
+            elif (
+                top == "[["
+                and word_start is True
+                and line.startswith("]]", col)
+                and _end_of_word(line, col + 2)
+            ):
+                stack.pop()
                 word_start = False
                 col += 2
                 continue
-            if char in "'\"":
-                quote = char
-                word_start = False
-            elif char == "#" and word_start:
-                if word_start == "redirect":
-                    raise _UnreadableHeredoc
-                break
+            elif line.startswith("<<<", col):
+                word_start = "redirect"
+                col += 3
+                continue
             elif line.startswith("<<", col):
                 strip_tabs = line.startswith("<<-", col)
                 word, quoted, col = _read_heredoc_word(line, col + 2 + strip_tabs)
                 pending.append((word, strip_tabs, quoted))
                 word_start = False
                 continue
+            elif line.startswith(("<(", ">("), col):
+                stack.append("$(")
+                word_start = True
+                col += 2
+                continue
+            elif word_start is True and line.startswith("((", col):
+                stack.append("((")
+                word_start = False
+                col += 2
+                continue
+            elif (
+                word_start is True
+                and line.startswith("[[", col)
+                and _end_of_word(line, col + 2)
+            ):
+                stack.append("[[")
+                col += 2
+                continue
+            elif char == "(" and stack:
+                stack.append("(")
+                word_start = True
+            elif char == ")" and stack:
+                if top not in ("$(", "("):
+                    raise _UnreadableHeredoc
+                stack.pop()
+                word_start = False
             elif char in "<>" or (char == "&" and word_start == "redirect"):
                 word_start = "redirect"
             else:
                 word_start = char in " \t|&;()"
             col += 1
         index += 1
-        if continued or quote is not None:
+        if not continued and (not stack or stack[-1] in _COMMAND_CONTEXTS):
+            # A newline ends a command; inside quotes it is data.
+            word_start = True
+        if continued or stack:
             if pending:
                 raise _UnreadableHeredoc
             continue
-        word_start = True
         for word, strip_tabs, quoted in pending:
             first = index
             while True:
@@ -2086,7 +2166,7 @@ def _scan_heredoc_bodies(lines: list) -> list:
             spans.append((first, index))
             index += 1
         pending = []
-    if quote is not None or pending:
+    if stack or pending:
         raise _UnreadableHeredoc
     return spans
 
