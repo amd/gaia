@@ -46,6 +46,19 @@ describe('MessageBubble footer', () => {
         expect(screen.getByRole('button', { name: 'Interrupted after 16 s' })).toBeInTheDocument();
     });
 
+    it('says a failed turn failed after its time (#7364)', () => {
+        const failed = { ...base, content: 'fireworks.no-such-model isn\'t available on Fireworks AI (HTTP 404).', failed: true };
+        render(<MessageBubble message={failed} latencyMs={2_000} />);
+        expect(screen.getByRole('button', { name: 'Failed after 2 s' })).toBeInTheDocument();
+        expect(document.body).not.toHaveTextContent('Answered in');
+    });
+
+    it('says a saved failure failed when its error is the whole answer', () => {
+        const content = 'Error: the model server refused the request.';
+        render(<MessageBubble message={{ ...base, content, stats: { place: 'via Fireworks AI' } as Message['stats'] }} latencyMs={2_000} />);
+        expect(screen.getByRole('button', { name: 'Failed after 2 s via Fireworks AI' })).toBeInTheDocument();
+    });
+
     it('still says an answered turn answered', () => {
         render(<MessageBubble message={base} latencyMs={16_000} />);
         expect(screen.getByRole('button', { name: 'Answered in 16 s' })).toBeInTheDocument();

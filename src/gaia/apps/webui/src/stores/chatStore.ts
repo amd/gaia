@@ -127,9 +127,18 @@ export interface PendingPrompt {
 }
 
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
+export interface QuestionOption {
+    value: string;
+    label: string;
+}
+
 export interface LiveQuestion {
     sessionId: string;
     expiresAt: number | null;
+    /** Lets the message box answer it: the choices, and whether any text will do. */
+    options?: QuestionOption[];
+    allowFreeText?: boolean;
+    sensitive?: boolean;
 }
 
 /** One stage of a recording: 0 running, 1 done, 2 skipped. */
@@ -239,9 +248,17 @@ interface ChatState {
     /** Mid-run questions the agent is still blocked on, by request id. A card
      *  missing from here can no longer be answered. */
     liveQuestions: Record<string, LiveQuestion>;
-    openQuestion: (requestId: string, sessionId: string, timeoutSeconds?: number | null) => void;
+    openQuestion: (
+        requestId: string,
+        sessionId: string,
+        timeoutSeconds?: number | null,
+        shape?: Pick<LiveQuestion, 'options' | 'allowFreeText' | 'sensitive'>,
+    ) => void;
     closeQuestion: (requestId: string) => void;
     closeSessionQuestions: (sessionId: string) => void;
+    /** What the user answered, by request id, so the card keeps it as a record; null hides a sensitive one. */
+    questionAnswers: Record<string, string | null>;
+    recordAnswer: (requestId: string, shown: string | null) => void;
 
     // Structured cards from tool_result.render events (issue #2108).
     // Accumulated during the stream, transferred onto the finalized
@@ -538,16 +555,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     awaitingUser: false,
     setAwaitingUser: (awaiting) => set({ awaitingUser: awaiting }),
     liveQuestions: {},
-    openQuestion: (requestId, sessionId, timeoutSeconds) =>
+    openQuestion: (requestId, sessionId, timeoutSeconds, shape) =>
         set((state) => ({
             liveQuestions: {
                 ...state.liveQuestions,
                 [requestId]: {
                     sessionId,
                     expiresAt: timeoutSeconds != null && timeoutSeconds > 0 ? Date.now() + timeoutSeconds * 1000 : null,
+                    ...shape,
                 },
             },
         })),
+    questionAnswers: {},
+    recordAnswer: (requestId, shown) =>
+        set((state) => ({ questionAnswers: { ...state.questionAnswers, [requestId]: shown } })),
     closeQuestion: (requestId) =>
         set((state) => {
             if (!(requestId in state.liveQuestions)) return state;
