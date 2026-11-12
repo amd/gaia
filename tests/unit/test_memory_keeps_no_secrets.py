@@ -162,6 +162,27 @@ def test_a_refused_secret_is_still_in_this_chat(store):
         assert "new chat" in out["message"]
 
 
+def test_the_refusal_neither_echoes_nor_keeps_the_secret(store):
+    """The new wording points at the chat; it must not repeat or save the secret."""
+    _Host(store, [])
+    kid = store.store(category="fact", content="User's vault is in the study")
+    secret = "cobalt-heron-417"
+
+    outs = [
+        _tool("remember")(fact=f"The vault passphrase is {secret}"),
+        _tool("update_memory")(
+            knowledge_id=kid, content=f"The vault passphrase is {secret}"
+        ),
+    ]
+
+    for out in outs:
+        assert secret not in out["message"]
+    assert "password manager" in outs[0]["message"]
+    assert store.get_item(kid)["content"] == "User's vault is in the study"
+    rows = store._conn.execute("SELECT content FROM knowledge").fetchall()
+    assert all(secret not in r[0] for r in rows)
+
+
 def test_the_conversation_log_keeps_no_secret(store):
     host = _Host(store, [])
     host._auto_extract_enabled = False
