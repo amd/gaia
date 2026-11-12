@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { RenderCard } from '../render/RenderCard';
+import { useChatStore } from '../../stores/chatStore';
 
 const recipe = {
     kind: 'guide',
@@ -35,6 +36,7 @@ const itinerary = {
 };
 
 afterEach(() => {
+    useChatStore.setState({ locale: 'en' });
     for (const key of Object.keys(localStorage)) if (key.startsWith('gaia:guide')) localStorage.removeItem(key);
 });
 
@@ -157,5 +159,22 @@ describe('GuideCard', () => {
         render(<RenderCard render="guide" data={itinerary} />);
 
         expect(screen.queryByRole('note')).toBeNull();
+    });
+
+    it('reads its headings, servings, start button and tip in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        const { container } = render(<RenderCard render="guide" data={recipe} />);
+        expect(screen.getByText(/المكونات/)).toBeInTheDocument();
+        expect(screen.getByText(/الخطوات/)).toBeInTheDocument();
+        expect(container.querySelector('.render-guide__servings-count')).toHaveTextContent(/2 حصص/);
+        expect(screen.getByRole('button', { name: /بدء الطهي/ })).toBeInTheDocument();
+        expect(screen.getByRole('note')).toHaveTextContent('غيّر عدد الحصص');
+        expect(screen.queryByText(/^Ingredients$/)).toBeNull();
+    });
+
+    it('titles an untitled itinerary day in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        render(<RenderCard render="guide" data={{ ...itinerary, steps: ['Alfama walk', 'Belem and the tower'] }} />);
+        expect(screen.getByText(/اليوم 2/)).toBeInTheDocument();
     });
 });
