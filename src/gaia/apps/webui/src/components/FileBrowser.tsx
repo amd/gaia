@@ -187,7 +187,7 @@ interface FileBrowserProps {
 
 export function FileBrowser({ onStartChat }: FileBrowserProps) {
     const t = useT();
-    const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
+    const { setShowFileBrowser, leaveFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
     const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
     useEscapeToClose(true, closeBrowser);
     const dialogRef = useRef<HTMLDivElement>(null);
@@ -363,6 +363,10 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
             if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
             indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
             setSelectedFiles(new Set());
+            // Opened from the library: go back there to see the files land.
+            if (result.failed === 0 && result.unsupported.length === 0 && useChatStore.getState().fileBrowserFromLibrary) {
+                setShowFileBrowser(false);
+            }
         } catch (err) {
             log.doc.error('Index selected failed', err);
             setIndexError({
@@ -372,7 +376,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         } finally {
             setIndexingFiles(new Set());
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setShowFileBrowser]);
 
     // A second click can land before the re-render that disables the button.
     const askingRef = useRef(false);
@@ -425,7 +429,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
             } else {
                 await onStartChat(prompt);
             }
-            setShowFileBrowser(false);
+            leaveFileBrowser();
             setSelectedFiles(new Set());
         } catch (err) {
             log.doc.error('Ask Agent failed', err);
@@ -438,7 +442,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
             setIndexingFiles(new Set());
             setIndexStatus(null);
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser, onStartChat]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, leaveFileBrowser, onStartChat]);
 
     // Build breadcrumb segments from current path
     const pathSegments = currentPath ? currentPath.replace(/\\/g, '/').split('/').filter(Boolean) : [];

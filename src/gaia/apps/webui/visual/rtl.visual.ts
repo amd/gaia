@@ -787,6 +787,11 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.fb-entry-date')).toHaveText(month);
         await shot(page, `dates-${locale}-files`);
         // No audit yet: the file browser's names and sizes still break the RTL rules, tracked separately.
+
+        // Closing a browser opened from the library used to drop you back in the chat.
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toBeVisible();
+        await expect(page.locator('.fb-entry-date')).toHaveCount(0);
     });
 
     test(`an answer's timestamp and outputs read in the interface language (${locale})`, async ({ page }) => {

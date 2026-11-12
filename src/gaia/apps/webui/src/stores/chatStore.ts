@@ -267,6 +267,8 @@ interface ChatState {
     theme: 'light' | 'dark';
     showDocLibrary: boolean;
     showFileBrowser: boolean;
+    /** The file browser was opened from the document library, so closing it goes back there. */
+    fileBrowserFromLibrary: boolean;
     /** Open settings section, or null when settings is closed. */
     settingsSection: SettingsSection | null;
     /** Setup was asked to run again from Settings. */
@@ -307,7 +309,12 @@ interface ChatState {
     /** Re-resolve a `system` preference after the OS appearance changed. */
     syncSystemTheme: () => void;
     setShowDocLibrary: (show: boolean) => void;
+    /** Closing returns to the document library when that is where it was opened from. */
     setShowFileBrowser: (show: boolean) => void;
+    /** Swap the document library for the file browser, to come back to on close. */
+    openFileBrowserFromLibrary: () => void;
+    /** Close the file browser without going back to the library, e.g. to start a chat. */
+    leaveFileBrowser: () => void;
     openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
@@ -584,6 +591,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     theme: resolveTheme(readThemePreference()),
     showDocLibrary: false,
     showFileBrowser: false,
+    fileBrowserFromLibrary: false,
     settingsSection: null,
     setupAgain: false,
     runSetupAgain: (on) => set({ setupAgain: on }),
@@ -637,7 +645,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     pendingPrompt: null,
     setShowDocLibrary: (show) =>
         set(show ? { ...NO_DESTINATION, showDocLibrary: true } : { showDocLibrary: false }),
-    setShowFileBrowser: (show) => set({ showFileBrowser: show }),
+    setShowFileBrowser: (show) => {
+        if (show) {
+            set({ showFileBrowser: true });
+            return;
+        }
+        const backToLibrary = get().fileBrowserFromLibrary;
+        set({ showFileBrowser: false, fileBrowserFromLibrary: false });
+        if (backToLibrary) get().setShowDocLibrary(true);
+    },
+    openFileBrowserFromLibrary: () => set({ showDocLibrary: false, showFileBrowser: true, fileBrowserFromLibrary: true }),
+    leaveFileBrowser: () => set({ showFileBrowser: false, fileBrowserFromLibrary: false }),
     openSettings: (section = 'general', provider) => set({ settingsSection: section, settingsProvider: provider ?? null }),
     closeSettings: () => set({ settingsSection: null, settingsProvider: null }),
     setShowMemoryDashboard: (show) =>
