@@ -4,7 +4,6 @@
 name: Test Lemonade Embeddings
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:

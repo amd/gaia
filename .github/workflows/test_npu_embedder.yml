@@ -105,7 +105,6 @@ on:
       - 'src/gaia/agents/base/memory.py'
       - 'src/gaia/agents/base/memory_store.py'
       - 'tests/test_npu_flm_embedder_hw.py'
-  workflow_call:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}

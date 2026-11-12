@@ -116,9 +116,12 @@ jobs:
       - name: Pick the instances
         id: pick
         if: steps.model.outputs.ready == 'true'
+        env:
+          # Free text from the dispatch form; never paste it into the script.
+          INSTANCES: ${{ github.event.inputs.instances }}
         run: |
-          if [ -n "${{ github.event.inputs.instances }}" ]; then
-            ids="${{ github.event.inputs.instances }}"
+          if [ -n "$INSTANCES" ]; then
+            ids="$INSTANCES"
           else
             ids=$(python -c "import json,sys; print(','.join(t['id'] for t in json.load(open('eval/tasks/swebench_subsets.json'))[sys.argv[1]]))" "$SUBSET")
           fi

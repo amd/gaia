@@ -83,7 +83,6 @@ def _python_path() -> str:
     parts = [
         CODE_ROOT / "src",
         CODE_ROOT / "hub" / "agents" / "gaia" / "python",
-        CODE_ROOT / "hub" / "agents" / "chat" / "python",
     ]
     return os.pathsep.join(str(p) for p in parts)
 

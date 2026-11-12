@@ -4,7 +4,6 @@
 name: Test Electron Framework and Apps
 
 on:
-  workflow_call:
   push:
     branches: ["main"]
     paths:

@@ -14,7 +14,6 @@
 name: Example Agents Integration Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:

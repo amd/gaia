@@ -554,6 +554,9 @@ jobs:
 
       - name: Commit the refreshed SCORECARD.md (full profile only)
         timeout-minutes: 10
+        env:
+          # A branch name is untrusted text; never paste it into the script.
+          PUSH_REF: ${{ github.head_ref || github.ref_name }}
         run: |
           if ("${{ steps.pre.outputs.commit_allowed }}" -ne "true") {
             Write-Host "SUBSET RUN -- card NOT committed (basis limit=$env:LIMIT experiments=$env:EXPERIMENTS is smaller than the committed limit=${{ steps.pre.outputs.committed_limit }} n_runs=${{ steps.pre.outputs.committed_n }} basis). Restoring the committed SCORECARD.md."
@@ -574,5 +577,5 @@ jobs:
           }
           git commit -m "$commitMsg"
           if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
-          git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
+          git push origin "HEAD:$env:PUSH_REF"
           if ($LASTEXITCODE -ne 0) { throw "git push failed" }

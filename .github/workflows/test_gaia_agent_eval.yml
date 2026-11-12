@@ -110,6 +110,9 @@ on:
         type: string
         default: ''
     secrets:
+      HUGGINGFACE_ACCESS_TOKEN:
+        description: 'Reads gated model repositories during the model download.'
+        required: false
       CLAUDE_CODE_OAUTH_TOKEN:
         description: 'Claude Code subscription token (primary account); preferred over ANTHROPIC_API_KEY, as in eval_flagship.yml.'
         required: false

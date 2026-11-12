@@ -9,7 +9,6 @@
 name: C++ Build & Test
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:

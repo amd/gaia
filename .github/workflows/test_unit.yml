@@ -23,7 +23,6 @@
 name: Unit Tests
 
 on:
-  workflow_call:
   push:
     branches: [ main ]
     paths:
@@ -245,9 +244,13 @@ jobs:
                          filter=(--trigger-paths-from .github/workflows/test_unit.yml) ;;
             # Not event.before: a burst of merges drops the pending runs in
             # between, and their changes would never reach Windows or macOS.
+            # A failed lookup (API rate limit) runs everything instead of nothing.
             push) base=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow test_unit.yml \
                     --branch main --event push --status success --limit 1 \
-                    --json headSha --jq '.[0].headSha // ""') ;;
+                    --json headSha --jq '.[0].headSha // ""') || {
+                    echo "::warning::Could not look up the last tested commit; running the full suite."
+                    base=""
+                  } ;;
             *) base="" ;;
           esac
           # No earlier tested commit to diff against: run everything.
