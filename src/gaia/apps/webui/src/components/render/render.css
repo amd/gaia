@@ -627,6 +627,12 @@
     overflow-wrap: anywhere;
 }
 
+.render-connect__note {
+    max-width: 44ch;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
 .render-connect__settings {
     padding: 0;
     background: none;

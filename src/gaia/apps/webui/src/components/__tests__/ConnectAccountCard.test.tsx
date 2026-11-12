@@ -151,6 +151,31 @@ describe('ConnectAccountCard', () => {
         expect(window.open).not.toHaveBeenCalled();
     });
 
+    it('sends a provider with no OAuth client to Settings, in one line, without trying to sign in', async () => {
+        mocked.listConnectors.mockResolvedValue({
+            connectors: [connector('google', false, { configurable: false, config_error: 'Google OAuth client is not configured' })],
+        });
+        render(<ConnectAccountCard data={card(['google'])} />);
+        expect(await screen.findByText('Google needs a one-time setup first. The button opens it in Settings.')).toBeTruthy();
+        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        expect(useChatStore.getState().settingsSection).toBe('connectors');
+        expect(mocked.authorizeConnector).not.toHaveBeenCalled();
+        expect(screen.queryByRole('alert')).toBeNull();
+        act(() => useChatStore.setState({ settingsSection: null }));
+    });
+
+    it('never shows the terminal walkthrough when sign-in answers "not set up"', async () => {
+        const walkthrough = 'Google OAuth client is not configured ... gaia connectors configure google --client-id <ID>';
+        mocked.authorizeConnector.mockRejectedValue(
+            Object.assign(new Error(walkthrough), { httpStatus: 503, detail: walkthrough, body: null }),
+        );
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
+        expect(await screen.findByText('Google needs a one-time setup first. The button opens it in Settings.')).toBeTruthy();
+        expect(screen.queryByRole('alert')).toBeNull();
+        expect(shown()).not.toMatch(/gaia connectors|client-id/);
+    });
+
     it('turns to "ask again" once the account is connected', async () => {
         mocked.listConnectors.mockResolvedValue({ connectors: [connector('google', true)] });
         render(<ConnectAccountCard data={card(['google'])} />);

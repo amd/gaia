@@ -328,6 +328,7 @@ export const enMessages = {
     'connectCard.connect': 'Connect {name}',
     'connectCard.reconnect': 'Reconnect {name}',
     'connectCard.connected': '{name} is connected',
+    'connectCard.needsSetup': '{name} needs a one-time setup first. The button opens it in Settings.',
     'connectCard.settings': 'Open Connectors in Settings',
     'msg.continue': 'Continue',
     'msg.continuePrompt': 'Continue your answer from where it stopped.',

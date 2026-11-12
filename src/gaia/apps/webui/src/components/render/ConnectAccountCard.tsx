@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, ExternalLink, Link2, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
+import type { ApiError } from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
 import { log } from '../../utils/logger';
@@ -112,12 +113,15 @@ function ProviderRow({
     connectorId,
     name,
     connected,
+    needsSetup,
     grantAgents,
     onOpened,
 }: {
     connectorId: string;
     name: string;
     connected: boolean;
+    /** No OAuth client yet: sign-in cannot start until Settings registers one. */
+    needsSetup: boolean;
     grantAgents: string[];
     onOpened: () => void;
 }) {
@@ -125,15 +129,19 @@ function ProviderRow({
     const openSettings = useChatStore((s) => s.openSettings);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Sign-in answered "not set up"; the next press tries again, in case Settings fixed it.
+    const [setupFound, setSetupFound] = useState(false);
 
     const connect = useCallback(async () => {
-        // With no agent to size the request, Settings is where access is chosen.
-        if (grantAgents.length === 0) {
+        // With no agent to size the request, or no OAuth client to sign in
+        // with, Settings is where the user goes next.
+        if (grantAgents.length === 0 || needsSetup) {
             openSettings('connectors');
             return;
         }
         setBusy(true);
         setError(null);
+        setSetupFound(false);
         try {
             // No scopes: the backend asks for what the granted agent declares,
             // never the connector's whole list.
@@ -141,11 +149,19 @@ function ProviderRow({
             openAuthUrl(flow.authorization_url);
             onOpened();
         } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            // A 503 with a plain-text detail is a missing OAuth client; its
+            // detail is the terminal walkthrough, which this card never shows.
+            const apiErr = e as Partial<ApiError>;
+            if (apiErr?.httpStatus === 503 && apiErr.body === null) {
+                log.ui.warn(`ConnectAccountCard: ${connectorId} sign-in needs setup`, apiErr.detail);
+                setSetupFound(true);
+            } else {
+                setError(e instanceof Error ? e.message : String(e));
+            }
         } finally {
             setBusy(false);
         }
-    }, [connectorId, grantAgents, onOpened, openSettings]);
+    }, [connectorId, grantAgents, needsSetup, onOpened, openSettings]);
 
     const label = t(connected ? 'connectCard.reconnect' : 'connectCard.connect', { name });
     return (
@@ -166,6 +182,11 @@ function ProviderRow({
                     <CheckCircle2 size={13} aria-hidden="true" />
                     {t('connectCard.connected', { name })}
                 </span>
+            )}
+            {(needsSetup || setupFound) && (
+                <div className="render-connect__note" role="status">
+                    {t('connectCard.needsSetup', { name })}
+                </div>
             )}
             {error && (
                 <div className="render-connect__error" role="alert">{error}</div>
@@ -209,6 +230,8 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
 
     const isConnected = (id: string) =>
         connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+    const needsSetup = (id: string) =>
+        connectors.some((c) => c.id === id && !('error' in c) && !c.configured && c.configurable === false);
     const displayName = (id: string) =>
         PROVIDER_NAMES[id]
         ?? connectors.find((c) => c.id === id && !('error' in c))?.display_name
@@ -232,6 +255,7 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         connectorId={id}
                         name={displayName(id)}
                         connected={isConnected(id)}
+                        needsSetup={needsSetup(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}
                         onOpened={() => setOpened(true)}
                     />

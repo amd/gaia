@@ -328,6 +328,7 @@ const messages: Messages = {
     'connectCard.connect': 'ربط {name}',
     'connectCard.reconnect': 'إعادة ربط {name}',
     'connectCard.connected': 'تم ربط {name}',
+    'connectCard.needsSetup': 'يحتاج {name} إلى إعداد لمرة واحدة أولًا. يفتحه الزر في الإعدادات.',
     'connectCard.settings': 'فتح «الموصلات» في الإعدادات',
     'msg.continue': 'متابعة',
     'msg.continuePrompt': 'تابع إجابتك من حيث توقفت.',
