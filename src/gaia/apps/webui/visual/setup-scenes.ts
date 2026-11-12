@@ -270,7 +270,7 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
     });
 }
 
-const hero = (page: Page) => page.locator('.setup-hero');
+const hero = (page: Page) => page.locator('.setup-hero').first();
 
 /** The checks stop on what they found; Continue goes on to the plan. */
 export async function toPlan(page: Page): Promise<void> {
@@ -281,7 +281,7 @@ export async function toPlan(page: Page): Promise<void> {
 
 export async function toModels(page: Page): Promise<void> {
     await toPlan(page);
-    await hero(page).locator('.link-btn').nth(0).click();
+    await page.locator('.setup-footer .btn-secondary').click();
     await expect(page.locator('.mc-list').first()).toBeVisible();
 }
 
@@ -294,7 +294,8 @@ async function toGpu(page: Page): Promise<void> {
 
 async function toKey(page: Page): Promise<void> {
     await toPlan(page);
-    await hero(page).locator('.link-btn').nth(1).click();
+    await page.locator('.setup-where-card').nth(1).click();
+    await page.locator('.setup-footer .btn-primary').click();
     await expect(page.locator('.setup-form')).toBeVisible();
 }
 
@@ -327,8 +328,20 @@ export const SETUP_SCENES: SetupScene[] = [
         name: 'plan',
         reach: async (page) => {
             await toPlan(page);
+            // This PC and the cloud are two cards of the same size, not a card and a link.
+            const [local, cloud] = await page.locator('.setup-where-card').evaluateAll((cards) => cards.map((c) => c.getBoundingClientRect().width));
+            expect(Math.abs(local - cloud)).toBeLessThan(1);
             await page.locator('.setup-disclosure summary').click();
             await expect(page.locator('.setup-contents')).toBeVisible();
+        },
+    },
+    {
+        name: 'plan-cloud-picked',
+        reach: async (page) => {
+            await toPlan(page);
+            await page.locator('.setup-where-card').nth(1).click();
+            await expect(page.locator('.setup-where-card.is-active')).toHaveCount(1);
+            await expect(page.locator('.setup-where-card').nth(1)).toHaveClass(/is-active/);
         },
     },
     {
@@ -336,7 +349,7 @@ export const SETUP_SCENES: SetupScene[] = [
         answers: { plan: PLAN_SHORT },
         reach: async (page) => {
             await toPlan(page);
-            await expect(hero(page).locator('.setup-error')).toBeVisible();
+            await expect(page.locator('.setup-stage .setup-error')).toBeVisible();
         },
     },
     {
@@ -477,13 +490,15 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
-        name: 'key-local-only',
+        // Local only is on: the cloud card stays in place, can't be picked, and says why.
+        name: 'plan-local-only',
         answers: { localOnly: true },
         reach: async (page) => {
-            await toKey(page);
-            await expect(page.locator('.setup-choice.is-disabled').first()).toBeVisible();
-            await expect(page.locator('.setup-choice.is-disabled').first()).toHaveText(/\S/);
-            await expect(page.locator('.setup-key-steps')).toHaveCount(0);
+            await toPlan(page);
+            const cloud = page.locator('.setup-where-card').nth(1);
+            await expect(cloud).toHaveClass(/is-disabled/);
+            await expect(cloud.locator('input[type="radio"]')).toBeDisabled();
+            await expect(cloud.locator('.setup-hint')).toHaveText(/\S/);
             await expect(page.locator('.setup-error')).toHaveCount(0);
         },
     },
@@ -553,7 +568,7 @@ export const SETUP_SCENES: SetupScene[] = [
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'key-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);

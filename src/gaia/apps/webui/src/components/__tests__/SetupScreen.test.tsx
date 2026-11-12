@@ -129,7 +129,8 @@ async function toModels() {
 }
 
 async function toKey() {
-    fireEvent.click(screen.getByRole('button', { name: 'Use a cloud model' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Use a cloud model' }));
+    clickContinue();
     await screen.findByRole('heading', { name: 'Connect a cloud provider' });
 }
 
@@ -317,6 +318,30 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
 });
 
 describe('SetupScreen: the recommendation', () => {
+    it('offers this PC and the cloud as two equal choices, this PC recommended and picked', async () => {
+        await open();
+        const local = screen.getByRole('radio', { name: /^Run .* on this PC$/ });
+        const cloud = screen.getByRole('radio', { name: 'Use a cloud model' });
+        expect(local).toBeChecked();
+        expect(cloud).not.toBeChecked();
+        expect(screen.getByRole('region', { name: 'Recommended setup' })).toHaveTextContent('Recommended for this PC');
+        const cloudCard = screen.getByRole('region', { name: 'Cloud model' });
+        expect(cloudCard).toHaveTextContent('Nothing to download');
+        expect(cloudCard).toHaveTextContent('Each message and the chat history are sent to the provider.');
+        expect(cloudCard).not.toHaveTextContent('Recommended');
+        // Customize is its own button in the bottom bar, not a link beside the cloud choice.
+        const bar = within(document.querySelector('.setup-footer') as HTMLElement);
+        expect(bar.getByRole('button', { name: 'Customize' })).toHaveClass('btn-secondary');
+        expect(bar.getByRole('button', { name: /Download and start/ })).toHaveClass('btn-primary');
+        // Picking the cloud card makes the main action go there, and starts nothing.
+        fireEvent.click(cloudCard);
+        expect(cloud).toBeChecked();
+        expect(bar.queryByRole('button', { name: /Download and start/ })).toBeNull();
+        clickContinue();
+        await screen.findByRole('heading', { name: 'Connect a cloud provider' });
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+    });
+
     it('shows what it will do before anything starts, with no stale error', async () => {
         mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
         await open();
