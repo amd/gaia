@@ -230,12 +230,16 @@ _FILE_CHANGE_FAMILY = "file_change"
 
 #: Programs that only rename or move a file. A plain call that keeps the file in
 #: one folder is a change there, and a folder grant covers it. Off Windows,
-#: ``rename`` is often Perl's, whose first argument is code it runs.
+#: ``rename`` is often Perl's, whose first argument is code it runs. On Windows
+#: only cmd.exe's built-ins: it runs an ``mv.bat`` in the folder ahead of PATH.
 _RENAME_PROGRAMS = (
-    frozenset({"ren", "rename", "mv", "move"}) if os.name == "nt" else frozenset({"mv"})
+    frozenset({"ren", "rename", "move"}) if os.name == "nt" else frozenset({"mv"})
 )
 #: Of those, cmd.exe's, whose new name is a bare name in the source's own folder.
 _RENAME_IN_PLACE = frozenset({"ren", "rename"})
+#: Characters a shell acts on. cmd.exe does so inside single quotes too, where
+#: this module reads them as part of a name, so a line holding one is never plain.
+_RENAME_SHELL_CHARS = frozenset("'`^&|<>;,=()!%$~{}*?[]")
 
 _PATH_ARG_NAMES = ("file_path", "path", "filename", "file", "target_file")
 _COMMAND_ARG_NAMES = ("command", "cmd", "script", "command_line")
@@ -724,19 +728,23 @@ def _file_change_scope(parent: str, as_written: str) -> GrantScope:
 def _rename_operand(word: str, cwd: Any) -> Optional[str]:
     """*word* as an absolute path, or None when the shell, not GAIA, decides it.
 
-    A network path, a device name or a name Windows rewrites is None too, and
-    is checked before anything on disk is looked at.
+    A network path, a device name, a name Windows rewrites or a path through
+    ``..`` is None too, and is checked before anything on disk is looked at.
     """
     if not word or word.startswith("-") or glob.has_magic(word):
         return None
     if any(ch in word for ch in "$%~`"):
         return None
     if os.path.isabs(word):
-        path = os.path.normpath(word)
+        written = word
     elif isinstance(cwd, str) and os.path.isabs(cwd):
-        path = os.path.normpath(os.path.join(cwd, word))
+        written = os.path.join(cwd, word)
     else:
         return None
+    # `link/..` is the link target's parent on disk, not the folder it is spelled in.
+    if ".." in re.split(r"[\\/]", written):
+        return None
+    path = os.path.normpath(written)
     if _is_network_path(word) or _is_network_path(path):
         return None
     try:
@@ -755,11 +763,18 @@ def _rename_scope(args: Dict[str, Any]) -> Optional[GrantScope]:
     folder write grant uses, and the new name must be free. Anything else
     returns None and is asked about.
     """
-    facts = read_command(_first_str(args, _COMMAND_ARG_NAMES))
+    command = _first_str(args, _COMMAND_ARG_NAMES)
+    if any(ch in _RENAME_SHELL_CHARS or ord(ch) < 32 for ch in command):
+        return None
+    # Off Windows a backslash is an escape to the shell and part of a name here.
+    if os.name != "nt" and "\\" in command:
+        return None
+    facts = read_command(command)
     if facts.opaque or facts.writes_file or len(facts.segments) != 1:
         return None
     argv = facts.segments[0]
-    program = binary_name(argv[0])
+    # The bare word only: `./mv` or `mv.bat` is whatever file sits at that path.
+    program = argv[0].lower() if os.name == "nt" else argv[0]
     if program not in _RENAME_PROGRAMS or len(argv) != 3:
         return None
     cwd = args.get("working_directory")
