@@ -33,10 +33,25 @@ on:
       - '.github/workflows/build_agents.yml'
   merge_group:
   workflow_dispatch:
+  # publish.yml builds the release's gaiacpp here and attaches it to the GitHub
+  # release, a release candidate's pre-release included.
+  workflow_call:
+    inputs:
+      version:
+        description: Version stamped into gaiacpp (0.25.4, or 0.25.4-rc.1 for an RC)
+        type: string
+        required: true
+      tag:
+        description: Release tag the Lemonade pin file names (v0.25.4-rc1)
+        type: string
+        required: true
 
+# Only a pull request's stale build is cancelled. A release build called from
+# publish.yml must finish: a re-run on the same tag would otherwise cancel the
+# gaiacpp build the first run's release is waiting for.
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -116,9 +131,12 @@ jobs:
 
       - name: Configure CMake (static)
         shell: bash
+        env:
+          GAIACPP_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          cmake -B cpp/build -S cpp \
+          # A release stamps its own version; any other build keeps the project's.
+          cmake -B cpp/build -S cpp ${GAIACPP_VERSION:+"-DGAIACPP_VERSION=${GAIACPP_VERSION}"} \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DGAIA_BUILD_TESTS=OFF \
@@ -134,6 +152,33 @@ jobs:
       - name: Build (Release)
         run: cmake --build cpp/build --config Release --parallel
 
+      # The shipped bytes, run on the platform they ship to: a binary that
+      # cannot start, or reports another version, must not reach packaging.
+      - name: Smoke-test gaiacpp
+        shell: bash
+        env:
+          GAIACPP_VERSION: ${{ inputs.version }}
+          GAIA_HOME: ${{ runner.temp }}/gaia-home
+        run: |
+          set -euo pipefail
+          bin="$(find cpp/build -type f \( -name gaiacpp -o -name gaiacpp.exe \) | head -n1)"
+          [ -n "${bin}" ] || { echo "::error::the build produced no gaiacpp binary"; exit 1; }
+          got="$("${bin}" --version | tr -d '\r')"
+          if [ -n "${GAIACPP_VERSION}" ]; then
+            want="gaiacpp ${GAIACPP_VERSION}"
+            [ "${got}" = "${want}" ] || { echo "::error::gaiacpp --version printed '${got}', expected '${want}'"; exit 1; }
+          else
+            case "${got}" in
+              gaiacpp\ [0-9]*) ;;
+              *) echo "::error::gaiacpp --version printed '${got}', expected 'gaiacpp <version>'"; exit 1 ;;
+            esac
+          fi
+          "${bin}" --help > /dev/null
+          # MCP server mode answers a handshake with no model server running.
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"0"}}}' > init.json
+          "${bin}" --mcp < init.json | head -n 1 | tee mcp.json
+          grep -q '"serverInfo"' mcp.json
+
       - name: Package agents for ${{ matrix.platform }}
         run: >-
           python cpp/packaging/package_agents.py
@@ -148,7 +193,7 @@ jobs:
           --build-dir cpp/build
           --os ${{ matrix.lemonade_os }}
           --arch ${{ matrix.lemonade_arch }}
-          --version ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || 'v0.0.0-dev' }}
+          --version ${{ inputs.tag || (startsWith(github.ref, 'refs/tags/v') && github.ref_name) || 'v0.0.0-dev' }}
           --out dist/lemonade
 
       - name: Show packaged artifacts

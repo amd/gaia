@@ -42,6 +42,7 @@ sys.path.insert(0, str(REPO_ROOT / "installer" / "tui"))
 sys.path.insert(0, str(REPO_ROOT / "util"))
 
 import artifacts  # noqa: E402
+import gaiacpp_release_assets  # noqa: E402
 from release_tag import ReleaseTag, parse_tag  # noqa: E402
 
 WINDOWS_SETUP_PLATFORM = "win-x64"
@@ -64,6 +65,9 @@ CORE_FILES = (
     "gaia-core-linux-x64.tar.gz",
     "gaia-core-SHA256SUMS.txt",
 )
+# gaiacpp, the native agent: the archives Lemonade installs from, the bare
+# binaries, the pin file and their checksums.
+GAIACPP_FILES = tuple(gaiacpp_release_assets.release_files())
 UPDATE_FEEDS = ("latest.yml", "latest-mac.yml", "latest-linux.yml")
 
 
@@ -82,6 +86,7 @@ def promised_assets(rel: ReleaseTag, windows_setup: bool = True) -> list[str]:
         *UPDATE_FEEDS,
         *TUI_FILES,
         *CORE_FILES,
+        *GAIACPP_FILES,
         INSTALLER_SUMS,
     ]
     for platform in sorted(artifacts.ARTIFACTS):
