@@ -102,12 +102,12 @@ describe('NotificationCenter permission prompts follow the interface language', 
     it('words a tool prompt in Arabic, the tool kept left to right', () => {
         setUiLocale('ar');
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+            notifications: [prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         const title = container.querySelector('.notification-title')!;
         expect(title.textContent).toContain('هل تسمح بـ');
-        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^running python$/);
+        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^editing file$/);
         expect(container.querySelector('.notification-message')).toHaveTextContent('يحتاج GAIA إلى موافقتك قبل');
     });
 
@@ -129,10 +129,10 @@ describe('NotificationCenter permission prompts follow the interface language', 
 
     it('reads the same as before in English', () => {
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+            notifications: [prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
-        expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow running python?');
-        expect(stripIsolates(container.querySelector('.notification-message')!.textContent!)).toBe('GAIA needs your OK before running python.');
+        expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow editing file?');
+        expect(stripIsolates(container.querySelector('.notification-message')!.textContent!)).toBe('GAIA needs your OK before editing file.');
     });
 });

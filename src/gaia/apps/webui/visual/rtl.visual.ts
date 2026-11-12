@@ -2649,13 +2649,42 @@ for (const locale of ['ar', 'en']) {
         });
         expect(gap).toBeLessThan(16);
         const title = page.locator('.perm-card-title');
-        if (locale === 'ar') await expect(title).toContainText('هل تسمح بـ');
-        else await expect(title).toHaveText('Allow running python?');
-        await expect(title.locator('bdi[dir="ltr"]').first()).toHaveText('running python');
+        if (locale === 'ar') await expect(title).toContainText('هل تريد تشغيل نص Python');
+        else await expect(title).toHaveText('Run this Python script?');
         await expect(page.getByRole('button', { name: /Allow once/ })).toContainText(locale === 'ar' ? 'السماح مرة واحدة' : 'Allow once');
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
         await shot(page, `permission-python-${locale}`);
+    });
+}
+
+const FOLDER = 'C:\\Users\\you\\Documents\\uxa';
+const STEPS_THEN_PROMPT = [
+    ...['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt', 'a.txt', 'b.txt', 'c.txt', 'd.txt'].flatMap((f) => [
+        { type: 'tool_start', tool: 'read_file', detail: `file_path: ${f}`, narration: `Reading file: ${f}` },
+        { type: 'tool_end', success: true },
+    ]),
+    {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-folder',
+        args: { file_path: `${FOLDER}\\summary.md`, content: '# Summary\n' },
+        always_scope: `changes to files in ${FOLDER}`, always_label: `changing files in ${FOLDER}`,
+    },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a permission card names a granted folder briefly (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 1400, height: 700 });
+        await page.addInitScript(streamThenWait, STEPS_THEN_PROMPT);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('summarize the folder');
+        await page.keyboard.press('Enter');
+        const card = page.locator('.perm-card');
+        await expect(card).toBeVisible();
+        const always = card.locator('.perm-btn').nth(1);
+        await expect(always).toHaveAttribute('title', `changing files in ${FOLDER}`);
+        if (locale === 'en') await expect(always).toHaveText('Always allow changing files in uxa in this chat');
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `permission-folder-${locale}`);
     });
 }
 
@@ -2700,7 +2729,7 @@ for (const locale of ['ar', 'en']) {
 }
 
 const REPEATED_PROMPTS = ['c1', 'c2', 'c3'].map((id) => ({
-    ...PYTHON_PROMPT[0], confirm_id: id, always_scope: 'Python snippets (run_python)', risk: 'execute',
+    ...PYTHON_PROMPT[0], confirm_id: id, always_scope: 'Python snippets', risk: 'execute',
 }));
 
 for (const locale of ['ar', 'en']) {

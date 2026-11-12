@@ -61,6 +61,14 @@ export function splitCommandSummary(summary: string): { command: string; folder:
     };
 }
 
+/** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
+export function shortScope(scope: string): string {
+    return scope.replace(/(\s)((?:[A-Za-z]:)?[\\/][^]*)$/, (_, space: string, path: string) => {
+        const name = path.split(/[\\/]/).filter(Boolean).pop();
+        return name ? `${space}${name}` : `${space}${path}`;
+    });
+}
+
 /** Lines of code a prompt shows before "Show all". */
 export const CODE_PREVIEW_LINES = 12;
 
@@ -260,8 +268,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                             className={`perm-btn${suggestAlways ? ' is-suggested' : ''}`}
                             onClick={() => answer('always')}
                             disabled={busy}
+                            title={scopeText}
                         >
-                            {t('prompt.alwaysAllow', { scope: scopeText })}
+                            {t('prompt.alwaysAllow', { scope: shortScope(scopeText) })}
                         </button>
                     )}
                     <button type="button" className="perm-btn" onClick={() => answer('deny')} disabled={busy}>

@@ -42,11 +42,11 @@ describe('permission prompt in Arabic', () => {
     });
 
     it('asks in Arabic, the tool kept left to right', () => {
-        prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: CODE } });
+        prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt', old_content: 'a', new_content: 'b' } });
         const title = screen.getByRole('heading');
         expect(title.textContent).toMatch(/^⁧?هل تسمح بـ/);
-        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^running python$/);
-        expect(stripIsolates(title.querySelector('.i18n-gloss')!.textContent!)).toBe('(Allow running python?)');
+        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^editing file$/);
+        expect(stripIsolates(title.querySelector('.i18n-gloss')!.textContent!)).toBe('(Allow editing file?)');
     });
 
     it('keeps a shell command, its folder and its always-allow scope left to right', () => {
