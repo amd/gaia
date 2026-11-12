@@ -585,3 +585,34 @@ def test_an_automation_change_is_never_offered_always():
         "gaia discord watch --repo amd/gaia",
     ):
         assert grant_scope("run_shell_command", {"command": command}) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gaia-cli automation add --name x --every 10m --prompt x",
+        "gaia-cli.exe discord watch --repo amd/gaia",
+        "python -m gaia.cli automation add --name x --every 10m --prompt x",
+        "py -m gaia.cli automation edit x --every 5m",
+        "python3 -mgaia.cli discord watch --repo amd/gaia",
+        "uv run gaia automation add --name x --every 10m --prompt x",
+        "python src/gaia/cli.py automation add --name x --every 10m --prompt x",
+        r"C:\Python313\python.exe -m gaia.cli Automation resume x",
+    ],
+)
+def test_every_spelling_of_gaias_cli_is_never_offered_always(command):
+    """`gaia-cli` and `python -m gaia.cli` reach the same unattended automations
+    as `gaia`; "always" for them would approve every later one unasked."""
+    from gaia.agents.base.tool_grants import grant_scope
+
+    assert grant_scope("run_shell_command", {"command": command}) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["gaia-cli llm hello", "python -m gaia.cli llm hello", "echo automation"],
+)
+def test_other_gaia_commands_keep_their_always_offer(command):
+    from gaia.agents.base.tool_grants import grant_scope
+
+    assert grant_scope("run_shell_command", {"command": command}) is not None
