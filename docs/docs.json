@@ -434,6 +434,7 @@
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",
+              "plans/codebase-knowledge-index",
               "plans/desktop-installer",
               "plans/tool-loader",
               "plans/nightly-benchmarks",
