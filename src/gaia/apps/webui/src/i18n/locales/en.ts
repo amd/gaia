@@ -414,6 +414,7 @@ export const enMessages = {
     'activity.thoughtFirst': 'Thought first; open the step to read it',
     'activity.waiting': 'Waiting for you',
     'activity.usedSkill': 'Used {name} skill',
+    'activity.skillFailed': 'Could not use {name} skill',
     'activity.usingSkill': 'Using skill: {name}',
     'activity.blocked': 'Blocked by policy',
     'activity.hitError': 'Hit an error',

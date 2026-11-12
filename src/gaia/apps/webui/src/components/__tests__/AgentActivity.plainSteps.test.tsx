@@ -135,7 +135,8 @@ describe('identical calls', () => {
     it('merges three identical failed reads into one row marked ×3', () => {
         const steps = [failedRead(1), retryThought(2), failedRead(3), retryThought(4), failedRead(5)];
         render(<AgentActivity steps={steps} isActive={false} />);
-        fireEvent.click(screen.getByRole('button', { name: /^Read web page ×3$/ }));
+        // All three failed, so the heading must not read as if a page was read.
+        fireEvent.click(screen.getByRole('button', { name: /^Reading web page failed ×3$/ }));
 
         expect(screen.getAllByText('Reading web page: go.nps.gov/RainierWeather')).toHaveLength(1);
         expect(screen.getByLabelText('3 identical calls')).toHaveTextContent('×3');
@@ -472,6 +473,37 @@ describe('timeline review fixes', () => {
         render(<AgentActivity steps={[call(1, 'Reading file: a.txt'), warning]} isActive={false} running />);
 
         expect(screen.getByRole('status')).toHaveTextContent('Execution paused.');
+    });
+
+    it('keeps a warning readable under the folded steps once the turn is done', () => {
+        const warning: AgentStep = {
+            id: 1, type: 'status', label: 'MCP servers that could not start: weatherbox.', active: false, success: false, timestamp: 1,
+        };
+        render(<AgentActivity steps={[warning, call(2, 'Reading file: a.txt'), call(3, 'Reading file: b.txt')]} isActive={false} />);
+
+        const fold = screen.getByRole('button', { name: /^Read file ×2$/ });
+        expect(fold).toHaveAttribute('aria-expanded', 'false');
+        expect(screen.getByRole('status')).toHaveTextContent('weatherbox');
+
+        // Opening the steps shows it once, in its place among them.
+        fireEvent.click(fold);
+        expect(screen.getAllByRole('status')).toHaveLength(1);
+    });
+
+    it('shows a finished turn whose only row is a warning', () => {
+        const warning: AgentStep = {
+            id: 1, type: 'status', label: 'MCP servers that could not start: weatherbox.', active: false, success: false, timestamp: 1,
+        };
+        render(<AgentActivity steps={[warning]} isActive={false} />);
+
+        expect(screen.getByRole('status')).toHaveTextContent('weatherbox');
+    });
+
+    it('still drops a plain progress line from a finished turn', () => {
+        const progress: AgentStep = { id: 1, type: 'status', label: 'Reading your request', active: false, timestamp: 1 };
+        render(<AgentActivity steps={[progress, call(2, 'Reading file: a.txt')]} isActive={false} />);
+
+        expect(screen.queryByText('Reading your request')).toBeNull();
     });
 
     it('keeps a short note the answer only mentions later on', () => {
