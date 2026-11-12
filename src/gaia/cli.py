@@ -7588,7 +7588,16 @@ def _resolve_gateway_token(args, *, prompt: str) -> str:
 
     import getpass
 
-    return getpass.getpass(prompt)
+    try:
+        return getpass.getpass(prompt)
+    except EOFError:
+        # No terminal to type into: a script, a CI step, stdin closed.
+        print(
+            "\n❌ gaia gateway needs a terminal to ask for the token. Pass "
+            "--token-stdin and pipe it in, or set GAIA_GATEWAY_TOKEN.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def _claude_route_sends_another_token(token):

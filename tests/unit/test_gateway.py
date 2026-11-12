@@ -1582,3 +1582,29 @@ def test_auth_no_remember_keeps_a_matching_stored_token(monkeypatch):
         monkeypatch, token="same-token", no_remember=True, stored="same-token"
     )
     assert store == {"token": "same-token"}
+
+
+def test_gateway_token_prompt_without_a_terminal_exits_1_and_names_the_alternatives(
+    monkeypatch, capsys
+):
+    """No terminal to type into (a script, a CI step): getpass raises EOFError."""
+    import getpass
+
+    import gaia.cli as cli
+
+    def no_terminal(_prompt):
+        raise EOFError
+
+    monkeypatch.delenv("GAIA_GATEWAY_TOKEN", raising=False)
+    monkeypatch.setattr(getpass, "getpass", no_terminal)
+    args = SimpleNamespace(token_stdin=False, token=None)
+
+    with pytest.raises(SystemExit) as excinfo:
+        cli._resolve_gateway_token(args, prompt="Gateway API token (input hidden): ")
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "needs a terminal" in captured.err
+    assert "--token-stdin" in captured.err
+    assert "GAIA_GATEWAY_TOKEN" in captured.err
