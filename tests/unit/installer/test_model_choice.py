@@ -11,7 +11,12 @@ import pytest
 import gaia.config
 from gaia.installer import model_choice as mc
 from gaia.llm.gpu_memory import GB_PER_GIB
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME
+from gaia.llm.lemonade_client import (
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_MODEL_NAME,
+    LemonadeClientError,
+    ModelDownloadCancelledError,
+)
 from gaia.llm.model_fit import MachineCapacity
 
 QWEN = "Qwen3.6-35B-A3B-GGUF"
@@ -202,6 +207,13 @@ def test_a_remote_server_that_does_not_say_is_unknown():
         ("Connection reset by peer", "network"),
         ("Read timed out", "network"),
         ("checkpoint not found on Hugging Face", "lemonade"),
+        (
+            "Failed to create directory 'C:\\Users\\you\\.cache\\huggingface\\hub\\models--x': "
+            "The filename or extension is too long.",
+            "path_too_long",
+        ),
+        # Linux and macOS say it differently, and the Windows advice wouldn't fit.
+        ("OSError: [Errno 36] File name too long", "lemonade"),
         (None, None),
     ],
 )
@@ -219,8 +231,9 @@ class _FlakyClient:
     def ensure_model_downloaded(self, model_id, on_progress=None, **kwargs):
         self.calls.append((model_id, kwargs))
         if self.errors:
-            on_progress({"event": "error", "error": self.errors.pop(0)})
-            return False
+            message = self.errors.pop(0)
+            on_progress({"event": "error", "error": message})
+            raise LemonadeClientError(message)
         return True
 
 
@@ -269,6 +282,42 @@ def test_keep_trying_never_retries_a_full_disk():
     assert not mc.pull_model(
         client, QWEN, lambda e: None, keep_trying_s=120, sleep=pytest.fail
     )
+
+
+class _SilentRaiser:
+    """Raises without a progress error event first, like a polled pull."""
+
+    def __init__(self, exc):
+        self.exc = exc
+
+    def ensure_model_downloaded(self, model_id, on_progress=None, **kwargs):
+        raise self.exc
+
+
+def test_a_raise_without_an_error_event_is_reported_once():
+    seen = []
+    client = _SilentRaiser(LemonadeClientError("Download of 'q' did not finish"))
+    assert not mc.pull_model(client, QWEN, seen.append, sleep=pytest.fail)
+    assert seen == [{"event": "error", "error": "Download of 'q' did not finish"}]
+
+
+def test_a_streamed_error_is_not_reported_twice():
+    seen = []
+    assert not mc.pull_model(
+        _FlakyClient(["No space left on device"]), QWEN, seen.append
+    )
+    assert [e["event"] for e in seen] == ["error"]
+
+
+def test_cancel_is_never_turned_into_a_failed_download():
+    client = _SilentRaiser(ModelDownloadCancelledError("stopped"))
+    with pytest.raises(ModelDownloadCancelledError):
+        mc.pull_model(client, QWEN, lambda e: None, keep_trying_s=120)
+
+
+def test_a_bug_in_the_client_is_not_swallowed_as_a_failed_download():
+    with pytest.raises(TypeError):
+        mc.pull_model(_SilentRaiser(TypeError("boom")), QWEN, lambda e: None)
 
 
 def test_builtin_models_pull_by_name_only():

@@ -32,7 +32,7 @@ function callbacks() {
         onChunk: vi.fn<StreamCallbacks['onChunk']>(),
         onAgentEvent: vi.fn<StreamCallbacks['onAgentEvent']>(),
         onDone: vi.fn<StreamCallbacks['onDone']>(),
-        onError: vi.fn<(err: Error & { httpStatus?: number; endpoint?: string }) => void>(),
+        onError: vi.fn<(err: Error & { httpStatus?: number; endpoint?: string; unreachable?: boolean }) => void>(),
         onConnected: vi.fn<() => void>(),
     };
 }
@@ -190,6 +190,20 @@ describe('chat stream idle watchdog (E4)', () => {
         attachToRun('s1', cb);
         await vi.advanceTimersByTimeAsync(0);
         expect(cb.onError.mock.calls[0][0].name).toBe('StreamDroppedError');
+        expect(cb.onError.mock.calls[0][0].unreachable).toBe(true);
+    });
+
+    it('does not call GAIA unreachable when it answered and the connection was cut later', async () => {
+        const s = openStream();
+        fetchMock().mockResolvedValue(s.response);
+        const cb = callbacks();
+        attachToRun('s1', cb);
+        await vi.advanceTimersByTimeAsync(0);
+        s.send({ type: 'chunk', content: 'Partial' });
+        s.cut();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(cb.onError.mock.calls[0][0].name).toBe('StreamDroppedError');
+        expect(cb.onError.mock.calls[0][0].unreachable).toBe(false);
     });
 
     it('applies to a re-attached run too', async () => {

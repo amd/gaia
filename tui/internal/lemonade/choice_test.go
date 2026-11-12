@@ -87,6 +87,22 @@ func TestTheSavedChoicePicksTheServer(t *testing.T) {
 			want: "http://localhost:63207/api/v1", gaiaRuns: true},
 		{name: "no choice behaves as gaia",
 			doc: nil, want: "http://localhost:63207/api/v1", gaiaRuns: true},
+		{name: "a LEMONADE_BASE_URL GAIA's own was chosen over is ignored",
+			doc: map[string]any{"lemonade_mode": "gaia", "lemonade_env_url_ignored": "http://127.0.0.1:59999/api/v1"},
+			env: "http://127.0.0.1:59999/api/v1/", want: "http://localhost:63207/api/v1", gaiaRuns: true},
+		{name: "a bare origin and its API path are the same ignored value",
+			doc: map[string]any{"lemonade_mode": "gaia", "lemonade_env_url_ignored": "http://127.0.0.1:59999"},
+			env: "http://127.0.0.1:59999/api/v1", want: "http://localhost:63207/api/v1", gaiaRuns: true},
+		{name: "another port is not the ignored value",
+			doc: map[string]any{"lemonade_mode": "gaia", "lemonade_env_url_ignored": "http://127.0.0.1:59999"},
+			env: "http://127.0.0.1:59998", want: "http://127.0.0.1:59998/api/v1"},
+		{name: "a changed LEMONADE_BASE_URL applies again",
+			doc: map[string]any{"lemonade_mode": "gaia", "lemonade_env_url_ignored": "http://127.0.0.1:59999/api/v1"},
+			env: "http://gpu-box:13305/api/v1", want: "http://gpu-box:13305/api/v1"},
+		{name: "the saved server applies over an ignored LEMONADE_BASE_URL",
+			doc: map[string]any{"lemonade_mode": "external", "lemonade_base_url": "http://localhost:13305/api/v1",
+				"lemonade_env_url_ignored": "http://127.0.0.1:59999/api/v1"},
+			env: "http://127.0.0.1:59999/api/v1", want: "http://localhost:13305/api/v1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			useConfig(t, tc.doc)
@@ -265,10 +281,10 @@ func TestProbeTellsLemonadeFromEverythingElse(t *testing.T) {
 		inMessage                    []string
 	}{
 		{name: "current lemonade", status: 200, contentType: "application/json",
-			body: `{"status":"ok","version":"10.10.0"}`, want: ProbeOK},
+			body: `{"status":"ok","version":"2026.44.1"}`, want: ProbeOK},
 		{name: "too old", status: 200, contentType: "application/json",
-			body: `{"status":"ok","version":"10.8.1"}`, want: ProbeTooOld,
-			inMessage: []string{"v10.8.1", "v10.9.0", "https://lemonade-server.ai", "gaia config set lemonade_mode gaia"}},
+			body: `{"status":"ok","version":"11.9.0"}`, want: ProbeTooOld,
+			inMessage: []string{"v11.9.0", "v2026.44.1", "https://lemonade-server.ai", "gaia config set lemonade_mode gaia"}},
 		{name: "needs a key", status: 401, want: ProbeNeedsKey, inMessage: []string{"gaia lemonade connect"}},
 		{name: "rejects the key", key: "k", status: 403, want: ProbeBadKey, inMessage: []string{"gaia lemonade connect"}},
 		{name: "a web page", status: 200, contentType: "text/html", body: "<html>hi</html>",
@@ -362,19 +378,19 @@ func TestApplyingTheChoiceToTheDaemon(t *testing.T) {
 	}
 }
 
-// The adoption floor is the flagship profile's, or GAIA adopts a server its
-// own setup would refuse.
-func TestMinExternalVersionMatchesTheGaiaProfile(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "src", "gaia", "installer", "init_command.py"))
+// The adoption floor is GAIA's, or GAIA adopts a server its own setup would
+// refuse.
+func TestMinExternalVersionMatchesGaiasFloor(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "src", "gaia", "version.py"))
 	if err != nil {
 		t.Skipf("Python source not alongside this checkout: %v", err)
 	}
-	block := regexp.MustCompile(`(?s)\n    "gaia": \{.*?"min_lemonade_version": "([^"]+)"`).FindSubmatch(raw)
-	if block == nil {
-		t.Fatal("could not find the gaia profile's min_lemonade_version in init_command.py")
+	floor := regexp.MustCompile(`(?m)^LEMONADE_MIN_VERSION = "([^"]+)"`).FindSubmatch(raw)
+	if floor == nil {
+		t.Fatal("could not find LEMONADE_MIN_VERSION in src/gaia/version.py")
 	}
-	if got := string(block[1]); got != MinExternalVersion {
-		t.Fatalf("MinExternalVersion = %s, but the gaia profile needs %s", MinExternalVersion, got)
+	if got := string(floor[1]); got != MinExternalVersion {
+		t.Fatalf("MinExternalVersion = %s, but GAIA needs %s", MinExternalVersion, got)
 	}
 }
 
@@ -421,14 +437,49 @@ func TestAnUnreadableChoiceStartsNothingAndSaysWhy(t *testing.T) {
 			}
 		})
 	}
-	// LEMONADE_BASE_URL overrides the choice without reading it, as in Python.
+	// Unreadable, the config can't say whether LEMONADE_BASE_URL is ignored,
+	// so it is an error with the variable set too, as in Python.
 	path := useConfig(t, nil)
 	if err := os.WriteFile(path, []byte(`{"lemonade_mode":`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LEMONADE_BASE_URL", "http://lemon.lan:9000")
-	if err := ChoiceError(); err != nil {
-		t.Fatalf("env override still read the config: %v", err)
+	if err := ChoiceError(); err == nil || !strings.Contains(err.Error(), path) {
+		t.Fatalf("ChoiceError = %v, want one naming %s", err, path)
+	}
+}
+
+// GAIA's own, chosen in the Agent UI over LEMONADE_BASE_URL: the TUI follows
+// it, and the env server's key never goes to GAIA's own.
+func TestAnIgnoredLemonadeBaseURLAndItsKey(t *testing.T) {
+	useConfig(t, map[string]any{"lemonade_mode": "gaia", "lemonade_env_url_ignored": "http://127.0.0.1:59999/api/v1"})
+	installEmbeddedHere(t, 63207)
+	t.Setenv("LEMONADE_BASE_URL", "http://127.0.0.1:59999/api/v1")
+	t.Setenv("LEMONADE_API_KEY", "env-server-key")
+	if got := EnvBaseURL(); got != "" {
+		t.Fatalf("EnvBaseURL = %q, want it ignored", got)
+	}
+	if !EnvURLIgnored() || ExternalModeActive() || ChoiceError() != nil {
+		t.Fatal("the ignored value still picks the server")
+	}
+	key, err := APIKeyFor(context.Background(), "")
+	if err != nil || key != "embedded-key" {
+		t.Fatalf("APIKeyFor = %q, %v; want GAIA's own key", key, err)
+	}
+
+	t.Setenv("LEMONADE_BASE_URL", "http://gpu-box:13305")
+	if got := EnvBaseURL(); got != "http://gpu-box:13305" || EnvURLIgnored() {
+		t.Fatalf("a changed value is still ignored: %q", got)
+	}
+	if key, _ := APIKeyFor(context.Background(), ""); key != "env-server-key" {
+		t.Fatalf("APIKeyFor = %q, want the env key for the env server", key)
+	}
+}
+
+func TestReadChoiceRefusesANonStringIgnoredURL(t *testing.T) {
+	useConfig(t, map[string]any{"lemonade_env_url_ignored": 5})
+	if _, err := ReadChoice(); err == nil || !strings.Contains(err.Error(), "lemonade_env_url_ignored") {
+		t.Fatalf("ReadChoice err = %v", err)
 	}
 }
 

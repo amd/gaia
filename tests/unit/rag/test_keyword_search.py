@@ -11,13 +11,11 @@ import weakref
 from collections import Counter
 
 from gaia.rag import keyword_search
-from gaia.rag.keyword_search import KeywordIndex, keyword_index, rank_keyword_chunks
+from gaia.rag.keyword_search import KeywordIndex, keyword_index
 
 
 def _top(query, texts, limit=5):
-    return [
-        i for i, _score, _words in rank_keyword_chunks(query, enumerate(texts), limit)
-    ]
+    return [i for i, _score, _words in KeywordIndex(texts).rank(query, limit=limit)]
 
 
 def test_best_match_beats_earlier_chunks_sharing_one_common_word():
@@ -84,17 +82,58 @@ def test_word_in_every_chunk_of_a_small_document_still_matches():
     assert len(_top("contract", ["contract one", "contract two"])) == 2
 
 
+def test_distinctive_word_matches_in_a_document_of_any_size():
+    chunk = "Finance handles reimbursement of travel costs"
+    for size in range(1, 12):
+        texts = [chunk] + [f"general clause {n} on scope" for n in range(size - 1)]
+
+        assert _top("Who handles reimbursement?", texts) == [0], size
+    assert _top("Who approves reimbursement?", [chunk]) == [0]
+
+
+def test_distinctive_word_matches_when_searching_a_few_chunks_of_a_big_library():
+    index = KeywordIndex(
+        ["Finance handles reimbursement of travel costs"]
+        + [f"general clause {n} on scope" for n in range(40)]
+    )
+
+    for positions in ([0], [0, 1], [3, 0, 2], [0, 1, 2, 3]):
+        found = index.rank("Who approves reimbursement?", positions)
+
+        assert [position for position, _score, _words in found] == [0], positions
+
+
+def test_filler_word_alone_still_brings_in_nothing_in_a_small_document():
+    for size in range(2, 12):
+        texts = [f"the clause {n} of scope" for n in range(size)]
+
+        assert _top("what is the penalty", texts) == [], size
+        assert _top("zebra giraffe", texts) == [], size
+
+
+def test_missing_words_never_reorder_the_chunks_that_matched():
+    rng = random.Random(6409)
+    for _ in range(300):
+        texts = [_random_text(rng) for _ in range(rng.randint(1, 30))]
+        query = _random_text(rng) + " absentword otherabsent"
+        before = [i for i, _s, _w in _plain_rank(query, enumerate(texts), 50, 0)]
+        after = [i for i, _s, _w in _plain_rank(query, enumerate(texts), 50)]
+
+        # Missing words now weigh less, so more chunks clear the bar, in the same order.
+        assert [i for i in after if i in before] == before
+
+
 def test_nothing_matching_returns_nothing():
-    assert rank_keyword_chunks("zebra", [(0, "contract"), (1, "terms")]) == []
-    assert rank_keyword_chunks("", [(0, "contract")]) == []
-    assert rank_keyword_chunks("?!", [(0, "contract")]) == []
-    assert rank_keyword_chunks("zebra", []) == []
+    assert KeywordIndex(["contract", "terms"]).rank("zebra") == []
+    assert KeywordIndex(["contract"]).rank("") == []
+    assert KeywordIndex(["contract"]).rank("?!") == []
+    assert KeywordIndex([]).rank("zebra") == []
 
 
-def test_chunk_keeps_its_own_index_and_matched_words():
-    index, score, words = rank_keyword_chunks("large fee", [(41, "a large fee")])[0]
+def test_match_reports_its_position_and_matched_words():
+    index, score, words = KeywordIndex(["other", "a large fee"]).rank("large fee")[0]
 
-    assert index == 41
+    assert index == 1
     assert words == ["large", "fee"]
     assert 0.6 <= score <= 0.9
 
@@ -105,7 +144,7 @@ def test_limit_is_respected():
 
 # The cached index (#6393) must rank exactly as the scoring read straight off
 # each chunk's words, which is what this computes.
-def _plain_rank(query, chunks, limit=5):
+def _plain_rank(query, chunks, limit=5, held_floor=1):
     query_words = list(dict.fromkeys(keyword_search._words(query)))
     query_pairs = list(zip(query_words, query_words[1:]))
     if not query_words:
@@ -117,7 +156,8 @@ def _plain_rank(query, chunks, limit=5):
         held_by.update(set(words) & set(query_words))
     total = len(indexed)
     weights = {
-        word: math.log((total + 1) / (held_by[word] + 1)) + 1 / (total + 1)
+        word: math.log((total + 1) / (max(held_by[word], held_floor) + 1))
+        + 1 / (total + 1)
         for word in query_words
     }
     whole = sum(weights.values()) + sum(

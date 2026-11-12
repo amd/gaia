@@ -129,3 +129,29 @@ class TestStartupBanner:
         server._print_startup_info(stream=out)
         text = out.getvalue()
         assert "/mcp" in text
+
+
+class _RecordingAgent(_EchoAgent):
+    """Records the arguments each tool call actually receives."""
+
+    calls: List[Dict[str, Any]] = []
+
+    def execute_mcp_tool(
+        self, tool_name: str, arguments: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        _RecordingAgent.calls.append(dict(arguments))
+        return {"success": True}
+
+
+class TestArgumentPassThrough:
+    @pytest.mark.parametrize("arg", ["directory", "app_dir", "project_path"])
+    async def test_path_arguments_reach_the_tool_unchanged(self, arg):
+        _RecordingAgent.calls = []
+        server = AgentMCPServer(agent_class=_RecordingAgent)
+        echo = next(
+            t for t in server.mcp._tool_manager.list_tools() if t.name == "echo"
+        )
+
+        await echo.fn(kwargs={arg: "/work/project", "text": "hi"})
+
+        assert _RecordingAgent.calls == [{arg: "/work/project", "text": "hi"}]

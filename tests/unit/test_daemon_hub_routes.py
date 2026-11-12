@@ -950,6 +950,8 @@ def test_registry_hold_blocks_ensure_for_the_duration(monkeypatch):
             self.started_at = None
             self.mode = "user"
 
+        uses_ignored_lemonade = False
+
         @property
         def is_running(self):
             return self._running
@@ -1024,6 +1026,8 @@ class _ToyManager:
     @property
     def mode(self):
         return self._mode_override or "user"
+
+    uses_ignored_lemonade = False
 
     @property
     def is_running(self):

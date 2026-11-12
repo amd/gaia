@@ -47,6 +47,12 @@ def load(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     return db.get_session_environment(session_id)
 
 
+_NOTE_OPENINGS = (
+    "[This chat is working in the folder ",
+    "[This chat is working in these folders: ",
+)
+
+
 def with_folder_note(message: str, folders: List[str]) -> str:
     """*message* as sent to the chat's agent, led by a note naming *folders*."""
     # A granted folder only widens the scope; the model must also be told it.
@@ -63,6 +69,15 @@ def with_folder_note(message: str, folders: List[str]) -> str:
             'When the user says "this folder" or "here", they mean these.]'
         )
     return f"{note}\n\n{message}"
+
+
+def without_folder_note(message: str) -> str:
+    """*message* without the note :func:`with_folder_note` leads it with."""
+    if message.startswith(_NOTE_OPENINGS):
+        _note, sep, rest = message.partition("]\n\n")
+        if sep:
+            return rest
+    return message
 
 
 def apply_to_agent(agent: Any, env: Dict[str, Any]) -> bool:
@@ -113,8 +128,9 @@ def takes_folders(agent_type: Optional[str]) -> bool:
     Raises:
         EnvironmentChangeError: The relayed agent could not be started to ask.
     """
+    from gaia.daemon.sidecars.errors import SidecarError
+
     from .email_sidecar import daemon_client
-    from .email_sidecar.errors import SidecarError
     from .email_sidecar.profiles import profile_for, scope_supported
 
     agent_type = agent_type or "chat"
@@ -437,8 +453,9 @@ def _tell_running_relay(session_id: str, internet_off: bool) -> None:
     Raises:
         RelayedSwitchError: When the running turn's sidecar couldn't be told.
     """
+    from gaia.daemon.sidecars.errors import SidecarError
+
     from ._chat_helpers import _active_sse_handlers
-    from .email_sidecar.errors import SidecarError
 
     handler = _active_sse_handlers.get(session_id)
     if internet_off and getattr(handler, "relay_ignores_internet", False) is True:

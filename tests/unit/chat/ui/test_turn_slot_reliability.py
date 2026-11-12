@@ -633,6 +633,9 @@ class _ParkingSidecar:
         self.answer = value
         self.answered.set()
 
+    def cancel_query(self, run_id):  # noqa: ARG002
+        self.answered.set()
+
 
 def _relay_through(sidecar):
     from gaia.ui.email_sidecar import relay
@@ -666,7 +669,7 @@ async def test_unexpected_model_slot_retake_emits_named_error(caplog):
     handler.on_model_regained = None
     handler._emit = events.append
 
-    SSEOutputHandler.come_back_to_model(handler)
+    assert SSEOutputHandler.come_back_to_model(handler) is False
 
     assert events == [
         {
@@ -695,9 +698,45 @@ async def test_a_stop_during_the_retake_wait_is_not_an_error():
     handler.on_model_regained = None
     handler._emit = events.append
 
-    SSEOutputHandler.come_back_to_model(handler)
+    assert SSEOutputHandler.come_back_to_model(handler) is None
 
     assert events == []
+    assert handler.cancelled.is_set()
+
+
+async def test_a_stop_during_model_regain_is_reported_as_cancel():
+    events = []
+    handler = object.__new__(SSEOutputHandler)
+    handler.cancelled = threading.Event()
+    handler.turn_slot = SimpleNamespace(come_back=lambda _cancelled: True)
+
+    def stop_while_regaining():
+        handler.cancelled.set()
+
+    handler.on_model_regained = stop_while_regaining
+    handler._emit = events.append
+
+    assert SSEOutputHandler.come_back_to_model(handler) is None
+    assert events == []
+    assert handler.cancelled.is_set()
+
+
+async def test_model_regain_failure_returns_named_terminal_error():
+    events = []
+    handler = object.__new__(SSEOutputHandler)
+    handler.cancelled = threading.Event()
+    handler.turn_slot = SimpleNamespace(come_back=lambda _cancelled: True)
+
+    def fail_while_regaining():
+        raise RuntimeError("reload failed")
+
+    handler.on_model_regained = fail_while_regaining
+    handler._emit = events.append
+
+    assert SSEOutputHandler.come_back_to_model(handler) is False
+    assert events == [
+        {"type": "agent_error", "content": "reload failed", "fatal": True}
+    ]
     assert handler.cancelled.is_set()
 
 

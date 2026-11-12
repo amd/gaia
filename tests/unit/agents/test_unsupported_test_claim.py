@@ -21,6 +21,7 @@ import ast
 import json
 import random
 import time
+from collections.abc import Sequence
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -1406,11 +1407,38 @@ def test_a_command_grown_many_times_is_still_read(prefixes):
     assert _detect_test_runner(source) is True
 
 
+class _CountingArgv(Sequence):
+    """An argv that counts every word read, so linearity is checked without a clock."""
+
+    def __init__(self, words, reads=None):
+        self._words = list(words)
+        self.reads = reads if reads is not None else [0]
+
+    def __len__(self):
+        return len(self._words)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            part = self._words[index]
+            self.reads[0] += len(part)
+            return _CountingArgv(part, self.reads)
+        self.reads[0] += 1
+        return self._words[index]
+
+
 def test_a_long_launcher_chain_is_unwrapped_in_linear_time():
-    started = time.perf_counter()
-    assert argv_check_label(["uv", "run"] * 100_000 + ["pytest"]) == "pytest"
-    assert argv_check_label(["npx"] * 100_000 + ["cat", "pytest.log"]) is None
-    assert time.perf_counter() - started < 5
+    for chain, tail, expected in (
+        (["uv", "run"], ["pytest"], "pytest"),
+        (["npx"], ["cat", "pytest.log"], None),
+    ):
+        reads = []
+        for repeats in (1_000, 2_000):
+            argv = _CountingArgv(chain * repeats + tail)
+            assert argv_check_label(argv) == expected
+            reads.append(argv.reads[0])
+        # Linear reads double with the chain; re-reading the rest per launcher quadruples.
+        assert reads[1] <= 2.5 * reads[0], (chain, reads)
+        assert reads[1] <= 4 * len(argv), (chain, reads)
 
     command = "uv run " * 40_000 + "pytest"
     source = _LAUNCH_HEADER + f"os.system({command!r})\n"

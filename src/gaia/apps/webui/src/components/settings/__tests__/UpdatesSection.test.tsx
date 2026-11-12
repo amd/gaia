@@ -4,7 +4,8 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { UpdatesSection } from '../UpdatesSection';
+import { UpdatesSection, describeUpdateStatus } from '../UpdatesSection';
+import { translator } from '../../../i18n/useT';
 import { UpdateIndicator } from '../../UpdateIndicator';
 import { INITIAL_STATE } from '../../../hooks/useUpdateStatus';
 import type { UpdateState } from '../../../hooks/useUpdateStatus';
@@ -52,9 +53,50 @@ describe('UpdatesSection', () => {
         expect(container).toBeEmptyDOMElement();
     });
 
+    it('says it could not read the update status, in plain words, instead of claiming up to date', async () => {
+        bridge.getStatus.mockRejectedValueOnce(
+            new Error("Error invoking remote method 'gaia-updater:get-status': Error: No handler registered for 'gaia-updater:get-status'"),
+        );
+        render(<UpdatesSection />);
+        const line = await screen.findByText(
+            /couldn't read the update status\. press try again, or restart gaia if it keeps happening\./i,
+            { selector: '[role="status"]' },
+        );
+        expect(line.textContent).not.toMatch(/handler|gaia-updater|remote method|unknown/i);
+        expect(screen.queryByText(/up to date/i, { selector: '[role="status"]' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /try again/i })).toBeEnabled();
+        expect(screen.queryByRole('button', { name: /check for updates/i })).not.toBeInTheDocument();
+    });
+
+    it('reads the status again on Try again', async () => {
+        bridge.getStatus.mockRejectedValueOnce(new Error('No handler registered'));
+        render(<UpdatesSection />);
+        await screen.findByText(/couldn't read the update status/i, { selector: '[role="status"]' });
+        await userEvent.click(screen.getByRole('button', { name: /try again/i }));
+        await screen.findByText(/gaia is up to date/i, { selector: '[role="status"]' });
+        expect(bridge.getStatus).toHaveBeenCalledTimes(2);
+        expect(screen.getByRole('button', { name: /check for updates/i })).toBeEnabled();
+    });
+
+    it('drops the read failure once the updater pushes a real status', async () => {
+        bridge.getStatus.mockRejectedValueOnce(new Error('No handler registered'));
+        render(<UpdatesSection />);
+        await screen.findByText(/couldn't read the update status/i, { selector: '[role="status"]' });
+        act(() => push({ status: 'available', version: '0.26.0' }));
+        await screen.findByText(/gaia 0\.26\.0 is available/i, { selector: '[role="status"]' });
+        expect(screen.queryByText(/couldn't read the update status/i, { selector: '[role="status"]' })).not.toBeInTheDocument();
+    });
+
+    it('says the update status could not be read in Arabic', () => {
+        const line = describeUpdateStatus({ ...INITIAL_STATE, readFailed: true }, translator('ar'));
+        expect(line).toContain('تعذّرت قراءة حالة التحديث');
+        expect(line).toContain('«إعادة المحاولة»');
+        expect(line).not.toContain('محدّث');
+    });
+
     it('shows auto-update off by default', async () => {
         render(<UpdatesSection />);
-        await waitFor(() => expect(screen.getByText(/running gaia 0\.25\.0/i)).toBeInTheDocument());
+        await waitFor(() => expect(screen.getByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' })).toBeInTheDocument());
         expect(autoSwitch()).not.toBeChecked();
     });
 
@@ -67,7 +109,7 @@ describe('UpdatesSection', () => {
 
     it('opting into release candidates leaves auto-update off', async () => {
         render(<UpdatesSection />);
-        await screen.findByText(/running gaia 0\.25\.0/i);
+        await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
         expect(rcSwitch()).not.toBeChecked();
         expect(rcSwitch()).toBeEnabled();
 
@@ -88,7 +130,7 @@ describe('UpdatesSection', () => {
     it('says plainly when no release publishes an update for this platform', async () => {
         state = { ...state, status: 'no-channel', error: 'No GAIA release publishes a desktop update for this platform yet' };
         render(<UpdatesSection />);
-        expect(await screen.findByText(/no gaia release publishes a desktop update/i)).toBeInTheDocument();
+        expect(await screen.findByText(/no gaia release publishes a desktop update/i, { selector: '[role="status"]' })).toBeInTheDocument();
         expect(screen.queryByText(/up to date/i)).toBeNull();
     });
 
@@ -119,7 +161,7 @@ describe('UpdatesSection', () => {
 
     it('offers the way back only when there is an earlier version', async () => {
         render(<UpdatesSection />);
-        await screen.findByText(/running gaia 0\.25\.0/i);
+        await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
         expect(screen.queryByRole('button', { name: /go back/i })).not.toBeInTheDocument();
         act(() => push({ previousVersion: '0.24.0' }));
         await userEvent.click(await screen.findByRole('button', { name: /go back to gaia 0\.24\.0/i }));

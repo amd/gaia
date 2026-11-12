@@ -323,6 +323,13 @@ type ChatModel struct {
 	// workspace run unasked. Set only after the transport confirmed it.
 	acceptEdits bool
 
+	// readAloud is the reply being read aloud, nil when none is; readAloudSeq
+	// tells a stopped reading's late messages from the current one's.
+	readAloud    *readAloudRun
+	readAloudSeq int
+	// readAloudAuto mirrors read_aloud_auto: read each finished reply.
+	readAloudAuto bool
+
 	// warming is the warm-up stage before the first chat turn — see warmup.go.
 	// warmHidden is Esc on the stage: the chat shows while the warm-up turn
 	// keeps running. warmStep is what the agent is doing now; warmDone what it
@@ -385,9 +392,9 @@ type ChatModel struct {
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
 	// panel implemented only in the root model is absent there — which is why
-	// /help did nothing at all on that path. Under the hub, root intercepts
-	// ToggleHelpMsg before it reaches here and this stays closed, so the two
-	// never both draw.
+	// /help did nothing at all on that path. Under the root model, root
+	// intercepts ToggleHelpMsg before it reaches here and this stays closed, so
+	// the two never both draw.
 	help components.HelpState
 
 	// palette is the "/" command palette's open/selected state. Its filter
@@ -599,9 +606,8 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, de
 	return m.applyFirstBootGate()
 }
 
-// NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
-// CanReturnToHub) for a real catalog agent, so agentID is the catalog id
-// rather than NewChatModel's default of the display name.
+// NewChatModelForCatalogAgent creates a standalone ChatModel for a real catalog
+// agent, so agentID is the catalog id rather than NewChatModel's display name.
 func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
@@ -676,6 +682,7 @@ func (m ChatModel) Init() tea.Cmd {
 		// or /memory has already run negotiate once — see
 		// probeCapabilitiesCmd.
 		m.probeCapabilitiesCmd(),
+		loadReadAloudAutoCmd,
 	}
 	if m.agentID == setupAgentID {
 		// Whether /gpu applies here: only a PC with an integrated GPU has a
@@ -906,6 +913,9 @@ func queuedSendWatchdogAfter(turnSeq int, d time.Duration) tea.Cmd {
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.handleReadAloudMsg(msg); handled {
+		return next, cmd
+	}
 	var setupCmd tea.Cmd
 	if m.modelSetup != nil {
 		next, cmd, handled := m.updateModelSetup(msg)
@@ -1268,6 +1278,14 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case mediaActionResultMsg:
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: mediaStatus(msg.path, msg.action, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case pasteClipboardMsg:
 		text := normalizePastedText(msg.text)
 		if msg.err != nil || strings.TrimSpace(text) == "" {
@@ -1538,9 +1556,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.Reset()
 		m.syncComposerHeight()
 
-		// Copying is local and read-only: there is no reason to make it wait
-		// for the turn to end.
-		if isCopyCommand(query) {
+		// Copying and reading aloud are local: there is no reason to make
+		// them wait for the turn to end.
+		if isCopyCommand(query) || isReadAloudCommand(query) || isVoiceCommand(query) {
 			return m.submit(query)
 		}
 
@@ -1597,6 +1615,12 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case tea.KeyCtrlF:
+		return m, m.mediaActionCmd("open")
+
+	case tea.KeyCtrlG:
+		return m, m.mediaActionCmd("reveal")
+
 	case tea.KeyCtrlV:
 		// Reaches here only when the terminal did NOT already turn this into a
 		// bracketed paste above — most terminals bind Ctrl+V to their own paste
@@ -1607,21 +1631,21 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, pasteFromClipboardOrImage()
 
 	case tea.KeyPgUp:
-		m.viewport.HalfViewUp()
+		m.viewport.HalfPageUp()
 		return m.afterScroll(), nil
 
 	case tea.KeyPgDown:
-		m.viewport.HalfViewDown()
+		m.viewport.HalfPageDown()
 		return m.afterScroll(), nil
 
 	case tea.KeyUp:
 		// The composer is one line high, so the arrows have no job there and
 		// belong to the transcript — which is where a reader reaches first.
-		m.viewport.LineUp(1)
+		m.viewport.ScrollUp(1)
 		return m.afterScroll(), nil
 
 	case tea.KeyDown:
-		m.viewport.LineDown(1)
+		m.viewport.ScrollDown(1)
 		return m.afterScroll(), nil
 
 	case tea.KeyHome, tea.KeyEnd:
@@ -1815,6 +1839,13 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// dispatched before the exact-match switch.
 	if isUpdateCommand(query) {
 		return m.runUpdateCommand(updateCommandArg(query))
+	}
+	// Free-form arguments too (a voice id, a speed), so also before the switch.
+	if isReadAloudCommand(query) {
+		return m.runReadAloudCommand(commandArg(query, readAloudCommand))
+	}
+	if isVoiceCommand(query) {
+		return m.runVoiceCommand(commandArg(query, voiceCommand))
 	}
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
@@ -2151,6 +2182,13 @@ func (m *ChatModel) dropCancellingNotice() {
 	}
 }
 
+// Retire stops everything this chat started before it is dropped: the turn
+// and any reading aloud, which would otherwise play on with no way to stop it.
+func (m *ChatModel) Retire() {
+	m.CancelActiveTurn()
+	m.StopReadAloud()
+}
+
 // CancelActiveTurn stops any in-flight turn. The UI owns the per-turn context, so
 // tearing this view down has to cancel it — otherwise the transport keeps
 // streaming into a screen nobody is watching and the agent run stays alive.
@@ -2279,8 +2317,12 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 		m.streaming = false
 		m.totalSteps = e.Steps
+		readable := !m.cancelPending && !m.awaitingModelSwitch && !m.warming
 		m.settleTurn()
 		m.updateViewport()
+		if readable {
+			return m.autoReadAloud(content)
+		}
 		return m, nil
 
 	case event.ChunkEvent:
@@ -2489,6 +2531,7 @@ func (m *ChatModel) syncViewportHeight(chrome int) {
 
 	m.confirmRows = 0
 	if m.confirmation != nil {
+		m.confirmation.SetMaxRows(budget - 1)
 		m.confirmRows = lipgloss.Height(m.confirmation.View())
 		// The transcript keeps at least one row. Past that the modal is
 		// clipped rather than allowed to push the composer and status bar off
@@ -2729,24 +2772,6 @@ func (m ChatModel) answerWidth() int {
 		w = 20
 	}
 	return w
-}
-
-// wrapForPane wraps text to the visible pane, leaving it untouched before the
-// first WindowSizeMsg (when no width is known yet).
-func (m ChatModel) wrapForPane(s string) string {
-	if m.width <= 0 {
-		return s
-	}
-	return components.WrapText(s, m.cardWidth())
-}
-
-// wrapProse wraps to the same measure an answer lays out at, so prose from
-// either side of the conversation shares one column.
-func (m ChatModel) wrapProse(s string) string {
-	if m.width <= 0 {
-		return s
-	}
-	return components.WrapText(s, m.answerWidth())
 }
 
 // spacedAfter reports whether a message gets a blank line under it. Substantial
@@ -3248,6 +3273,8 @@ func (m ChatModel) phasePhrase() string {
 			return "Reading the tool results"
 		}
 		return "Reading your request"
+	case "loading_tools":
+		return "Loading more tools"
 	case "reasoning":
 		if m.phase.words > 0 {
 			return "Reasoning · " + commas(m.phase.words) + " words"

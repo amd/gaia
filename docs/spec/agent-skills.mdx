@@ -532,6 +532,39 @@ other. A name that is not installed is ignored and logged at debug level, never
 an error: a skill may name a companion the user has not installed. Use it only
 for pairs that are true in general, not for one task.
 
+#### Skills that load with their tools
+
+Some models skip `load_skill` and call a skill's tools directly. The work gets
+done, but without the skill's instructions, and the chat never shows that a
+skill was used. A skill can list the tools that only it drives in
+`metadata.gaia.loads_with`:
+
+```yaml
+metadata:
+  gaia:
+    tools_required: [transcribe_media, refine_transcript, analyze_transcript]
+    loads_with: [analyze_transcript]
+```
+
+When the model calls one of those tools and the skill isn't loaded, GAIA loads
+it before the tool runs. Each name must also be in `tools_required`, or the skill
+fails validation. Only skills GAIA ships with the agent, and that bring no code of
+their own, load this way. A skill you installed, one from a `.claude/skills`
+folder, or one with its own `tools` loads only when the model calls `load_skill`,
+since nobody chose it otherwise. List only tools that no other skill relies on. A shared tool
+such as `read_file` or `transcribe_media` can't say which skill is in use, so it
+doesn't belong here. If the skill can't load (for example, the model isn't
+offered a tool it needs), the call still runs and the reason is logged.
+
+The Agent UI shows a skill in use in two places:
+
+- **The activity trace.** A turn that loads a skill with `load_skill` shows that
+  call. A turn that uses a skill some other way shows **Using skill: _name_**,
+  once per skill per turn. That covers a skill GAIA loaded for a `loads_with`
+  tool, or one already loaded earlier in the chat.
+- **The side panel's Skills section.** It lists every skill loaded in the chat
+  and how it came in: by the model, by GAIA when its tools ran, or always on.
+
 <Note>
 **Write the `description` for this.** The model decides from it. Say what the
 skill does and when to use it, naming the objects, formats, and services a user
@@ -572,7 +605,9 @@ is loaded: each call goes to the user's approval prompt instead. The grant is
 pre-approval — loading the skill lets the policy's reads run without a prompt.
 A call outside the policy (`git push`, `gh auth token`) is not covered by any
 grant: it is shown verbatim with a risk note for a one-time approval, with or
-without the skill loaded, and one that deletes or discards work stays refused.
+without the skill loaded. One that deletes or discards work stays refused, and
+so does an action the policy marks `never_offered_actions` (`gh issue close`,
+`gh pr close`, `gh pr merge`).
 With nobody to answer the prompt, the call is refused.
 
 Tunable: `GAIA_SKILL_DISCOVERY` (`0` hides the list).
@@ -1047,7 +1082,10 @@ standard intentionally leaves open.
   [#2468](https://github.com/amd/gaia/issues/2468).** Every skill's body is
   scanned for injection patterns at publish, and the claimed tier decides the
   consequence rather than a separate policy: advisory at `experimental`, forcing
-  `REVIEW` at `community`, and gated on a `medium` at `verified`. Run it yourself
+  `REVIEW` at `community`, and gated on a `medium` at `verified`. One rule ignores
+  the tier: an instruction to send content to a URL or webhook
+  (`body.injection.outbound_url`) is held for `REVIEW` even at `experimental`.
+  Run it yourself
   with `gaia skill audit ./<skill>/`. The precision trade-offs (fenced text is
   downgraded one step rather than ignored; a prohibition is not a directive) are
   recorded in

@@ -8,7 +8,9 @@ npx @amd-gaia/gaia
 
 That fetches the two binaries GAIA needs — the agent sidecar and the terminal UI —
 verifies both against a checksum manifest that ships inside this package, and drops
-you into the terminal UI. No Python to install, no repo to clone, no build step.
+you into the terminal UI. No repo to clone and no build step. The terminal UI does
+start the GAIA daemon from the `gaia` Python CLI, so install that first (see
+[Requirements](#requirements)).
 Local inference is the default. The TUI can explicitly select Fireworks AI or AMD
 LLM Gateway through Lemonade; remote chat sends conversation history to that provider. The
 terminal UI's *launch* flag `--use-claude`, which would pin the Anthropic API for
@@ -42,7 +44,7 @@ however you arrive at the terminal UI, it behaves identically.
 - **On Linux x64, glibc 2.34 or newer** for the agent sidecar (Ubuntu 22.04,
   Debian 12 and RHEL 9 or later). An older distro cannot start the agent. Check
   with `ldd --version`.
-- The `gaia` Python CLI **0.25.4 or newer** on `PATH` for the daemon the terminal
+- The `gaia` Python CLI **0.26.0 or newer** on `PATH` for the daemon the terminal
   UI starts. An earlier core cannot run this agent, so the UI comes up with
   nothing behind it. Install it with
   `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows:
@@ -212,7 +214,7 @@ so probe `/version` first. See
 
 **Internet switched off for the chat? Send `internet_off`** (contract ≥
 2.23) every turn: `true` refuses web search, page fetches, the browser,
-connector and Agent Hub tools, mailbox reads, and commands that contact another host;
+connector and Agent Hub tools, mailbox reads, drafts and sends, calendar access, and commands that contact another host;
 `false` allows them.
 Omit it and the agent keeps its own setting. Binaries older than 2.23 reject
 the field with `422`, so probe `/version` first, do not answer an
@@ -252,8 +254,18 @@ get its own wording; a headless caller omits it. See
 
 **Showing the model's reasoning?** Send `reasoning: true` (contract ≥ 2.22)
 and it arrives as `reasoning` events with a `delta`, apart from `status` lines
-and the answer. Join the deltas as they come. Older binaries reject the field
-with `422`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+and the answer. Join the deltas as they come. One with `retracts_answer: true`
+means the `token` text since the last tool call was reasoning: drop it from the
+answer. Older binaries reject the field with `422`. See [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
+
+**A reply can start over.** When GAIA's model server stops part-way through a
+reply, the step is retried once the server is back, and a `status` with
+`retracts_answer: true` (phase `answer_restart`) comes first: drop the `token`
+text since the last tool call and show its `message` instead, so the new reply
+never silently replaces the old one. While the server restarts, `status` lines
+carry phase `model_restart`, also when it stopped under a tool's own model
+calls (a long document extraction, say), which report each page with phase
+`reading` ("Reading page 4 of 12…").
 
 **Showing how full the model's window is?** From contract 2.21 the `final`
 event carries `context`: the window size, the tokens the next call will take,
@@ -269,6 +281,12 @@ so the agent sees the tool calls it made and what they returned.
 Text-only `context` loses them, and the agent can't explain its own last turn.
 An empty `turns` list clears a retained session's history. Older binaries
 reject `turns` with `422`.
+
+An answer ends with one line such as `I haven't confirmed this works — the
+tests didn't pass.` when a check failed or was blocked, or a change went
+unchecked. It appears only then; a confirmed or purely conversational turn has
+no such line. It is part of `final.answer`, so show it to the user rather than
+trimming it. Details in [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
@@ -296,13 +314,13 @@ actually being served — the sidecars it just published, and the terminal-hub
 artifacts it downloaded and cross-checked against the hub's own recorded hashes.
 
 A committed release's lock, like this one, always carries real hashes — the
-regenerate step in the release pipeline never publishes placeholders. Between
-releases, an unreleased working tree's lock instead carries
-`PENDING-replace-with-real-sha256` placeholders, and **a placeholder blocks the
-fetch outright** — before any network call — so an unverifiable binary can never
-be downloaded, let alone executed. If you need to run against a locally built
-binary, build it yourself and point the lifecycle helpers at it directly; the
-fetcher will not be talked into it.
+regenerate step in the release pipeline never publishes placeholders, and the
+release commits the same lock to `main`. A placeholder such as
+`PENDING-replace-with-real-sha256` therefore only appears in a lock edited by
+hand, and **a placeholder blocks the fetch outright** — before any network call —
+so an unverifiable binary can never be downloaded, let alone executed. If you
+need to run against a locally built binary, build it yourself and point the
+lifecycle helpers at it directly; the fetcher will not be talked into it.
 
 ## Links
 

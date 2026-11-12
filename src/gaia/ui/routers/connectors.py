@@ -60,6 +60,7 @@ from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowInProgressError,
     FlowTimeoutError,
+    InvalidConfigValueError,
     NoDeclaredScopesError,
     ScopeMismatchError,
     ScopeNotAllowedError,
@@ -85,6 +86,7 @@ from gaia.connectors.mcp_server import (
     is_mcp_server_configured,
 )
 from gaia.connectors.registry import REGISTRY
+from gaia.connectors.spec import ConfigField
 from gaia.connectors.store import peek_connection, peek_provider_credentials
 
 from ..security import require_ui_header as _require_ui_header
@@ -268,6 +270,8 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
         )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, InvalidConfigValueError):
+        return HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, ScopeNotAllowedError):
         return HTTPException(
             status_code=400,
@@ -325,7 +329,11 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
 
 
 def _resolve_grant_scopes(
-    request: Request, connector_id: str, agent_ids: List[str]
+    request: Request,
+    connector_id: str,
+    agent_ids: List[str],
+    *,
+    enforced_only: bool = False,
 ) -> Dict[str, List[str]]:
     """Resolve ``[namespaced_agent_id]`` → ``{agent_id: required_scopes}`` (#2117).
 
@@ -346,7 +354,9 @@ def _resolve_grant_scopes(
         raise HTTPException(status_code=503, detail="Agent registry not initialized")
 
     try:
-        return resolve_declared_scopes(registry, connector_id, agent_ids)
+        return resolve_declared_scopes(
+            registry, connector_id, agent_ids, enforced_only=enforced_only
+        )
     except UnknownAgentError as e:
         raise HTTPException(
             status_code=404,
@@ -519,6 +529,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "description": spec.description,
         "product_url": spec.product_url,
         "docs_url": spec.docs_url,
+        "setup_url": spec.setup_url,
         "configured": configured,
         "configurable": configurable,
         "config_error": config_error,
@@ -535,17 +546,21 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "supports_device_code": spec.supports_device_code,
         # OAuth setup form (e.g. Google client_id/client_secret) — empty
         # tuple for connectors that don't need first-time provider creds.
-        "oauth_setup_fields": [
-            {
-                "key": f.key,
-                "label": f.label,
-                "kind": f.kind,
-                "required": f.required,
-                "placeholder": f.placeholder,
-                "help_md": f.help_md,
-            }
-            for f in spec.oauth_setup_fields
-        ],
+        "oauth_setup_fields": [_field_summary(f) for f in spec.oauth_setup_fields],
+        # Label, example and help for each ``mcp_env_keys`` entry.
+        "config_fields": [_field_summary(f) for f in spec.config_schema],
+    }
+
+
+def _field_summary(f: ConfigField) -> Dict[str, Any]:
+    return {
+        "key": f.key,
+        "label": f.label,
+        "kind": f.kind,
+        "required": f.required,
+        "placeholder": f.placeholder,
+        "help_md": f.help_md,
+        "prefix": f.prefix,
     }
 
 
@@ -567,7 +582,9 @@ async def list_connectors() -> Dict[str, Any]:
             logger.warning(
                 "connectors-list: summary failed for %s (%s)", s.id, type(exc).__name__
             )
-            summaries.append({"id": s.id, "error": "unavailable"})
+            summaries.append(
+                {"id": s.id, "display_name": s.display_name, "error": "unavailable"}
+            )
     return {"connectors": summaries}
 
 
@@ -1184,7 +1201,10 @@ async def forward_connection(
     requirement for ``provider`` is rejected with 400 ``agent_declares_no_scopes``
     rather than silently granting it zero required scopes.
     """
-    grant_map = _resolve_grant_scopes(request, provider, body.grant_agents)
+    # A host that forwards mail only must keep working without calendar scope.
+    grant_map = _resolve_grant_scopes(
+        request, provider, body.grant_agents, enforced_only=True
+    )
     required: set[str] = set()
     for scopes in grant_map.values():
         required.update(scopes)
