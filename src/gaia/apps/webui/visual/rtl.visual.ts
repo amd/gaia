@@ -422,6 +422,9 @@ for (const [title, locale, name] of [
         await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
         await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
         await expect(page.locator('.composer-attachment.has-error')).toHaveCount(0);
+        // A long name is cut in the middle, so its extension stays in view.
+        await expect(page.locator('.composer-attachment-name')).toHaveText(/\.(mp4|m4a)$/);
+        await shot(page, `attachment-name-${locale}`);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
     });
@@ -433,6 +436,31 @@ test('new chat', async ({ page }) => {
     await expect(page.locator('.sb-location-name')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const row = page.locator('.sb-row').filter({ hasText: 'Compare two lease PDFs' });
+        await expect(row).toBeVisible();
+        const rowBox = (await row.boundingBox())!;
+        const titleBox = (await row.locator('.sb-row-title').boundingBox())!;
+        // Rename, pin and delete appear over the row on hover, not in space kept beside the title.
+        expect(titleBox.width + 30, 'title cut short to leave room for hidden buttons').toBeGreaterThan(rowBox.width * 0.85);
+        await row.hover();
+        await expect(row.locator('.sb-row-delete')).toBeVisible();
+        await shot(page, `sidebar-row-hover-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        // While renaming, pin and delete sit beside the name box, not over the end of what is typed.
+        await row.locator('.sb-row-rename').click();
+        // The title gives way to the name box, so find the row by it now.
+        const edit = page.locator('.sb-row-edit');
+        await expect(edit).toBeFocused();
+        const editBox = (await edit.boundingBox())!;
+        const actionsBox = (await page.locator('.sb-row:has(.sb-row-edit) .sb-row-actions').boundingBox())!;
+        const overlap = Math.min(editBox.x + editBox.width, actionsBox.x + actionsBox.width) - Math.max(editBox.x, actionsBox.x);
+        expect(overlap, 'pin and delete cover the name being typed').toBeLessThanOrEqual(0);
+    });
+}
 
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
@@ -496,6 +524,35 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
+    });
+}
+
+async function withFailedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Give me three tips for better sleep.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'Error: `fireworks.no-such-model` isn\'t available on Fireworks AI (HTTP 404).',
+                        inference_stats: { seconds: 2, place: 'via Fireworks AI' },
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed answer is footed as failed (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedAnswer);
+        const footer = page.locator('.msg-assistant .msg-stats-summary');
+        await expect(footer).toContainText(locale === 'en' ? 'Failed after' : 'فشلت بعد');
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').hover();
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`failed-answer-${locale}.png`) });
     });
 }
 
@@ -566,6 +623,30 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.msg-assistant')).not.toContainText('read back to confirm');
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath(`checked-answer-${locale}.png`) });
+    });
+}
+
+async function withStoppedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write about the history of canals', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The earliest canals carried water to fields, not boats. In Mesopotamia', created_at: NOW.toISOString(), rag_sources: null, stopped: true },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a stopped answer offers Continue and Try again (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withStoppedAnswer);
+        const actions = page.locator('.msg-assistant .msg-try-again');
+        await expect(actions).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`stopped-answer-${locale}.png`) });
     });
 }
 
@@ -2891,7 +2972,14 @@ for (const locale of ['ar', 'en']) {
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
         const meter = page.locator('button.context-meter');
         await expect(meter).toBeVisible();
-        await expect(page.locator('.context-warning')).toBeVisible();
+        const warning = page.locator('.context-warning');
+        await expect(warning).toBeVisible();
+        // One short line by default, so it never covers the end of the chat.
+        expect((await warning.boundingBox())!.height).toBeLessThan(60);
+        await shot(page, `context-warning-${locale}`);
+        await warning.getByRole('button', { expanded: false }).click();
+        await shot(page, `context-warning-details-${locale}`);
+        expect(await audit(page)).toEqual([]);
         await meter.click();
         await expect(page.locator('.context-meter-panel')).toBeVisible();
         expect(await audit(page)).toEqual([]);

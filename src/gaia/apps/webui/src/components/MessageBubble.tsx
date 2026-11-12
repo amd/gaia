@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -52,8 +52,10 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** More message actions, before Copy (e.g. Retry with…). */
     extraActions?: React.ReactNode;
-    /** Shows a labelled Try again under a failed or cut-off reply, which asks the user to press it. */
+    /** Shows a labelled Try again under a failed, cut-off or stopped reply, which asks the user to press it. */
     onTryAgain?: () => void;
+    /** Shows Continue under a stopped reply that wrote something. */
+    onContinue?: () => void;
     /** The chat's latest answer, whose actions stay in view. */
     latest?: boolean;
     /** Total wall-clock latency in ms (time from user message to response completion). */
@@ -504,12 +506,13 @@ export function splitCutOff(content: string): CutOff | null {
 }
 
 /** How an assistant turn ended short of an answer, or undefined when it answered. */
-export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
+export function turnEnding(content: string, stopState: Message['stopState'], failed = false): TurnEnding | undefined {
     if (stopState) return 'stopped';
-    return splitCutOff(content) ? 'interrupted' : undefined;
+    if (splitCutOff(content)) return 'interrupted';
+    return failed ? 'failed' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(() => {
@@ -726,6 +729,12 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 : say(cutOff.notice)))}
                         </p>
                     )}
+                    {onContinue && stopState && !isStreaming && cleanedContent.trim() && cleanedContent.trim() !== SERVER_CANCELLED_TEXT && (
+                        <button type="button" className="msg-try-again" onClick={onContinue}>
+                            <Play size={12} aria-hidden="true" />
+                            {t('msg.continue')}
+                        </button>
+                    )}
                     {onTryAgain && !isStreaming && (
                         <button type="button" className="msg-try-again" onClick={onTryAgain}>
                             <RotateCw size={12} aria-hidden="true" />
@@ -757,7 +766,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState)} />
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError)} />
                         </div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
