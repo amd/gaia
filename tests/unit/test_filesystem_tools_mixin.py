@@ -382,6 +382,15 @@ class TestBrowseDirectory:
         assert result["status"] == "error"
         assert result["error"] == "Access denied: blocked by policy"
 
+    def test_a_reason_that_already_says_access_denied_says_it_once(self, tmp_path):
+        reason = f"Access denied: '{tmp_path}' is not in allowed paths."
+        mock_validator = MagicMock()
+        mock_validator.validate_read.return_value = (False, reason)
+        self.agent._path_validator = mock_validator
+
+        result = self.browse(path=str(tmp_path))
+        assert result["error"] == reason
+
 
 # =============================================================================
 # tree Tool Tests

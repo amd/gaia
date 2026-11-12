@@ -1528,6 +1528,36 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+const OPENCODE = 'opencode.big-model';
+
+for (const locale of ['ar', 'en']) {
+    test(`a cloud model learned from Lemonade's list reads as cloud (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            // No chats yet, so the chip goes by the picked model alone.
+            await p.route((url) => url.pathname === '/api/sessions', (route) => route.fulfill({ json: { sessions: [], total: 0 } }));
+            await p.route('**/api/providers/active', (route) => route.fulfill({
+                json: {
+                    provider: 'local', model: OPENCODE, display_name: 'big-model', label: 'big-model · opencode', remote: true,
+                    provider_name: 'opencode', downloaded: null, inference_remote: true, inference_description: null,
+                    is_default: false, restore: { status: 'none', message: null },
+                },
+            }));
+        });
+        await expect(page.getByText(/downloaded yet/)).toHaveCount(0);
+        await expect(page.getByText('big-model · opencode')).toBeVisible();
+        await shot(page, `chip-${locale}-cloud-from-lemonade-list`);
+        const sidebar = page.getByRole('button', { name: /Open sidebar/ });
+        if (await sidebar.isVisible()) await sidebar.click();
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="model"]').click();
+        await expect(page.locator('.model-in-use-name')).toBeVisible();
+        await expect(page.getByText(/downloaded yet/)).toHaveCount(0);
+        await shot(page, `model-${locale}-cloud-from-lemonade-list`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const FLASH = 'fireworks.deepseek-v4p1-flash';
 
 /** The answer chat on DeepSeek on Fireworks, with three priced answers and a stopped one. */
@@ -2989,6 +3019,12 @@ for (const locale of ['ar', 'en']) {
             await item.locator('.mem-about-btn').first().click();
             await expect(item.locator('textarea')).toBeVisible();
             await checkMemory(page, locale, 'about-editing');
+        });
+
+        test('about you, more than one page', async ({ page }) => {
+            await openMemory(page, locale, { more: true });
+            await expect(page.locator('.mem-about-more .btn-secondary')).toBeVisible();
+            await checkMemory(page, locale, 'about-more');
         });
 
         test('about you, empty', async ({ page }) => {

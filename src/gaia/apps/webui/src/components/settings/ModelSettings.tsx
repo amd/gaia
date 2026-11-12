@@ -289,7 +289,7 @@ export function ModelSettings() {
 
             <ModelInUse
                 row={listedInUse ?? (sameModelId(inUseRow?.id, active?.model) ? inUseRow : null)}
-                providerName={providers?.find((p) => p.id === active?.provider)?.name ?? null}
+                providerName={active?.provider_name ?? null}
                 choices={connected ? switchChoices : []}
                 labels={labels}
                 disabled={busy !== null}
