@@ -1271,7 +1271,7 @@ def _free_memory_snapshot(url: str):
         if name:
             options = entry.get("recipe_options") or {}
             resident[name] = int(options.get("ctx_size") or 0)
-            if entry.get("type") == "llm" and entry.get("recipe") != "cloud":
+            if entry.get("type") in ("llm", "vlm") and entry.get("recipe") != "cloud":
                 chat.append(name)
     if (health.get("max_models") or {}).get("llm") == 1:
         resident.replaced_by_chat_load = tuple(chat)

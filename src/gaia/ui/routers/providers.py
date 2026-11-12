@@ -1776,6 +1776,11 @@ def apply_pending_context_reload() -> List[str]:
         return []
     health = _read_health()
     if _server_owner(_base_url()) != "gaia":
+        logger.info(
+            "Not reloading %s for a new context size: the model server isn't "
+            "GAIA's. The size applies the next time the model loads.",
+            ", ".join(sorted(_pending_context_reload)),
+        )
         _pending_context_reload.clear()
         return []
     started = []
@@ -1787,6 +1792,9 @@ def apply_pending_context_reload() -> List[str]:
             continue
         if _busy_reason(_chat_entry(health, model_id), False) is not None:
             continue
+        # Again, after the reads above: a turn may have started meanwhile.
+        if _active_sse_handlers or _warming_up():
+            break
         if not _start_reload(model_id, server_up=True):
             break
         _pending_context_reload.discard(model_id)
@@ -1898,6 +1906,19 @@ def remove_custom_model(
         raise HTTPException(status_code=500, detail=str(e)) from e
     if _model_ids_match(db.get_setting("custom_model"), result["removed"]):
         db.set_setting("custom_model", None)
+        from gaia.ui import warmup
+
+        from ..database import resolved_default_model
+
+        try:
+            default = resolved_default_model()
+        except GaiaConfigError as e:
+            # The removal is done; the model list reports the config.
+            logger.warning("Not loading the default after a removal: %s", e)
+            return result
+        if provider_of(default) == LOCAL:
+            # Chat is back on the default: load it, as picking it would.
+            warmup.request_warm_up("model removed", fresh=True, model=default)
     return result
 
 

@@ -4353,7 +4353,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     slot.close()
                 _stopping_sessions[session_id] = producer
         # After the join: the thread may still have been reading from the model.
-        turn_ended()
+        # Off the loop: a context size waiting on this turn reads Lemonade.
+        await asyncio.to_thread(turn_ended)
 
     try:
         # Create SSE handler for streaming events

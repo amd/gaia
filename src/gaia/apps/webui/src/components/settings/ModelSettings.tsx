@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Cloud, Cpu, Loader2, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
-import { useModelStore, displayModelName, distinctModelLabels, sameModelId } from '../../stores/modelStore';
+import { useModelStore, displayModelName, distinctModelLabels, sameModelId, syncModelAfterSettingChange } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useT, type Translate } from '../../i18n/useT';
 import { AddCustomModel } from './AddCustomModel';
@@ -220,13 +220,14 @@ export function ModelSettings() {
                 : r.cleared.includes('default_model') ? 'settings.model.removedDefault' : 'settings.model.removed';
             setNotice({ ok: true, text: t(removed, { name: r.display_name }) });
             await loadModels('local', true);
-            await refreshActive();
+            // Removing the model in use puts chat back on the default, which loads now.
+            await syncModelAfterSettingChange();
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {
             setBusy(null);
         }
-    }, [loadModels, refreshActive, t]);
+    }, [loadModels, t]);
 
     const added = useCallback(async (name: string) => {
         setNotice({ ok: true, text: t('settings.model.added', { name }) });

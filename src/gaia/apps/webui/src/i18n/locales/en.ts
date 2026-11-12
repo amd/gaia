@@ -1892,6 +1892,7 @@ export const enMessages = {
     'settings.models.applyDownload': 'Apply: download {size}',
     'settings.models.applying': 'Saving…',
     'settings.models.applied': 'Saved.',
+    'settings.models.appliedNotSwitched': "Saved as the default, but GAIA couldn't switch to it now: {reason}",
     'settings.models.remove': 'Remove',
     'settings.models.removeAria': 'Remove {name}',
     'settings.models.removeTitle': 'Remove {name}?',

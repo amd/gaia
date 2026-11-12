@@ -159,13 +159,22 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
             setSelection({ ...selection, defaultChat: latest.chat_model.id });
             // The last model picked outranks the default, so a new default that is
             // on this PC is picked too; otherwise "In use" would never change.
+            let notSwitched: string | null = null;
             if (defaultChanged && latest.chat_model.downloaded) {
-                await useModelStore.getState().select(latest.chat_model.id);
+                try {
+                    await useModelStore.getState().select(latest.chat_model.id);
+                } catch (err) {
+                    // The default is saved; say the switch didn't happen and carry on.
+                    notSwitched = errorText(err);
+                    void useModelStore.getState().refresh();
+                }
             } else {
                 void useModelStore.getState().refresh();
             }
             if (ids.length) await enqueue(ids, { acknowledgeLowDisk: true });
-            setNotice({ ok: true, text: t('settings.models.applied') });
+            setNotice(notSwitched === null
+                ? { ok: true, text: t('settings.models.applied') }
+                : { ok: false, text: t('settings.models.appliedNotSwitched', { reason: notSwitched }) });
         } catch (err) {
             setNotice({ ok: false, text: errorText(err) });
         } finally {

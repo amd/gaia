@@ -2269,8 +2269,17 @@ def test_add_twice_is_refused(client, custom_server, hf_web, custom_config):
 
 
 def test_remove_deletes_by_the_name_lemonade_lists(
-    client, custom_server, hf_web, custom_config, db
+    client, custom_server, hf_web, custom_config, db, monkeypatch
 ):
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+    from gaia.ui import warmup
+
+    asked = []
+    monkeypatch.setattr(
+        warmup,
+        "request_warm_up",
+        lambda reason, fresh=False, model=None: asked.append((fresh, model)),
+    )
     client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
     custom_server.models = [
         {"id": "Tiny-Q4_K_M-GGUF", "checkpoint": "someone/else:x.gguf"},
@@ -2290,6 +2299,8 @@ def test_remove_deletes_by_the_name_lemonade_lists(
     }
     assert cm.CONFIG_KEY not in json.loads(custom_config.read_text())
     assert db.get_setting("custom_model") is None
+    # Chat is back on the default, which loads now rather than with a message.
+    assert asked == [(True, DEFAULT_MODEL_NAME)]
 
 
 def test_remove_before_download_skips_the_server_delete(

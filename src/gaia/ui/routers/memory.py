@@ -1546,7 +1546,11 @@ def stream_inference(include_browser: bool = Query(False)):
             model = resolve_default_chat_model()
             try:
                 picked = resolve_chat_model()
-                if picked != model and _runs_on_this_pc(picked):
+                if (
+                    picked != model
+                    and _runs_on_this_pc(picked)
+                    and _downloaded_on_this_pc(picked)
+                ):
                     model = picked
                 local = _runs_on_this_pc(model)
                 # Lemonade downloads a missing model on first use, unasked.

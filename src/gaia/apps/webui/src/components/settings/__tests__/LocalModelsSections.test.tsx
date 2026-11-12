@@ -217,6 +217,23 @@ describe('Settings > default chat model', () => {
         await waitFor(() => expect(select).toHaveBeenCalledWith(QWEN.id));
     });
 
+    it('says so, and still saves, when the switch to the new default fails', async () => {
+        const refresh = vi.fn().mockResolvedValue(undefined);
+        const select = vi.fn().mockRejectedValue(new Error('the model server is still starting'));
+        useModelStore.setState({ refresh, select });
+        mocked.chooseSetupChatModel.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), GPT_OSS], {
+            chat_model: { id: QWEN.id, user_set: true, size_gb: 0, downloaded: true },
+        }));
+        mocked.getSetupPlan.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), on(GPT_OSS)], {
+            chat_model: { id: GPT_OSS.id, user_set: true, size_gb: 0, downloaded: true },
+        }));
+        render(<LocalModelsSections />);
+        fireEvent.change(await screen.findByRole('combobox', { name: 'Default chat model' }), { target: { value: QWEN.id } });
+        fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
+        expect(await screen.findByText(/Saved as the default, but GAIA couldn't switch to it now: the model server is still starting/)).toBeInTheDocument();
+        expect(refresh).toHaveBeenCalled();
+    });
+
     it('only refreshes when the new default still has to download', async () => {
         const refresh = vi.fn().mockResolvedValue(undefined);
         const select = vi.fn().mockResolvedValue(undefined);

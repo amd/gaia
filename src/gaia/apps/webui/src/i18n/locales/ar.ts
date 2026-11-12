@@ -1892,6 +1892,7 @@ const messages: Messages = {
     'settings.models.applyDownload': 'تطبيق: تنزيل {size}',
     'settings.models.applying': 'جارٍ الحفظ…',
     'settings.models.applied': 'تم الحفظ.',
+    'settings.models.appliedNotSwitched': 'تم الحفظ كنموذج افتراضي، لكن تعذّر على GAIA التبديل إليه الآن: {reason}',
     'settings.models.remove': 'إزالة',
     'settings.models.removeAria': 'إزالة {name}',
     'settings.models.removeTitle': 'إزالة {name}؟',
