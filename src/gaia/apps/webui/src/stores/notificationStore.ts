@@ -301,6 +301,11 @@ export const selectVisibleNotifications = (state: NotificationState): GaiaNotifi
   return visible;
 };
 
+/** The kinds of notification in the list, for the panel's filter tabs. */
+export const selectPresentTypes = (state: NotificationState): NotificationType[] => [
+  ...new Set(state.notifications.filter((n) => !n.dismissed).map((n) => n.type)),
+];
+
 /** The newest unanswered permission request of chat `sessionId` — the one the agent waits on. */
 export const selectSessionPermissionPrompt = (sessionId: string) =>
   (state: NotificationState): GaiaNotification | null =>

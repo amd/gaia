@@ -2757,6 +2757,42 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`the notification panel opens at the bell, with tabs that fit (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const bell = page.locator('.sb-bottom-actions .sb-icon-btn').first();
+        // Empty: one line, no filter tabs.
+        await bell.click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-empty')).toBeVisible();
+        await expect(panel.getByRole('tab')).toHaveCount(0);
+        await shot(page, `notification-panel-empty-${locale}`);
+        await bell.click();
+
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await bell.click();
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // Anchored to the bell (#7416): it opens beside it, not across the window.
+        const b = (await bell.boundingBox())!;
+        const p = (await panel.boundingBox())!;
+        const vw = page.viewportSize()!.width;
+        const nearBell = locale === 'ar' ? vw - (p.x + p.width) < 40 : p.x < 40;
+        expect(nearBell, 'the panel opens on the bell side of the window').toBe(true);
+        expect(p.y + p.height).toBeLessThanOrEqual(b.y);
+        // Every tab is whole: none cut off at the panel's edge.
+        const bar = (await panel.locator('.notification-filter-bar').boundingBox())!;
+        for (const tab of await panel.getByRole('tab').all()) {
+            const box = (await tab.boundingBox())!;
+            expect(box.x >= bar.x - 1 && box.x + box.width <= bar.x + bar.width + 1).toBe(true);
+        }
+        await shot(page, `notification-panel-anchored-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** A first message whose chat model isn't downloaded, on a disk too small for it. */
 async function withMissingModel(page: Page): Promise<void> {
     await page.route('**/api/setup/needs/chat', (route) =>

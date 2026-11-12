@@ -5,8 +5,8 @@
 .notification-center {
   display: flex;
   flex-direction: column;
-  width: 400px;
-  max-height: 600px;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(600px, calc(100dvh - 72px));
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -24,7 +24,7 @@
 @keyframes notifSlideIn {
   from {
     opacity: 0;
-    transform: translateY(-8px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;

@@ -45,7 +45,7 @@ const messages: Messages = {
     'notifications.filter.security': 'الأمان',
     'notifications.filter.status': 'الحالة',
     'notifications.filter.info': 'معلومات',
-    'notifications.empty': 'لا توجد إشعارات',
+    'notifications.empty': 'لا جديد، اطّلعت على كل شيء',
     'notifications.reason': 'السبب',
     'notifications.approve': 'موافقة',
     'notifications.deny': 'رفض',

@@ -19,6 +19,7 @@ import {
   useNotificationStore,
   selectUnreadCount,
   selectVisibleNotifications,
+  selectPresentTypes,
   PATH_ACCESS_TOOL,
   permissionPromptText,
 } from '../stores/notificationStore';
@@ -96,6 +97,7 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
   const dismiss = useNotificationStore((s) => s.dismiss);
   const respondToPermission = useNotificationStore((s) => s.respondToPermission);
   const typeFilter = useNotificationStore((s) => s.typeFilter);
+  const presentTypes = useNotificationStore(useShallow(selectPresentTypes));
   const setTypeFilter = useNotificationStore((s) => s.setTypeFilter);
 
   // Handle clicking a notification item (mark as read)
@@ -124,8 +126,8 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
 
   useEscapeToClose(true, onClose);
 
-  // Filter type tabs
-  const filterTypes: Array<{ key: NotificationType | null; label: string }> = [
+  // Only the kinds that are in the list, so the tabs fit and none of them is empty.
+  const allFilters: Array<{ key: NotificationType | null; label: string }> = [
     { key: null, label: t('notifications.filter.all') },
     { key: 'permission_request', label: t('notifications.filter.permissions') },
     { key: 'policy_alert', label: t('notifications.filter.policy') },
@@ -134,6 +136,8 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
     { key: 'status_change', label: t('notifications.filter.status') },
     { key: 'info', label: t('notifications.filter.info') },
   ];
+  const filterTypes = allFilters.filter((ft) => ft.key === null || ft.key === typeFilter || presentTypes.includes(ft.key));
+  const showFilters = filterTypes.length > 2 || typeFilter !== null;
 
   return (
     <div className="notification-center" role="dialog" aria-label={t('notifications.dialogAria')}>
@@ -155,19 +159,21 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
       </div>
 
       {/* Filter tabs */}
-      <div className="notification-filter-bar" role="tablist" aria-label={t('notifications.filterAria')}>
-        {filterTypes.map((ft) => (
-          <button
-            key={ft.key ?? 'all'}
-            role="tab"
-            aria-selected={typeFilter === ft.key}
-            className={`notification-filter-tab ${typeFilter === ft.key ? 'active' : ''}`}
-            onClick={() => setTypeFilter(ft.key)}
-          >
-            {ft.label}
-          </button>
-        ))}
-      </div>
+      {showFilters && (
+        <div className="notification-filter-bar" role="tablist" aria-label={t('notifications.filterAria')}>
+          {filterTypes.map((ft) => (
+            <button
+              key={ft.key ?? 'all'}
+              role="tab"
+              aria-selected={typeFilter === ft.key}
+              className={`notification-filter-tab ${typeFilter === ft.key ? 'active' : ''}`}
+              onClick={() => setTypeFilter(ft.key)}
+            >
+              {ft.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Notification list */}
       <div className="notification-list">

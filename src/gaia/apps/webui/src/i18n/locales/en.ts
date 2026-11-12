@@ -45,7 +45,7 @@ export const enMessages = {
     'notifications.filter.security': 'Security',
     'notifications.filter.status': 'Status',
     'notifications.filter.info': 'Info',
-    'notifications.empty': 'No notifications',
+    'notifications.empty': "You're all caught up",
     'notifications.reason': 'Reason',
     'notifications.approve': 'Approve',
     'notifications.deny': 'Deny',
