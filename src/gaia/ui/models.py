@@ -741,7 +741,8 @@ class TurnSummaryLiveData(BaseModel):
 class TurnSummaryCost(BaseModel):
     """What the turn cost."""
 
-    kind: str  # local | estimate | unknown | unreported (priced, no usage sent)
+    # local | estimate | unknown | unreported (priced, no usage sent) | no_reply
+    kind: str
     usd: Optional[float] = None
 
 

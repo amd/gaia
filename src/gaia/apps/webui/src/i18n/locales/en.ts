@@ -905,6 +905,7 @@ export const enMessages = {
     'rail.costAbout': 'About ${usd} at list price',
     'rail.costUnknownModel': 'Not known for this model',
     'rail.costUnknown': 'Not known',
+    'rail.costNoReply': 'None: no reply came, so nothing was counted',
     'rail.costUnreported': 'Not reported for this answer',
     'rail.costUnreportedStopped': 'Not reported, as the answer was stopped',
     'env.title': 'Environment',

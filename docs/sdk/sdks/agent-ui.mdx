@@ -1168,7 +1168,7 @@ Deleting a chat deletes its copies.
     | `outputs` | What it made besides files, for the session panel's Outputs: `kind` (`image`, `document` indexed, `memory` saved, `schedule` created), `name`, and `path`, `detail` or `ref` (a memory's id) where they apply. |
     | `live_data` | `attempted` and `failed` counts for the internet tools. All failed means the answer has no live data. |
     | `model` | `remote`, `provider`, `provider_name`, `name`. Absent when the location could not be determined. |
-    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), `unknown` (no known price), or `unreported` (the model is priced but no usage came back, such as a stopped answer). |
+    | `cost` | `kind`: `local`, `estimate` (with `usd`, at list price), `unknown` (no known price), `unreported` (the model is priced but no usage came back, such as a stopped answer), or `no_reply` (a cloud turn that was stopped or failed before any reply, which spending leaves out). |
     | `error` | Set, with the rest empty, when the summary could not be built. |
 
     **Non-streaming response:**
@@ -3065,7 +3065,8 @@ model with no known price reads as unknown, never $0. Cloud models from
     What one chat's cloud answers cost, and every chat's answers since `since`
     (an ISO instant: the start of the viewer's local day). Sums the cost each
     answer's turn summary saved, cache discounts included; answers on this PC
-    are left out. `paid` is true when `model` has a known cloud price, the only
+    are left out, and so is a turn stopped or failed before any reply, by the
+    rule `GET /api/spending` uses. `paid` is true when `model` has a known cloud price, the only
     time the composer shows it. `chat` carries `usd`, `answers`,
     `unpriced_answers` (stopped or unpriced answers, counted apart, never as
     $0) and `items` (`message_id`, `created_at`, `model`, `kind`, `usd` per

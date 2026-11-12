@@ -905,6 +905,7 @@ const messages: Messages = {
     'rail.costAbout': 'نحو ${usd} بسعر القائمة',
     'rail.costUnknownModel': 'غير معروفة لهذا النموذج',
     'rail.costUnknown': 'غير معروفة',
+    'rail.costNoReply': 'لا شيء: لم يصل أي رد، فلم يُحتسب شيء',
     'rail.costUnreported': 'لم يُبلَّغ عنها لهذه الإجابة',
     'rail.costUnreportedStopped': 'لم يُبلَّغ عنها، لأن الإجابة أُوقفت',
     'env.title': 'البيئة',

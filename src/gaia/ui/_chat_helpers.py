@@ -5425,6 +5425,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 # A relayed turn ran on the model it sent; with none, the sidecar picked.
                 relayed_location=turn_location if model_id else None,
             )
+            if spending.never_answered(
+                turn_failed and not turn_replied, inference_stats
+            ):
+                spending.mark_no_reply(turn_summary)
 
             model_messages = result_holder.get("model_messages")
             if turn_cancelled:
@@ -5549,6 +5553,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 turn_summary = _turn_summary(
                     sse_handler, result_holder.get("agent"), request.message, None
                 )
+                # No reply text: spending leaves this turn out, so its cost is none.
+                spending.mark_no_reply(turn_summary)
                 msg_id = db.add_message(
                     request.session_id,
                     "assistant",
