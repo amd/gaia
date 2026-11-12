@@ -16,6 +16,7 @@ import pytest
 from gaia_agent.agent import GaiaAgent, GaiaAgentConfig, _apply_fast_mode
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.model_features import COMPACT
 from gaia.agents.base.skill_suggester import (
     DEFAULT_SUGGEST_THRESHOLD,
     SkillSuggester,
@@ -78,9 +79,17 @@ class _Suggester:
         self.names = names
         self.calls = []
 
-    def suggest(self, query, skills, loaded=frozenset()):
-        self.calls.append((query, set(skills), set(loaded)))
+    def suggest(self, query, skills, loaded=frozenset(), list_project=False):
+        self.calls.append((query, set(skills), set(loaded), list_project))
         return list(self.names)
+
+
+def _installed(name, tools_required=()):
+    return SimpleNamespace(
+        name=name,
+        tool_names=[],
+        gaia=SimpleNamespace(tools_required=list(tools_required)),
+    )
 
 
 def _wired(monkeypatch, names, *, memory_store=object()):
@@ -89,7 +98,11 @@ def _wired(monkeypatch, names, *, memory_store=object()):
     agent._memory_store = memory_store
     agent._loaded_skills = {"coding": SimpleNamespace(name="coding")}
     agent._skill_manager = SimpleNamespace(
-        discover=lambda: {"coding": object(), "summarize": object()}
+        discover=lambda: {
+            "coding": _installed("coding"),
+            "summarize": _installed("summarize"),
+            "mail": _installed("mail", ["search_email"]),
+        }
     )
     return agent
 
@@ -98,10 +111,27 @@ def test_scores_the_current_message_against_installed_skills(monkeypatch):
     agent = _wired(monkeypatch, ["summarize"])
     agent.conversation_history = [{"role": "user", "content": "earlier ask"}]
     assert agent._select_skill_suggestions_for_turn("sum this up") == ["summarize"]
-    query, installed, loaded = agent.skill_suggester.calls[0]
+    query, installed, loaded, list_project = agent.skill_suggester.calls[0]
     assert query == "sum this up"
-    assert installed == {"coding", "summarize"}
+    assert installed == {"coding", "summarize", "mail"}
     assert loaded == {"coding"}
+    assert list_project is False
+
+
+def test_skills_the_model_cannot_load_are_never_suggested(monkeypatch):
+    # Same pool as the catalogue: a compact model is not offered the mail tools.
+    agent = _wired(monkeypatch, [])
+    agent.model_features = COMPACT
+    agent._select_skill_suggestions_for_turn("check my inbox")
+    _, installed, _, _ = agent.skill_suggester.calls[0]
+    assert installed == {"coding", "summarize"}
+
+
+def test_project_skills_follow_the_catalogue(monkeypatch):
+    agent = _wired(monkeypatch, [])
+    agent._lists_project_skills = lambda: True
+    agent._select_skill_suggestions_for_turn("run the release checklist")
+    assert agent.skill_suggester.calls[0][3] is True
 
 
 def test_no_suggestions_without_the_memory_embedder(monkeypatch):
@@ -160,7 +190,8 @@ def test_a_real_suggester_reaches_the_turn_context(monkeypatch):
             name=name,
             description=f"does {name}",
             root="agent",
-            gaia=SimpleNamespace(pairs_with=[]),
+            tool_names=[],
+            gaia=SimpleNamespace(pairs_with=[], tools_required=[]),
         )
         for name in ("image-gen", "coding")
     }

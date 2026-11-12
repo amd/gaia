@@ -636,8 +636,9 @@ class GaiaAgent(
             return []
         return suggester.suggest(
             user_input,
-            self.skill_manager.discover(),
+            self._catalog_skills(),
             loaded=frozenset(self.loaded_skills),
+            list_project=self._lists_project_skills(),
         )
 
     def get_memory_dynamic_context(self) -> str:

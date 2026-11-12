@@ -155,13 +155,18 @@ class SkillSuggester:
         """True while an embedder failure has suggestions paused."""
         return time.monotonic() < self._disabled_until
 
-    def scores(self, query: str, skills: Dict[str, "Skill"]) -> Dict[str, float]:
+    def scores(
+        self, query: str, skills: Dict[str, "Skill"], list_project: bool = False
+    ) -> Dict[str, float]:
         """Cosine score of *query* against every listed skill in *skills*.
+
+        *list_project* is the catalogue's flag (:func:`listed`), so only a skill
+        the catalogue lists can be suggested.
 
         Raises whatever the embedder raises; :meth:`suggest` is the caller that
         turns a failure into "no suggestion".
         """
-        candidates = {name: s for name, s in skills.items() if listed(s)}
+        candidates = {name: s for name, s in skills.items() if listed(s, list_project)}
         if not candidates:
             return {}
         vectors = self._skill_vectors(candidates)
@@ -173,6 +178,7 @@ class SkillSuggester:
         query: str,
         skills: Dict[str, "Skill"],
         loaded: AbstractSet[str] = frozenset(),
+        list_project: bool = False,
     ) -> List[str]:
         """Names to suggest for *query*: clear matches, then their companions.
 
@@ -190,7 +196,7 @@ class SkillSuggester:
         if not query.strip() or self.cooling_down:
             return []
         try:
-            scored = self.scores(query, skills)
+            scored = self.scores(query, skills, list_project)
         except Exception as exc:  # noqa: BLE001 — a suggestion is optional
             self._disabled_until = time.monotonic() + self.RETRY_COOLDOWN_SECONDS
             log.warning(
@@ -212,7 +218,7 @@ class SkillSuggester:
 
         result = list(picked)
         for name in picked:
-            for other in companions(skills, name)[:CATALOG_PAIRS_SHOWN]:
+            for other in companions(skills, name, list_project)[:CATALOG_PAIRS_SHOWN]:
                 if (
                     other not in loaded
                     and other not in result

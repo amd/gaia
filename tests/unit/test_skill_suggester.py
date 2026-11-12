@@ -35,7 +35,7 @@ from gaia.agents.base.skill_suggester import (
     render_suggestion,
     suggest_env_override,
 )
-from gaia.skills.manager import ROOT_CLAUDE_IMPORT
+from gaia.skills.manager import ROOT_CLAUDE_IMPORT, ROOT_CLAUDE_PROJECT
 
 REPO = Path(__file__).resolve().parents[2]
 CASES = REPO / "tests" / "fixtures" / "skills" / "skill_suggestion_cases.json"
@@ -154,6 +154,22 @@ def test_claude_imports_are_never_scored():
     s, embed = _suggester({"q": {"alpha": 0.90, "beta": 0.40}})
     assert s.suggest("q", skills) == ["beta"]
     assert embed.doc_calls == 1
+
+
+def test_project_skills_are_scored_only_when_the_catalogue_lists_them():
+    skills = _skills(_skill("alpha", root=ROOT_CLAUDE_PROJECT), _skill("beta"))
+    s, _ = _suggester({"q": {"alpha": 0.90, "beta": 0.40}})
+    assert s.suggest("q", skills) == ["beta"]
+    assert s.suggest("q", skills, list_project=True) == ["alpha"]
+
+
+def test_an_unlisted_project_companion_is_not_suggested():
+    skills = _skills(
+        _skill("alpha", pairs=["beta"]), _skill("beta", root=ROOT_CLAUDE_PROJECT)
+    )
+    s, _ = _suggester({"q": {"alpha": 0.90, "beta": 0.60}})
+    assert s.suggest("q", skills) == ["alpha"]
+    assert s.suggest("q", skills, list_project=True) == ["alpha", "beta"]
 
 
 def test_descriptions_embed_once_and_each_turn_costs_one_query():

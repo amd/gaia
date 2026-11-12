@@ -616,7 +616,8 @@ Tunable: `GAIA_SKILL_DISCOVERY` (`0` hides the list).
 
 Smaller local models often skip the catalogue: they load nothing, or only the
 first of two skills a request needs. So at the start of each turn the flagship
-scores the user's message against every listed skill and, when some clearly fit
+scores the user's message against every skill the catalogue lists (so never
+one whose tools this model is not offered) and, when some clearly fit
 and are not loaded yet, adds one line to that turn's context, beside the
 current time at the top of the user's message:
 
@@ -647,7 +648,9 @@ suggestion costs one line the model can ignore.
   table?"*. With `embeddinggemma-300m`: precision 0.84, recall 0.93, and 3 of
   the 12 negatives got a suggestion. All 3 are near misses scoring 0.35–0.44,
   as high as real requests (the weakest best match on a positive is 0.30), so
-  no threshold removes them without losing recall. Every hub skill needs
+  no threshold removes them without losing recall. The fixture has since
+  grown to cover every hub skill on main; rerun the calibration before
+  changing the defaults. Every hub skill needs
   labelled requests; the coverage test names any that has none. The scores
   depend on the embedding model: `nomic-embed-text-v2` measured far worse on
   the first 37 requests, so recalibrate before changing the embedder. Run
