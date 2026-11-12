@@ -2908,6 +2908,13 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     removed; the server keeps its key.
   </Accordion>
 
+  <Accordion title="POST /api/providers/key-store/retry">
+    Let the next key read ask the OS to unlock the credential store again. After
+    a dismissed or refused unlock prompt GAIA stops reading the store for five
+    minutes, and providers report `key_state: "store_locked"`; the Try again
+    button calls this. Returns `{"retrying": true}`.
+  </Accordion>
+
   <Accordion title="GET /api/providers/{provider}/models">
     Chat models for a provider (embedding, reranker, speech, and image models
     are left out). `local` lists downloaded models plus the default models

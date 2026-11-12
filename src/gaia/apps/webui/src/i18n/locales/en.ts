@@ -2137,6 +2137,8 @@ export const enMessages = {
     'settings.key.connectedDot': 'connected',
     'settings.key.none': 'No key yet.',
     'settings.key.waitingOs': 'Waiting for the OS to allow reading the saved key.',
+    'settings.key.storeLocked': "The OS key store is locked, so GAIA can't read your saved key.",
+    'settings.key.unlockAgain': 'Try again',
     'settings.key.setIn': 'From your environment ({name})',
     'settings.key.notConnectedHint': '{name} has your key but is not connected yet, so no models are listed.',
     'settings.key.savedAria': 'Saved {name} API key',

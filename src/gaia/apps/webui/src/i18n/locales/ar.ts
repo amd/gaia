@@ -2138,6 +2138,8 @@ const messages: Messages = {
     'settings.key.connectedDot': 'متصل',
     'settings.key.none': 'لا يوجد مفتاح بعد.',
     'settings.key.waitingOs': 'في انتظار سماح نظام التشغيل بقراءة المفتاح المحفوظ.',
+    'settings.key.storeLocked': 'مخزن المفاتيح في نظام التشغيل مقفل، لذلك لا يستطيع GAIA قراءة مفتاحك المحفوظ.',
+    'settings.key.unlockAgain': 'حاول مرة أخرى',
     'settings.key.setIn': 'من متغيرات البيئة ({name})',
     'settings.key.notConnectedHint': 'لدى {name} مفتاحك لكنه غير متصل بعد، لذا لا تظهر أي نماذج.',
     'settings.key.savedAria': 'مفتاح API المحفوظ لـ {name}',

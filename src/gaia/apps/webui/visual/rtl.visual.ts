@@ -1215,6 +1215,17 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a closed key store prompt reads as locked, with Try again', async ({ page }) => {
+            const message = 'The OS credential store is locked: its unlock prompt was closed (Prompt dismissed).';
+            await openModelPage(page, locale, { fireworks: { key_source: null, key_hint: null, models_discovered: false, key_state: 'store_locked', key_message: message } });
+            await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+            await expect(page.getByRole('button', { name: locale === 'ar' ? 'حاول مرة أخرى' : 'Try again' })).toBeVisible();
+            await expect(page.getByText(message)).toBeHidden();
+            await shot(page, `model-${locale}-cloud-key-store-locked`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.settings-hint[role="status"]')).toEqual([]);
+        });
+
         test('dark theme', async ({ page }) => {
             await openModelPage(page, locale, { theme: 'dark' });
             await shot(page, `model-${locale}-dark`);

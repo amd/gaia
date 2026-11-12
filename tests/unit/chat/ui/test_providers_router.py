@@ -597,6 +597,64 @@ def test_a_keychain_prompt_is_reported_as_waiting_not_as_no_key(
     assert credential_wait.in_flight_count() == 0
 
 
+_REAL_RECALL_KEY = cloud_keys.recall_key
+
+
+@pytest.fixture
+def dismissed_keyring(monkeypatch):
+    """The real store over a keyring whose unlock prompt the user cancels."""
+    from gaia.connectors import store
+
+    state = {"reads": 0}
+
+    def get_password(service, username):
+        state["reads"] += 1
+        raise store.keyring.errors.InitError(
+            "Failed to create the collection: Prompt dismissed.."
+        )
+
+    monkeypatch.setattr(store.keyring, "get_password", get_password)
+    monkeypatch.setattr(store, "verify_keyring_backend", lambda: None)
+    store.retry_keyring()
+    yield state
+    store.retry_keyring()
+    credential_wait._in_flight.clear()
+
+
+def test_a_dismissed_keyring_prompt_is_not_reopened_by_polling(
+    client, lemonade, dismissed_keyring
+):
+    """#7227: Cancel brought the prompt straight back, about once a second."""
+    lemonade.cloud["fireworks"] = {"name": "fireworks"}
+    for _ in range(10):
+        body = client.get("/api/providers")
+        assert body.status_code == 200, body.text
+    asked = dismissed_keyring["reads"]
+    assert asked == 1
+    for view in body.json()["providers"][1:]:
+        assert view["key_state"] == "store_locked"
+        assert view["key_source"] is None
+        assert "won't ask again for 5 minutes" in view["key_message"]
+
+    assert client.post("/api/providers/key-store/retry").json() == {"retrying": True}
+    client.get("/api/providers")
+    assert dismissed_keyring["reads"] == asked + 1
+
+
+def test_connecting_with_a_locked_store_is_not_answered_as_a_wait(
+    client, lemonade, keys, dismissed_keyring, monkeypatch
+):
+    """A 409 makes the screen ask again every two seconds, reopening the prompt."""
+    monkeypatch.setattr(cloud_keys, "recall_key", _REAL_RECALL_KEY)
+    lemonade.cloud["fireworks"] = {"name": "fireworks"}
+    client.get("/api/providers")
+    resp = client.post("/api/providers/fireworks/connect", json={})
+    assert resp.status_code == 423, resp.text
+    assert "won't ask again for 5 minutes" in resp.json()["detail"]
+    # Connect is the user's action: it asked the store once more.
+    assert dismissed_keyring["reads"] == 2
+
+
 def test_restore_waits_for_a_keychain_prompt_then_restores(
     client, lemonade, keys, db, keychain_prompt
 ):
