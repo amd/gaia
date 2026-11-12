@@ -11,6 +11,7 @@ import { parseQuantity } from './quantity';
 import type { ParsedLine } from './quantity';
 import { splitTitle } from './durations';
 import { temperatureSystem } from './units';
+import type { MessageKey } from '../../../i18n/registry';
 import type { UnitSystem } from './units';
 
 export type GuideType = 'recipe' | 'workout' | 'howto' | 'checklist' | 'itinerary';
@@ -27,41 +28,41 @@ export interface GuideWire {
 }
 
 export interface GuideFeatures {
-    itemsLabel: string;
-    stepsLabel: string | null;
+    itemsLabel: MessageKey;
+    stepsLabel: MessageKey | null;
     scaling: boolean;
     units: boolean;
     timers: boolean;
     checkItems: boolean;
-    startLabel: string | null;
+    startLabel: MessageKey | null;
     /** Steps are days on a timeline, each titled by its "Day N" lead. */
     timeline: boolean;
     /** Shown once, under the first card with hidden controls, until dismissed. */
-    tip: string | null;
+    tip: MessageKey | null;
 }
 
 export const GUIDE_FEATURES: Readonly<Record<GuideType, GuideFeatures>> = {
     recipe: {
-        itemsLabel: 'Ingredients', stepsLabel: 'Steps', scaling: true, units: true,
-        timers: true, checkItems: false, startLabel: 'Start cooking', timeline: false,
-        tip: 'Change the servings, switch units, tap a time to start a timer, or press Start cooking for one step at a time.',
+        itemsLabel: 'cards.ingredients', stepsLabel: 'cards.stepsHeading', scaling: true, units: true,
+        timers: true, checkItems: false, startLabel: 'cards.startCooking', timeline: false,
+        tip: 'cards.tip.recipe',
     },
     workout: {
-        itemsLabel: 'Equipment', stepsLabel: 'Exercises', scaling: false, units: false,
-        timers: true, checkItems: true, startLabel: 'Start workout', timeline: false,
-        tip: 'Tap a time to start a timer, or press Start workout for one exercise at a time with sets and rest.',
+        itemsLabel: 'cards.equipment', stepsLabel: 'cards.exercises', scaling: false, units: false,
+        timers: true, checkItems: true, startLabel: 'cards.startWorkout', timeline: false,
+        tip: 'cards.tip.workout',
     },
     howto: {
-        itemsLabel: 'Materials & tools', stepsLabel: 'Steps', scaling: false, units: true,
-        timers: true, checkItems: true, startLabel: 'Start', timeline: false,
-        tip: 'Tick off what you have, or press Start for one step at a time.',
+        itemsLabel: 'cards.materials', stepsLabel: 'cards.stepsHeading', scaling: false, units: true,
+        timers: true, checkItems: true, startLabel: 'cards.start', timeline: false,
+        tip: 'cards.tip.howto',
     },
     checklist: {
-        itemsLabel: 'Items', stepsLabel: null, scaling: false, units: false,
+        itemsLabel: 'cards.items', stepsLabel: null, scaling: false, units: false,
         timers: false, checkItems: true, startLabel: null, timeline: false, tip: null,
     },
     itinerary: {
-        itemsLabel: 'Packing', stepsLabel: 'Days', scaling: false, units: false,
+        itemsLabel: 'cards.packing', stepsLabel: 'cards.daysHeading', scaling: false, units: false,
         timers: false, checkItems: true, startLabel: null, timeline: true, tip: null,
     },
 };

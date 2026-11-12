@@ -215,7 +215,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--download"
+                                    className="btn-primary"
                                     onClick={() => downloadModel(false, undefined, !status.model_loaded)}
                                     disabled={isDownloadingModel}
                                 >
@@ -240,7 +240,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--load"
+                                    className="btn-primary"
                                     onClick={() => loadModel()}
                                     disabled={isLoadingModel}
                                 >
@@ -285,7 +285,7 @@ export function AdvancedSettings() {
                                 <div className="force-redownload-row">
                                     <span className="force-redownload-label">{t('settings.advanced.corrupted')}</span>
                                     <button
-                                        className="btn-force-redownload"
+                                        className="btn-secondary"
                                         onClick={() => downloadModel(true, undefined, !status.model_loaded)}
                                         disabled={isDownloadingModel}
                                     >
@@ -338,7 +338,7 @@ export function AdvancedSettings() {
                     />
                     <div className="model-btn-group">
                         <button
-                            className={`btn-model-save${justSaved ? ' saved' : ''}`}
+                            className="btn-primary"
                             onClick={() => { void saveCustomModel(); }}
                             disabled={!settingsLoaded || savingModel || (!customModelDirty && !justSaved)}
                             aria-label={t('settings.advanced.customSave')}

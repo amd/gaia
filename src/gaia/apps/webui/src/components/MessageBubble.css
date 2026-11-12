@@ -162,6 +162,13 @@
     gap: 8px;
 }
 .msg-edit-btn { height: 28px; }
+.msg-drop-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-block-start: 8px;
+    font-size: 13px;
+}
 
 .msg-body {
     min-width: 0;

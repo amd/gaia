@@ -3225,6 +3225,8 @@ Do NOT wrap conversational replies in JSON.
         self._turn_ungrounded: List[str] = []
         # The user's own words this turn ask only for a plan, not an answer.
         self._turn_plan_only_requested = False
+        # The user's own words this turn bar tools, reading included.
+        self._turn_no_look_requested = False
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
@@ -10670,6 +10672,7 @@ Do NOT wrap conversational replies in JSON.
             history=history,
             locate=path_locator(roots),
             plan_only=getattr(self, "_turn_plan_only_requested", False),
+            may_act=not getattr(self, "_turn_no_look_requested", False),
         )
 
     def _deliverable_findings(
@@ -11496,6 +11499,7 @@ Do NOT wrap conversational replies in JSON.
         no_action_requested = _asks_for_no_action(request_text)
         # "Why does foo.py fail? Don't touch anything": look, but don't edit.
         no_look_requested = _asks_not_to_look(request_text)
+        self._turn_no_look_requested = no_look_requested
         self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
         if no_look_requested:
             grounding_fired.add(LOOK)
