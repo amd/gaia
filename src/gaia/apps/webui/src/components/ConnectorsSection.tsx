@@ -337,7 +337,7 @@ export function ConnectorsSection() {
                 <div className="connector-personalize connector-personalize--offer" role="status">
                     <p>
                         <strong>{t('settings.connectors.personalize.connected', { name: justConnected.display_name })}</strong>{' '}
-                        {t('settings.connectors.personalize.offer', { source: personalizeSourceRef(justConnected) })}
+                        {t('settings.connectors.personalize.offer', { source: personalizeSourceRef(justConnected), name: justConnected.display_name })}
                     </p>
                     <PersonalizeButton connector={justConnected} primary onStarted={() => setJustConnected(null)} />
                     <button type="button" className="btn-secondary" onClick={() => setJustConnected(null)}>
@@ -504,7 +504,7 @@ function ConnectorTile({
                     )}
                     {connector.configured && connector.enabled !== false && (
                         <div className="connector-personalize">
-                            <p>{t('settings.connectors.personalize.tile', { source: personalizeSourceRef(connector) })}</p>
+                            <p>{t('settings.connectors.personalize.tile', { source: personalizeSourceRef(connector), name: connector.display_name })}</p>
                             <PersonalizeButton connector={connector} />
                         </div>
                     )}
