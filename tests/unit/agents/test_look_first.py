@@ -265,6 +265,46 @@ def test_a_no_tools_answer_stating_a_file_unread_keeps_its_note(
     assert "I didn't read `toybox/dates.py` this turn" in result["result"]
 
 
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        # rc18 round 3, as the tester typed it.
+        "Do NOT run anything in this turn and use no tools. I am testing a "
+        "display: answer with exactly this one sentence: I read {path} and it "
+        "has 4 data rows.",
+        "For {path} I want totals. Use no tools in this turn. Answer only with "
+        "a three-step plan.",
+    ],
+)
+@pytest.mark.parametrize(
+    "path", ["C:/no-such-drive-folder/t/orders.csv", "C:\\no-such\\t\\orders.csv"]
+)
+def test_a_no_tools_answer_that_says_it_read_a_full_path_keeps_its_note(
+    agent, workspace, request_text, path
+):
+    """The drive colon hid the claim: "I read C:/.../orders.csv", no note."""
+    answer = f"I read {path} and it has 4 data rows."
+    _script(agent, _answer(answer), _answer(answer))
+
+    result = agent.process_query(request_text.format(path=path), max_steps=10)
+
+    assert f"I didn't read `{path}` this turn" in result["result"]
+
+
+def test_a_plan_naming_a_full_path_it_has_yet_to_read_gets_no_note(agent, workspace):
+    path = "C:/no-such-drive-folder/t/orders.csv"
+    plan = f"1. I will read {path}.\n2. I will total each region.\n3. I will report."
+    _script(agent, _answer(plan))
+
+    result = agent.process_query(
+        f"For {path} I want totals. Use no tools in this turn. Answer only with "
+        "a three-step plan.",
+        max_steps=10,
+    )
+
+    assert result["result"].strip() == plan
+
+
 def test_the_verifiers_version_question_keeps_its_note(agent, workspace):
     (workspace / "src" / "gaia").mkdir(parents=True)
     (workspace / "src" / "gaia" / "version.py").write_text(

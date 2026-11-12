@@ -26,6 +26,7 @@ from gaia.agents.base.claims import (
     admits_unverified,
     claims_success,
     passing_test_claim,
+    read_claims,
 )
 from gaia.agents.base.completion import mentioned_paths
 from gaia.agents.base.grounding import (
@@ -480,6 +481,43 @@ def test_versions_code_and_ordinals_are_not_data(answer):
 )
 def test_action_claim_vocabulary(answer, kinds):
     assert [kind for kind, _ in action_claims(answer)] == kinds
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # rc18 round 3: the drive colon ended the clause at "I read C".
+        "C:/gtest/h18-m1/Documents/t/orders.csv",
+        "C:\\gtest\\h18-m1\\Documents\\t\\orders.csv",
+        "`C:\\gtest\\h18-m1\\Documents\\t\\orders.csv`",
+        "docs\\orders.csv",
+        "~/Documents/orders.csv",
+        "data/orders.csv",
+    ],
+)
+def test_a_read_claim_names_its_file_however_the_path_is_written(path):
+    answer = f"I read {path} and it has 4 data rows."
+    assert [kind for kind, _ in action_claims(answer)] == ["read"]
+    assert any("orders.csv" in clause for clause in read_claims(answer))
+    query = f"Use no tools. How many data rows does {path.strip('`')} have?"
+    findings = look_findings(answer, query, [], lambda p: None)
+    assert [f.note for f in findings] == [
+        f"I didn't read `{path.strip('`')}` this turn"
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # A colon that opens a list or a clause still ends the claim.
+        "I checked one thing: C is not installed, so orders.csv was never built.",
+        "I didn't read C:/data/orders.csv, so I can't say how many rows it has.",
+        "Note: read C:/data/orders.csv before you trust this.",
+        "C:/data/orders.csv probably has a header row and four data rows.",
+    ],
+)
+def test_a_windows_path_alone_is_not_a_read_claim(answer):
+    assert not any("orders.csv" in clause for clause in read_claims(answer))
 
 
 def test_tested_without_a_test_run_is_caught():
