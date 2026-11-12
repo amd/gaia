@@ -3321,6 +3321,49 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+/** A finished turn, reopened: a document step and an image step that found no vision model. */
+async function withSavedVisionOffer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'What colour is the attached image?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'I can\'t see the image yet: GAIA needs its vision model to read images.',
+                        agent_steps: [
+                            { id: 1, type: 'tool', label: 'Using tool', tool: 'index_document', detail: 'notes.txt', result: 'Indexed 1 chunk', active: false, success: true },
+                            {
+                                id: 2, type: 'tool', label: 'Using tool', tool: 'answer_question_about_image', active: false, success: false, needsModel: 'vision',
+                                result: "error: Vision extraction failed for page 1, image 1: Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded",
+                            },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a reopened chat still offers the vision model, with its steps folded (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSavedVisionOffer);
+        const reply = page.locator('.msg-assistant').last();
+        await expect(reply.locator('.flow-steps.folded')).toBeVisible();
+        await expect(reply.locator('.flow-tool-offer')).toHaveCount(1);
+        await expect(reply.locator('.flow-tool-offer').getByRole('button')).toBeVisible();
+        await expect(reply).not.toContainText('Gemma-4-E4B-it-GGUF');
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`vision-offer-folded-${locale}.png`) });
+        await reply.locator('.flow-steps-summary').click();
+        await expect(reply.locator('.flow-tool-offer')).toHaveCount(1);
+        await expect(reply.locator('.flow-tool-failure')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`vision-offer-open-${locale}.png`) });
+    });
+}
+
 const CHANGE_PROMPTS = {
     write: {
         type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-write',

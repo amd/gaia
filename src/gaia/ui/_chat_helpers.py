@@ -3042,6 +3042,13 @@ def _declined_call(event: dict) -> bool:
     return status == "denied" and not timed_out
 
 
+def _needed_model(event: dict) -> Optional[str]:
+    """The model a ``tool_result`` says its call lacked; a relayed one nests it in ``data``."""
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    needed = event.get("needs_model", data.get("needs_model"))
+    return needed if isinstance(needed, str) and needed else None
+
+
 def _insert_skill_step(steps: list, step: dict) -> None:
     """Put a skill step before the running tool call that brought the skill in."""
     for i in range(len(steps) - 1, -1, -1):
@@ -5072,6 +5079,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         tool_step["success"] = event.get("success", True)
                         if _declined_call(event):
                             tool_step["declined"] = True
+                        # Kept so a reopened chat still offers the download.
+                        if _needed_model(event):
+                            tool_step["needsModel"] = _needed_model(event)
                         # Persist MCP tool latency
                         if event.get("latency_ms") is not None:
                             tool_step["latencyMs"] = event["latency_ms"]

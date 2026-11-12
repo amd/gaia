@@ -538,6 +538,21 @@ interface AgentActivityProps {
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
+const needsVision = (step: AgentStep) => step.type === 'tool' && step.needsModel === 'vision' && !step.active;
+
+/** The download an image step needs, offered where the user is looking. */
+function VisionOffer() {
+    const t = useT();
+    return (
+        <div className="flow-tool-offer">
+            <span>{t('activity.visionNeeded')}</span>
+            <button type="button" className="btn-secondary" onClick={() => { void ensureModel('vision'); }}>
+                {t('activity.getVisionModel')}
+            </button>
+        </div>
+    );
+}
+
 export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, toolStatus = null, answer }: AgentActivityProps) {
     const t = useT();
     const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
@@ -661,6 +676,8 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                             {open && <div className="flow-steps-rows">{shown.map(renderRow)}</div>}
                             {/* A warning never hides behind the fold. */}
                             {!open && visible.filter(isWarning).map(renderRow)}
+                            {/* Nor does the download an image step asked for. */}
+                            {!open && !live && visible.some(needsVision) && <VisionOffer />}
                         </div>
                     );
                 })}
@@ -883,7 +900,8 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const declined = !!step.declined && !step.active;
-    const failure = step.success === false && step.result && !declined ? step.result : '';
+    // A missing vision model is said by the offer under the row, not by the tool's raw error.
+    const failure = step.success === false && step.result && !declined && !step.needsModel ? step.result : '';
     const timing = waiting
         ? ''
         : step.active
@@ -933,14 +951,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                 </div>
             </button>
 
-            {step.needsModel === 'vision' && !step.active && (
-                <div className="flow-tool-offer">
-                    <span>{t('activity.visionNeeded')}</span>
-                    <button type="button" className="btn-secondary" onClick={() => { void ensureModel('vision'); }}>
-                        {t('activity.getVisionModel')}
-                    </button>
-                </div>
-            )}
+            {step.needsModel === 'vision' && !step.active && <VisionOffer />}
 
             {isExpanded && (
                 <div className="flow-tool-detail">
