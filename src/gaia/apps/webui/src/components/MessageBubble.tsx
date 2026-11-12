@@ -551,22 +551,27 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     }, []);
 
     const handleCopy = useCallback(() => {
+        const showCopied = () => {
+            setCopied(true);
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+            copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+        };
         if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(message.content).catch(() => {});
-        } else {
-            // Fallback for non-HTTPS contexts (common for localhost)
-            const textarea = document.createElement('textarea');
-            textarea.value = message.content;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
+            navigator.clipboard.writeText(message.content).then(showCopied).catch((err) => {
+                log.ui.warn('Could not copy to the clipboard', err);
+            });
+            return;
         }
-        setCopied(true);
-        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+        // Fallback for non-HTTPS contexts (common for localhost)
+        const textarea = document.createElement('textarea');
+        textarea.value = message.content;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showCopied();
     }, [message.content]);
 
     const handleDelete = useCallback(() => {
@@ -778,22 +783,27 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     }, []);
 
     const handleCopy = useCallback(() => {
+        const showCopied = () => {
+            setCopied(true);
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+            copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+        };
         if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(code).catch(() => {});
-        } else {
-            // Fallback for non-HTTPS contexts (common for localhost)
-            const textarea = document.createElement('textarea');
-            textarea.value = code;
-            textarea.style.position = 'fixed';
-            textarea.style.opacity = '0';
-            document.body.appendChild(textarea);
-            textarea.select();
-            document.execCommand('copy');
-            document.body.removeChild(textarea);
+            navigator.clipboard.writeText(code).then(showCopied).catch((err) => {
+                log.ui.warn('Could not copy to the clipboard', err);
+            });
+            return;
         }
-        setCopied(true);
-        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+        // Fallback for non-HTTPS contexts (common for localhost)
+        const textarea = document.createElement('textarea');
+        textarea.value = code;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+        showCopied();
     }, [code]);
 
     return (

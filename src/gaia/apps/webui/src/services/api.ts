@@ -903,12 +903,13 @@ async function consumeSSEResponse(
         reader.releaseLock();
     }
 
-    // Only signal completion if no explicit done event was received during the stream
-    if (!doneReceived) {
+    // Only signal completion if the stream never ended the turn itself: an
+    // error event already did, and a done after it would add the answer twice.
+    if (!doneReceived && !errorReceived) {
         log.stream.timed(`SSE connection closed without done event: ${chunkCount} chunks, ${agentEventCount} agent events`, t);
         // A send that closes having said nothing would otherwise leave the
         // message sitting there with no answer and no error.
-        if (silentCloseIsError && chunkCount === 0 && agentEventCount === 0 && !errorReceived) {
+        if (silentCloseIsError && chunkCount === 0 && agentEventCount === 0) {
             callbacks.onError(new Error(
                 'GAIA closed the connection before any answer arrived. Send the message again; ' +
                 'if it keeps happening, check the GAIA server log.',

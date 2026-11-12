@@ -277,6 +277,15 @@ async function serveFrontend(port) {
     }
   });
 
+  server.on("error", (err) => {
+    const reason =
+      err.code === "EADDRINUSE" ? "another program is using it" : err.message;
+    console.error(
+      `Could not serve the GAIA Agent UI on port ${port}: ${reason}. ` +
+        "Choose another port with --port.",
+    );
+    process.exit(1);
+  });
   server.listen(port, () => {
     console.log(`GAIA Agent UI serving at http://localhost:${port}`);
   });
