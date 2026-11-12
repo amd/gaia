@@ -184,7 +184,7 @@ describe('Sidebar', () => {
 
     it('shows a cloud location for a cloud model', () => {
         useModelStore.setState({
-            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false },
+            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false, provider_name: 'Fireworks AI' },
         });
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByRole('button', { name: 'Fireworks AI · kimi-k2' })).toBeInTheDocument();
