@@ -1351,14 +1351,7 @@ def select_model(
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
-    if provider_of(model_id) != LOCAL and cloud_blocked():
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Can't switch to {model_label(model_id)}: Local only is on. "
-                f"{SETTINGS_HINT}"
-            ),
-        )
+    refuse_blocked_cloud_model(model_id)
     from gaia.config import GaiaConfigError
     from gaia.connectors.credential_wait import CredentialStoreWaiting
 
@@ -1387,11 +1380,27 @@ def select_model(
 
         # Load it now: nothing else would until the next message is sent.
         warmup.request_warm_up("model pick", fresh=True)
-    # A choice made now supersedes this run's restore notice.
+    clear_restore_notice()
+    return _active_view(db)
+
+
+def clear_restore_notice() -> None:
+    """A model the user picks now supersedes this run's restore notice."""
     global _restore_result
     with _restore_lock:
         _restore_result = {"status": "none", "message": None}
-    return _active_view(db)
+
+
+def refuse_blocked_cloud_model(model_id: str) -> None:
+    """Raise 409 when *model_id* is a cloud model and Local only is on."""
+    if provider_of(model_id) != LOCAL and cloud_blocked():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_label(model_id)}: Local only is on. "
+                f"{SETTINGS_HINT}"
+            ),
+        )
 
 
 # ── Context size (#5213) ───────────────────────────────────────────────────

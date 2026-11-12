@@ -1149,6 +1149,41 @@ class TestCustomModelIsTheChosenModel:
         assert "read-only" in resp.json()["detail"]
         assert db.get_setting("custom_model") == "Qwen3.6-35B-A3B-GGUF"
 
+    def test_a_cloud_model_is_refused_while_local_only_is_on(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.config import GaiaConfig
+        from gaia.llm import local_only
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        GaiaConfig.save_keys({"last_model": "Qwen3.6-35B-A3B-GGUF"})
+
+        resp = client.put(
+            "/api/settings", json={"custom_model": "fireworks.glm-5p3-flash"}
+        )
+
+        assert resp.status_code == 409
+        assert "Local only is on" in resp.json()["detail"]
+        assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
+        assert db.get_setting("custom_model") is None
+
+    def test_saving_a_custom_model_clears_a_failed_restore_notice(
+        self, client, monkeypatch
+    ):
+        from gaia.ui.routers import providers
+
+        monkeypatch.setattr(
+            providers,
+            "_restore_result",
+            {"status": "failed", "message": "Couldn't restore your last model."},
+        )
+
+        resp = client.put("/api/settings", json={"custom_model": "opencode.big-model"})
+
+        assert resp.status_code == 200
+        assert providers._restore_result == {"status": "none", "message": None}
+
 
 class TestDynamicToolsSetting:
     """/api/settings round-trip + env lock for dynamic tool loading."""
