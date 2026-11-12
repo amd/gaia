@@ -88,8 +88,12 @@ def record_turn(db, model_id: Optional[str], stats: Optional[Dict[str, Any]]) ->
     usd = None
     if isinstance(inp, int) and isinstance(out, int):
         cached = stats.get("cached_tokens")
+        # A count that can't be part of this input is priced as uncached.
+        if isinstance(cached, bool) or not isinstance(cached, int):
+            cached = 0
+        cached = cached if 0 <= cached <= inp else 0
         # Priced as each answer's own estimate is, so the month and "today" agree.
-        usd = turn_cost(model_id, inp, out, cached if isinstance(cached, int) else 0)
+        usd = turn_cost(model_id, inp, out, cached)
     else:
         # Counted as a turn of unknown cost, so the total never looks smaller.
         log.warning(
