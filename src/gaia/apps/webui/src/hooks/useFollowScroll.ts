@@ -77,6 +77,17 @@ export function useFollowScroll(
         if (e.target === e.currentTarget) scrollbarHeldRef.current = true;
     }, []);
 
+    // A bar mounting above the list shrinks it without a scroll event; stay pinned to the end.
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        const watch = new ResizeObserver(() => {
+            if (followRef.current && !userScrolling()) el.scrollTop = el.scrollHeight;
+        });
+        watch.observe(el);
+        return () => watch.disconnect();
+    }, [scrollRef, followRef, userScrolling]);
+
     useEffect(() => {
         const release = () => { scrollbarHeldRef.current = false; };
         const onKey = (e: KeyboardEvent) => {
