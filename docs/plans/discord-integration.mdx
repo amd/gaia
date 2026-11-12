@@ -1,0 +1,215 @@
+---
+title: "Discord Integration"
+description: "Chat with the flagship GAIA agent from a Discord DM, set up from the TUI or the Agent UI"
+icon: "discord"
+---
+
+# Discord Integration
+
+> **Status:** Implemented. Follow-ups are listed at the end.
+>
+> **Tracking:** none open. #635 was closed as a duplicate of #1003, but #1003 shipped only
+> the outbound connector below, so the inbound half had no issue.
+
+## Why this matters
+
+Today GAIA can *post to* Discord, but you can't *talk to* GAIA from Discord. The
+`mcp-discord` connector (#1003) gives the agent tools to read and send channel messages
+when you ask it to from the TUI or Agent UI. There's no way to DM GAIA from your phone and
+have it answer from your desktop. This plan builds that bridge and sets it up from both
+apps. You paste one token, and nothing needs a terminal command.
+
+## What the user gets
+
+You DM the GAIA bot. The flagship agent answers from your PC:
+
+- It streams the reply into one message that keeps getting edited.
+- It uploads files it writes.
+- Before any shell command, file write or code execution, it shows **Allow / Always /
+  Deny** buttons.
+
+A remote message can *ask* for a dangerous tool, but it can't *run* one unattended.
+
+**Setup** (TUI `/discord setup`, or Agent UI **Settings → Messaging → Discord**):
+
+1. Create an application in the Developer Portal and copy its bot token. Discord has no
+   manifest or pre-filled URL, so this step can't be automated.
+2. Paste the token. GAIA checks it, stores it in the OS keyring, and starts the bridge in
+   **pairing** mode with a one-time code shown only on this PC.
+3. Add the bot to a server you're in, using the invite link GAIA builds. It needs no
+   permissions (`permissions=0`). Discord only lets you DM a bot you share a server with.
+4. DM the code to the bot. **Whoever sends it becomes the only person the bot answers.**
+   That proves you are at this PC *and* control that Discord account. It works the same
+   for apps owned by a team, and an ownership transfer changes nothing. The code lasts an
+   hour, and five wrong guesses replace it.
+
+The bridge needs no privileged intent. It asks only for `DIRECT_MESSAGES`, and Discord
+delivers DM content without Message Content. So there's no Developer Portal toggle, and
+close code 4014 can't happen. If **Public Bot** is on (the default), setup warns that anyone
+can add the bot to a server and DM it. Those strangers only ever get one refusal.
+
+## Decisions
+
+| Question | Decision | Why |
+|----------|----------|-----|
+| Library | **`discord.py` (MIT), added to core `install_requires`**, pinned `>=2.7,<3`, imported lazily | The installers ship `amd-gaia[api]` / `[ui]` and never pip-install, so an optional extra would be missing for app users (that's how Slack is broken today). Its dependencies are `aiohttp`, already core, and on Python 3.13+ `audioop-lts`. A hand-rolled Gateway client would have to re-implement heartbeat, resume, 429 buckets and identify pacing. A bug there can use up Discord's 1,000-logins/day budget, which **resets the bot token**. |
+| Agent binary | A shared resolver: the hub-installed, sentinel-verified `~/.gaia/agents/gaia/gaia-agent`, then PATH | App installs don't put `gaia-agent` on PATH. The resolver also fixes Slack, which uses the same channel. |
+| Who may use it | Exactly one Discord user, **paired by a one-time code** they DM to the bot. Pairing again replaces them | One agent process means one history and one set of "Always allow" grants, so a second user would read the first one's conversation (the same rule Slack enforces). The application owner is the wrong source: for a team-owned app it's a pseudo-user, and every team admin can reset the token. |
+| Process model | A **detached, single-instance bridge process**. An OS file lock per machine refuses a second copy. A status file records its state | It survives closing the TUI or Agent UI. A second bridge would answer every DM twice. The daemon only supervises HTTP agent sidecars today. A generic "messaging service" supervisor is its own design, so it's the follow-up, not a blocker. |
+| Keeping it running | Once connected, `autostart` is on. The TUI at launch and the Agent UI backend at startup start the bridge if it's configured and not running | "Connected" has to mean "it answers" without the user ever starting a process. |
+| Bot sharing | On every start, the bridge refuses a token whose **bot ID** matches the `mcp-discord` connector's bot | Two Gateway sessions on one bot both receive every DM. Comparing bot IDs, not token strings, also catches a reset token and a connector added later. |
+| Two PCs, one bot | A lease: a pinned "GAIA is answering from &lt;PC&gt;" message in the owner's DM, refreshed every 60 s. A bridge that finds another PC's fresh lease reports `taken_over` and answers nothing | The OS lock is per OS user, so it can't see a second PC. |
+| Setup offer | Offer once in the TUI when the Discord desktop app is installed, and re-offer when detection flips. Uses the same state machine as Slack, generalized | Web and phone users still find it through `/discord` and Settings. |
+
+## Rules (each one pinned by a test)
+
+- **Gateway only.** An outbound WebSocket. Buttons arrive as `INTERACTION_CREATE` because no
+  Interactions Endpoint URL is set. No inbound port and no public URL.
+- **DM-only.** Accept only DM channels (no `guild_id`). Drop messages from any bot,
+  including this one. Never run an edit (`MESSAGE_UPDATE`): a message edited after approval
+  must not run again. A recent edit gets one line saying so, so a fixed typo is not a dead end.
+- **Nothing stale runs.** A message or click older than 2 minutes (by its snowflake
+  timestamp) is never executed. That covers Gateway RESUME replays and a PC waking from
+  sleep. The bridge says it missed the message and asks for it to be resent.
+- **One allowed user.** Check it on every message **and every button press**. Refusals go
+  to an audit log at WARNING. A stranger gets one reply saying they're not authorized.
+- **Bypass is unreachable.** `AgentChannel` has no `bypass` verb.
+- **Approvals:**
+  - acknowledge each click immediately, with a deferred update, inside Discord's 3-second
+    window;
+  - accept a click only on a prompt message the bridge recorded, in the owner's DM, from the
+    owner. The confirm ID comes from the bridge's map, never from `custom_id`;
+  - no `confirm_id` from the agent → deny, and show no buttons;
+  - "Always" appears only when the agent sends an `always_scope`;
+  - the command shown can't be disguised. Backticks are neutralized, bidi and zero-width
+    characters are made visible, and a long command shows its start, end and length, with
+    the full text attached as a file;
+  - a click on an unknown or answered prompt gets a private "expired" reply and is never
+    forwarded;
+  - an unanswered prompt is denied after 10 minutes;
+  - on shutdown, pending prompts are edited to "Expired — bridge stopped."
+- **Attachments:** only `cdn.discordapp.com` / `media.discordapp.net` over https, no
+  redirects, a size cap, and the filename sanitized into `~/.gaia/discord/inbox/`
+  (including Windows reserved names, `:` streams and trailing dots). Every message is sent
+  with `AllowedMentions.none()`. Uploads
+  come only from a write tool's path under the upload roots, within Discord's 10 MB limit.
+- **Reading doesn't ask.** The allowed user can read what the agent can read. Setup says so.
+
+## Concurrency
+
+`discord.py` runs on one dedicated asyncio thread. The adapter core is synchronous, as in
+Slack:
+
+- **Agent events** arrive on the bridge's reader thread. They call the transport, which
+  runs a coroutine on the loop (`run_coroutine_threadsafe(...).result(timeout)`). That keeps
+  the edits to one message in order.
+- **Inbound handlers** run on the loop. They hand work to an executor so a blocked pipe
+  write can't stall the heartbeat.
+- **Calling the transport from the loop thread raises** instead of deadlocking.
+
+## Failure states
+
+| State | Detection | What the user sees |
+|-------|-----------|--------------------|
+| Token revoked or reset | `LoginFailure` / close 4004 | Status `token_invalid`. TUI and Agent UI offer "Paste a new token" |
+| Not paired yet | No paired ID | Status `pairing` with the code and the invite link. The user DMs first, so DM privacy settings never block it |
+| Keyring locked (Linux, at autostart) | The credential read fails | Status `credentials_unavailable` with a Retry button. Never falls back to plaintext |
+| Same bot as the connector | Bot IDs match | Status `conflict`, and the bridge doesn't connect |
+| Another PC answering | A fresh lease from another PC | Status `taken_over`, with an "Answer from this PC" button that takes the lease |
+| Gateway drop | discord.py resumes. Message IDs are deduplicated (LRU) | Nothing |
+| Offline while you messaged | On a fresh connect, DMs after the last handled ID are counted | "I was offline and missed N messages — resend anything you still need." Never replayed, because a stale "delete X" shouldn't run hours later |
+| Rate limited | discord.py honors `retry_after`. Streaming edits are ≥ 1.2 s apart | Slower streaming |
+| Agent child crashes | `AgentChannel` restarts it up to its budget, then gives up | The give-up text names the app's Restart action, not a command |
+| Second bridge | Lock held | `start` reports "already running" (idempotent) |
+| Reply over 2,000 characters | Split at a boundary: the first chunk is edited in place, the rest are follow-ups | The full answer |
+
+## Surfaces
+
+- **CLI `gaia discord`:** `setup | connect | start [--detach] | stop | restart | pair |
+  autostart | status [--json] | decline | disconnect`, plus `schedules`, `schedule-add`,
+  `schedule-remove`, `watches`, `watch` and `unwatch` for summaries and alerts. It owns
+  every rule. `connect` reads the token from stdin, never
+  argv.
+- **Start:** `start --detach` spawns through `popen_outliving_job` with
+  `background_popen_kwargs`: a hidden console, never `DETACHED_PROCESS`, and outside the
+  TUI's or Electron's job object so closing them doesn't kill it. While it imports, the
+  status file names the child's pid, so a slow start reads "starting", not "stopped".
+- **TUI `/discord`:** setup panel with a masked token prompt, `connect`, the invite link,
+  then `start --detach`. `/discord` shows status, `/discord stop`, and the one-time offer.
+  It never prints a command for the user to run.
+- **Agent UI:** **Settings → Messaging → Discord** card. Disconnected → steps and a token
+  field. Connected → owner, state, invite link, Start/Stop, Disconnect. Router
+  `/api/messaging/discord/*` calls the same Python functions. Every failure state has a
+  button. The token and pairing routes require `require_local_pc`, so a tunnel session
+  can't swap in its own bot and approve its own commands.
+
+## Summaries and alerts
+
+The user asks in plain words ("summarize my PRs every few hours; tell me right away when
+someone else comments"). The `automations` skill turns that into `gaia automation`
+commands through the agent's shell tool. Each change shows the user an Allow prompt; the
+`gaia` entry in the skill binary policy allows only the list commands without asking, and
+refuses every other `gaia` subcommand.
+
+- **Alerts are not a prompt.** `watch` registers a repo and the user's own accounts. The
+  bridge polls GitHub (issues, issue comments, review comments) every 2 minutes with the gh
+  CLI's token (10 minutes per watched repo without one) and DMs each new item from anyone
+  else who is not a bot, once, with a link. The first check only records where to start; a
+  repo GitHub won't show is refused at `watch`; three failed checks in a row are reported.
+- **Summaries are.** `schedule-add` stores a prompt and an interval (at least 5 minutes, at
+  most 10 schedules). On each tick the bridge runs due prompts through its own agent, told
+  the exact UTC window it covers, and posts the answer as a new message, so the phone is
+  notified. A slot missed while the PC was off runs once on return.
+- **Answers are posted whole.** Token streaming is off: models think aloud in the same
+  stream, and an edit never notifies. The placeholder only names the tool in use; status
+  text is never echoed. Link previews are suppressed.
+- **Only the lease holder** runs schedules and watches.
+
+## Tests
+
+- **Unit:**
+  - allowlist and DM-only filtering;
+  - bot-author drop;
+  - refusal audit;
+  - click from a non-owner, stale click, timeout deny, expire-on-close;
+  - splitting;
+  - attachment host and redirect refusal;
+  - lock and status file;
+  - pairing (code, expiry, guess limit, team-owned app);
+  - stale-message and stale-click refusal;
+  - `MESSAGE_UPDATE` ignored;
+  - approval text that can't be disguised;
+  - lease takeover;
+  - bot-ID collision refusal;
+  - local-only routes;
+  - no bypass anywhere.
+- **Contract:** the transport's conversion of `discord.py` messages, the intents it
+  requests, and the absence of an edit handler.
+- **Policy:** the `gaia` binary policy pinned at all three tiers, and the
+  `automations` skill in the starter-pack checks.
+- **TUI:** Go tests for the panel, status and offer, plus the palette and help overlay.
+- **Agent UI:** component tests for the card states (including "starting" while a start is
+  in flight), and router tests for the local-only and CSRF guards.
+- **Live:** a real bot on DeepSeek via Fireworks, starting from no token stored. DM from a
+  phone, approve one shell command, deny one, receive a file, restart the bridge while a
+  prompt is pending, revoke the token.
+- **Eval:** the bridge adds no tool, but the new skill's description joins the agent's skill
+  catalog. Watch `gaia_skills_lifecycle` and `gaia_shell` on the next RC.
+
+## Follow-ups (not in this change)
+
+- `gaia kill` and `gaia uninstall` should stop a running bridge, since a running Python
+  process holds the venv during an upgrade. Today `disconnect` or Stop in the apps does it.
+- Importing `gaia` takes 10–15 s, so a bridge start takes ~30 s. Startup work, not specific
+  to Discord.
+- Slack ships `slack-sdk` only as an extra, so `/slack` fails on app installs. Its TUI also
+  prints `gaia slack start …` for the user to run.
+- A daemon "messaging service" supervisor for both bridges: start at login, restart with
+  backoff.
+- Server-channel mentions and multiple users. Both need a design for per-user agents and
+  histories.
+
+## Out of scope
+
+Voice, slash commands, and bot-initiated DMs other than replies and the lease marker. Scheduled
+briefs to Discord belong to `gaia schedule`'s delivery targets.
