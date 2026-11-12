@@ -723,6 +723,32 @@ def _cost(value: Any) -> int:
     return len(json.dumps(value, ensure_ascii=False))
 
 
+_JSON_SCALARS = (str, int, float, bool, type(None))
+
+
+def require_json_values(tool_name: str, result: Any) -> None:
+    """Raise ``TypeError`` naming the first field of *result* JSON can't hold."""
+    pending: List[Tuple[str, Any]] = [("", result)]
+    while pending:
+        path, value = pending.pop()
+        if isinstance(value, dict):
+            pending.extend(
+                (f"{path}.{key}" if path else str(key), item)
+                for key, item in reversed(list(value.items()))
+            )
+        elif isinstance(value, (list, tuple)):
+            pending.extend(
+                (f"{path}[{i}]", item) for i, item in reversed(list(enumerate(value)))
+            )
+        elif not isinstance(value, _JSON_SCALARS):
+            raise TypeError(
+                f"Tool {tool_name} returned {type(value).__name__} at "
+                f"{path or 'its top level'}, which cannot be shown to the model. "
+                "A tool result must hold only text, numbers, booleans, null, "
+                "lists and objects; the tool has to drop or convert that field."
+            )
+
+
 def index_entries(chunks: Sequence[Chunk], short: bool = False) -> List[Dict[str, Any]]:
     """Index entries numbered from 1; ``read_tool_output(entry=n)`` reads one."""
     return [
@@ -1037,6 +1063,7 @@ def condense_result(
     An over-target render raises rather than degrading: a budgeting bug here
     would otherwise reach the model as a silently oversized prompt.
     """
+    require_json_values(tool_name, result)
     body = find_body(tool_name, result, store)
     if body is None:
         return None
