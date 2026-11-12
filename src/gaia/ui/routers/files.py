@@ -760,6 +760,24 @@ async def search_files(
 # ── File Preview ─────────────────────────────────────────────────────────────
 
 
+def _looks_like_text(path: Path) -> bool:
+    """True when the file starts as valid UTF-8 text, not NULs or a PDF header."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8192)
+    except OSError:
+        return False
+    if b"\x00" in head or head.startswith(b"%PDF-"):
+        return False
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        # A multi-byte character cut off by the 8 KB read is not binary.
+        if exc.start < len(head) - 3:
+            return False
+    return True
+
+
 @router.get("/api/files/preview", response_model=FilePreviewResponse)
 async def preview_file(path: str, lines: int = 50):
     """Get a preview of a file's contents.
@@ -820,8 +838,10 @@ async def preview_file(path: str, lines: int = 50):
         "encoding": None,
     }
 
-    # Try to read as text
-    if ext in TEXT_EXTENSIONS or stat.st_size < 1_000_000:  # Try text for < 1MB
+    # Try to read as text; other types must look like text (PDF, DOCX, PNG... decode as latin-1)
+    if ext in TEXT_EXTENSIONS or (
+        stat.st_size < 1_000_000 and _looks_like_text(resolved)
+    ):
         for encoding in ("utf-8", "latin-1", "cp1252"):
             try:
                 import itertools
