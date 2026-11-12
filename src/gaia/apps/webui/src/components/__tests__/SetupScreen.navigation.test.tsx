@@ -66,7 +66,7 @@ async function cloudRunGoing() {
     fireEvent.click(screen.getByRole('radio', { name: 'Use a cloud model' }));
     fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByRole('heading', { name: 'Connect a cloud provider' });
-    fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'k' } });
+    fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'k' } });
     fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
     await screen.findByRole('button', { name: 'Cancel' });
     expect(mockedApi.startSetup).toHaveBeenCalledTimes(1);

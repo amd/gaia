@@ -142,6 +142,7 @@ describe('ModelChip model states', () => {
                 : m)),
         });
         fireEvent.click(within(dialog).getByRole('button', { name: 'Download Qwen3.6 35B A3B' }));
+        fireEvent.click(within(dialog).getByRole('button', { name: 'Download' }));
         await waitFor(() => expect(mockedApi.downloadModel).toHaveBeenCalledWith(QWEN));
         expect(await within(dialog).findByTitle('Downloading, 42%')).toBeInTheDocument();
     });

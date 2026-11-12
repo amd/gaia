@@ -312,6 +312,17 @@
         ],
         "title": "Decision"
       },
+      "declined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Declined"
+      },
       "detail": {
         "anyOf": [
           {
