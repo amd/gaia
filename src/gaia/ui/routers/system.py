@@ -576,7 +576,7 @@ def _gaia_lemonade_is_stopped() -> bool:
 
 def _restart_gaia_lemonade() -> None:
     """Have the daemon start GAIA's own server again, one start at a time."""
-    global _own_server_restart, _own_server_restart_failed_at
+    global _own_server_restart
     if _own_server_restart is not None and _own_server_restart.is_alive():
         return
     failed_at = _own_server_restart_failed_at
