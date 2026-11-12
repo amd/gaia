@@ -155,7 +155,7 @@ describe('ModelSettings custom models', () => {
     it('says the server is down in plain words when a link check cannot run', async () => {
         mockedApi.checkCustomModel.mockRejectedValue(new Error("not reachable (HTTPConnectionPool(host='127.0.0.1'): Max retries exceeded)"));
         await paste(URL);
-        expect(await screen.findByText("GAIA can't reach its model server")).toBeInTheDocument();
+        expect(await screen.findByText("The model server isn't answering")).toBeInTheDocument();
         const raw = screen.getByText(/HTTPConnectionPool/);
         expect((raw.closest('details') as HTMLDetailsElement).open).toBe(false);
     });

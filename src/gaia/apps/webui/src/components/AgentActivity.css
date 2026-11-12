@@ -483,8 +483,14 @@
     border-radius: var(--radius-xs);
     background: color-mix(in srgb, var(--danger) 4%, transparent);
     border: 1px solid color-mix(in srgb, var(--danger) 15%, transparent);
-    font-size: 12px;
-    font-family: var(--font-mono);
+    font-size: 13px;
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
+}
+
+.flow-error > svg {
+    flex-shrink: 0;
+    margin-top: 2px;
     color: var(--danger);
 }
 
