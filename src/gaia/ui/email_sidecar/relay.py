@@ -579,9 +579,10 @@ def _send_internet_switch(
         )
 
 
-def _best_effort_cancel(proxy: Any, rid: str) -> None:
+def _best_effort_cancel(proxy: Any, rid: str) -> Optional[int]:
+    """Cancel run *rid*; how many attached documents it left unloaded, when it says."""
     try:
-        proxy.cancel_query(rid)
+        left = proxy.cancel_query(rid)
     except SidecarError as exc:
         logger.info(
             "%s relay: cancel_query for run_id=%s: %s",
@@ -589,6 +590,30 @@ def _best_effort_cancel(proxy: Any, rid: str) -> None:
             rid,
             exc,
         )
+        return None
+    if isinstance(left, int) and not isinstance(left, bool) and left > 0:
+        return left
+    return None
+
+
+def _emit_documents_left(handler: Any, left: int, profile: RelayProfile) -> None:
+    """Close the open document-loading step with how many Stop left unloaded.
+
+    Stop closes the stream before the sidecar's own closing line can arrive.
+    """
+    noun = "1 document was" if left == 1 else f"{left} documents were"
+    message = f"Stopped: {noun} not loaded. They load with your next message."
+    _dispatch_one(
+        handler,
+        {
+            "type": "tool_result",
+            "tool": "index_documents",
+            "data": {"status": "stopped", "message": message, "success": False},
+        },
+        profile,
+        False,
+        False,
+    )
 
 
 def relay_query(
@@ -917,7 +942,9 @@ def relay_query(
         handler.active_relay_internet_session = None
 
     if handler.cancelled.is_set():
-        _best_effort_cancel(proxy, rid)
+        left = _best_effort_cancel(proxy, rid)
+        if left:
+            _emit_documents_left(handler, left, profile)
         if not terminated:
             handler._emit({"type": "status", "message": "Cancelled."})
     elif crashed or not terminated:

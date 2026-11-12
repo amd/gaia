@@ -393,8 +393,11 @@ class SidecarProxy:
 
         return _events()
 
-    def cancel_query(self, run_id: str) -> None:
+    def cancel_query(self, run_id: str) -> Optional[int]:
         """Cancel an in-flight ``/query`` run.
+
+        Returns the sidecar's ``documents_left``: how many of the turn's
+        attached documents the cancel left unloaded, or None when it names none.
 
         Best-effort by design: the caller's forced response close has already
         unblocked the relay's reader, so this POST uses a short dedicated
@@ -421,15 +424,28 @@ class SidecarProxy:
                 run_id,
                 exc,
             )
-            return
+            return None
         if resp.status_code == 404:
             logger.info(
                 "%s sidecar: cancel for run_id=%s: no longer in flight (404)",
                 self.agent_id,
                 run_id,
             )
-            return
+            return None
         self._raise_for_status(resp, path)
+        try:
+            left = resp.json().get("documents_left")
+        except (ValueError, AttributeError) as exc:
+            # The run is cancelled either way; only the count is unknown.
+            logger.warning(
+                "%s sidecar: cancel for run_id=%s answered without a readable "
+                "body: %s",
+                self.agent_id,
+                run_id,
+                exc,
+            )
+            return None
+        return left if isinstance(left, int) and not isinstance(left, bool) else None
 
 
 class EmailSidecarProxy(SidecarProxy):

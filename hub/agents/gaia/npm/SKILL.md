@@ -370,6 +370,9 @@ Rules a client must respect:
 - **Cancel with `POST /v1/gaia/query/{run_id}/cancel`.** It returns
   `{ run_id, cancelled }` — an unknown id reports `cancelled: false` with a
   **200**, not a 404, because a cancel racing a normal completion is expected.
+  When the cancel stops the turn's attached documents from loading, the reply
+  also has `documents_left`: how many were not loaded (they load with the next
+  turn). Show it, since a stream you closed never delivers that step's result.
   Dropping the HTTP connection also cancels the run. A run stopped mid-answer
   ends with an empty `final`, and no `token` follows the cancel, so keep the
   text the `token` events already delivered. Text not yet sent when the
