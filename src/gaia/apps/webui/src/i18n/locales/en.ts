@@ -275,7 +275,7 @@ export const enMessages = {
     'composer.memoryOff': 'Memory off',
     'composer.memoryUnknown': 'Memory unknown',
     'composer.memoryOffTitle': 'Memory is off in Settings, so no chat is saved to memory',
-    'composer.memoryUnknownTitle': "Couldn't read the memory setting. Turn on private chat to keep this chat out of memory either way.",
+    'composer.memoryUnknownTitle': "Couldn't read the memory setting. Choose Private chat to keep this chat out of memory either way.",
     'composer.memoryChipAria': 'Memory for this chat: {state}',
     'composer.memoryMenu': 'Memory for this chat',
     'composer.remember': 'Remember this chat',

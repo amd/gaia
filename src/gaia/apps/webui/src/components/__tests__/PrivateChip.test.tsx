@@ -111,7 +111,10 @@ describe('PrivateChip', () => {
 
         // Private still works, and reads as Private, when the setting is unknown.
         await userEvent.click(screen.getByRole('button', { name: 'Memory for this chat: Memory unknown' }));
-        await userEvent.click(screen.getByRole('button', { name: /Private chat/ }));
+        const remember = screen.getByRole('button', { name: /^Remember this chat/ });
+        expect(remember).toHaveTextContent("Couldn't read the memory setting. Choose Private chat");
+        expect(remember).not.toHaveTextContent('GAIA can learn from this chat');
+        await userEvent.click(screen.getByRole('button', { name: /^Private chat/ }));
         expect(screen.getByRole('button', { name: 'Memory for this chat: Private' })).toHaveTextContent('Private');
         expect(useChatStore.getState().draftPrivate).toBe(true);
         logged.mockRestore();

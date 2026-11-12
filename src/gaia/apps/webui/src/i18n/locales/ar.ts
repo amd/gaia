@@ -275,7 +275,7 @@ const messages: Messages = {
     'composer.memoryOff': 'الذاكرة متوقفة',
     'composer.memoryUnknown': 'حالة الذاكرة غير معروفة',
     'composer.memoryOffTitle': 'الذاكرة متوقفة في الإعدادات، لذا لا تُحفظ أي محادثة في الذاكرة',
-    'composer.memoryUnknownTitle': 'تعذّرت قراءة إعداد الذاكرة. فعّل المحادثة الخاصة لإبقاء هذه المحادثة خارج الذاكرة في كل الأحوال.',
+    'composer.memoryUnknownTitle': 'تعذّرت قراءة إعداد الذاكرة. اختر «محادثة خاصة» لإبقاء هذه المحادثة خارج الذاكرة في كل الأحوال.',
     'composer.memoryChipAria': 'الذاكرة لهذه المحادثة: {state}',
     'composer.memoryMenu': 'الذاكرة لهذه المحادثة',
     'composer.remember': 'تذكّر هذه المحادثة',

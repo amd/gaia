@@ -68,7 +68,7 @@ export function PrivateChip({ disabled }: { disabled?: boolean }) {
         setOpen(false);
     };
     const options = [
-        { priv: false, Icon: Eye, label: t('composer.remember'), note: t('composer.rememberNote') },
+        { priv: false, Icon: Eye, label: t('composer.remember'), note: readFailed ? t('composer.memoryUnknownTitle') : t('composer.rememberNote') },
         { priv: true, Icon: EyeOff, label: t('composer.privateChat'), note: t('composer.privateChatNote') },
     ];
     return (
