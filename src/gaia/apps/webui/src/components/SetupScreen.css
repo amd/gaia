@@ -141,17 +141,23 @@ button.setup-rail-step:hover {
     }
 }
 
+/* Scrolls the full width, with room kept for the bar so nothing shifts when it appears. */
+.setup-scroll {
+    flex: 1;
+    min-block-size: 0;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+}
+
 .setup-inner {
     --setup-pad-block: 48px;
     display: flex;
-    flex: 1;
     flex-direction: column;
     gap: 14px;
     min-inline-size: 0;
     max-inline-size: 720px;
     margin-inline: auto;
     padding: var(--setup-pad-block) 24px;
-    overflow-y: auto;
 }
 
 .setup-card {
@@ -454,6 +460,17 @@ button.setup-rail-step:hover {
     font-weight: 600;
 }
 
+/* Focus lands on the title so screen readers announce the new step: a thin line under
+   the words marks it, not the full-width box a control gets. */
+.setup-title[tabindex="-1"] {
+    inline-size: fit-content;
+}
+
+.setup-title[tabindex="-1"]:focus {
+    outline: none;
+    box-shadow: 0 2px 0 0 var(--accent-light);
+}
+
 .setup-close {
     align-self: flex-start;
 }
@@ -708,6 +725,15 @@ label.setup-choice {
 
 .setup-logs {
     margin-top: 16px;
+}
+
+/* The logs and the report sit one level in, under "Having trouble?". */
+.setup-help {
+    padding-inline-start: 17px;
+}
+
+.setup-help > .setup-log:first-child {
+    margin-top: 10px;
 }
 
 .setup-report {

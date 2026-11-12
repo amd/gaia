@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, Cloud, Eye, EyeOff, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
-import { shortModelName, useModelStore } from '../stores/modelStore';
+import { displayModelName, shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
 import { CloudPrices } from './settings/CloudPrices';
 import './settings/CloudSpending.css';
@@ -886,6 +886,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     }, [plan]);
 
     const runFailed = run?.state === 'failed' || run?.state === 'cancelled';
+    // A step that went wrong opens "Having trouble?" by itself.
+    const stepFailed = (run?.state === 'failed') || !!startError || !!planError || !!hardwareError || !!lostContact || !!actionError;
+    // A first run has no earlier chat to pick up, so "Check in" waits for one.
+    const readyTasks = again ? firstTasks : firstTasks.filter((c) => c.skill !== 'check-in');
     const downloadDone = fullRun && (fullRun.state === 'failed' || fullRun.state === 'cancelled')
         && (fullRun.models ?? []).length > 0
         && (fullRun.models ?? []).every((m) => m.state === 'ready' || m.state === 'skipped' || m.state === 'verifying' || m.state === 'unchecked')
@@ -914,8 +918,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             firstStage.current = false;
             return;
         }
-        const inner = document.querySelector('.setup-inner');
-        if (inner) inner.scrollTop = 0;
+        const scroller = document.querySelector('.setup-scroll');
+        if (scroller) scroller.scrollTop = 0;
         document.getElementById('setup-title')?.focus({ preventScroll: true });
     }, [stage]);
     // One flat line of steps; Customize, the cloud key and GPU memory are screens of the step they open from.
@@ -1019,6 +1023,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
             <SetupRail steps={railSteps} />
             <SetupFooterSlot value={footerSlot}>
             <div className="setup-pane">
+            {/* The whole pane scrolls, so the scrollbar sits at the window's edge. */}
+            <div className="setup-scroll">
             <div className="setup-inner">
                 {shownAt >= 0 && (
                     <nav className="setup-topnav" aria-label={t('setup.nav.label')}>
@@ -1435,7 +1441,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     {/* The heading already says GAIA is ready; this says what answers. */}
                                     {answering && (
                                         <p>
-                                            {t(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? shortModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? shortModelName(answering)) })}
+                                            {t(cloud ? 'setup.ready.answersCloud' : 'setup.ready.answersLocal', { model: cloud ? displayModelName(answering) : (names[answering] ?? finalPlan?.catalog?.find((e) => e.id === answering)?.name ?? displayModelName(answering)) })}
                                         </p>
                                     )}
                                 </div>
@@ -1456,10 +1462,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         {t('setup.ready.extraNotFetched', { names: notFetched.map((id) => names[id] ?? id).join(', ') })}
                                     </p>
                                 )}
-                                {firstTasks.length > 0 && (
+                                {readyTasks.length > 0 && (
                                     <>
                                         <p className="setup-hint">{t('setup.ready.tasks')}</p>
-                                        <StartCards cards={firstTasks} onPick={(card) => void finish(card)} />
+                                        <StartCards cards={readyTasks} onPick={(card) => void finish(card)} />
                                     </>
                                 )}
                             </div>
@@ -1475,7 +1481,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 {runGoing && (choiceStep || stage === 'plan') && (
                     <p className="setup-hint" role="status">{t('setup.nav.runGoing')}</p>
                 )}
-                <StageLogs run={run} before={{ check: checkNotes }} />
+                <StageLogs run={run} before={{ check: checkNotes }} failed={stepFailed} />
+            </div>
             </div>
             <div className="setup-footer" ref={setFooterSlot} />
             </div>
