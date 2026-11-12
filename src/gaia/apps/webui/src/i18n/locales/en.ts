@@ -1204,6 +1204,7 @@ export const enMessages = {
     'settings.title': 'Settings',
     'settings.sections': 'Settings sections',
     'settings.close': 'Close settings',
+    'settings.backTo': 'Back to {section}',
     'chat.loadingTools': 'Loading more tools',
     'chat.modelQueue.waiting': 'Waiting for another chat to finish ({seconds}s)',
     'chat.modelQueue.waitingInLine': 'Waiting for another chat to finish, #{position} of {length} in line ({seconds}s)',
