@@ -13,7 +13,7 @@ named tool has to be offered.
 from __future__ import annotations
 
 import re
-from typing import Iterable, List
+from typing import Iterable, List, Tuple
 
 # Core only: naming a tool off the short list forces the session's one jump.
 SHELL_TOOLS = ("run_shell_command",)
@@ -45,7 +45,34 @@ _SHELL_ONLY_ANSWER = re.compile(
 # Spoken output: "read this aloud" shares no words with the tool's description, so
 # retrieval scored it under small talk.
 _SPEECH_NAMED = re.compile(
-    r"\b(?:aloud|out\s+loud|text[- ]to[- ]speech|into\s+speech)\b", re.IGNORECASE
+    r"\b(?:aloud|out\s+loud|text[- ]to[- ]speech|into\s+speech|narrate)\b",
+    re.IGNORECASE,
+)
+SPEECH_TOOLS = ("text_to_speech", "dictate_document")
+
+# A document turned into audio: "dictate this PDF", "make an audiobook of it".
+_DICTATION_NAMED = re.compile(
+    r"\bdictate\b|\baudio\s?books?\b"
+    r"|\b(?:in)?to\s+(?:an?\s+)?(?:audio|mp3)\b"
+    r"|\bas\s+(?:an?\s+)?(?:audio|mp3)\b"
+    r"|\b(?:audio|spoken)\s+version\b"
+    r"|\bread\s+\S+(?:\s+\S+){0,3}\s+to\s+me\b",
+    re.IGNORECASE,
+)
+# Audio that already exists is for the transcription tools, not for speech.
+_EXISTING_AUDIO = re.compile(
+    r"\b(?:video|recording|transcri\w+|podcast|song|music|meeting|voice\s?memo)\b",
+    re.IGNORECASE,
+)
+
+# An audio file the reply is saved to: "save it as report.mp3", "narrate it to ch1.wav".
+_AUDIO_OUTPUT = re.compile(
+    r"\b(?:save|write|export|output|store|put|turn|convert|render|make|create"
+    r"|produce|generate|dictate|narrate|read|record)\w*\b(?:[^.?!\n]|\.(?=\S)){0,80}?"
+    r"\b(?:as|to|into|called|named)\s+(?:an?\s+|the\s+)?"
+    r"(?P<name>\"[^\"\n]+?\.(?:mp3|wav|m4a|ogg|flac)\"|'[^'\n]+?\.(?:mp3|wav|m4a|ogg|flac)'"
+    r"|[^\s\"'`]*\.(?:mp3|wav|m4a|ogg|flac))(?!\w|\.\w)",
+    re.IGNORECASE,
 )
 
 # A file only an off-list tool can open. The prompt names these tools, and a
@@ -62,13 +89,22 @@ _MEDIA_NAMED = (
 )
 
 
+def _audio_files(user_input: str) -> Tuple[bool, bool]:
+    """Whether the message names an audio file to save to, and one to read from."""
+    outputs = [m.span("name") for m in _AUDIO_OUTPUT.finditer(user_input)]
+    named = _MEDIA_NAMED[1][0].finditer(user_input)
+    reads = any(not any(a <= m.start() < b for a, b in outputs) for m in named)
+    return bool(outputs), reads
+
+
 def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
     """Return the registry tools *user_input* explicitly asks for, in order.
 
-    Four signals: a registry tool name written out (``run_shell_command``), a
+    Signals: a registry tool name written out (``run_shell_command``), a
     request that names the shell or can only be answered by it, a request to
-    speak, and a named picture or recording. Only names in *registry* are
-    returned, so a profile without shell tools gets none.
+    speak, a request to turn a document into audio (including one saved to a
+    named ``.mp3``/``.wav``/... file), and a named picture or recording. Only names in *registry* are returned, so a profile without
+    shell tools gets none.
     """
     names = set(registry)
     found: List[str] = []
@@ -83,13 +119,21 @@ def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
         for name in SHELL_TOOLS:
             if name in names and name not in found:
                 found.append(name)
-    if (
-        _SPEECH_NAMED.search(user_input)
-        and "text_to_speech" in names
-        and "text_to_speech" not in found
-    ):
-        found.append("text_to_speech")
+    saves_audio, reads_audio = _audio_files(user_input)
+    as_audio = _DICTATION_NAMED.search(user_input) or saves_audio
+    if as_audio and not reads_audio and not _EXISTING_AUDIO.search(user_input):
+        wanted = SPEECH_TOOLS[::-1]
+    elif _SPEECH_NAMED.search(user_input):
+        wanted = SPEECH_TOOLS[:1]
+    else:
+        wanted = ()
+    for name in wanted:
+        if name in names and name not in found:
+            found.append(name)
     for pattern, name in _MEDIA_NAMED:
+        # "dictate notes.pdf to notes.mp3" names the output, not a recording to transcribe.
+        if name == "transcribe_media" and "dictate_document" in wanted:
+            continue
         if pattern.search(user_input) and name in names and name not in found:
             found.append(name)
     return found

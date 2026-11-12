@@ -509,6 +509,7 @@ _GAIA_TOOL_LABELS: Dict[str, str] = {
     "list_sd_models": "Listing image models",
     "get_generation_history": "Listing generated images",
     "text_to_speech": "Speaking",
+    "dictate_document": "Dictating",
     "list_windows": "Listing windows",
     "notify_desktop": "Sending a notification",
     "read_clipboard": "Reading clipboard",

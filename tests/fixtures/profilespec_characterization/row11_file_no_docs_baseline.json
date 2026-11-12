@@ -8,6 +8,7 @@
     "bookmark",
     "browse_directory",
     "check_cli_setup",
+    "dictate_document",
     "edit_file",
     "execute_python_file",
     "file_info",

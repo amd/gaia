@@ -427,6 +427,8 @@ const messages: Messages = {
     'media.showFull': 'عرض بالحجم الكامل',
     'media.showSmaller': 'عرض بحجم أصغر',
     'media.audioUnplayable': 'تعذّر تشغيل هذا الصوت. ربما نُقل الملف أو حُذف.',
+    'media.savedTo': 'حُفظ في',
+    'media.listeningScript': 'حُفظ النص في',
     // Recipe, workout and calculator cards
     'cards.tryGroup': 'جرّب مثالًا',
     'cards.try': 'جرّب',
@@ -756,6 +758,8 @@ const messages: Messages = {
     'tool.take_screenshot.active': 'التقاط لقطة شاشة',
     'tool.text_to_speech.done': 'قرأ بصوت عالٍ',
     'tool.text_to_speech.active': 'القراءة بصوت عالٍ',
+    'tool.dictate_document.done': 'حوّل المستند إلى ملف صوتي',
+    'tool.dictate_document.active': 'تحويل المستند إلى ملف صوتي',
     'tool.tree.done': 'اطّلع على شجرة المجلد',
     'tool.tree.active': 'سرد شجرة المجلد',
     'tool.wait_for_condition.done': 'انتظر شرطًا',

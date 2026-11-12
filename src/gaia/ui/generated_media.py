@@ -12,6 +12,7 @@ those folders and nothing else: no subfolders, no symlinks, no other paths.
 from __future__ import annotations
 
 import logging
+import math
 import ntpath
 import os
 import struct
@@ -35,7 +36,7 @@ MEDIA_TYPES: Dict[str, Dict[str, str]] = {
         ".webp": "image/webp",
         ".gif": "image/gif",
     },
-    "audio": {".wav": "audio/wav"},
+    "audio": {".wav": "audio/wav", ".mp3": "audio/mpeg"},
 }
 
 #: The tool-result key that names the saved file, per kind.
@@ -129,14 +130,34 @@ def wav_duration_seconds(path: Path) -> Optional[float]:
         return None
 
 
-def _result_path(event: Mapping[str, Any], key: str) -> Optional[str]:
-    """The saved-file path on a tool_result, in-process or relayed."""
+def _result_value(event: Mapping[str, Any], key: str) -> Any:
+    """A tool_result field, in-process or relayed."""
     value = event.get(key)
-    if isinstance(value, str):
+    if value is not None:
         return value
     data = event.get("data")
-    if isinstance(data, Mapping) and isinstance(data.get(key), str):
-        return data[key]
+    return data.get(key) if isinstance(data, Mapping) else None
+
+
+def _result_path(event: Mapping[str, Any], key: str) -> Optional[str]:
+    """The saved-file path on a tool_result, in-process or relayed."""
+    value = _result_value(event, key)
+    return value if isinstance(value, str) else None
+
+
+def _audio_duration(event: Mapping[str, Any], path: Path) -> Optional[float]:
+    """Length of a generated audio file: its WAV header, else what the tool measured."""
+    duration = wav_duration_seconds(path) if path.suffix.lower() == ".wav" else None
+    if duration is not None:
+        return duration
+    reported = _result_value(event, "duration_seconds")
+    if (
+        isinstance(reported, (int, float))
+        and not isinstance(reported, bool)
+        and math.isfinite(reported)
+        and reported >= 0
+    ):
+        return round(float(reported), 2)
     return None
 
 
@@ -208,8 +229,13 @@ def media_card(
         if kind == "image":
             data["alt"] = caption or "Generated image"
         else:
-            duration = wav_duration_seconds(real)
+            duration = _audio_duration(event, real)
             if duration is not None:
                 data["duration_seconds"] = duration
+            # Shown as text only: where the user's copy and the script went.
+            for key in ("saved_to", "script_path"):
+                where = _result_path(event, key)
+                if where:
+                    data[key] = where
         return {"render": kind, "data": data}
     return None

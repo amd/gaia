@@ -13,6 +13,10 @@ interface AudioPayload {
     caption?: string;
     path?: string;
     duration_seconds?: number;
+    /** Where the user's own copy went; shown as text, never opened from here. */
+    saved_to?: string;
+    /** The listening script a dictation was read from. */
+    script_path?: string;
 }
 
 function isAudioPayload(value: unknown): value is AudioPayload {
@@ -23,6 +27,8 @@ function isAudioPayload(value: unknown): value is AudioPayload {
         resolveMediaSrc('audio', v.src) !== null &&
         isOptionalString(v.caption) &&
         isOptionalString(v.path) &&
+        isOptionalString(v.saved_to) &&
+        isOptionalString(v.script_path) &&
         (v.duration_seconds === undefined ||
             (typeof v.duration_seconds === 'number' &&
                 Number.isFinite(v.duration_seconds) &&
@@ -57,6 +63,16 @@ export function AudioCard({ data }: { data: unknown }) {
                         {fileName}
                         {fileName && data.duration_seconds !== undefined && ' · '}
                         {data.duration_seconds !== undefined && <bdi dir="ltr">{formatDuration(data.duration_seconds)}</bdi>}
+                    </span>
+                )}
+                {data.saved_to && (
+                    <span className="render-audio__where">
+                        {t('media.savedTo')} <bdi dir="ltr">{data.saved_to}</bdi>
+                    </span>
+                )}
+                {data.script_path && (
+                    <span className="render-audio__where">
+                        {t('media.listeningScript')} <bdi dir="ltr">{data.script_path}</bdi>
                     </span>
                 )}
             </figcaption>

@@ -85,6 +85,7 @@ _RENDER_TOOL_TO_LANG: Dict[str, str] = {
     "generate_music": "media",
     "generate_sound_effect": "media",
     "text_to_speech": "media",
+    "dictate_document": "media",
 }
 
 # HTTP-style status codes for the canonical ``error`` event's ``status`` field.

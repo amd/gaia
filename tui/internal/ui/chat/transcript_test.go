@@ -188,6 +188,42 @@ func TestTheLiveLineNamesTheModelsPhase(t *testing.T) {
 	}
 }
 
+// A dictation records for minutes. Its step row said "Running dictate document"
+// the whole time, so a long recording looked the same as a stuck one.
+func TestARunningToolsOwnProgressIsOnTheLiveLine(t *testing.T) {
+	m := sizedChat(t, 120, 40)
+	progress := func(message string) event.CanonicalStatusEvent {
+		return event.CanonicalStatusEvent{Type: "status", Phase: "dictation", Message: message}
+	}
+	m = feed(t, m, toolCall("dictate_document", `{"file_path":"report.pdf"}`))
+	before := frameOf(m)
+	if strings.Contains(before, "Recording") {
+		t.Fatalf("no progress has been reported yet:\n%s", before)
+	}
+	for _, said := range []string{
+		"Writing the listening script: part 2 of 7",
+		"Recording about 40 min of audio: part 12 of 60",
+	} {
+		m = feed(t, m, progress(said))
+		if frame := frameOf(m); !strings.Contains(frame, said) {
+			t.Fatalf("the live line should say %q:\n%s", said, frame)
+		}
+	}
+	// The model's own phases are not a tool's progress.
+	m = feed(t, m, phase("reading", 0))
+	if frame := frameOf(m); strings.Contains(frame, "Recording about") {
+		t.Errorf("a model phase must replace the tool's last progress:\n%s", frame)
+	}
+	m = feed(t, m, progress("Recording about 40 min of audio: part 13 of 60"),
+		toolDone("dictate_document", "saved"))
+	if frame := frameOf(m); strings.Contains(frame, "part 13 of 60") {
+		t.Errorf("progress must not outlive the tool:\n%s", frame)
+	}
+	if frame := frameOf(ctrlO(t, m)); strings.Contains(frame, "part 13 of 60") {
+		t.Errorf("progress is not narration and must not reach Ctrl+O:\n%s", frame)
+	}
+}
+
 // A confirmation used to reach the screen four times: "[!] confirmation needed",
 // "[!] … resolved: approved — running it", "[!] approved decision … delivered",
 // plus the modal. Now: the modal asks, and the step it gated says one word.

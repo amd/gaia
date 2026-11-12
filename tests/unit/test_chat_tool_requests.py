@@ -100,3 +100,136 @@ def test_only_registered_tools_are_returned():
     """A profile without the shell tools gets no shell request."""
     assert requested_tools("run pwd in the shell", {"read_file"}) == []
     assert requested_tools("call delete_everything now", REGISTRY) == []
+
+
+SPEECH_REGISTRY = REGISTRY | {"text_to_speech", "dictate_document"}
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Dictate this document",
+        "Turn this PDF into audio",
+        "read report.pdf to me",
+        "Make an audiobook of notes.md",
+        "Save it as an MP3",
+        "I'd like an audio version of the handbook",
+    ],
+)
+def test_a_document_asked_for_as_audio_gets_the_dictation_tool_first(message):
+    assert requested_tools(message, SPEECH_REGISTRY) == [
+        "dictate_document",
+        "text_to_speech",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message", ["Read this aloud", "Say it out loud", "Narrate the story of the fox"]
+)
+def test_speaking_text_asks_for_text_to_speech_alone(message):
+    assert requested_tools(message, SPEECH_REGISTRY) == ["text_to_speech"]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        # Audio that already exists is the transcription tools' job.
+        "Listen to the recording and summarize it",
+        "Summarize the dictation transcript",
+        "Convert this video to audio",
+        "Save the transcript as an mp3",
+        "Transcribe this audio",
+        # Ordinary requests that share a word.
+        "I dictated notes yesterday",
+        "Convert it to PDF",
+        "Read the file",
+    ],
+)
+def test_requests_that_only_sound_like_speech_ask_for_nothing(message):
+    assert requested_tools(message, SPEECH_REGISTRY) == []
+
+
+def test_speech_tools_are_only_offered_where_registered():
+    assert requested_tools("Dictate this document", REGISTRY) == []
+
+
+def test_a_dictation_naming_its_output_file_does_not_ask_to_transcribe_it():
+    msg = "Dictate report.pdf and save it as C:/out/report.mp3"
+    assert requested_tools(msg, SPEECH_REGISTRY) == [
+        "dictate_document",
+        "text_to_speech",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Summarize standup.mp3",
+        "Turn the meeting in standup.mp4 into audio",
+        "Read the transcript of call.wav to me",
+    ],
+)
+def test_an_existing_recording_still_asks_to_transcribe_beside_speech(message):
+    found = requested_tools(message, SPEECH_REGISTRY)
+    assert "transcribe_media" in found
+    assert "dictate_document" not in found
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Read notes.pdf aloud and save it as report.mp3",
+        "Narrate chapter1.txt and save as chapter1.wav",
+        "Convert report.docx and save it as report.mp3",
+        "Read notes.pdf aloud to notes.mp3.",
+        "Speak handbook.md out loud and write it to C:/out/handbook.m4a",
+        'Read the essay aloud and export it as "my essay.ogg"',
+        "Narrate story.txt into story.flac",
+        "Read README.md out loud, then save the result to readme.wav!",
+    ],
+)
+def test_a_document_saved_to_a_named_audio_file_gets_the_dictation_tool(message):
+    assert requested_tools(message, SPEECH_REGISTRY) == [
+        "dictate_document",
+        "text_to_speech",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Transcribe meeting.mp3",
+        "what does interview.mp3 say?",
+        "Listen to interview.mp3 and tell me the key points",
+        "Convert interview.mp3 to interview.wav",
+        "Who speaks first in lecture.m4a?",
+        "Transcribe podcast.flac and save it as podcast.txt",
+        "Convert interview.mp4 into audio",
+        "Save the transcript of call.mp3 as notes.txt",
+    ],
+)
+def test_reading_an_existing_audio_file_still_routes_to_transcription(message):
+    found = requested_tools(message, SPEECH_REGISTRY)
+    assert "transcribe_media" in found
+    assert "dictate_document" not in found
+
+
+def test_reading_one_recording_aloud_into_another_is_not_dictation():
+    """The input is audio, so the output name must not turn it into a dictation."""
+    msg = "Read interview.mp3 aloud and save it as copy.wav"
+    assert requested_tools(msg, SPEECH_REGISTRY) == [
+        "text_to_speech",
+        "transcribe_media",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Save it to the current folder.",
+        "Save the notes as report.mp3s.txt",
+        "Read notes.pdf aloud and save it as report.wavy",
+    ],
+)
+def test_a_name_that_only_looks_like_an_audio_file_is_not_an_output(message):
+    assert "dictate_document" not in requested_tools(message, SPEECH_REGISTRY)

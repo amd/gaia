@@ -12,7 +12,7 @@ GAIA's talk mode enables natural voice-based interaction with LLMs using Whisper
 
 Both models run inside Lemonade Server, the same server that runs the chat model — GAIA itself installs no speech model runtime. The first `gaia talk` downloads the Whisper model (~150 MB for `base`) and the Kokoro voice model (~350 MB) through Lemonade. To have typed replies read aloud instead, use the speaker button in the [Agent UI](/guides/agent-ui#settings) or `/read-aloud` in the [terminal app](/guides/tui).
 
-The GAIA agent's `text_to_speech` tool uses the same Kokoro model but never downloads it during a chat. Run `gaia download --agent talk` (or `gaia talk` once) before asking the agent to read something aloud.
+The GAIA agent's `text_to_speech` and `dictate_document` tools use the same Kokoro model but never download it during a chat. Run `gaia download --agent talk` (or `gaia talk` once, or press Read aloud on a reply in the Agent UI) before asking the agent to read something aloud. To turn a whole document into an MP3, see [Dictate a Document](/guides/dictation).
 
 <Info>
   **First time here?** Complete the [Setup](/setup) guide first to install GAIA and its dependencies.
