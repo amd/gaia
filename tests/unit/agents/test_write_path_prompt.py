@@ -351,6 +351,35 @@ def test_the_terminal_ui_summary_carries_the_location_note():
     assert note in prompt["summary"]
 
 
+def test_the_terminal_ui_summary_shows_no_internal_arguments():
+    """What GAIA adds for its own prompt is not an argument of the call."""
+    from gaia.agents.base.tool_grants import RESOLVED_PATH_ARG
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    path = "/home/u/Documents/a.txt"
+    note = f"{path} is outside this chat's folders."
+    out = CanonicalTranslator(run_id=None, agent_id="gaia").translate(
+        {
+            "type": "permission_request",
+            "tool": "write_file",
+            "args": {
+                "file_path": path,
+                "content": "tide-gate",
+                RESOLVED_PATH_ARG: path,
+                RISK_NOTE_ARG: note,
+            },
+            "confirm_id": "c-1",
+        }
+    )
+
+    prompt = next(e for e in out if e["type"] == "needs_confirmation")
+    assert prompt["summary"] == (
+        f'Run \'write_file\' with content="tide-gate", file_path="{path}"?\n{note}'
+    )
+    assert prompt["args"] == {"file_path": path, "content": "tide-gate"}
+    assert prompt["prompt_context"]["risk_note"] == note
+
+
 def test_full_access_asks_only_about_the_write(layout):
     """Full access covers the location, so the write's prompt carries no note."""
     handler = SSEOutputHandler()

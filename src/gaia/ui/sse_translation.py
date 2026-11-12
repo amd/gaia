@@ -75,6 +75,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.base.call_risk import (
     EXACT_TEXT_ARG,
+    NEEDS_PERSON_ARG,
     RISK_NOTE_ARG,
     plain_risk_note,
 )
@@ -82,6 +83,7 @@ from gaia.agents.base.tool_grants import (
     PATH_ACCESS_PROMPT_TOOL,
     PATH_TOOLS,
     PROJECT_TRUST_PROMPT_TOOL,
+    RESOLVED_PATH_ARG,
     SCRATCH_ARG,
 )
 from gaia.agents.base.untrusted_text import strip_untrusted_field_markers
@@ -689,7 +691,10 @@ class CanonicalTranslator:
         if tool == PROJECT_TRUST_PROMPT_TOOL and isinstance(args.get("folder"), str):
             return _project_trust_question(args)
         label = self._action_labels.get(tool, f"Run {tool!r}")
-        detail = render_invocation(args)
+        # The call's own arguments; the risk note follows as its own line.
+        detail = render_invocation(
+            {k: v for k, v in args.items() if k not in PROMPT_ONLY_ARGS}
+        )
         if not detail:
             return f"{label}?"
         inline, newline, blocks = detail.partition("\n")
@@ -839,7 +844,9 @@ PROMPT_ARG_VALUE_CHARS = 64_000
 
 
 #: Keys GAIA writes into a prompt's arguments; the agent refuses them from a model.
-PROMPT_ONLY_ARGS = frozenset({RISK_NOTE_ARG, SCRATCH_ARG, EXACT_TEXT_ARG})
+PROMPT_ONLY_ARGS = frozenset(
+    {RISK_NOTE_ARG, SCRATCH_ARG, EXACT_TEXT_ARG, RESOLVED_PATH_ARG, NEEDS_PERSON_ARG}
+)
 
 
 def _model_call_args(event: Dict[str, Any], args: Dict[str, Any]) -> Dict[str, Any]:
