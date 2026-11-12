@@ -25,6 +25,7 @@ import { isMediaFile } from '../utils/mediaFiles';
 import { bugReportUrl } from './UnsupportedFeature';
 import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
+import { connectCardProviders, hasConnectCard } from './render/ConnectAccountCard';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import { answerQuestion, QuestionGoneError, resolveTypedAnswer, waitingQuestionId } from './render/NeedsInputCard';
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
@@ -1581,10 +1582,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Stale connector-reply cue (#2119): when the newest reply was a connector
     // auth-required error, offer to re-run once the account is connected.
     const lastMessage = messages.length > 0 ? messages[messages.length - 1] : undefined;
+    const lastConnectProviders = useMemo(() => connectCardProviders(lastMessage), [lastMessage]);
     const lastIsConnectorError = !isStreaming
         && !isLoadingMessages
         && lastMessage?.role === 'assistant'
-        && isAuthRequiredMessage(lastMessage.content);
+        // A card speaks for itself: the reply's wording is read only without one.
+        && (hasConnectCard(lastMessage) ? lastConnectProviders.length > 0 : isAuthRequiredMessage(lastMessage.content));
 
     // Pre-compute per-message latency: time from preceding user message to each
     // assistant message. O(N) single pass, avoids repeated backward scans in render.
@@ -1831,7 +1834,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <ExportErrorBar message={exportError} onDismiss={clearExportError} dismissLabel={t('chat.dismissExportError')} />
                     <ExportErrorBar message={actionError} onDismiss={() => setActionError(null)} dismissLabel={t('chat.dismissError')} />
                     {lastIsConnectorError && lastMessage && (
-                        <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
+                        <ConnectorRetryBanner content={lastMessage.content} providers={lastConnectProviders} onRetry={handleRetryLast} />
                     )}
                     <PermissionPrompt sessionId={sessionId} />
                     <ContextWarning usage={contextUsage} />

@@ -143,6 +143,8 @@
                   "connectors/memory",
                   "connectors/slack",
                   "connectors/discord",
+                  "connectors/notion",
+                  "connectors/brave-search",
                   "security/connections",
                   "security/connectors"
                 ]
