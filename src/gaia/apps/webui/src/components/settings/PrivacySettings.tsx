@@ -28,13 +28,14 @@ export function PrivacySettings() {
     const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null);
     const [localOnly, setLocalOnly] = useState<boolean | null>(null);
     const [savingPolicy, setSavingPolicy] = useState(false);
+    const [policyResult, setPolicyResult] = useState<{ ok: boolean; text: string } | null>(null);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
     useEffect(() => {
         let active = true;
         void api.getSettings()
             .then((settings) => { if (active) setLocalOnly(settings.network_policy === 'local_ai_only'); })
-            .catch((err) => { if (active) setResult({ ok: false, text: err instanceof Error ? err.message : String(err) }); });
+            .catch((err) => { if (active) setPolicyResult({ ok: false, text: err instanceof Error ? err.message : String(err) }); });
         return () => { active = false; };
     }, []);
 
@@ -44,7 +45,7 @@ export function PrivacySettings() {
         const next = !previous;
         setLocalOnly(next);
         setSavingPolicy(true);
-        setResult(null);
+        setPolicyResult(null);
         try {
             const settings = await api.updateSettings({ network_policy: next ? 'local_ai_only' : 'cloud_allowed' });
             setLocalOnly(settings.network_policy === 'local_ai_only');
@@ -64,10 +65,10 @@ export function PrivacySettings() {
                     return t('settings.privacy.policyNoticeUnknown');
                 }).join(' ')
                 : t(next ? 'settings.privacy.localOnlyOn' : 'settings.privacy.localOnlyOff');
-            setResult({ ok: !hasWarning, text });
+            setPolicyResult({ ok: !hasWarning, text });
         } catch (err) {
             setLocalOnly(previous);
-            setResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
+            setPolicyResult({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {
             setSavingPolicy(false);
         }
@@ -98,23 +99,31 @@ export function PrivacySettings() {
         <div className="settings-pane">
             <h2 className="settings-pane-title">{t('settings.section.privacy')}</h2>
             <section className="settings-card" aria-label={t('settings.privacy.localOnlyTitle')}>
-                <div className="settings-row settings-row-between">
-                    <div>
+                <div>
+                    <label className="setting-row">
                         <strong>{t('settings.privacy.localOnlyTitle')}</strong>
-                        <p className="settings-hint">{t('settings.privacy.localOnlyHint')}</p>
-                    </div>
-                    <button
-                        type="button"
-                        role="switch"
-                        aria-checked={localOnly === true}
-                        aria-label={t('settings.privacy.localOnlyTitle')}
-                        className={localOnly ? 'is-active' : ''}
-                        onClick={() => void toggleLocalOnly()}
-                        disabled={localOnly === null || savingPolicy}
-                    >
-                        {localOnly ? t('settings.privacy.localOnlyOnLabel') : t('settings.privacy.localOnlyOffLabel')}
-                    </button>
+                        <span className="toggle-switch">
+                            <input
+                                type="checkbox"
+                                role="switch"
+                                checked={localOnly === true}
+                                aria-label={t('settings.privacy.localOnlyTitle')}
+                                aria-describedby="privacy-local-only-hint"
+                                onChange={() => void toggleLocalOnly()}
+                                // Stays enabled while saving so keyboard focus is not dropped.
+                                disabled={localOnly === null}
+                                aria-busy={savingPolicy}
+                            />
+                            <span className="toggle-track" />
+                        </span>
+                    </label>
+                    <p className="settings-hint" id="privacy-local-only-hint">{t('settings.privacy.localOnlyHint')}</p>
                 </div>
+                {policyResult && (
+                    <p className={policyResult.ok ? 'settings-ok' : 'settings-error'} role={policyResult.ok ? 'status' : 'alert'}>
+                        {policyResult.text}
+                    </p>
+                )}
             </section>
             <section className="settings-card" aria-label={t('settings.privacy.whereTitle')}>
                 <p className="settings-note">{t('settings.privacy.stays')}</p>

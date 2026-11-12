@@ -433,3 +433,31 @@ describe('FileBrowser dates follow the interface language', () => {
         expect(date).not.toMatch(ENGLISH_MONTH);
     });
 });
+
+describe('FileBrowser in Arabic', () => {
+    afterEach(resetUiLocale);
+
+    it('shows the title, quick links, search controls and empty state in Arabic', async () => {
+        mockedApi.browseFiles.mockResolvedValue({
+            ...BROWSE_RESPONSE,
+            entries: [],
+            quick_links: [
+                { name: 'Home', path: '/x', icon: 'home' },
+                { name: 'Desktop', path: '/x/Desktop', icon: 'desktop' },
+                { name: 'Documents', path: '/x/Documents', icon: 'documents' },
+                { name: 'Downloads', path: '/x/Downloads', icon: 'download' },
+            ],
+        });
+        setUiLocale('ar');
+        render(<FileBrowser onStartChat={vi.fn()} />);
+
+        const dialog = await screen.findByRole('dialog');
+        await waitFor(() => expect(stripIsolates(dialog.textContent ?? '')).toContain('هذا المجلد فارغ'));
+        const text = stripIsolates(dialog.textContent ?? '');
+        for (const word of ['متصفح الملفات', 'الرئيسية', 'سطح المكتب', 'المستندات', 'التنزيلات', 'إظهار المخفية']) {
+            expect(text).toContain(word);
+        }
+        expect(within(dialog).getByPlaceholderText(/ابحث عن ملفات على جهازك/)).toBeInTheDocument();
+        expect(within(dialog).getByRole('combobox', { name: /تصفية حسب نوع الملف/ })).toHaveDisplayValue(/كل الملفات/);
+    });
+});
