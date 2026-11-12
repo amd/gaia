@@ -721,7 +721,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="PUT /api/settings">
-    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and revert to the default model; omitting it or sending `null` leaves it unchanged. The value is also saved as `last_model` in `~/.gaia/config.json` (cleared with it), so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on.
+    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and revert to the default model; omitting it or sending `null` leaves it unchanged. The value is also saved as `last_model` in `~/.gaia/config.json` (cleared with it), so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on, including one from a provider GAIA knows only from the model server's list; when that list can't be read to tell, the save is refused with `503`.
 
     **Request:**
     ```json
@@ -2507,6 +2507,10 @@ plan and make one set of choices.
   <Accordion title="GET /api/setup/check">
     Runs `gaia init --check --profile gaia --json` and returns its result plus
     the step list: `{"ready": bool, "stage": ..., "reasons": [...], "steps": [...]}`.
+    `initialized` is true once setup was seen ready on this PC. With it, a
+    `"server"` stage (the model server isn't answering) is an outage, not a
+    first run: the app keeps its chats, says so, and re-checks when the server
+    answers.
 
     **Query params:** `skip_chat_model` (the chat runs on a cloud provider, so
     only the embedding model is needed locally), `load` (also check that the

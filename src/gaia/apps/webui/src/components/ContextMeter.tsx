@@ -46,10 +46,11 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
         : null;
     if (!usage) {
         if (!unavailable) return null;
+        // A dash, not an empty bar: nothing is measured yet, and the title says when it will be.
         return (
-            <span className="context-meter is-empty" title={unavailable}>
-                <span className="context-meter-bar" aria-hidden="true"><span style={{ width: 0 }} /></span>
+            <span className="context-meter is-empty" title={unavailable} aria-label={`${t('ctx.context')}: ${unavailable}`}>
                 <span className="context-meter-label">{t('ctx.context')}</span>
+                <span aria-hidden="true">–</span>
             </span>
         );
     }
@@ -59,6 +60,12 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
     // The meter fills against GAIA's admitted window, which can be far below a cloud model's own.
     const modelWindow = usage.model_window != null && usage.model_window > usage.window ? usage.model_window : null;
     const cap = modelWindow ? { gaia: formatTokens(usage.window), model: formatTokens(modelWindow) } : null;
+    // A new chat already reads 16-36%: say that most of it is GAIA's own set-up, not the user's doing.
+    const setup = usage.system + usage.tools;
+    const mostlySetup = usage.used > 0 && setup / usage.used >= 0.6;
+    const setupNote = mostlySetup
+        ? t('ctx.meter.mostlySetup', { setup: formatTokens(setup), chat: formatTokens(usage.history + usage.query + usage.documents) })
+        : null;
     return (
         <div className="composer-chip-wrap context-meter-wrap">
             <button
@@ -71,7 +78,7 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                     const fill = say('ctx.meter.aria', { pct, used: formatTokens(usage.used), window: formatTokens(usage.window) });
                     return cap ? `${fill} (${say('ctx.meter.capNote', cap)})` : fill;
                 })}
-                title={cap ? t('ctx.meter.titleCapped', cap) : t('ctx.meter.title')}
+                title={[cap ? t('ctx.meter.titleCapped', cap) : t('ctx.meter.title'), setupNote].filter(Boolean).join('\n')}
             >
                 <span className="context-meter-bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
                 <span className="context-meter-label"><bdi dir="ltr">{pct}%</bdi></span>
@@ -87,6 +94,7 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
                             </span>
                         )}
                     </div>
+                    {setupNote && <p className="context-meter-note is-setup">{setupNote}</p>}
                     <div className="context-meter-stack" aria-hidden="true">
                         {PARTS.map(({ key }) => (
                             <span key={key} className={`part-${key}`} style={{ width: `${(usage[key] / usage.window) * 100}%` }} />

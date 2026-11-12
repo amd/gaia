@@ -29,12 +29,12 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from gaia.llm.local_only import (
-    SETTINGS_HINT,
-    cloud_blocked,
-    local_only_key_message,
+from gaia.llm.local_only import cloud_blocked, local_only_key_message
+from gaia.llm.surface_hints import (
+    AGENT_UI_LOCAL_ONLY_HINT,
+    APP_RESTART_HINT,
+    surface_wording,
 )
-from gaia.llm.surface_hints import APP_RESTART_HINT
 from gaia.logger import get_logger
 
 from ..database import ChatDatabase
@@ -81,6 +81,10 @@ class ProviderError(Exception):
     def __init__(self, message: str, status: int = 502):
         super().__init__(message)
         self.status = status
+
+
+class _ModelListFailed(ProviderError):
+    """The model server answered ``/models`` with a 5xx: its own state, no verdict on a model."""
 
 
 # ── Lemonade access ────────────────────────────────────────────────────────
@@ -483,7 +487,8 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
 
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
-        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+        failed = _ModelListFailed if status >= 500 else ProviderError
+        raise failed(f"Lemonade answered /models with HTTP {status}.")
     offered: List[str] = []
     if provider == LOCAL:
         offered = [*_suggested_local_models()]
@@ -619,30 +624,29 @@ def cloud_provider_name(model_id: str) -> Optional[str]:
     return _ui_cloud_provider(model_id)
 
 
-def _learn_cloud_models(model_id: str) -> None:
-    """Read Lemonade's catalog when only it can say whether *model_id* is cloud.
+def _is_cloud_model(model_id: str) -> bool:
+    """Whether *model_id* is a cloud model, asking Lemonade's list when only it can say.
 
     Right after a restart nothing has taught the in-memory cloud check yet.
-    """
-    from gaia.llm.lemonade_client import (
-        find_model_requirement,
-        may_be_cloud_model,
-        record_cloud_models,
-    )
 
-    if (
-        cloud_provider_name(model_id) is not None
-        or not may_be_cloud_model(model_id)
-        or find_model_requirement(model_id) is not None
-    ):
-        return
+    Raises:
+        ProviderError: the list was needed and couldn't be read.
+    """
+    from gaia.llm.lemonade_client import find_model_requirement, may_be_cloud_model
+
+    if cloud_provider_name(model_id) is not None:
+        return True
+    if not may_be_cloud_model(model_id) or find_model_requirement(model_id) is not None:
+        return False
+    return _listed_as_cloud(model_id)
+
+
+def _learn_cloud_models(model_id: str) -> None:
+    """Teach the in-memory cloud check about *model_id* before it is shown."""
     try:
-        status, body = _lemonade("GET", "models?show_all=true")
+        _is_cloud_model(model_id)
     except ProviderError as e:
         logger.info("Could not tell whether %s is a cloud model: %s", model_id, e)
-        return
-    if status < 400:
-        record_cloud_models(body)
 
 
 def model_label(model_id: str) -> str:
@@ -766,13 +770,26 @@ def _listed_as_cloud(model_id: str) -> bool:
     Reads the list, which also teaches the in-memory cloud check every other
     part of the UI classifies by.
     """
-    from gaia.llm.lemonade_client import is_cloud_model, record_cloud_models
+    from gaia.llm.lemonade_client import (
+        CLOUD_RECIPE,
+        _model_ids_match,
+        record_cloud_models,
+    )
 
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
-        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+        raise ProviderError(
+            f"Lemonade answered /models with HTTP {status}. {APP_RESTART_HINT}"
+        )
     record_cloud_models(body)
-    return is_cloud_model(model_id)
+    # Match as the server does (case, ``user.`` prefix), or a retyped id slips by.
+    entries = body.get("data") if isinstance(body, dict) else None
+    return any(
+        isinstance(e, dict)
+        and e.get("recipe") == CLOUD_RECIPE
+        and _model_ids_match(e.get("id"), model_id)
+        for e in entries or []
+    )
 
 
 def _check_model_available(model_id: str) -> Optional[str]:
@@ -819,7 +836,7 @@ def _check_model_available(model_id: str) -> Optional[str]:
         # Refuse only what nothing here can run; a memory estimate stays a caveat.
         return _local_unavailable(models, model_id)
     except ProviderError as e:
-        if e.status == 503:
+        if e.status == 503 or isinstance(e, _ModelListFailed):
             raise _ServerNotReady(str(e)) from e
         return str(e)
     except CloudKeyError as e:
@@ -902,7 +919,8 @@ def reset_restore_state() -> None:
 
 
 def _raise(e: ProviderError) -> None:
-    raise HTTPException(status_code=e.status, detail=str(e)) from e
+    detail = surface_wording(str(e), "agent_ui")
+    raise HTTPException(status_code=e.status, detail=detail) from e
 
 
 def _known(provider: str) -> None:
@@ -1078,7 +1096,10 @@ def connect_provider(
         raise HTTPException(status_code=422, detail="Local models need no connection.")
     if cloud_blocked():
         raise HTTPException(
-            status_code=409, detail=local_only_key_message(_NAMES[provider])
+            status_code=409,
+            detail=surface_wording(
+                local_only_key_message(_NAMES[provider]), "agent_ui"
+            ),
         )
     key = (body.api_key or "").strip()
     if key and via_tunnel(request):
@@ -1543,13 +1564,29 @@ def clear_restore_notice() -> None:
 
 
 def refuse_blocked_cloud_model(model_id: str) -> None:
-    """Raise 409 when *model_id* is a cloud model and Local only is on."""
-    if provider_of(model_id) != LOCAL and cloud_blocked():
+    """Refuse *model_id* when it is a cloud model and Local only is on.
+
+    Raises 409 for a cloud model, and 503 when only the model server's list
+    could say and it can't be read.
+    """
+    if not cloud_blocked():
+        return
+    try:
+        cloud = _is_cloud_model(model_id)
+    except ProviderError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Can't switch to {model_id}: Local only is on and GAIA couldn't "
+                f"check that it isn't a cloud model. {e}"
+            ),
+        ) from e
+    if cloud:
         raise HTTPException(
             status_code=409,
             detail=(
                 f"Can't switch to {model_label(model_id)}: Local only is on. "
-                f"{SETTINGS_HINT}"
+                f"{AGENT_UI_LOCAL_ONLY_HINT}"
             ),
         )
 

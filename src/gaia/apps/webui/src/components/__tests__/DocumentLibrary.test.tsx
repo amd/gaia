@@ -189,6 +189,20 @@ describe('DocumentLibrary says where documents go', () => {
         expect(screen.getByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
     });
 
+    it('drops the "will be attached" line when that document is removed', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
+        mockedApi.deleteDocument.mockResolvedValue(undefined as never);
+        render(<DocumentLibrary />);
+        fireEvent.change(screen.getByRole('combobox', { name: 'Add documents to' }), { target: { value: 'next' } });
+        indexPath();
+        expect(await screen.findByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
+
+        await waitFor(() => expect(screen.queryByText(/will be attached to your next new chat/)).toBeNull());
+        expect(useChatStore.getState().draftDocumentIds).toEqual([]);
+    });
+
     it('says so when indexing worked but attaching did not', async () => {
         mockedApi.attachDocument.mockRejectedValue(new Error('Session not found'));
         render(<DocumentLibrary />);
