@@ -591,6 +591,54 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A turn GAIA re-checked: the model wrote its answer, read the file back, then wrote it again. */
+const CHECKED_ANSWER = [
+    'Done — except the last step, which you declined.',
+    '',
+    '| Month | Total |',
+    '|---|---|',
+    '| October 2026 | 47.70 |',
+    '| November 2026 | 36.75 |',
+    '| **Grand total** | **84.45** |',
+    '',
+    '**Renamed:** `draft_old.txt` → `draft_archive.txt`',
+].join('\n');
+
+async function withCheckedAnswer(page: Page): Promise<void> {
+    const step = (id: number, extra: Record<string, unknown>) => ({ id, active: false, timestamp: id, ...extra });
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Total both expense files into summary.md and rename draft_old.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `${CHECKED_ANSWER}\n\nSay the word and I'll add the line.`, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            step(1, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(2, { type: 'tool', label: 'Write file', tool: 'write_file', success: true }),
+                            step(3, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER }),
+                            step(4, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(5, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER.replace('declined.', 'declined (read back to confirm).') }),
+                            step(6, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a re-checked answer shows once (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCheckedAnswer);
+        await expect(page.locator('.md-table')).toHaveCount(1);
+        await expect(page.locator('.msg-assistant')).not.toContainText('read back to confirm');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`checked-answer-${locale}.png`) });
+    });
+}
+
 async function withStoppedAnswer(page: Page): Promise<void> {
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
         route.fulfill({
