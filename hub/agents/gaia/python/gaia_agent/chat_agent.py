@@ -2367,15 +2367,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def confirmation_args_for_call(
         self, tool_name: str, tool_args: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Also mark a change after an unanswered question for a person.
+        """Also mark a gated call after an unanswered question for a person.
 
         Pre-approval (Full access) must not turn the model's guess at an
-        answer into a change nobody agreed to.
+        answer into a change nobody agreed to. Only a call known to be a read
+        is exempt; the marker matters only on a call that already asks.
         """
         shown = super().confirmation_args_for_call(tool_name, tool_args)
         if self._unanswered_question is None or not isinstance(shown, dict):
             return shown
-        if call_risk(tool_name, tool_args) in (None, READ):
+        if call_risk(tool_name, tool_args) == READ:
             return shown
         return {**shown, NEEDS_PERSON_ARG: True}
 

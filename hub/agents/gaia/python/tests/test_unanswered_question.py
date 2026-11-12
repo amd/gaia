@@ -88,6 +88,16 @@ def test_a_real_answer_matching_the_default_is_the_answer(agent):
         ("edit_file", {"file_path": "C:/x/a.txt", "old": "a", "new": "b"}),
         ("run_shell_command", {"command": "move a.txt sub\\a.txt"}),
         ("run_python", {"code": "import shutil; shutil.move('a', 'b')"}),
+        # Gated tools the risk table has no opinion on are held too.
+        ("mcp_filesystem_move_file", {"source": "a.txt", "destination": "b/a.txt"}),
+        ("remove_skill", {"name": "cleanup"}),
+        ("forget_everything", {}),
+        ("install_cli", {"name": "gh"}),
+        ("send_email", {"to": "a@b.c", "body": "done"}),
+        # A shell line that reads first and changes after is not a read.
+        ("run_shell_command", {"command": "dir & del a.txt"}),
+        ("run_shell_command", {"command": "git status && git push"}),
+        ("run_shell_command", {"command": ""}),
     ],
 )
 def test_a_change_after_an_unanswered_question_needs_a_person(
@@ -103,8 +113,8 @@ def test_a_change_after_an_unanswered_question_needs_a_person(
 @pytest.mark.parametrize(
     "tool_name, tool_args",
     [
-        ("read_file", {"file_path": "C:/x/a.txt"}),
         ("run_shell_command", {"command": "dir C:\\x"}),
+        ("run_shell_command", {"command": "git status"}),
     ],
 )
 def test_reading_after_an_unanswered_question_is_unchanged(agent, tool_name, tool_args):
@@ -132,3 +142,24 @@ def test_a_later_answer_lifts_the_hold(agent):
     _ask(**CLEANUP)
 
     assert agent._unanswered_question is None
+
+
+def test_a_new_unanswered_question_after_an_answer_holds_again(agent):
+    agent.console.reply = "Delete duplicates"
+    _ask(**CLEANUP)
+    agent.console.reply = "__NO_RESPONSE__"
+    _ask(**CLEANUP)
+
+    shown = agent.confirmation_args_for_call("remove_skill", {"name": "cleanup"})
+
+    assert shown.get(NEEDS_PERSON_ARG) is True
+
+
+def test_an_empty_reply_is_not_an_answer(agent):
+    agent.console.reply = ""
+
+    assert _ask(**CLEANUP).startswith("__NO_RESPONSE__")
+    shown = agent.confirmation_args_for_call(
+        "write_file", {"file_path": "C:/x/a.txt", "content": "x"}
+    )
+    assert shown.get(NEEDS_PERSON_ARG) is True
