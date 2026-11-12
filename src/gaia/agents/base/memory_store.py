@@ -191,6 +191,9 @@ _MODEL_SENTINEL = re.compile(
 )
 _MODEL_TOOL_CALL_OPENER = re.compile(r"<\|tool_call>|<｜tool[▁_]call[▁_]begin")
 
+# Default for update()'s clearable fields: an explicit None there means "clear".
+_UNSET: Any = object()
+
 
 def _without_code_spans(text: str) -> str:
     """*text* with closed fenced and inline code blanked, in linear time.
@@ -2221,12 +2224,12 @@ class MemoryStore:
         knowledge_id: str,
         content: str | None = None,
         category: str | None = None,
-        domain: str | None = None,
+        domain: str | None = _UNSET,
         metadata: dict | None = None,
         context: str | None = None,
         sensitive: bool | None = None,
-        entity: str | None = None,
-        due_at: str | None = None,
+        entity: str | None = _UNSET,
+        due_at: str | None = _UNSET,
         reminded_at: str | None = None,
         superseded_by: str | None = None,
         allow_privileged: bool = False,
@@ -2236,6 +2239,9 @@ class MemoryStore:
         Sets updated_at to now. Returns False if ID not found.
 
         Args:
+            domain, entity, due_at: Omit to leave unchanged; pass ``None``
+                to clear the field (store NULL). An empty string leaves it
+                unchanged. Every other field ignores ``None``.
             superseded_by: ID of the newer knowledge item that replaces this one.
                 When set, this item is considered historical/inactive and will be
                 excluded from active queries (search, get_by_*, system prompt).
@@ -2266,14 +2272,14 @@ class MemoryStore:
         # An empty-string entity or domain would differ from NULL in SQL and
         # break entity-scoped dedup, index filtering, and stats queries.
         if entity == "":
-            entity = None
+            entity = _UNSET
         if domain == "":
-            domain = None
+            domain = _UNSET
 
         # Validate and normalize due_at — same rule as store().
         # Naive datetimes are attached to local timezone so SQL string
         # comparisons against tz-aware timestamps remain consistent.
-        if due_at is not None:
+        if due_at is not _UNSET and due_at is not None:
             _dt = datetime.fromisoformat(due_at)
             if _dt.tzinfo is None:
                 _dt = _dt.astimezone()
@@ -2306,7 +2312,7 @@ class MemoryStore:
         if category is not None:
             sets.append("category = ?")
             params.append(category)
-        if domain is not None:
+        if domain is not _UNSET:
             sets.append("domain = ?")
             params.append(domain)
         if metadata is not None:
@@ -2318,10 +2324,10 @@ class MemoryStore:
         if sensitive is not None:
             sets.append("sensitive = ?")
             params.append(int(sensitive))
-        if entity is not None:
+        if entity is not _UNSET:
             sets.append("entity = ?")
             params.append(entity)
-        if due_at is not None:
+        if due_at is not _UNSET:
             sets.append("due_at = ?")
             params.append(due_at)
         if reminded_at is not None:
@@ -2345,7 +2351,7 @@ class MemoryStore:
                     if (
                         content is not None
                         or category is not None
-                        or domain is not None
+                        or domain is not _UNSET
                     ):
                         self._update_knowledge_fts_locked(knowledge_id)
                     self._conn.commit()

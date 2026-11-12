@@ -724,11 +724,12 @@ export function MemoryDashboard() {
             const updated = await memoryApi.editKnowledge(editingId, {
                 content: formData.content,
                 category: formData.category,
-                domain: formData.domain || undefined,
+                // The form starts from the entry's values, so empty means cleared.
+                domain: formData.domain || null,
                 context: formData.context,
-                entity: formData.entity || undefined,
+                entity: formData.entity || null,
                 sensitive: formData.sensitive,
-                due_at: formData.due_at || undefined,
+                due_at: formData.due_at || null,
             });
             setEditingId(null);
             setFormData({ content: '', category: 'fact', domain: '', context: 'global', entity: '', sensitive: false, due_at: '' });
