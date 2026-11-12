@@ -218,6 +218,8 @@ def test_the_final_release_job_steps(publish):
         "Checksum TUI binaries",
         "Download the gaia core builds",
         "Attach and checksum the gaia core",
+        "Download the gaiacpp bundle",
+        "Attach and checksum gaiacpp",
         "Download the combined Windows setup",
         "Check the combined Windows setup is this release's",
         "Download Desktop Installer (Windows NSIS)",

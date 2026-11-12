@@ -21,6 +21,16 @@ It runs four ways:
 
 ## Quick start
 
+Every [GAIA release](https://github.com/amd/gaia/releases), release candidates included, carries a prebuilt `gaiacpp` for each platform, stamped with the release's version:
+
+| Platform | Binary | Archive (binary and licenses) |
+|---|---|---|
+| Windows x64 | `gaiacpp-windows-x64.exe` | `gaiacpp-windows-x64.zip` |
+| Linux x64 | `gaiacpp-linux-x64` | `gaiacpp-linux-x64.tar.gz` |
+| macOS, Apple silicon | `gaiacpp-darwin-arm64` | `gaiacpp-darwin-arm64.tar.gz` |
+
+`gaiacpp-SHA256SUMS.txt` lists the checksum of each file. To build it yourself:
+
 ```bash
 cd cpp
 cmake -B build -DCMAKE_BUILD_TYPE=Release

@@ -425,7 +425,10 @@ if(GAIA_BUILD_GAIA_AGENT)
         agents/gaia/sidecar.cpp
         agents/bash/bash_tools.cpp
     )
-    target_compile_definitions(gaiacpp PRIVATE GAIACPP_VERSION="${PROJECT_VERSION}")
+    # A GAIA release stamps its own version (0.25.4, 0.25.4-rc.1); the daemon
+    # and the release checks read it back from `gaiacpp --version`.
+    set(GAIACPP_VERSION "${PROJECT_VERSION}" CACHE STRING "Version gaiacpp reports")
+    target_compile_definitions(gaiacpp PRIVATE GAIACPP_VERSION="${GAIACPP_VERSION}")
     target_link_libraries(gaiacpp PRIVATE gaia::gaia_core)
     if(httplib_FOUND)
         target_link_libraries(gaiacpp PRIVATE httplib::httplib)
