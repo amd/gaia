@@ -6,6 +6,7 @@ import { Check, ChevronDown, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
+import { useNotificationStore, selectSessionPermissionPrompt } from '../stores/notificationStore';
 import type { PermissionMode } from '../types';
 import { ref, type MessageKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
@@ -30,6 +31,7 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
     const [confirming, setConfirming] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const anchor = useRef<HTMLButtonElement>(null);
+    const promptWaiting = useNotificationStore((s) => sessionId !== null && selectSessionPermissionPrompt(sessionId)(s) !== null);
 
     useEffect(() => {
         if (!sessionId) {
@@ -56,11 +58,13 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
                 const saved = (await api.setPermissionMode(sessionId, next)).mode;
                 setMode(saved);
                 announcePermissionMode(sessionId, saved);
+                // Keep the menu up so the note about the question already waiting is seen.
+                if (!(saved === 'full_access' && promptWaiting)) setOpen(false);
             } else {
                 setDraftMode(next);
                 setMode(next);
+                setOpen(false);
             }
-            setOpen(false);
         } catch (err) {
             setError(requestErrorText(err));
             // The mode can be saved even though a running relayed agent couldn't be told.
@@ -72,7 +76,7 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
         } finally {
             setConfirming(false);
         }
-    }, [confirming, sessionId, setDraftMode]);
+    }, [confirming, promptWaiting, sessionId, setDraftMode]);
 
     const full = mode === 'full_access';
     const Icon = full ? ShieldAlert : ShieldCheck;
@@ -113,6 +117,9 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
                         {t('env.fullAccessWarn')}{' '}
                         <button type="button" className="link-btn" onClick={() => apply('full_access')}>{t('env.turnOn')}</button>
                     </div>
+                )}
+                {full && promptWaiting && !confirming && (
+                    <div className="popover-message" role="status">{t('perm.fullPendingNote')}</div>
                 )}
                 {error && <div className="popover-message is-error" role="alert">{error}</div>}
             </Popover>
