@@ -218,6 +218,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
+    'GET /skills/featured': { libraries: [{ id: 'pstack', name: 'pstack', url: 'https://github.com/michael-denyer/pstack-claude', description: 'Engineering workflows: design, review, CI fixes, TDD, PR hygiene (MIT)' }] },
     'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
     'GET /speech/model': { downloaded: true, size_gb: 0.3 },

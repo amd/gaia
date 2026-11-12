@@ -8,6 +8,16 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Add skills from a pasted link (`/skills`).** On the stdio transport,
+  `/skills add <link>` lists the skills in a GitHub repository or folder, a
+  skills.sh page or an https `.zip`, with what each one is allowed to do (its
+  declared permissions, in plain words), its audit result, and a security
+  warning; `/skills add <link> confirm` adds exactly the version that was shown,
+  at the `experimental` tier. A `confirm` with no preview earlier in the session
+  shows the preview instead of adding anything, and a link that changed since
+  its preview is refused.
+  Skills that ship code need `--allow-code`. Bare `/skills` lists what is
+  installed.
 - **The terminal UI can reopen a past session.** Over stdio, `--session-kind`
   (with `--history-file`) keeps a listing beside the session's transcript:
   its title, whether it is running, waiting on a permission prompt, done or
