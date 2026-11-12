@@ -176,6 +176,27 @@ export const enMessages = {
     'row.confirmDeleteUnsentAria.other': 'Confirm delete {title} and its {n} unsent messages',
     'row.clickAgainUnsent.one': 'Click again to delete this chat and its {n} unsent message',
     'row.clickAgainUnsent.other': 'Click again to delete this chat and its {n} unsent messages',
+    'row.toSend.one': '{n} to send',
+    'row.toSend.other': '{n} to send',
+    'row.notSent.one': '{n} not sent',
+    'row.notSent.other': '{n} not sent',
+
+    // Messages typed while GAIA answers, above the message box
+    'queue.listAria': 'Messages waiting to send',
+    'queue.sending': 'Adding to the running reply…',
+    'queue.delivered': 'Added to the running reply. GAIA reads it at its next step.',
+    'queue.queued': 'Queued. Sends when this reply ends.',
+    'queue.busyRetry': 'GAIA is still busy in this chat. Trying again in a few seconds.',
+    'queue.sendingNext': 'Sending next.',
+    'queue.steerRefused': "Can't add to this reply; it will send when the reply ends.",
+    'queue.notSent': 'Not sent.',
+    'queue.notSentWhy': 'Not sent. {error}',
+    'queue.sendAgain': 'Send again',
+    'queue.sendAgainAria': 'Send again: {text}',
+    'queue.steer': 'Add to this reply',
+    'queue.steerTitle': 'GAIA reads it at its next step, without starting over. It may not answer it separately.',
+    'queue.remove': 'Remove',
+    'queue.removeAria': 'Remove queued message: {text}',
 
     // New-chat screen
     'newChat.label': 'New chat',

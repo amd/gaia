@@ -4,11 +4,14 @@
 /** A queued message's "can't add to this reply" note holds only while that reply runs. */
 
 import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { useChatStore } from '../../stores/chatStore';
 import { QueuedMessages } from '../QueuedMessages';
-import { STEER_REFUSED_NOTE, type QueuedMessage } from '../../utils/messageQueue';
+import type { QueuedMessage } from '../../utils/messageQueue';
 
-const refused: QueuedMessage = { id: 1, text: 'second', state: 'queued', note: STEER_REFUSED_NOTE };
+const STEER_REFUSED_NOTE = "Can't add to this reply; it will send when the reply ends.";
+
+const refused: QueuedMessage = { id: 1, text: 'second', state: 'queued', refused: true };
 
 function show(items: QueuedMessage[], replying: boolean, busyRetry = false) {
     render(<QueuedMessages items={items} onRemove={() => {}} onRetry={() => {}} replying={replying} busyRetry={busyRetry} />);
@@ -37,8 +40,21 @@ describe('a queued message the running reply refused', () => {
         expect(screen.getByText('Queued. Sends when this reply ends.')).toBeTruthy();
     });
 
-    it('treats an empty note as no note', () => {
-        show([{ id: 3, text: 'fourth', state: 'queued', note: '' }], true);
+    it('treats refused: false as not refused', () => {
+        show([{ id: 3, text: 'fourth', state: 'queued', refused: false }], true);
         expect(screen.getByText('Queued. Sends when this reply ends.')).toBeTruthy();
+    });
+});
+
+describe('the queued-message strip in Arabic (#7629)', () => {
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it('is translated, and the typed text keeps its own direction', () => {
+        useChatStore.setState({ locale: 'ar' });
+        render(<QueuedMessages items={[{ id: 4, text: 'And what if the rate were 5%?', state: 'queued' }]}
+            onRemove={() => {}} onSteer={() => {}} onRetry={() => {}} replying />);
+        expect(screen.getByText(/في قائمة الانتظار/)).toBeTruthy();
+        expect(screen.getByRole('button', { name: /أضفها إلى هذا الرد/ })).toBeTruthy();
+        expect(screen.getByText('And what if the rate were 5%?').getAttribute('dir')).toBe('auto');
     });
 });

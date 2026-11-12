@@ -16,7 +16,6 @@
   "components/MobileAccessModal.tsx": 21,
   "components/ModelChip.tsx": 6,
   "components/PrivateChatButton.tsx": 4,
-  "components/QueuedMessages.tsx": 7,
   "components/RetryWithMenu.tsx": 3,
   "components/SessionDocsBar.tsx": 6,
   "components/SetupScreen.tsx": 2,

@@ -176,6 +176,27 @@ const messages: Messages = {
     'row.confirmDeleteUnsentAria.other': 'تأكيد حذف {title} ورسائلها غير المُرسلة ({n})',
     'row.clickAgainUnsent.one': 'انقر مرة أخرى لحذف هذه المحادثة ورسائلها غير المُرسلة ({n})',
     'row.clickAgainUnsent.other': 'انقر مرة أخرى لحذف هذه المحادثة ورسائلها غير المُرسلة ({n})',
+    'row.toSend.one': 'بانتظار الإرسال ({n})',
+    'row.toSend.other': 'بانتظار الإرسال ({n})',
+    'row.notSent.one': 'لم تُرسل ({n})',
+    'row.notSent.other': 'لم تُرسل ({n})',
+
+    // Messages typed while GAIA answers, above the message box
+    'queue.listAria': 'رسائل بانتظار الإرسال',
+    'queue.sending': 'جارٍ الإضافة إلى الرد الجاري…',
+    'queue.delivered': 'أُضيفت إلى الرد الجاري. سيقرؤها GAIA في خطوته التالية.',
+    'queue.queued': 'في قائمة الانتظار. تُرسل عند انتهاء هذا الرد.',
+    'queue.busyRetry': 'ما زال GAIA مشغولًا في هذه المحادثة. ستُعاد المحاولة خلال ثوانٍ.',
+    'queue.sendingNext': 'تُرسل تاليًا.',
+    'queue.steerRefused': 'تعذّرت الإضافة إلى هذا الرد؛ ستُرسل عند انتهائه.',
+    'queue.notSent': 'لم تُرسل.',
+    'queue.notSentWhy': 'لم تُرسل. {error}',
+    'queue.sendAgain': 'أعد الإرسال',
+    'queue.sendAgainAria': 'أعد الإرسال: {text}',
+    'queue.steer': 'أضفها إلى هذا الرد',
+    'queue.steerTitle': 'سيقرؤها GAIA في خطوته التالية دون أن يبدأ من جديد. قد لا يجيب عنها على حدة.',
+    'queue.remove': 'إزالة',
+    'queue.removeAria': 'إزالة الرسالة المنتظرة: {text}',
 
     // New-chat screen
     'newChat.label': 'محادثة جديدة',
