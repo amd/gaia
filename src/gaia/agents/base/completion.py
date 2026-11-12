@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from gaia.agents.base.tool_outcome import tool_result_dict
-from gaia.config import gaia_home
+from gaia.home import gaia_home
 
 WRITE_TOOLS = frozenset(
     {
