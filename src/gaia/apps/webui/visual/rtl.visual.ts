@@ -2803,6 +2803,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const DECLINED_STEPS = [
+    { type: 'tool_start', tool: 'answer_question_about_image', narration: 'Looking at the image' },
+    { type: 'tool_result', success: false, summary: "Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded" },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'run_python', narration: 'Running Python' },
+    { type: 'tool_result', success: false, status: 'denied', summary: "Tool 'run_python' was denied by the user." },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`steps name the action, and a declined call says so (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, DECLINED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('what colour is the picture?');
+        await page.keyboard.press('Enter');
+        const rows = page.locator('.flow-steps.live .flow-tool');
+        await expect(rows).toHaveCount(3);
+        await expect(rows.nth(1)).toHaveClass(/declined/);
+        if (locale === 'en') await expect(rows.nth(1).locator('.flow-tool-label')).toHaveText('You declined: Running Python');
+        await expect(page.locator('.flow-tool-label').filter({ hasText: /run python|request user input/ })).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `declined-steps-${locale}`);
+    });
+}
+
 const PATH_PROMPT = [{
     type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
     args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },

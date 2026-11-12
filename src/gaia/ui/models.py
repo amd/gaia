@@ -635,6 +635,8 @@ class AgentStepResponse(BaseModel):
     receiptId: Optional[str] = None
     result: Optional[str] = None
     success: Optional[bool] = None
+    # The user said no to this call; a reload must not show it as failed.
+    declined: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
     planNarrations: Optional[List[str]] = None
