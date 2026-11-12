@@ -240,8 +240,15 @@ describe('FileBrowser Index Selected', () => {
         mockedApi.attachDocument.mockRejectedValue(new Error('API 500'));
         await indexNotes();
         await waitFor(() => expect(mockedApi.attachDocument).toHaveBeenCalled());
-        await waitFor(() => expect(screen.queryByText(/Indexing 1 file/)).not.toBeInTheDocument());
+        await waitFor(() => expect(screen.queryByText(/Adding 1 file/)).not.toBeInTheDocument());
         expect(useChatStore.getState().sessions[0].document_ids).toEqual([]);
+    });
+
+    it('says the file was added, not indexed', async () => {
+        mockedApi.attachDocument.mockResolvedValue(undefined as never);
+        await indexNotes();
+        expect(await screen.findByText('Added 1 file')).toBeInTheDocument();
+        expect(screen.queryByText(/indexed/i)).not.toBeInTheDocument();
     });
 });
 

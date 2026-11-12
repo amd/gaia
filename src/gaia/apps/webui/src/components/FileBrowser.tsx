@@ -343,22 +343,22 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         }
 
         setIndexingFiles(new Set(files));
-        setIndexStatus(`Indexing ${files.length} file(s)...`);
+        setIndexStatus(t.plural('fileBrowser.adding', files.length));
 
         try {
             const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList);
 
             if (result.failed > 0) {
-                setIndexStatus(`Done: ${result.docIds.length} indexed, ${result.failed} failed`);
+                setIndexStatus(t('fileBrowser.addedWithFailures', { added: result.docIds.length, failed: result.failed }));
                 setIndexError({
                     filename: `${result.failed} file(s)`,
                     error: result.lastError || 'Indexing failed for some files',
                 });
             } else {
-                const skippedNote = result.unsupported.length > 0
-                    ? ` (${result.unsupported.length} skipped — unsupported type)`
-                    : '';
-                setIndexStatus(`Successfully indexed ${result.docIds.length} file(s)${skippedNote}`);
+                const added = t.plural('fileBrowser.added', result.docIds.length);
+                setIndexStatus(result.unsupported.length > 0
+                    ? `${added} ${t.plural('fileBrowser.skipped', result.unsupported.length)}`
+                    : added);
             }
             if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
             indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
@@ -372,7 +372,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         } finally {
             setIndexingFiles(new Set());
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, t]);
 
     // A second click can land before the re-render that disables the button.
     const askingRef = useRef(false);
@@ -382,7 +382,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
         const files = Array.from(selectedFiles);
         setIndexError(null);
         setIndexingFiles(new Set(files));
-        setIndexStatus(`Indexing ${files.length} file(s) for analysis...`);
+        setIndexStatus(t.plural('fileBrowser.adding', files.length));
 
         try {
             const result = await indexAndAttachFiles(files, entries, currentSessionId, updateSessionInList);
@@ -410,7 +410,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
 
             // Surface partial-failure before closing modal so user knows some files were dropped
             if (result.failed > 0) {
-                setIndexStatus(`Warning: ${result.failed} file(s) failed to index and will be excluded.`);
+                setIndexStatus(t.plural('fileBrowser.someFailed', result.failed));
             }
 
             // Build prompt from files that were actually indexed (not just supported)
@@ -438,7 +438,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
             setIndexingFiles(new Set());
             setIndexStatus(null);
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser, onStartChat]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser, onStartChat, t]);
 
     // Build breadcrumb segments from current path
     const pathSegments = currentPath ? currentPath.replace(/\\/g, '/').split('/').filter(Boolean) : [];
