@@ -15,15 +15,18 @@ interface Props {
     defaultOpen?: boolean;
     /** Holds the section open, e.g. while a search or a download needs its rows seen. */
     forceOpen?: boolean;
+    /** Lets Settings > Setup send the user straight to this section. */
+    targetId?: string;
     children: ReactNode;
 }
 
 /** A collapsible section; its contents stay mounted, so their state survives closing it. */
-export function SettingsDisclosure({ title, titleId, count, hint, defaultOpen = false, forceOpen = false, children }: Props) {
+export function SettingsDisclosure({ title, titleId, count, hint, defaultOpen = false, forceOpen = false, targetId, children }: Props) {
     const [open, setOpen] = useState(defaultOpen);
     return (
         <details
             className="settings-disclosure"
+            data-settings-target={targetId}
             open={open || forceOpen}
             onToggle={(e) => { if (!forceOpen) setOpen(e.currentTarget.open); }}
         >

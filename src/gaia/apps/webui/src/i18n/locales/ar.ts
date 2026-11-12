@@ -994,6 +994,7 @@ const messages: Messages = {
     'chat.dismissError': 'إغلاق الخطأ',
     'chat.dismissExportError': 'إغلاق خطأ التصدير',
     'settings.close': 'إغلاق الإعدادات',
+    'settings.backTo': 'العودة إلى {section}',
     'settings.loading': 'جارٍ التحميل…',
     'settings.section.general': 'عام',
     'settings.section.model': 'النموذج',

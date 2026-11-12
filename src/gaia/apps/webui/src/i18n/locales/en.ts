@@ -986,6 +986,7 @@ export const enMessages = {
     'settings.title': 'Settings',
     'settings.sections': 'Settings sections',
     'settings.close': 'Close settings',
+    'settings.backTo': 'Back to {section}',
     'chat.loadingTools': 'Loading more tools',
     'chat.renameFailed': 'Couldn\'t rename this chat: {error}',
     'chat.privateFailed': 'Couldn\'t change private mode for this chat: {error}',

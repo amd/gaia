@@ -99,6 +99,31 @@
     color: var(--text-primary);
 }
 
+/* "Back to Setup" after a Setup row opened another section. */
+.settings-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-block-end: 8px;
+    padding-block: 2px;
+    padding-inline: 2px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.settings-back:hover {
+    color: var(--text-primary);
+    background: var(--bg-hover);
+}
+
+/* The setting a Setup row pointed at, marked for a moment after landing. */
+.settings-target-hit {
+    scroll-margin-top: 64px;
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+}
+
 /* ── Shared pane building blocks ───────────────────────────────── */
 
 .settings-pane {

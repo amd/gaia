@@ -294,7 +294,7 @@ export function AdvancedSettings() {
 
             <LogsCard />
 
-            <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')}>
+            <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')} targetId="model-server">
                 <ModelServerPanel />
                 <LemonadeServerSection />
             </SettingsDisclosure>

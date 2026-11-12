@@ -1262,6 +1262,27 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`a Setup row lands on its setting, with a way back (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            await p.route('**/api/onboarding/preflight', (route) => route.fulfill({ json: { gpu_name: 'Radeon 8060S', npu_detected: true, ram_gb: 128 } }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const dialog = page.getByRole('dialog');
+        await dialog.locator('[data-section="setup"]').click();
+        await dialog.locator('.settings-setup-row').filter({ hasText: /Context window|نافذة السياق/ }).click();
+        // The setting itself, not the top of the Model tab (#7403).
+        await expect(page.locator('#ctx-size')).toBeFocused();
+        await expect(page.locator('#ctx-size')).toBeInViewport();
+        const back = dialog.locator('.settings-back');
+        await expect(back).toBeVisible();
+        await shot(page, `setup-row-jump-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await back.click();
+        await expect(dialog.locator('[data-section="setup"]')).toHaveAttribute('aria-current', 'page');
+        await expect(back).toHaveCount(0);
+    });
+
     test(`Local only blocks cloud model picker (${locale})`, async ({ page }) => {
         await openModelPage(page, locale, { localOnly: true });
         const cloud = page.getByRole('radio', { name: /Fireworks AI/ });

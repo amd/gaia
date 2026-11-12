@@ -1,11 +1,12 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SetupSettings } from '../SetupSettings';
 import * as api from '../../../services/api';
 import { useModelStore } from '../../../stores/modelStore';
+import { useChatStore } from '../../../stores/chatStore';
 import type { ActiveModel, SetupPlan } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -44,6 +45,16 @@ describe('SetupSettings', () => {
     it('falls back to the planned model before the active model is known', async () => {
         render(<SetupSettings />);
         expect(await screen.findByText('Running Qwen3.6 35B A3B')).toBeTruthy();
+    });
+
+    it('sends each row to the setting it names, not the top of a tab', async () => {
+        render(<SetupSettings />);
+        fireEvent.click(await screen.findByRole('button', { name: /Context window/ }));
+        expect(useChatStore.getState().settingsSection).toBe('model');
+        expect(useChatStore.getState().settingsJump).toEqual({ section: 'model', target: '#ctx-size', from: 'setup' });
+        fireEvent.click(screen.getByRole('button', { name: /GPU memory/ }));
+        expect(useChatStore.getState().settingsJump?.target).toBe('#settings-gpu-title');
+        expect(useChatStore.getState().settingsProvider).toBe('local');
     });
 
     it('counts only the models the plan says are on this PC', async () => {

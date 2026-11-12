@@ -106,12 +106,28 @@ describe('chatStore sidebar destinations', () => {
 
 describe('chatStore settings dialog', () => {
     it('opens on General by default, on a named section, and closes', () => {
+        useChatStore.setState({ lastSettingsSection: 'general' });
         useChatStore.getState().openSettings();
         expect(useChatStore.getState().settingsSection).toBe('general');
         useChatStore.getState().openSettings('permissions');
         expect(useChatStore.getState().settingsSection).toBe('permissions');
         useChatStore.getState().closeSettings();
         expect(useChatStore.getState().settingsSection).toBeNull();
+    });
+
+    it('reopens on the section it was closed on', () => {
+        useChatStore.getState().openSettings('privacy');
+        useChatStore.getState().closeSettings();
+        useChatStore.getState().openSettings();
+        expect(useChatStore.getState().settingsSection).toBe('privacy');
+    });
+
+    it('a jump names its target and where it came from; picking a section clears it', () => {
+        useChatStore.getState().jumpToSetting({ section: 'model', target: '#ctx-size', from: 'setup' });
+        expect(useChatStore.getState().settingsSection).toBe('model');
+        expect(useChatStore.getState().settingsJump).toEqual({ section: 'model', target: '#ctx-size', from: 'setup' });
+        useChatStore.getState().openSettings('general');
+        expect(useChatStore.getState().settingsJump).toBeNull();
     });
 });
 
