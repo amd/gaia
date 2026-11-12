@@ -4,12 +4,14 @@
 Freeze the GAIA core (``gaia.cli:main``) into the one-dir ``gaia`` executable
 the desktop app ships, so a user's PC never installs a Python package.
 
-It holds what ``pip install amd-gaia[ui]`` installs today: the CLI, the Agent UI
-backend (FastAPI, RAG indexing, connectors), the daemon and ``gaia init``. It
-leaves out the flagship agent, which runs as its own hub binary, so ``gaia eval
-agent``, which runs that agent in-process, works only from source.
+It holds what ``pip install amd-gaia[ui,mcp,talk,notify]`` installs: the CLI,
+the Agent UI backend (FastAPI, RAG indexing, connectors), the daemon, ``gaia
+init``, the ``gaia mcp`` servers, ``gaia talk``'s audio I/O and the scheduler's
+Windows notifications. It leaves out the flagship agent, which runs as its own
+hub binary, so ``gaia eval agent``, which runs that agent in-process, works only
+from source.
 
-Usage (from a venv with ``.[ui]`` and pyinstaller installed, after
+Usage (from a venv with those extras and pyinstaller installed, after
 ``npm ci && npm run build`` in ``src/gaia/apps/webui``)::
 
     python installer/core/freeze.py
@@ -72,11 +74,24 @@ PACKAGE_DATA = [
 #: through the daemon. The chat paths relay to them when they can't be imported.
 NOT_SHIPPED = ["gaia_agent"]
 
+#: The amd-gaia extras the freeze environment installs. A frozen app has no pip,
+#: so a command whose extra is missing here can never run for an installer user.
+FREEZE_EXTRAS = ("ui", "mcp", "talk", "notify")
+
 # reportlab: the pdf skills' scripts need it, and no gaia module imports it.
 COLLECT_SUBMODULES = ["uvicorn", "keyring", "pydantic", "reportlab"]
+#: Collected without the subpackages listed. ``mcp.cli`` exits the import when
+#: its optional typer is missing, which kills a plain --collect-submodules.
+FILTERED_SUBMODULES = {"mcp": ("mcp.cli",)}
 COLLECT_ALL = ["faiss"]
 COPY_METADATA = ["amd-gaia", "keyring"]
 HIDDEN_IMPORTS = [tiktoken_bundle.PLUGIN_MODULE]
+if sys.platform == "win32":
+    # plyer picks its platform module by name at runtime.
+    HIDDEN_IMPORTS.append("plyer.platforms.win.notification")
+
+#: Imported only inside functions, so a missing one would still build.
+REQUIRED_MODULES = ["fastapi", "pypdf", "pypdfium2", "sounddevice", "plyer", "mcp"]
 
 # Same as the agent's freeze: GPL code GAIA must not ship, and the ML stack no
 # GAIA path runs in-process.
@@ -102,6 +117,7 @@ EXCLUDES = [
     "scipy",
     "sympy",
     "tkinter",
+    "mcp.cli",
     *GPL_EXCLUDES,
     *NOT_SHIPPED,
 ]
@@ -120,15 +136,15 @@ def _verify_freeze_env() -> None:
     """
     missing = [
         mod
-        for mod in COLLECT_SUBMODULES + COLLECT_ALL + ["fastapi", "pypdf", "pypdfium2"]
+        for mod in COLLECT_SUBMODULES + COLLECT_ALL + REQUIRED_MODULES
         if importlib.util.find_spec(mod) is None
     ]
     if missing:
         raise SystemExit(
             "freeze: refusing to build -- these modules must be in the executable "
             f"but are not installed: {', '.join(missing)}.\n"
-            'Install the core with its UI extras (uv pip install -e ".[ui]" '
-            "pyinstaller) into the freeze environment and re-run."
+            f"Install the core with its extras ({install_command()}) into the "
+            "freeze environment and re-run."
         )
     if not (WEBUI_DIST / "index.html").is_file():
         raise SystemExit(
@@ -141,8 +157,28 @@ def _verify_freeze_env() -> None:
         raise SystemExit(
             f"freeze: `gaia` imports from {origin.parent}, not {SRC / 'gaia'}.\n"
             "The executable would carry another checkout's code. Install this "
-            'checkout (uv pip install -e ".[ui]") into the freeze environment.'
+            f"checkout ({install_command()}) into the freeze environment."
         )
+
+
+def install_command() -> str:
+    """How to set up the freeze environment, as build_core.yml runs it."""
+    return f'uv pip install -e ".[{",".join(FREEZE_EXTRAS)}]" pyinstaller'
+
+
+def filtered_submodules(collect=None) -> list[str]:
+    """:data:`FILTERED_SUBMODULES`, never importing a skipped subpackage."""
+    if collect is None:
+        from PyInstaller.utils.hooks import collect_submodules as collect
+    names = []
+    for package, skipped in FILTERED_SUBMODULES.items():
+        names += collect(
+            package,
+            filter=lambda name, skipped=skipped: not any(
+                name == s or name.startswith(s + ".") for s in skipped
+            ),
+        )
+    return names
 
 
 def gaia_hidden_imports() -> list[str]:
@@ -200,7 +236,8 @@ def build(clean: bool = True) -> Path:
         args += ["--collect-submodules", mod]
     for mod in COLLECT_ALL:
         args += ["--collect-all", mod]
-    for mod in sorted(set(HIDDEN_IMPORTS + gaia_hidden_imports())):
+    hidden = HIDDEN_IMPORTS + filtered_submodules() + gaia_hidden_imports()
+    for mod in sorted(set(hidden)):
         args += ["--hidden-import", mod]
     for distribution in COPY_METADATA:
         args += ["--copy-metadata", distribution]
