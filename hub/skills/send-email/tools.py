@@ -39,7 +39,11 @@ from gaia.agents.tools._email.outgoing import (
     reply_message,
     require_recipient,
 )
-from gaia.agents.tools._email.scopes import OPERATION_DRAFT, OPERATION_SEND
+from gaia.agents.tools._email.scopes import (
+    OPERATION_DRAFT,
+    OPERATION_SEND,
+    WRITE_SCOPES,
+)
 from gaia.agents.tools.connect_card import agent_surface, with_connect_card
 from gaia.agents.tools.email_tools import EMAIL_AGENT_ID, EmailToolsMixin
 from gaia.logger import get_logger
@@ -55,6 +59,9 @@ SEND_TOOLS = frozenset(
 CONFIRMATION_TOOLS = SEND_TOOLS | {"discard_draft", "update_draft"}
 
 _MAX_LIMIT = 100
+
+# What a Connect from a failed send asks for: sending, which needs reading too.
+_SEND_SCOPES = {p: ops[OPERATION_SEND] for p, ops in WRITE_SCOPES.items()}
 
 _PROMPT_INTROS = {
     "discard_draft": "Permanently delete this draft:\n\n",
@@ -116,6 +123,7 @@ def _fail(exc: Any, action: str, **extra: Any) -> str:
             exc,
             agent_id=EMAIL_AGENT_ID,
             surface=agent_surface(current().agent),
+            scopes=_SEND_SCOPES,
         )
     return json.dumps(payload, indent=2)
 
@@ -168,6 +176,7 @@ class _MailPreflight:
                 exc,
                 agent_id=EMAIL_AGENT_ID,
                 surface=agent_surface(call.agent),
+                scopes=_SEND_SCOPES,
             )
         if self._preapproved(mailer) and not a_person_can_answer(
             getattr(mailer, "console", None)
@@ -185,6 +194,7 @@ class _MailPreflight:
                 exc,
                 agent_id=EMAIL_AGENT_ID,
                 surface=agent_surface(call.agent),
+                scopes=_SEND_SCOPES,
             )
         mailer._email_prepared[_call_key(self._tool_name, args)] = message
         return None

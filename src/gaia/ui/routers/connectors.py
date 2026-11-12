@@ -846,6 +846,9 @@ async def configure_connector(
         config["grant_agents"] = _resolve_grant_scopes(
             request, connector_id, list(raw_grant_agents)
         )
+        config["scopes"] = _widen_empty_scopes(
+            list(config.get("scopes") or []), config["grant_agents"]
+        )
     try:
         result = await configure(connector_id, config)
     except KeyError:

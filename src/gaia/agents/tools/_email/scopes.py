@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Which mailbox scope the flagship declares, and which one it requests.
 
-Three different lists, and the differences are the point.
+Four different lists, and the differences are the point.
 
 ``DECLARED_SCOPES`` is the mail half of what a *new consent* asks for. It feeds
 ``REQUIRED_CONNECTORS``, which is what both ``gaia connectors connect
@@ -17,6 +17,11 @@ grant ledger does exact subset matching with no scope implication, so a
 connection made when the flagship only read mail, carrying just
 ``gmail.readonly``, must keep reading without a reconnect. Resolving the request
 scope against the connection reuses what is already there.
+
+``READ_ONLY_SCOPES`` is what the in-chat Connect card asks for when a call
+only reads mail: the narrowest read scope, so asking for the inbox never asks
+for permission to send. Drafting, sending and the calendar ask for their own
+scope when they are first used.
 
 ``WRITE_SCOPES`` is what each write needs, all of it, per operation. Reads and
 writes resolve separately: a read never asks for more than a read needs, and a
@@ -61,6 +66,10 @@ DECLARED_SCOPES: Dict[str, Tuple[str, ...]] = {
 READ_CAPABLE_SCOPES: Dict[str, Tuple[str, ...]] = {
     GOOGLE_CONNECTOR_ID: (SCOPE_GMAIL_READONLY, SCOPE_GMAIL_MODIFY),
     MICROSOFT_CONNECTOR_ID: (SCOPE_MAIL_READ, SCOPE_MAIL_READWRITE),
+}
+
+READ_ONLY_SCOPES: Dict[str, Tuple[str, ...]] = {
+    provider: capable[:1] for provider, capable in READ_CAPABLE_SCOPES.items()
 }
 
 WRITE_SCOPES: Dict[str, Dict[str, Tuple[str, ...]]] = {
@@ -108,6 +117,7 @@ __all__ = [
     "OPERATION_DRAFT",
     "OPERATION_SEND",
     "READ_CAPABLE_SCOPES",
+    "READ_ONLY_SCOPES",
     "SCOPE_GMAIL_COMPOSE",
     "SCOPE_GMAIL_FULL_MAILBOX",
     "SCOPE_GMAIL_MODIFY",

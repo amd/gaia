@@ -9,22 +9,30 @@ backend re-resolution when a connection changes mid-session.
 
 from __future__ import annotations
 
-from typing import Iterable, Tuple
+from typing import Dict, Iterable, Mapping, Optional, Tuple
 
 
 class MailboxError(RuntimeError):
     """A mailbox request failed in a way the caller should surface verbatim.
 
     ``connect`` names the connectors that signing in fixes, and ``reconnect``
-    those of them that are connected already.
+    those of them that are connected already. ``scopes`` maps a connector to
+    the access the failed call needs, when that is more than reading mail.
     """
 
     def __init__(
-        self, *args, connect: Iterable[str] = (), reconnect: Iterable[str] = ()
+        self,
+        *args,
+        connect: Iterable[str] = (),
+        reconnect: Iterable[str] = (),
+        scopes: Optional[Mapping[str, Iterable[str]]] = None,
     ):
         super().__init__(*args)
         self.connect: Tuple[str, ...] = tuple(connect)
         self.reconnect: Tuple[str, ...] = tuple(reconnect)
+        self.scopes: Dict[str, Tuple[str, ...]] = {
+            p: tuple(s) for p, s in (scopes or {}).items()
+        }
 
 
 class MailboxAuthError(MailboxError):

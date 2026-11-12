@@ -50,6 +50,7 @@ from gaia.agents.tools._email.scopes import (
     MICROSOFT_CONNECTOR_ID,
     OPERATION_SEND,
     READ_CAPABLE_SCOPES,
+    READ_ONLY_SCOPES,
     WRITE_SCOPES,
     missing_write_scopes,
     resolve_request_scope,
@@ -357,6 +358,7 @@ def _write_scopes(provider: str, operation: str, app: bool = False) -> Tuple[str
             f"mail left ticked on {name}'s consent screen fixes it.",
             connect=(provider,),
             reconnect=(provider,),
+            scopes={provider: WRITE_SCOPES[provider][operation]},
         )
     if missing:
         union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
@@ -679,7 +681,11 @@ class EmailToolsMixin:
                 payload.update(NOT_EXECUTED)
             payload.update(extra)
             with_connect_card(
-                payload, exc, agent_id=EMAIL_AGENT_ID, surface=agent_surface(mixin)
+                payload,
+                exc,
+                agent_id=EMAIL_AGENT_ID,
+                surface=agent_surface(mixin),
+                scopes=READ_ONLY_SCOPES,
             )
             return json.dumps(payload, indent=2)
 
@@ -1104,6 +1110,7 @@ class EmailToolsMixin:
                         agent_id=EMAIL_AGENT_ID,
                         surface=agent_surface(mixin),
                         field="message",
+                        scopes=READ_ONLY_SCOPES,
                     )
                     payload["message"] += f" See {_EMAIL_DOCS_URL}"
                 elif not payload["connected"]:

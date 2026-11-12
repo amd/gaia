@@ -608,6 +608,31 @@ class TestAuthorizeGrantAgents:
         assert resp.status_code == 200, resp.text
         # The list of ids is resolved to the {id: scopes} map the flow expects.
         assert captured["config"]["grant_agents"] == {"installed:email": self._SCOPES}
+        # Explicit scopes are kept as sent.
+        assert captured["config"]["scopes"] == ["openid"]
+
+    def test_configure_with_no_scopes_asks_for_what_the_granted_agents_declare(
+        self, ui_api_client, monkeypatch
+    ):
+        """Settings' Save & Connect sends no scopes when it grants an agent;
+        sign-in must not fall back to identity only."""
+        captured = {}
+
+        async def fake_configure(connector_id, config):
+            captured["config"] = config
+            return {"configured": True, "flow_id": "f1"}
+
+        monkeypatch.setattr("gaia.ui.routers.connectors.configure", fake_configure)
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
+            "installed:email", "google", self._SCOPES
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/google/configure",
+            json={"config": {"scopes": [], "grant_agents": ["installed:email"]}},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        assert captured["config"]["scopes"] == sorted(self._SCOPES)
 
 
 # ---------------------------------------------------------------------------
@@ -692,6 +717,7 @@ class TestSidecarRegistrationEndToEnd:
                 "microsoft",
                 [
                     "https://graph.microsoft.com/Calendars.ReadWrite",
+                    "https://graph.microsoft.com/Mail.Read",
                     "https://graph.microsoft.com/Mail.ReadWrite",
                     "https://graph.microsoft.com/Mail.Send",
                 ],
@@ -748,6 +774,60 @@ class TestSidecarRegistrationEndToEnd:
         assert kwargs["scopes"] == declared
         assert sorted(kwargs["grant_agents"]["installed:gaia"]) == declared
         assert not any("gmail.modify" in s or "drive" in s for s in kwargs["scopes"])
+
+    @pytest.mark.parametrize(
+        "connector_id, read_scope",
+        [
+            ("google", "https://www.googleapis.com/auth/gmail.readonly"),
+            ("microsoft", "https://graph.microsoft.com/Mail.Read"),
+        ],
+    )
+    def test_the_cards_read_only_request_asks_to_read_and_nothing_more(
+        self, monkeypatch, connector_id, read_scope
+    ):
+        """ "What's in my inbox?" sends the read scope and the flagship: sign-in
+        asks for exactly that, and the flagship is granted it on success."""
+        from starlette.testclient import TestClient
+
+        from gaia.connectors.catalog.google import GOOGLE_SPEC
+        from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
+        from gaia.connectors.registry import ConnectorRegistry
+        from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
+        from gaia.ui.server import create_app
+
+        real = ConnectorRegistry()
+        real.register(GOOGLE_SPEC)
+        real.register(MICROSOFT_SPEC)
+        monkeypatch.setattr("gaia.connectors.registry.REGISTRY", real)
+        monkeypatch.setattr("gaia.ui.routers.connectors.REGISTRY", real)
+        monkeypatch.setattr(
+            "gaia.hub.installer.list_installed",
+            lambda *a, **kw: {
+                "gaia": InstalledAgent(
+                    id="gaia",
+                    version="0.1.0",
+                    language="python",
+                    installed_at="2026-01-01T00:00:00Z",
+                    artifact_kind=ARTIFACT_KIND_BINARY,
+                )
+            },
+        )
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+
+        with TestClient(create_app(db_path=":memory:")) as client:
+            resp = client.post(
+                f"/api/connectors/{connector_id}/authorize",
+                json={"scopes": [read_scope], "grant_agents": ["installed:gaia"]},
+                headers=UI_HEADER,
+            )
+
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        assert kwargs["scopes"] == [read_scope]
+        assert read_scope in kwargs["grant_agents"]["installed:gaia"]
 
     def test_authorize_404s_when_the_bridge_is_not_wired(self, monkeypatch):
         """Sibling with the bridge itself disabled (not just 'not

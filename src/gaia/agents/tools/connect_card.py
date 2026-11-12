@@ -11,7 +11,7 @@ no button, so they get the remedy in words they can act on.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, Mapping, Optional, Tuple
 
 from gaia.agents.base.tool_outcome import tool_result_dict
 
@@ -80,12 +80,18 @@ def connect_note(
 
 
 def connect_card(
-    providers: Iterable[str], *, agent_id: str, reconnect: Iterable[str] = ()
+    providers: Iterable[str],
+    *,
+    agent_id: str,
+    reconnect: Iterable[str] = (),
+    scopes: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> Dict[str, Any]:
     """The card payload offering *providers*, granting *agent_id* on sign-in.
 
     *reconnect* names those connected already, so the card does not read their
-    being connected as the fix.
+    being connected as the fix. *scopes* maps a provider to the access the
+    failed call needs, so sign-in asks for that and no more; a provider it
+    leaves out asks for everything the agent declares.
     """
     names = list(dict.fromkeys(providers))
     if not names:
@@ -100,6 +106,10 @@ def connect_card(
     again = [p for p in names if p in set(reconnect)]
     if again:
         card["reconnect"] = again
+    asked = {p: list(dict.fromkeys((scopes or {}).get(p) or ())) for p in names}
+    asked = {p: s for p, s in asked.items() if s}
+    if asked:
+        card["scopes"] = asked
     return card
 
 
@@ -131,6 +141,7 @@ def with_connect_remedy(
     surface: Optional[str],
     field: str = "error",
     reconnect: Iterable[str] = (),
+    scopes: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> Dict[str, Any]:
     """*payload* with how to connect *providers* added to its ``field``.
 
@@ -144,21 +155,31 @@ def with_connect_remedy(
     payload[field] = f"{payload[field]} {note}" if payload.get(field) else note
     if surface == AGENT_UI:
         payload[CONNECT_CARD_KEY] = connect_card(
-            names, agent_id=agent_id, reconnect=reconnect
+            names, agent_id=agent_id, reconnect=reconnect, scopes=scopes
         )
     return payload
 
 
 def with_connect_card(
-    payload: Dict[str, Any], error: Any, *, agent_id: str, surface: Optional[str]
+    payload: Dict[str, Any],
+    error: Any,
+    *,
+    agent_id: str,
+    surface: Optional[str],
+    scopes: Optional[Mapping[str, Iterable[str]]] = None,
 ) -> Dict[str, Any]:
-    """A failed result, plus the remedy when *error* names connectors to connect."""
+    """A failed result, plus the remedy when *error* names connectors to connect.
+
+    *scopes* is what this kind of call needs; an error that names its own
+    (a write on a read-only connection) overrides it for that provider.
+    """
     return with_connect_remedy(
         payload,
         getattr(error, "connect", ()),
         agent_id=agent_id,
         surface=surface,
         reconnect=getattr(error, "reconnect", ()),
+        scopes={**(scopes or {}), **(getattr(error, "scopes", None) or {})},
     )
 
 
@@ -174,5 +195,14 @@ def connect_card_in(result: Any) -> Optional[Dict[str, Any]]:
     if not all(isinstance(p, str) and p in CONNECT_CARD_PROVIDERS for p in providers):
         return None
     if not isinstance(card.get("agent_id", ""), str):
+        return None
+    scopes = card.get("scopes", {})
+    if not isinstance(scopes, dict) or not all(
+        p in providers
+        and isinstance(asked, list)
+        and asked
+        and all(isinstance(s, str) and s for s in asked)
+        for p, asked in scopes.items()
+    ):
         return None
     return card

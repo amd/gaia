@@ -696,10 +696,16 @@ def test_required_connectors_declare_gmail_read_compose_and_calendar_only():
 
 def test_microsoft_requires_mail_but_only_requests_calendar():
     from gaia.agents.tools._calendar.scopes import SCOPE_GRAPH_CALENDARS_READWRITE
-    from gaia.agents.tools._email.scopes import SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND
+    from gaia.agents.tools._email.scopes import (
+        SCOPE_MAIL_READ,
+        SCOPE_MAIL_READWRITE,
+        SCOPE_MAIL_SEND,
+    )
 
     microsoft = _requirement("microsoft")
+    # Mail.Read is requested so a read-only Connect can ask for it alone.
     assert list(microsoft.scopes) == [
+        SCOPE_MAIL_READ,
         SCOPE_MAIL_READWRITE,
         SCOPE_MAIL_SEND,
         SCOPE_GRAPH_CALENDARS_READWRITE,
@@ -794,6 +800,7 @@ def test_the_callable_entry_point_publishes_the_requirements_to_the_registry():
     assert resolve_declared_scopes(registry, "microsoft", ["installed:gaia"]) == {
         "installed:gaia": [
             "https://graph.microsoft.com/Calendars.ReadWrite",
+            "https://graph.microsoft.com/Mail.Read",
             "https://graph.microsoft.com/Mail.ReadWrite",
             "https://graph.microsoft.com/Mail.Send",
         ]

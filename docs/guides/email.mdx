@@ -192,7 +192,7 @@ The agent could not reach any mailbox. It names each provider's own state, and t
 - *connected, but without permission to read mail* → press **Reconnect** on the card and leave mail access ticked on the consent screen
 - *connected and readable, but GAIA has not been given access to it* → turn GAIA's access on for that account under **Settings › Connectors** (no sign-in needed)
 
-The card's sign-in asks for the same access as the terminal command in [setup](#1-connect-your-mailbox): reading, drafting and sending mail, and your calendar. It does not ask for `gmail.modify` or Google Drive.
+The card's sign-in asks only for what the request needs. Asking about your inbox asks to read mail (`gmail.readonly`, or `Mail.Read` on Outlook) and nothing else; the first draft or send asks for `gmail.compose` (`Mail.ReadWrite` and `Mail.Send`), and the first calendar request for calendar access, each keeping what the account already allows. It never asks for `gmail.modify` or Google Drive. Connecting from **Settings › Connectors**, or with the terminal command in [setup](#1-connect-your-mailbox), asks for all of it at once.
 
 In a terminal the same fixes are `gaia connectors connect <provider> --grant-agent installed:gaia` and `gaia connectors grants grant <provider> installed:gaia --scopes <scope>`.
 
