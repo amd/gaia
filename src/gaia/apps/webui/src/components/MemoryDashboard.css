@@ -1812,6 +1812,12 @@
     flex: 1;
     min-width: 0;
 }
+.mem-about-add .mem-about-when {
+    flex: 0 0 auto;
+}
+.mem-about-edit .mem-about-when {
+    align-self: flex-start;
+}
 .mem-about-group {
     margin-bottom: 22px;
 }
