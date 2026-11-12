@@ -118,7 +118,7 @@ export function LemonadeServerSection() {
                             aria-label={t('settings.server.key')}
                         />
                         <div className="model-btn-group">
-                            <button type="submit" className="btn-model-save" disabled={busy || !url.trim()}>
+                            <button type="submit" className="btn-primary" disabled={busy || !url.trim()}>
                                 {busy ? <><Loader2 size={13} className="btn-spinner" /> {t('settings.server.checking')}</> : t('settings.server.use')}
                             </button>
                         </div>

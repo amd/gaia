@@ -172,7 +172,7 @@ describe('MCP connector configure panel', () => {
             });
             await openTile(row);
             fireEvent.change(screen.getByPlaceholderText('xoxb-…'), { target: { value: 'xapp-1' } });
-            fireEvent.click(document.querySelector('.configure-actions .btn-model-save')!);
+            fireEvent.click(document.querySelector('.configure-actions .btn-primary')!);
             const error = await waitFor(() => {
                 const el = document.querySelector('.configure-error');
                 expect(el).not.toBeNull();
