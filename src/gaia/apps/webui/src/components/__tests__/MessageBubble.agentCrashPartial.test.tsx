@@ -42,6 +42,16 @@ describe('an answer the agent died writing', () => {
         expect(steps).toHaveLength(2);
     });
 
+    it("keeps a tool's error step when a finished answer ends by quoting it", () => {
+        const toolError = 'File not found: C:\\Users\\me\\notes.txt';
+        const steps: AgentStep[] = [
+            { id: 1, type: 'error', label: 'Error', detail: toolError, active: false, success: false, timestamp: 1 },
+            { id: 2, type: 'thinking', label: 'Thinking', detail: 'Tell the user.', active: false, timestamp: 2 },
+        ];
+        expect(dropErrorsEchoedInAnswer(steps, `I could not open your notes. The tool said:\n\n${toolError}`).steps)
+            .toHaveLength(2);
+    });
+
     it('does not call a partial answer an error reply', () => {
         expect(dropErrorsEchoedInAnswer(STEPS, `${ESSAY}\n\n${NOTICE}`).echoed).toBe(false);
         expect(dropErrorsEchoedInAnswer(STEPS, NOTICE).echoed).toBe(true);
