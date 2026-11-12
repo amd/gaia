@@ -833,6 +833,8 @@ export const enMessages = {
     'docs.loadFailed': 'Couldn\'t load your documents: {error}',
     'fileBrowser.selected.one': '{n} item selected',
     'fileBrowser.selected.other': '{n} items selected',
+    'fileBrowser.denied': 'GAIA cannot open the folder "{name}". Check that your account is allowed to read it, then try again.',
+    'fileBrowser.deniedMac': 'GAIA cannot open the folder "{name}". Allow file access for GAIA in System Settings > Privacy & Security > Files & Folders, then try again.',
     'fileBrowser.selectHint': 'Select files to add to your library, or to ask GAIA about',
     'fileBrowser.addToLibrary': 'Add to library',
     'fileBrowser.addToLibraryTitle': 'Add the selected files to your document library, so chats can search them',

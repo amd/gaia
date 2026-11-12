@@ -833,6 +833,8 @@ const messages: Messages = {
     'docs.loadFailed': 'تعذّر تحميل مستنداتك: {error}',
     'fileBrowser.selected.one': 'العناصر المحددة: {n}',
     'fileBrowser.selected.other': 'العناصر المحددة: {n}',
+    'fileBrowser.denied': 'لا يستطيع GAIA فتح المجلد "{name}". تأكد من أن حسابك مخوّل بقراءته ثم حاول مرة أخرى.',
+    'fileBrowser.deniedMac': 'لا يستطيع GAIA فتح المجلد "{name}". اسمح لـ GAIA بالوصول إلى الملفات من إعدادات النظام > الخصوصية والأمان > الملفات والمجلدات، ثم حاول مرة أخرى.',
     'fileBrowser.selectHint': 'حدّد ملفات لإضافتها إلى مكتبتك، أو لتسأل GAIA عنها',
     'fileBrowser.addToLibrary': 'إضافة إلى المكتبة',
     'fileBrowser.addToLibraryTitle': 'أضف الملفات المحددة إلى مكتبة المستندات لتتمكن المحادثات من البحث فيها',

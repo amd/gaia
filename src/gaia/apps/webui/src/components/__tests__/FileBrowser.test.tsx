@@ -433,3 +433,24 @@ describe('FileBrowser dates follow the interface language', () => {
         expect(date).not.toMatch(ENGLISH_MONTH);
     });
 });
+
+describe('unreadable folder', () => {
+    it('clears the previous folder and names the folder that could not be opened', async () => {
+        render(<FileBrowser onStartChat={vi.fn()} />);
+        await screen.findByText('report.pdf');
+
+        mockedApi.browseFiles.mockRejectedValueOnce(
+            Object.assign(new Error('Permission denied for this directory'), { httpStatus: 403 }),
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'docs' }));
+        mockedApi.browseFiles.mockRejectedValueOnce(
+            Object.assign(new Error('Permission denied for this directory'), { httpStatus: 403 }),
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'user' }));
+
+        expect(await screen.findByText(/cannot open the folder "user"/)).toBeTruthy();
+        expect(screen.queryByText('report.pdf')).toBeNull();
+        expect(screen.queryByText('This folder is empty')).toBeNull();
+        expect(screen.getByRole('button', { name: 'user' })).toBeTruthy();
+    });
+});
