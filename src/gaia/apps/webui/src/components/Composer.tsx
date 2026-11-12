@@ -24,6 +24,8 @@ interface ComposerProps {
     stopping?: boolean;
     /** While streaming, Enter still submits: the message is queued for the next turn. */
     queueWhileStreaming?: boolean;
+    /** GAIA is waiting on a question, and Enter sends the text as its answer. */
+    answering?: boolean;
     /** Blocks typing and sending, with the reason shown as the placeholder. */
     disabledReason?: string | null;
     attachments: UseAttachments;
@@ -42,7 +44,7 @@ const MAX_INPUT_HEIGHT = 240;
 export const MAX_MESSAGE_CHARS = 100_000;
 
 export function Composer({
-    value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, disabledReason, attachments,
+    value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, answering = false, disabledReason, attachments,
     placeholder, autoFocus, inputRef, leftControls, rightControls,
 }: ComposerProps) {
     const t = useT();
@@ -184,8 +186,8 @@ export function Composer({
                             className="composer-send"
                             onClick={onSubmit}
                             disabled={!canSend}
-                            aria-label={t('composer.queue')}
-                            title={t('composer.queueTitle')}
+                            aria-label={answering ? t('composer.sendAnswer') : t('composer.queue')}
+                            title={answering ? t('composer.sendAnswerTitle') : t('composer.queueTitle')}
                         >
                             <ArrowUp size={16} />
                         </button>

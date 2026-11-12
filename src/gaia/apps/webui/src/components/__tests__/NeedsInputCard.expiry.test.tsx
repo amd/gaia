@@ -49,7 +49,7 @@ function gone(status: number): Error {
 
 beforeEach(() => {
     vi.clearAllMocks();
-    useChatStore.setState({ liveQuestions: {} });
+    useChatStore.setState({ liveQuestions: {}, questionAnswers: {} });
     mockedApi.respondToInput.mockResolvedValue({ status: 'ok', request_id: 'req-1' });
 });
 
@@ -133,7 +133,7 @@ describe('NeedsInputCard expiry', () => {
         render(<NeedsInputCard data={card} />);
         fireEvent.click(screen.getByRole('button', { name: 'Allow once' }));
         await act(async () => {});
-        expect(screen.getByText('Answered')).toBeInTheDocument();
+        expect(screen.getByText('You answered: Allow once')).toBeInTheDocument();
         expect(useChatStore.getState().liveQuestions['req-1']).toBeUndefined();
     });
 });
@@ -169,6 +169,7 @@ describe('ChatView question lifecycle', () => {
             pendingPrompt: null,
             systemStatus: null,
             liveQuestions: {},
+            questionAnswers: {},
         });
         useNotificationStore.setState({ notifications: [], showPanel: false, typeFilter: null });
     });
@@ -192,6 +193,33 @@ describe('ChatView question lifecycle', () => {
             } as unknown as StreamEvent);
         });
     }
+
+    it('the message box answers a waiting question instead of queueing a new message', async () => {
+        await send();
+        const box = screen.getByLabelText('Message');
+        expect(box).toHaveAttribute('placeholder', "Answer GAIA's question");
+        await act(async () => {
+            fireEvent.change(box, { target: { value: 'allow once' } });
+            fireEvent.keyDown(box, { key: 'Enter' });
+        });
+        expect(mockedApi.respondToInput).toHaveBeenCalledWith(SESSION.id, 'req-1', 'Allow once');
+        expect(box).toHaveValue('');
+        expect(screen.queryByText(/Sends when this reply ends/)).not.toBeInTheDocument();
+        await waitFor(() => expect(screen.getByText('You answered: Allow once')).toBeInTheDocument());
+        expect(box).toHaveAttribute('placeholder', 'Queue your next message');
+    });
+
+    it('a typed answer the server could not take goes back in the box with the reason', async () => {
+        mockedApi.respondToInput.mockRejectedValueOnce(new Error('relay down'));
+        await send();
+        const box = screen.getByLabelText('Message');
+        await act(async () => {
+            fireEvent.change(box, { target: { value: 'maybe later' } });
+            fireEvent.keyDown(box, { key: 'Enter' });
+        });
+        expect(box).toHaveValue('maybe later');
+        expect(screen.getByText("Couldn't send your answer: relay down")).toBeInTheDocument();
+    });
 
     it('a needs_input event opens the question with its deadline', async () => {
         const before = Date.now();
