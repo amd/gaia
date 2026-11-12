@@ -2930,6 +2930,44 @@ Skills are discovered from these roots, highest precedence first:
     - **Code needs consent.** A skill that ships code is refused without `--allow-experimental`, because that code runs in your agent's own process. If the audit returns REVIEW, the skill lands with its code inert until you run `gaia skill promote <name>`.
   </Tab>
 
+  <Tab title="add">
+    ```bash
+    gaia skill add <link> [OPTIONS]
+    ```
+
+    Adds one skill or a whole skills library from a link. Accepted links:
+
+    - a GitHub repository — `https://github.com/<owner>/<repo>` or the `<owner>/<repo>` shorthand — which adds every `SKILL.md` folder in it
+    - a GitHub folder or file — `.../tree/<branch>/<folder>` or `.../blob/<branch>/<folder>/SKILL.md`
+    - a skills.sh page — `https://skills.sh/<owner>/<repo>/<skill>` adds that one skill
+    - any https link to a `.zip`
+    - `pstack` — shorthand for the pstack library
+
+    Adding the same link again updates the skills you added from it to the latest version.
+
+    Before adding, the command lists each skill with its description, its declared permissions in plain words, and its audit findings, then adds exactly that version. If the link changes between the listing and the add, nothing is added.
+
+    | Option | Description |
+    |--------|-------------|
+    | `--list` | Show the skills behind the link, what each may do (its permissions), and their audit results; add nothing |
+    | `--skill NAME` | Add only this skill (repeatable). Default: every skill behind the link |
+    | `--allow-code` | Also add skills that ship code (`tools.py` or `scripts/`) |
+    | `--force` | Replace a same-named skill that came from somewhere else |
+    | `--yes` | Skip the confirmation prompt |
+    | `--json` | Machine-readable output |
+
+    ```bash
+    gaia skill add michael-denyer/pstack-claude --list
+    gaia skill add https://github.com/michael-denyer/pstack-claude --skill deslop --skill babysit
+    ```
+
+    <Warning>
+    A skill from a link is written by someone else, and its instructions steer what GAIA does with your files, shell and accounts. Only add skills from people you trust, and read what they do first.
+    </Warning>
+
+    Each skill goes through the same gate as [`import`](#import): it lands `experimental`, an audit BLOCK is refused, and a skill that ships code is skipped unless you pass `--allow-code`. One refused skill never stops the rest; each refusal is listed with its reason. Private repositories can't be read; clone one and use `gaia skill import <folder>`.
+  </Tab>
+
   <Tab title="export">
     ```bash
     gaia skill export <name> [--output FILE.zip]
@@ -3883,6 +3921,7 @@ gaia-tui status                                # background service + what is in
 | Command | Description |
 |---------|-------------|
 | `gaia-tui` | Launch straight into the flagship agent's chat, behind its readiness gate. |
+| `gaia-tui --resume[=<id>]` | Reopen a past session: bare `--resume` opens the session list (sessions waiting on you first), `--resume=<id>` reopens one directly by id or unique prefix. The id must be attached with `=`, and `--resume` is refused while `GAIA_HISTORY_FILE` is set. Built-in flagship only — see [Reopening a session](/guides/tui#reopening-a-session). |
 | `gaia-tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent by catalog id. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). It exits **0** when the agent answered and nothing reported a failure, **1** on an error or a tool failure nothing recovered, **3** when a confirmation gate held back a destructive action the run cannot approve — nothing broke, and nothing was done — and **130** when Ctrl+C, SIGTERM or SIGHUP stopped it. A stop asks the agent to end the turn and waits up to 10s for it to confirm; a second Ctrl+C quits without waiting. If the agent does not confirm, a local agent's process is killed, and one run by the background service is reported on stderr as possibly still running. |
 | `gaia-tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia-tui run --query` is, `--timeout` included. |
 | `gaia-tui status` | Whether the background service is running, which Lemonade it uses (address, version, the chat model's backend and context window), which sidecars it knows, and what is installed. |

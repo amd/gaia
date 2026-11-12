@@ -1855,6 +1855,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
+	if isSkillsCommand(query) {
+		return m.submitSkillsCommand(query)
+	}
 	if isConnectorsPersonalize(query) {
 		return m.startConnectorsPersonalize(query)
 	}
@@ -1940,6 +1943,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/gateway":
 		return m, func() tea.Msg { return OpenGatewayMsg{} }
+
+	case "/sessions":
+		return m, func() tea.Msg { return OpenSessionsMsg{} }
+
+	case "/sessions all":
+		return m, func() tea.Msg { return OpenSessionsMsg{AllKinds: true} }
 
 	case "/clear":
 		return m.clearConversation()
