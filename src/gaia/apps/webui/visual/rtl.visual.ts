@@ -554,6 +554,46 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const PICTURE = '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800"><rect width="1200" height="800" fill="#6a8fd8"/><circle cx="880" cy="240" r="110" fill="#ffe08a"/></svg>';
+
+async function withSentImages(page: Page): Promise<void> {
+    await page.route('**/api/files/uploads/*', (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml', body: PICTURE }));
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [{
+                    id: 1, session_id: ANSWER_SESSION, role: 'user', created_at: NOW.toISOString(), rag_sources: null,
+                    content: 'ما رأيك؟\n\n![a.png](/api/files/uploads/a1.png)\n![b.png](/api/files/uploads/b2.png)\n![c.png](/api/files/uploads/c3.png)',
+                }],
+                total: 1,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`sent images are small tiles, and the viewer steps the way the page reads (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSentImages);
+        const tiles = page.locator('.image-thumb');
+        await expect(tiles).toHaveCount(3);
+        for (const box of await tiles.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height))) {
+            expect(box).toBeLessThanOrEqual(160);
+        }
+        expect(await audit(page)).toEqual([]);
+        await tiles.first().click();
+        const dialog = page.getByRole('dialog');
+        await expect(dialog).toBeVisible();
+        const prev = await dialog.locator('.image-viewer-prev').boundingBox();
+        const next = await dialog.locator('.image-viewer-next').boundingBox();
+        expect(locale === 'ar' ? prev!.x > next!.x : prev!.x < next!.x, 'previous sits at the start edge').toBe(true);
+        const img = await dialog.locator('.image-viewer-img').boundingBox();
+        expect(img!.x).toBeGreaterThanOrEqual(0);
+        expect(img!.x + img!.width).toBeLessThanOrEqual(1400);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`image-viewer-${locale}.png`) });
+    });
+}
+
 /** A new chat whose empty history is still loading when its first message goes out. */
 async function withSlowNewChat(page: Page): Promise<void> {
     const created = { ...SESSIONS[0], title: 'New chat', message_count: 0 };

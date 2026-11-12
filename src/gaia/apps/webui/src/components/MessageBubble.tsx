@@ -29,6 +29,8 @@ import { useChatStore } from '../stores/chatStore';
 import { useLogsStore } from '../stores/logsStore';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import { dropAnswerDrafts } from '../utils/answerDrafts';
+import { splitUploadedImages } from '../utils/messageImages';
+import { ImageThumbs } from './ImageThumbs';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type FoundPage, type LibraryDoc,
@@ -565,11 +567,15 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     );
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
+    const userParts = useMemo(
+        () => (message.role === 'user' ? splitUploadedImages(message.content) : null),
+        [message.content, message.role],
+    );
     const cleanedContent = useMemo(
-        () => (message.role === 'user'
-            ? message.content
+        () => (userParts
+            ? userParts.text
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
-        [message.content, message.role, isStreaming, cutOff],
+        [message.content, userParts, isStreaming, cutOff],
     );
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
@@ -773,6 +779,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
                         <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
                     )}
+                    {!editing && userParts && <ImageThumbs images={userParts.images} />}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
                             <Square size={9} fill="currentColor" aria-hidden="true" />

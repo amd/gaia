@@ -65,9 +65,9 @@ describe.each([
 
     it('shows the uploaded image and links the file to the backend', async () => {
         const { container, getByText } = bubble(await sentContent());
-        const img = container.querySelector('.md-content img');
+        const img = container.querySelector('.image-thumb img');
         expect(img?.getAttribute('src')).toBe(`${expected}0b9e7a52-1c2d-4e5f-8a9b-0c1d2e3f4a5b.png`);
-        expect(img?.getAttribute('alt')).toBe('sunset.png');
+        expect(container.querySelector('.image-thumb')?.getAttribute('aria-label')).toContain('sunset.png');
         expect(getByText('notes.txt').closest('a')?.getAttribute('href')).toBe(
             `${expected}6f1e2d3c-4b5a-4968-8776-655443322110.txt`,
         );

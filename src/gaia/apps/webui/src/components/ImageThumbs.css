@@ -1,0 +1,42 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.image-thumbs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-block: 8px 0;
+    padding: 0;
+    list-style: none;
+}
+
+/* A square crop: the picture fills the tile, so a wide photo and a tall one line up. */
+.image-thumb {
+    display: block;
+    block-size: 112px;
+    max-inline-size: 100%;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    cursor: zoom-in;
+    transition: box-shadow var(--duration-fast) var(--ease);
+}
+
+.image-thumb:hover {
+    box-shadow: var(--shadow-md);
+}
+
+.image-thumb:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 2px;
+}
+
+.image-thumb img {
+    display: block;
+    inline-size: 112px;
+    block-size: 100%;
+    max-inline-size: 100%;
+    object-fit: cover;
+}

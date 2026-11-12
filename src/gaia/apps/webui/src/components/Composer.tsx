@@ -116,7 +116,7 @@ export function Composer({
                     {attachments.attachments.map((a) => {
                         const Icon = attachmentIcon(a);
                         return (
-                        <li key={a.id} className={`composer-attachment${a.error ? ' has-error' : ''}${a.isMedia ? ' is-media' : ''}`}>
+                        <li key={a.id} title={a.isImage && a.url ? a.name : undefined} className={`composer-attachment${a.error ? ' has-error' : ''}${a.isMedia ? ' is-media' : ''}${a.isImage && a.url ? ' is-image' : ''}`}>
                             {a.isImage && a.url
                                 ? <img src={a.url} alt="" className="composer-attachment-thumb" />
                                 : <Icon size={14} aria-hidden="true" />}

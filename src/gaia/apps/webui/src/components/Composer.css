@@ -184,6 +184,55 @@
     border-radius: var(--radius-xs);
 }
 
+/* A picture is a square tile like the ones in the sent message; its name stays in the tooltip and the remove label. */
+.composer-attachment.is-image {
+    position: relative;
+    display: block;
+    inline-size: 96px;
+    block-size: 96px;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--border-light);
+}
+
+.composer-attachment.is-image .composer-attachment-thumb {
+    display: block;
+    inline-size: 100%;
+    block-size: 100%;
+    border-radius: 0;
+}
+
+.composer-attachment.is-image .composer-attachment-name {
+    display: none;
+}
+
+.composer-attachment.is-image .composer-icon-btn {
+    position: absolute;
+    inset-block-start: 4px;
+    inset-inline-end: 4px;
+    inline-size: 22px;
+    block-size: 22px;
+    border-radius: var(--radius-full);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-sm);
+}
+
+.composer-attachment.is-image .composer-attachment-state {
+    position: absolute;
+    inset-inline: 0;
+    inset-block-end: 0;
+    padding-block: 2px;
+    padding-inline: 6px;
+    background: var(--bg-card);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.composer-attachment.is-image.has-error {
+    border-color: var(--danger);
+}
+
 .composer-attachment-name {
     overflow: hidden;
     text-overflow: ellipsis;
