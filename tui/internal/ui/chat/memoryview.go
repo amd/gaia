@@ -249,7 +249,7 @@ func renderMemorySummary(dump client.MemoryDump, width int) []string {
 	detail := []string{
 		formatMemoryCounts(dump.Stats.ByCategory),
 		formatMemoryContextCounts(dump.Contexts),
-		fmt.Sprintf("%d entities · avg confidence %.2f", dump.Stats.EntityCount, dump.Stats.AvgConfidence),
+		formatMemoryEntityLine(dump.Stats),
 	}
 	for _, d := range detail {
 		if d == "" || d == "—" {
@@ -267,6 +267,14 @@ func renderMemorySummary(dump client.MemoryDump, width int) []string {
 		lines = append(lines, memoryFlagStyle.Render(memoryGutter(width)+truncateToWidth(note, memoryWrapWidth(width))))
 	}
 	return lines
+}
+
+func formatMemoryEntityLine(stats client.MemoryStats) string {
+	line := fmt.Sprintf("%d entities", stats.EntityCount)
+	if stats.AvgConfidence != nil {
+		line += fmt.Sprintf(" · avg confidence %.2f", *stats.AvgConfidence)
+	}
+	return line
 }
 
 func renderMemorySection(group memoryCategoryGroup, totalForCategory, width int) []string {
@@ -387,7 +395,9 @@ func formatMemoryMeta(item client.MemoryItem) string {
 	if item.Context != "" && item.Context != "global" {
 		meta = append(meta, item.Context)
 	}
-	meta = append(meta, fmt.Sprintf("confidence %.2f", item.Confidence))
+	if item.Confidence != nil {
+		meta = append(meta, fmt.Sprintf("confidence %.2f", *item.Confidence))
+	}
 	if u := formatMemoryTimestamp(item.UpdatedAt); u != "" {
 		meta = append(meta, u)
 	}
