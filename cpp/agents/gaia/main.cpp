@@ -320,7 +320,7 @@ struct Settings {
 
 Settings buildSettings(const Cli& cli) {
     gaia::json merged = {{"contextSize", 32768},
-                         {"maxTokens", 8192},
+                         {"maxTokens", 16384},
                          {"temperature", 0.2},
                          {"modelId", "Gemma-4-E4B-it-GGUF"},
                          {"baseUrl", gaia::defaultBaseUrl()},
@@ -443,10 +443,10 @@ gaia::GaiaAgent::Options agentOptions(const Cli& cli, const Settings& settings) 
     o.screenshots = cli.screenshots;
     o.fullAccess = cli.fullAccess;
     std::error_code ec;
-    o.workspaceRoots.push_back(fs::current_path(ec).string());
+    o.workspaceRoots.push_back(fs::current_path(ec).u8string());
     for (const auto& d : cli.allowDirs) {
         if (!fs::is_directory(d, ec)) usageError("--allow-dir " + d + " is not a folder");
-        o.workspaceRoots.push_back(fs::absolute(d).string());
+        o.workspaceRoots.push_back(fs::absolute(d).u8string());  // argv is in the code page
     }
     return o;
 }

@@ -419,6 +419,78 @@ std::string withUsage(const std::string& body, int prompt, int cached, int compl
 }
 }  // namespace
 
+namespace {
+// One SSE event per JSON object, then the terminator.
+std::string sse(std::initializer_list<json> events) {
+    std::string out;
+    for (const auto& event : events) out += "data: " + event.dump() + "\n\n";
+    return out + "data: [DONE]\n\n";
+}
+
+json delta(const json& fields, const json& finish = nullptr) {
+    return {{"choices", json::array({{{"index", 0}, {"delta", fields}, {"finish_reason", finish}}})}};
+}
+}  // namespace
+
+TEST(AgentStreaming, AStreamedAnswerReportsItsTokenUsage) {
+    bench::MockLlmServer mock;
+    mock.enableSseStreaming(true);
+    mock.pushSseStream(sse({delta({{"content", "Hel"}}), delta({{"content", "lo"}}, "stop"),
+                            {{"choices", json::array()},
+                             {"usage", {{"prompt_tokens", 900}, {"completion_tokens", 7}, {"total_tokens", 907}}}}}));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.streaming = true;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+
+    EXPECT_EQ(r["result"], "Hello");
+    EXPECT_EQ(r["usage"]["prompt_tokens"], 900);
+    EXPECT_EQ(r["usage"]["completion_tokens"], 7);
+    // The server only sends usage on a stream when the request asks for it.
+    const json sent = json::parse(mock.receivedBodies().at(0));
+    EXPECT_EQ(sent["stream"], true);
+    EXPECT_EQ(sent["stream_options"]["include_usage"], true);
+}
+
+TEST(AgentStreaming, AReplyCutOffInItsReasoningSaysSoAndIsNotRetried) {
+    bench::MockLlmServer mock;
+    mock.enableSseStreaming(true);
+    mock.pushSseStream(sse({delta({{"reasoning_content", "Let me think about this at length"}}),
+                            delta({{"reasoning_content", " and then some"}}, "length")}));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.streaming = true;
+    cfg.llmRetries = 3;
+    cfg.maxTokens = 4096;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+
+    EXPECT_EQ(r["status"], "error");
+    const std::string why = r["result"].get<std::string>();
+    EXPECT_NE(why.find("reply limit of 4096 tokens"), std::string::npos) << why;
+    EXPECT_NE(why.find("reasoning used the whole limit"), std::string::npos) << why;
+    EXPECT_NE(why.find("--max-tokens"), std::string::npos) << why;
+    EXPECT_EQ(mock.requestCount(), 1) << "sending the same request again would hit the same limit";
+}
+
+TEST(AgentStreaming, AStreamWithReasoningButNoAnswerIsRetried) {
+    bench::MockLlmServer mock;
+    mock.enableSseStreaming(true);
+    mock.pushSseStream(sse({delta({{"reasoning_content", "thinking"}}, "stop")}));
+    mock.pushSseStream(sse({delta({{"content", "Here it is."}}, "stop")}));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.streaming = true;
+    cfg.llmRetries = 1;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("go");
+
+    EXPECT_EQ(r["status"], "success") << r.dump();
+    EXPECT_EQ(r["result"], "Here it is.");
+    EXPECT_EQ(mock.requestCount(), 2);
+}
+
 TEST(AgentTelemetry, ResultCountsCallsCachedTokensAndPeakContext) {
     bench::MockLlmServer mock;
     mock.pushResponse(withUsage(call("c1", "add", R"({"a":5,"b":7})"), 1000, 0, 40));

@@ -37,7 +37,7 @@ GaiaAgent::Options optionsFor(const Workdir& w) {
     GaiaAgent::Options o;
     o.skills = false;
     o.webTools = false;
-    o.workspaceRoots = {w.path.string()};
+    o.workspaceRoots = {w.path.u8string()};
     o.memoryPath = ":memory:";
     return o;
 }
@@ -98,6 +98,107 @@ TEST(GaiaAgentTest, ToolsAreConfinedByDefault) {
     json r = agent.toolRegistry().executeTool("file_read", json{{"path", "/etc/hostname"}});
     EXPECT_EQ(r["status"], "error");
     EXPECT_TRUE(agent.tools().hasTool("query_documents"));
+}
+
+TEST(GaiaAgentTest, AWriteOutsideTheFoldersIsRefusedWithoutAskingTheUser) {
+    Workdir w;
+    Workdir elsewhere;
+    bench::MockLlmServer mock;
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    int asked = 0;
+    agent.toolRegistry().setConfirmCallback([&asked](const std::string&, const json&) {
+        ++asked;
+        return ToolConfirmResult::ALLOW_ONCE;
+    });
+    const fs::path outside = elsewhere.path / "leak.txt";
+    for (const json& call : {json{{"tool", "file_write"}, {"args", {{"path", outside.string()}, {"content", "x"}}}},
+                             json{{"tool", "file_edit"},
+                                  {"args", {{"path", outside.string()}, {"old_string", "a"}, {"new_string", "b"}}}}}) {
+        json r = agent.toolRegistry().executeTool(call["tool"].get<std::string>(), call["args"]);
+        EXPECT_EQ(r["status"], "error") << r.dump();
+        EXPECT_EQ(r.value("executed", true), false) << r.dump();
+    }
+    EXPECT_EQ(asked, 0);
+    EXPECT_FALSE(fs::exists(outside));
+
+    // Inside the folders the user is still asked, and the write happens.
+    json ok = agent.toolRegistry().executeTool(
+        "file_write", json{{"path", (w.path / "out" / "kept.txt").string()}, {"content", "x"}});
+    EXPECT_NE(ok.value("status", ""), "error") << ok.dump();
+    EXPECT_EQ(asked, 1);
+    EXPECT_TRUE(fs::exists(w.path / "out" / "kept.txt"));
+}
+
+TEST(GaiaAgentTest, AFolderWithANonAsciiNameStillMakesAValidRequest) {
+    Workdir parent;
+    const fs::path folder = parent.path / fs::u8path("caf\xC3\xA9 notes");
+    fs::create_directories(folder);
+    const fs::path before = fs::current_path();
+    fs::current_path(folder);
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("ok"));
+    json result;
+    {
+        GaiaAgent::Options o;
+        o.skills = false;
+        o.webTools = false;
+        o.workspaceRoots = {folder.u8string()};
+        o.memoryPath = ":memory:";
+        GaiaAgent agent(cfgFor(mock), o);
+        result = agent.processQuery("hello");
+    }
+    fs::current_path(before);
+
+    EXPECT_EQ(result["result"], "ok") << result.dump(-1, ' ', false, json::error_handler_t::replace);
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    const std::string name = "caf\xC3\xA9 notes";
+    EXPECT_NE(system.find("Working directory: " + folder.u8string()), std::string::npos);
+    EXPECT_NE(system.find(name), std::string::npos);
+}
+
+TEST(GaiaAgentTest, ThePromptListsTheWorkingFolderTwoLevelsDeep) {
+    Workdir w;
+    std::ofstream(w.path / "budget_2025.md") << "x";
+    std::ofstream(w.path / ".secret") << "x";
+    fs::create_directories(w.path / "exports" / "deep");
+    std::ofstream(w.path / "exports" / "orders.csv") << "x";
+    std::ofstream(w.path / "exports" / "deep" / "hidden-by-depth.txt") << "x";
+    const fs::path before = fs::current_path();
+    fs::current_path(w.path);
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("ok"));
+    {
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        agent.processQuery("hello");
+    }
+    fs::current_path(before);
+
+    ASSERT_EQ(mock.receivedBodies().size(), 1u);
+    const std::string system = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    EXPECT_NE(system.find("In it when this turn began: budget_2025.md, exports/, exports/deep/, exports/orders.csv, out/"),
+              std::string::npos)
+        << system.substr(system.find("## Environment"));
+    EXPECT_EQ(system.find(".secret"), std::string::npos);
+    EXPECT_EQ(system.find("hidden-by-depth"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, ALargeFolderIsListedUpToALimit) {
+    Workdir w;
+    for (int i = 0; i < 80; ++i) std::ofstream(w.path / ("file" + std::to_string(100 + i) + ".txt")) << "x";
+    const fs::path before = fs::current_path();
+    fs::current_path(w.path);
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("ok"));
+    {
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        agent.processQuery("hello");
+    }
+    fs::current_path(before);
+
+    const std::string system = json::parse(mock.receivedBodies().at(0))["messages"][0]["content"];
+    EXPECT_NE(system.find("file159.txt, and 21 more"), std::string::npos) << system.substr(system.find("## Environment"));
+    EXPECT_EQ(system.find("file160.txt"), std::string::npos);
 }
 
 TEST(GaiaAgentTest, AnalyzeImageSendsTheImageToTheModel) {

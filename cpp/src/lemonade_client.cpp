@@ -513,6 +513,8 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
 
     json body = requestBody;
     body["stream"] = true;
+    // Without this a streamed reply carries no token counts at all.
+    if (!body.contains("stream_options")) body["stream_options"] = {{"include_usage", true}};
 
     SseParser parser(onToken);
     std::string rawBytes;
