@@ -133,7 +133,11 @@ async function indexAndAttachFiles(
             } else {
                 if (!(await ensureModel('embedding'))) break;
                 const doc = await api.uploadDocumentByPath(filepath);
-                if (doc?.id) {
+                if (doc?.indexing_status === 'failed') {
+                    // Neither attached nor held for the next chat: GAIA can't search it.
+                    failed++;
+                    lastError = doc.last_error ?? '';
+                } else if (doc?.id) {
                     docIds.push(doc.id);
                     succeededFiles.push(filepath);
                 }

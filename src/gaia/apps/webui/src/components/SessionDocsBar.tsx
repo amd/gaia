@@ -64,7 +64,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
     return (
         <div
             className={`doc-context-bar${docsExpanded ? ' doc-context-expanded' : ''}`}
-            aria-label={t.plural('docsBar.aria', readableCount)}
+            aria-label={failedCount > 0 ? label : t.plural('docsBar.aria', readableCount)}
         >
             {failedCount > 0
                 ? <AlertCircle size={12} className="doc-context-icon doc-context-icon-failed" aria-hidden="true" />
