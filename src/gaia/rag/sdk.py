@@ -893,6 +893,7 @@ class RAGSDK:
             max_tokens=self.config.max_tokens,
             show_stats=self.config.show_stats,
             use_local_llm=self.config.use_local_llm,
+            base_url=self.config.base_url,
         )
         self.chat = AgentSDK(chat_config)
 
@@ -1378,7 +1379,7 @@ class RAGSDK:
         from gaia.llm.lemonade_client import MODELS, LemonadeClient
 
         if not hasattr(self, "llm_client") or self.llm_client is None:
-            self.llm_client = LemonadeClient()
+            self.llm_client = LemonadeClient(base_url=self.config.base_url)
 
         # Register + download the embedder before loading. Custom
         # (``user.``) embedders aren't Lemonade built-ins — they need
@@ -3228,7 +3229,7 @@ These positions indicate where to split the text."""
             if self.llm_client is None:
                 from gaia.llm.lemonade_client import LemonadeClient
 
-                self.llm_client = LemonadeClient()
+                self.llm_client = LemonadeClient(base_url=self.config.base_url)
                 self.log.info("✅ Initialized LLM client for intelligent chunking")
 
             return self._fit_chunks_to_embedder(
