@@ -2605,6 +2605,7 @@ const messages: Messages = {
     'schedules.create': 'إنشاء المهمة',
     'schedules.creating': 'جارٍ الإنشاء…',
     'schedules.createFailed': 'تعذّر إنشاء المهمة المجدولة',
+    'schedules.nameTaken': 'توجد مهمة مجدولة بهذا الاسم بالفعل. اختر اسمًا مختلفًا.',
     'schedules.list': 'المهام الحالية',
     'schedules.dismissError': 'إغلاق رسالة الخطأ',
     'schedules.loading': 'جارٍ تحميل المهام المجدولة…',

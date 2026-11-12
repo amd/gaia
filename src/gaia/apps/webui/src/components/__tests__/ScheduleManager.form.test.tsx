@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIRM_DELETE_MS, ScheduleManager } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
-import { parseScheduleInput } from '../../services/api';
+import { ApiError, parseScheduleInput } from '../../services/api';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
@@ -78,6 +78,31 @@ describe('New schedule form', () => {
         expect(field).toHaveAccessibleDescription(
             "GAIA didn't understand that schedule. 25:00 isn't a time — use 0:00–23:59.",
         );
+    });
+});
+
+describe('Reusing a schedule name', () => {
+    it('marks the Name field with a plain message instead of the server line', async () => {
+        const createSchedule = vi.fn(async () => {
+            throw Object.assign(new ApiError('x', 409, "Task with name 'Morning brief' already exists", null), {
+                httpStatus: 409,
+            });
+        });
+        useScheduleStore.setState({ createSchedule });
+        render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
+        fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every day' } });
+        fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Morning brief' } });
+        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Hello' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Create Schedule' }));
+
+        const name = screen.getByLabelText('Name');
+        expect(await screen.findByText('A schedule with this name already exists. Choose a different name.')).toBeInTheDocument();
+        expect(screen.queryByText(/Task with name/)).not.toBeInTheDocument();
+        expect(name).toHaveAttribute('aria-invalid', 'true');
+
+        fireEvent.change(name, { target: { value: 'Morning brief 2' } });
+        expect(name).toHaveAttribute('aria-invalid', 'false');
     });
 });
 

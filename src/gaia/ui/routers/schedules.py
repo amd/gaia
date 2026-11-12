@@ -12,7 +12,7 @@ from typing import List, Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from ..scheduler import Scheduler
+from ..scheduler import DuplicateScheduleName, Scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +198,8 @@ async def create_schedule(
             tz=request.timezone,
         )
         return task
+    except DuplicateScheduleName as e:
+        raise HTTPException(status_code=409, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:

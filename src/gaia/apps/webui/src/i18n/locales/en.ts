@@ -2604,6 +2604,7 @@ export const enMessages = {
     'schedules.create': 'Create Schedule',
     'schedules.creating': 'Creating...',
     'schedules.createFailed': 'Failed to create schedule',
+    'schedules.nameTaken': 'A schedule with this name already exists. Choose a different name.',
     'schedules.list': 'Active schedules',
     'schedules.dismissError': 'Dismiss error',
     'schedules.loading': 'Loading schedules...',
