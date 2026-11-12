@@ -367,6 +367,7 @@ export function ModelSettings() {
                     {provider.remote && !offline(provider) && !blocked(provider) && (
                         <form
                             className="settings-field"
+                            data-settings-target="cloud-key"
                             onSubmit={(e) => { e.preventDefault(); void connect(); }}
                         >
                             <div className="settings-row settings-row-between">
@@ -511,7 +512,7 @@ export function ModelSettings() {
                             {local ? (
                                 <>
                                     {onThisPc.length > 0 && (
-                                        <SettingsDisclosure title={t('settings.model.groupDownloaded')} count={onThisPc.length} defaultOpen forceOpen={searching}>
+                                        <SettingsDisclosure title={t('settings.model.groupDownloaded')} count={onThisPc.length} defaultOpen forceOpen={searching} targetId="models-on-pc">
                                             <ul className="model-list">{onThisPc.map(renderRow)}</ul>
                                         </SettingsDisclosure>
                                     )}
