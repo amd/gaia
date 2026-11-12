@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageBubble, RenderedContent } from '../MessageBubble';
 import { AgentActivity } from '../AgentActivity';
 import { envelopeNote, parseTruncationEnvelope } from '../LongContent';
+import { useChatStore } from '../../stores/chatStore';
 import type { AgentStep, Message } from '../../types';
 
 vi.mock('../../services/api');
@@ -151,6 +152,20 @@ describe('long code blocks', () => {
 
         expect(block).not.toHaveClass('is-collapsed');
         expect(screen.getByRole('button', { name: 'Collapse' })).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('labels the toggle in Arabic, not English', () => {
+        useChatStore.setState({ locale: 'ar' });
+        try {
+            render(<MessageBubble message={answer(fence(44))} />);
+            const toggle = screen.getByRole('button', { name: /توسيع/ });
+            expect(toggle.textContent).toContain('أسطر');
+            expect(toggle.textContent).not.toMatch(/lines/);
+            fireEvent.click(toggle);
+            expect(screen.getByRole('button', { name: /طيّ/ })).toHaveAttribute('aria-expanded', 'true');
+        } finally {
+            useChatStore.setState({ locale: 'en' });
+        }
     });
 
     it('leaves a 25-line block alone', () => {

@@ -5,6 +5,8 @@
 
 import React, { useId, useState } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
+import { pluralKey } from '../i18n/registry';
+import { useT, type Translate } from '../i18n/useT';
 import './LongContent.css';
 
 /** A user message is collapsed past this many lines… */
@@ -17,6 +19,10 @@ export const CODE_PREVIEW_LINES = 20;
 /** A step output is capped past this many lines or characters. */
 export const STEP_COLLAPSE_LINES = 25;
 export const STEP_COLLAPSE_CHARS = 2500;
+
+export function lineCount(t: Translate, lines: number): string {
+    return t.bare(pluralKey('size.lines', lines), { n: lines.toLocaleString('en-US') });
+}
 
 export function countLines(text: string): number {
     if (!text) return 0;
@@ -49,10 +55,10 @@ export function messageExcerpt(text: string): { head: string; tail: string; hidd
 }
 
 /** "700 lines", or "60,000 characters" when the length is in a few very long lines. */
-export function sizeLabel(text: string, lineThreshold = USER_COLLAPSE_LINES): string {
+export function sizeLabel(t: Translate, text: string, lineThreshold = USER_COLLAPSE_LINES): string {
     const lines = countLines(text);
-    if (lines > lineThreshold) return `${lines.toLocaleString('en-US')} lines`;
-    return `${text.length.toLocaleString('en-US')} characters`;
+    if (lines > lineThreshold) return lineCount(t, lines);
+    return t.bare(pluralKey('size.characters', text.length), { n: text.length.toLocaleString('en-US') });
 }
 
 interface ExpandToggleProps {
@@ -160,6 +166,7 @@ export function envelopeNote(env: TruncationEnvelope): string {
  * in a command's output buries the output.
  */
 export function StepResult({ text, renderShort }: { text: string; renderShort: (text: string) => React.ReactNode }) {
+    const t = useT();
     const [expanded, setExpanded] = useState(false);
     const bodyId = useId();
     const envelope = parseTruncationEnvelope(text);
@@ -181,8 +188,8 @@ export function StepResult({ text, renderShort }: { text: string; renderShort: (
                     expanded={expanded}
                     onToggle={() => setExpanded((v) => !v)}
                     controls={bodyId}
-                    collapsedLabel={`Expand (${sizeLabel(shown, STEP_COLLAPSE_LINES)})`}
-                    expandedLabel="Collapse"
+                    collapsedLabel={t('code.expand', { size: sizeLabel(t, shown, STEP_COLLAPSE_LINES) })}
+                    expandedLabel={t('code.collapse')}
                     className="step-expand-toggle"
                 />
             )}
