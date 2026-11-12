@@ -98,6 +98,11 @@ without leaving the terminal.
 If `gaia-agent` itself is missing, the gate stops there and points you at the
 installer — there is no in-TUI download for the agent binary.
 
+When the native agent, `gaiacpp`, is installed too, the TUI runs it instead and
+the header shows `(gaiacpp)`. `GAIA_TUI_AGENT=gaia-agent` (or `gaiacpp`, or a
+path) picks one; see the
+[developer manual](https://amd-gaia.ai/docs/reference/tui-dev#which-agent-program-runs).
+
 Colours adapt to your terminal automatically. Some terminals never answer that
 query (SSH, tmux, a CI log) — if the screen comes out hard to read, force it:
 

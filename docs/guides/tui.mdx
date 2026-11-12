@@ -1002,7 +1002,35 @@ The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
 scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,
 under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
 through the background service instead, it doesn't keep them yet: `/sessions`
-and `--resume` say so rather than showing an empty list.
+and `--resume` say so rather than showing an empty list. The native agent, `gaiacpp`, doesn't keep sessions yet either: `--resume` with it stops and names the Python agent to use instead.
+
+## Which agent program answers
+
+GAIA's agent comes as two programs: `gaiacpp`, the native one, and `gaia-agent`,
+the Python one. The installers ship `gaia-agent`. When `gaiacpp` is also on the
+machine (on your PATH, next to `gaia-tui`, or in `~/.gaia/agents/gaia`), the
+terminal UI runs it instead, and the header says so:
+
+```
+ GAIA  │ agent gaia v0.25.4 (gaiacpp) │ Gemma-4-E4B-it-GGUF
+```
+
+Without `(gaiacpp)` the Python agent is answering. To pick one yourself, set
+`GAIA_TUI_AGENT` to `gaiacpp`, `gaia-agent`, or the path of either, or pass the
+same value to `--agent-program`:
+
+```bash
+GAIA_TUI_AGENT=gaia-agent gaia-tui
+```
+
+If the one you named is not installed, `gaia-tui` stops and lists where it
+looked; it does not start the other one.
+
+The native agent has no Claude provider. `--use-claude` is refused at launch
+with it, and `/model` with a Claude model is refused in the chat, leaving the
+session on its current model. Use `/provider` to pick a model on this PC or a
+cloud provider that Lemonade offers, or run the Python agent for Claude. The
+developer manual has the [full comparison](/reference/tui-dev#which-agent-program-runs).
 
 ## Running another agent
 
