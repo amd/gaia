@@ -20,6 +20,7 @@ export const SHORTCUTS: ReadonlyArray<{ label: MessageKey; keys: string }> = [
     { label: 'shortcuts.sheet', keys: 'Mod+/' },
     { label: 'shortcuts.send', keys: 'Enter' },
     { label: 'shortcuts.newLine', keys: 'Shift+Enter' },
+    { label: 'shortcuts.editLast', keys: '↑' },
     { label: 'shortcuts.stop', keys: 'Esc' },
 ];
 

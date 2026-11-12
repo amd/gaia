@@ -328,9 +328,13 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const [showAutomated, setShowAutomated] = useState(readShowAutomated);
     const phone = useMediaQuery('(max-width: 768px)');
     const searchRef = useRef<HTMLInputElement>(null);
+    // What had focus before search took it, so Esc can give it back.
+    const beforeSearch = useRef<HTMLElement | null>(null);
 
     useEffect(() => {
         const focusSearch = () => {
+            const active = document.activeElement;
+            if (active instanceof HTMLElement && active !== searchRef.current) beforeSearch.current = active;
             if (collapsed) toggleCollapsed();
             requestAnimationFrame(() => searchRef.current?.focus());
         };
@@ -482,7 +486,11 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
         if (e.key === 'Escape') {
             e.preventDefault();
             setQuery('');
-            searchRef.current?.blur();
+            // Back to where typing was, as closing a dialog does; the message box when nothing had focus.
+            const back = beforeSearch.current;
+            beforeSearch.current = null;
+            const to = back?.isConnected && back !== document.body ? back : document.querySelector<HTMLElement>('.composer-input');
+            if (to) to.focus(); else searchRef.current?.blur();
             return;
         }
         if (!q || results.length === 0 || e.nativeEvent.isComposing) return;
@@ -565,6 +573,7 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
                             onKeyDown={onSearchKey}
+                            onFocus={(e) => { if (e.relatedTarget instanceof HTMLElement) beforeSearch.current = e.relatedTarget; }}
                             {...CLAIMS_ESCAPE}
                             placeholder={t('sidebar.search')}
                             aria-label={t.hint(t('sidebar.search'), formatShortcut('Mod+K'))}

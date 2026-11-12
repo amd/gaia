@@ -260,6 +260,7 @@ const messages: Messages = {
     'shortcuts.sheet': 'قائمة الاختصارات هذه',
     'shortcuts.send': 'إرسال الرسالة',
     'shortcuts.newLine': 'سطر جديد في الرسالة',
+    'shortcuts.editLast': 'تعديل رسالتك الأخيرة، من مربع رسالة فارغ',
     'shortcuts.stop': 'إيقاف الإجابة',
     'composer.send': 'إرسال',
     'composer.answerQuestion': 'أجب عن سؤال GAIA',

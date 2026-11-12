@@ -155,6 +155,24 @@ describe('Sidebar chat search', () => {
         expect(within(list()).getByRole('button', { name: 'Fix the build' })).toBeInTheDocument();
     });
 
+    it('Escape gives focus back to the message box the shortcut took it from (#7709)', async () => {
+        render(<><textarea className="composer-input" aria-label="Message" /><Sidebar onNewChat={vi.fn()} /></>);
+        const box = screen.getByLabelText('Message');
+        box.focus();
+        vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => { cb(0); return 0; });
+        act(() => { window.dispatchEvent(new CustomEvent('gaia:focus-search')); });
+        expect(searchbox()).toHaveFocus();
+        fireEvent.keyDown(searchbox(), { key: 'Escape' });
+        expect(box).toHaveFocus();
+    });
+
+    it('Escape goes to the message box when nothing had focus before the search', async () => {
+        render(<><textarea className="composer-input" aria-label="Message" /><Sidebar onNewChat={vi.fn()} /></>);
+        searchbox().focus();
+        fireEvent.keyDown(searchbox(), { key: 'Escape' });
+        expect(screen.getByLabelText('Message')).toHaveFocus();
+    });
+
     it('says when nothing matches, only once the backend has answered', async () => {
         render(<Sidebar onNewChat={vi.fn()} />);
         await type('zebra');

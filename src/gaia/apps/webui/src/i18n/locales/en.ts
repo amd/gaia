@@ -260,6 +260,7 @@ export const enMessages = {
     'shortcuts.sheet': 'This list of shortcuts',
     'shortcuts.send': 'Send the message',
     'shortcuts.newLine': 'New line in the message',
+    'shortcuts.editLast': 'Edit your last message, from an empty message box',
     'shortcuts.stop': 'Stop the answer',
     'composer.send': 'Send',
     'composer.answerQuestion': "Answer GAIA's question",

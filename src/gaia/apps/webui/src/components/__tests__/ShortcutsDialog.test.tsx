@@ -14,6 +14,8 @@ describe('ShortcutsDialog', () => {
         expect(dialog).toHaveTextContent('Search chats');
         expect(dialog).toHaveTextContent('Stop the answer');
         expect(dialog).toHaveTextContent('Shift+Enter');
+        // Up-arrow works in an empty message box, so the list has to say so (#7709).
+        expect(dialog).toHaveTextContent('Edit your last message');
     });
 
     it('closes on Escape and on its close button', () => {
