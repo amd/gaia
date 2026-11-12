@@ -622,6 +622,18 @@ def test_a_relayed_download_refused_before_it_ran_is_not_a_failed_lookup():
     assert summary["live_data"] == {"attempted": 0, "failed": 0}
 
 
+@pytest.mark.parametrize("executed", [None, True, "false", 0])
+def test_a_relayed_download_that_ran_and_failed_is_still_a_failed_lookup(executed):
+    """Only a literal ``executed: False`` marks a call as refused before it ran."""
+    result = {"status": "error", "error": "HTTP 404 from example.com"}
+    if executed is not None:
+        result["executed"] = executed
+    summary = _relayed_summary(
+        "download_file", {"url": "https://example.com/missing.pdf"}, result
+    )
+    assert summary["live_data"] == {"attempted": 1, "failed": 1}
+
+
 # ── automatic memory writes ────────────────────────────────────────────────
 
 
