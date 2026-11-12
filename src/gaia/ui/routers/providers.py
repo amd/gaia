@@ -922,6 +922,7 @@ def reset_restore_state() -> None:
     with _restore_lock:
         _restore_result = None
         _key_settle_started.clear()
+        _pending_context_reload.clear()
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────
@@ -1740,15 +1741,57 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
             reload = {"started": False, "reason": "already_loaded"}
         elif _server_owner(_base_url()) != "gaia":
             reload = {"started": False, "reason": "not_gaias_server"}
-        elif busy_reason == "warm_up":
-            reload = {"started": False, "reason": "warm_up"}
-        elif busy_reason == "request":
-            reload = {"started": False, "reason": "busy"}
+        elif busy_reason in ("warm_up", "request"):
+            # Applied once the model is free: nothing else would shrink a window.
+            _pending_context_reload.add(model_id)
+            reload = {
+                "started": False,
+                "reason": "warm_up" if busy_reason == "warm_up" else "busy",
+            }
         elif _start_reload(model_id, server_up=True):
             reload = {"started": True, "reason": None}
         else:
             reload = {"started": False, "reason": "restarting"}
     return {**view, "reload": reload}
+
+
+#: Models whose chosen context size waits for the model to stop being busy.
+_pending_context_reload: set = set()
+
+
+def apply_pending_context_reload() -> List[str]:
+    """Reload each model whose context size was chosen while it was busy.
+
+    Called when a chat turn or a warm-up ends. A model that is busy again, or
+    a reload already running, keeps waiting. Returns the models reloaded.
+
+    Raises:
+        ProviderError: Lemonade could not be read; the models keep waiting.
+    """
+    if not _pending_context_reload:
+        return []
+    from .._chat_helpers import _active_sse_handlers
+
+    if _active_sse_handlers or _warming_up():
+        return []
+    health = _read_health()
+    if _server_owner(_base_url()) != "gaia":
+        _pending_context_reload.clear()
+        return []
+    started = []
+    for model_id in sorted(_pending_context_reload):
+        view = _context_view(model_id)
+        wanted = view["chosen"] or view["automatic"]
+        if not view["loaded_ctx"] or view["loaded_ctx"] == wanted:
+            _pending_context_reload.discard(model_id)
+            continue
+        if _busy_reason(_chat_entry(health, model_id), False) is not None:
+            continue
+        if not _start_reload(model_id, server_up=True):
+            break
+        _pending_context_reload.discard(model_id)
+        started.append(model_id)
+    return started
 
 
 # ── Models the user adds from a Hugging Face link ─────────────────────────

@@ -150,6 +150,7 @@ class PrefixWarmer:
             again, self._again = self._again, None
         if again is not None:
             self.request(again, fresh=True)
+        _model_now_idle()
 
     def turn_ended(self) -> bool:
         """Run the fresh request a chat turn held back. Returns whether it started."""
@@ -505,6 +506,21 @@ def turn_ended() -> None:
     """A chat turn finished: load a model picked while it ran."""
     if _warmer is not None:
         _warmer.turn_ended()
+    _model_now_idle()
+
+
+def _model_now_idle() -> None:
+    """Apply a context size chosen while the model was busy."""
+    from gaia.ui.routers.providers import apply_pending_context_reload
+
+    try:
+        apply_pending_context_reload()
+    except Exception as exc:  # noqa: BLE001 - must not end a turn's cleanup
+        logger.warning(
+            "Could not apply the context size chosen while the model was busy: "
+            "%s. It applies the next time the model loads.",
+            exc,
+        )
 
 
 def _set_phase(phase: str) -> None:

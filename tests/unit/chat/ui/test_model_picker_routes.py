@@ -283,6 +283,24 @@ def test_a_size_change_never_reloads_mid_reply(client, lemonade, jobs):
     assert jobs == []
 
 
+def test_a_size_chosen_mid_reply_applies_once_the_reply_ends(client, lemonade, jobs):
+    """A smaller window was otherwise never applied: turns only reload to grow."""
+    lemonade.loaded = [
+        {**_entry(LARGE_DEFAULT_MODEL_NAME, ctx=262144), "is_busy": True}
+    ]
+    client.put(
+        "/api/providers/local/context",
+        json={"model": LARGE_DEFAULT_MODEL_NAME, "ctx_size": 131072},
+    )
+    assert providers.apply_pending_context_reload() == [], "still answering"
+
+    lemonade.loaded = [_entry(LARGE_DEFAULT_MODEL_NAME, ctx=262144)]
+    assert providers.apply_pending_context_reload() == [LARGE_DEFAULT_MODEL_NAME]
+    _join_restart()
+    assert jobs == [(LARGE_DEFAULT_MODEL_NAME, True)]
+    assert providers.apply_pending_context_reload() == [], "applied once"
+
+
 def test_a_size_change_waits_for_the_new_chat_warm_up(
     client, lemonade, jobs, monkeypatch
 ):

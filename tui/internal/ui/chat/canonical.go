@@ -280,7 +280,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		content = StripVerificationScope(content)
 		m.buffer = ""
-		m.confirmRelayedSwitch()
+		// A stopped turn never answered on the new model; the next reply saves it.
+		if !m.cancelPending {
+			m.confirmRelayedSwitch()
+		}
 		if m.awaitingModelSwitch && m.switchTarget != "" && sameModelID(m.switchedTo.model, m.switchTarget) {
 			m.rememberModel(m.switchedTo)
 			if m.startup.inFlight && sameModelID(m.switchTarget, m.startup.model) {

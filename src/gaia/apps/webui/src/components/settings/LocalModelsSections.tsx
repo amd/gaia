@@ -137,7 +137,9 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
         setBusy(true);
         try {
             let latest = plan;
+            let defaultChanged = false;
             if (selection.defaultChat && selection.defaultChat !== latest.chat_model.id) {
+                defaultChanged = true;
                 try {
                     latest = await api.chooseSetupChatModel(selection.defaultChat, acknowledgeNoFit || noFitAcked);
                 } catch (err) {
@@ -155,8 +157,13 @@ export function LocalModelsSections({ downloadsSlot }: { downloadsSlot?: HTMLEle
             const ids = pendingDownloads(catalogOf(latest), selection).map((e) => e.id).filter((id) => progress[id]?.state !== 'downloading');
             setPlan(latest);
             setSelection({ ...selection, defaultChat: latest.chat_model.id });
-            // "In use" and the sidebar read the model store; refresh it now, not on reload.
-            void useModelStore.getState().refresh();
+            // The last model picked outranks the default, so a new default that is
+            // on this PC is picked too; otherwise "In use" would never change.
+            if (defaultChanged && latest.chat_model.downloaded) {
+                await useModelStore.getState().select(latest.chat_model.id);
+            } else {
+                void useModelStore.getState().refresh();
+            }
             if (ids.length) await enqueue(ids, { acknowledgeLowDisk: true });
             setNotice({ ok: true, text: t('settings.models.applied') });
         } catch (err) {

@@ -200,9 +200,10 @@ describe('the download chip in the app chrome', () => {
 });
 
 describe('Settings > default chat model', () => {
-    it('refreshes "In use" and the sidebar right after the change, not on reload', async () => {
+    it('makes a new default that is on this PC the model in use', async () => {
         const refresh = vi.fn().mockResolvedValue(undefined);
-        useModelStore.setState({ refresh });
+        const select = vi.fn().mockResolvedValue(undefined);
+        useModelStore.setState({ refresh, select });
         mocked.chooseSetupChatModel.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), GPT_OSS], {
             chat_model: { id: QWEN.id, user_set: true, size_gb: 0, downloaded: true },
         }));
@@ -213,7 +214,24 @@ describe('Settings > default chat model', () => {
         fireEvent.change(await screen.findByRole('combobox', { name: 'Default chat model' }), { target: { value: QWEN.id } });
         fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
         await waitFor(() => expect(mocked.chooseSetupChatModel).toHaveBeenCalledWith(QWEN.id, false));
+        await waitFor(() => expect(select).toHaveBeenCalledWith(QWEN.id));
+    });
+
+    it('only refreshes when the new default still has to download', async () => {
+        const refresh = vi.fn().mockResolvedValue(undefined);
+        const select = vi.fn().mockResolvedValue(undefined);
+        useModelStore.setState({ refresh, select });
+        mocked.chooseSetupChatModel.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), GPT_OSS], {
+            chat_model: { id: QWEN.id, user_set: true, size_gb: 0, downloaded: false },
+        }));
+        mocked.getSetupPlan.mockResolvedValue(plan([on(QWEN), { ...GEMMA, skipped: true, selected: false }, on(EMBED), on(GPT_OSS)], {
+            chat_model: { id: GPT_OSS.id, user_set: true, size_gb: 0, downloaded: true },
+        }));
+        render(<LocalModelsSections />);
+        fireEvent.change(await screen.findByRole('combobox', { name: 'Default chat model' }), { target: { value: QWEN.id } });
+        fireEvent.click(screen.getByRole('button', { name: /^Apply/ }));
         await waitFor(() => expect(refresh).toHaveBeenCalled());
+        expect(select).not.toHaveBeenCalled();
     });
 });
 
