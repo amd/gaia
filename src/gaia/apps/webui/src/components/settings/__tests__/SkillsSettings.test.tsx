@@ -91,6 +91,30 @@ describe('SkillsSettings', () => {
         expect(within(imported).queryByText('web-research')).not.toBeInTheDocument();
     });
 
+    it('counts only the matching skills in each group while searching', async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [
+                skill('image-gen', 'Make pictures', null, 'agent-bundled'),
+                skill('web-research', 'Research', null, 'agent-bundled'),
+                skill('summarize', 'Summarize', null, 'agent-bundled'),
+                skill('coding', 'Code', null, 'agent-bundled'),
+                skill('old-helper', 'Imported', null, 'claude-import'),
+                skill('image-resize', 'Resize images', null, 'claude-import'),
+                skill('pdf-tools', 'PDFs', null, 'claude-import'),
+            ],
+            invalid: {},
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        const countOf = (title: string) =>
+            screen.getByText(title).closest('summary')!.querySelector('.settings-disclosure-count')!.textContent;
+        await screen.findByRole('region', { name: 'Built into GAIA' });
+        expect(countOf('Built into GAIA')).toBe('4');
+        expect(countOf('From Claude Code')).toBe('3');
+        fireEvent.change(screen.getByRole('searchbox', { name: 'Search skills' }), { target: { value: 'image' } });
+        expect(countOf('Built into GAIA')).toBe('1');
+        expect(countOf('From Claude Code')).toBe('1');
+    });
+
     it('shows every skill, flat, when one comes from a source it has no group for', async () => {
         mockedApi.listSkills.mockResolvedValue({
             skills: [

@@ -93,10 +93,9 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
             {skills && skills.length === 0 && <p className="settings-hint">{t('settings.skills.none')}</p>}
             {grouped ? GROUPS.map((g) => {
                 const rows = shown.filter((s) => s.source === g.source);
-                const total = (skills ?? []).filter((s) => s.source === g.source).length;
                 if (rows.length === 0 && (q || !g.empty)) return null;
                 return (
-                    <SettingsDisclosure key={g.source} title={t(g.title)} count={total} hint={t(g.note, g.params)} defaultOpen={g.source === 'user'} forceOpen={!!q}>
+                    <SettingsDisclosure key={g.source} title={t(g.title)} count={rows.length} hint={t(g.note, g.params)} defaultOpen={g.source === 'user'} forceOpen={!!q}>
                         <section aria-label={t(g.title)}>
                             {rows.length === 0 ? <p className="settings-hint">{g.empty && t(g.empty, g.params)}</p> : <ul className="skill-list">{rows.map(renderRow)}</ul>}
                         </section>
