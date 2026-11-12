@@ -45,7 +45,6 @@ files:
   - "!**/.gaia/**"
   - "!gaia.log"
   - "!**/node_modules/.cache/**"
-  - "!forge.config.cjs"
   - "!vite.config.ts"
   - "!tsconfig.json"
   - "!index.html"
@@ -87,8 +86,8 @@ asar: true
 asarUnpack: []
 
 # afterPack hook: prune Chromium locales to en-US only (~45 MB savings).
-# Replaces the postPackage hook from forge.config.cjs.
-afterPack: ../../../../installer/scripts/after-pack.cjs
+# electron-builder only loads hooks from inside this app's own folder.
+afterPack: ./scripts/after-pack.cjs
 
 # Auto-update provider — R2-primary generic feed (#1724).
 #

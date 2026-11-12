@@ -14,6 +14,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/setupapi"
+	"github.com/amd/gaia/tui/internal/textutil"
+	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -40,7 +42,7 @@ var (
 )
 
 const (
-	indentW = 2
+	indentW = components.IndentW
 	minW    = 40
 	minH    = 10
 	nameW   = 22
@@ -51,7 +53,7 @@ const (
 // View renders the screen on view.
 func (m Model) View() string {
 	if m.tooSmall() {
-		return clip([]string{pad(warnStyle.Render(tooSmall))}, m.width, m.height)
+		return clip([]string{components.Pad(warnStyle.Render(tooSmall))}, m.width, m.height)
 	}
 	w, h := m.width, m.height
 	if w < minW {
@@ -62,7 +64,7 @@ func (m Model) View() string {
 	switch m.scr {
 	case scrLoading:
 		title = titleLoading
-		body = []string{pad(m.busyMarker() + " " + dimStyle.Render(m.busyText()))}
+		body = []string{components.Pad(m.busyMarker() + " " + dimStyle.Render(m.busyText()))}
 		foot = m.footer(w, [][2]string{{"esc", "back"}})
 	case scrLoadError:
 		title = titleModels
@@ -80,7 +82,7 @@ func (m Model) View() string {
 			text = noServerInstall
 			keys = append([][2]string{{"enter", "install it"}}, keys...)
 		}
-		body = indentAll(wrapStyled(dimStyle, text, w-2*indentW), indentW)
+		body = components.IndentAll(wrapStyled(dimStyle, text, w-2*indentW), indentW)
 		foot = m.footer(w, keys)
 	case scrModels:
 		title = titleModels
@@ -131,9 +133,9 @@ func (m Model) View() string {
 	if m.scr == scrModels && !m.details {
 		up, down = m.scrollHints()
 	}
-	out := []string{m.header(w, title, right), pad(dividerStyle.Render(withHint(div, up)))}
+	out := []string{m.header(w, title, right), components.Pad(dividerStyle.Render(withHint(div, up)))}
 	out = append(out, body...)
-	out = append(out, pad(dividerStyle.Render(withHint(div, down))))
+	out = append(out, components.Pad(dividerStyle.Render(withHint(div, down))))
 	out = append(out, foot...)
 	return clip(out, m.width, m.height)
 }
@@ -154,9 +156,9 @@ func withHint(div, hint string) string {
 func (m Model) header(w int, left, right string) string {
 	gap := w - 2*indentW - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 1 {
-		return pad(titleStyle.Render(truncate(left, w-2*indentW)))
+		return components.Pad(titleStyle.Render(truncate(left, w-2*indentW)))
 	}
-	return pad(titleStyle.Render(left) + strings.Repeat(" ", gap) + summaryStyle.Render(right))
+	return components.Pad(titleStyle.Render(left) + strings.Repeat(" ", gap) + summaryStyle.Render(right))
 }
 
 // footer is the key hints, or the y/n question that replaces them.
@@ -176,20 +178,12 @@ func fitKeys(w, real int, keys [][2]string) string {
 	}
 	avail -= 2 * indentW
 	for first := 0; first < len(keys); first++ {
-		line := renderKeys(keys[first:])
+		line := components.RenderKeys(keys[first:])
 		if first == len(keys)-1 || lipgloss.Width(line) <= avail {
-			return pad(line)
+			return components.Pad(line)
 		}
 	}
-	return pad("")
-}
-
-func renderKeys(keys [][2]string) string {
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, keyStyle.Render(k[0])+" "+dimStyle.Render(k[1]))
-	}
-	return strings.Join(parts, dimStyle.Render(" · "))
+	return components.Pad("")
 }
 
 // askFooter is the question and its keys. It is one line when it fits; a
@@ -204,10 +198,10 @@ func (m Model) askFooter(w int) []string {
 		avail = m.width - 2*indentW
 	}
 	if lipgloss.Width(line) <= avail {
-		return []string{pad(line)}
+		return []string{components.Pad(line)}
 	}
-	out := indentAll(wrapStyled(warnStyle, q, avail), indentW)
-	return append(out, pad(keys))
+	out := components.IndentAll(wrapStyled(warnStyle, q, avail), indentW)
+	return append(out, components.Pad(keys))
 }
 
 func (m Model) askText() (q, yes, no string) {
@@ -256,12 +250,12 @@ func (m Model) modelsView(w, h int) (body, foot []string) {
 // modelsLayout is what surrounds the list, and the lines left for it.
 func (m Model) modelsLayout(w, h int) (top, bottom, foot []string, budget int) {
 	if m.resume && m.opts.Mode == ModeFirstRun {
-		top = append(top, pad(warnStyle.Render("[!] "+resumeBanner+" ")+dimStyle.Render("enter resume")))
+		top = append(top, components.Pad(warnStyle.Render("[!] "+resumeBanner+" ")+dimStyle.Render("enter resume")))
 	}
 	if m.sel.cloud {
-		top = append(top, pad(dimStyle.Render(cloudNoDownload)))
+		top = append(top, components.Pad(dimStyle.Render(cloudNoDownload)))
 	} else if m.height >= 30 {
-		top = append(top, indentAll(wrapStyled(dimStyle, introFor(m.opts.Mode == ModeModels), w-2*indentW), indentW)...)
+		top = append(top, components.IndentAll(wrapStyled(dimStyle, introFor(m.opts.Mode == ModeModels), w-2*indentW), indentW)...)
 	}
 
 	bottom = m.modelsBottom(w)
@@ -343,9 +337,9 @@ func (m Model) jobHeading(job string, w int) []string {
 	}
 	switch job {
 	case jobChat:
-		out = append(out, pad(jobStyle.Render(jobChatTitle)))
+		out = append(out, components.Pad(jobStyle.Render(jobChatTitle)))
 	case jobVision:
-		out = append(out, pad(jobStyle.Render(jobVisionTitle)))
+		out = append(out, components.Pad(jobStyle.Render(jobVisionTitle)))
 		if m.radio() {
 			chat := "This model"
 			if r, ok := m.sel.find(m.sel.chat); ok {
@@ -355,12 +349,12 @@ func (m Model) jobHeading(job string, w int) []string {
 			if m.builtInVision() {
 				text = visionBuiltIn(chat)
 			}
-			out = append(out, pad(dimStyle.Render(truncate(text, width))))
+			out = append(out, components.Pad(dimStyle.Render(truncate(text, width))))
 		}
 	case jobDocs:
-		out = append(out, pad(jobStyle.Render(jobDocsTitle)))
+		out = append(out, components.Pad(jobStyle.Render(jobDocsTitle)))
 	case jobExtras:
-		out = append(out, pad(jobStyle.Render(jobExtrasTitle)+dimStyle.Render(" ("+extrasOff+")")))
+		out = append(out, components.Pad(jobStyle.Render(jobExtrasTitle)+dimStyle.Render(" ("+extrasOff+")")))
 	}
 	return out
 }
@@ -439,10 +433,10 @@ func (m Model) itemLine(i int, it item, w int) string {
 		if m.showAll {
 			label = installedHide
 		}
-		return pad(cursor + dimStyle.Render("[ ] "+label))
+		return components.Pad(cursor + dimStyle.Render("[ ] "+label))
 	}
 	if it.action != "" {
-		return pad(cursor + dimStyle.Render(m.actionText(it)))
+		return components.Pad(cursor + dimStyle.Render(m.actionText(it)))
 	}
 	r := it.row
 	tick, tickStyle := m.tickOf(it)
@@ -466,7 +460,7 @@ func (m Model) itemLine(i int, it item, w int) string {
 	if marks := m.marks(it, w-2*indentW-lipgloss.Width(line)-1); marks != "" {
 		line += " " + marks
 	}
-	return pad(line)
+	return components.Pad(line)
 }
 
 // tickOf is a row's box: setup picks one model for chat and one for images,
@@ -581,7 +575,7 @@ func (m Model) marks(it item, avail int) string {
 		parts = append(parts, warnStyle.Render("[!]"))
 	}
 	rec := -1
-	if m.recommendedFor(it) && (r.fits != nil || r.planned) && !r.installed {
+	if m.recommendedFor(it) && (r.fits != nil || r.planned) && !r.installed && !r.npuBlocked() {
 		rec = len(parts)
 		parts = append(parts, accentStyle.Render(markRecommended))
 	}
@@ -637,9 +631,11 @@ func (m Model) noteLines(w int) []string {
 		add(warnStyle, "[!] "+imagesBlockedLine(name))
 	}
 	if r.partial && r.leftGB != nil {
-		add(dimStyle, "Partly downloaded, "+formatGB(*r.leftGB)+" left.")
+		add(dimStyle, "Partly downloaded, "+textutil.FormatGB(*r.leftGB)+" left.")
 	}
 	switch {
+	case r.npuBlocked():
+		add(warnStyle, "[!] "+npuBlockedLine(r.fitReason))
 	case r.fits != nil && !*r.fits && r.needGB != nil && r.haveGB != nil:
 		add(warnStyle, noFitLine(*r.needGB, *r.haveGB))
 	case r.fits == nil && !r.downloaded:
@@ -672,28 +668,28 @@ func (m Model) modelsBottom(w int) []string {
 		if m.radio() {
 			hint = ""
 		}
-		out = append(out, pad(dimStyle.Render("Default chat: ")+textStyle.Render(chat)+dimStyle.Render(hint)))
+		out = append(out, components.Pad(dimStyle.Render("Default chat: ")+textStyle.Render(chat)+dimStyle.Render(hint)))
 		if ok && r.support == setupapi.SupportUntested {
-			out = append(out, indentAll(wrapStyled(warnStyle, "[!] "+untestedPicked, width), indentW)...)
+			out = append(out, components.IndentAll(wrapStyled(warnStyle, "[!] "+untestedPicked, width), indentW)...)
 		}
 	}
 	if m.opts.Mode == ModeFirstRun {
-		out = append(out, pad(m.keepTryLine()))
+		out = append(out, components.Pad(m.keepTryLine()))
 	}
-	out = append(out, pad(dimStyle.Render(truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), width))))
+	out = append(out, components.Pad(dimStyle.Render(truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), width))))
 	if names := m.componentsToFetch(); len(names) > 0 {
-		out = append(out, pad(dimStyle.Render(truncate(alsoSetUp(names), width))))
+		out = append(out, components.Pad(dimStyle.Render(truncate(alsoSetUp(names), width))))
 	}
 	if msg := m.sel.shortfall(m.freeGB(), m.drive()); msg != "" {
-		out = append(out, indentAll(wrapStyled(warnStyle, "[!] "+msg, width), indentW)...)
+		out = append(out, components.IndentAll(wrapStyled(warnStyle, "[!] "+msg, width), indentW)...)
 	}
 	if m.sel.blocked() {
-		out = append(out, indentAll(wrapStyled(warnStyle, "[!] "+zeroChat, width), indentW)...)
+		out = append(out, components.IndentAll(wrapStyled(warnStyle, "[!] "+zeroChat, width), indentW)...)
 	}
 	if m.busy != "" {
-		out = append(out, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
+		out = append(out, components.Pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
 	} else if m.note != "" {
-		out = append(out, indentAll(wrapStyled(warnStyle, m.note, width), indentW)...)
+		out = append(out, components.IndentAll(wrapStyled(warnStyle, m.note, width), indentW)...)
 	}
 	return out
 }
@@ -722,7 +718,7 @@ func contentSize(gb *float64) string {
 	if gb == nil {
 		return contentsSizeLater
 	}
-	return formatGB(*gb)
+	return textutil.FormatGB(*gb)
 }
 
 // contentLine is one thing coming to this PC: state, size and source on a row.
@@ -735,7 +731,7 @@ func contentLine(marker, name string, st lipgloss.Style, w int, facts ...string)
 		}
 	}
 	room := w - 2*indentW - 5 - col - 1
-	return pad(st.Render(fmt.Sprintf("%-4s", marker)) + " " + textStyle.Render(fmt.Sprintf("%-*s", col, truncate(name, col))) + " " +
+	return components.Pad(st.Render(fmt.Sprintf("%-4s", marker)) + " " + textStyle.Render(fmt.Sprintf("%-*s", col, truncate(name, col))) + " " +
 		dimStyle.Render(truncate(strings.Join(parts, " · "), room)))
 }
 
@@ -762,7 +758,7 @@ func (m Model) componentLine(c setupapi.Component, w int) string {
 
 // contentsView is everything coming to this PC, before anything starts.
 func (m Model) contentsView(w int) (body, foot []string) {
-	body = indentAll(wrapStyled(dimStyle, contentsLede, w-2*indentW), indentW)
+	body = components.IndentAll(wrapStyled(dimStyle, contentsLede, w-2*indentW), indentW)
 	for _, c := range m.components() {
 		body = append(body, m.componentLine(c, w))
 	}
@@ -773,7 +769,7 @@ func (m Model) contentsView(w int) (body, foot []string) {
 		}
 		body = append(body, contentLine("[ ]", r.name, dimStyle, w, contentsWaiting, contentSize(r.leftGB), from))
 	}
-	body = append(body, "", pad(dimStyle.Render(truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), w-2*indentW))))
+	body = append(body, "", components.Pad(dimStyle.Render(truncate(diskSummary(m.sel.downloadGB(), m.freeGB(), m.drive()), w-2*indentW))))
 	return body, m.footer(w, [][2]string{{"enter", "continue"}, {"esc", "back"}})
 }
 
@@ -804,7 +800,7 @@ func (m Model) pickLines(w int) []string {
 		if r.npu {
 			extra = strings.TrimSpace(extra + " " + markNPU)
 		}
-		out = append(out, pad(cursor+dimStyle.Render(mark)+" "+st.Render(truncate(r.name, w-20))+"  "+dimStyle.Render(extra)))
+		out = append(out, components.Pad(cursor+dimStyle.Render(mark)+" "+st.Render(truncate(r.name, w-20))+"  "+dimStyle.Render(extra)))
 	}
 	return out
 }
@@ -820,7 +816,7 @@ func (m Model) loadErrorLines(w int) []string {
 			msg = "Couldn't read how this PC's memory is split: " + strings.TrimSuffix(m.loadErr.Error(), ".") + "."
 		}
 	}
-	return indentAll(wrapStyled(failStyle, "[!] "+msg, w-2*indentW), indentW)
+	return components.IndentAll(wrapStyled(failStyle, "[!] "+msg, w-2*indentW), indentW)
 }
 
 // --- GPU --------------------------------------------------------------------
@@ -829,7 +825,7 @@ func (m Model) gpuView(w int) (body, foot []string) {
 	width := w - 2*indentW
 	g := m.gpu
 	if g == nil {
-		return indentAll(wrapStyled(dimStyle, "GAIA couldn't read how this PC's memory is split.", width), indentW),
+		return components.IndentAll(wrapStyled(dimStyle, "GAIA couldn't read how this PC's memory is split.", width), indentW),
 			m.footer(w, [][2]string{{"esc", "back"}})
 	}
 	if !g.Applies {
@@ -837,16 +833,16 @@ func (m Model) gpuView(w int) (body, foot []string) {
 		if g.HiddenReason != nil && *g.HiddenReason != "" {
 			reason = *g.HiddenReason
 		}
-		return indentAll(wrapStyled(dimStyle, reason, width), indentW), m.footer(w, [][2]string{{"esc", "back"}})
+		return components.IndentAll(wrapStyled(dimStyle, reason, width), indentW), m.footer(w, [][2]string{{"esc", "back"}})
 	}
-	body = append(body, indentAll(wrapStyled(dimStyle, gpuBody(g.TotalGB, g.GPUGB), width), indentW)...)
+	body = append(body, components.IndentAll(wrapStyled(dimStyle, gpuBody(g.TotalGB, g.GPUGB), width), indentW)...)
 	body = append(body, "")
 	label := "Now:    " + gpuSplit(g.CPUGB, g.GPUGB)
 	barW := width - lipgloss.Width(label) - 4
 	if barW > 30 {
 		barW = 30
 	}
-	line := pad(textStyle.Render(label))
+	line := components.Pad(textStyle.Render(label))
 	if barW >= 8 && g.TotalGB > 0 {
 		line += "    " + m.splitBar(barW)
 	}
@@ -857,20 +853,20 @@ func (m Model) gpuView(w int) (body, foot []string) {
 		if len(g.Presets) > 1 {
 			hint = "  (←/→ to change)"
 		}
-		body = append(body, pad(textStyle.Render("Target: GPU "+formatGBShort(pool))+dimStyle.Render(hint)))
-		body = append(body, indentAll(wrapStyled(dimStyle, fmt.Sprintf(gpuKeepsFmt, formatGBShort(g.ReserveGB), osName(g.OS)), width), indentW)...)
+		body = append(body, components.Pad(textStyle.Render("Target: GPU "+formatGBShort(pool))+dimStyle.Render(hint)))
+		body = append(body, components.IndentAll(wrapStyled(dimStyle, fmt.Sprintf(gpuKeepsFmt, formatGBShort(g.ReserveGB), osName(g.OS)), width), indentW)...)
 		if u := gpuUnlocks(pool, m.unlocks()); u != "" {
-			body = append(body, pad(okStyle.Render(u)))
+			body = append(body, components.Pad(okStyle.Render(u)))
 		}
 	}
 	if g.Pending != nil {
 		switch g.Pending.State {
 		case setupapi.PendingRestart:
-			body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+gpuPendingLine(m.poolFor(g.Pending.SettingGB)), width), indentW)...)
+			body = append(body, components.IndentAll(wrapStyled(warnStyle, "[!] "+gpuPendingLine(m.poolFor(g.Pending.SettingGB)), width), indentW)...)
 		case setupapi.PendingTookEffect:
-			body = append(body, indentAll(wrapStyled(okStyle, "[ok] "+gpuTookEffect(g.GPUGB), width), indentW)...)
+			body = append(body, components.IndentAll(wrapStyled(okStyle, "[ok] "+gpuTookEffect(g.GPUGB), width), indentW)...)
 		case setupapi.PendingNotApplied:
-			body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+gpuNotApplied(g.GPUGB), width), indentW)...)
+			body = append(body, components.IndentAll(wrapStyled(warnStyle, "[!] "+gpuNotApplied(g.GPUGB), width), indentW)...)
 		}
 	}
 	if g.Method == setupapi.MethodGuided {
@@ -878,14 +874,14 @@ func (m Model) gpuView(w int) (body, foot []string) {
 		if g.MethodReason != "" {
 			reason = g.MethodReason
 		}
-		body = append(body, indentAll(wrapStyled(dimStyle, reason, width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(dimStyle, reason, width), indentW)...)
 	}
 	if m.ask == askGPUConsent {
 		body = append(body, "")
-		body = append(body, indentAll(wrapStyled(textStyle, gpuConsent(g.Setting.Name, pool, g.GPUGB), width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(textStyle, gpuConsent(g.Setting.Name, pool, g.GPUGB), width), indentW)...)
 	}
 	if m.busy != "" {
-		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
+		body = append(body, components.Pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
 	} else if m.gpuNote != "" {
 		st := dimStyle
 		switch m.gpuPhase {
@@ -894,7 +890,7 @@ func (m Model) gpuView(w int) (body, foot []string) {
 		case gpuDenied:
 			st = warnStyle
 		}
-		body = append(body, indentAll(wrapStyled(st, m.gpuNote, width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(st, m.gpuNote, width), indentW)...)
 	}
 
 	var keys [][2]string
@@ -988,32 +984,32 @@ func (m Model) guideView(w int) (body, foot []string) {
 		return nil, m.footer(w, [][2]string{{"esc", "back"}})
 	}
 	if m.busy != "" && len(m.gpu.GuidedSteps) == 0 {
-		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
+		body = append(body, components.Pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
 	} else if m.busy == "" && m.gpu.GuidedValue == nil && len(m.gpu.GuidedSteps) == 0 {
-		body = append(body, indentAll(wrapStyled(dimStyle, gpuNothingToGive, width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(dimStyle, gpuNothingToGive, width), indentW)...)
 	}
 	for i, step := range m.gpu.GuidedSteps {
 		prefix := fmt.Sprintf("%d. ", i+1)
 		lines := wrap(step, width-len(prefix))
 		for j, l := range lines {
 			if j == 0 {
-				body = append(body, pad(textStyle.Render(prefix+l)))
+				body = append(body, components.Pad(textStyle.Render(prefix+l)))
 			} else {
-				body = append(body, pad(strings.Repeat(" ", len(prefix))+textStyle.Render(l)))
+				body = append(body, components.Pad(strings.Repeat(" ", len(prefix))+textStyle.Render(l)))
 			}
 		}
 	}
 	if v := m.copyValue(); v != "" {
-		body = append(body, "", pad(dimStyle.Render("Value: ")+accentStyle.Render(v)+dimStyle.Render("   (c copies it)")))
+		body = append(body, "", components.Pad(dimStyle.Render("Value: ")+accentStyle.Render(v)+dimStyle.Render("   (c copies it)")))
 	}
 	if m.busy != "" && len(m.gpu.GuidedSteps) > 0 {
-		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
+		body = append(body, components.Pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
 	} else if m.gpuNote != "" {
 		st := dimStyle
 		if m.gpuDone {
 			st = okStyle
 		}
-		body = append(body, indentAll(wrapStyled(st, m.gpuNote, width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(st, m.gpuNote, width), indentW)...)
 	}
 	var keys [][2]string
 	if m.copyValue() != "" {
@@ -1034,7 +1030,7 @@ func (m Model) downloadView(w int) (body, foot []string) {
 	now := m.opts.Now()
 	rows := m.shownRows()
 	if m.status != nil && len(m.status.Models) == 0 && m.status.State != setupapi.RunIdle && !m.dl.active {
-		body = append(body, pad(dimStyle.Render(noPerModel)))
+		body = append(body, components.Pad(dimStyle.Render(noPerModel)))
 	}
 	for i, r := range rows {
 		body = append(body, m.progressLine(i, r, w, now))
@@ -1051,26 +1047,26 @@ func (m Model) downloadView(w int) (body, foot []string) {
 	}
 	comps := len(body)
 	if m.lost != nil {
-		body = append(body, indentAll(wrapStyled(failStyle, "[!] "+lostContact, width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(failStyle, "[!] "+lostContact, width), indentW)...)
 	}
 	if note := m.runStoppedNote(); note != "" {
-		body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+note, width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(warnStyle, "[!] "+note, width), indentW)...)
 	}
 	if m.dl.cancelled && !m.dl.active {
-		body = append(body, pad(dimStyle.Render(setupCancelled)))
+		body = append(body, components.Pad(dimStyle.Render(setupCancelled)))
 	}
 	if m.busy != "" {
-		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
+		body = append(body, components.Pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
 	} else if m.note != "" {
-		body = append(body, indentAll(wrapStyled(warnStyle, m.note, width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(warnStyle, m.note, width), indentW)...)
 	}
-	body = append(body, pad(m.keepTryLine()))
+	body = append(body, components.Pad(m.keepTryLine()))
 	if m.dl.active {
 		leaving := leavingCancels
 		if m.opts.Mode != ModeFirstRun {
 			leaving = leavingKeeps
 		}
-		body = append(body, pad(dimStyle.Render(truncate(leaving, width))))
+		body = append(body, components.Pad(dimStyle.Render(truncate(leaving, width))))
 	}
 	// Under the models, whose rows the user acts on; a window too short for
 	// the list keeps only the rows.
@@ -1171,7 +1167,7 @@ func (m Model) progressLine(i int, r setupapi.ModelProgress, w int, now time.Tim
 	}
 	nameCol := fmt.Sprintf("%-*s", nw, truncate(name, nw))
 	if m.lost != nil {
-		return pad(cursor + warnStyle.Render("[?] ") + " " + dimStyle.Render(nameCol) + " " + dimStyle.Render("last known: "+r.State))
+		return components.Pad(cursor + warnStyle.Render("[?] ") + " " + dimStyle.Render(nameCol) + " " + dimStyle.Render("last known: "+r.State))
 	}
 	marker, st := "[ ]", dimStyle
 	text := ""
@@ -1179,10 +1175,10 @@ func (m Model) progressLine(i int, r setupapi.ModelProgress, w int, now time.Tim
 	case setupapi.StateQueued:
 		text = dimStyle.Render("queued")
 		if done := m.inPlanBytes(r, m.doneBytes(r)); done > 0 {
-			text += dimStyle.Render(", " + formatGB(bytesGB(done)) + " already here")
+			text += dimStyle.Render(", " + textutil.FormatGB(bytesGB(done)) + " already here")
 		}
 		if size := m.sizeOf(r); size > 0 {
-			text += dimStyle.Render(" · " + formatGB(bytesGB(size)))
+			text += dimStyle.Render(" · " + textutil.FormatGB(bytesGB(size)))
 		}
 		if e, ok := m.sel.find(r.ID); ok && e.source != "" {
 			text += dimStyle.Render(" · " + contentsFrom + e.source)
@@ -1212,24 +1208,24 @@ func (m Model) progressLine(i int, r setupapi.ModelProgress, w int, now time.Tim
 		if at, ok := m.readyAt[r.ID]; ok && now.Sub(at) < 100*time.Millisecond && !m.opts.Motion.Reduced {
 			ns = flashStyle
 		}
-		return pad(cursor + st.Render(marker) + "  " + ns.Render(nameCol) + " " + ns.Render("ready"))
+		return components.Pad(cursor + st.Render(marker) + "  " + ns.Render(nameCol) + " " + ns.Render("ready"))
 	case setupapi.StateFailed:
 		marker, st = "[!]", failStyle
 		text = failStyle.Render("failed")
 	case setupapi.StateCancelled:
 		text = dimStyle.Render("cancelled")
 		if done := m.inPlanBytes(r, m.doneBytes(r)); done > 0 {
-			text += dimStyle.Render(", " + formatGB(bytesGB(done)) + " kept")
+			text += dimStyle.Render(", " + textutil.FormatGB(bytesGB(done)) + " kept")
 		}
 	case setupapi.StateUnchecked:
 		// Lined up with ready rows: a finished download, just not checked.
-		return pad(cursor + okStyle.Render("[ok]") + "  " + textStyle.Render(nameCol) + " " + dimStyle.Render("downloaded · not checked yet"))
+		return components.Pad(cursor + okStyle.Render("[ok]") + "  " + textStyle.Render(nameCol) + " " + dimStyle.Render("downloaded · not checked yet"))
 	}
 	spin := "  "
 	if (r.State == setupapi.StateDownloading || r.State == setupapi.StateVerifying) && !m.opts.Motion.Reduced {
 		spin = st.Render(m.spinFrame()) + " "
 	}
-	return pad(cursor + st.Render(fmt.Sprintf("%-4s", marker)) + " " + spin + textStyle.Render(nameCol) + " " + text)
+	return components.Pad(cursor + st.Render(fmt.Sprintf("%-4s", marker)) + " " + spin + textStyle.Render(nameCol) + " " + text)
 }
 
 func (m Model) downloadingText(r setupapi.ModelProgress, room int, now time.Time) string {
@@ -1245,7 +1241,7 @@ func (m Model) downloadingText(r setupapi.ModelProgress, room int, now time.Time
 		return infoStyle.Render(startingLine)
 	}
 	rt := m.rates[r.ID]
-	nums := fmt.Sprintf("%.1f/%s", bytesGB(m.inPlanBytes(r, r.BytesDone)), formatGB(bytesGB(m.sizeOf(r))))
+	nums := fmt.Sprintf("%.1f/%s", bytesGB(m.inPlanBytes(r, r.BytesDone)), textutil.FormatGB(bytesGB(m.sizeOf(r))))
 	tail := ""
 	if rt != nil {
 		switch stall := rt.stalled(now); {
@@ -1328,7 +1324,7 @@ func (m Model) progressNote(r setupapi.ModelProgress, width int) []string {
 			add(warnStyle, retryingLine(left))
 		}
 		if r.DownloadedBeforeGB != nil && *r.DownloadedBeforeGB > 0 {
-			add(dimStyle, "Resumed: "+formatGB(*r.DownloadedBeforeGB)+" was already on this PC.")
+			add(dimStyle, "Resumed: "+textutil.FormatGB(*r.DownloadedBeforeGB)+" was already on this PC.")
 		}
 		if e, ok := m.sel.find(r.ID); ok && e.source != "" {
 			add(dimStyle, contentsFrom+e.source)
@@ -1364,7 +1360,7 @@ func (m Model) overallLine(w int, now time.Time) string {
 	if total > 0 {
 		pct = int(done * 100 / total)
 	}
-	parts := []string{fmt.Sprintf("%d%%", pct), fmt.Sprintf("%.1f/%s", bytesGB(done), formatGB(bytesGB(total)))}
+	parts := []string{fmt.Sprintf("%d%%", pct), fmt.Sprintf("%.1f/%s", bytesGB(done), textutil.FormatGB(bytesGB(total)))}
 	switch {
 	case !m.dl.active, total > 0 && done >= total:
 		// Nothing left to download: no estimate to make.
@@ -1390,7 +1386,7 @@ func (m Model) overallLine(w int, now time.Time) string {
 		f, t := bar(m.fill("", done, total), barW, m.opts.Motion.ASCII)
 		line += infoStyle.Render(f) + trackStyle.Render(t) + " "
 	}
-	return pad(line + warnStyle.Render(tail))
+	return components.Pad(line + warnStyle.Render(tail))
 }
 
 // --- test -------------------------------------------------------------------
@@ -1451,7 +1447,7 @@ func (m Model) waitingTests() []string {
 func (m Model) testLine(marker string, st lipgloss.Style, label, result string, w int) string {
 	const col = 16
 	room := w - 2*indentW - 5 - col - 1
-	return pad(st.Render(fmt.Sprintf("%-4s", marker)) + " " +
+	return components.Pad(st.Render(fmt.Sprintf("%-4s", marker)) + " " +
 		textStyle.Render(fmt.Sprintf("%-*s", room, truncate(label, room))) + " " + dimStyle.Render(result))
 }
 
@@ -1484,9 +1480,9 @@ func (m Model) testView(w int) (body, foot []string) {
 		f, t := bar(frac(int64(finished), int64(total)), barW, m.opts.Motion.ASCII)
 		line += " " + infoStyle.Render(f) + trackStyle.Render(t)
 	}
-	body = append(body, pad(line+" "+warnStyle.Render(fmt.Sprintf("%d%%", finished*100/total))))
+	body = append(body, components.Pad(line+" "+warnStyle.Render(fmt.Sprintf("%d%%", finished*100/total))))
 	if m.dl.active {
-		body = append(body, pad(dimStyle.Render(truncate(testLede, width))))
+		body = append(body, components.Pad(dimStyle.Render(truncate(testLede, width))))
 	}
 	shownErrors := map[string]bool{}
 	for _, r := range rows {
@@ -1506,19 +1502,19 @@ func (m Model) testView(w int) (body, foot []string) {
 		body = append(body, m.testLine(marker, st, label, testResult(r), w))
 		if r.Error != nil && *r.Error != "" {
 			shownErrors[*r.Error] = true
-			body = append(body, indentAll(wrapStyled(failStyle, *r.Error, width-6), indentW+6)...)
+			body = append(body, components.IndentAll(wrapStyled(failStyle, *r.Error, width-6), indentW+6)...)
 		}
 	}
 	for _, job := range waiting {
 		body = append(body, m.testLine("[ ]", dimStyle, testJobLabel(job), testWaiting, w))
 	}
 	if m.lost != nil {
-		body = append(body, indentAll(wrapStyled(failStyle, "[!] "+lostContact, width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(failStyle, "[!] "+lostContact, width), indentW)...)
 	}
 	if m.busy != "" {
-		body = append(body, pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
+		body = append(body, components.Pad(m.busyMarker()+" "+dimStyle.Render(m.busyText())))
 	} else if m.note != "" {
-		body = append(body, indentAll(wrapStyled(warnStyle, m.note, width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(warnStyle, m.note, width), indentW)...)
 	}
 
 	keys := [][2]string{{"d", "details"}}
@@ -1544,7 +1540,7 @@ func (m Model) testFailure(width int, shown map[string]bool) []string {
 	out := []string{""}
 	if m.status != nil && m.status.Error != nil {
 		if why := runError.ReplaceAllString(*m.status.Error, ""); why != "" && !shown[why] {
-			out = append(out, indentAll(wrapStyled(failStyle, "[!] "+why, width), indentW)...)
+			out = append(out, components.IndentAll(wrapStyled(failStyle, "[!] "+why, width), indentW)...)
 		}
 	}
 	help := testFailedHelp
@@ -1553,9 +1549,9 @@ func (m Model) testFailure(width int, shown map[string]bool) []string {
 			help = testFailedMem
 		}
 	}
-	out = append(out, indentAll(wrapStyled(warnStyle, help, width), indentW)...)
+	out = append(out, components.IndentAll(wrapStyled(warnStyle, help, width), indentW)...)
 	if row, ok := m.brokenModel(); ok {
-		out = append(out, indentAll(wrapStyled(dimStyle, downloadAgain(m.nameOf(*row.Subject)), width), indentW)...)
+		out = append(out, components.IndentAll(wrapStyled(dimStyle, downloadAgain(m.nameOf(*row.Subject)), width), indentW)...)
 	}
 	return out
 }
@@ -1587,29 +1583,29 @@ func (m Model) readyView(w int) (body, foot []string) {
 			}
 		}
 		if m.sel.cloud {
-			body = append(body, pad(textStyle.Render("Chat       runs in the cloud")))
+			body = append(body, components.Pad(textStyle.Render("Chat       runs in the cloud")))
 		} else if chat != "" {
-			body = append(body, pad(textStyle.Render(chat)))
+			body = append(body, components.Pad(textStyle.Render(chat)))
 		}
 		if v, ok := m.sel.find(m.sel.resolveVision()); ok && (v.downloaded || v.installed || m.landed(v.id)) {
-			body = append(body, pad(textStyle.Render(readyVision(v.name))))
+			body = append(body, components.Pad(textStyle.Render(readyVision(v.name))))
 		} else if v, ok := m.visionRow(); ok {
-			body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+readyVisionOff(v.name), width), indentW)...)
+			body = append(body, components.IndentAll(wrapStyled(warnStyle, "[!] "+readyVisionOff(v.name), width), indentW)...)
 		}
 		if docs != "" {
-			body = append(body, pad(textStyle.Render(readyDocs(docs))))
+			body = append(body, components.Pad(textStyle.Render(readyDocs(docs))))
 		} else if d, ok := m.docsRow(); ok {
-			body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+readyDocsOff(d.name), width), indentW)...)
+			body = append(body, components.IndentAll(wrapStyled(warnStyle, "[!] "+readyDocsOff(d.name), width), indentW)...)
 		}
 		if len(missing) > 0 {
-			body = append(body, indentAll(wrapStyled(dimStyle, readyNotInstalled(missing), width), indentW)...)
+			body = append(body, components.IndentAll(wrapStyled(dimStyle, readyNotInstalled(missing), width), indentW)...)
 		}
 	}
 	if g := m.gpu; g != nil && m.gpuPhase == gpuApplied {
-		body = append(body, indentAll(wrapStyled(okStyle, readyGPU(m.targetPool(), m.gpuWas), width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(okStyle, readyGPU(m.targetPool(), m.gpuWas), width), indentW)...)
 	}
 	if g := m.gpu; g != nil && (m.gpuPhase == gpuPendingSaved || m.gpuPhase == gpuApplied) {
-		body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+gpuPendingLine(formatGBShort(m.targetPool())), width), indentW)...)
+		body = append(body, components.IndentAll(wrapStyled(warnStyle, "[!] "+gpuPendingLine(formatGBShort(m.targetPool())), width), indentW)...)
 	}
 	if m.status != nil {
 		// GAIA is ready without an extra, but never hides that one failed.
@@ -1619,12 +1615,12 @@ func (m Model) readyView(w int) (body, foot []string) {
 				if r.Error != nil {
 					why = *r.Error
 				}
-				body = append(body, indentAll(wrapStyled(warnStyle, "[!] "+extraFailed(extraLabel(r.Job), why), width), indentW)...)
+				body = append(body, components.IndentAll(wrapStyled(warnStyle, "[!] "+extraFailed(extraLabel(r.Job), why), width), indentW)...)
 			}
 		}
 	}
 	if len(m.dl.ids) == 0 && (m.status == nil || len(m.status.Models) == 0) && m.nothingLeftOut() {
-		body = append(body, "", pad(dimStyle.Render(everythingHere)))
+		body = append(body, "", components.Pad(dimStyle.Render(everythingHere)))
 	}
 	keys := [][2]string{{"m", "change models"}}
 	if m.opts.Mode == ModeFirstRun {
@@ -1690,7 +1686,7 @@ func (m Model) detailLines(w int) []string {
 		if p.Disk.Path != nil {
 			free := "unknown"
 			if p.Disk.FreeGB != nil {
-				free = formatGB(*p.Disk.FreeGB)
+				free = textutil.FormatGB(*p.Disk.FreeGB)
 			}
 			raw = append(raw, "Model drive: "+*p.Disk.Path+", free "+free)
 		}
@@ -1739,7 +1735,7 @@ func (m Model) detailLines(w int) []string {
 		if !ok {
 			continue
 		}
-		out = append(out, indentAll(wrapStyled(dimStyle, l, width), indentW)...)
+		out = append(out, components.IndentAll(wrapStyled(dimStyle, l, width), indentW)...)
 	}
 	// The newest lines matter most: keep the tail when it is long.
 	if budget := m.height - 5; budget > 0 && len(out) > budget {
@@ -1785,17 +1781,6 @@ func (m Model) busyText() string {
 		return m.busy + " " + formatElapsed(el)
 	}
 	return m.busy
-}
-
-func pad(s string) string { return strings.Repeat(" ", indentW) + s }
-
-func indentAll(lines []string, n int) []string {
-	prefix := strings.Repeat(" ", n)
-	out := make([]string, 0, len(lines))
-	for _, l := range lines {
-		out = append(out, prefix+l)
-	}
-	return out
 }
 
 func wrapStyled(s lipgloss.Style, text string, w int) []string {

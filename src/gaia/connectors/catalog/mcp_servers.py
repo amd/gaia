@@ -219,6 +219,58 @@ _DISCORD = ConnectorSpec(
     ),
 )
 
+_NOTION = ConnectorSpec(
+    id="mcp-notion",
+    display_name="Notion",
+    icon="📝",
+    category="productivity",
+    tier=2,
+    type="mcp_server",
+    description="Search, read and edit the Notion pages and databases you share with GAIA.",
+    docs_url="https://amd-gaia.ai/docs/connectors/notion",
+    mcp_command="npx",
+    mcp_args=("-y", "@notionhq/notion-mcp-server@2.5.2"),
+    mcp_env_keys=("NOTION_TOKEN",),
+    config_schema=(
+        ConfigField(
+            key="NOTION_TOKEN",
+            label="Notion Integration Secret",
+            kind="secret",
+            placeholder="ntn_…",
+            help_md=(
+                "Create an internal integration at "
+                "[notion.so/profile/integrations](https://www.notion.so/profile/integrations), "
+                "then share the pages GAIA may use with it."
+            ),
+            secret=True,
+        ),
+    ),
+)
+
+_BRAVE_SEARCH = ConnectorSpec(
+    id="mcp-brave-search",
+    display_name="Brave Search",
+    icon="🦁",
+    category="dev-tools",
+    tier=2,
+    type="mcp_server",
+    description="Web and local search through the Brave Search API.",
+    docs_url="https://amd-gaia.ai/docs/connectors/brave-search",
+    mcp_command="npx",
+    mcp_args=("-y", "@modelcontextprotocol/server-brave-search@0.6.2"),
+    mcp_env_keys=("BRAVE_API_KEY",),
+    config_schema=(
+        ConfigField(
+            key="BRAVE_API_KEY",
+            label="Brave Search API Key",
+            kind="secret",
+            placeholder="BSA…",
+            help_md="Get a key from the [Brave Search API dashboard](https://api-dashboard.search.brave.com/).",
+            secret=True,
+        ),
+    ),
+)
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -230,6 +282,8 @@ _ALL_SPECS = (
     _GIT,
     _SLACK,
     _DISCORD,
+    _NOTION,
+    _BRAVE_SEARCH,
 )
 
 for _spec in _ALL_SPECS:

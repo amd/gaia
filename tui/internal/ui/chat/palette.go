@@ -35,10 +35,12 @@ var paletteCommands = []paletteCommand{
 	{"/memory", "View this agent's memory"},
 	{"/full-access", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
+	{"/connectors", "See connected apps (Gmail, Slack, GitHub…); /connectors personalize <id> learns from one"},
 	{"/models", "Choose the models on this PC: download, skip, or pick the chat model"},
 	{"/gpu", "Give the GPU more memory so bigger models fit (integrated-GPU PCs)"},
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
+	{"/skills", "List skills, or add one or a library: /skills add <GitHub or skills.sh link>"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
 	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},
 	{"/cost", "What this session has spent; /cost help for rates"},
@@ -48,6 +50,8 @@ var paletteCommands = []paletteCommand{
 	{"/voice", "Pick the read-aloud voice and speed, or read every reply"},
 	{"/agents", "List installed agents and switch this session to one"},
 	{"/update", "Check for a newer GAIA, install one (/update now, /update v0.25.0), or set auto-update"},
+	{"/sessions", "Reopen a past session — ones waiting on you come first"},
+	{"/sessions all", "Every session, eval and scheduled runs included"},
 }
 
 // modelPalettePrefix is what turns the palette into the model picker: the

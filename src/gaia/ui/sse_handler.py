@@ -26,7 +26,7 @@ from typing import Any, ClassVar, Dict, Iterator, List, Optional
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
-from gaia.agents.base.tool_outcome import FAILED_STATUSES
+from gaia.agents.base.tool_outcome import FAILED_STATUSES, tool_result_dict
 from gaia.agents.base.tool_outcome import tool_result_failed as _tool_result_failed
 from gaia.agents.base.tools import (
     get_tool_display_label,
@@ -34,7 +34,12 @@ from gaia.agents.base.tools import (
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_metrics import turn_log_path
-from gaia.agents.base.verification import split_verification_scope
+from gaia.agents.base.verification import EXECUTED_KEY, split_verification_scope
+from gaia.agents.tools.connect_card import (
+    CONNECT_CARD_KIND,
+    CONNECT_CARD_SUMMARY,
+    connect_card_in,
+)
 from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
@@ -630,7 +635,8 @@ class SSEOutputHandler(OutputHandler):
         # may have unloaded or reloaded it meanwhile. Raises when it can't.
         self.on_model_regained = None
         # Autonomous loop support
-        # background_mode=True: skip blocking user confirmation; immediately deny.
+        # background_mode=True: nobody can confirm. In process a gated tool is
+        # denied; on the sidecar relay the run ends at that step.
         self.background_mode: bool = background_mode
         # False on a transport with no route back for an answer (the stdio
         # agent): a question there would hang the turn, so none is asked.
@@ -667,6 +673,8 @@ class SSEOutputHandler(OutputHandler):
         self._relay_question_id: Optional[str] = None
         # What the sidecar measured fills its context, from its ``final`` event.
         self.relay_context: Optional[Dict[str, Any]] = None
+        # Turns this relay left out to fit; the sidecar never sees them.
+        self.relay_hidden_turns = 0
         self.relay_context_error: Optional[str] = None
         self.relay_performance: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
@@ -925,6 +933,12 @@ class SSEOutputHandler(OutputHandler):
         # must not reach the chat's Outputs as made.
         if isinstance(data, dict) and isinstance(data.get("status"), str):
             event["status"] = data["status"]
+        # A "denied" call nobody answered is not one the user declined.
+        if isinstance(data, dict) and data.get("timed_out") is True:
+            event["timed_out"] = True
+        # A refusal must not read as a site contacted, relayed or not.
+        if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
+            event[EXECUTED_KEY] = False
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
         # summary may be incomplete instead of making them infer truncation.
@@ -1035,9 +1049,24 @@ class SSEOutputHandler(OutputHandler):
                     "chunks": structured_chunks,
                 }
 
+        connect = connect_card_in(data)
+        if connect is not None:
+            fault = str((tool_result_dict(data) or {}).get("error") or "")
+            said = fault.splitlines()[0][:200] if fault else CONNECT_CARD_SUMMARY
+            event["summary"] = said
+            # A relaying host reads the outcome and the summary off this payload.
+            connect = {
+                **connect,
+                "success": success,
+                "status": "ok" if success else "error",
+                "display_message": said,
+            }
+            event["result_data"] = connect
+            event["render"] = CONNECT_CARD_KIND
+            event["data"] = connect
         # The render-map card (if any) is authoritative for a registered tool —
         # set last so it always wins over the generic result_data shapes above.
-        if render_card is not None:
+        elif render_card is not None:
             event["result_data"] = render_card
             event["render"] = self._RENDER_TOOL_TO_LANG[self._last_tool_name]
             event["data"] = render_card

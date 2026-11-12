@@ -61,10 +61,6 @@ func Init() {
 	}
 }
 
-// IsDark reports the mode currently in effect. Only for diagnostics — screens
-// should use the tokens, which already carry both values.
-func IsDark() bool { return lipgloss.HasDarkBackground() }
-
 // Text-carrying roles. Everything here holds at least 4.5:1 against every
 // background in contrast_test.go, so it is safe for body copy.
 var (

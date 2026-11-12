@@ -15,7 +15,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, List
 
-SHELL_TOOLS = ("run_shell_command", "get_shell_state")
+# Core only: naming a tool off the short list forces the session's one jump.
+SHELL_TOOLS = ("run_shell_command",)
 
 # The user names the shell. "Terminal" and "bash" are ordinary English too, so
 # they count only as the place something is run ("in the terminal").
@@ -64,14 +65,28 @@ _EXISTING_AUDIO = re.compile(
     re.IGNORECASE,
 )
 
+# A file only an off-list tool can open. The prompt names these tools, and a
+# model cannot call what its list does not hold.
+_MEDIA_NAMED = (
+    (
+        re.compile(r"\.(?:png|jpe?g|gif|bmp|webp|tiff?)\b", re.IGNORECASE),
+        "analyze_image",
+    ),
+    (
+        re.compile(r"\.(?:mp3|wav|m4a|flac|ogg|mp4|mkv|mov|webm)\b", re.IGNORECASE),
+        "transcribe_media",
+    ),
+)
+
 
 def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
     """Return the registry tools *user_input* explicitly asks for, in order.
 
     Signals: a registry tool name written out (``run_shell_command``), a
     request that names the shell or can only be answered by it, a request to
-    speak, and a request to turn a document into audio. Only names in *registry* are returned, so a profile without shell
-    tools gets none.
+    speak, a request to turn a document into audio, and a named picture or
+    recording. Only names in *registry* are returned, so a profile without
+    shell tools gets none.
     """
     names = set(registry)
     found: List[str] = []
@@ -94,5 +109,11 @@ def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
         wanted = ()
     for name in wanted:
         if name in names and name not in found:
+            found.append(name)
+    for pattern, name in _MEDIA_NAMED:
+        # "dictate notes.pdf to notes.mp3" names the output, not a recording to transcribe.
+        if name == "transcribe_media" and "dictate_document" in wanted:
+            continue
+        if pattern.search(user_input) and name in names and name not in found:
             found.append(name)
     return found

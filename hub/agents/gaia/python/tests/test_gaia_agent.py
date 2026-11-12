@@ -369,16 +369,29 @@ def test_passing_both_a_config_and_kwargs_is_refused():
     assert "not both" in message
 
 
-def test_flagship_step_limit_defaults_to_150(monkeypatch):
-    """50 steps ended a nine-datasheet BOM task mid-research."""
+def test_flagship_step_limit_defaults_to_1000(monkeypatch):
+    """150 steps ended multi-part desktop tasks before the last part."""
     from gaia_agent.agent import FLAGSHIP_MAX_STEPS
 
     from gaia.agents.base.agent import DEFAULT_MAX_STEPS
 
     monkeypatch.delenv("GAIA_AGENT_MAX_STEPS", raising=False)
-    assert FLAGSHIP_MAX_STEPS == 150
-    assert GaiaAgentConfig().max_steps == 150
+    assert FLAGSHIP_MAX_STEPS == 1000
+    assert GaiaAgentConfig().max_steps == 1000
     assert DEFAULT_MAX_STEPS == 50  # other agents keep the fleet default
+
+
+def test_the_flagship_limit_does_not_bring_the_wrap_up_notices_forward():
+    """The notices count steps left, so a higher limit must not fire them early."""
+    from gaia_agent.agent import FLAGSHIP_MAX_STEPS
+
+    from gaia.agents.base.agent import _BUDGET_NOTICES, _budget_notice_trigger
+
+    triggers = [
+        _budget_notice_trigger(left, fraction, FLAGSHIP_MAX_STEPS)
+        for left, fraction, _ in _BUDGET_NOTICES
+    ]
+    assert triggers == [20, 10, 5]
 
 
 def test_flagship_step_limit_env_and_explicit_values_win(monkeypatch):
@@ -401,7 +414,7 @@ def test_an_unset_step_limit_resolves_to_the_flagship_default(monkeypatch):
     monkeypatch.setattr(ChatAgent, "__init__", _capture)
     GaiaAgent(config=GaiaAgentConfig(max_steps=None))
 
-    assert seen["max_steps"] == 150
+    assert seen["max_steps"] == 1000
 
 
 def test_the_readiness_probe_takes_no_request_parameters():
