@@ -728,6 +728,22 @@
     overflow: hidden;
 }
 
+.skill-row-desc.is-open {
+    display: block;
+    overflow: visible;
+}
+
+.skill-row-more {
+    align-self: flex-start;
+    padding: 0;
+    color: var(--text-primary);
+    font-size: 12.5px;
+    text-decoration: underline;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
 .model-row > button,
 .skill-row > button {
     flex-shrink: 0;

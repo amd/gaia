@@ -36,6 +36,28 @@ describe('SkillsSettings', () => {
         expect(screen.getByText('pdf-forms')).toBeInTheDocument();
     });
 
+    it('lets you read a description that is cut off', async () => {
+        const full = 'Run a short personal check-in. Use when the user says good morning.';
+        mockedApi.listSkills.mockResolvedValue({ skills: [skill('check-in', full)], invalid: {} });
+        const scroll = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(80);
+        const client = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(36);
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        const row = (await screen.findByText('check-in')).closest('li')!;
+        const more = within(row).getByRole('button', { name: 'Show more' });
+        expect(more).toHaveAttribute('aria-expanded', 'false');
+        fireEvent.click(more);
+        expect(within(row).getByText(full).parentElement).toHaveClass('is-open');
+        expect(within(row).getByRole('button', { name: 'Show less' })).toHaveAttribute('aria-expanded', 'true');
+        scroll.mockRestore();
+        client.mockRestore();
+    });
+
+    it('offers no toggle for a description that fits', async () => {
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        const row = (await screen.findByText('pdf-forms')).closest('li')!;
+        expect(within(row).queryByRole('button', { name: /Show/ })).not.toBeInTheDocument();
+    });
+
     it('starts a new chat with the chosen skill', async () => {
         const onUseSkill = vi.fn();
         render(<SkillsSettings onUseSkill={onUseSkill} />);
