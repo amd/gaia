@@ -5,6 +5,7 @@ import { useCallback, useLayoutEffect, useRef, type ReactNode, type RefObject } 
 import { ArrowUp, FileAudio, FileText, FileVideo, Plus, Square, X } from 'lucide-react';
 import type { UseAttachments } from '../hooks/useAttachments';
 import { useT } from '../i18n/useT';
+import { middleTruncate } from '../utils/format';
 import { isVideoFile } from '../utils/mediaFiles';
 import type { Attachment } from '../types';
 import './Composer.css';
@@ -109,7 +110,7 @@ export function Composer({
                             {a.isImage && a.url
                                 ? <img src={a.url} alt="" className="composer-attachment-thumb" />
                                 : <Icon size={14} aria-hidden="true" />}
-                            <span className="composer-attachment-name" title={a.name} dir="auto">{a.name}</span>
+                            <span className="composer-attachment-name" title={a.name} dir="auto">{middleTruncate(a.name)}</span>
                             {a.uploading && (
                                 <span className="composer-attachment-state">
                                     {a.progress === undefined
