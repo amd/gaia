@@ -476,6 +476,29 @@ describe('ModelChip', () => {
         expect(within(dialog).queryByText(/keychain access/)).not.toBeInTheDocument();
     });
 
+    it('offers Try again for a locked key store instead of polling or "Add your key"', async () => {
+        const locked: ProviderInfo = {
+            ...FIREWORKS, models_discovered: false, key_source: null,
+            key_state: 'store_locked',
+            key_message: 'The OS credential store is locked: its unlock prompt was closed.',
+        };
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL, locked, AMD_UNCONNECTED], active: LOCAL_ACTIVE, lemonade_error: null });
+        mockedApi.retryKeyStore.mockResolvedValue({ retrying: true });
+        render(<ModelChip />);
+        const dialog = await openPicker();
+
+        const retry = await within(dialog).findByRole('option', { name: /Try again/ });
+        expect(within(dialog).getByText(/credential store is locked/)).toBeInTheDocument();
+        expect(within(dialog).queryByText('Add your key')).not.toBeInTheDocument();
+        const reads = mockedApi.listProviders.mock.calls.length;
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        expect(mockedApi.listProviders.mock.calls.length).toBe(reads);
+
+        fireEvent.click(retry);
+        await waitFor(() => expect(mockedApi.retryKeyStore).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(mockedApi.listProviders.mock.calls.length).toBe(reads + 1));
+    });
+
     it('opens model settings from the picker', async () => {
         render(<ModelChip />);
         const dialog = await openPicker();

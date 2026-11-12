@@ -25,6 +25,7 @@ interface ProviderModels {
 
 const DOWNLOAD_POLL_MS = 2000;
 const KEY_WAITING = 'waiting_for_os_permission';
+const KEY_LOCKED = 'store_locked';
 // How many polls a picked model may show no download before the pick is given up.
 const PICK_START_POLLS = 5;
 
@@ -150,6 +151,17 @@ export function ModelChip() {
             setError(requestErrorText(err));
         }
     }, [rememberNames, t]);
+
+    // The user closed the OS unlock prompt; GAIA asks again only on this click.
+    const retryKeyStore = useCallback(async () => {
+        try {
+            await api.retryKeyStore();
+        } catch (err) {
+            setError(requestErrorText(err));
+            return;
+        }
+        await load(true);
+    }, [load]);
 
     useEffect(() => {
         if (open) {
@@ -405,6 +417,20 @@ export function ModelChip() {
                             <div className="popover-message" role="status">
                                 <Loader2 size={13} className="spin" aria-hidden="true" /> {provider.key_message}
                             </div>
+                        ) : provider.key_state === KEY_LOCKED ? (
+                            <button
+                                type="button"
+                                className="popover-item"
+                                {...rowProps(`unlock:${provider.id}`)}
+                                aria-selected={false}
+                                onClick={() => void retryKeyStore()}
+                            >
+                                <span className="popover-item-check"><KeyRound size={13} aria-hidden="true" /></span>
+                                <span className="popover-item-body">
+                                    <span className="popover-item-title">{t('settings.key.unlockAgain')}</span>
+                                    <span className="popover-item-note">{provider.key_message ?? t('settings.key.storeLocked')}</span>
+                                </span>
+                            </button>
                         ) : provider.remote && !provider.models_discovered && (
                             <button
                                 type="button"

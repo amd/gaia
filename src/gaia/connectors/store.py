@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import zlib
 from typing import List, Optional
@@ -207,12 +208,57 @@ def _kr_raw_set(username: str, value: str) -> None:
     _set()
 
 
-def _kr_raw_get(username: str) -> Optional[str]:
-    @_wrap_keyring_call("get_password")
-    def _get():
-        return keyring.get_password(SERVICE_NAME, username)
+class KeyringRefused(ConnectorsError):
+    """The credential store stayed locked: its unlock prompt was dismissed."""
 
-    return _get()
+
+_refusal_lock = threading.Lock()
+_refusal: Optional[str] = None
+
+
+def keyring_refusal() -> Optional[str]:
+    """Why reads are held back after a dismissed unlock prompt, or None."""
+    with _refusal_lock:
+        return _refusal
+
+
+def retry_keyring() -> None:
+    """Let the next read ask the OS again; for an action the user just took."""
+    global _refusal
+    with _refusal_lock:
+        _refusal = None
+
+
+def _refuse(error: Exception) -> KeyringRefused:
+    global _refusal
+    message = (
+        "The OS credential store is locked: its unlock prompt was closed "
+        f"({error}). GAIA will not ask again on its own; try again when you "
+        "want to unlock it."
+    )
+    with _refusal_lock:
+        _refusal = message
+    logger.warning("Keyring read refused; holding reads until the user retries")
+    return KeyringRefused(message)
+
+
+def _kr_raw_get(username: str) -> Optional[str]:
+    # Every read after a dismissed prompt would open a new one at once.
+    refusal = keyring_refusal()
+    if refusal:
+        raise KeyringRefused(refusal)
+    try:
+        return keyring.get_password(SERVICE_NAME, username)
+    except (keyring.errors.KeyringLocked, keyring.errors.InitError) as e:
+        raise _refuse(e) from e
+    except keyring.errors.KeyringError as e:
+        raise ConnectorsError(
+            f"Keyring get_password failed: {e}. Install a system "
+            "credential store (gnome-keyring on Linux, or rely on "
+            "the macOS Keychain / Windows Credential Locker), "
+            "configure it, and restart GAIA. See "
+            "docs/security/connections.mdx."
+        ) from e
 
 
 def _kr_raw_delete(username: str) -> None:
@@ -239,6 +285,7 @@ def _kr_set(username: str, payload: str) -> None:
     """Store ``payload`` under ``username``, chunking if it exceeds the
     single-slot ceiling. Chunks are written BEFORE the manifest so a reader
     never sees a manifest pointing at not-yet-written parts."""
+    retry_keyring()
     if len(payload) <= _CHUNK_CHARS:
         _kr_raw_set(username, payload)
         # A prior write may have been chunked; sweep stale chunk slots.
@@ -312,6 +359,7 @@ def _kr_get(username: str) -> Optional[str]:
 
 def _kr_delete(username: str) -> None:
     """Delete a (possibly chunked) value and all its chunk slots. Idempotent."""
+    retry_keyring()
     raw = _kr_raw_get(username)
     _kr_raw_delete(username)
     if raw is not None and raw.startswith(_CHUNK_SENTINELS):

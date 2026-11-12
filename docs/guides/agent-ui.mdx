@@ -612,6 +612,10 @@ Open **Settings → Model** (or the model chip in the message box):
   Keychain dialog. Until you answer it, the model list says macOS is asking for
   keychain access instead of offering to add a key. Click **Always Allow** and
   the list fills in on its own.
+- If you close the OS key store's unlock or "new keyring" prompt without
+  unlocking it, GAIA stops asking. The model list and **Settings → Model** say
+  the key store is locked and offer **Try again**, which asks the OS once more.
+  Connecting a provider or picking a cloud model also asks again.
 - The AMD LLM Gateway is greyed out, here and on the first-run setup screen,
   when its host can't be reached from this network. It reads "No network
   available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect

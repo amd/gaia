@@ -154,6 +154,15 @@ icon: "bug"
     keychain itself and asks again after each update.
   </Accordion>
 
+  <Accordion title="The model list says the OS key store is locked" icon="lock">
+    You closed the system prompt that unlocks your key store (on Linux, GNOME's
+    "Unlock keyring" or "Choose password for new keyring"), so GAIA can't read a
+    saved key. GAIA does not ask again on its own, so the prompt doesn't keep
+    coming back. When you want to use a saved key, choose **Try again** in the
+    model list or under **Settings → Model**, then unlock or create the keyring
+    in the prompt that opens.
+  </Accordion>
+
   <Accordion title="Use GAIA's own says GAIA's server is not installed" icon="box-open">
     Switching back from your Lemonade needs GAIA's own server, and on this PC it was
     never installed (or only partly). The switch is refused and GAIA keeps using
