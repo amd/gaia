@@ -870,11 +870,12 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
-                    <span className="flow-tool-label">{line}</span>
+                    {/* The model's narration is English in every UI language; it truncates at its own end. */}
+                    <span className="flow-tool-label" dir="auto">{line}</span>
                     {count > 1 && (
                         <span className="flow-tool-count" aria-label={t('activity.identicalCalls', { n: count })}>{'×'}{count}</span>
                     )}
-                    {failure && <span className="flow-tool-failure">{failure}</span>}
+                    {failure && <span className="flow-tool-failure" dir="auto">{failure}</span>}
                 </div>
                 <div className="flow-tool-right">
                     {timing && <span className="flow-tool-latency">{timing}</span>}
