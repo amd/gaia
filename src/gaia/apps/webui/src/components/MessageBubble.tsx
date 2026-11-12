@@ -186,15 +186,27 @@ export function isErrorContent(content: string): boolean {
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 /**
- * Drop an error step the answer is, word for word. A run that fails before
- * answering saves its error as the whole answer; it is shown once, there, with
- * its links. An answer that only quotes a tool's error keeps the step.
+ * Drop an error step the answer is, or ends with, word for word. A run that
+ * fails before answering saves its error as the whole answer (`echoed`); one
+ * that dies mid-answer saves what it wrote, then the error, which then reads
+ * below that text rather than above it. An answer that only quotes a tool's
+ * error keeps the step.
  */
 export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): { steps: AgentStep[]; echoed: boolean } {
     const answer = squash(content);
     if (!answer) return { steps, echoed: false };
-    const kept = steps.filter((s) => !(s.type === 'error' && s.detail && squash(s.detail) === answer));
-    return { steps: kept, echoed: kept.length < steps.length };
+    const tail = content.trimEnd();
+    let echoed = false;
+    const kept = steps.filter((s) => {
+        if (s.type !== 'error' || !s.detail?.trim()) return true;
+        if (squash(s.detail) === answer) {
+            echoed = true;
+            return false;
+        }
+        // The server appends the error as its own paragraph.
+        return !tail.endsWith(`\n\n${s.detail.trim()}`);
+    });
+    return { steps: kept, echoed };
 }
 
 /**
