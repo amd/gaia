@@ -329,6 +329,8 @@ const messages: Messages = {
     'answer.stoppedAfterPlace': 'توقّفت بعد {time} {place}',
     'answer.interruptedAfter': 'انقطعت بعد {time}',
     'answer.interruptedAfterPlace': 'انقطعت بعد {time} {place}',
+    'answer.failedAfter': 'فشلت بعد {time}',
+    'answer.failedAfterPlace': 'فشلت بعد {time} {place}',
     'answer.answeredPlace': 'اكتملت الإجابة {place}',
     'answer.ranPlace': 'جرى التشغيل {place}',
     'answer.firstWord': 'أول كلمة بعد {time}',
