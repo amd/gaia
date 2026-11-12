@@ -653,3 +653,23 @@ describe('sidebar destinations', () => {
         expect(screen.queryByRole('dialog', { name: 'Scheduled tasks' })).not.toBeInTheDocument();
     });
 });
+
+describe('New chat right after sending a first message', () => {
+    // v0.26.0-rc18: New chat clicked ~20 ms after Enter dropped the prompt.
+    // The chat existed but had not sent it yet, so it was cleaned up as an
+    // empty draft with the prompt inside, and nothing said so.
+    it('keeps the unsent message in the new chat box', async () => {
+        mocked.getMessages.mockImplementation(() => new Promise(() => { /* history still loading */ }));
+        mocked.deleteSession.mockResolvedValue({ deleted: true } as never);
+        render(<App />);
+        await sendFirstMessage('Reply with exactly: RACE-LOST-1');
+        await waitFor(() => expect(useChatStore.getState().pendingPrompt?.sessionId).toBe('sess-new-0001'));
+
+        await userEvent.click(await screen.findByRole('button', { name: 'New chat' }));
+
+        expect(useChatStore.getState().currentSessionId).toBeNull();
+        expect(useChatStore.getState().pendingPrompt).toBeNull();
+        expect(await screen.findByLabelText('Message')).toHaveValue('Reply with exactly: RACE-LOST-1');
+        expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+    });
+});
