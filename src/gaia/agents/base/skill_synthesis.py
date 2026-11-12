@@ -726,7 +726,7 @@ def _outcomes_since_learned(prior: Dict) -> Dict[str, int]:
         return {}
     return {
         key: int(provenance[key])
-        for key in ("outcomes", "outcome_successes")
+        for key in ("outcomes", "outcome_successes", "unscored_outcomes")
         if provenance.get(key) is not None
     }
 

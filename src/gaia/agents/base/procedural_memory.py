@@ -586,7 +586,8 @@ class ProceduralMemoryMixin:
         procedure has ``MIN_OUTCOMES_TO_RETIRE`` outcomes since it was learned,
         a failure that leaves it below the success rate it was learned at
         disables it. That rate is judged per session: each session it was
-        learned from is one success, each outcome one attempt.
+        learned from is one success, each outcome one attempt. Outcomes counted
+        before approvals were (``unscored_outcomes``) are left out of both.
 
         Consumes the turn's decisions, so a turn is counted once.
         """
@@ -625,12 +626,14 @@ class ProceduralMemoryMixin:
         logger.info("[MemoryMixin] procedure outcome: failure for %s", sorted(failed))
         bar = load_synthesis_config(_load_memory_settings()).min_success_rate
         for skill_id, record in failed.items():
-            if record.outcomes < MIN_OUTCOMES_TO_RETIRE:
+            # An RC row's earlier outcomes have no approval count, so only the
+            # ones scored since are judged.
+            if record.scored_outcomes < MIN_OUTCOMES_TO_RETIRE:
                 continue
             # Sessions and turns, not birth tool calls: 15 calls from three
             # sessions must not outweigh three declines.
             successes = record.learned_from + record.outcome_successes
-            attempts = record.learned_from + record.outcomes
+            attempts = record.learned_from + record.scored_outcomes
             if successes / attempts >= bar:
                 continue
             if store.disable_skill(skill_id):

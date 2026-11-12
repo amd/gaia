@@ -60,6 +60,8 @@ class SkillOutcomeRecord(NamedTuple):
     tool calls plus one per outcome.  ``outcomes`` / ``outcome_successes`` count
     turns since the lineage was learned, and ``learned_from`` the sessions it
     was distilled from — the two numbers in the same unit.
+    ``unscored_outcomes`` are outcomes counted before approvals were (an RC
+    row), so whether each was an approval is unknown.
     """
 
     success_count: int
@@ -67,6 +69,12 @@ class SkillOutcomeRecord(NamedTuple):
     outcomes: int
     outcome_successes: int
     learned_from: int
+    unscored_outcomes: int = 0
+
+    @property
+    def scored_outcomes(self) -> int:
+        """Outcomes whose approvals are in ``outcome_successes``."""
+        return self.outcomes - self.unscored_outcomes
 
 
 # ============================================================================
@@ -4092,7 +4100,9 @@ class MemoryStore:
         Adds one to ``attempt_count``, and to ``success_count`` when *success*,
         on top of the counts the row was born with, and one to
         ``provenance.outcomes`` (and ``provenance.outcome_successes`` when
-        *success*), the outcomes recorded since it was learned.
+        *success*), the outcomes recorded since it was learned.  A row that
+        counted outcomes before approvals were counted gets those outcomes
+        recorded as ``provenance.unscored_outcomes`` on its first update.
         What makes an outcome is the caller's definition
         (``ProceduralMemoryMixin._record_procedure_outcome``).
 
@@ -4121,7 +4131,12 @@ class MemoryStore:
                 self._conn.execute(
                     "UPDATE procedures SET attempt_count = attempt_count + 1, "
                     "success_count = success_count + ?, "
-                    "provenance = json_set(COALESCE(provenance, '{}'), "
+                    "provenance = json_set("
+                    "CASE WHEN json_extract(provenance, '$.outcomes') IS NOT NULL "
+                    "AND json_extract(provenance, '$.outcome_successes') IS NULL "
+                    "THEN json_set(provenance, '$.unscored_outcomes', "
+                    "json_extract(provenance, '$.outcomes')) "
+                    "ELSE COALESCE(provenance, '{}') END, "
                     "'$.outcomes', "
                     "COALESCE(json_extract(provenance, '$.outcomes'), 0) + 1, "
                     "'$.outcome_successes', "
@@ -4133,7 +4148,8 @@ class MemoryStore:
                     "SELECT id, success_count, attempt_count, "
                     "json_extract(provenance, '$.outcomes'), "
                     "json_extract(provenance, '$.outcome_successes'), "
-                    "COALESCE(json_array_length(provenance, '$.from_sessions'), 0) "
+                    "COALESCE(json_array_length(provenance, '$.from_sessions'), 0), "
+                    "COALESCE(json_extract(provenance, '$.unscored_outcomes'), 0) "
                     f"FROM procedures WHERE id IN ({placeholders})",
                     ids,
                 ).fetchall()

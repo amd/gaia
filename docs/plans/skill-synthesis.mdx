@@ -265,10 +265,14 @@ an *empirical* outcome for procedures:
   a session `unusable` instead of clustering it. Otherwise runs that refused a
   procedure's step would relearn it without that step and supersede it.
 - **A supersede keeps the record.** The successor row carries the prior row's
-  `outcomes` and `outcome_successes`, so re-synthesis does not reset the count a
-  retirement is judged on.
+  `outcomes`, `outcome_successes` and `unscored_outcomes`, so re-synthesis does not
+  reset the count a retirement is judged on.
 - Existing rows keep their birth counts; outcomes add to `success_count` /
-  `attempt_count`, and no migration rewrites them.
+  `attempt_count`, and no migration rewrites them. A row from an RC that counted
+  `outcomes` but not `outcome_successes` gets those outcomes recorded as
+  `provenance.unscored_outcomes` on its next outcome. They are left out of the rate
+  and of the `MIN_OUTCOMES_TO_RETIRE` count, so earlier approvals are not read as
+  declines, and the row is judged once it has three outcomes of its own.
 
 ### Thresholds
 

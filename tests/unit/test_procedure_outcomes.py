@@ -86,18 +86,27 @@ def _enabled(store, skill_id) -> bool:
     return bool(store.search_skills(skill_id=skill_id))
 
 
+def _rc_provenance(outcomes: int, sessions: int = 3) -> dict:
+    """Provenance as an RC since v0.26.0-rc6 wrote it: outcomes, no approvals."""
+    return {
+        "source": "synthesized",
+        "from_sessions": [f"s{i}" for i in range(1, sessions + 1)],
+        "outcomes": outcomes,
+    }
+
+
 class TestRecordSkillOutcome:
     def test_a_success_adds_one_to_both_counters(self, store):
         sid = _procedure(store)
         assert store.record_skill_outcome([sid], success=True) == {
-            sid: (10, 10, 1, 1, 1)
+            sid: (10, 10, 1, 1, 1, 0)
         }
         assert _record(store, sid) == (10, 10)
 
     def test_a_failure_adds_an_attempt_only(self, store):
         sid = _procedure(store)
         assert store.record_skill_outcome([sid], success=False) == {
-            sid: (9, 10, 1, 0, 1)
+            sid: (9, 10, 1, 0, 1, 0)
         }
         assert _record(store, sid) == (9, 10)
 
@@ -105,7 +114,7 @@ class TestRecordSkillOutcome:
         sid = _procedure(store, successes=4, attempts=5)
         store.record_skill_outcome([sid], success=True)
         assert store.record_skill_outcome([sid], success=False) == {
-            sid: (5, 7, 2, 1, 1)
+            sid: (5, 7, 2, 1, 1, 0)
         }
 
     def test_the_record_names_the_sessions_it_was_learned_from(self, store):
@@ -128,17 +137,37 @@ class TestRecordSkillOutcome:
             "outcome_successes": 1,
         }
 
+    def test_an_rc_row_marks_its_earlier_outcomes_unscored(self, store):
+        """An RC row counted outcomes but not approvals; those stay unscored."""
+        sid = _procedure(store, provenance=_rc_provenance(outcomes=2))
+        record = store.record_skill_outcome([sid], success=True)[sid]
+        assert (record.outcomes, record.outcome_successes) == (3, 1)
+        assert record.unscored_outcomes == 2
+        assert record.scored_outcomes == 1
+        provenance = store.search_skills(skill_id=sid)[0]["provenance"]
+        assert provenance["unscored_outcomes"] == 2
+        # Marked once: later outcomes are scored, the unscored count holds.
+        record = store.record_skill_outcome([sid], success=False)[sid]
+        assert (record.unscored_outcomes, record.scored_outcomes) == (2, 2)
+
+    def test_a_new_row_never_gets_an_unscored_count(self, store):
+        sid = _procedure(store)
+        store.record_skill_outcome([sid], success=False)
+        store.record_skill_outcome([sid], success=True)
+        provenance = store.search_skills(skill_id=sid)[0]["provenance"]
+        assert "unscored_outcomes" not in provenance
+
     def test_a_row_without_provenance_starts_counting(self, store):
         sid = _procedure(store, provenance=None)
         assert store.record_skill_outcome([sid], success=False) == {
-            sid: (9, 10, 1, 0, 0)
+            sid: (9, 10, 1, 0, 0, 0)
         }
 
     def test_each_recalled_procedure_is_counted(self, store):
         first = _procedure(store)
         second = _procedure(store, name="label-a-ticket", when_to_use="Label it.")
         counts = store.record_skill_outcome([first, second], success=False)
-        assert counts == {first: (9, 10, 1, 0, 1), second: (9, 10, 1, 0, 1)}
+        assert counts == {first: (9, 10, 1, 0, 1, 0), second: (9, 10, 1, 0, 1, 0)}
 
     def test_a_procedure_listed_twice_is_counted_once(self, store):
         sid = _procedure(store)
@@ -148,7 +177,7 @@ class TestRecordSkillOutcome:
     def test_a_procedure_forgotten_since_recall_is_skipped(self, store):
         sid = _procedure(store)
         assert store.record_skill_outcome(["proc_gone", sid], success=True) == {
-            sid: (10, 10, 1, 1, 1)
+            sid: (10, 10, 1, 1, 1, 0)
         }
 
     def test_nothing_is_written_after_an_erase(self, store):
@@ -418,6 +447,38 @@ class TestDemotion:
         host.turn(True)
         host.turn(True)
         host.turn(False)  # 5/6, three outcomes, still above the bar
+        assert _enabled(store, sid)
+
+    def test_rc_approvals_are_not_read_as_declines(self, host, store):
+        """Learned from 3 runs, approved twice on an RC, then one decline: 5/6,
+        not 3/6 — the RC approvals have no approval count to read."""
+        sid = _procedure(
+            store, successes=5, attempts=5, provenance=_rc_provenance(outcomes=2)
+        )
+        host.recall(sid)
+        host.turn(False)
+        assert _enabled(store, sid)
+
+    def test_an_rc_row_still_retires_on_its_new_record(self, host, store):
+        """The unscored outcomes don't shield it: declines counted since do."""
+        sid = _procedure(
+            store, successes=5, attempts=5, provenance=_rc_provenance(outcomes=2)
+        )
+        host.recall(sid)
+        for _ in range(MIN_OUTCOMES_TO_RETIRE - 1):
+            host.turn(False)
+        assert _enabled(store, sid), "judged before its new record was complete"
+        host.turn(False)  # 3 runs + 3 scored declines: 3/6
+        assert not _enabled(store, sid)
+
+    def test_an_rc_row_with_approvals_since_survives_a_decline(self, host, store):
+        sid = _procedure(
+            store, successes=5, attempts=5, provenance=_rc_provenance(outcomes=4)
+        )
+        host.recall(sid)
+        host.turn(True)
+        host.turn(True)
+        host.turn(False)  # 3 runs + 2/3 scored: 5/6
         assert _enabled(store, sid)
 
     def test_a_success_never_disables(self, host, store):
