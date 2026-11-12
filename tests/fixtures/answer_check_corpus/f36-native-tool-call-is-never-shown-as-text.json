@@ -1,0 +1,17 @@
+{
+  "kind": "stream",
+  "finding": "F36 (amd/gaia#7205)",
+  "why": "A cloud model on the in-text tool format can still call a tool natively; that JSON envelope is control data, never answer text.",
+  "chunks": [
+    "Saving that.",
+    "{\"__tool_calls__\": [{\"id\": \"call_1\", \"function\": {\"name\": \"remember\", \"arguments\": \"{\\\"fact\\\": \\\"prefers metric units\\\", \\\"sensitive\\\": \\\"true\\\"}\"}}], \"finish_reason\": \"tool_calls\", \"content\": null}"
+  ],
+  "expect": {
+    "shown_has": [
+      "Saving that."
+    ],
+    "shown_lacks": [
+      "__tool_calls__"
+    ]
+  }
+}

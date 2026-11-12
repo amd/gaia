@@ -204,7 +204,7 @@ _MAX_SHELL_SCOPE_WORDS = 2
 #: ``wait_for_condition`` belongs here because its ``command`` is a shell
 #: command like any other — scoping the grant to it keeps "always" from becoming
 #: "any command, as long as you poll with it".
-_SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
+_SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 
 #: Tools whose blast radius is one path. A prompt for a file inside a named
 #: folder may offer a chat-scoped folder grant; a bare filename stays exact so

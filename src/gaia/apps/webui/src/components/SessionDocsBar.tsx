@@ -8,7 +8,11 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 
 /** The documents indexed for this chat, shown under the header; renders nothing when there are none. */
-export function SessionDocsBar({ sessionId }: { sessionId: string }) {
+export function SessionDocsBar({ sessionId, onDetachFailed }: {
+    sessionId: string;
+    /** Called with the document's name when removing it from the chat fails. */
+    onDetachFailed: (name: string, err: unknown) => void;
+}) {
     const session = useChatStore((s) => s.sessions.find((x) => x.id === sessionId));
     const documents = useChatStore((s) => s.documents);
     const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
@@ -35,8 +39,9 @@ export function SessionDocsBar({ sessionId }: { sessionId: string }) {
             log.doc.info(`Detached document from session: ${doc?.filename || docId}`);
         } catch (err) {
             log.doc.error(`Failed to detach document: ${doc?.filename || docId}`, err);
+            onDetachFailed(doc?.filename || docId, err);
         }
-    }, [documents, sessionId, updateSessionInList]);
+    }, [documents, sessionId, updateSessionInList, onDetachFailed]);
 
     if (sessionDocs.length === 0) return null;
 

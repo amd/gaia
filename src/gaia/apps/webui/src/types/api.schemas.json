@@ -312,6 +312,17 @@
         ],
         "title": "Decision"
       },
+      "declined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Declined"
+      },
       "detail": {
         "anyOf": [
           {
@@ -2605,6 +2616,237 @@
     "title": "LoadedModelInfo",
     "type": "object"
   },
+  "LogFileInfo": {
+    "description": "One log file a source offers.",
+    "properties": {
+      "modified": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Modified"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      },
+      "size_bytes": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size Bytes"
+      }
+    },
+    "required": [
+      "name",
+      "path"
+    ],
+    "title": "LogFileInfo",
+    "type": "object"
+  },
+  "LogLineInfo": {
+    "description": "One redacted log line.",
+    "properties": {
+      "severity": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Severity"
+      },
+      "tag": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Tag"
+      },
+      "text": {
+        "title": "Text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "LogLineInfo",
+    "type": "object"
+  },
+  "LogReadResponse": {
+    "description": "A log's recent lines for the viewer, or a reason code when it can't be read.",
+    "properties": {
+      "available": {
+        "default": false,
+        "title": "Available",
+        "type": "boolean"
+      },
+      "base_url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base Url"
+      },
+      "cursor": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cursor"
+      },
+      "detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Detail"
+      },
+      "dropped": {
+        "default": 0,
+        "title": "Dropped",
+        "type": "integer"
+      },
+      "lines": {
+        "items": {
+          "$ref": "#/components/schemas/LogLineInfo"
+        },
+        "title": "Lines",
+        "type": "array"
+      },
+      "log_path": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Log Path"
+      },
+      "owner": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Owner"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      },
+      "reset": {
+        "default": false,
+        "title": "Reset",
+        "type": "boolean"
+      },
+      "server_answering": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Server Answering"
+      },
+      "source": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Source"
+      }
+    },
+    "title": "LogReadResponse",
+    "type": "object"
+  },
+  "LogSourceInfo": {
+    "description": "A group of logs: model_server | gaia | service | agent | desktop | other.",
+    "properties": {
+      "files": {
+        "items": {
+          "$ref": "#/components/schemas/LogFileInfo"
+        },
+        "title": "Files",
+        "type": "array"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "title": "LogSourceInfo",
+    "type": "object"
+  },
+  "LogSourcesResponse": {
+    "properties": {
+      "sources": {
+        "items": {
+          "$ref": "#/components/schemas/LogSourceInfo"
+        },
+        "title": "Sources",
+        "type": "array"
+      }
+    },
+    "required": [
+      "sources"
+    ],
+    "title": "LogSourcesResponse",
+    "type": "object"
+  },
   "McpOutputResponse": {
     "description": "The text an MCP tool returned, capped for the tool row.",
     "properties": {
@@ -2969,6 +3211,11 @@
   "ModelStatus": {
     "description": "Status of a custom model on the Lemonade server.",
     "properties": {
+      "checked": {
+        "default": false,
+        "title": "Checked",
+        "type": "boolean"
+      },
       "downloaded": {
         "default": false,
         "title": "Downloaded",
@@ -4660,24 +4907,6 @@
     "title": "SpeechSettingsUpdate",
     "type": "object"
   },
-  "StartAgentServerRequest": {
-    "properties": {
-      "backend_url": {
-        "default": "http://localhost:4200",
-        "title": "Backend Url",
-        "type": "string"
-      },
-      "port": {
-        "default": 8766,
-        "maximum": 65535.0,
-        "minimum": 1024.0,
-        "title": "Port",
-        "type": "integer"
-      }
-    },
-    "title": "StartAgentServerRequest",
-    "type": "object"
-  },
   "SystemStatus": {
     "description": "System readiness status.",
     "properties": {
@@ -5090,58 +5319,6 @@
       "description"
     ],
     "title": "TaskCreate",
-    "type": "object"
-  },
-  "TaskListResponse": {
-    "description": "List of background tasks.",
-    "properties": {
-      "tasks": {
-        "items": {
-          "$ref": "#/components/schemas/TaskResponse"
-        },
-        "title": "Tasks",
-        "type": "array"
-      }
-    },
-    "required": [
-      "tasks"
-    ],
-    "title": "TaskListResponse",
-    "type": "object"
-  },
-  "TaskResponse": {
-    "description": "A single background task visible to the frontend.",
-    "properties": {
-      "error": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Error"
-      },
-      "id": {
-        "title": "Id",
-        "type": "string"
-      },
-      "name": {
-        "title": "Name",
-        "type": "string"
-      },
-      "status": {
-        "title": "Status",
-        "type": "string"
-      }
-    },
-    "required": [
-      "id",
-      "name",
-      "status"
-    ],
-    "title": "TaskResponse",
     "type": "object"
   },
   "TaskStatusUpdate": {

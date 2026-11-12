@@ -93,10 +93,6 @@ MAX_SPEAKERS = 8
 # Refinement is one LLM pass per section; a 46-minute meeting is ~9 sections.
 REFINE_TOOL_TIMEOUT = 3600
 
-# A section must fit the REPLY budget, not just the context window: the model
-# re-emits the whole section with speaker labels, so output ~= input.
-REFINE_SECTION_CHARS = 3500
-
 # Room for the section back out, plus a reasoning model's private thinking.
 REFINE_MAX_TOKENS = 4096
 
@@ -114,39 +110,6 @@ ANALYZE_CLOUD_PARALLEL = 4
 PARAGRAPH_SECONDS = 60.0
 
 EXPORT_FORMATS = ("srt", "vtt", "txt")
-
-# A speaker label is one to three capitalised words, or "Speaker X". Prose
-# preambles a small model emits ("Note:", "Action items:", "Here is the
-# corrected transcript:") must not become speakers — they used to, and then
-# propagated into every later section via the carried speaker list.
-_SPEAKER_LINE = re.compile(
-    r"^(?:Speaker [A-Z0-9]{1,3}|[A-Z][a-z'-]+(?: [A-Z][a-z'-]+){0,2})\s*:",
-    re.MULTILINE,
-)
-_NOT_A_SPEAKER = frozenset(
-    {"Note", "Notes", "Summary", "Transcript", "Action", "Speakers", "Output"}
-)
-
-
-def _split_sections(text: str, limit: int) -> List[str]:
-    """Split on sentence boundaries so a turn is not cut mid-thought."""
-    if len(text) <= limit:
-        return [text]
-    pieces = re.split(r"(?<=[.!?])\s+", text)
-    sections, current = [], ""
-    for piece in pieces:
-        if current and len(current) + len(piece) + 1 > limit:
-            sections.append(current)
-            current = piece
-        else:
-            current = f"{current} {piece}".strip()
-    if current:
-        sections.append(current)
-    return sections
-
-
-_TURN_SPAN = re.compile(r"^\s*(\d+)\s*[-–]\s*(\d+)\s*:\s*(.+?)\s*$", re.MULTILINE)
-
 
 _TURN_LABEL = re.compile(r"^\s*(\d+)\s*[:.]\s*(.+?)\s*$", re.MULTILINE)
 
@@ -343,59 +306,6 @@ def _turns_from_gaps(segments: List[dict], gap_seconds: float) -> List[List[dict
         else:
             turns.append([seg])
     return turns
-
-
-def _sentences(text: str) -> List[str]:
-    """Split a section into sentences, the unit a speaker turn starts on."""
-    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
-
-
-def _parse_turn_spans(reply: str, count: int) -> List[tuple]:
-    """Read `START-END: Name` lines into ordered, gap-free spans.
-
-    Every sentence must land in exactly one turn — a model that skips or
-    overlaps ranges would otherwise silently drop speech. Gaps are healed by
-    extending the previous turn, and anything left over is appended, so the
-    output always contains the whole section.
-    """
-    spans: List[tuple] = []
-    for raw_start, raw_end, name in _TURN_SPAN.findall(reply):
-        start, end = int(raw_start), int(raw_end)
-        label = name.strip().rstrip(":").strip()
-        if not label or start < 1 or end < start or start > count:
-            continue
-        end = min(end, count)
-        if spans and start <= spans[-1][1]:
-            start = spans[-1][1] + 1  # overlap: the earlier turn wins
-            if start > end:
-                continue
-        if spans and start > spans[-1][1] + 1:
-            prev = spans[-1]
-            spans[-1] = (prev[0], start - 1, prev[2])  # heal the gap
-        spans.append((start, end, label))
-
-    if not spans:
-        return [(1, count, "Speaker A")]
-    if spans[0][0] > 1:
-        spans[0] = (1, spans[0][1], spans[0][2])
-    if spans[-1][1] < count:
-        last = spans[-1]
-        spans[-1] = (last[0], count, last[2])
-    return spans
-
-
-def _collect_speakers(blocks: List[str]) -> List[str]:
-    """Distinct speaker labels, in first-appearance order."""
-    seen: List[str] = []
-    for block in blocks:
-        for line in _SPEAKER_LINE.findall(block):
-            clean = line.rstrip(":").strip()
-            if not clean or clean in seen:
-                continue
-            if clean.split()[0] in _NOT_A_SPEAKER:
-                continue
-            seen.append(clean)
-    return seen
 
 
 def _render_refined(
@@ -859,6 +769,7 @@ class AudioToolsMixin:
             raise_if_cancelled()
             self._report_stage("decode", "Audio ready", state=STAGE_DONE)
             client = LemonadeASRClient(model=model or DEFAULT_ASR_MODEL)
+            self._download_speech_model(client)
             expected = media_seconds / REALTIME_FACTOR
             self._report_stage(
                 "transcribe",
@@ -1717,6 +1628,31 @@ class AudioToolsMixin:
         if lemonade_error:
             result["lemonade_error"] = lemonade_error
         return result
+
+    def _download_speech_model(self, client) -> None:
+        """Download a missing speech model as its own visible step.
+
+        Lemonade would otherwise pull it inside the first transcription
+        request, behind a "Transcribing" line that knows nothing of it.
+        """
+        from gaia.agents.base.tools import raise_if_cancelled
+
+        line = [""]
+
+        def say(message: str) -> None:
+            size = re.search(r"\(~[\d.]+ GB\)", message)
+            line[0] = (
+                f"Downloading the speech model {client.model}"
+                + (f" {size.group(0)}" if size else "")
+                + ", one time"
+            )
+            self._report_progress(line[0])
+
+        def on_percent(percent: int) -> None:
+            raise_if_cancelled()
+            self._report_progress(f"{line[0]} — {percent}%")
+
+        client.ensure_model(say=say, on_percent=on_percent)
 
     def _report_download(self, message: str) -> None:
         """Turn the downloader's progress lines into the download stage."""
