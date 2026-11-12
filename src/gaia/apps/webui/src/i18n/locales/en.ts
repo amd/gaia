@@ -840,7 +840,7 @@ export const enMessages = {
     'docs.hint': 'A chat searches only the documents attached to it.',
     'docs.drop': 'Drop files here to add them',
     'docs.dropHint': 'PDF, TXT, MD, code files, and 50+ formats',
-    'docs.pathPlaceholder': 'Or enter a file or folder path: {example}',
+    'docs.pathHint': 'Or enter a file or folder path',
     'docs.pathAria': 'File path to add',
     'docs.index': 'Add',
     'docs.browse': 'Browse files',
