@@ -83,7 +83,8 @@ STATES = {
 
 def start_up_warm_up(_tmp_path) -> list:
     """The model the flagship sidecar loads when the app starts."""
-    from gaia_agent import server as sidecar
+    # The unit job has no flagship package; test_gaia_agent.yml runs this.
+    sidecar = pytest.importorskip("gaia_agent.server")
 
     model = sidecar._model_to_warm()
     return [model] if model else []
