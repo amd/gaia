@@ -1281,13 +1281,6 @@ const messages: Messages = {
     'settings.colors.reset': 'إعادة تعيين',
     'settings.colors.hint': 'تتكيّف ألوان النص تلقائيًا ليبقى كل شيء مقروءًا في الوضعين الفاتح والداكن.',
     'settings.shortcuts': 'اختصارات لوحة المفاتيح',
-    'settings.shortcut.send': 'إرسال',
-    'settings.shortcut.newLine': 'سطر جديد',
-    'settings.shortcut.stop': 'إيقاف الإجابة',
-    'settings.shortcut.newChat': 'محادثة جديدة',
-    'settings.shortcut.search': 'البحث في المحادثات',
-    'settings.shortcut.sidebar': 'إظهار الشريط الجانبي أو إخفاؤه',
-    'settings.shortcut.settings': 'الإعدادات',
 
     // First-run setup: choosing models, the GPU share, downloads (#6226)
     'setup.rail.label': 'خطوات الإعداد',

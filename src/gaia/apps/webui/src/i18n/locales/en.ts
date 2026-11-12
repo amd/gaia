@@ -1281,13 +1281,6 @@ export const enMessages = {
     'settings.colors.reset': 'Reset',
     'settings.colors.hint': 'Text colors adjust on their own so everything stays readable in light and dark.',
     'settings.shortcuts': 'Keyboard shortcuts',
-    'settings.shortcut.send': 'Send',
-    'settings.shortcut.newLine': 'New line',
-    'settings.shortcut.stop': 'Stop the answer',
-    'settings.shortcut.newChat': 'New chat',
-    'settings.shortcut.search': 'Search chats',
-    'settings.shortcut.sidebar': 'Show or hide the sidebar',
-    'settings.shortcut.settings': 'Settings',
 
     // First-run setup: choosing models, the GPU share, downloads (#6226)
     'setup.rail.label': 'Setup steps',

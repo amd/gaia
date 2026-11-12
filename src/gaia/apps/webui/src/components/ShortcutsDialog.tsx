@@ -11,13 +11,13 @@ import { useT } from '../i18n/useT';
 import { formatShortcut } from '../utils/platform';
 import './ShortcutsDialog.css';
 
-/** Every shortcut the app answers, in the words and keys this platform uses. */
+/** Every shortcut the app answers; the one list the sheet and Settings both show. */
 export const SHORTCUTS: ReadonlyArray<{ label: MessageKey; keys: string }> = [
-    { label: 'shortcuts.newChat', keys: formatShortcut('Mod+Shift+O') },
-    { label: 'shortcuts.search', keys: formatShortcut('Mod+K') },
-    { label: 'shortcuts.sidebar', keys: formatShortcut('Mod+B') },
-    { label: 'shortcuts.settings', keys: formatShortcut('Mod+,') },
-    { label: 'shortcuts.sheet', keys: formatShortcut('Mod+/') },
+    { label: 'shortcuts.newChat', keys: 'Mod+Shift+O' },
+    { label: 'shortcuts.search', keys: 'Mod+K' },
+    { label: 'shortcuts.sidebar', keys: 'Mod+B' },
+    { label: 'shortcuts.settings', keys: 'Mod+,' },
+    { label: 'shortcuts.sheet', keys: 'Mod+/' },
     { label: 'shortcuts.send', keys: 'Enter' },
     { label: 'shortcuts.newLine', keys: 'Shift+Enter' },
     { label: 'shortcuts.stop', keys: 'Esc' },
@@ -45,7 +45,7 @@ export function ShortcutsDialog({ onClose }: { onClose: () => void }) {
                     {SHORTCUTS.map(({ label, keys }) => (
                         <div key={label} className="shortcuts-row">
                             <dt>{t(label)}</dt>
-                            <dd><kbd dir="ltr">{keys}</kbd></dd>
+                            <dd><kbd dir="ltr">{formatShortcut(keys)}</kbd></dd>
                         </div>
                     ))}
                 </dl>
