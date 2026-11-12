@@ -240,7 +240,7 @@ class TestFileUpload:
             files={"file": ("empty.txt", io.BytesIO(b""), "text/plain")},
         )
         assert resp.status_code == 400
-        assert "empty" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["status"] == "empty_file"
 
     def test_upload_disallowed_extension(self, client):
         """Upload a .exe file should return 400."""
@@ -255,7 +255,7 @@ class TestFileUpload:
             },
         )
         assert resp.status_code == 400
-        assert "not allowed" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["status"] == "unsupported_type"
 
     def test_upload_disallowed_extension_bat_not_doc(self, client):
         """Upload a .dll file should return 400, .bat is allowed."""
@@ -288,7 +288,7 @@ class TestFileUpload:
             files={"file": ("big.txt", io.BytesIO(b"x" * size), "text/plain")},
         )
         assert resp.status_code == 413
-        assert "too large" in resp.json()["detail"].lower()
+        assert resp.json()["detail"]["status"] == "too_large"
 
     def test_upload_preserves_extension(self, client):
         """Verify uploaded filename is <id>_<name>.ext pattern."""
