@@ -838,6 +838,7 @@ export const enMessages = {
     'prompt.willWrite': 'What will be saved',
     'prompt.willChange': 'What will change',
     'prompt.emptyFile': 'An empty file.',
+    'prompt.unseenChars': "This text holds characters that don't show. Those that hide or reorder text appear as [U+XXXX]; they are saved as written.",
     'prompt.in': 'in',
     'prompt.showAllLines': 'Show all {n} lines',
     'prompt.showLess': 'Show less',

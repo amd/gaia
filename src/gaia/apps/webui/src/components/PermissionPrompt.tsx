@@ -66,14 +66,16 @@ export function splitCommandSummary(summary: string): { command: string; folder:
 export const CODE_PREVIEW_LINES = 12;
 
 /** Long text, collapsed past `previewLines` lines (the code a gated call runs, a tool's output). */
-export function CodeBlock({ code, previewLines = CODE_PREVIEW_LINES, testId = 'perm-code' }: {
+export function CodeBlock({ code, previewLines = CODE_PREVIEW_LINES, testId = 'perm-code', exact = false }: {
     code: string;
     previewLines?: number;
     testId?: string;
+    /** Keep every blank line; only the final line break is dropped. */
+    exact?: boolean;
 }) {
     const t = useT();
     const [expanded, setExpanded] = useState(false);
-    const lines = code.replace(/^\n+|\n+$/g, '').split('\n');
+    const lines = (exact ? code.replace(/\n$/, '') : code.replace(/^\n+|\n+$/g, '')).split('\n');
     const long = lines.length > previewLines;
     const shown = (long && !expanded ? lines.slice(0, previewLines) : lines).join('\n');
     return (

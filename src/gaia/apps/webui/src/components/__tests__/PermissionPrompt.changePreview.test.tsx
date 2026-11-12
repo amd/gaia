@@ -74,6 +74,51 @@ describe('write and edit prompts', () => {
     });
 });
 
+describe('a preview never reads unlike the file', () => {
+    it('shows a character that reorders text as a code, and says so', () => {
+        // U+202E would draw "evil()" reversed while the file keeps it as written.
+        show('write_file', { file_path: 'a.py', content: 'ok = 1\n# \u202Eevil()\n' });
+
+        const preview = screen.getByTestId('perm-write-preview').textContent ?? '';
+        expect(preview).toContain('[U+202E]evil()');
+        expect(preview).not.toContain('\u202E');
+        expect(screen.getByTestId('perm-change-unseen')).toBeInTheDocument();
+    });
+
+    it('shows a zero-width character an edit adds', () => {
+        show('edit_file', { file_path: 'a.txt', old_content: 'admin = false\n', new_content: 'admin\u200B = true\n' });
+
+        expect(screen.getByTestId('perm-edit-diff').textContent).toContain('+admin[U+200B] = true');
+        expect(screen.getByTestId('perm-change-unseen')).toBeInTheDocument();
+    });
+
+    it('adds no note to plain text, tabs and Arabic', () => {
+        show('write_file', { file_path: 'a.md', content: 'name\tvalue\nمرحبا\n' });
+
+        expect(screen.getByTestId('perm-write-preview').textContent).toBe('name\tvalue\nمرحبا');
+        expect(screen.queryByTestId('perm-change-unseen')).toBeNull();
+    });
+
+    it('keeps blank lines at the start of a write', () => {
+        show('write_file', { file_path: 'a.md', content: '\n\nbody\n' });
+
+        expect(screen.getByTestId('perm-write-preview').textContent).toBe('\n\nbody');
+    });
+
+    it('does not call a whitespace-only write empty', () => {
+        show('write_file', { file_path: 'a.md', content: '   \n' });
+
+        expect(screen.queryByText('An empty file.')).toBeNull();
+        expect(screen.getByTestId('perm-write-preview').textContent).toBe('   ');
+    });
+
+    it('calls only a truly empty write empty', () => {
+        show('write_file', { file_path: 'a.md', content: '' });
+
+        expect(screen.getByText('An empty file.')).toBeInTheDocument();
+    });
+});
+
 describe('editLines', () => {
     it('keeps two unchanged lines around the change', () => {
         expect(editLines('a\nb\nc\nd\ne', 'a\nb\nc\nX\ne')).toEqual([' b', ' c', '-d', '+X', ' e']);
@@ -81,5 +126,13 @@ describe('editLines', () => {
 
     it('reads a new file as all added', () => {
         expect(editLines('', 'one\ntwo')).toEqual(['+one', '+two']);
+    });
+
+    it('shows an edit that only drops the final line break as a change', () => {
+        expect(editLines('a\nb\n', 'a\nb')).toEqual(['-a', '-b', '+a', '+b']);
+    });
+
+    it('shows an edit that only changes line endings as a change', () => {
+        expect(editLines('a\r\nb', 'a\nb')).not.toEqual([]);
     });
 });

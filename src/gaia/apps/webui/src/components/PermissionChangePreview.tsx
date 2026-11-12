@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { useT } from '../i18n/useT';
 import { CodeBlock } from './PermissionPrompt';
+import { unseen, visibleText } from './CalendarApproval';
 import './render/render.css';
 import './PermissionChangePreview.css';
 
@@ -37,6 +38,10 @@ export function editLines(before: string, after: string): string[] {
     while (head < a.length && head < b.length && a[head] === b[head]) head++;
     let tail = 0;
     while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+    // Only a line ending or the final line break differs: show both sides whole, never "no change".
+    if (head + tail >= a.length && head + tail >= b.length && before !== after) {
+        return [...a.map((l) => `-${l}`), ...b.map((l) => `+${l}`)];
+    }
     return [
         ...a.slice(Math.max(0, head - CONTEXT_LINES), head).map((l) => ` ${l}`),
         ...a.slice(head, a.length - tail).map((l) => `-${l}`),
@@ -60,7 +65,7 @@ function EditDiff({ lines }: { lines: string[] }) {
     return (
         <>
             <pre dir="ltr" className="render-diff__body perm-card-diff" data-testid="perm-edit-diff">
-                {shown.map((line, i) => <div key={i} className={lineClass(line)}>{line}</div>)}
+                {shown.map((line, i) => <div key={i} className={lineClass(line)}>{visibleText(line, true)}</div>)}
             </pre>
             {long && (
                 <button type="button" className="perm-card-args-toggle" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
@@ -76,14 +81,17 @@ export function ChangePreview({ args }: { args: Record<string, unknown> }) {
     const t = useT();
     const change = fileChange(args);
     if (!change) return null;
+    // A character that hides or reorders text would make the preview read unlike the file.
+    const hidden = change.kind === 'edit' ? unseen(args.old_content) || unseen(args.new_content) : unseen(change.text);
     return (
         <div className="perm-card-change">
             <p className="perm-card-change-label">{t(change.kind === 'edit' ? 'prompt.willChange' : 'prompt.willWrite')}</p>
             {change.kind === 'edit'
                 ? <EditDiff lines={change.lines} />
-                : change.text.trim()
-                ? <CodeBlock code={change.text} previewLines={CHANGE_PREVIEW_LINES} testId="perm-write-preview" />
+                : change.text
+                ? <CodeBlock code={visibleText(change.text, true)} previewLines={CHANGE_PREVIEW_LINES} testId="perm-write-preview" exact />
                 : <p className="perm-card-detail">{t('prompt.emptyFile')}</p>}
+            {hidden && <p className="perm-card-risk" role="note" data-testid="perm-change-unseen">{t('prompt.unseenChars')}</p>}
         </div>
     );
 }

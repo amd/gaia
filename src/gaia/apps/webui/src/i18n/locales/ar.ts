@@ -838,6 +838,7 @@ const messages: Messages = {
     'prompt.willWrite': 'ما سيُحفظ',
     'prompt.willChange': 'ما سيتغيّر',
     'prompt.emptyFile': 'ملف فارغ.',
+    'prompt.unseenChars': 'يحتوي هذا النص على أحرف لا تظهر. تظهر الأحرف التي تُخفي النص أو تعيد ترتيبه بالشكل [U+XXXX]، وتُحفظ كما كُتبت.',
     'prompt.in': 'في',
     'prompt.showAllLines': 'عرض كل الأسطر ({n})',
     'prompt.showLess': 'عرض أقل',
