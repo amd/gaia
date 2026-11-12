@@ -40,7 +40,7 @@ interface DraftCheckState {
 
 /**
  * Pure predicate (state passed in) so it can be unit-tested without the store.
- * Returns true when ``sessionId`` is an abandoned "New Task" draft safe to drop.
+ * Returns true when ``sessionId`` is an abandoned "New chat" (or legacy "New Task") draft safe to drop.
  */
 export function isAbandonedDraft(sessionId: string, state: DraftCheckState): boolean {
     const s = state.sessions.find((x) => x.id === sessionId);
