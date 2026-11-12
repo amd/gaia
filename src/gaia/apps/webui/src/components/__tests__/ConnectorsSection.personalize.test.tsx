@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import type { ConnectorRow } from '../../types';
 
 vi.mock('../../services/api', () => ({
@@ -20,8 +20,9 @@ vi.mock('../../services/api', () => ({
     testConnector: vi.fn(),
 }));
 
+const sse = vi.hoisted(() => ({ notify: null as null | ((event: { reason: string; connectorId: string; payload: Record<string, unknown> }) => void) }));
 vi.mock('../../hooks/useConnectorsSSE', () => ({
-    useConnectorsSSE: () => {},
+    useConnectorsSSE: (onEvent: NonNullable<typeof sse.notify>) => { sse.notify = onEvent; },
 }));
 
 import * as api from '../../services/api';
@@ -155,11 +156,26 @@ describe('Personalize GAIA offer', () => {
         expect(screen.queryByText('Memory is connected.')).toBeNull();
     });
 
-    it('opens the card for a connector that connects while its card is closed', async () => {
-        mocked.getConnector.mockResolvedValue(mcpRow({ id: 'mcp-memory', display_name: 'Memory', configured: true }));
-        await openTile(mcpRow({ id: 'mcp-memory', display_name: 'Memory' }));
-        fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+    it('opens the card of a connector that connects in the background, when no card is open', async () => {
+        const memory = mcpRow({ id: 'mcp-memory', display_name: 'Memory' });
+        mocked.listConnectors.mockResolvedValue({ connectors: [memory, mcpRow({ id: 'mcp-slack', display_name: 'Slack' })] } as never);
+        mocked.getConnector.mockResolvedValue({ ...memory, configured: true });
+        render(<ConnectorsSection />);
+        await screen.findByText('Memory');
+        act(() => sse.notify?.({ reason: 'configured', connectorId: 'mcp-memory', payload: {} }));
         await screen.findByText(/^Want GAIA to read/);
         expect(screen.getByRole('button', { name: /^Memory/ })).toHaveAttribute('aria-expanded', 'true');
+    });
+
+    it('leaves the card the user is reading open when another connector connects', async () => {
+        const memory = mcpRow({ id: 'mcp-memory', display_name: 'Memory' });
+        mocked.listConnectors.mockResolvedValue({ connectors: [memory, mcpRow({ id: 'mcp-slack', display_name: 'Slack' })] } as never);
+        mocked.getConnector.mockResolvedValue({ ...memory, configured: true });
+        render(<ConnectorsSection />);
+        fireEvent.click(await screen.findByText('Slack'));
+        act(() => sse.notify?.({ reason: 'configured', connectorId: 'mcp-memory', payload: {} }));
+        await waitFor(() => expect(mocked.getConnector).toHaveBeenCalledWith('mcp-memory'));
+        expect(screen.getByRole('button', { name: /^Slack/ })).toHaveAttribute('aria-expanded', 'true');
+        expect(screen.getByRole('button', { name: /^Memory/ })).toHaveAttribute('aria-expanded', 'false');
     });
 });

@@ -247,8 +247,8 @@ export function ConnectorsSection() {
             const before = connectorsRef.current.find((c) => c.id === id);
             if (before && 'configured' in before && !before.configured && row.configured) {
                 setJustConnected(id);
-                // Its card carries the one Personalize offer, so it has to be open.
-                setExpanded(id);
+                // Its card carries the one Personalize offer; open it unless the user is reading another.
+                setExpanded((prev) => prev ?? id);
             } else if (!row.configured || row.enabled === false) {
                 // A disconnect or disable takes back the offer made for that connector.
                 setJustConnected((prev) => (prev === id ? null : prev));
