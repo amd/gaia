@@ -2385,7 +2385,7 @@ export const enMessages = {
     'connectors.mcp-brave-search.BRAVE_API_KEY.help': 'Get a key from the [Brave Search API dashboard](https://api-dashboard.search.brave.com/).',
 
     // The connection banner
-    'banner.serverStopped': "The model server isn't running.",
+    'banner.serverStopped': "The model server isn't answering.",
     'banner.finishSetup': 'Set up models on this PC, or choose a cloud model in Settings.',
     'banner.unreachable': 'Can’t reach GAIA’s assistant.',
     'banner.unreachableHint': 'GAIA keeps trying to reconnect.',

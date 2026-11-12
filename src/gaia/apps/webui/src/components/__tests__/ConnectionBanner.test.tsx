@@ -106,7 +106,7 @@ describe('the model server is down', () => {
     it('never invents a start command the backend did not give', () => {
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(screen.getByText(/The model server isn't running/)).toBeInTheDocument();
+        expect(screen.getByText(/The model server isn't answering/)).toBeInTheDocument();
         expect(container.querySelector('code')).toBeNull();
         expect(container).not.toHaveTextContent('lemonade-server serve');
     });
@@ -115,9 +115,21 @@ describe('the model server is down', () => {
         const install = 'Lemonade Server is not installed. Run `gaia init` to install it, or set LEMONADE_SERVER_PATH to an existing install.';
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null, start_instruction: install } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(container).toHaveTextContent("The model server isn't running. Set up models on this PC");
+        expect(container).toHaveTextContent("The model server isn't answering. Set up models on this PC");
         expect(container).not.toHaveTextContent('gaia init');
         expect(container).not.toHaveTextContent('stopped');
+    });
+
+    it('never tells a set-up PC to run setup from a terminal', () => {
+        useChatStore.setState({ systemStatus: {
+            initialized: true, lemonade_running: false, start_command: 'gaia init',
+            start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
+        } as SystemStatus });
+        const { container } = render(<ConnectionBanner />);
+        expect(container).not.toHaveTextContent('gaia init');
+        expect(container.querySelector('code')).toBeNull();
+        expect(container).toHaveTextContent('cloud ones too');
+        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
     });
 
     it('offers a way to set up local models when none are installed, and only then', () => {
@@ -142,7 +154,7 @@ describe('the model server is down', () => {
         const { container } = render(<ConnectionBanner />);
         expect(container).toHaveTextContent('The model server is not answering (Lemonade health query failed)');
         expect(container).toHaveTextContent('may be busy');
-        expect(container).not.toHaveTextContent("isn't running");
+        expect(container).not.toHaveTextContent("isn't answering.");
         expect(container).toHaveTextContent('If it stays this way, restart it:');
         expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
     });

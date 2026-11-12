@@ -2386,7 +2386,7 @@ const messages: Messages = {
     'connectors.mcp-brave-search.BRAVE_API_KEY.help': 'احصل على مفتاح من [لوحة تحكم Brave Search](https://api-dashboard.search.brave.com/).',
 
     // The connection banner
-    'banner.serverStopped': 'خادم النماذج لا يعمل.',
+    'banner.serverStopped': 'خادم النماذج لا يستجيب.',
     'banner.finishSetup': 'أعدّ النماذج على هذا الجهاز، أو اختر نموذجًا سحابيًا من الإعدادات.',
     'banner.unreachable': 'تعذّر الوصول إلى مساعد GAIA.',
     'banner.unreachableHint': 'يواصل GAIA محاولة إعادة الاتصال.',
