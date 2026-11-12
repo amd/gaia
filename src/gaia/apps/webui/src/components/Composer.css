@@ -56,6 +56,18 @@
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+    container: composer-row / inline-size;
+}
+
+/* A narrow row gives way in this order before the model name is cut:
+   the day's spend, then the context bar (its % stays), then the folder's name (its icon stays). */
+@container composer-row (max-width: 600px) {
+    .spend-meter-today { display: none; }
+}
+
+@container composer-row (max-width: 540px) {
+    .context-meter .context-meter-bar { display: none; }
+    .folder-chip .composer-chip-label { display: none; }
 }
 
 .composer-row-left,

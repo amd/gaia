@@ -7149,7 +7149,7 @@ def handle_api_command(args):
                 base_url=getattr(args, "base_url", None),
             )
             if not success:
-                return
+                sys.exit(1)
 
         try:
             import uvicorn
@@ -7998,6 +7998,8 @@ def handle_gateway_command(args):
                     model=model,
                     messages=[{"role": "user", "content": args.prompt}],
                     max_tokens=256,
+                    # Reasoning would spend these 256 tokens before any answer.
+                    reasoning_effort=None,
                 )
             except CloudModelUnavailableError:
                 _report_unavailable_gateway_model(manager, model)
