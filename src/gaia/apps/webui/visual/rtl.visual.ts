@@ -792,7 +792,7 @@ async function withLongChat(page: Page): Promise<void> {
 }
 
 for (const locale of ['ar', 'en']) {
-    test(`jump to bottom floats above the composer, clear of it (${locale})`, async ({ page }, info) => {
+    test(`jump to bottom sits on the composer's edge, clear of the text column's middle (${locale})`, async ({ page }, info) => {
         await open(page, `#${ANSWER_SESSION}`, locale, withLongChat);
         await expect(page.getByText('Question 22')).toBeVisible();
         await page.locator('.messages-scroll').hover();
@@ -801,7 +801,19 @@ for (const locale of ['ar', 'en']) {
         await expect(button).toBeVisible();
         await button.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
         const [btn, composer] = [await button.boundingBox(), await page.locator('.input-column').boundingBox()];
-        expect(composer!.y - (btn!.y + btn!.height)).toBeGreaterThanOrEqual(11);
+        // Astride the composer's top edge, at its end, never in the middle of a line.
+        expect(btn!.y).toBeLessThan(composer!.y);
+        expect(btn!.y + btn!.height).toBeGreaterThan(composer!.y);
+        const end = locale === 'ar' ? btn!.x - composer!.x : composer!.x + composer!.width - (btn!.x + btn!.width);
+        expect(end).toBeLessThanOrEqual(40);
+        expect(await button.evaluate((el) => {
+            const b = el.getBoundingClientRect();
+            const middle = b.left + b.width / 2;
+            return document.elementFromPoint(middle, b.top + b.height / 2) === el
+                || el.contains(document.elementFromPoint(middle, b.top + b.height / 2));
+        })).toBe(true);
+        // No fade over the list: over a dark code block it showed as a pale band.
+        expect(await page.locator('.messages-scroll').evaluate((el) => getComputedStyle(el).maskImage)).toBe('none');
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath(`jump-to-bottom-${locale}.png`) });
     });

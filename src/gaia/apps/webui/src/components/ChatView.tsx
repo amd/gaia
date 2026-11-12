@@ -1684,7 +1684,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             <SessionDocsBar sessionId={sessionId} onDetachFailed={handleDetachFailed} />
 
-            <div className={`messages-scroll${showScrollBtn ? ' is-scrolled-up' : ''}`} ref={messagesScrollRef} {...followListProps}>
+            <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
                     {isLoadingMessages && !openingShown && (
                         <div className="skeleton-messages" aria-label="Loading messages">
