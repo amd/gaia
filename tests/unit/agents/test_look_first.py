@@ -201,6 +201,45 @@ def test_a_request_not_to_act_is_not_sent_to_look(agent, workspace):
     assert PLAN in result["result"]
 
 
+def test_a_touch_ban_on_an_investigation_still_sends_the_answer_to_look(
+    agent, workspace
+):
+    sent = _script(agent, _answer(GUESS), _read("toybox/dates.py"), _answer(REVIEW))
+
+    result = agent.process_query(
+        "Find out why toybox/dates.py fails. Don't touch anything.", max_steps=10
+    )
+
+    assert "`toybox/dates.py`" in sent[1][-1]["content"]
+    assert "without opening anything" in sent[1][-1]["content"]
+    assert REVIEW in result["result"]
+
+
+ANNOUNCED_EDIT = "The bug is on line 1. Let me check toybox/dates.py and patch it."
+
+
+def test_a_touch_ban_keeps_an_announced_edit_from_being_pushed(agent, workspace):
+    sent = _script(agent, _read("toybox/dates.py"), _answer(ANNOUNCED_EDIT))
+
+    result = agent.process_query(
+        "Why does toybox/dates.py fail? Don't touch anything.", max_steps=10
+    )
+
+    assert len(sent) == 2
+    assert ANNOUNCED_EDIT in result["result"]
+
+
+def test_small_talk_before_a_touch_ban_is_not_sent_to_look(agent, workspace):
+    sent = _script(agent, _answer(GUESS))
+
+    agent.process_query(
+        "Hi, how are you? Don't touch anything, toybox/dates.py stays as is.",
+        max_steps=10,
+    )
+
+    assert len(sent) == 1
+
+
 READ_NOTHING_PLAN = (
     "1. I will load the module.\n2. I will add a test for each date helper.\n"
     "3. I will run the new tests."
