@@ -153,6 +153,13 @@
     background: var(--bg-primary);
 }
 
+/* Below "Back to Setup" the title must not reach up over the button. */
+.settings-scroll > .settings-back + .settings-pane > .settings-pane-title {
+    top: 0;
+    margin-top: 0;
+    padding-top: 0;
+}
+
 .settings-pane-lede {
     color: var(--text-secondary);
     font-size: 13.5px;

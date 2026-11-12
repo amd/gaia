@@ -1807,6 +1807,13 @@ for (const locale of ['ar', 'en']) {
         await expect(back).toBeVisible();
         await shot(page, `setup-row-jump-${locale}`);
         expect(await audit(page)).toEqual([]);
+        // The pinned tab title must not paint over the button.
+        await dialog.locator('.settings-scroll').evaluate((el) => { el.scrollTop = 0; });
+        const backBox = await back.boundingBox();
+        const backOnTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-back'),
+            [backBox!.x + backBox!.width / 2, backBox!.y + backBox!.height / 2]);
+        expect(backOnTop, 'the tab title covers the Back button').toBe(true);
+        await shot(page, `setup-row-jump-${locale}-top`);
         await back.click();
         await expect(dialog.locator('[data-section="setup"]')).toHaveAttribute('aria-current', 'page');
         await expect(back).toHaveCount(0);
