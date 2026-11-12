@@ -1669,8 +1669,6 @@ export const enMessages = {
     'settings.memory.dashboardHint': 'Search, edit and forget what GAIA remembers.',
     'settings.privacy.localOnlyTitle': 'Local only',
     'settings.privacy.localOnlyHint': 'Keep every GAIA AI request on this PC. Turning this on clears saved cloud model choices and removes cloud keys from GAIA’s running model server.',
-    'settings.privacy.localOnlyOnLabel': 'On',
-    'settings.privacy.localOnlyOffLabel': 'Off',
     'settings.privacy.localOnlyOn': 'Local only is on. Cloud models are unavailable until you turn it off here.',
     'settings.privacy.localOnlyOff': 'Cloud models can be used again.',
     'settings.privacy.localOnlyBlocked': 'Blocked by Local only. Turn it off in Settings to use cloud models.',

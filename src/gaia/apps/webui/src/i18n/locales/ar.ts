@@ -1669,8 +1669,6 @@ const messages: Messages = {
     'settings.memory.dashboardHint': 'ابحث فيما يتذكره GAIA وعدّله وانسه.',
     'settings.privacy.localOnlyTitle': 'محلي فقط',
     'settings.privacy.localOnlyHint': 'أبقِ كل طلبات GAIA للذكاء الاصطناعي على هذا الجهاز. يؤدي تفعيل هذا الخيار إلى مسح اختيارات النماذج السحابية المحفوظة وإزالة مفاتيح السحابة من خادم النماذج الذي يديره GAIA.',
-    'settings.privacy.localOnlyOnLabel': 'مفعّل',
-    'settings.privacy.localOnlyOffLabel': 'متوقف',
     'settings.privacy.localOnlyOn': 'المحلي فقط مفعّل. لا تتوفر النماذج السحابية حتى توقفه من هنا.',
     'settings.privacy.localOnlyOff': 'يمكن استخدام النماذج السحابية مجددًا.',
     'settings.privacy.localOnlyBlocked': 'محظور بسبب خيار «محلي فقط». أوقفه من الإعدادات لاستخدام النماذج السحابية.',

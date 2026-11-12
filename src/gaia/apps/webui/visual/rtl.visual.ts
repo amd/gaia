@@ -1253,10 +1253,14 @@ for (const locale of ['ar', 'en']) {
         const dialog = page.getByRole('dialog');
         await dialog.locator('[data-section="privacy"]').click();
         const toggle = page.getByRole('switch');
-        await expect(toggle).toHaveAttribute('aria-checked', 'false');
+        await expect(toggle).not.toBeChecked();
+        // Drawn as a slider like every other Settings switch, not the bare word "Off" (#7404).
+        const track = page.locator('.toggle-switch', { has: toggle }).locator('.toggle-track');
+        const box = await track.boundingBox();
+        expect(box && box.width >= 24 && box.height >= 14).toBe(true);
         await shot(page, `privacy-local-only-${locale}-off`);
-        await toggle.click();
-        await expect(toggle).toHaveAttribute('aria-checked', 'true');
+        await track.click();
+        await expect(toggle).toBeChecked();
         await expect(page.locator('.settings-ok[role="status"]')).toBeVisible();
         await shot(page, `privacy-local-only-${locale}-on-notice`);
         expect(await audit(page)).toEqual([]);
