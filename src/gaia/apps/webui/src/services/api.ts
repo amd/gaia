@@ -105,10 +105,7 @@ function hasUsefulServerDetail(detail: string): boolean {
 export function getFriendlyError(status: number, detail: string): string {
     switch (status) {
         case 403: return detail || 'Access denied.';
-        // Prefer the backend's detail for 404s — the previous canned string
-        // ("The file or folder may have been moved or deleted.") was misleading
-        // for upload/indexing flows where the real cause was a malformed
-        // filepath, not a missing file. See issue #728.
+        // The backend's detail first: a canned "moved or deleted" hid a malformed path (#728).
         case 404: return detail || 'The requested item was not found.';
         case 413: return detail || 'File too large to process.';
         case 500: return hasUsefulServerDetail(detail) ? detail : 'Server error. Please try again.';

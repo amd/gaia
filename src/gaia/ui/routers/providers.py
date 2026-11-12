@@ -849,7 +849,8 @@ def _check_model_available(model_id: str) -> Optional[str]:
     except ProviderError as e:
         if e.status == 503 or isinstance(e, _ModelListFailed):
             raise _ServerNotReady(str(e)) from e
-        return str(e)
+        # Callers end the sentence themselves.
+        return str(e).rstrip(".")
     except CloudKeyError as e:
         if "not reachable" in str(e):
             raise _ServerNotReady(str(e)) from e

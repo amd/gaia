@@ -2755,3 +2755,17 @@ def test_a_malformed_model_list_is_named_not_a_server_error(
     detail = resp.json()["detail"]
     assert "model list came back in an unexpected shape" in detail
     assert "Settings > Advanced > Model server" in detail
+
+
+def test_a_malformed_model_list_ends_a_switch_or_restore_with_one_full_stop(
+    client, lemonade, keys, db
+):
+    _write_config({"last_model": "Qwen3-4B-GGUF"})
+    lemonade.answers[("GET", "models?show_all=true")] = (200, {"data": "x"})
+    restore = client.get("/api/providers/active").json()["restore"]
+    assert restore["status"] == "failed"
+    assert "points at Lemonade. Pick a model to continue." in restore["message"]
+    resp = client.post("/api/providers/select", json={"model": "Qwen3-4B-GGUF"})
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["detail"].endswith("points at Lemonade.")
+    assert ".." not in restore["message"] + resp.json()["detail"]
