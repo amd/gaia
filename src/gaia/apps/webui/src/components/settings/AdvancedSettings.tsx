@@ -12,12 +12,20 @@ import { useT } from '../../i18n/useT';
 import { isolate } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
-import type { SystemStatus, MCPServerStatus } from '../../types';
+import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
+
+type SaveNote = { kind: 'unlisted' | 'unchecked'; id: string };
+
+/** A saved ID the model server doesn't list ('unlisted') or couldn't be asked about ('unchecked'). */
+function noteFor(id: string, modelStatus: ModelStatus | null | undefined): SaveNote | null {
+    if (!id || !modelStatus || modelStatus.found) return null;
+    return { kind: modelStatus.checked ? 'unlisted' : 'unchecked', id };
+}
 
 /** Model server status and choice, context size, custom model id, beta flags, MCP status, version. */
 export function AdvancedSettings() {
@@ -32,8 +40,7 @@ export function AdvancedSettings() {
     const [settingsLoaded, setSettingsLoaded] = useState(false);
     const [savingModel, setSavingModel] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
-    /** A saved ID the model server doesn't list ('unlisted') or couldn't be asked about ('unchecked'). */
-    const [saveNote, setSaveNote] = useState<{ kind: 'unlisted' | 'unchecked'; id: string } | null>(null);
+    const [saveNote, setSaveNote] = useState<SaveNote | null>(null);
     const [justSaved, setJustSaved] = useState(false);
     const justSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -75,6 +82,7 @@ export function AdvancedSettings() {
                 const value = s.custom_model ?? '';
                 setCustomModel(value);
                 setSavedCustomModel(value);
+                setSaveNote(noteFor(value, s.model_status));
                 setDynamicTools(s.dynamic_tools);
                 setDynamicToolsLocked(s.dynamic_tools_locked);
             })
@@ -101,10 +109,7 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
-            const checked = updated.model_status;
-            if (nextValue && checked && !checked.found) {
-                setSaveNote({ kind: checked.checked ? 'unlisted' : 'unchecked', id: nextValue });
-            }
+            setSaveNote(noteFor(nextValue, updated.model_status));
             setJustSaved(true);
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
             justSavedTimerRef.current = setTimeout(() => setJustSaved(false), 2200);

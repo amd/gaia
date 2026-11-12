@@ -227,6 +227,32 @@ describe('AdvancedSettings', () => {
             expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
         });
 
+        it('keeps the note for a saved ID the model server does not list when Settings reopens', async () => {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.getSettings.mockResolvedValue({
+                custom_model: 'fireworks.no-such-model',
+                model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+            expect(await screen.findByText(
+                "Saved, but the model server doesn't list “fireworks.no-such-model”. Check the ID: messages will fail if the model doesn't exist.",
+            )).toBeInTheDocument();
+        });
+
+        it('shows no note on reopen for a saved ID the model server lists', async () => {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.getSettings.mockResolvedValue({
+                custom_model: 'Qwen3-4B-GGUF',
+                model_status: { found: true, checked: true, downloaded: true, loaded: false },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+            const input = await screen.findByRole('textbox', { name: 'Custom model override' });
+            await waitFor(() => expect(input).toHaveValue('Qwen3-4B-GGUF'));
+            expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
+        });
+
         it('drops the note once the ID is edited', async () => {
             await save('fireworks.no-such-model', { found: false, checked: true });
             await screen.findByText(/Saved, but the model server/);
