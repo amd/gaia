@@ -1042,6 +1042,36 @@ Deleting a chat deletes its copies.
     says why. The app splits a long reply into pieces and plays them back to
     back.
   </Accordion>
+
+  <Accordion title="GET /api/voice/settings">
+    The dictation and voice-mode settings, shared with the TUI: `{"language",
+    "asr_model", "turn_taking", "silence_ms", "status_updates", "captions",
+    "wake_word", "volume", "chime"}`. `language` is `null` while voice follows
+    the app's language.
+  </Accordion>
+
+  <Accordion title="PUT /api/voice/settings">
+    Save any of the voice settings; the others keep their value. An empty
+    `language` goes back to following the app's language. Returns the saved
+    settings. **422** names a value that isn't allowed, and nothing is saved.
+  </Accordion>
+
+  <Accordion title="GET /api/voice/status">
+    Whether voice can start now, for the app language in `?lang=`. Returns
+    `ready`, the spoken `language`, the `asr_model` and `tts_model` it would
+    use, `speaks` (false where no voice exists for the language, so replies
+    stay on screen), the current settings, and `models`:
+    `[{"id", "purpose", "downloaded", "size_gb"}]`. When `ready` is false,
+    `error` says why and `error_code` is `model_missing`,
+    `lemonade_unreachable` or the voice error's own code.
+  </Accordion>
+
+  <Accordion title="POST /api/voice/models/download">
+    Download one speech model through Lemonade. Body: `{"model"}`. Returns
+    `{"model", "downloaded": true}`. **422** for a model that isn't a voice
+    model, **409** when voice can't run against the configured Lemonade,
+    **503** when Lemonade is unreachable, **502** when the download fails.
+  </Accordion>
 </AccordionGroup>
 
 ### Chat

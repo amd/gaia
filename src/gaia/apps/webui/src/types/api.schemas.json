@@ -6021,6 +6021,11 @@
         "title": "Captions",
         "type": "boolean"
       },
+      "chime": {
+        "default": true,
+        "title": "Chime",
+        "type": "boolean"
+      },
       "language": {
         "anyOf": [
           {
@@ -6046,6 +6051,16 @@
         "default": "hands_free",
         "title": "Turn Taking",
         "type": "string"
+      },
+      "volume": {
+        "default": 100,
+        "title": "Volume",
+        "type": "integer"
+      },
+      "wake_word": {
+        "default": true,
+        "title": "Wake Word",
+        "type": "boolean"
       }
     },
     "title": "VoiceSettings",
@@ -6074,6 +6089,17 @@
           }
         ],
         "title": "Captions"
+      },
+      "chime": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Chime"
       },
       "language": {
         "anyOf": [
@@ -6118,6 +6144,28 @@
           }
         ],
         "title": "Turn Taking"
+      },
+      "volume": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Volume"
+      },
+      "wake_word": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Wake Word"
       }
     },
     "title": "VoiceSettingsUpdate",
@@ -6131,6 +6179,11 @@
       },
       "captions": {
         "title": "Captions",
+        "type": "boolean"
+      },
+      "chime": {
+        "default": true,
+        "title": "Chime",
         "type": "boolean"
       },
       "error": {
@@ -6189,6 +6242,16 @@
       "turn_taking": {
         "title": "Turn Taking",
         "type": "string"
+      },
+      "volume": {
+        "default": 100,
+        "title": "Volume",
+        "type": "integer"
+      },
+      "wake_word": {
+        "default": true,
+        "title": "Wake Word",
+        "type": "boolean"
       }
     },
     "required": [

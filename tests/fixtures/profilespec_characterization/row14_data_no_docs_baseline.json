@@ -38,6 +38,7 @@
     "search_file_content",
     "search_past_conversations",
     "set_loop_state",
+    "set_voice_setting",
     "sign_in_cli",
     "text_to_speech",
     "update_memory",
