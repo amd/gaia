@@ -105,25 +105,22 @@ func TestDownloadedFLMModelStaysSelectableOnAReadyNPU(t *testing.T) {
 	}
 }
 
-// An NPU recommendation stays listed either way: on a PC with no NPU it is
-// blocked with the absence reason, so the row explains itself instead of
-// vanishing (the visible-when-unknown case is in catalog_verdict_test.go).
-// Lemonade hides FLM models until its NPU backend is installed; Pull installs it.
-func TestAnNPURecommendationIsListedWhetherOrNotThePCHasOne(t *testing.T) {
-	for _, e := range BuildEntries("local", nil, capacityOf(t, npuMissing), nil, verdict(false, false, true)) {
-		if e.Recommended == nil || e.Recommended.Device != "npu" {
-			continue
-		}
-		if e.Selectable() || !strings.Contains(e.Reason, "reports none on this PC") {
-			t.Fatalf("a PC with no NPU must show %s as blocked: %+v", e.Model.ID, e)
-		}
+// A confirmed-absent NPU is not an option to explain, so the unlisted
+// recommendation is hidden. Lemonade hides FLM models until its NPU backend is
+// installed; Pull installs it.
+func TestAnNPURecommendationIsHiddenOnAConfirmedAbsentNPU(t *testing.T) {
+	by := entriesByID(BuildEntries("local", nil, capacityOf(t, npuMissing), nil, verdict(false, false, true)))
+	if e, ok := by["gemma4-it-e4b-FLM"]; ok {
+		t.Fatalf("a PC with no NPU must not show the recommendation: %+v", e)
 	}
+}
+
+// A ready NPU keeps the recommendation, even before Lemonade lists the model.
+func TestAnNPURecommendationIsShownOnAReadyNPU(t *testing.T) {
 	by := entriesByID(BuildEntries("local", nil, capacityOf(t, haloNPU), nil, verdict(true, true, true)))
-	for _, id := range []string{"gemma4-it-e4b-FLM"} {
-		e, ok := by[id]
-		if !ok || !e.Selectable() || !e.NeedsDownload() || e.Reason != "" {
-			t.Fatalf("%s on an NPU PC without the backend: %+v", id, e)
-		}
+	e, ok := by["gemma4-it-e4b-FLM"]
+	if !ok || !e.Selectable() || !e.NeedsDownload() || e.Reason != "" {
+		t.Fatalf("%s on an NPU PC without the backend: %+v", "gemma4-it-e4b-FLM", e)
 	}
 }
 

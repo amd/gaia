@@ -338,11 +338,10 @@ func TestAColdNPUPCIsOfferedGemmaBeforeLemonadeListsIt(t *testing.T) {
 	}
 }
 
-func TestAPCWithoutAnNPUIsNotOfferedFLMModels(t *testing.T) {
+func TestAPCWithoutAnNPUDropsTheUnlistedNPURecommendation(t *testing.T) {
 	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil, verdict(false, false, true))
-	e := npuEntry(entries, "gemma4-it-e4b-FLM")
-	if e == nil || e.Selectable() || !strings.Contains(e.Reason, "reports none on this PC") {
-		t.Fatalf("a PC with no NPU must show it blocked, not drop it: %+v", e)
+	if e := npuEntry(entries, "gemma4-it-e4b-FLM"); e != nil {
+		t.Fatalf("a PC with no NPU must drop the unlisted recommendation: %+v", e)
 	}
 }
 

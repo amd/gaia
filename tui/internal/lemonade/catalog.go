@@ -35,8 +35,8 @@ type Entry struct {
 // and not known because the plan could not be read.
 //
 // Known false is not "no NPU": it is "nobody measured", and it must not read as
-// absence or as permission to proceed. Reasons is the server's own words for
-// what stops the NPU when it is present but not ready.
+// absence. It is not permission either; the memory rule decides. Reasons is the
+// server's own words for what stops the NPU when it is present but not ready.
 //
 // Capacity cannot answer this. Its NPU memory is zero both for a PC with no NPU
 // and for one that has one Lemonade did not measure.
@@ -47,23 +47,20 @@ type NPUVerdict struct {
 	Reasons []string
 }
 
-// Blocks reports whether the verdict stops an NPU model from running here, and
-// why. Ready is the only state that does not.
+// Blocks reports whether a known verdict stops an NPU model from running here,
+// and why. Ready and unknown both return false: ready is permission, and
+// unknown is a gap that the memory check handles without claiming absence.
 func (v NPUVerdict) Blocks() (reason string, blocked bool) {
-	if v.Ready {
+	if v.Ready || !v.Known {
 		return "", false
 	}
-	switch {
-	case !v.Known:
-		return "whether this PC's NPU is ready could not be checked", true
-	case !v.Present:
+	if !v.Present {
 		return "runs on a Ryzen AI NPU, and Lemonade reports none on this PC", true
-	default:
-		if len(v.Reasons) == 0 {
-			return "this PC's NPU is not ready to run a model yet", true
-		}
-		return v.Reasons[0], true
 	}
+	if len(v.Reasons) == 0 {
+		return "this PC's NPU is not ready to run a model yet", true
+	}
+	return v.Reasons[0], true
 }
 
 // SizeGB is the download size, from the catalog or the recommendation.
@@ -98,9 +95,8 @@ func (e Entry) Selectable() bool {
 		return true
 	}
 	// On a PC that can run it, a downloaded model need not be checked against
-	// memory; the NPU verdict already refused one this PC cannot run. Known
-	// false here is the verdict's unknown, not unread capacity: a ready verdict
-	// keeps the row selectable even when memory could not be read.
+	// memory; a known absent or not-ready NPU already set FitUnknown, so it
+	// stays blocked. An unknown verdict leaves the file selectable.
 	if e.Model.Downloaded && !e.FitUnknown {
 		return true
 	}
@@ -250,10 +246,14 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 		}
 		e := Entry{Model: Model{ID: rec.ID}, Recommended: &rec}
 		switch {
+		case rec.Device == "npu" && !rec.Custom && npu.Known && !npu.Present:
+			// A confirmed-absent NPU is not a broken option to explain; it is
+			// not an option. A custom model stays so the user can remove it.
+			continue
 		case rec.Device == "npu":
 			// Lemonade lists FLM models only once its NPU backend is in; Pull
-			// installs it. A PC that cannot run them keeps the row, blocked with
-			// the reason, rather than dropping a model setup will mention later.
+			// installs it. A PC whose NPU is not ready, or whose verdict is
+			// unknown, keeps the row so the reason stays visible.
 			judge(&e)
 		case rec.RegisterAs == "":
 			// A built-in this Lemonade does not ship: it cannot be pulled by name.

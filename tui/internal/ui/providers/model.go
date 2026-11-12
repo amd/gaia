@@ -376,20 +376,24 @@ func loadCatalog(ctx context.Context, c *lemonade.Client, provider string) model
 			note = "Your added models aren't listed: " + err.Error()
 		}
 	}
-	entries, err := c.Catalog(ctx, provider, capacity, capErr, readNPUVerdict(ctx), added...)
+	var npu lemonade.NPUVerdict
+	if provider == "local" {
+		npu = readNPUVerdict(ctx)
+	}
+	entries, err := c.Catalog(ctx, provider, capacity, capErr, npu, added...)
 	return modelsMsg{source: c, entries: entries, capacity: line, err: err, note: note}
 }
 
 // newSetupAPI and planTimeout are hooks so tests reach no daemon.
 var (
-	newSetupAPI    = func() setupapi.API { return setupapi.NewDaemon() }
+	newSetupAPI    = func() setupapi.API { return setupapi.NewAttachedDaemon() }
 	planTimeout    = 10 * time.Second
 	readNPUVerdict = func(ctx context.Context) lemonade.NPUVerdict { return readNPUVerdictFrom(ctx, newSetupAPI()) }
 )
 
 // readNPUVerdictFrom asks the daemon what it knows about this PC's NPU. A plan
-// that cannot be read is unknown, never "no NPU": the catalog blocks NPU models
-// either way, but only the known case may claim why.
+// that cannot be read is unknown, never "no NPU": the memory rule decides, and
+// only a known verdict may claim absence or unreadiness.
 func readNPUVerdictFrom(ctx context.Context, api setupapi.API) lemonade.NPUVerdict {
 	ctx, cancel := context.WithTimeout(ctx, planTimeout)
 	defer cancel()

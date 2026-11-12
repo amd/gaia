@@ -6,6 +6,9 @@ package providers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -33,7 +36,7 @@ func TestTheCatalogReadsThePlansVerdict(t *testing.T) {
 }
 
 // An unreadable plan must not read as an absent NPU: the verdict it produces
-// says unknown, and a model it blocks must not say "reports none".
+// says unknown, and the memory rule keeps a model that fits selectable.
 func TestAnUnreadablePlanIsUnknownNotAbsent(t *testing.T) {
 	got := readNPUVerdictFrom(context.Background(), &setupapitest.Fake{PlanErr: errors.New("daemon down")})
 	if got.Known {
@@ -41,16 +44,36 @@ func TestAnUnreadablePlanIsUnknownNotAbsent(t *testing.T) {
 	}
 	models := []lemonade.Model{{ID: "gemma4-it-e4b-FLM", Recipe: "flm", Size: 9.1, Labels: []string{"chat"}}}
 	var row *lemonade.Entry
-	entries := lemonade.BuildEntries("local", models, lemonade.Capacity{MemoryGB: 96, NPUMemoryGB: 64}, nil, got)
+	entries := lemonade.BuildEntries("local", models, lemonade.Capacity{MemoryGB: 96, DiskFreeGB: 500, NPUMemoryGB: 64}, nil, got)
 	for i, e := range entries {
 		if e.Model.ID == "gemma4-it-e4b-FLM" {
 			row = &entries[i]
 		}
 	}
-	if row == nil || row.Selectable() {
-		t.Fatalf("an unread plan must block the NPU model: %+v", row)
+	if row == nil || !row.Selectable() {
+		t.Fatalf("an unread plan must keep the memory verdict: %+v", row)
 	}
-	if strings.Contains(row.Reason, "reports none") || !strings.Contains(row.Reason, "could not be checked") {
-		t.Fatalf("want an uncertainty reason, got %q", row.Reason)
+	if strings.Contains(row.Reason, "reports none") {
+		t.Fatalf("an unread plan must not claim absence, got %q", row.Reason)
+	}
+}
+
+// A cloud catalog never needs the NPU verdict, so it must not read the plan or
+// attach to the daemon for it.
+func TestCloudCatalogDoesNotReadTheNPUPlan(t *testing.T) {
+	reads := 0
+	restore := readNPUVerdict
+	t.Cleanup(func() { readNPUVerdict = restore })
+	readNPUVerdict = func(context.Context) lemonade.NPUVerdict {
+		reads++
+		return lemonade.NPUVerdict{}
+	}
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"data":[]}`)
+	}))
+	defer s.Close()
+	loadCatalog(context.Background(), lemonade.New(s.URL), "fireworks")
+	if reads != 0 {
+		t.Fatalf("read the NPU plan %d times for a cloud catalog", reads)
 	}
 }

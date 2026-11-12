@@ -76,40 +76,35 @@ func TestAbsentNPUBlocksWithTheAbsenceReason(t *testing.T) {
 	}
 }
 
-// An unread plan is neither absence nor permission: the row stays, says it
-// could not be checked, and is not selectable.
-func TestUnknownVerdictKeepsTheRowUnselectableAndSaysSo(t *testing.T) {
-	for _, e := range BuildEntries("local", flmCatalog(), capacityOf(t, haloNPU), nil, verdict(false, false, false)) {
-		if !e.OnNPU() {
-			continue
-		}
-		if e.Selectable() {
-			t.Fatalf("%s offered while NPU readiness is unknown: %+v", e.Model.ID, e)
-		}
-		if !strings.Contains(e.Reason, "could not be checked") {
-			t.Fatalf("%s want an uncertainty reason, got %q", e.Model.ID, e.Reason)
-		}
-		for _, claim := range []string{"reports none", "not ready", "not set up"} {
-			if strings.Contains(e.Reason, claim) {
-				t.Fatalf("an unread plan must not claim %q, got %q", claim, e.Reason)
-			}
+// An unread plan is not absence: the row falls through to the memory rule and
+// is selectable when that says it fits.
+func TestUnknownVerdictJudgesAnNPUModelOnMemory(t *testing.T) {
+	by := entriesByID(BuildEntries("local", flmCatalog(), capacityOf(t, haloNPU), nil, verdict(false, false, false)))
+	if e := by["gemma4-it-e4b-FLM"]; !e.Selectable() || !e.Fits {
+		t.Fatalf("an unknown verdict must leave the memory rule in charge: %+v", e)
+	}
+	tight := Capacity{MemoryGB: 96, MemorySource: "AMD iGPU", DiskFreeGB: 500, NPUMemoryGB: 8}
+	by = entriesByID(BuildEntries("local", flmCatalog(), tight, nil, verdict(false, false, false)))
+	e := by["gemma4-it-e4b-FLM"]
+	if e.Selectable() || !strings.Contains(e.Reason, "NPU, system RAM") {
+		t.Fatalf("an unknown verdict must still refuse memory that does not fit: %+v", e)
+	}
+	for _, claim := range []string{"reports none", "not ready", "not set up"} {
+		if strings.Contains(e.Reason, claim) {
+			t.Fatalf("an unread plan must not claim %q, got %q", claim, e.Reason)
 		}
 	}
 }
 
-// An unknown verdict blocks a downloaded FLM model even while the machine's
-// memory reads fine: the two are separate answers, and a readable PC says
-// nothing about whether its NPU can run a model.
-func TestUnknownVerdictBlocksADownloadedFLMModelOnAReadablePC(t *testing.T) {
+// An unread plan must not take a downloaded model away: the file is already
+// here, and the memory rule says it fits.
+func TestUnknownVerdictKeepsADownloadedFLMModelSelectable(t *testing.T) {
 	models := flmCatalog()
 	models[0].Downloaded = true
 	by := entriesByID(BuildEntries("local", models, capacityOf(t, haloNPU), nil, verdict(false, false, false)))
 	e := by["qwen3.6-moe-35b-a3b-FLM"]
-	if e.Selectable() {
-		t.Fatalf("an unknown NPU verdict must block a downloaded model: %+v", e)
-	}
-	if !e.FitUnknown || !strings.Contains(e.Reason, "could not be checked") {
-		t.Fatalf("want the NPU-readiness uncertainty reason, got %+v", e)
+	if !e.Selectable() || e.FitUnknown {
+		t.Fatalf("an unknown NPU verdict must keep a downloaded model selectable: %+v", e)
 	}
 }
 
@@ -127,7 +122,8 @@ func TestReadyNPUKeepsADownloadedFLMModelSelectableWhenMemoryIsUnreadable(t *tes
 }
 
 // An NPU recommendation the catalog does not list stays visible with the
-// reason, rather than being dropped: a row that vanishes cannot explain itself.
+// reason when the NPU is present but not ready: a row that vanishes cannot
+// explain itself.
 func TestAnUnlistedNPURecommendationStaysWithItsReason(t *testing.T) {
 	v := verdict(true, false, true, notReadyReason)
 	by := entriesByID(BuildEntries("local", nil, capacityOf(t, haloNPU), nil, v))
@@ -137,6 +133,15 @@ func TestAnUnlistedNPURecommendationStaysWithItsReason(t *testing.T) {
 	}
 	if e.Selectable() || e.Reason != notReadyReason {
 		t.Fatalf("want blocked with the server's reason, got %+v", e)
+	}
+}
+
+// A confirmed-absent NPU is not an option to explain, so the unlisted
+// recommendation goes away. A listed FLM row still shows the absence reason.
+func TestAConfirmedAbsentNPUHidesAnUnlistedNPURecommendation(t *testing.T) {
+	by := entriesByID(BuildEntries("local", nil, capacityOf(t, npuMissing), nil, verdict(false, false, true)))
+	if e, ok := by["gemma4-it-e4b-FLM"]; ok {
+		t.Fatalf("a PC with no NPU must not show the unlisted recommendation: %+v", e)
 	}
 }
 
