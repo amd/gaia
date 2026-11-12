@@ -109,7 +109,9 @@ def test_eval_dates_fill_the_scenario_and_never_the_prefix(monkeypatch, today):
 def _launch(tmp_path, monkeypatch, scenario):
     seen = {}
 
-    def driver(cmd, *, input, timeout, cwd, env=None):  # pylint: disable=redefined-builtin
+    def driver(
+        cmd, *, input, timeout, cwd, env=None
+    ):  # pylint: disable=redefined-builtin
         seen["cmd"], seen["input"] = cmd, input
         payload = {
             "structured_output": {
@@ -122,6 +124,7 @@ def _launch(tmp_path, monkeypatch, scenario):
         return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
 
     monkeypatch.setattr(runner, "_run_driver", driver)
+    monkeypatch.setattr(runner, "_driver_auth", lambda: ([], None))
     runner.run_scenario_subprocess(
         tmp_path / "s.yaml",
         scenario,
@@ -208,14 +211,13 @@ def test_both_layouts_carry_the_same_sections():
     assert other_sys == cached_sys
 
 
-def test_parallel_judges_always_read_the_whole_prefix(tmp_path, monkeypatch):
-    """The prefix is written before the pool starts, never by a racing call."""
+def _rejudge_fixture(tmp_path, monkeypatch, count=6):
     import yaml
 
     scenarios = tmp_path / "scenarios"
     scenarios.mkdir()
     results = []
-    for n in range(6):
+    for n in range(count):
         sid = f"s{n}"
         (scenarios / f"{sid}.yaml").write_text(
             yaml.dump(_scenario(sid)), encoding="utf-8"
@@ -230,6 +232,28 @@ def test_parallel_judges_always_read_the_whole_prefix(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "USER_SCENARIOS_DIR", tmp_path / "absent")
     monkeypatch.setattr(rejudge, "_load_merged_manifest", lambda: MANIFEST)
 
+
+def _rejudge_args(tmp_path, sample=6, workers=3):
+    return [
+        "--artifacts",
+        str(tmp_path / "artifacts"),
+        "--out",
+        str(tmp_path / "out"),
+        "--model",
+        "m",
+        "--sample",
+        str(sample),
+        "--arms",
+        "cached",
+        "--workers",
+        str(workers),
+    ]
+
+
+def test_parallel_judges_always_read_the_whole_prefix(tmp_path, monkeypatch):
+    """The prefix is written before the pool starts, never by a racing call."""
+    _rejudge_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(rejudge, "_driver_auth", lambda: ([], None))
     seen = []
 
     def fake_claude(cmd, *, input, **_kwargs):  # pylint: disable=redefined-builtin
@@ -248,28 +272,76 @@ def test_parallel_judges_always_read_the_whole_prefix(tmp_path, monkeypatch):
         return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
 
     monkeypatch.setattr(rejudge.subprocess, "run", fake_claude)
-    out = tmp_path / "out"
-    code = rejudge.main(
-        [
-            "--artifacts",
-            str(tmp_path / "artifacts"),
-            "--out",
-            str(out),
-            "--model",
-            "m",
-            "--sample",
-            "6",
-            "--arms",
-            "cached",
-            "--workers",
-            "3",
-        ]
-    )
+    code = rejudge.main(_rejudge_args(tmp_path))
     assert code == 0
     expected, _ = rejudge.build_judge_prompt(
         "cached", _scenario("s0"), RECORDED, MANIFEST
     )
     assert len(seen) == 6 and all(prefix == expected for prefix in seen)
+
+
+def test_judge_calls_authenticate_like_the_runner(tmp_path, monkeypatch):
+    """An API-key credential reaches every call as ``--bare`` plus its env."""
+    _rejudge_fixture(tmp_path, monkeypatch, count=3)
+    resolved = []
+
+    def auth():
+        resolved.append(1)
+        return ["--bare"], {"ANTHROPIC_API_KEY": "from-dotenv"}
+
+    monkeypatch.setattr(rejudge, "_driver_auth", auth)
+    calls = []
+
+    def fake_claude(
+        cmd, *, input, env=None, **_kwargs
+    ):  # pylint: disable=redefined-builtin
+        calls.append((cmd, env))
+        sid = input.split("id: ", 1)[1].split()[0]
+        verdict = {"scenario_id": sid, "status": "PASS", "overall_score": 9}
+        payload = {"structured_output": verdict, "usage": {}, "num_turns": 1}
+        return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
+
+    monkeypatch.setattr(rejudge.subprocess, "run", fake_claude)
+    assert rejudge.main(_rejudge_args(tmp_path, sample=3)) == 0
+    assert len(resolved) == 1 and len(calls) == 3
+    for cmd, env in calls:
+        assert cmd[1:3] == ["-p", "--bare"]
+        assert env == {"ANTHROPIC_API_KEY": "from-dotenv"}
+
+
+def test_subscription_auth_never_adds_bare_even_with_a_key_in_the_env(
+    tmp_path, monkeypatch
+):
+    """The old copy added ``--bare`` whenever a key was exported; follow the runner."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "exported")
+    cmd = rejudge._command("m", None, [])
+    assert "--bare" not in cmd
+
+
+def test_local_only_stops_the_rejudge_before_any_call(tmp_path, monkeypatch):
+    from gaia.llm import local_only
+
+    _rejudge_fixture(tmp_path, monkeypatch, count=2)
+    monkeypatch.setattr(local_only, "cloud_blocked", lambda: True)
+    monkeypatch.setattr(
+        rejudge, "_driver_auth", lambda: pytest.fail("resolved a credential")
+    )
+    monkeypatch.setattr(
+        rejudge.subprocess, "run", lambda *a, **k: pytest.fail("called claude")
+    )
+    with pytest.raises(local_only.CloudDisabledError):
+        rejudge.main(_rejudge_args(tmp_path, sample=2))
+
+
+def test_local_only_refuses_a_direct_judge_call(monkeypatch):
+    from gaia.llm import local_only
+
+    monkeypatch.setattr(local_only, "cloud_blocked", lambda: True)
+    monkeypatch.setattr(
+        rejudge.subprocess, "run", lambda *a, **k: pytest.fail("called claude")
+    )
+    with pytest.raises(local_only.CloudDisabledError):
+        rejudge.judge_once("legacy", _scenario("a"), RECORDED, MANIFEST, "m", None, 5)
 
 
 def test_a_judge_call_without_its_prefix_is_refused():

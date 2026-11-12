@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import random
 import shutil
 import subprocess
@@ -50,6 +49,7 @@ from gaia.eval.claude_usage import add_usage, empty_usage, usage_from_cli
 from gaia.eval.runner import (
     DRIVER_INTRO,
     REPO_ROOT,
+    _driver_auth,
     _load_merged_manifest,
     apply_rubric,
     find_scenarios,
@@ -57,6 +57,7 @@ from gaia.eval.runner import (
     rubric_sections,
     scenario_section,
 )
+from gaia.llm.local_only import assert_provider_permitted
 
 LAYOUTS = ("legacy", "cached")
 _JUDGED = ("PASS", "FAIL")
@@ -186,11 +187,9 @@ def pick_sample(results: dict, size: int, seed: int) -> list:
     return picked
 
 
-def _command(model: str, system_file) -> list:
+def _command(model: str, system_file, auth_flags=()) -> list:
     claude = shutil.which("claude") or "claude"
-    cmd = [claude, "-p"]
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        cmd.append("--bare")
+    cmd = [claude, "-p", *auth_flags]
     cmd += [
         "--no-session-persistence",
         "--output-format",
@@ -228,17 +227,31 @@ def write_system_prefix(layout, scenario_data, recorded, manifest, workdir):
     return path
 
 
-def judge_once(layout, scenario_data, recorded, manifest, model, system_file, timeout):
-    """Run one judge call; returns a record for ``calls.jsonl``."""
+def judge_once(
+    layout,
+    scenario_data,
+    recorded,
+    manifest,
+    model,
+    system_file,
+    timeout,
+    auth=((), None),
+):
+    """Run one judge call; returns a record for ``calls.jsonl``.
+
+    *auth* is the runner's ``(flags, env)`` from :func:`_driver_auth`.
+    """
     system, user = build_judge_prompt(layout, scenario_data, recorded, manifest)
     if (system is None) != (system_file is None):
         raise ValueError(
             f"layout {layout!r} needs its system prefix written first "
             "(write_system_prefix) and only then judged"
         )
+    assert_provider_permitted("the Claude Code CLI")
+    auth_flags, auth_env = auth
     start = time.time()
     proc = subprocess.run(
-        _command(model, system_file),
+        _command(model, system_file, auth_flags),
         input=user,
         capture_output=True,
         text=True,
@@ -246,6 +259,7 @@ def judge_once(layout, scenario_data, recorded, manifest, model, system_file, ti
         errors="replace",
         timeout=timeout,
         cwd=str(REPO_ROOT),
+        env=auth_env,
         check=False,
     )
     try:
@@ -379,6 +393,8 @@ def main(argv=None) -> int:
     scenarios = {d["id"]: d for _p, d in find_scenarios(scenario_id=sample)}
     sample = [sid for sid in sample if sid in scenarios]
     manifest = _load_merged_manifest()
+    assert_provider_permitted("the Claude Code CLI")
+    auth = _driver_auth()
 
     args.out.mkdir(parents=True, exist_ok=True)
     calls_path = args.out / "calls.jsonl"
@@ -405,6 +421,7 @@ def main(argv=None) -> int:
                     args.model,
                     system_file,
                     args.timeout,
+                    auth,
                 )
 
             with ThreadPoolExecutor(max_workers=args.workers) as pool:
