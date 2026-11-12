@@ -408,6 +408,33 @@ def _mentions(text: set, memory: set) -> bool:
     )
 
 
+#: Content words a short restatement of a one-word memory may add ("diagnosed 2019").
+_SHORT_RESTATEMENT = 3
+
+
+def _rewords(text: set, memory: set) -> bool:
+    """Whether *text* restates *memory*.
+
+    One shared word is enough only for a one-word memory in a short text:
+    "User has diabetes, diagnosed 2019" restates "I have diabetes", a report
+    on diabetes research funding does not.
+    """
+    shared = text & memory
+    if len(memory) == 1:
+        return bool(shared) and len(text) <= _SHORT_RESTATEMENT
+    return _same_memory(text, memory) or (len(shared) >= 2 and _mentions(text, memory))
+
+
+_NEGATION_RE = re.compile(
+    r"\b(?:not|no|never|none|neither|nor|without)\b|n['’]t\b", re.IGNORECASE
+)
+
+
+def _negated(text: str) -> bool:
+    """Whether *text* says something is not so ("is not", "isn't", "never")."""
+    return bool(_NEGATION_RE.search(text))
+
+
 def is_about_user(item: Dict) -> bool:
     """Whether a knowledge row is about the user, not the agent's own records.
 
@@ -445,6 +472,7 @@ def _word_overlap(text1: str, text2: str) -> float:
     |intersection| / min(|A|, |B|)
 
     A subset of a longer text still counts as a match — appropriate for dedup.
+    Filler words don't count, so "I am ..." and "User is ..." overlap fully.
     """
     if _MEMORY_SYMBOL_RE.search(text1) or _MEMORY_SYMBOL_RE.search(text2):
         words1 = set(_memory_tokens(text1))
@@ -453,7 +481,11 @@ def _word_overlap(text1: str, text2: str) -> float:
         words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
         words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
 
-    if not words1 or not words2 or _has_symbol_conflict(words1, words2):
+    if _has_symbol_conflict(words1, words2):
+        return 0.0
+    words1 = {w.removesuffix("'s") for w in words1} - _DEDUP_FILLER_WORDS
+    words2 = {w.removesuffix("'s") for w in words2} - _DEDUP_FILLER_WORDS
+    if not words1 or not words2:
         return 0.0
 
     intersection = words1 & words2
@@ -502,24 +534,44 @@ def _merged_duplicate(new: str, existing: str) -> Optional[str]:
     return None
 
 
+def _plain_fact_words(text: str) -> Tuple[str, ...]:
+    """``fact_words`` of *text* without its bracketed asides ("(health info)")."""
+    return fact_words(re.sub(r"\([^()]*\)", " ", text))
+
+
+def _same_fact(new: str, existing: str) -> Optional[str]:
+    """The content to keep if the two texts state one fact, else None."""
+    if _word_overlap(new, existing) < DEDUP_OVERLAP_THRESHOLD:
+        return None
+    return _merged_duplicate(new, existing)
+
+
+#: Names a ``type:name`` tag gives the user themselves ("person:user").
+_USER_TAG_NAMES = ("user", "me", "self", "myself")
+
+
 def _same_subject_sql(entity: Optional[str]) -> Tuple[str, tuple]:
     """SQL condition on ``k.entity`` for rows about the same subject as *entity*.
 
-    No tag, a bare label ("user", "health") or a ``user:`` tag is the user,
-    so those are one subject: the remember tool tags, extraction often
-    doesn't. Any other ``type:name`` tag (``person:Sam``, ``app:slack``) is
-    its own subject and matches only itself.
+    No tag, a bare label ("user", "health"), a ``user:`` tag or a tag that
+    names the user (``person:user``) is the user, so those are one subject:
+    the remember tool tags, extraction often doesn't. Any other ``type:name``
+    tag (``person:Sam``, ``app:slack``) is its own subject and matches only
+    itself.
     """
-    if entity is not None and ":" in entity and not _is_user_tag(entity):
+    if entity is not None and not _is_user_tag(entity):
         return "k.entity = ?", (entity,)
     return (
         "(k.entity IS NULL OR instr(k.entity, ':') = 0 "
-        "OR lower(k.entity) LIKE 'user:%')"
-    ), ()
+        "OR lower(k.entity) LIKE 'user:%' "
+        "OR lower(trim(substr(k.entity, instr(k.entity, ':') + 1))) IN "
+        f"({','.join('?' * len(_USER_TAG_NAMES))}))"
+    ), _USER_TAG_NAMES
 
 
 def _is_user_tag(entity: str) -> bool:
-    return ":" not in entity or entity.lower().startswith("user:")
+    kind, sep, name = entity.lower().partition(":")
+    return not sep or kind == "user" or name.strip() in _USER_TAG_NAMES
 
 
 # ============================================================================
@@ -1550,6 +1602,10 @@ class MemoryStore:
 
                 # Check for dedup match (scoped to category + context + subject)
                 match = self._find_similar_locked(content, category, context, entity)
+                if category in EXTRACTABLE_CATEGORIES:
+                    match, sensitive = self._fold_sensitive_copies_locked(
+                        content, context, entity, sensitive, match
+                    )
             except BaseException:
                 self._conn.rollback()
                 raise
@@ -1687,22 +1743,10 @@ class MemoryStore:
             )
             for row in cursor.fetchall():
                 existing_id, existing_content = row[0], row[1]
-                overlap = _word_overlap(content, existing_content)
-                if overlap < DEDUP_OVERLAP_THRESHOLD:
-                    continue
-                kept = _merged_duplicate(content, existing_content)
+                kept = _same_fact(content, existing_content)
                 if kept is None:
-                    logger.debug(
-                        "[MemoryStore] near match kept apart: overlap=%.2f id=%s",
-                        overlap,
-                        existing_id,
-                    )
                     continue
-                logger.debug(
-                    "[MemoryStore] dedup match: overlap=%.2f id=%s",
-                    overlap,
-                    existing_id,
-                )
+                logger.debug("[MemoryStore] dedup match: id=%s", existing_id)
                 return cast(str, existing_id), kept
             if category in INTERCHANGEABLE_CATEGORIES:
                 kinds = sorted(INTERCHANGEABLE_CATEGORIES)
@@ -1734,6 +1778,68 @@ class MemoryStore:
             logger.warning("[MemoryStore] FTS5 dedup search failed: %s", e)
 
         return None
+
+    def _fold_sensitive_copies_locked(
+        self,
+        content: str,
+        context: str,
+        entity: Optional[str],
+        sensitive: bool,
+        match: Optional[Tuple[str, str]],
+    ) -> Tuple[Optional[Tuple[str, str]], bool]:
+        """Keep a sensitive fact to one row per context, with no unflagged copy.
+
+        Returns the row to merge into and the flag to store. Whatever the
+        category: a write that repeats a sensitive row merges into the one in
+        its context, and is itself sensitive in any other; a sensitive write
+        takes over the unflagged copies in its context and flags the rest.
+        A rewording too loose to merge (``_mentions``) still takes the flag.
+        Same locking as ``_find_similar_locked``; writes without committing.
+        """
+        same_subject, params = _same_subject_sql(entity)
+        kinds = sorted(EXTRACTABLE_CATEGORIES)
+        rows = self._conn.execute(
+            "SELECT k.id, k.content, k.context, k.sensitive FROM knowledge k "
+            f"WHERE {same_subject} AND k.superseded_by IS NULL "
+            f"AND k.category IN ({','.join('?' * len(kinds))})"
+            # Only a sensitive write needs the unflagged rows read too.
+            + ("" if sensitive else " AND k.sensitive = 1"),
+            (*params, *kinds),
+        ).fetchall()
+        copies = [r for r in rows if _same_fact(content, r[1]) is not None]
+        stems = content_stems(content)
+        if sensitive:
+            for kid, other, _, flagged in rows:
+                if not flagged and _rewords(content_stems(other), stems):
+                    self._conn.execute(
+                        "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (kid,)
+                    )
+        elif any(_rewords(stems, content_stems(r[1])) for r in rows):
+            sensitive = True
+        if not copies:
+            return match, sensitive
+        here = [r for r in copies if r[2] == context]
+        if match is None and here:
+            first = here[0]
+            match = (first[0], cast(str, _same_fact(content, first[1])))
+        for kid, other, _, _ in here:
+            if match is not None and kid != match[0]:
+                # A dropped copy may be the fuller one: keep its detail.
+                fuller = _same_fact(match[1], other)
+                if fuller is not None:
+                    match = (match[0], fuller)
+                self._conn.execute(
+                    "DELETE FROM knowledge_fts WHERE rowid = "
+                    "(SELECT rowid FROM knowledge WHERE id = ?)",
+                    (kid,),
+                )
+                self._conn.execute("DELETE FROM knowledge WHERE id = ?", (kid,))
+        for kid, _, row_context, flagged in copies:
+            if row_context != context and not flagged:
+                self._conn.execute(
+                    "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (kid,)
+                )
+        return match, True
 
     def _insert_knowledge_fts_locked(self, knowledge_id: str):
         """Insert a knowledge entry into the FTS5 index. Must hold self._lock.
@@ -2389,22 +2495,25 @@ class MemoryStore:
     ) -> List[str]:
         """Ids of other current rows that store the same fact as *knowledge_id*.
 
-        A copy has the same words bar filler ("User is allergic to mango" and
-        "Allergic to mango.") about the same subject (``_same_subject_sql``),
-        in a chat-writable category. *contexts* limits it to those contexts;
+        A copy has the same words bar filler and bracketed asides ("I am
+        allergic to mango" and "User is allergic to mango (health info)"),
+        about the same subject (``_same_subject_sql``), in a chat-writable
+        category. When either row is sensitive a looser rewording counts too
+        (``_same_memory``). *contexts* limits it to those contexts;
         None searches all. Forgetting one memory must take these with it.
         """
         with self._locked():
             row = self._conn.execute(
-                "SELECT content, entity FROM knowledge WHERE id = ?", (knowledge_id,)
+                "SELECT content, entity, sensitive FROM knowledge WHERE id = ?",
+                (knowledge_id,),
             ).fetchone()
             if row is None:
                 return []
-            content, entity = row
+            content, entity, flagged = row
             same_subject, params = _same_subject_sql(entity)
             kinds = sorted(EXTRACTABLE_CATEGORIES)
             sql = (
-                "SELECT k.id, k.content FROM knowledge k WHERE k.id != ? "
+                "SELECT k.id, k.content, k.sensitive FROM knowledge k WHERE k.id != ? "
                 f"AND {same_subject} AND k.superseded_by IS NULL "
                 f"AND k.category IN ({','.join('?' * len(kinds))})"
             )
@@ -2413,8 +2522,18 @@ class MemoryStore:
                 sql += f" AND k.context IN ({','.join('?' * len(contexts))})"
                 args += tuple(contexts)
             rows = self._conn.execute(sql, args).fetchall()
-        words = fact_words(content)
-        return [kid for kid, other in rows if words and fact_words(other) == words]
+        words, stems = _plain_fact_words(content), content_stems(content)
+        return [
+            kid
+            for kid, other, other_flagged in rows
+            if (words and _plain_fact_words(other) == words)
+            or (
+                (flagged or other_flagged)
+                # "Is not allergic" is the user's correction, not a copy.
+                and _negated(content) == _negated(other)
+                and _same_memory(stems, content_stems(other))
+            )
+        ]
 
     def forget_with_copies(
         self,

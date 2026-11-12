@@ -852,6 +852,8 @@ export interface AgentStep {
     result?: string;
     /** Whether this step completed successfully. */
     success?: boolean;
+    /** The user said no to this call, so it never ran (for type='tool'). */
+    declined?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */

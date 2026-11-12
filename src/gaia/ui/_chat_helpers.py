@@ -1666,7 +1666,13 @@ def _index_rag_with_progress(
     idx_start = _time.time()
     doc_stats = []
     total_chunks = 0
+    cancelled = getattr(sse_handler, "cancelled", None)
+    left = 0
     for i, fpath in enumerate(fpath_list, 1):
+        # Stop ends the loading here; what is left is picked up on the next turn.
+        if cancelled is not None and cancelled.is_set():
+            left = n - i + 1
+            break
         doc_name = Path(fpath).name
         sse_handler._emit(
             {
@@ -1718,8 +1724,13 @@ def _index_rag_with_progress(
                 }
             )
     idx_elapsed = round(_time.time() - idx_start, 1)
+    headline = (
+        f"Stopped: {left} of {n} {label} not loaded. They load with your next message."
+        if left
+        else f"Indexed {n} {label} in {idx_elapsed}s"
+    )
     summary_lines = [
-        f"Indexed {n} {label} in {idx_elapsed}s",
+        headline,
         f"Total: {total_chunks} chunks in index",
         "",
     ] + doc_stats
@@ -1728,7 +1739,7 @@ def _index_rag_with_progress(
             "type": "tool_result",
             "title": "Index Documents",
             "summary": "\n".join(summary_lines),
-            "success": True,
+            "success": not left,
         }
     )
 
@@ -2981,6 +2992,14 @@ def _find_last_tool_step(steps: list) -> dict | None:
         if steps[i].get("type") == "tool":
             return steps[i]
     return None
+
+
+def _declined_call(event: dict) -> bool:
+    """A ``tool_result`` for a call the user said no to; a relayed one nests it in ``data``."""
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    status = event.get("status", data.get("status"))
+    timed_out = event.get("timed_out") is True or data.get("timed_out") is True
+    return status == "denied" and not timed_out
 
 
 def _insert_skill_step(steps: list, step: dict) -> None:
@@ -5006,6 +5025,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
+                        if _declined_call(event):
+                            tool_step["declined"] = True
                         # Persist MCP tool latency
                         if event.get("latency_ms") is not None:
                             tool_step["latencyMs"] = event["latency_ms"]
