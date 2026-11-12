@@ -68,8 +68,6 @@ BINDS_A_PORT = {"mcp start", "api start"}
 #: line. Keyed by (rule, command as typed); the rule is "traceback" or
 #: "model server".
 KNOWN_BUGS = {
-    ("traceback", "mcp engineering --backend claude"): "amd/gaia#7335",
-    ("traceback", "mcp code-index"): "amd/gaia#7335",
     ("model server", "chat"): "amd/gaia#7345",
     ("model server", "-p Reply with one word."): "amd/gaia#7345",
 }
