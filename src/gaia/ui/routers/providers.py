@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -693,9 +694,28 @@ def _write_config_keys(values: Dict[str, Any]) -> None:
 _restore_lock = threading.Lock()
 _restore_result: Optional[Dict[str, Any]] = None
 
+#: How long a key Lemonade holds may go without listed models before it counts as broken.
+KEY_SETTLE_SECONDS = 15.0
+_key_settle_started: Dict[str, float] = {}
+
 
 class _ServerNotReady(Exception):
     """The model server is not answering yet; the question can be asked again."""
+
+
+def _key_still_settling(provider: str) -> bool:
+    """True while Lemonade holds *provider*'s key and has not listed its models yet.
+
+    Lemonade stores a key before the provider answers with its models, so a
+    restore that lands in between would call a good key broken.
+    """
+    entry = _cloud_entry(provider) or {}
+    held = entry.get("env_var_set") or entry.get("runtime_key_set")
+    if not held or entry.get("models_discovered"):
+        _key_settle_started.pop(provider, None)
+        return False
+    started = _key_settle_started.setdefault(provider, time.monotonic())
+    return time.monotonic() - started < KEY_SETTLE_SECONDS
 
 
 def _check_model_available(model_id: str) -> Optional[str]:
@@ -720,6 +740,11 @@ def _check_model_available(model_id: str) -> Optional[str]:
             ):
                 _register_on_gaias_server(provider, base_url)
             if not ensure_authenticated(provider, recall=lambda: _usable_key(provider)):
+                if _key_still_settling(provider):
+                    raise _ServerNotReady(
+                        f"{_NAMES[provider]} hasn't listed its models yet; "
+                        "try again in a few seconds"
+                    )
                 return f"{_NAMES[provider]} has no working key"
         models = _list_models(provider)
         found = _listed(models, model_id)
@@ -808,6 +833,7 @@ def reset_restore_state() -> None:
     global _restore_result
     with _restore_lock:
         _restore_result = None
+        _key_settle_started.clear()
 
 
 # ── Routes ─────────────────────────────────────────────────────────────────
@@ -981,6 +1007,8 @@ def connect_provider(
     provider: str, body: ConnectRequest, request: Request
 ) -> Dict[str, Any]:
     """Register the provider and hand Lemonade the key; keep a key that works."""
+    # A new key gets its own settle window.
+    _key_settle_started.pop(provider, None)
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated, remember_key
 
     _known(provider)
