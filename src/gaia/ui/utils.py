@@ -147,6 +147,29 @@ TEXT_EXTENSIONS = frozenset(
 )
 
 
+# What to do instead, for common types the document library can't take.
+_UNSUPPORTED_TYPE_HINTS = (
+    (
+        frozenset({".ico", ".heic", ".heif"}),
+        "Convert the image to PNG or JPEG; GAIA reads the text in those.",
+    ),
+    (VIDEO_EXTENSIONS, "Attach the video to a chat to transcribe it."),
+    (AUDIO_EXTENSIONS, "Attach the recording to a chat to transcribe it."),
+    (
+        frozenset({".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz"}),
+        "Extract the archive, then index the files inside it.",
+    ),
+    (
+        frozenset({".sqlite", ".db", ".mdb", ".accdb", ".dbf"}),
+        "Export the data to CSV or JSON and index that file.",
+    ),
+    (
+        frozenset({".doc", ".ppt", ".xls"}),
+        "Save the file again as .docx, .pptx or .xlsx.",
+    ),
+)
+
+
 def unsupported_type_message(filename: str) -> str:
     """Why *filename* can't be indexed, in words a user can act on."""
     suffix = Path(filename).suffix.lower()
@@ -156,10 +179,14 @@ def unsupported_type_message(filename: str) -> str:
             "can't tell what kind of document it is. Rename it with the right "
             "extension (for example .txt or .pdf) and index it again."
         )
+    refusal = f"File type not allowed: GAIA can't index {suffix} files."
+    for extensions, hint in _UNSUPPORTED_TYPE_HINTS:
+        if suffix in extensions:
+            return f"{refusal} {hint}"
     return (
-        f"File type not allowed: GAIA can't index {suffix} files. It indexes "
-        "PDF, Word (.docx), PowerPoint (.pptx), Excel (.xlsx), text, Markdown, "
-        "CSV, JSON, HTML, XML, YAML and source-code files."
+        f"{refusal} It indexes PDF, Word (.docx), PowerPoint (.pptx), Excel "
+        "(.xlsx), text, Markdown, CSV, JSON, HTML, XML, YAML, images (PNG, JPEG, "
+        "WebP) and source-code files."
     )
 
 
@@ -303,105 +330,6 @@ def doc_to_response(doc: dict) -> DocumentResponse:
 # ── Path Sanitization / Validation ─────────────────────────────────────────────
 
 
-def sanitize_document_path(user_path: str) -> Path:
-    """Sanitize a user-provided file path for document upload.
-
-    Resolves the path, validates it is absolute, checks for null bytes,
-    and enforces an extension allowlist. Returns a safe Path object
-    that has been fully validated.
-
-    Args:
-        user_path: Raw file path string from user input.
-
-    Returns:
-        A resolved, validated Path object safe for filesystem operations.
-
-    Raises:
-        HTTPException: If the path is invalid, contains traversal, or
-            has a disallowed extension.
-    """
-    # Reject null bytes early (before any path operations)
-    if "\x00" in user_path:
-        raise HTTPException(status_code=400, detail="Invalid file path")
-
-    # Check symlink before resolve (resolve follows symlinks silently)
-    if Path(user_path).is_symlink():
-        raise HTTPException(status_code=400, detail="Symbolic links are not supported")
-
-    # Resolve to absolute canonical path (eliminates .., etc.)
-    resolved = Path(user_path).resolve()
-
-    # Verify the path is absolute
-    if not resolved.is_absolute():
-        raise HTTPException(status_code=400, detail="Invalid file path")
-
-    # Check file extension against allowlist
-    ext = resolved.suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        # Provide categorized feedback for common unsupported types
-        _UNSUPPORTED_CATEGORIES = {
-            "image": (
-                {".ico", ".heic", ".heif"},
-                "This image format cannot be indexed. "
-                "Tip: Convert it to PNG or JPEG — GAIA reads the text in those images.",
-            ),
-            "video": (
-                VIDEO_EXTENSIONS,
-                "Video files can't go in the document library. "
-                "Tip: Attach the video to a chat to transcribe it.",
-            ),
-            "audio": (
-                AUDIO_EXTENSIONS,
-                "Audio files can't go in the document library. "
-                "Tip: Attach the recording to a chat to transcribe it.",
-            ),
-            "archive": (
-                {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".tgz"},
-                "Archive files must be extracted first. "
-                "Extract the archive and then index the individual files inside.",
-            ),
-            "executable": (
-                {".exe", ".msi", ".dll", ".so", ".app", ".dmg", ".bin", ".com"},
-                "Executable and binary files cannot be indexed.",
-            ),
-            "database": (
-                {".sqlite", ".db", ".mdb", ".accdb", ".dbf"},
-                "Database files are not supported for direct indexing. "
-                "Tip: Export your data to CSV or JSON format, then index those files.",
-            ),
-            "office": (
-                {".doc", ".ppt", ".xls"},
-                "Legacy Microsoft Office formats (.doc, legacy PowerPoint .ppt, "
-                "and legacy Excel .xls) are not supported — GAIA reads only the "
-                "modern XML-based Office formats. "
-                "Tip: Re-save as .docx, .pptx, or .xlsx — GAIA supports PDFs, "
-                "modern Word (.docx), PowerPoint (.pptx), and Excel (.xlsx).",
-            ),
-        }
-
-        hint = ""
-        category = ""
-        for cat, (exts, msg) in _UNSUPPORTED_CATEGORIES.items():
-            if ext in exts:
-                hint = msg
-                category = cat
-                break
-
-        if not hint:
-            hint = f"The file type '{ext}' is not supported for indexing."
-
-        detail = (
-            f"{hint} "
-            f"Supported formats: PDF, DOCX, PPTX, XLSX, EPUB, TXT, MD, CSV, JSON, "
-            f"HTML, XML, YAML, images (PNG, JPG, WEBP, ...), and 30+ code file formats. "
-            f"Want support for {category + ' files' if category else 'this file type'}? "
-            f"Request it at https://github.com/amd/gaia/issues/new?title=[Feature]%20Support%20{ext}%20file%20indexing"
-        )
-        raise HTTPException(status_code=400, detail=detail)
-
-    return resolved
-
-
 def sanitize_static_path(base_dir: Path, user_path: str) -> Optional[Path]:
     """Sanitize a URL path for static file serving.
 
@@ -433,34 +361,6 @@ def sanitize_static_path(base_dir: Path, user_path: str) -> Optional[Path]:
         return None
 
     return candidate
-
-
-def validate_file_path(filepath: Path) -> None:
-    """Validate that a file path is safe to access.
-
-    Checks:
-    - Path is absolute (after resolve)
-    - Path does not contain null bytes
-    - File extension is in allowed set
-
-    Raises:
-        HTTPException: If the path is invalid or unsafe.
-    """
-    # Check for null bytes (path injection)
-    if "\x00" in str(filepath):
-        raise HTTPException(status_code=400, detail="Invalid file path")
-
-    # Verify the path is absolute (resolve() makes it absolute)
-    if not filepath.is_absolute():
-        raise HTTPException(status_code=400, detail="Invalid file path")
-
-    # Check file extension
-    ext = filepath.suffix.lower()
-    if ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type: {ext}",
-        )
 
 
 # Extra directories the operator declares as readable document roots, on top of
