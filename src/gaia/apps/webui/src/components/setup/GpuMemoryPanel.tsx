@@ -366,7 +366,10 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                         </p>
                     )}
                     <p className="setup-hint">
-                        {t.compose((say) => `${say('gpu.reserve', { gb: formatSize(status.reserve_gb ?? 16), os: osName(status.os) })} ${say('gpu.needs')}`)}
+                        {/* The method reason below already says what changing it takes. */}
+                        {canApply || !status.method_reason
+                            ? t.compose((say) => `${say('gpu.reserve', { gb: formatSize(status.reserve_gb ?? 16), os: osName(status.os) })} ${say('gpu.needs')}`)
+                            : t('gpu.reserve', { gb: formatSize(status.reserve_gb ?? 16), os: osName(status.os) })}
                     </p>
                     {!canApply && status.method_reason && <p className="setup-hint"><bdi dir="ltr">{status.method_reason}</bdi></p>}
                 </>

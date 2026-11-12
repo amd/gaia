@@ -81,7 +81,11 @@ export function SetupChecks({ hardware, hardwareError, plan, serverRun, awaiting
             id: 'server',
             label: t('setup.checks.server'),
             // What answered, not that something is running: which Lemonade, and whose.
-            value: serverUp ? serverFound : awaitingChoice ? t('setup.checks.serverChoose') : null,
+            value: serverUp ? serverFound
+                : awaitingChoice ? t('setup.checks.serverChoose')
+                    // GAIA's own server downloading: its percent belongs on its row, not a second bar.
+                    : serverRun?.state === 'running' && serverRun.percent != null ? `${Math.max(0, Math.min(100, Math.round(serverRun.percent)))}%`
+                        : null,
             // Waiting on the user is not work in progress: no spinner.
             state: serverUp ? 'done' : serverFailed ? 'failed' : awaitingChoice ? 'question' : hardware ? 'active' : 'waiting',
         },

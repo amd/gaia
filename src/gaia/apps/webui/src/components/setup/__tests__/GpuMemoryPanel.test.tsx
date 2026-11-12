@@ -226,6 +226,12 @@ describe('GPU memory: guided', () => {
         expect(screen.getByRole('button', { name: 'Copy amd-ttm --set 60' })).toBeInTheDocument();
     });
 
+    it('says what changing it takes once, in the reason for the guided steps', () => {
+        render(<Harness initial={windows()} />);
+        expect(screen.getByText(/GAIA keeps at least .* for Windows and your apps\.$/)).toBeInTheDocument();
+        expect(document.body).not.toHaveTextContent('needs administrator permission and a restart');
+    });
+
     it("re-reads the split after I've done this instead of trusting it", async () => {
         mocked.getGpuMemory.mockResolvedValue(windows());
         mocked.recordGpuMemoryPending.mockResolvedValue({

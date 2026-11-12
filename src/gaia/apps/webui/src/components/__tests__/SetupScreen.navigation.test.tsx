@@ -100,7 +100,9 @@ describe('moving between steps during a run', () => {
         await screen.findByRole('heading', { name: 'Connect a cloud provider' });
         fireEvent.click(screen.getByRole('button', { name: 'Back' }));
         await screen.findByRole('heading', { name: 'Your setup' });
-        expect(screen.getByRole('button', { name: 'Customize' })).toBeDisabled();
+        // Customize picks local models, so the cloud choice doesn't offer it at all.
+        expect(screen.queryByRole('button', { name: 'Customize' })).not.toBeInTheDocument();
+        expect(screen.queryByText('See everything that will be downloaded')).not.toBeInTheDocument();
         expect(screen.getByRole('radio', { name: 'Use a cloud model' })).toBeDisabled();
     });
 

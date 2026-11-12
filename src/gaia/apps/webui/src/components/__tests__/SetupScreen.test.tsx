@@ -283,7 +283,11 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         mockedApi.cancelSetup.mockResolvedValue({ cancelled: true });
         renderSetup();
         expect(await screen.findByText("Getting GAIA's model server ready…")).toBeInTheDocument();
-        expect(screen.getByRole('progressbar', { name: "Getting GAIA's model server ready…" })).toHaveAttribute('value', '40');
+        // One bar on the screen: the checks count; the server's percent sits on its own row.
+        expect(screen.queryByRole('progressbar', { name: "Getting GAIA's model server ready…" })).not.toBeInTheDocument();
+        expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+        expect(document.querySelector('.setup-activity')).not.toHaveTextContent('40%');
+        expect(screen.getByText('Model server').closest('li')).toHaveTextContent('40%');
         const bar = document.querySelector('.setup-footer') as HTMLElement;
         fireEvent.click(within(bar).getByRole('button', { name: 'Cancel' }));
         await waitFor(() => expect(mockedApi.cancelSetup).toHaveBeenCalledWith());
@@ -1603,6 +1607,9 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         const more = screen.getByRole('button', { name: 'About your model server' });
         expect(more).toHaveAttribute('aria-expanded', 'false');
         fireEvent.click(more);
+        // Said only of the user's server: with GAIA's own picked, it would describe the other choice.
+        expect(screen.queryByText(plain)).not.toBeInTheDocument();
+        fireEvent.click(mine);
         expect(screen.getByText(plain)).toBeInTheDocument();
         expect(form).toHaveTextContent('Lemonade 10.3.0 · http://localhost:13305/api/v1');
     });
