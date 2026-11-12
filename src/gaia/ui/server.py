@@ -38,6 +38,7 @@ from starlette.convertors import PathConvertor, register_url_convertor
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_wheel_failed_message
+from gaia.client_hangups import quiet_client_hangups
 from gaia.config import UnsafeGaiaHomeError
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
 
@@ -525,6 +526,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         from gaia.ui._chat_helpers import _eval_provider_kwargs
         from gaia.ui.dispatch import DispatchQueue
 
+        # A client quitting mid-connection is not an error here.
+        quiet_client_hangups(asyncio.get_running_loop())
         _eval_provider_kwargs()
 
         # ── Boot-time initialization via DispatchQueue ──────────────────
