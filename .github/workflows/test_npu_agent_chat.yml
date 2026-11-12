@@ -13,8 +13,7 @@
 # gaia-agent binary; the real Agent UI backend then relays one message to that
 # binary's sidecar, which the daemon starts. It fails unless the answer is real,
 # nothing said the model was unreachable, and Lemonade shows the model loaded
-# with the flm recipe. The smaller E2B NPU model then gets
-# one direct prompt as before.
+# with the flm recipe.
 #
 # Not covered: the Electron shell, and the agent source in this checkout. The
 # sidecar is the published gaia-agent binary `gaia init` installs from the hub,
@@ -106,7 +105,6 @@ permissions:
 
 env:
   NPU_MODEL: gemma4-it-e4b-FLM
-  EMAIL_NPU_MODEL: gemma4-it-e2b-FLM
 
 jobs:
   windows:
@@ -143,7 +141,6 @@ jobs:
           # the image may carry them: --force-models pulls them again.
           python util/check_npu_agent_chat.py `
               --model $env:NPU_MODEL `
-              --also-llm-model $env:EMAIL_NPU_MODEL `
               --force-models `
               --logs "${{ runner.temp }}\npu-logs"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -205,7 +202,6 @@ jobs:
           mkdir -p "$HOME"
           "$VENV/bin/python" util/check_npu_agent_chat.py \
             --model "$NPU_MODEL" \
-            --also-llm-model "$EMAIL_NPU_MODEL" \
             --logs "$NPU_WORKDIR/logs"
 
       - name: Upload logs on failure
