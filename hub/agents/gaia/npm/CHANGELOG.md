@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **One MCP server with a bad repeat-call declaration no longer takes the
+  others down.** An MCP server tool can name the arguments the repeat-call
+  guard compares, in its `_meta` under `ai.amd-gaia/dedup_key`. A server whose
+  declaration is invalid is refused on its own: it is disconnected, its tools
+  are neither registered nor counted toward `mcp_tool_limit`, the "MCP servers
+  that could not start" notice names it with the error, and the other servers
+  still load.
 - **The model is told when older turns are out of its view.** A long chat showed
   "Older messages are now out of the model's view" while the model answered
   that something from those turns was never mentioned. The oldest turn it still
@@ -208,7 +215,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   "only a plan, then do step 1") is not a request not to act, and neither is
   a ban that comes with the work ("fix foo.py but don't touch anything",
   "don't touch anything, just read config.py") or "plan only" inside a
-  request to do work ("my plan only covers Postgres; extend it").
+  request to do work ("my plan only covers Postgres; extend it"). "Don't
+  touch anything" right after a request to look into something ("why does
+  foo.py fail? Don't touch anything") bars edits only: the look-first check
+  stays on, and the agent is still not pushed to make an edit it announced.
 
 ## [0.3.5]
 

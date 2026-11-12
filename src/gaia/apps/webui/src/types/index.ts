@@ -529,6 +529,8 @@ export interface ModelStatus {
     found: boolean;
     downloaded: boolean;
     loaded: boolean;
+    /** The model list was read, so `found` false means the ID isn't in it. */
+    checked: boolean;
 }
 
 export interface Settings {
@@ -852,6 +854,8 @@ export interface AgentStep {
     result?: string;
     /** Whether this step completed successfully. */
     success?: boolean;
+    /** The user said no to this call, so it never ran (for type='tool'). */
+    declined?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */

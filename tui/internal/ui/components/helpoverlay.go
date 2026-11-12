@@ -288,8 +288,8 @@ const chatHelpText = `  GAIA Chat
   Ctrl+C      Quit
 
   Commands    /help /clear /full-access /slack /setup
-              /memory /model /provider /gateway /agents
-              /models /gpu /read-aloud /voice
+              /memory /models /provider /gateway /agents
+              /model /gpu /read-aloud /voice /connectors
   /cost       Session spend · /cost help for rates
   /update     New GAIA release? · /update now
   /           Browse commands on an empty line: ↑/↓ or

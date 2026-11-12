@@ -138,6 +138,9 @@ ends before reading it, it goes back in the queue. If the reply can't take it,
 the message says so and waits to go out when the reply ends. Press Stop and anything still
 queued goes back into the message box.
 
+A stopped answer keeps what it wrote so far. **Continue** asks GAIA to carry on
+from there, and **Try again** asks the question afresh.
+
 Each chat keeps its own queue. Switch to another chat and the queued messages
 still go out when their chat's reply ends, and the chat list shows how many are
 waiting. They survive a reload of the app too. A message that can't be sent
@@ -148,6 +151,14 @@ queued messages; the delete button says how many first.
 Deleting a chat, one at a time or with **Settings → Privacy → Delete all chats**,
 also removes its conversation and tool calls from Memory. What GAIA learned about
 you from it stays under **About you** in Memory; the delete confirmation says so.
+
+### Edit a Message or Try Again
+
+To fix a sent message, hover it and choose **Edit message**, or press the up
+arrow in an empty message box to open your last one. Change the text and press
+Enter: GAIA answers the edited message, and the turns after it are replaced.
+Escape leaves the message as it was. **Try again** on the latest answer asks
+the same question again with the same model.
 
 ### Compare Models on Your Question
 
@@ -346,11 +357,15 @@ Pick the install path that fits you best:
     already runs on the PC, it asks which one GAIA should use: **Install
     GAIA's own**, recommended because it is the version GAIA is tested with
     and keeps its own copy of each model, or **Use the one I have**, which
-    keeps one copy of each model. It then recommends a setup, with the reasons, and **Download
-    and start** takes it. Each step's main action is at the bottom right, and
-    the language can be changed from the first screen.
+    keeps one copy of each model. **Your setup** then offers two cards of equal
+    weight: a model on this PC, recommended and picked, with its
+    download size and the reasons, and **Use a cloud model**, which downloads
+    no chat model, needs an API key and sends each message to the provider.
+    **Download and start** takes the local setup; with the cloud card picked,
+    **Continue** opens the provider's key. Each step's main action is at the
+    bottom right, and the language can be changed from the first screen.
 
-    **Customize** opens the model choices; the steps beside the screen stay
+    **Customize**, at the bottom left of Your setup, opens the model choices; the steps beside the screen stay
     the same. **Run on** comes first: **Graphics (GPU)**, which uses llama.cpp
     on Vulkan, or **Ryzen AI NPU**, which uses FastFlowLM, on a PC whose NPU has
     the memory for GAIA's NPU model or already has an NPU model. These are the
@@ -396,8 +411,10 @@ Pick the install path that fits you best:
     test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
     yourself beforehand also works.
 
-    Each step keeps a log, collapsed under it until you open it. **Save a
-    troubleshooting report** on any step saves setup's logs, GAIA's logs and
+    Each step keeps a log. The logs and **Save a troubleshooting report** sit
+    under **Having trouble?** at the bottom of every step, which opens by
+    itself when a step fails. A redrawn progress bar shows only its last line.
+    **Save a troubleshooting report** saves setup's logs, GAIA's logs and
     this PC's details in one file. API keys and other secrets are removed from
     the logs, but a log can quote your chats, so look it over before you share
     it. A copy stays in `~/.gaia`.
@@ -461,9 +478,9 @@ Pick the install path that fits you best:
 The app opens straight to an empty chat: a greeting and a message box over a
 quiet field of dots laid out like the NPU's tile array. The dots say what GAIA
 is doing: they sweep while a model loads, fill from the bottom up while one
-downloads, and stir under the pointer and with each keystroke. Start typing and
-the message box drops to the bottom of the window; send, and the dots clear away
-so the chat starts on a clean page. With reduced motion turned on in your
+downloads, and stir under the pointer and with each keystroke. The message box
+stays put while you type; send, and it drops to the bottom of the window and the
+dots clear away so the chat starts on a clean page. With reduced motion turned on in your
 system settings, the dots hold still.
 
 - **Sidebar:** search, New chat, **Memory**, **Scheduled tasks**, **Documents**,
@@ -514,14 +531,15 @@ system settings, the dots hold still.
   such as a saved deliverable, open in your file explorer when clicked. So does
   a file the answer names only by file name, in code formatting, when it is one
   of the files that turn wrote; two written files with the same name stay plain.
-- **A new chat** greets you and shows the folder GAIA works in.
-  Click the folder under the message box to give the chat another folder it
-  may read and write from its first message, the same as **Add folder** in the
-  session panel. The chat's agent is told which folder the chat is working
+- **A new chat** greets you and, under the message box, names the project
+  folder GAIA works in when you started it from one. **Add a folder** gives the
+  chat another folder it may read and write from its first message, the same as
+  **Add folder** in the session panel; the picked folder shows as its own chip,
+  and its **×** drops it again. The chat's agent is told which folder the chat is working
   in, so "this folder" means the one you picked. This works when GAIA runs
   its agent as its own process too,
   as an installed GAIA does. Only an agent too old to be given folders shows
-  the folder as plain text; update GAIA to pick one. In the desktop app this
+  no **Add a folder** button; update GAIA to pick one. In the desktop app this
   opens your computer's own folder picker; in a browser GAIA shows its own,
   where hidden folders (names starting with a dot) stay out of the list until
   you tick **Show hidden**.
@@ -1020,8 +1038,10 @@ this month's cloud chats have cost and lets you set a monthly limit. GAIA warns
 when you're close, and once you reach it, it stops before sending a chat to the
 cloud and tells you how to go on: raise the limit, allow more for this month,
 or use a model on this PC. The total is an estimate at list price, with cached
-input at its cached rate; it leaves out turns that fail or are stopped before a
-reply, so your provider's bill is the final word.
+input at its cached rate; it leaves out turns stopped before any reply, and
+turns that fail before any reply with no usage reported (an answer stopped
+partway still counts, since the provider may bill it), so your provider's bill
+is the final word.
 
 While a chat runs on a priced cloud model, the composer shows what it has cost
 so far and what all your chats have cost today, such as "$0.04 · today $0.31".
@@ -1106,6 +1126,8 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Enter` | Send message |
 | `Shift+Enter` | New line |
 | `Escape` | Stop agent response |
+| `↑` (empty message box) | Edit your last message |
+| `Escape` (editing a message) | Put the message back as it was |
 | `Ctrl+K` | Search chats |
 | `Ctrl+Shift+O` | New chat |
 | `Ctrl+B` | Show or hide the sidebar |

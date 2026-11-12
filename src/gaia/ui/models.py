@@ -298,6 +298,8 @@ class ModelStatus(BaseModel):
     found: bool = False
     downloaded: bool = False
     loaded: bool = False
+    #: The model list was read, so ``found`` False means the id isn't in it.
+    checked: bool = False
 
 
 class PolicyNotice(BaseModel):
@@ -635,6 +637,8 @@ class AgentStepResponse(BaseModel):
     receiptId: Optional[str] = None
     result: Optional[str] = None
     success: Optional[bool] = None
+    # The user said no to this call; a reload must not show it as failed.
+    declined: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
     planNarrations: Optional[List[str]] = None

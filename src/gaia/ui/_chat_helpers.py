@@ -2982,6 +2982,14 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
+def _declined_call(event: dict) -> bool:
+    """A ``tool_result`` for a call the user said no to; a relayed one nests it in ``data``."""
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    status = event.get("status", data.get("status"))
+    timed_out = event.get("timed_out") is True or data.get("timed_out") is True
+    return status == "denied" and not timed_out
+
+
 def _insert_skill_step(steps: list, step: dict) -> None:
     """Put a skill step before the running tool call that brought the skill in."""
     for i in range(len(steps) - 1, -1, -1):
@@ -4174,7 +4182,12 @@ async def _get_chat_response(
             if isinstance(result, dict)
             else {}
         )
-        spending.record_turn(db, model_id, counts)
+        spending.record_turn(
+            db,
+            model_id,
+            counts,
+            failed=isinstance(result, dict) and bool(result.get("model_failed")),
+        )
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -5005,6 +5018,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
+                        if _declined_call(event):
+                            tool_step["declined"] = True
                         # Persist MCP tool latency
                         if event.get("latency_ms") is not None:
                             tool_step["latencyMs"] = event["latency_ms"]
@@ -5189,6 +5204,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Only a Stop (run_manager.cancel() or POST /api/chat/cancel) sets
         # ``cancelled`` before this point, so True means not a normal completion.
         turn_cancelled = sse_handler.cancelled.is_set()
+        # Reply text reached the user (a failure notice isn't one), before any error is added.
+        turn_replied = bool(full_response.strip()) and not (
+            isinstance(answer_event, dict) and answer_event.get("failed")
+        )
 
         # Signal cancellation (handles client disconnect) then wait for producer.
         await _cleanup_stream()
@@ -5426,7 +5445,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
             if link_warning:
                 yield _undo_link_warning_event(link_warning)
-            spending.record_turn(db, model_id, inference_stats)
+            # A begun answer may be billed even if stopped; one that failed unanswered is not.
+            spending.record_turn(
+                db,
+                model_id,
+                inference_stats,
+                failed=turn_failed and not turn_replied,
+            )
             # Fire-and-forget auto-titling, on the model this turn ran on.
             _spawn_after_turn_title(
                 _maybe_update_session_title(

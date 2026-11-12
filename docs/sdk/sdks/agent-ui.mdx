@@ -709,7 +709,8 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "model_status": {
         "found": true,
         "downloaded": true,
-        "loaded": false
+        "loaded": false,
+        "checked": true
       }
     }
     ```
@@ -717,7 +718,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Description |
     |-------|------|-------------|
     | `custom_model` | string or null | HuggingFace model ID overriding the default, or `null` if using the default model. |
-    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), and `loaded` (currently active). |
+    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), `loaded` (currently active), and `checked` (the model list was read; when `false`, `found` says nothing). Settings notes a saved ID that is unlisted or could not be checked. |
   </Accordion>
 
   <Accordion title="PUT /api/settings">
@@ -1994,7 +1995,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="DELETE /api/memory/knowledge/{knowledge_id}">
-    Delete a knowledge entry. An entry about the user is recorded as forgotten, and current copies of it (the same words about the same subject, in any context) are forgotten with it; the response then lists every erased id as `knowledge_ids`.
+    Delete a knowledge entry. An entry about the user is recorded as forgotten, and current copies of it (the same fact about the same subject, however it was worded or tagged, in any context) are forgotten with it; the response then lists every erased id as `knowledge_ids`.
   </Accordion>
 
   <Accordion title="GET /api/memory/upcoming">
@@ -3050,8 +3051,8 @@ model with no known price reads as unknown, never $0. Cloud models from
 
   <Accordion title="GET /api/spending">
     This month's cloud chat turns in the Agent UI at list price, cached input at
-    its cached rate (the basis each answer's own cost uses). A turn that fails or is stopped before it answers isn't counted,
-    so the total can read lower than the bill as well as higher: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
+    its cached rate (the basis each answer's own cost uses). A turn stopped before any reply isn't counted, nor is one that fails before any reply with no usage reported (an answer stopped partway is, since the provider may bill it),
+    so the total can read lower than the bill as well as higher: `total_usd`, `turns` (every counted turn, the next two kinds included), `unpriced_turns` (turns on a model with no
     known price, counted apart), `unreported_turns` (turns on a priced model that
     sent no usage, such as a stopped answer, also counted apart), `by_model` (each
     entry carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`
