@@ -199,6 +199,53 @@ describe('What GAIA knows about you', () => {
 
         expect(await screen.findByText(/Couldn't load your memories/)).toBeInTheDocument();
     });
+
+    it('says how many there are past the first page and shows the rest on request', async () => {
+        // v0.26.0-rc18: 323 memories, 200 rows, no count and no way to the other 123.
+        const all = Array.from({ length: 323 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        render(<MemoryDashboard />);
+        await screen.findByText('Memory number 0');
+
+        expect(screen.getAllByRole('button', { name: /^Forget:/ })).toHaveLength(200);
+        expect(screen.getByText('Showing 200 of 323 memories')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+
+        expect(await screen.findByText('Memory number 322')).toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: /^Forget:/ })).toHaveLength(323);
+        expect(screen.queryByText(/^Showing \d+ of/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+        for (const call of mockedApi.getKnowledge.mock.calls) {
+            expect(call[0]?.limit ?? 0).toBeLessThanOrEqual(200);
+        }
+    });
+
+    it('keeps the extra rows in view after forgetting one of them', async () => {
+        let all = Array.from({ length: 250 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        mockedApi.deleteKnowledge.mockImplementation(async (id: string) => {
+            all = all.filter((i) => i.id !== id);
+            return { status: 'deleted' };
+        });
+        render(<MemoryDashboard />);
+        await screen.findByText('Memory number 0');
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await screen.findByText('Memory number 249');
+
+        fireEvent.click(within(itemRow('Memory number 240')).getByRole('button', { name: /^Forget:/ }));
+
+        await waitFor(() => expect(screen.queryByText('Memory number 240')).not.toBeInTheDocument());
+        expect(screen.getByText('Memory number 249')).toBeInTheDocument();
+    });
 });
 
 describe('Profile saves refresh the other views (#4814)', () => {

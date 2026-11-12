@@ -23,6 +23,9 @@ export interface AboutYouItem {
     due_at?: string | null;
 }
 
+/** Rows per request; the knowledge endpoint serves at most 200. */
+const PAGE_SIZE = 200;
+
 /** Categories that describe the user, grouped under a plain heading. */
 const GROUPS: { title: MessageKey; categories: string[] }[] = [
     { title: 'mem.about.group.preferences', categories: ['preference'] },
@@ -91,23 +94,40 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     const [newText, setNewText] = useState('');
     const [newCategory, setNewCategory] = useState('fact');
     const [busyId, setBusyId] = useState<string | null>(null);
+    const [total, setTotal] = useState(0);
+    const [loadingMore, setLoadingMore] = useState(false);
     // Bumped by every load and every change, so an older load that lands late
     // cannot put back an item the user just forgot.
     const generation = useRef(0);
+    // How many rows to show; a reload after an edit keeps the pages already open.
+    const wanted = useRef(PAGE_SIZE);
 
-    const load = useCallback(async () => {
+    const load = useCallback(async (want?: number) => {
         const mine = ++generation.current;
+        const count = want ?? wanted.current;
         try {
-            // Filtered on the server, so paging never fills up with GAIA's own notes.
-            const data = await memoryApi.getKnowledge({
-                about_user: true,
-                include_sensitive: true,
-                sort_by: 'updated_at',
-                order: 'desc',
-                limit: 200,
-            });
-            if (mine !== generation.current) return;
-            setItems(data.items as AboutYouItem[]);
+            const rows: AboutYouItem[] = [];
+            let found = 0;
+            for (;;) {
+                const limit = Math.min(PAGE_SIZE, count - rows.length);
+                // Filtered on the server, so paging never fills up with GAIA's own notes.
+                const data = await memoryApi.getKnowledge({
+                    about_user: true,
+                    include_sensitive: true,
+                    sort_by: 'updated_at',
+                    order: 'desc',
+                    offset: rows.length,
+                    limit,
+                });
+                if (mine !== generation.current) return;
+                rows.push(...(data.items as AboutYouItem[]));
+                found = typeof data.total === 'number' ? data.total : rows.length;
+                // A short page is the end of what the store holds right now.
+                if (data.items.length < limit || rows.length >= Math.min(count, found)) break;
+            }
+            wanted.current = count;
+            setItems(rows);
+            setTotal(found);
             setLoadError(null);
         } catch (err) {
             if (mine !== generation.current) return;
@@ -117,6 +137,15 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     }, []);
 
     useEffect(() => { load(); }, [load, reloadKey]);
+
+    const showMore = useCallback(async () => {
+        setLoadingMore(true);
+        try {
+            await load(Math.max(wanted.current, items?.length ?? 0) + PAGE_SIZE);
+        } finally {
+            setLoadingMore(false);
+        }
+    }, [load, items]);
 
     const saveEdit = useCallback(async (item: AboutYouItem) => {
         const content = draft.trim();
@@ -142,6 +171,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
             await memoryApi.deleteKnowledge(item.id);
             generation.current++;
             setItems(prev => (prev ?? []).filter(i => i.id !== item.id));
+            setTotal(prev => Math.max(prev - 1, 0));
             setForgotten(prev => [item, ...prev]);
             onChanged();
         } catch (err) {
@@ -255,7 +285,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
             {loadError ? (
                 <div className="mem-about-empty">
                     <p>{t('mem.about.loadFailed', { error: loadError })}</p>
-                    <button className="btn-secondary" onClick={load}>{t('mem.about.retry')}</button>
+                    <button className="btn-secondary" onClick={() => load()}>{t('mem.about.retry')}</button>
                 </div>
             ) : items === null ? (
                 <div className="mem-loading"><div className="mem-spinner" /> {t('mem.loading')}</div>
@@ -347,6 +377,14 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                         </ul>
                     </section>
                 ))
+            )}
+            {!loadError && items !== null && items.length < total && (
+                <div className="mem-about-more">
+                    <span>{t('mem.about.showing', { shown: items.length, total })}</span>
+                    <button className="btn-secondary" disabled={loadingMore} onClick={showMore}>
+                        {t('mem.about.showMore')}
+                    </button>
+                </div>
             )}
         </div>
     );
