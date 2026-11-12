@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from gaia.installer import export_import
 from gaia.installer.export_import import (
     BUNDLE_FORMAT_VERSION,
     BUNDLE_JSON_NAME,
@@ -455,6 +456,68 @@ def test_import_overwrites_existing(tmp_path, fake_home, agents_root):
     assert (final / "agent.py").read_text() == "NEW\n"
     # Stale file from the previous install must be gone.
     assert not (final / "stale.txt").exists()
+    assert not (agents_root / ".backup-test-fixture-agent").exists()
+
+
+def _overwrite_bundle(tmp_path):
+    bundle = tmp_path / "new.zip"
+    with zipfile.ZipFile(bundle, "w") as zf:
+        zf.writestr(
+            BUNDLE_JSON_NAME,
+            json.dumps(
+                {
+                    "format_version": BUNDLE_FORMAT_VERSION,
+                    "exported_at": "now",
+                    "gaia_version": "test",
+                    "agent_ids": ["test-fixture-agent"],
+                }
+            ),
+        )
+        zf.writestr("test-fixture-agent/agent.py", "NEW\n")
+    return bundle
+
+
+def test_failed_overwrite_puts_the_existing_agent_back(
+    tmp_path, fake_home, agents_root, monkeypatch
+):
+    _make_agent(agents_root, "test-fixture-agent", body="OLD\n")
+    final = agents_root / "test-fixture-agent"
+    real_replace = export_import.os.replace
+
+    def replace(src, dst):
+        if Path(dst) == final and Path(src).parent != agents_root:
+            raise OSError("disk full")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(export_import.os, "replace", replace)
+
+    result = import_agent_bundle(_overwrite_bundle(tmp_path))
+
+    assert result.imported == []
+    assert (final / "agent.py").read_text() == "OLD\n"
+    assert not (agents_root / ".backup-test-fixture-agent").exists()
+
+
+def test_existing_agent_survives_when_it_cannot_be_put_back(
+    tmp_path, fake_home, agents_root, monkeypatch
+):
+    _make_agent(agents_root, "test-fixture-agent", body="OLD\n")
+    final = agents_root / "test-fixture-agent"
+    backup = agents_root / ".backup-test-fixture-agent"
+    real_replace = export_import.os.replace
+
+    def replace(src, dst):
+        if Path(dst) == final:
+            raise OSError("access denied")
+        real_replace(src, dst)
+
+    monkeypatch.setattr(export_import.os, "replace", replace)
+
+    result = import_agent_bundle(_overwrite_bundle(tmp_path))
+
+    assert result.imported == []
+    assert (backup / "agent.py").read_text() == "OLD\n"
+    assert any(backup.name in error for error in result.errors)
 
 
 # ---------------------------------------------------------------------------
