@@ -329,6 +329,8 @@ export const enMessages = {
     'connectCard.reconnect': 'Reconnect {name}',
     'connectCard.connected': '{name} is connected',
     'connectCard.settings': 'Open Connectors in Settings',
+    'connectCard.needsSetup': '{name} needs a one-time setup before GAIA can connect to it. The steps are in Settings.',
+    'connectCard.setUp': 'Set up {name}',
     'msg.continue': 'Continue',
     'msg.continuePrompt': 'Continue your answer from where it stopped.',
     'msg.reportNote': "GAIA saved what it saw when this failed. The report adds GAIA's logs and this PC's details, to attach to a bug report; nothing is sent unless you share it.",

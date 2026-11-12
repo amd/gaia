@@ -329,6 +329,8 @@ const messages: Messages = {
     'connectCard.reconnect': 'إعادة ربط {name}',
     'connectCard.connected': 'تم ربط {name}',
     'connectCard.settings': 'فتح «الموصلات» في الإعدادات',
+    'connectCard.needsSetup': 'يحتاج {name} إلى إعداد لمرة واحدة قبل أن يتمكن GAIA من الاتصال به. الخطوات في الإعدادات.',
+    'connectCard.setUp': 'إعداد {name}',
     'msg.continue': 'متابعة',
     'msg.continuePrompt': 'تابع إجابتك من حيث توقفت.',
     'msg.reportNote': 'حفظ GAIA ما رآه عند حدوث هذا الخطأ. يضيف التقرير سجلات GAIA وتفاصيل هذا الكمبيوتر لإرفاقه ببلاغ عن خطأ، ولا يُرسَل شيء ما لم تشاركه بنفسك.',

@@ -627,6 +627,16 @@
     overflow-wrap: anywhere;
 }
 
+.render-connect__setup {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    max-width: 44ch;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
 .render-connect__settings {
     padding: 0;
     background: none;

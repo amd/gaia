@@ -181,8 +181,13 @@ export function ConnectorsSection() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [disconnectNotice, setDisconnectNotice] = useState<string | null>(null);
-    const [expanded, setExpanded] = useState<string | null>(null);
+    const focus = useChatStore((s) => s.settingsConnector);
+    const [expanded, setExpanded] = useState<string | null>(focus);
     const [query, setQuery] = useState('');
+    // Opened at one connector (from the chat's Connect card): open its tile.
+    useEffect(() => {
+        if (focus) setExpanded(focus);
+    }, [focus]);
     // Groups are settled when the list loads, so a tile that connects stays under the pointer.
     const [connectedAtLoad, setConnectedAtLoad] = useState<ReadonlySet<string>>(new Set());
     // Set when a refresh shows a connector going from not connected to connected.
