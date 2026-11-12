@@ -449,6 +449,7 @@ TEST(AgentTelemetry, ResultCountsCallsCachedTokensAndPeakContext) {
     EXPECT_EQ(tools[0]["name"], "add");
     EXPECT_EQ(tools[0]["step"], 1);
     EXPECT_EQ(tools[0]["ok"], true);
+    EXPECT_TRUE(json::parse(tools[0]["args"].get<std::string>()).is_object());
     EXPECT_EQ(tools[1]["name"], "soft_fail");
     EXPECT_EQ(tools[1]["step"], 2);
     EXPECT_EQ(tools[1]["ok"], false);

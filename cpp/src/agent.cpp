@@ -1999,8 +1999,17 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     };
     json toolCallLog = json::array();
     for (const auto& call : turnToolCalls_) {
+        // Arguments are what make a trace readable; capped so one huge write can't bloat the log.
+        std::string args = call.args.dump(-1, ' ', false, json::error_handler_t::replace);
+        constexpr size_t kMaxLoggedArgs = 2000;
+        if (args.size() > kMaxLoggedArgs) {
+            size_t cut = kMaxLoggedArgs;
+            while (cut > 0 && (static_cast<unsigned char>(args[cut]) & 0xC0) == 0x80) --cut;
+            args = args.substr(0, cut) + "... (" + std::to_string(args.size()) + " bytes)";
+        }
         toolCallLog.push_back({{"step", call.step},
                                {"name", call.name},
+                               {"args", std::move(args)},
                                {"wall_s", std::round(call.wallSeconds * 1000) / 1000},
                                {"ok", call.succeeded}});
     }
