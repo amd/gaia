@@ -14,6 +14,7 @@ import { ModelInUse } from './ModelInUse';
 import { ModelRow } from './ModelRow';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import { isDownloading } from '../modelMeta';
+import { modelServerHealth } from '../../services/statusPoll';
 import '../ModelPicker.css';
 import { CloudPrices } from './CloudPrices';
 import { SpendingLimit } from './SpendingLimit';
@@ -34,6 +35,7 @@ export function ModelSettings() {
     const selectModel = useModelStore((s) => s.select);
     const refreshActive = useModelStore((s) => s.refresh);
     const rememberNames = useModelStore((s) => s.rememberNames);
+    const serverHung = useChatStore((s) => !!s.systemStatus && modelServerHealth(s.systemStatus) === 'unresponsive');
 
     const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -325,6 +327,12 @@ export function ModelSettings() {
                     </button>
                 ))}
             </div>
+
+            {!providers && !loadError && (
+                <p className="settings-hint" role="status">
+                    <Loader2 size={13} className="spin" /> {serverHung ? t('settings.model.waitingServer') : t('settings.loading')}
+                </p>
+            )}
 
             {loadError && (
                 <ErrorNotice message={loadError} onRetry={() => { void loadProviders(); void loadModels(chosen); }} />

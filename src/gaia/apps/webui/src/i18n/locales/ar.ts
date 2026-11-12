@@ -2514,6 +2514,7 @@ const messages: Messages = {
     // Settings > Model: the page itself
     'settings.model.inUseTitle': 'النموذج المستخدم',
     'settings.model.noneInUse': 'لم يُختر نموذج بعد. اختر واحدًا أدناه.',
+    'settings.model.waitingServer': 'في انتظار رد خادم النماذج. قد يكون مشغولًا بتحميل نموذج، وستكتمل هذه الصفحة عندما يرد.',
     'settings.model.cloud': 'سحابي',
     'settings.model.loaded': 'محمّل',
     'settings.model.downloaded': 'تم التنزيل',

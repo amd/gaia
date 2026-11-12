@@ -2513,6 +2513,7 @@ export const enMessages = {
     // Settings > Model: the page itself
     'settings.model.inUseTitle': 'Model in use',
     'settings.model.noneInUse': 'No model is chosen yet. Pick one below.',
+    'settings.model.waitingServer': 'Waiting for the model server to answer. It may be busy loading a model; this page fills in once it does.',
     'settings.model.cloud': 'Cloud',
     'settings.model.loaded': 'Loaded',
     'settings.model.downloaded': 'Downloaded',
