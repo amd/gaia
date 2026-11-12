@@ -178,6 +178,34 @@ button.setup-rail-step:hover {
     border-radius: var(--radius-lg);
 }
 
+/* This PC or the cloud: two cards of the same weight, the picked one outlined. */
+.setup-where {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.setup-where-card {
+    border-color: var(--border-light);
+    cursor: pointer;
+}
+
+.setup-where-card.is-active {
+    border-color: var(--accent-light);
+    box-shadow: inset 0 0 0 1px var(--accent-light);
+}
+
+.setup-where-card.is-disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.setup-where-card .setup-hero-title input[type="radio"] {
+    margin-inline-end: 10px;
+    accent-color: var(--accent);
+    vertical-align: middle;
+}
+
 .setup-eyebrow {
     color: var(--accent);
     font-size: 12px;
