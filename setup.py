@@ -76,6 +76,7 @@ setup(
         "gaia.sd",
         "gaia.vlm",
         "gaia.voice",
+        "gaia.phone",
         "gaia.api",
         "gaia.filesystem",
         "gaia.scratchpad",
