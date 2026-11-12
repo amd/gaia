@@ -99,6 +99,14 @@ describe('SpendingLimit', () => {
         expect(await screen.findByText(/Plus 3 turns on models with an unknown price/)).toBeInTheDocument();
     });
 
+    it('never counts a turn both in the priced total and in a "Plus" line', async () => {
+        mockedApi.getSpending.mockResolvedValue({ ...REPORT, turns: 37, unpriced_turns: 4, unreported_turns: 5 });
+        render(<SpendingLimit />);
+        expect(await screen.findByText(/28 cloud chat turns, at list price/)).toBeInTheDocument();
+        expect(screen.getByText(/Plus 4 turns on models with an unknown price/)).toBeInTheDocument();
+        expect(screen.getByText(/Plus 5 turns whose usage wasn’t reported/)).toBeInTheDocument();
+    });
+
     it('counts stopped turns with no reported usage apart, not as an unknown price (#6541)', async () => {
         mockedApi.getSpending.mockResolvedValue({ ...REPORT, unreported_turns: 1 });
         render(<SpendingLimit />);

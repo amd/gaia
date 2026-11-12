@@ -181,6 +181,9 @@
     font-family: var(--font-sans);
     margin-bottom: 10px;
 }
+.model-warning-content p:last-child {
+    margin-bottom: 0;
+}
 
 .model-status-hint {
     font-size: 12px;
