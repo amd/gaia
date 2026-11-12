@@ -2749,7 +2749,7 @@ export const enMessages = {
     'schedules.whenPlaceholder': 'Describe your schedule in natural language...\nExamples: "every 30m", "daily at 9pm", "every hour from 8am to 6pm on weekdays"',
     'schedules.whenHint': 'Write it in English, like "every 30m", "daily at 9pm" or "every hour from 8am to 6pm on weekdays".',
     'schedules.parsing': 'Parsing...',
-    'schedules.notUnderstood': "GAIA didn't understand that schedule.",
+    'schedules.notUnderstood': "That schedule can't be used.",
     'schedules.nextRun': 'Next run: {when}',
     'schedules.name': 'Name',
     'schedules.namePlaceholder': 'Schedule name (e.g. daily-summary)',

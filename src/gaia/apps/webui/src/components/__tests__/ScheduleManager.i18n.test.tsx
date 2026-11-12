@@ -79,7 +79,7 @@ describe('Scheduled tasks in Arabic', () => {
         fireEvent.click(screen.getByRole('button', { name: /مهمة مجدولة جديدة/ }));
         expect(screen.getByLabelText(readsAs('موعد التشغيل (When to run)')).tagName).toBe('TEXTAREA');
         fireEvent.change(screen.getByLabelText(readsAs('موعد التشغيل (When to run)')), { target: { value: 'daily at 25:00' } });
-        expect(await screen.findByText(readsAs('لم يفهم GAIA هذا الموعد. (GAIA didn\'t understand that schedule.)'), {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(await screen.findByText(readsAs('لا يمكن استخدام هذا الموعد. (That schedule can\'t be used.)'), {}, { timeout: 3000 })).toBeInTheDocument();
         expect(leftoverEnglish(container)).toEqual([]);
         for (const a of attrs(container)) expect(a, a).toMatch(/[؀-ۿ]/);
     });
@@ -93,7 +93,7 @@ describe('Scheduled tasks in Arabic', () => {
         fireEvent.click(screen.getByRole('button', { name: /مهمة مجدولة جديدة/ }));
         const field = screen.getByLabelText(readsAs('موعد التشغيل (When to run)'));
         fireEvent.change(field, { target: { value: 'كل يوم الساعة 8 صباحا' } });
-        expect(await screen.findByText(readsAs('لم يفهم GAIA هذا الموعد. (GAIA didn\'t understand that schedule.)'), {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(await screen.findByText(readsAs('لا يمكن استخدام هذا الموعد. (That schedule can\'t be used.)'), {}, { timeout: 3000 })).toBeInTheDocument();
         expect(screen.queryByText(/couldn't read/)).not.toBeInTheDocument();
         const hint = container.querySelector('.schedule-field-hint')!;
         expect(stripIsolates(hint.textContent ?? '')).toContain('اكتب الموعد بالإنجليزية، مثل "every 30m"');

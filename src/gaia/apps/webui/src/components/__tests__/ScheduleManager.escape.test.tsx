@@ -43,7 +43,19 @@ describe('ScheduleManager', () => {
         render(<ScheduleManager />);
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         fireEvent.change(screen.getByPlaceholderText(/Describe your schedule/), { target: { value: 'whenever the moon is blue' } });
-        expect(await screen.findByText(/didn.t understand that schedule/, {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(await screen.findByText(/That schedule can.t be used/, {}, { timeout: 3000 })).toBeInTheDocument();
         expect(screen.getByText(/Try "every 30m"/).closest('.schedule-parsed-hint')).not.toBeNull();
+    });
+
+    it('does not claim GAIA failed to understand a schedule it read but cannot run', async () => {
+        vi.mocked(api.parseScheduleInput).mockResolvedValue({
+            valid: false,
+            description: "A schedule here repeats; it can't run just once.",
+        } as never);
+        render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
+        fireEvent.change(screen.getByPlaceholderText(/Describe your schedule/), { target: { value: 'in 10 minutes' } });
+        expect(await screen.findByText(/can't run just once/, {}, { timeout: 3000 })).toBeInTheDocument();
+        expect(screen.queryByText(/didn.t understand/)).toBeNull();
     });
 });
