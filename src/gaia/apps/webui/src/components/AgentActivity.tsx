@@ -315,8 +315,8 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
         }
-        // Merge consecutive status steps
-        if (step.type === 'status' && prev && prev.type === 'status' && step.active !== false) {
+        // Merge consecutive status steps, never over a warning
+        if (step.type === 'status' && prev && prev.type === 'status' && prev.success !== false && step.active !== false) {
             result[result.length - 1] = { ...step, label: step.label || prev.label };
             return;
         }
@@ -387,11 +387,10 @@ export function toTimeline(rows: ActivityRow[], answer = ''): TimelineItem[] {
     return items;
 }
 
-/** "Used meeting-notes skill" for a skill pickup whose narration names the skill. */
-function skillUsed(row: ActivityRow): MessageRef | undefined {
+/** The skill a skill pickup's narration names. */
+function skillName(row: ActivityRow): string | undefined {
     if (!SKILL_USE_TOOLS.has(row.tool ?? '')) return undefined;
-    const name = /:\s*(.+)$/.exec(row.narration ?? '')?.[1]?.trim();
-    return name ? ref('activity.usedSkill', { name }) : undefined;
+    return /:\s*(.+)$/.exec(row.narration ?? '')?.[1]?.trim() || undefined;
 }
 
 /** Most kinds of step named in a folded run before "and N more". */
@@ -399,24 +398,36 @@ const SUMMARY_KINDS = 3;
 
 /** The one line a folded run of steps shows: what it did, in order. */
 export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
-    const kinds: { label: MessageRef; id: string; count: number }[] = [];
+    const kinds: { label: MessageRef; failedLabel?: MessageRef; allFailed: boolean; id: string; count: number }[] = [];
     for (const row of rows) {
         let label: MessageRef;
-        if (row.type === 'tool') label = skillUsed(row) ?? getToolMeta(row.tool, row).label;
+        let failedLabel: MessageRef | undefined;
+        if (row.type === 'tool') {
+            const meta = getToolMeta(row.tool, row);
+            const skill = skillName(row);
+            label = skill ? ref('activity.usedSkill', { name: skill }) : meta.label;
+            failedLabel = skill ? ref('activity.skillFailed', { name: skill }) : ref('tool.failed', { label: meta.activeLabel });
+        }
         else if (row.type === 'policy_alert') label = ref('activity.blocked');
         else if (row.type === 'error') label = ref('activity.hitError');
         else if (row.type === 'plan') label = ref('activity.madePlan');
         else continue;
         const id = `${label.ref}:${JSON.stringify(label.params ?? {})}`;
+        const failed = row.type === 'tool' && row.success === false;
         const seen = kinds.find((k) => k.id === id);
-        if (seen) seen.count += row.count ?? 1;
-        else kinds.push({ label, id, count: row.count ?? 1 });
+        if (seen) {
+            seen.count += row.count ?? 1;
+            seen.allFailed &&= failed;
+        }
+        else kinds.push({ label, failedLabel, allFailed: failed, id, count: row.count ?? 1 });
     }
     // Written once per language, so a bracketed locale brackets the whole line, not each piece.
     return t.compose((sayIn) => {
         if (kinds.length === 0) return sayIn('activity.thoughtThrough');
         const parts = kinds.slice(0, SUMMARY_KINDS).map((k, i) => {
-            const label = sayIn(k.label.ref, k.label.params);
+            // "Saved to memory" over calls that all failed would claim they worked.
+            const shown = k.allFailed && k.failedLabel ? k.failedLabel : k.label;
+            const label = sayIn(shown.ref, shown.params);
             const text = i === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1);
             return k.count > 1 ? `${text} ×${k.count}` : text;
         });
@@ -431,7 +442,7 @@ function isTurnError(row: ActivityRow): boolean {
     return row.type === 'error' || row.type === 'policy_alert';
 }
 
-/** A warning the agent raised mid-turn ("Execution paused"); it carries no phase for the live line. */
+/** A warning the agent raised mid-turn ("Execution paused"); it carries no phase for the live line, and stays with the turn. */
 function isWarning(row: ActivityRow): boolean {
     return row.type === 'status' && row.success === false;
 }
@@ -555,13 +566,13 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     }
 
     const lastIndex = timeline.length - 1;
-    const visibleRows = (rows: ActivityRow[], live: boolean) =>
-        rows.filter((r) => (shownWhenDone(r) || (live && isWarning(r))) && !isPlanShownLive(r, livePlan));
+    const visibleRows = (rows: ActivityRow[]) =>
+        rows.filter((r) => (shownWhenDone(r) || isWarning(r)) && !isPlanShownLive(r, livePlan));
     // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
     const openCalls = timeline.reduce((n, item, i) => {
         if (item.kind !== 'steps') return n;
         const live = running && i === lastIndex;
-        const visible = visibleRows(item.rows, live);
+        const visible = visibleRows(item.rows);
         if (visible.length < 2 && !live) return n;
         const open = openGroups.get(item.id) ?? (live || visible.some(isTurnError));
         return open ? n + visible.filter((r) => r.type === 'tool').length : n;
@@ -575,7 +586,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                         return <FlowNote key={item.row.id} text={item.row.detail ?? ''} />;
                     }
                     const live = running && i === lastIndex;
-                    const visible = visibleRows(item.rows, live);
+                    const visible = visibleRows(item.rows);
                     if (visible.length === 0) return null;
                     const failed = visible.some(isTurnError);
                     // A lone row is already one line; folding it would only add a click.
@@ -602,6 +613,8 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                 </button>
                             )}
                             {open && <div className="flow-steps-rows">{shown.map(renderRow)}</div>}
+                            {/* A warning never hides behind the fold. */}
+                            {!open && visible.filter(isWarning).map(renderRow)}
                         </div>
                     );
                 })}

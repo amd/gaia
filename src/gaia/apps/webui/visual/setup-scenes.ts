@@ -128,6 +128,8 @@ const RUN = {
     ],
     overall: { bytes_done: 2.33e9, bytes_total: 6.3e9, speed_bps: 0, eta_s: null, percent: 36, failed: 0 },
 };
+// Before any model row: the run is still fetching the parts around the models.
+const RUN_PARTS = { ...RUN, models: [], overall: undefined, percent: 45, size: '63 MB of 141 MB' };
 const RUN_ROW_FAILED = {
     ...RUN,
     components: { server: 'done', backend: 'failed' },
@@ -312,6 +314,9 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: async (page) => {
             await expect(page.locator('.setup-result.is-done').first()).toBeVisible();
             await expect(page.locator('.setup-result.is-active').first()).toBeVisible();
+            // A wait never leaves the bottom bar empty: it says what is going on and offers Cancel.
+            await expect(page.locator('.setup-activity')).toBeVisible();
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
         },
     },
     {
@@ -388,6 +393,18 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: toGpu,
     },
     {
+        // The split already runs the default model: keeping it is picked, and the main button keeps it.
+        name: 'gpu-keep',
+        answers: { gpu: { ...GPU, recommended_setting_gb: null, models: [{ id: QWEN_ID, size_gb: 23.3, need_gb: 26.8, default: true, fits_now: true, fits_at_setting_gb: null }] } },
+        reach: async (page) => {
+            await toGpu(page);
+            await expect(page.locator('.gpu-preset').first()).toHaveClass(/is-active/);
+            await expect(page.locator('.gpu-preset.is-active')).toHaveCount(1);
+            await expect(page.locator('.setup-footer .btn-primary')).toHaveCount(1);
+            await expect(page.locator('.gpu-unlock:not(.is-keep)')).toHaveCount(0);
+        },
+    },
+    {
         // Max picked, with its warning; the split already runs the default model, so keeping it is the advice.
         name: 'gpu-max',
         answers: { gpu: { ...GPU, recommended_setting_gb: null, models: [{ id: QWEN_ID, size_gb: 23.3, need_gb: 26.8, default: true, fits_now: true, fits_at_setting_gb: null }] } },
@@ -458,6 +475,9 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: async (page) => {
             await toKey(page);
             await expect(page.locator('.setup-key-steps')).toBeVisible();
+            // Which model GAIA will use is a visible choice, and the key field has a visible name.
+            await expect(page.locator('.cloud-prices-list.is-pickable input[type="radio"]:checked')).toHaveCount(1);
+            await expect(page.locator('.setup-key-label')).toBeVisible();
         },
     },
     {
@@ -473,7 +493,9 @@ export const SETUP_SCENES: SetupScene[] = [
         answers: { gatewayReachable: false },
         reach: async (page) => {
             await toKey(page);
-            await expect(page.locator('.setup-choice.is-disabled')).toBeVisible();
+            // Off AMD's network the gateway isn't offered at all.
+            await expect(page.locator('.setup-choice')).toHaveCount(1);
+            await expect(page.locator('.setup-choice.is-disabled')).toHaveCount(0);
         },
     },
     {
@@ -495,6 +517,15 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.setup-contents')).toBeVisible();
             await expect(page.getByRole('button', { pressed: false }).first()).toBeVisible();
             // A running download keeps a way out in the same bar every step's actions sit in.
+            await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+        },
+    },
+    {
+        name: 'download-parts',
+        answers: { status: RUN_PARTS },
+        reach: async (page) => {
+            await expect(page.locator('.setup-contents')).toBeVisible();
+            await expect(page.locator('.setup-activity progress')).toBeVisible();
             await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
         },
     },

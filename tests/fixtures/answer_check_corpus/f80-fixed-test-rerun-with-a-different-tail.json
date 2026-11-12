@@ -1,0 +1,58 @@
+{
+  "kind": "turn",
+  "finding": "F80 (amd/gaia#7293)",
+  "why": "The suite failed, was fixed, and passed on the rerun; trimming the rerun's output differently does not make it a second, unpassed check.",
+  "request": "One test in this project is failing (python -m pytest -q). Find the root cause and fix it properly. Don't change the tests.",
+  "files": {
+    "cart.py": "def total(a, b):\n    return a - b\n"
+  },
+  "model": [
+    {
+      "tool": "run_shell_command",
+      "args": {
+        "command": "python -m pytest -q 2>&1 | tail -40"
+      },
+      "result": {
+        "status": "error",
+        "error": "1 failed, 4 passed",
+        "return_code": 1
+      }
+    },
+    {
+      "tool": "edit_file",
+      "args": {
+        "file_path": "{ws}/cart.py",
+        "old_content": "a - b",
+        "new_content": "a + b"
+      },
+      "creates": {
+        "{ws}/cart.py": "def total(a, b):\n    return a + b\n"
+      },
+      "result": {
+        "status": "success",
+        "file_path": "{ws}/cart.py"
+      }
+    },
+    {
+      "tool": "run_shell_command",
+      "args": {
+        "command": "python -m pytest -q 2>&1 | tail -20"
+      },
+      "result": {
+        "status": "success",
+        "return_code": 0,
+        "stdout": "5 passed"
+      }
+    },
+    {
+      "answer": "The total subtracted instead of adding. Fixed in cart.py; all 5 tests pass now."
+    }
+  ],
+  "expect": {
+    "model_calls": 4,
+    "answer_lacks": [
+      "I haven't confirmed this works",
+      "didn't pass"
+    ]
+  }
+}

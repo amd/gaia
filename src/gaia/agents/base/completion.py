@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from gaia.agents.base.tool_outcome import tool_result_dict
+from gaia.home import gaia_home
 
 WRITE_TOOLS = frozenset(
     {
@@ -139,6 +140,36 @@ _FIRST_PERSON = re.compile(
     r"put|generated|made|copied)\b",
     re.I,
 )
+# "What I would have written, from x.xlsx": a write that did not happen is
+# not a claim. Only that clause goes: it ends at punctuation, a conjunction
+# or the next write verb, so "... and then saved y.md" still counts.
+_WRITE_VERB = (
+    r"(?:saved|wrote|written|stored|exported|created|put|generated|made|copied)"
+)
+_COUNTERFACTUAL = re.compile(
+    r"(?:\b(?:would|could|should|might)(?:n['’]t|\s+not)?|\b(?:I|we)['’]d)\s+have\s+"
+    rf"(?:\w+\s+)?{_WRITE_VERB}\b"
+    r"(?:(?!\b(?:but|and|so|then|instead|or|yet|while|whereas|though|although)\b"
+    rf"|\b{_WRITE_VERB}\b|\s-\s)[^,;:—–])*"
+    # The clause's own ";" or dash goes too, or the save after it reads as
+    # a second clause that destination_paths never reaches.
+    r"(?:\s*(?:[;—–]|-(?=\s)))?"
+    rf"(?P<join>(?:\s*\b(?:and|so|then|instead)\b)+\s+(?={_WRITE_VERB}\b))?",
+    re.I,
+)
+
+
+def _drop_counterfactual(sentence: str) -> str:
+    """Strip each "would have written" clause.
+
+    "... and then saved b.txt" loses its subject with the clause, so it
+    gets one back: "I saved b.txt" is still a claim.
+    """
+    return _COUNTERFACTUAL.sub(
+        lambda match: "I " if match.group("join") else "", sentence
+    )
+
+
 _EARLIER = re.compile(
     r"\b(?:previous|last|earlier|prior)\s+(?:session|conversation|turn|time|chat)\b|"
     r"\b(?:earlier|yesterday)\b",
@@ -478,7 +509,12 @@ class CompletionEvidence:
     """Evidence for this turn, with no reads outside the tool permission boundary."""
 
     def __init__(
-        self, query: str, root: str | None, scratch: Any = None, validator: Any = None
+        self,
+        query: str,
+        root: str | None,
+        scratch: Any = None,
+        validator: Any = None,
+        backups: tuple[set[str], set[str]] | None = None,
     ):
         self.root = root or os.getcwd()
         self.validator = validator
@@ -497,6 +533,16 @@ class CompletionEvidence:
         self.unconfirmed: set[str] = set()
         self.requested, self.save_requested = save_obligations(query)
         self.instructed = save_instructed(query)
+        # The paths the request names and their folders: where a bare output
+        # ("also make tables.xlsx") lands.
+        self.named_folders = list(
+            dict.fromkeys(
+                folder
+                for path in mentioned_paths(query)
+                if ntpath.basename(path) != path
+                for folder in (self.key(path), os.path.dirname(self.key(path)))
+            )
+        )
         self.disk_tool_ran = False
         # (started ns, ended ns, succeeded, ledger sequence) per executor run.
         self.exec_windows: list[tuple[int, int, bool, int]] = []
@@ -507,6 +553,9 @@ class CompletionEvidence:
         self.compared: dict[str, int] = {}
         # key -> the path as the write tool reported it, for showing the user.
         self.written_as: dict[str, str] = {}
+        # Backups write tools made before changing a file: keys and file names.
+        # *backups* carries them from earlier turns, and is added to in place.
+        self.backups, self.backup_names = backups or (set(), set())
 
     def key(self, path: str, root: str | None = None) -> str:
         return _normalize_key(
@@ -654,6 +703,10 @@ class CompletionEvidence:
                         by_script=tool in _EXEC_TOOLS,
                     )
         data = _payload(result)
+        backup = data.get("backup_path")
+        if tool in WRITE_TOOLS and isinstance(backup, str) and "\x00" not in backup:
+            self.backups.add(self.key(backup))
+            self.backup_names.add(os.path.normcase(ntpath.basename(backup)))
         paths = []
         if tool in WRITE_TOOLS:
             path = (
@@ -849,6 +902,38 @@ class CompletionEvidence:
                 ):
                     self._written_by_executor(path)
 
+    def _find_bare_outputs(self, bare: set[str]) -> None:
+        """Look for a script-written bare output in the folders the turn named.
+
+        "Also make tables.xlsx" beside a named input lands in that input's
+        folder, not the agent's working directory.
+        """
+        written = {
+            os.path.normcase(os.path.basename(key))
+            for key, item in self.files.items()
+            if item.written
+        }
+        folders = list(
+            dict.fromkeys(
+                [
+                    os.path.dirname(key)
+                    for key, item in self.files.items()
+                    if item.written
+                ]
+                + self.named_folders
+            )
+        )
+        for path in bare:
+            name = os.path.basename(path)
+            if os.path.normcase(name) in written:
+                continue
+            for folder in folders:
+                if not (
+                    self.scratch
+                    and (folder == self.scratch or _inside(folder, self.scratch))
+                ):
+                    self._find_executor_writes(self.key(os.path.join(folder, name)))
+
     def delivered(self, tool: str, args: dict, original: Any, delivered: Any) -> None:
         data = _payload(delivered)
         if tool == "read_tool_output":
@@ -933,10 +1018,16 @@ class CompletionEvidence:
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
             if _EARLIER.search(sentence):
                 continue
-            sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
+            sentence = _CODE_BEHAVIOUR.sub(
+                "", _CONDITION.sub("", _drop_counterfactual(sentence))
+            )
             if not claims_file_write(sentence):
                 continue
-            paths = destination_paths(sentence)
+            named = destination_paths(sentence)
+            # A write tool's own backup is its by-product, not a claimed output.
+            paths = [path for path in named if not self._is_backup(path)]
+            if named and not paths:
+                continue
             if not checkable and not _FIRST_PERSON.search(sentence):
                 if soft is not None:
                     soft.extend(
@@ -960,6 +1051,7 @@ class CompletionEvidence:
                 for key, item in self.files.items()
             ):
                 self._find_executor_writes(path)
+        self._find_bare_outputs(bare)
 
         bare_names = {os.path.basename(path) for path in bare}
 
@@ -1069,6 +1161,22 @@ class CompletionEvidence:
                     f"`{item.path}` has not been read back completely after its latest write."
                 )
         return gaps
+
+    def _is_backup(self, path: str) -> bool:
+        """Whether *path* names a backup a write tool made, this turn or before.
+
+        By file name too: answers shorten the backup folder ("backups\\...\\").
+        A file on disk in GAIA's backup folder is one an earlier turn made.
+        """
+        key = self.key(path)
+        if (
+            key in self.backups
+            or os.path.normcase(ntpath.basename(path)) in self.backup_names
+        ):
+            return True
+        cache_dir = getattr(self.validator, "cache_dir", None)
+        folder = self.key(str((cache_dir or gaia_home() / "cache") / "backups"))
+        return _inside(key, folder) and os.path.isfile(key)
 
     def _large_and_checked(self, item: FileEvidence) -> bool:
         """A large script output shown in part counts; a small one is read whole."""

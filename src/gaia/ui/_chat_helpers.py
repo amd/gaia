@@ -15,6 +15,7 @@ patches take effect.
 
 import asyncio
 import concurrent.futures
+import contextvars
 import copy
 import functools
 import json
@@ -2198,10 +2199,13 @@ def _relayed_history(
     )
     context = select_history(turns, budget, cuts.append, reporter)
 
-    # select_history returns the turns' own message dicts, so identity says
-    # which clipped messages the model still sees.
+    # select_history returns the turns' own answer dicts (a question may be a
+    # copy carrying the hidden-turns note), so identity says which turns, and
+    # so which clipped messages, the model still sees.
     in_view = {id(message) for message in context}
-    shown = {key for key in clipped if id(turns[key[0]][key[1]]) in in_view}
+    visible = {pair for pair, turn in enumerate(turns) if id(turn[1]) in in_view}
+    sse_handler.relay_hidden_turns = len(turns) - len(visible)
+    shown = {key for key in clipped if key[0] in visible}
     seen = _relay_clips.get(session_id, set()) if session_id else set()
     if session_id:
         _relay_clips[session_id] = shown
@@ -2246,7 +2250,8 @@ def _relayed_turns(
     """The chat's recorded turns that fit *model_id*'s history budget, kept whole.
 
     A turn larger than the whole budget is sent shortened (#5864); turns newly
-    out of the model's view stream a ``history_cut`` status.
+    out of the model's view stream a ``history_cut`` status, and how many turns
+    were left out is kept on *sse_handler* for the sidecar's measurement.
     """
     from gaia.agents.base.history import CutReporter, fit_turns, relayed_history_budget
 
@@ -2268,7 +2273,9 @@ def _relayed_turns(
             }
         )
 
-    return fit_turns(turns, budget, on_cut, reporter)
+    kept = fit_turns(turns, budget, on_cut, reporter)
+    sse_handler.relay_hidden_turns = len(turns) - len(kept)
+    return kept
 
 
 #: What a stopped turn's reply is saved as when it wrote no text.
@@ -5068,6 +5075,25 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 ),
                             }
                         )
+                elif (
+                    event_type == "status"
+                    and event.get("status") == "warning"
+                    and event.get("message")
+                    # With a phase it drives the live line (an answer restart), not a row.
+                    and not event.get("phase")
+                ):
+                    # A warning is part of the turn's record, not only its live line.
+                    step_id += 1
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "status",
+                            "label": event["message"],
+                            "active": False,
+                            "success": False,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
                 elif event_type == "agent_error" and _echoes_failed_tool(
                     event, captured_steps
                 ):
@@ -5902,6 +5928,25 @@ def _page_total(filepath: Path) -> Optional[int]:
         return None
 
 
+_BATCH_EMBEDDER: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "gaia_ui_batch_embedder", default=None
+)
+
+
+@contextmanager
+def one_embedder_load():
+    """Index the documents awaited inside on one embedder load, not one per file.
+
+    Each ``_index_document`` builds its own ``RAGSDK``, which unloads and
+    reloads the embedder: ~3 s a file against well under 0.1 s of embedding.
+    """
+    token = _BATCH_EMBEDDER.set({})
+    try:
+        yield
+    finally:
+        _BATCH_EMBEDDER.reset(token)
+
+
 async def _index_document(
     filepath: Path,
     display_name: Optional[str] = None,
@@ -5910,7 +5955,9 @@ async def _index_document(
     """Index a document using RAG SDK. Returns chunk count.
 
     ``display_name`` is the user's name for the file when *filepath* is a
-    copy; every error message names it instead of the copy.
+    copy; every error message names it instead of the copy. Inside
+    :func:`one_embedder_load` it reuses the embedder an earlier document of
+    the batch loaded, unless that one read images or left some unread.
 
     With ``progress_key``, ``INDEX_PROGRESS[progress_key]`` tracks pages read
     and then chunks embedded until the index ends.
@@ -5981,6 +6028,10 @@ async def _index_document(
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
+        loaded = batch.pop("embedder", None) if batch is not None else None
+        if loaded is not None:
+            rag.llm_client = rag.embedder = loaded
+            rag.use_lemonade_embeddings = True
         # Cancel and the no-progress stop also end a wait for the model.
         try:
             with lease_wait_listener(_queue_update), lease_cancel_scope(stop):
@@ -6019,8 +6070,18 @@ async def _index_document(
 
         chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
         logger.info("Indexed %s (%s): %d chunks", name, filepath, chunks)
+        # A vision model loaded for this file may have pushed the embedder out,
+        # even when it then read none of the images.
+        read_with_vision = (
+            result.get("vlm_pages")
+            or result.get("vlm_slides")
+            or result.get("unread_image_pages")
+        )
+        if batch is not None and rag.embedder is not None and not read_with_vision:
+            batch["embedder"] = rag.embedder
         return chunks
 
+    batch = _BATCH_EMBEDDER.get()
     try:
         small = filepath.stat().st_size < _INDEX_SMALL_FILE_BYTES
     except OSError:
