@@ -460,6 +460,35 @@ class LemonadeModelNotFoundError(LemonadeError):
         super().__init__(user_message=message, payload=payload)
 
 
+class LemonadeUnknownModelError(LemonadeError):
+    """The model server lists no model by this name, so there is nothing to download.
+
+    A typed or stale model id: a download never starts, so neither a resend nor
+    setup helps. The fix is another model.
+    """
+
+    retryable = False
+    user_message = (
+        "The model server doesn't list this model, so it can't be downloaded. "
+        f"{TUI_MODEL_SWITCH_HINT}"
+    )
+
+    def __init__(
+        self,
+        model_id: Optional[str] = None,
+        payload: Optional[dict] = None,
+    ):
+        self.model_id = model_id
+        message = None
+        if model_id:
+            message = (
+                f"There is no model called `{model_id}` to download: the model "
+                "server doesn't list it. Check the name for a typo. "
+                f"{TUI_MODEL_SWITCH_HINT}"
+            )
+        super().__init__(user_message=message, payload=payload)
+
+
 class LemonadeCloudAccountError(LemonadeError):
     """The cloud provider refused the account itself (HTTP 402 / 412).
 
@@ -557,6 +586,9 @@ _LOAD_PREFIX_RE = re.compile(
 _QUOTED_MODEL_RE = re.compile(r"\bmodel ['\"`]([^'\"`]+)['\"`]", re.IGNORECASE)
 _WRAPPER_MODEL_RE = re.compile(
     r"failed to load(?: model)? ['\"`]?([^'\"`:\s]+)['\"`]?", re.IGNORECASE
+)
+_UNKNOWN_MODEL_RE = re.compile(
+    r"model name must include the [`'\"]?user[`'\"]? namespace", re.IGNORECASE
 )
 _ERROR_ENVELOPE_RE = re.compile(r"\{\s*['\"]error['\"]\s*:")
 _HTTP_STATUS_RE = re.compile(r"(?:status|error code:?)\s*\(?(\d{3})\b", re.IGNORECASE)
@@ -984,6 +1016,10 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
         return LemonadeServerUnreachableError(down.group(0).strip(), down.group(1))
     if "no model loaded" in text or "model_not_loaded" in text:
         return LemonadeModelNotLoadedError()
+    # Lemonade's refusal to pull a name outside its catalog.
+    if _UNKNOWN_MODEL_RE.search(raw):
+        m = re.search(r"Received:\s*([^\s'\"`]+)", raw) or _QUOTED_MODEL_RE.search(raw)
+        return LemonadeUnknownModelError(model_id=m.group(1) if m else None)
     # Model genuinely not installed (Lemonade HTTP 404 / model_not_found) — the
     # model was never pulled, so this is NOT retryable and NOT the same as
     # "not loaded". Naming the missing model is actionable (#2243).

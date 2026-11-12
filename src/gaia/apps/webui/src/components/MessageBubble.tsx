@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useLayoutEffect, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText, Settings } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -29,6 +29,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useLogsStore } from '../stores/logsStore';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import { dropAnswerDrafts } from '../utils/answerDrafts';
+import { describeFailedTurn, failedTurnDetails } from '../utils/failedTurn';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type FoundPage, type LibraryDoc,
@@ -556,6 +557,11 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
     const place = useInferencePlace();
     const showServerLog = useLogsStore((s) => s.show);
+    const openSettings = useChatStore((s) => s.openSettings);
+    const failedTurn = useMemo(
+        () => (isError && !isStreaming ? describeFailedTurn(message.content) : null),
+        [isError, isStreaming, message.content],
+    );
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
@@ -733,7 +739,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {isError && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />
-                            <span>{t('msg.error')}</span>
+                            <span>{t(failedTurn && failedTurn.kind !== 'unknown' ? `failedTurn.${failedTurn.kind}.title` : 'msg.error')}</span>
                         </div>
                     )}
                     {/* Structured cards (#2108) — finalized message.cards wins;
@@ -770,6 +776,14 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 className="msg-expand-toggle"
                             />
                         </>
+                    ) : failedTurn?.raw ? (
+                        <>
+                            <p className="msg-failed-lead">{t(`failedTurn.${failedTurn.kind}.body`)}</p>
+                            <details className="msg-failed-details">
+                                <summary>{t('failedTurn.details')}</summary>
+                                <RenderedContent content={failedTurnDetails(cleanedContent)} />
+                            </details>
+                        </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
                         <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
                     )}
@@ -804,6 +818,12 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {t('msg.tryAgain')}
                         </button>
                     )}
+                    {failedTurn?.sections.map((section) => (
+                        <button key={section} type="button" className="msg-try-again" onClick={() => openSettings(section)}>
+                            <Settings size={12} aria-hidden="true" />
+                            {t.compose((say) => say('failedTurn.openSettings', { tab: say(`settings.section.${section}`) }))}
+                        </button>
+                    ))}
                     {/* A local model failed: what Lemonade and its backend wrote says why. */}
                     {(isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && place?.remote === false && (
                         <button type="button" className="msg-try-again" onClick={() => showServerLog('model_server')}>

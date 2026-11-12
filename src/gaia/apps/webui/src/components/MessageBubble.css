@@ -276,6 +276,27 @@
     color: var(--text-secondary);
 }
 
+.msg-failed-lead {
+    margin: 0 0 6px;
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-primary);
+}
+.msg-failed-details {
+    font-family: var(--font-sans);
+    font-size: 12.5px;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
+.msg-failed-details summary {
+    cursor: pointer;
+    width: fit-content;
+    border-radius: var(--radius-sm);
+}
+.msg-failed-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.msg-failed-details[open] summary { margin-bottom: 4px; }
+
 .msg-error .msg-body .md-p,
 .msg-error .msg-body .md-content {
     font-size: 13px;

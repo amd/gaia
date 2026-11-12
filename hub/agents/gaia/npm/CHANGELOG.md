@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A model name the server doesn't list fails with a plain reason.** A
+  `/query` for a model id outside the model server's catalog answered 500 with
+  the raw preload error and a restart command. It now answers 503 saying there
+  is no model by that name to download, with the caller's own way to pick
+  another. For `surface: "agent_ui"`, a start failure's detail no longer names
+  a terminal command.
 - **Add skills from a pasted link (`/skills`).** On the stdio transport,
   `/skills add <link>` lists the skills in a GitHub repository or folder, a
   skills.sh page or an https `.zip`, with what each one is allowed to do (its

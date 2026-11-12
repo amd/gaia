@@ -554,6 +554,45 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const RAW_MODEL_ERROR = "Failed to start the query run: Failed to preload Lemonade model 'no-such-model-xyz-123' with ctx_size=65536 "
+    + "on idle server at http://localhost:64679/api/v1: Failed to auto-download 'no-such-model-xyz-123': Download failed: "
+    + 'When registering a new model, the model name must include the `user` namespace. Received: no-such-model-xyz-123';
+
+async function withFailedTurn(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: RAW_MODEL_ERROR, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [{ id: 1, type: 'error', label: 'Error', detail: RAW_MODEL_ERROR, active: false, success: false }],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed turn names the cause and offers Settings, with the server error under Details (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedTurn);
+        const reply = page.locator('.msg-error');
+        await expect(reply.locator('.msg-failed-lead')).toBeVisible();
+        await expect(reply.locator('details.msg-failed-details')).not.toHaveAttribute('open', '');
+        // Collapsed, the server's words are not on screen.
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeHidden();
+        await expect(reply.locator('.msg-try-again', { hasText: '›' })).toHaveCount(1);
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-${locale}.png`) });
+        await reply.locator('.msg-failed-details summary').click();
+        await expect(reply.locator('.msg-failed-details .md-content')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`failed-turn-open-${locale}.png`) });
+    });
+}
+
 /** A new chat whose empty history is still loading when its first message goes out. */
 async function withSlowNewChat(page: Page): Promise<void> {
     const created = { ...SESSIONS[0], title: 'New chat', message_count: 0 };
