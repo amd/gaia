@@ -53,6 +53,7 @@ export function GoBackOffer({ className }: { className?: string }) {
         <section className={className ? `setup-card ${className}` : 'setup-card'} aria-label={title}>
             <h3 className="mc-job-title">{title}</h3>
             <p>{t('setup.goBack.lead', { version: last.version, date })}</p>
+            <p className="setup-hint">{t('setup.goBack.fixes', { version: last.version })}</p>
             {downloading || restarting ? (
                 <p className="setup-hint" role="status">
                     <Loader2 size={13} className="spin" aria-hidden="true" />{' '}

@@ -1472,6 +1472,7 @@ const messages: Messages = {
     'setup.server.ownFailed': 'تعذّر على GAIA تنزيل محرك الذكاء الاصطناعي الخاص به أو تشغيله. تحقق من اتصالك بالإنترنت، ثم حاول مجددًا.',
     'setup.goBack.title': 'الرجوع إلى إصدار كان يعمل',
     'setup.goBack.lead': 'أكمل ⁦GAIA {version}⁩ الإعداد على هذا الكمبيوتر في {date}.',
+    'setup.goBack.fixes': 'لا يتضمن ⁦GAIA {version}⁩ الإصلاحات الصادرة بعده، ومنها إصلاحات الأمان. حدّث مجددًا عند صدور إصدار يصلح المشكلة.',
     'setup.goBack.note': 'يؤدي الرجوع إلى تنزيل ⁦GAIA {version}⁩ وإعادة التشغيل عليه. تبقى محادثاتك وذاكرتك وإعداداتك كما هي. يبقى ⁦GAIA {current}⁩ متاحًا: تتوقف التحديثات مؤقتًا حتى لا يعود من تلقاء نفسه، ويمكنك تجربته مجددًا من الإعدادات ← عام ← التحديثات.',
     'setup.goBack.action': 'الرجوع إلى ⁦GAIA {version}⁩',
     'setup.goBack.downloading': 'جارٍ تنزيل ⁦GAIA {version}⁩… ⁦{pct}%⁩',

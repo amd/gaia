@@ -60,6 +60,15 @@ describe('GoBackOffer', () => {
         expect(offer).toHaveTextContent(`GAIA 0.26.0-rc.12 finished setup on this PC on ${date}.`);
     });
 
+    it('says the older version lacks later security fixes, outside Details', async () => {
+        render(<GoBackOffer />);
+        await goBack();
+        const warning = screen.getByText(/security fixes included/);
+        expect(warning).toHaveTextContent("GAIA 0.26.0-rc.12 doesn't have the fixes released since, security fixes included.");
+        expect(warning.closest('details')).toBeNull();
+        expect(warning).toBeVisible();
+    });
+
     it('keeps what happens to chats, settings and the newer version behind Details', async () => {
         render(<GoBackOffer />);
         await goBack();

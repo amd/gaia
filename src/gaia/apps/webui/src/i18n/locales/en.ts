@@ -1472,6 +1472,7 @@ export const enMessages = {
     'setup.server.ownFailed': "GAIA couldn't download or start its AI engine. Check your internet connection, then try again.",
     'setup.goBack.title': 'Go back to a version that worked',
     'setup.goBack.lead': 'GAIA {version} finished setup on this PC on {date}.',
+    'setup.goBack.fixes': "GAIA {version} doesn't have the fixes released since, security fixes included. Update again once a fixed version is out.",
     'setup.goBack.note': "Going back downloads GAIA {version} and restarts into it. Your chats, memory and settings stay as they are. GAIA {current} stays available: updates pause so it doesn't come back on its own, and you can try it again from Settings → General → Updates.",
     'setup.goBack.action': 'Go back to GAIA {version}',
     'setup.goBack.downloading': 'Downloading GAIA {version}… {pct}%',
