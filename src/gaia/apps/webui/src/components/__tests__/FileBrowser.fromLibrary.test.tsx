@@ -67,7 +67,7 @@ describe('the file browser opened from the library', () => {
 
         const row = (await screen.findByText('notes.txt')).closest('.fb-entry') as HTMLElement;
         fireEvent.click(within(row).getByRole('checkbox'));
-        fireEvent.click(screen.getByRole('button', { name: /Index Selected/i }));
+        fireEvent.click(screen.getByRole('button', { name: /Add to library/i }));
 
         await waitFor(() => expect(useChatStore.getState().showDocLibrary).toBe(true));
         expect(useChatStore.getState().showFileBrowser).toBe(false);
@@ -81,7 +81,7 @@ describe('the file browser opened from the library', () => {
 
         const row = (await screen.findByText('notes.txt')).closest('.fb-entry') as HTMLElement;
         fireEvent.click(within(row).getByRole('checkbox'));
-        fireEvent.click(screen.getByRole('button', { name: /Ask Agent/i }));
+        fireEvent.click(screen.getByRole('button', { name: /Ask GAIA about these/i }));
 
         await waitFor(() => expect(useChatStore.getState().showFileBrowser).toBe(false));
         expect(useChatStore.getState().showDocLibrary).toBe(false);
