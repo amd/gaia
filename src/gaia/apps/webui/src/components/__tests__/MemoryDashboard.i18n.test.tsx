@@ -248,10 +248,10 @@ describe('Memory dashboard in Arabic', () => {
         mockedApi.openDiscoveryStream.mockReturnValue(es as never);
         render(<MemoryDashboard />);
         tab(/إعداد الملف الشخصي/);
-        expect(screen.getByRole('button', { name: /تشغيل الاستكشاف/ })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /ابدأ الفحص/ })).toBeInTheDocument();
         expect(leftoverEnglish()).toEqual([]);
 
-        fireEvent.click(screen.getByRole('button', { name: /تشغيل الاستكشاف/ }));
+        fireEvent.click(screen.getByRole('button', { name: /ابدأ الفحص/ }));
         act(() => {
             es.onmessage!({ data: JSON.stringify({ type: 'log', message: 'Scanning installed apps' }) });
             es.onmessage!({ data: JSON.stringify({ type: 'finding', item: { content: 'Uses VS Code', category: 'fact', context: 'global', confidence: 0.9 } }) });

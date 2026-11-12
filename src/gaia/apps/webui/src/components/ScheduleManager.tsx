@@ -249,7 +249,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                 <span>{t('schedules.card.runs', { n: schedule.run_count })}</span>
                 {schedule.error_count > 0 && <span>{t('schedules.card.errors', { n: schedule.error_count })}</span>}
                 <span>{t.compose((say) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(t)) }))}</span>
-                <span>{t.compose((say) => say('schedules.card.next', { when: formatNextRun(schedule.next_run_at, now, say, dateLocale(t)) }))}</span>
+                <span>{t.compose((say) => say('schedules.card.next', { when: schedule.status === 'paused' ? say('schedules.status.paused') : formatNextRun(schedule.next_run_at, now, say, dateLocale(t)) }))}</span>
             </div>
             {schedule.last_error && (
                 <div className="schedule-card-error">{t('schedules.card.lastFailed', { error: schedule.last_error })}</div>
@@ -328,10 +328,13 @@ export function ScheduleManager() {
     const fieldId = useId();
     const scheduleFieldId = `${fieldId}-when`;
     const scheduleErrorId = `${fieldId}-when-error`;
+    const scheduleHintId = `${fieldId}-when-hint`;
     const nameFieldId = `${fieldId}-name`;
     const nameErrorId = `${fieldId}-name-error`;
     const promptFieldId = `${fieldId}-prompt`;
     const scheduleRejected = !parsing && parsed !== null && !parsed.valid;
+    // The parser's reason is English; with no English in the input, the hint says what to fix.
+    const showRejectReason = scheduleRejected && /[A-Za-z]/.test(nlInput);
 
     // Debounced parse of NL input
     const parseTimerRef = useRef<number | null>(null);
@@ -425,10 +428,11 @@ export function ScheduleManager() {
                                         value={nlInput}
                                         onChange={(e) => setNlInput(e.target.value)}
                                         aria-invalid={scheduleRejected}
-                                        aria-describedby={scheduleRejected ? scheduleErrorId : undefined}
+                                        aria-describedby={scheduleRejected ? `${scheduleErrorId} ${scheduleHintId}` : scheduleHintId}
                                         autoFocus
                                         rows={2}
                                     />
+                                    <div id={scheduleHintId} className="schedule-field-hint">{t('schedules.whenHint')}</div>
                                 </div>
 
                                 {/* Parsed preview */}
@@ -448,7 +452,7 @@ export function ScheduleManager() {
                                                 ) : (
                                                     <div id={scheduleErrorId}>
                                                         <div className="schedule-parsed-description">{t('schedules.notUnderstood')}</div>
-                                                        <div className="schedule-parsed-hint"><bdi>{parsed.description}</bdi></div>
+                                                        {showRejectReason && <div className="schedule-parsed-hint"><bdi>{parsed.description}</bdi></div>}
                                                     </div>
                                                 )}
                                                 {parsed.valid && parsed.next_run_at && (
