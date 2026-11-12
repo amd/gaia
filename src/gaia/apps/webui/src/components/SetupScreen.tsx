@@ -1068,7 +1068,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
                             {serverRun?.state === 'running' && (
                                 <>
-                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} />
+                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} bar={false} />
                                     <SetupFooter>
                                         <button type="button" className="btn-secondary" onClick={() => void cancel()}>{t('setup.progress.cancel')}</button>
                                     </SetupFooter>
@@ -1167,7 +1167,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </section>
                             </div>
                             <SetupFooter>
-                                <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>
+                                {/* Both pick local models, which a cloud setup doesn't download. */}
+                                {where !== 'cloud' && <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>}
                                 {where === 'cloud' ? (
                                     <button type="button" className="btn-primary" onClick={useCloud} disabled={runGoing}>{t('setup.continue')}</button>
                                 ) : (
@@ -1192,10 +1193,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             )}
                             {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
                             {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
-                            <details className="setup-disclosure">
-                                <summary>{t('setup.plan.whatDownloads')}</summary>
-                                <DownloadContents plan={plan} models={pending} />
-                            </details>
+                            {where !== 'cloud' && (
+                                <details className="setup-disclosure">
+                                    <summary>{t('setup.plan.whatDownloads')}</summary>
+                                    <DownloadContents plan={plan} models={pending} />
+                                </details>
+                            )}
                         </>
                     )}
 
