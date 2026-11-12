@@ -62,11 +62,32 @@ describe('SkillsSettings', () => {
         expect(onUseSkill).toHaveBeenCalledExactlyOnceWith('gh-cli');
     });
 
-    it('names skills that could not be read', async () => {
-        mockedApi.listSkills.mockResolvedValue({ skills: [], invalid: { '/skills/broken/SKILL.md': 'missing name' } });
+    it('explains a skipped skill in one plain line, without paths or developer advice', async () => {
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [],
+            invalid: {
+                '/home/me/.claude/skills/modsmith': "/home/me/.claude/skills/modsmith/SKILL.md: description is 1025 characters; the limit is 1024. It is a trigger signal, not documentation — move the detail into the Markdown body. See https://amd-gaia.ai/docs/spec/agent-skills#x",
+                '/skills/broken': 'missing name',
+            },
+        });
         render(<SkillsSettings onUseSkill={vi.fn()} />);
-        expect(await screen.findByRole('alert')).toHaveTextContent('missing name');
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent("modsmith couldn't be loaded: its description is too long for GAIA");
+        expect(alert).toHaveTextContent("broken couldn't be loaded: it isn't a valid skill file");
+        expect(alert).not.toHaveTextContent('/home/me');
+        expect(alert).not.toHaveTextContent('trigger signal');
+        expect(alert).not.toHaveTextContent('https://');
         expect(screen.getByText('No skills are installed.')).toBeInTheDocument();
+    });
+
+    it('explains a skipped skill in Arabic', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listSkills.mockResolvedValue({
+            skills: [],
+            invalid: { '/x/modsmith': 'description is 1025 characters; the limit is 1024.' },
+        });
+        render(<SkillsSettings onUseSkill={vi.fn()} />);
+        expect(await screen.findByRole('alert')).toHaveTextContent(/تعذّر تحميل .*modsmith.*وصفه أطول/);
     });
 
     it('shows a load failure', async () => {
