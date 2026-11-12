@@ -179,7 +179,7 @@ describe('a new chat', () => {
         await sendFirstMessage('hello there');
 
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
-        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ title: 'New Task', agent_type: 'gaia' });
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ title: 'New chat', agent_type: 'gaia' });
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
         expect(mocked.sendMessageStream.mock.calls[0].slice(0, 2)).toEqual(['sess-new-0001', 'hello there']);
     });
@@ -667,7 +667,9 @@ describe('New chat right after sending a first message', () => {
         await sendFirstMessage('Reply with exactly: RACE-LOST-1');
         await waitFor(() => expect(useChatStore.getState().pendingPrompt?.sessionId).toBe('sess-new-0001'));
 
-        await userEvent.click(await screen.findByRole('button', { name: 'New chat' }));
+        // The untitled chat is called "New chat" too, in its row and header.
+        const buttons = await screen.findAllByRole('button', { name: 'New chat' });
+        await userEvent.click(buttons.find((b) => b.classList.contains('sb-nav-item'))!);
 
         expect(useChatStore.getState().currentSessionId).toBeNull();
         expect(useChatStore.getState().pendingPrompt).toBeNull();
