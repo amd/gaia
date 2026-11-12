@@ -35,6 +35,7 @@ var paletteCommands = []paletteCommand{
 	{"/memory", "View this agent's memory"},
 	{"/full-access", "Run every tool without asking first — shows a warning before it turns on"},
 	{"/setup", "Run first-time setup (gaia flagship agent only)"},
+	{"/connectors", "See connected apps (Gmail, Slack, GitHub…); /connectors personalize <id> learns from one"},
 	{"/models", "Choose the models on this PC: download, skip, or pick the chat model"},
 	{"/gpu", "Give the GPU more memory so bigger models fit (integrated-GPU PCs)"},
 	{"/slack", "Connect this agent to Slack, or show the connection's status"},

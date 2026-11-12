@@ -1721,6 +1721,34 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
+        test('a connected tile offers Personalize, and connecting a server offers it in a banner', async ({ page }) => {
+            const brave = { id: 'brave-search', display_name: 'Brave Search', type: 'mcp_server', icon: null, category: 'general',
+                tier: 'core', description: 'Lets GAIA work with Brave Search on your behalf.', configurable: true, enabled: true,
+                account_id: null, default_scopes: [], available_scopes: [], mcp_env_keys: ['BRAVE_API_KEY'], oauth_setup_fields: [] };
+            await openConnectors(page, undefined, {
+                'POST /connectors/brave-search/configure': {},
+                'POST /connectors/brave-search/test': { ok: true, detail: '' },
+                'GET /connectors/brave-search': { ...brave, configured: true },
+            });
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            const row = page.locator('.connector-detail .connector-personalize');
+            await expect(row).toBeVisible();
+            await row.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-personalize-tile`);
+            expect(await audit(page)).toEqual([]);
+
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Brave Search' }).click();
+            await page.locator('.mcp-key-input').fill('BSA-not-a-real-key');
+            await page.locator('.btn-model-save').click();
+            const offer = page.locator('.connector-personalize--offer');
+            await expect(offer).toBeVisible();
+            await offer.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-personalize-offer`);
+            expect(await audit(page)).toEqual([]);
+        });
+
         test('a keyed server shows its label, help and setup link', async ({ page }) => {
             await openConnectors(page, [{
                 id: 'mcp-slack', display_name: 'Slack', type: 'mcp_server', description: 'Read channels, threads, and DMs in your Slack workspace.',
