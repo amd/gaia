@@ -337,6 +337,24 @@ def _handle_connect(args: argparse.Namespace) -> int:
         resolve_declared_scopes,
         start_authorization,
     )
+    from gaia.connectors.registry import REGISTRY
+
+    # Say so up front, before any scope work, rather than let the provider
+    # lookup's KeyError escape as a traceback.
+    oauth_ids = sorted(s.id for s in REGISTRY.all() if s.type == "oauth_pkce")
+    if args.connector_id not in oauth_ids:
+        if args.connector_id in REGISTRY:
+            sys.stderr.write(
+                f"{args.connector_id!r} is not an OAuth connector, so it cannot be "
+                f"connected with this command. OAuth connectors: "
+                f"{', '.join(oauth_ids)}.\n"
+            )
+        else:
+            sys.stderr.write(
+                f"Unknown connector {args.connector_id!r}. "
+                f"Known: {', '.join(oauth_ids)}.\n"
+            )
+        return 1
 
     grant_agent = getattr(args, "grant_agent", None)
     explicit_scopes = args.scopes or []
