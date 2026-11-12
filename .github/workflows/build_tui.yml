@@ -35,6 +35,8 @@ on:
       # Nothing else runs pre-release on these — the PE check this job invokes,
       # and the installers that package the binaries it builds.
       - 'util/check_pe_resources.py'
+      # installer/tui/fetch_gaiacpp.py imports it to verify the packaged gaiacpp.
+      - 'util/gaiacpp_release_assets.py'
       - 'installer/tui/**'
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
@@ -81,6 +83,8 @@ on:
       # Nothing else runs pre-release on these — the PE check this job invokes,
       # and the installers that package the binaries it builds.
       - 'util/check_pe_resources.py'
+      # installer/tui/fetch_gaiacpp.py imports it to verify the packaged gaiacpp.
+      - 'util/gaiacpp_release_assets.py'
       - 'installer/tui/**'
       - '.github/workflows/build_tui.yml'
       - '.github/workflows/tui_installers.yml'
