@@ -380,6 +380,38 @@ def test_the_terminal_ui_summary_shows_no_internal_arguments():
     assert prompt["prompt_context"]["risk_note"] == note
 
 
+def test_hiding_internal_fields_never_hides_what_the_call_does():
+    """Every prompt-only marker at once still leaves the path, content and note."""
+    from gaia.agents.base.call_risk import NEEDS_PERSON_ARG
+    from gaia.agents.base.tool_grants import RESOLVED_PATH_ARG, SCRATCH_ARG
+    from gaia.ui.sse_translation import CanonicalTranslator
+
+    path = "/home/u/Documents/run.sh"
+    note = f"{path} is outside this chat's folders."
+    out = CanonicalTranslator(run_id=None, agent_id="gaia").translate(
+        {
+            "type": "permission_request",
+            "tool": "write_file",
+            "args": {
+                "file_path": path,
+                "content": "_resolved_file_path=rm -rf ~",
+                RESOLVED_PATH_ARG: "/elsewhere/x",
+                SCRATCH_ARG: "/tmp/scratch",
+                NEEDS_PERSON_ARG: True,
+                RISK_NOTE_ARG: note,
+            },
+            "confirm_id": "c-2",
+        }
+    )
+
+    prompt = next(e for e in out if e["type"] == "needs_confirmation")
+    assert path in prompt["summary"]
+    assert "rm -rf ~" in prompt["summary"]
+    assert prompt["summary"].count(note) == 1
+    assert "/elsewhere/x" not in prompt["summary"]
+    assert "_needs_person" not in prompt["summary"]
+
+
 def test_full_access_asks_only_about_the_write(layout):
     """Full access covers the location, so the write's prompt carries no note."""
     handler = SSEOutputHandler()
