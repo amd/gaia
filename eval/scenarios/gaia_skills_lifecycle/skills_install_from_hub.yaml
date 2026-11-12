@@ -15,7 +15,8 @@ persona: power_user
 
 setup:
   index_documents: []
-  notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub; unit-convert NOT installed (skills_hub_install_use_remove removes it if it ran first)."
+  skills_absent: [unit-convert]
+  notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub; unit-convert NOT installed."
 
 turns:
   - turn: 1

@@ -16,6 +16,7 @@ persona: power_user
 
 setup:
   index_documents: []
+  skills_absent: [unit-convert]
   notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub; unit-convert NOT installed (it is not a starter skill)."
 
 turns:

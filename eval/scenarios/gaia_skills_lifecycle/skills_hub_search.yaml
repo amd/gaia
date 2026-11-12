@@ -15,6 +15,7 @@ persona: casual_user
 
 setup:
   index_documents: []
+  skills_absent: [unit-convert]
   notes: "Fixture server running; GAIA_HUB_URL points at the fixture hub. The hub skills ship with the flagship, so the capability asked about is unit-convert, which exists only on the fixture hub."
 
 turns:

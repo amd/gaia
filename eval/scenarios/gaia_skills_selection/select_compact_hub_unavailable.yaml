@@ -13,6 +13,7 @@ persona: casual_user
 
 setup:
   index_documents: []
+  skills_absent: [unit-convert]
   notes: "Every hub/skills skill ships with the flagship; unit-convert is only on the fixture hub; the agent runs a compact-tier model (Gemma-4-E4B); GAIA_HUB_URL points at the fixture hub."
 
 turns:
