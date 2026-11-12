@@ -4,7 +4,9 @@
 
 A pin test proves the spec names an exact version; only launching it proves
 that version exists, installs, and speaks MCP. Placeholder credentials are
-enough: these servers read their keys at startup but only use them per call.
+enough for most servers, which read their keys at startup but only use them per
+call. A server that checks its key before speaking MCP is instead held to
+reaching that check and rejecting the placeholder.
 """
 
 import json
@@ -21,6 +23,12 @@ from gaia.connectors.catalog.mcp_servers import _ALL_SPECS
 pytestmark = [pytest.mark.integration, pytest.mark.network]
 
 _LAUNCH_TIMEOUT_S = 180
+
+# Servers that sign in before answering MCP, mapped to the stderr text of their
+# placeholder-credential rejection.
+_CHECKS_CREDENTIALS_AT_START = {
+    "mcp-slack": "invalid_auth",
+}
 
 
 def _rpc(proc, lines, msg_id, method, params=None):
@@ -65,20 +73,36 @@ def test_catalog_server_launches_and_lists_tools(spec):
         [launcher, *spec.mcp_args],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
         env=env,
     )
     lines: queue.Queue = queue.Queue()
+    stderr: list = []
 
     def pump():
         for line in proc.stdout:
             lines.put(line)
         lines.put(None)
 
+    def drain_stderr():
+        for line in proc.stderr:
+            stderr.append(line)
+
     threading.Thread(target=pump, daemon=True).start()
+    err_reader = threading.Thread(target=drain_stderr, daemon=True)
+    err_reader.start()
     try:
+        rejection = _CHECKS_CREDENTIALS_AT_START.get(spec.id)
+        if rejection is not None:
+            proc.wait(timeout=_LAUNCH_TIMEOUT_S)
+            err_reader.join(timeout=10)
+            output = "".join(stderr)
+            assert (
+                rejection in output
+            ), f"{spec.id} never reached its credential check; stderr:\n{output[-2000:]}"
+            return
         init = _rpc(
             proc,
             lines,
