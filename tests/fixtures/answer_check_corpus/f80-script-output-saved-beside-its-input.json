@@ -55,6 +55,5 @@
     "answer_lacks": [
       "No successful write to `recon_tables.xlsx`"
     ]
-  },
-  "xfail": "amd/gaia#7293, fixed by open PR amd/gaia#7321"
+  }
 }
