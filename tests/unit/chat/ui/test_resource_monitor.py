@@ -261,7 +261,7 @@ def test_posix_probe_shows_cpu_and_memory_when_the_clock_read_breaks(
     def broken_cpu_freq():  # psutil 7.2 on Apple silicon
         raise SystemError("<built-in function cpu_freq> returned a result")
 
-    monkeypatch.setattr(psutil, "cpu_freq", broken_cpu_freq)
+    monkeypatch.setattr(psutil, "cpu_freq", broken_cpu_freq, raising=False)
     probe = rm.PosixProbe(drm_root=tmp_path)
     with caplog.at_level(logging.DEBUG, logger=rm.logger.name):
         samples = [probe.sample() for _ in range(3)]
