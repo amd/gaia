@@ -1291,7 +1291,7 @@ def _script_io(
     Each file it opens is named, as a literal or a name bound once to one; it
     reaches no other data; and it types no figure beyond a small count —
     ``v*40``, ``1500 - 90``, ``9*10+5`` or ``'CM5,95'.split(',')`` invents its
-    result rather than computing it. A plain number in *copied* is exempt:
+    result rather than computing it. A decimal in *copied* is exempt:
     a rate a tool printed this turn, typed into the script, was copied.
     """
     if _name(record) != "run_python":
@@ -1360,9 +1360,15 @@ def _analysed(
                     continue
                 if isinstance(value, complex):
                     return None
-                if not float(value).is_integer() or abs(value) > _SMALL_INT:
-                    # Judged by the caller: a figure a tool showed is copied.
-                    typed.add(float(value))
+                if isinstance(value, int) or value.is_integer():
+                    if abs(value) > _SMALL_INT:
+                        return None
+                    continue
+                # A whole number matches a date or count by chance; a rate
+                # like 1.0842 does not, so only that can be judged copied.
+                if not math.isfinite(value):
+                    return None
+                typed.add(value)
         elif (
             isinstance(node, (ast.BinOp, ast.UnaryOp, ast.JoinedStr, ast.Call))
             and id(node) not in untyped
@@ -1875,7 +1881,7 @@ def file_findings(
     input_texts = [_spelled_out(t) for t in inputs]
     copied = _copied_numbers(
         _source_records(records, written),
-        [_spelled_out(query or ""), _spelled_out(context or "")] + input_texts,
+        [_spelled_out(query or "")] + input_texts,
     )
     found = [
         (_spelled_out(t), c)

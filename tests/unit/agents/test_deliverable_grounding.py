@@ -1396,3 +1396,38 @@ def test_a_number_only_the_written_file_shows_does_not_source_the_script():
     findings = _la3_findings(rates='{"USD": 1153.14}', shown="no rates")
 
     assert [f.gate for f in findings] == [FILE]
+
+
+def test_a_whole_number_a_date_happens_to_show_is_not_a_copied_rate():
+    """12 in "2026-11-12" is not where a typed rate of 12 came from."""
+    findings = _la3_findings(
+        rates='{"USD": 1.0840, "SEK": 12, "CHF": 0.9410, "EUR": 1.0}',
+        shown=LA3_RATES.replace("2026-11-11", "2026-11-12"),
+    )
+
+    assert [f.gate for f in findings] == [FILE]
+
+
+def test_a_rate_only_earlier_conversation_shows_is_not_copied_this_turn():
+    records = [
+        _read("invoices.csv", LA3_INVOICES),
+        _run_python(_la3_code(LA3_TYPED_RATES)),
+    ]
+    findings = file_findings(
+        {"invoices_eur.csv": text_blocks(LA3_OUTPUT, ".csv")},
+        records,
+        query=LA3_QUERY,
+        context="Earlier: USD 1.084, GBP 0.8615, SEK 11.42, CHF 0.941",
+    )
+
+    assert [f.gate for f in findings] == [FILE]
+
+
+def test_an_oversized_whole_number_in_a_script_does_not_crash_the_check():
+    findings = _la3_findings(
+        rates='{"USD": 1.0840, "SEK": 11.42, "CHF": 0.9410, "EUR": 1.0, "X": '
+        + "9" * 400
+        + "}"
+    )
+
+    assert [f.gate for f in findings] == [FILE]
