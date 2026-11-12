@@ -56,4 +56,21 @@ describe('ConnectorsSection with a connector the backend could not load', () => 
         expect(within(group('Unavailable')).getByText('Microsoft')).toBeInTheDocument();
         expect(screen.queryByText('Google')).not.toBeInTheDocument();
     });
+
+    it('names the unreadable activations file instead of saying restart', async () => {
+        const path = 'C:\\Users\\me\\.gaia\\connectors\\activations.json';
+        mocked.listConnectors.mockResolvedValue({
+            connectors: [{ ...unavailable, reason: 'activations_unreadable', path }],
+        });
+        render(<ConnectorsSection />);
+        await screen.findByText('Microsoft');
+        expect(screen.getByText(/couldn't read its connector settings file at/)).toHaveTextContent(path);
+        expect(screen.queryByText(/Restart GAIA/)).not.toBeInTheDocument();
+    });
+
+    it('keeps the generic hint when the cause is unknown', async () => {
+        render(<ConnectorsSection />);
+        await screen.findByText('Google');
+        expect(screen.getByText(/Restart GAIA/)).toBeInTheDocument();
+    });
 });

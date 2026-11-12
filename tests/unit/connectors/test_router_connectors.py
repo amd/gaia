@@ -159,6 +159,65 @@ class TestListConnectors:
         }
         assert rows["mcp-test"]["display_name"] == "MCP Test"
 
+    def test_a_corrupt_activations_file_is_named_on_every_unavailable_row(
+        self, ui_api_client
+    ):
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = resp.json()["connectors"]
+        assert rows
+        for row in rows:
+            assert row["error"] == "unavailable"
+            assert row["reason"] == "activations_unreadable"
+            assert row["path"] == str(path)
+
+    @pytest.mark.parametrize("body", ["[]", '{"activations": []}'])
+    def test_a_wrong_shape_activations_file_is_named_too(self, ui_api_client, body):
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        rows = ui_api_client.get("/api/connectors").json()["connectors"]
+        assert rows and all(r["reason"] == "activations_unreadable" for r in rows)
+
+    def test_an_unreadable_but_valid_activations_file_is_not_called_corrupt(
+        self, ui_api_client, monkeypatch
+    ):
+        """A permissions error must not tell the user to delete the file."""
+        import builtins
+
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"version": 1, "activations": {}}', encoding="utf-8")
+        real_open = builtins.open
+
+        def deny(file, *a, **k):
+            if str(file) == str(path):
+                raise PermissionError(13, "Permission denied", str(file))
+            return real_open(file, *a, **k)
+
+        monkeypatch.setattr(builtins, "open", deny)
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        for row in resp.json()["connectors"]:
+            assert "reason" not in row
+            assert "path" not in row
+
+    def test_no_activations_file_adds_no_reason(self, ui_api_client):
+        from gaia.connectors.activations import _activations_path
+
+        assert not _activations_path().exists()
+        for row in ui_api_client.get("/api/connectors").json()["connectors"]:
+            assert "reason" not in row
+
     def test_unconfigured_connector_shows_configured_false(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors")
         entry = next(e for e in resp.json()["connectors"] if e["id"] == "google")

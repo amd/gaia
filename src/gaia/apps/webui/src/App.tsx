@@ -21,6 +21,7 @@ import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
+import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
 import { useMediaQuery } from './hooks/useMediaQuery';
@@ -34,7 +35,7 @@ import { getSessionHash } from './utils/format';
 import { lastSessionTarget, readUrlTarget, rememberLastSession, resolveUrlNavTarget } from './utils/sessionNav';
 import { NEW_CHAT_DRAFT_KEY, chatDraftKey, clearSavedDraft, readSavedDraft, writeSavedDraft } from './utils/savedDraft';
 import { getApiBase } from './utils/apiBase';
-import { followBackendLifecycle } from './stores/backendStore';
+import { followBackendLifecycle, resyncBackend } from './stores/backendStore';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
 import { runWhileVisible } from './utils/visibleInterval';
@@ -75,6 +76,13 @@ const UPGRADE_WAIT_MS = 5 * 60_000;
 
 /** The embedded server's update ended in failure, as opposed to still running. */
 class UpgradeFailed extends Error {}
+
+/** The model in use could not be read, so a setup check can't be trusted to say "not set up". */
+class ModelUnread extends Error {
+    constructor(reason: string) {
+        super(getT().bare('setup.unknown.modelUnread', { error: reason }));
+    }
+}
 
 async function waitForEmbeddedUpgrade(): Promise<void> {
     const deadline = Date.now() + UPGRADE_WAIT_MS;
@@ -173,12 +181,18 @@ function App() {
         try {
             for (;;) {
                 await useModelStore.getState().refresh();
-                const remote = !!useModelStore.getState().active?.remote;
+                const active = useModelStore.getState().active;
+                const remote = !!active?.remote;
                 let check: SetupCheck;
                 try {
                     check = await api.checkSetup(remote);
+                    // Asked without the model, the answer is a local model's: a cloud install would read as not set up.
+                    if (!active && !check.ready) {
+                        throw new ModelUnread(useModelStore.getState().error ?? 'no answer');
+                    }
                 } catch (err) {
-                    if (!waitForStart || !isRefused(err) || waited >= BACKEND_START_WAIT_MS) throw err;
+                    const starting = isRefused(err) || err instanceof ModelUnread;
+                    if (!waitForStart || !starting || waited >= BACKEND_START_WAIT_MS) throw err;
                     // A refused local connection is cheap; poll steadily so the app opens as soon as it listens.
                     await sleep(RETRY_INITIAL_MS);
                     waited += RETRY_INITIAL_MS;
@@ -287,6 +301,8 @@ function App() {
     const applyStatus = useCallback((outcome: StatusOutcome) => {
         if (outcome.kind === 'unreachable') {
             log.system.warn('System status check failed', outcome.error);
+            // The backend may be back on another port; the next check goes wherever it is.
+            resyncBackend();
             wasUnreachable.current = true;
             slowCount.current = 0;
             slowSince.current = null;
@@ -387,6 +403,13 @@ function App() {
         const load = () => { void useScheduleStore.getState().loadSchedules(); };
         load();
         const t = setInterval(load, 30_000);
+        return () => clearInterval(t);
+    }, []);
+    // Goals also run unattended: an unreadable goal store raises one notification.
+    useEffect(() => {
+        const check = () => { void useGoalHealthStore.getState().check(); };
+        check();
+        const t = setInterval(check, 30_000);
         return () => clearInterval(t);
     }, []);
     // Queued messages go out when their chat's turn ends, even with another chat open.
