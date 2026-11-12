@@ -796,6 +796,11 @@ The panel reads when it opens, when you expand a section, and when an answer
 finishes. It never checks on a timer, and a closed panel or a collapsed section
 reads nothing.
 
+It leads with what the chat made and may touch: **This answer**, **Outputs**,
+**Changes**, **Folders and access** and **Skills**. How the chat ran, **Context
+& performance** and **Agent info**, sits last under **Details**, collapsed until
+you open it.
+
 - **This answer** shows what the latest turn used and where its data went:
   - **Sources:** the web pages it read and the document passages it drew on,
     named by file and page.
@@ -812,8 +817,8 @@ reads nothing.
   the previous one. When every web lookup in a turn failed, it says **Couldn't
   get live data**, so you know the answer isn't based on current information;
   with the panel closed, its button turns amber.
-- **Environment** shows where the chat runs and what it may touch. Each change
-  applies from GAIA's next step, without a restart:
+- **Folders and access** shows what the chat may touch and where it runs. Each
+  change applies from GAIA's next step, without a restart:
   - **Runs on:** this PC with its device and backend (for example
     `GPU · Vulkan`), the model and the memory in use, or the cloud provider.
   - **Can read and write:** the folders and files GAIA may use in this chat,
