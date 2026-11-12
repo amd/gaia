@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Cloud, Cpu, Loader2, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
@@ -307,7 +308,7 @@ export function ModelSettings() {
                 onSwitch={(model) => void use(model)}
             />
 
-            <div className="provider-tabs" role="radiogroup" aria-label={t('settings.model.whereRuns')}>
+            <RadioGroup className="provider-tabs" aria-label={t('settings.model.whereRuns')}>
                 {(providers ?? [{ id: 'local', name: 'Local', remote: false } as ProviderInfo]).map((p) => (
                     <button
                         key={p.id}
@@ -324,7 +325,7 @@ export function ModelSettings() {
                         {p.remote && p.models_discovered && <span className="provider-tab-dot" aria-label={t('settings.key.connectedDot')} />}
                     </button>
                 ))}
-            </div>
+            </RadioGroup>
 
             {loadError && (
                 <ErrorNotice message={loadError} onRetry={() => { void loadProviders(); void loadModels(chosen); }} />
