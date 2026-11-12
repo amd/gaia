@@ -63,7 +63,7 @@ logger = logging.getLogger(__name__)
 #               modern XML formats (.docx/.pptx)
 #   .xls (legacy BIFF) — openpyxl only handles .xlsx; would raise on open
 # NOTE: .pptx and .docx ARE supported — python-pptx and python-docx ship with
-# GAIA. See ``_UNSUPPORTED_CATEGORIES`` below for the user-facing rejection hint.
+# GAIA. See ``_UNSUPPORTED_TYPE_HINTS`` below for the user-facing rejection hint.
 #
 # FOLDER_INDEX_EXTENSIONS is what a folder walk indexes. Images are indexable
 # only when the user picks the file (see ``gaia.utils.image_formats``).
