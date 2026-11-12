@@ -130,6 +130,13 @@ def test_a_relayed_sidecar_is_sent_documents_but_not_images(home):
     ]
 
 
+@pytest.mark.parametrize("name", ["longtalk.wav", "call.MP3", "demo.mp4"])
+def test_a_relayed_sidecar_is_not_sent_recordings_to_index(home, name):
+    # #7215: the sidecar indexes what it is sent; a recording is transcribed.
+    attached = [str(home / "abc.pdf"), str(home / name)]
+    assert _relayed_documents([], attached) == [str(home / "abc.pdf")]
+
+
 # --- the chat turn itself grants it (cached agent, both transports) ----------
 
 
