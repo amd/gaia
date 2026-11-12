@@ -44,6 +44,7 @@ from gaia.filesystem.name_match import (
     glob_matches_mid_word,
 )
 from gaia.logger import get_logger
+from gaia.security import _format_size
 from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
@@ -54,18 +55,6 @@ logger = get_logger(__name__)
 # enough for any reasonable document (PDFs, big CSVs) but small enough that
 # we can tolerate loading it into memory at once.
 MAX_READ_BYTES = 50 * 1024 * 1024
-
-
-def _format_size(size_bytes: int) -> str:
-    """Format bytes to human-readable string."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
 def _format_date(timestamp: float) -> str:
@@ -227,7 +216,9 @@ class PathAccessDenied(ValueError):
     """The validator refused a path; ``refusal`` is the tool result to return."""
 
     def __init__(self, denied: dict):
-        super().__init__(f"Access denied: {denied['error']}")
+        reason = str(denied["error"])
+        prefix = "Access denied: "
+        super().__init__(reason if reason.startswith(prefix) else prefix + reason)
         self.refusal = {**denied, "error": str(self)}
 
 
@@ -746,10 +737,7 @@ class FileSystemToolsMixin:
 
                     elif ext == ".pdf":
                         try:
-                            try:
-                                import pypdf as _pdf
-                            except ImportError:
-                                import PyPDF2 as _pdf  # legacy fallback
+                            import pypdf as _pdf
 
                             with open(resolved, "rb") as f:
                                 reader = _pdf.PdfReader(f)
@@ -1905,18 +1893,10 @@ class FileSystemToolsMixin:
 
         def _read_pdf(path, mode):
             """Read PDF file."""
-            # Prefer ``pypdf`` (the modern maintained fork). Fall back to
-            # ``PyPDF2`` (deprecated legacy name) for older installs. The
-            # two share an identical API on the surface we use.
             try:
                 import pypdf as _pdf
             except ImportError:
-                try:
-                    import PyPDF2 as _pdf
-                except ImportError:
-                    return (
-                        f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
-                    )
+                return f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
 
             try:
                 with open(path, "rb") as f:

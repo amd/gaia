@@ -124,11 +124,33 @@ def test_preflight_blocks_when_the_default_model_does_not_fit_on_disk(
     assert body["blockers"]
 
 
+NPU_MODEL = "gemma4-it-e4b-FLM"
+
+
 @pytest.mark.allow_network
-def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch):
+def test_preflight_has_no_npu_notice_for_a_gpu_model_on_a_pc_without_one(
+    client, monkeypatch
+):
+    """#7229: Gemma's GGUF build said it "requests an NPU" on a PC with none."""
+    monkeypatch.setattr(
+        onboarding_mod,
+        "_probe_lemonade_devices",
+        _stub_devices(npu_detected=False, gpu_vram_gb=None, gpu_name=None),
+    )
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 16.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+
+    body = client.get("/api/onboarding/preflight").json()
+    assert body["recommended_model"] == "Gemma-4-E4B-it-GGUF"
+    assert not any("NPU" in w for w in body["warnings"])
+
+
+@pytest.mark.allow_network
+def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch, default_model):
     # No-NPU box with a capable GPU (the #2396 Radeon dGPU case): the Hardware
     # check must read as informational — no "agent" framing, no "install your
     # Ryzen AI NPU driver" CTA.
+    default_model["model"] = NPU_MODEL
     monkeypatch.setattr(
         onboarding_mod, "_probe_lemonade_devices", _stub_devices(npu_detected=False)
     )
@@ -147,7 +169,8 @@ def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch):
 
 
 @pytest.mark.allow_network
-def test_preflight_on_mac_has_no_npu_line(client, monkeypatch):
+def test_preflight_on_mac_has_no_npu_line(client, monkeypatch, default_model):
+    default_model["model"] = NPU_MODEL
     monkeypatch.setattr(compatibility, "detect_platform", lambda: "darwin-arm64")
     monkeypatch.setattr(
         onboarding_mod,
@@ -162,8 +185,11 @@ def test_preflight_on_mac_has_no_npu_line(client, monkeypatch):
 
 
 @pytest.mark.allow_network
-def test_preflight_no_npu_no_gpu_still_warns_to_remediate(client, monkeypatch):
-    # A box with neither NPU nor a detectable GPU keeps the remediation warning.
+def test_preflight_no_npu_no_gpu_still_warns_to_remediate(
+    client, monkeypatch, default_model
+):
+    # An NPU model on a box with neither NPU nor GPU keeps the remediation warning.
+    default_model["model"] = NPU_MODEL
     monkeypatch.setattr(
         onboarding_mod,
         "_probe_lemonade_devices",
@@ -203,7 +229,9 @@ def test_preflight_insufficient_ram_warns(client, monkeypatch):
 
 
 @pytest.mark.allow_network
-def test_preflight_lemonade_down_leaves_npu_unknown(client, monkeypatch):
+def test_preflight_lemonade_down_leaves_npu_unknown(client, monkeypatch, default_model):
+    default_model["model"] = NPU_MODEL
+
     async def _probe():
         return {
             "lemonade_running": False,

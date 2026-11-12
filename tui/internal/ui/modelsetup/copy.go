@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/amd/gaia/tui/internal/setupapi"
+	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // Every sentence the setup screens show, in one file, so first-run setup,
@@ -244,10 +245,10 @@ func introFor(settings bool) string {
 }
 
 // statusDownload is a row that still needs downloading.
-func statusDownload(gb float64) string { return formatGB(gb) }
+func statusDownload(gb float64) string { return textutil.FormatGB(gb) }
 
 // statusPartial is a row with some bytes already on disk.
-func statusPartial(left float64) string { return formatGB(left) + " left" }
+func statusPartial(left float64) string { return textutil.FormatGB(left) + " left" }
 
 // A model's need and the PC's memory for models both come from model_fit in
 // the same unit, so they carry the same label and compare directly. Whether a
@@ -271,6 +272,31 @@ func noFitAsk(need, have float64) string {
 	return fmt.Sprintf("Needs about %s; this PC has %s.", formatGBShort(need), formatGBShort(have))
 }
 
+// npuBlockedLine is the warning under a model the NPU can't run yet. The
+// server's sentence says which case it is (no NPU, or one not set up), and
+// both block. The reason is capitalised and its final full stop is removed,
+// including one inside a closing parenthesis, so it reads as its own clause
+// without doubling the stop when ours is appended.
+func npuBlockedLine(reason *string) string {
+	if reason == nil {
+		return "This model can't be used on this PC."
+	}
+	r := strings.TrimSpace(*reason)
+	r = strings.TrimRight(r, ".")
+	if strings.HasSuffix(r, ".)") {
+		r = strings.TrimSuffix(r, ".)") + ")"
+	}
+	if r == "" {
+		return "This model can't be used on this PC."
+	}
+	r = strings.ToUpper(r[:1]) + r[1:]
+	return "This model can't be used on this PC: " + r + "."
+}
+
+// npuBlockedPurpose is the job caption for a model the NPU can't run yet: it
+// must not read as a working chat option.
+const npuBlockedPurpose = "Requires a Ryzen AI NPU that is ready on this PC."
+
 // purposeLine says what a model is for in the job it is listed under.
 func purposeLine(e rowEntry, job string) string {
 	switch {
@@ -280,6 +306,8 @@ func purposeLine(e rowEntry, job string) string {
 		return "Lets GAIA search your files and remember things."
 	case job == jobVision:
 		return "Reads images and screenshots."
+	case e.npuBlocked():
+		return npuBlockedPurpose
 	case e.npu:
 		return "Answers your chats. Runs on the NPU."
 	case e.readsImages:
@@ -303,15 +331,15 @@ func skippedCaveat(e rowEntry) string {
 // diskSummary is the live totals line.
 func diskSummary(download float64, free *float64, drive string) string {
 	if free == nil {
-		return fmt.Sprintf("Download %s · Free space unknown", formatGB(download))
+		return fmt.Sprintf("Download %s · Free space unknown", textutil.FormatGB(download))
 	}
 	after := *free - download
 	if after < 0 {
 		return fmt.Sprintf("Download %s · free on %s %s · %s short",
-			formatGB(download), drive, formatGB(*free), formatGB(-after))
+			textutil.FormatGB(download), drive, textutil.FormatGB(*free), textutil.FormatGB(-after))
 	}
 	return fmt.Sprintf("Download %s · free on %s %s · after %s",
-		formatGB(download), drive, formatGB(*free), formatGB(after))
+		textutil.FormatGB(download), drive, textutil.FormatGB(*free), textutil.FormatGB(after))
 }
 
 // diskShortfall names how much to free, and the one model to drop when
@@ -320,10 +348,10 @@ func diskShortfall(need, free float64, drive, drop string, dropGB float64) strin
 	short := need - free
 	if drop != "" {
 		return fmt.Sprintf("Needs %s; only %s free on %s. Free %s or untick %s (saves %s).",
-			formatGB(need), formatGB(free), drive, formatGB(short), drop, formatGB(dropGB))
+			textutil.FormatGB(need), textutil.FormatGB(free), drive, textutil.FormatGB(short), drop, textutil.FormatGB(dropGB))
 	}
 	return fmt.Sprintf("Needs %s; only %s free on %s. Free %s, or untick more models.",
-		formatGB(need), formatGB(free), drive, formatGB(short))
+		textutil.FormatGB(need), textutil.FormatGB(free), drive, textutil.FormatGB(short))
 }
 
 // failureLine is a failed row's reason, worded for its kind.
@@ -331,7 +359,7 @@ func failureLine(kind, name, drive string, doneGB, leftGB float64) string {
 	switch kind {
 	case "disk_full":
 		return fmt.Sprintf("Ran out of disk space on %s after %s of %s. Free %s and press r. Nothing was lost; the download continues from where it stopped.",
-			drive, formatGB(doneGB), name, formatGB(leftGB))
+			drive, textutil.FormatGB(doneGB), name, textutil.FormatGB(leftGB))
 	case "network":
 		return "The connection dropped while downloading " + name + ". Press r to continue from where it stopped."
 	case "verify":
@@ -372,7 +400,7 @@ func removeAsk(e rowEntry) string {
 	}
 	frees := ""
 	if e.fullGB > 0 {
-		frees = " This frees " + formatGB(e.fullGB) + lost + "."
+		frees = " This frees " + textutil.FormatGB(e.fullGB) + lost + "."
 	}
 	return "Remove " + e.name + "?" + frees + " You can download it again."
 }

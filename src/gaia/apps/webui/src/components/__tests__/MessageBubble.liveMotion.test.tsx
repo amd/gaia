@@ -1,13 +1,14 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-/** The live status line shimmers only while the model works, and drops its typing effect under reduced motion. */
+/** The live status line shimmers only while the model works and shows its whole label at once. */
 
-import { act, render } from '@testing-library/react';
+import { render } from '@testing-library/react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MessageBubble } from '../MessageBubble';
 import type { Message } from '../../types';
+import bubbleCss from '../MessageBubble.css?raw';
 
 const streaming: Message = {
     id: -1,
@@ -65,12 +66,22 @@ describe('live status motion', () => {
         expect(indicator(container)).not.toHaveClass('is-live');
     });
 
-    it('types the label out by default', () => {
+    it('shows the whole label at once, in the UI font, with no typing cursor', () => {
         mockReducedMotion(false);
         const { container } = renderBubble();
-        expect(label(container)).toBe('');
-        for (let i = 0; i < 40; i++) act(() => { vi.advanceTimersByTime(30); });
         expect(label(container)).toBe('Reading your request');
+        expect(container.querySelector('.thinking-indicator .cursor')).toBeNull();
+        expect(bubbleCss).toMatch(/\.thinking-indicator \{[^}]*font-family: var\(--font-sans\)/);
+    });
+
+    it('drops the line as soon as the model stops', () => {
+        mockReducedMotion(false);
+        const { container, rerender } = renderBubble();
+        rerender(
+            <MessageBubble message={{ ...streaming, content: 'Done.' }} isStreaming agentSteps={[]}
+                agentStepsActive={false} liveStatus="Reading your request" />,
+        );
+        expect(indicator(container)).toBeNull();
     });
 
     it('shows the whole label on its first render under reduced motion', () => {

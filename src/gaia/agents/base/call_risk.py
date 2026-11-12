@@ -45,7 +45,7 @@ NEEDS_PERSON_ARG = "_needs_person"
 #: such as a whole email. Every front-end shows it in full, never shortened.
 EXACT_TEXT_ARG = "_exact_text"
 
-SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
+SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 
 _FILE_WRITE_TOOLS = frozenset(
     {

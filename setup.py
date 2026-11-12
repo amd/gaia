@@ -261,11 +261,9 @@ setup(
         "dev": [
             "pytest",
             "pytest-cov",
-            "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
             "pytest-xdist",
-            "pytest-rerunfailures",
             "pyfakefs",
             "matplotlib",
             "black",
@@ -313,6 +311,12 @@ setup(
             # WebSocket transport for the Lemonade Realtime transcription work
             # tracked in #372; #382 stages the packaging dependency first.
             "websockets",
+        ],
+        # The scheduler's Windows notification sink (`--sink notification`).
+        # Without it the sink shows a message box that waits for a click.
+        # No win32 marker: `gaia init` refuses a platform marker on an extra.
+        "notify": [
+            "plyer>=2.1.0,<3",
         ],
         "youtube": [
             "llama-index-readers-youtube-transcript",

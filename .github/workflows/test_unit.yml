@@ -328,8 +328,7 @@ jobs:
           # them. They live only in the [rag]/[ui] extras, which this job (like the
           # RAG dependencies above) does not install.
           # python-docx, python-pptx, openpyxl, reportlab and slack-sdk:
-          # tests/unit/rag/, tests/unit/chat/ui/test_xlsx_upload.py,
-          # tests/unit/eval/test_pdf_document_generator.py and
+          # tests/unit/rag/, tests/unit/chat/ui/test_xlsx_upload.py and
           # tests/unit/messaging/test_slack_sdk_contract.py importorskip them at
           # module level, so without them those files skip wholesale (#4206).
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
@@ -471,6 +470,15 @@ jobs:
           echo "acceptable. Skips itself when the runner has no network."
           echo ""
           pytest tests/integration/test_web_client_live_sni.py -v --tb=short --timeout=300
+
+      - name: Run MCP catalog launch test
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Launching every catalog MCP server at its pinned version ==="
+          echo "A pin test only proves the version is named; this proves it starts and lists tools"
+          echo ""
+          pytest tests/integration/test_mcp_catalog_launch.py -v --tb=short --timeout=900
 
       - name: Run Lemonade checksum pinning test
         env:

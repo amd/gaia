@@ -13,9 +13,10 @@ the running agent is asked instead.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +66,83 @@ def _skills_from_agent() -> Dict[str, Any]:
             status_code=502,
             detail=f"The GAIA agent could not list its skills: {e}",
         ) from e
+
+
+class SkillLinkRequest(BaseModel):
+    url: str
+
+
+class SkillLinkAddRequest(SkillLinkRequest):
+    #: The preview's pin, so the add installs exactly what was reviewed.
+    #: Required: an add that skipped the preview is refused.
+    pin: str
+    #: Skill names to add; omitted adds every addable skill behind the link.
+    names: Optional[List[str]] = None
+    #: Add skills that ship code (tools.py or scripts/).
+    allow_code: bool = False
+    force: bool = False
+
+
+@router.get("/api/skills/featured")
+def featured_skill_libraries() -> Dict[str, Any]:
+    """Libraries the Skills panel offers as one-click adds."""
+    from gaia.skills.link import FEATURED_LIBRARIES
+
+    return {"libraries": FEATURED_LIBRARIES}
+
+
+@router.post("/api/skills/link/preview")
+def preview_skill_link(body: SkillLinkRequest) -> Dict[str, Any]:
+    """List and audit the skills behind a pasted link. Writes nothing."""
+    from gaia.skills.errors import SkillError
+    from gaia.skills.link import SkillLinkError, preview_link
+
+    try:
+        return preview_link(body.url).to_dict()
+    except SkillLinkError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except SkillError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/api/skills/link/add")
+def add_skill_link(body: SkillLinkAddRequest) -> Dict[str, Any]:
+    """Add the chosen skills behind a pasted link to ``~/.gaia/skills``.
+
+    409 when the link no longer serves the version the preview pinned.
+    """
+    from gaia.skills.errors import SkillError
+    from gaia.skills.link import SkillLinkChangedError, SkillLinkError, add_from_link
+
+    try:
+        return add_from_link(
+            body.url,
+            body.names,
+            allow_code=body.allow_code,
+            force=body.force,
+            pin=body.pin,
+        ).to_dict()
+    except SkillLinkChangedError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except SkillLinkError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except SkillError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.delete("/api/skills/{name}")
+def remove_skill(name: str) -> Dict[str, Any]:
+    """Remove a skill from ``~/.gaia/skills``; bundled skills are refused."""
+    from gaia.skills.errors import SkillError, SkillNotFoundError
+    from gaia.skills.install import remove_skill as remove
+
+    try:
+        removed = remove(name)
+    except SkillNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except SkillError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"removed": removed.name}
 
 
 # ---------------------------------------------------------------------------

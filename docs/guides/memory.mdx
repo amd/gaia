@@ -109,7 +109,7 @@ Agent memory operates on four principles:
 3. **Learn continuously** -- LLM extraction from every conversation, not just regex patterns. The agent sees what it already knows and decides what's new, what's changed, and what's contradicted -- like intelligent memory management.
 4. **Be temporally aware** -- the agent knows the current time, what is coming up, what is overdue, and proactively surfaces time-sensitive items
 
-Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mode for concurrent reads). No cloud services, no external dependencies.
+Everything is stored in a single file at `~/.gaia/memory.db` (SQLite with WAL mode for concurrent reads). Storage is local: no cloud services, no external dependencies. When you chat with a cloud model, recalled memories travel with the conversation — see [Privacy](#privacy).
 
 ---
 
@@ -437,6 +437,7 @@ The page opens on **What GAIA knows about you**: the facts, preferences, reminde
 - **Edit** an item in place when it's wrong.
 - **Forget** an item in one click. GAIA won't learn it again from old chats; **Undo** restores it.
 - **Add** something GAIA should know, like "I prefer short answers".
+- The page lists the 200 newest items first. With more, it says how many there are, and **Show more** lists the next 200.
 
 ### Advanced
 
@@ -519,7 +520,7 @@ These thresholds live in `~/.gaia/memory_settings.json` under a `skill_synthesis
 
 Synthesized skills follow the same lineage rules as facts: a better recipe **supersedes** an older one rather than overwriting it, and nothing is deleted automatically.
 
-A learned procedure keeps a track record after it is first used. When GAIA recalls one and asks you to approve one of its steps, your answer counts: declining counts against the procedure, approving counts for it. Prompts for tools the procedure doesn't use don't count, and neither do steps that ran without asking you (Accept edits, an earlier Always allow, or full access). After a procedure has three answers of its own, GAIA stops recalling it once it falls below the 80% success rate it was learned at, and a new run of the same task can learn a replacement.
+A learned procedure keeps a track record after it is first used. When GAIA recalls one and asks you to approve one of its steps, your answer counts: declining counts against the procedure, approving counts for it. Prompts for tools the procedure doesn't use don't count, and neither do steps that ran without asking you (Accept edits, an earlier Always allow, or full access). After a procedure has three answers of its own, GAIA stops recalling it once it falls below the 80% success rate it was learned at, counted in runs: a procedure learned from three runs is retired by three declines. A run where you declined a step is never used to learn or relearn a procedure, and a new run of the same task done in full can learn a replacement.
 
 **Off switches:**
 
@@ -534,8 +535,8 @@ Run `gaia memory status` to see how many procedures have been synthesized.
 ## Privacy
 
 <CardGroup cols={2}>
-  <Card title="100% Local" icon="lock">
-    All memory is stored in a single SQLite file at `~/.gaia/memory.db`. Nothing is transmitted to any server or cloud service.
+  <Card title="Local Storage" icon="lock">
+    All memory is stored in a single SQLite file at `~/.gaia/memory.db`. With a local model, nothing is transmitted to any server or cloud service. With a cloud model (Fireworks AI, the AMD LLM Gateway or Claude), the memories recalled into a turn are sent to that provider along with the conversation. To refuse every cloud model, run `gaia config set network_policy local_ai_only` — see [Local only](/reference/cli#local-only).
   </Card>
 
   <Card title="User Control" icon="user-shield">

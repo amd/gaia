@@ -1,0 +1,80 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Runs every `gaia` command for real, as a subprocess, and holds each to what
+# it owes the person who typed it: no traceback, a non-zero exit and a reason
+# when the model server is down, the answer printed once, and --base-url
+# honoured. The commands come from the CLI's own parser
+# (tests/integration/test_cli_contract.py), so a new one is covered unasked.
+#
+# No model and no Lemonade: the installer journeys' fake model server answers.
+
+name: CLI Contract
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/test_cli_contract.yml'
+      - 'tests/integration/test_cli_contract.py'
+      - 'tests/fixtures/fake_lemonade.py'
+      - 'installer/headless/fake_model_server.py'
+      - 'src/gaia/**'
+      - '!src/gaia/apps/webui/**'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'tests/integration/conftest.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - '.github/workflows/test_cli_contract.yml'
+      - 'tests/integration/test_cli_contract.py'
+      - 'tests/fixtures/fake_lemonade.py'
+      - 'installer/headless/fake_model_server.py'
+      - 'src/gaia/**'
+      - '!src/gaia/apps/webui/**'
+      - 'conftest.py'
+      - 'tests/conftest.py'
+      - 'tests/integration/conftest.py'
+      - 'setup.py'
+      - 'pyproject.toml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cli-contract:
+    name: CLI Contract (py3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install dependencies
+        run: |
+          uv pip install --system pytest pytest-timeout pytest-xdist psutil keyring
+          uv pip install --system -e ".[api,ui]"
+
+      - name: Run every command against the contract
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          python -m pytest tests/integration/test_cli_contract.py \
+            -n logical --dist=worksteal -v --tb=short -rfE --durations=20

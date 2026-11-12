@@ -111,7 +111,7 @@ async function openBrowserAndTick() {
     act(() => useChatStore.getState().setShowFileBrowser(true));
     const row = (await screen.findByText('notes.txt')).closest('.fb-entry') as HTMLElement;
     fireEvent.click(within(row).getByRole('checkbox'));
-    return screen.getByRole('button', { name: /Ask Agent/i });
+    return screen.getByRole('button', { name: /Ask GAIA about these/i });
 }
 
 const sendsTo = (id: string) => mocked.sendMessageStream.mock.calls.filter((c) => c[0] === id);

@@ -31,6 +31,7 @@ from gaia.llm.lemonade_client import (
     resolve_default_chat_model,
     resolve_lemonade_api_key,
     resolve_lemonade_base_url,
+    runs_on_npu,
 )
 from gaia.llm.lemonade_manager import gpu_display_info
 from gaia.logger import get_logger
@@ -183,8 +184,8 @@ async def onboarding_preflight() -> PreflightReport:
     gpu_vram = devices["gpu_vram_gb"]
 
     # Synthesize the recommended first-run download's requirements and run the
-    # shared checker. NPU is recommended (advisory) — a no-NPU box still runs on
-    # GPU/CPU, so we surface it as a warning rather than blocking first run.
+    # shared checker. Only an NPU build of the model asks for an NPU (advisory) —
+    # a GGUF model runs on the GPU or CPU, so an absent NPU is nothing to report.
     # The report carries the detected RAM/disk, so we surface those values from
     # the *same* scan that produced the blockers/warnings — one detection, no
     # drift between what we display and what we gate on.
@@ -192,7 +193,7 @@ async def onboarding_preflight() -> PreflightReport:
     reqs = Requirements(
         min_memory_gb=_RECOMMENDED_MEMORY_GB,
         min_disk_gb=disk_gb,
-        npu=True,
+        npu=runs_on_npu(model),
         platforms=[],  # cross-platform; don't block on the platform triple here
     )
     report = check_compatibility(

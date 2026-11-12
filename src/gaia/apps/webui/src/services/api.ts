@@ -3,8 +3,8 @@
 
 /** API client for GAIA Agent UI backend. */
 
-import type { Session, Message, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
-import type { ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
+import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
+import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
 import type { AgentCapabilities, SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
@@ -324,6 +324,20 @@ export async function getLemonadeTarget(): Promise<LemonadeTarget> {
     return apiFetch('GET', '/lemonade/target');
 }
 
+/** Each log group (model server, GAIA, background service, agent, desktop app, other) and its files. */
+export async function getLogSources(): Promise<LogSourcesResponse> {
+    return apiFetch('GET', '/logs');
+}
+
+/** A log's last lines, redacted; with `after` (a cursor it returned), only the lines since. */
+export async function getLog(source: string, { file, after }: { file?: string | null; after?: string | null } = {}): Promise<LogReadResponse> {
+    const query = new URLSearchParams();
+    if (file) query.set('file', file);
+    if (after) query.set('after', after);
+    const qs = query.toString();
+    return apiFetch('GET', `/logs/${encodeURIComponent(source)}${qs ? `?${qs}` : ''}`);
+}
+
 /** A Lemonade the user already runs on this PC, or null. */
 /** `unchecked` lists URLs that accepted a connection but didn't answer in time. */
 export async function detectLemonade(): Promise<{ found: LemonadeFound | null; unchecked?: string[] }> {
@@ -386,6 +400,11 @@ export async function connectProviderWaitingForOs(
             await new Promise((resolve) => setTimeout(resolve, CONNECT_RETRY_MS));
         }
     }
+}
+
+/** After the user closed the OS key store's unlock prompt: let GAIA ask once more. */
+export async function retryKeyStore(): Promise<{ retrying: boolean }> {
+    return apiFetch('POST', '/providers/key-store/retry');
 }
 
 export async function forgetProviderKey(provider: string): Promise<{ removed: boolean }> {
@@ -465,6 +484,18 @@ export async function allowSpendingThisMonth(): Promise<SpendingReport> {
 
 export async function listSkills(): Promise<{ skills: SkillInfo[]; invalid: Record<string, string> }> {
     return apiFetch('GET', '/skills');
+}
+
+export async function listFeaturedSkillLibraries(): Promise<{ libraries: FeaturedLibrary[] }> {
+    return apiFetch('GET', '/skills/featured');
+}
+
+export async function previewSkillLink(url: string): Promise<LinkPreview> {
+    return apiFetch('POST', '/skills/link/preview', { url });
+}
+
+export async function addSkillsFromLink(url: string, names: string[], allowCode: boolean, pin: string): Promise<LinkAddResult> {
+    return apiFetch('POST', '/skills/link/add', { url, names, allow_code: allowCode, pin });
 }
 
 // -- Connections (issue #915): see connectorsApi.ts ----------------------------
@@ -1200,7 +1231,7 @@ export async function getTunnelStatus(): Promise<TunnelStatus> {
 
 // MCP server configuration moved to the connectors framework (#927):
 //   - Catalog tiles  → POST /api/connectors/{id}/configure
-//   - Custom servers → CLI `gaia connectors mcp add` today; UI in #977
+//   - Custom servers → an entry in ~/.gaia/mcp_servers.json; CLI and UI in #977
 //   - Catalog list   → GET /api/connectors/catalog (filter by type='mcp_server')
 // Only read-only runtime endpoints remain:
 

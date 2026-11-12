@@ -25,7 +25,7 @@ on:
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
       - '.github/actions/setup-venv/**'
-      - 'installer/scripts/start-lemonade.ps1'
+      - 'installer/scripts/ensure-lemonade-running.ps1'
       - 'util/check_cpp_sbom.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
@@ -40,7 +40,7 @@ on:
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
       - '.github/actions/setup-venv/**'
-      - 'installer/scripts/start-lemonade.ps1'
+      - 'installer/scripts/ensure-lemonade-running.ps1'
       - 'util/check_cpp_sbom.py'
   merge_group:
   workflow_dispatch:
@@ -272,8 +272,7 @@ jobs:
                 -DCMAKE_BUILD_TYPE=Release `
                 -DGAIA_BUILD_INTEGRATION_TESTS=ON `
                 -DGAIA_BUILD_TESTS=OFF `
-                -DGAIA_BUILD_EXAMPLES=OFF `
-                -DGAIA_ENABLE_SSL=OFF
+                -DGAIA_BUILD_EXAMPLES=OFF
           if ($LASTEXITCODE -ne 0) { throw "CMake configure failed" }
           cmake --build cpp/build-integration --config Release --parallel
           if ($LASTEXITCODE -ne 0) { throw "CMake build failed" }
@@ -391,7 +390,7 @@ jobs:
         run: |
           try {
               # Start Lemonade with Qwen3-4B-GGUF
-              .\installer\scripts\start-lemonade.ps1 -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 13305 -CtxSize 16384 -InitWaitTime 15
+              .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -ModelName "Qwen3-4B-Instruct-2507-GGUF" -Port 13305 -CtxSize 16384 -InitWaitTime 15
               # Stop here on setup failure: the script exits non-zero without
               # loading the model, so the suite would run at Lemonade's own ctx.
               if ($LASTEXITCODE -ne 0) { throw "Lemonade setup failed (exit $LASTEXITCODE)" }

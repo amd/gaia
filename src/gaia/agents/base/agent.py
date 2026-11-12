@@ -12,6 +12,7 @@ import ast
 import contextlib
 import contextvars
 import datetime
+import functools
 import hashlib
 import inspect
 import json
@@ -50,6 +51,8 @@ from gaia.agents.base.call_risk import (
     SHELL_TOOLS,
 )
 from gaia.agents.base.completion import (
+    _BINARY_SUFFIXES,
+    WRITE_TOOLS,
     CompletionEvidence,
     caveated_answer,
     incomplete_answer,
@@ -161,6 +164,11 @@ from gaia.agents.base.turn_scope import (
     REOPENED_MARKER,
     TurnScopeGuard,
 )
+from gaia.agents.base.unasked_edits import (
+    limits_edit,
+    removal_note,
+    unasked_removals,
+)
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     VERIFY_AFTER_CHANGE_TAG,
@@ -204,6 +212,7 @@ from gaia.llm.retry import (
     describe_retry_state,
     model_retry_notices,
     retry_state_of,
+    stopped_by_user,
 )
 from gaia.llm.surface_hints import TUI_SERVER_RESTART_HINT as SERVER_RESTART_HINT
 from gaia.logger import get_logger
@@ -668,6 +677,29 @@ def budget_notices_enabled() -> bool:
     )
 
 
+def verify_edits_enabled() -> bool:
+    """Whether a turn reads its own edits back before it answers.
+
+    On by default. The check is read-only and in-process — it opens the files
+    this turn wrote and nothing else — so it cannot run a build, start a
+    process, or reach anything the turn had not already touched.
+    ``GAIA_AGENT_VERIFY_EDITS=0`` turns it off. Read at call time, like the
+    other ``GAIA_AGENT_*`` knobs.
+    """
+    raw = os.environ.get("GAIA_AGENT_VERIFY_EDITS")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_AGENT_VERIFY_EDITS must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to keep the check on."
+    )
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -698,7 +730,6 @@ class ToolExecutionTimeout(Exception):
 # on their registry entry instead — see ``Agent._tool_requires_confirmation``.
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
-    "run_cli_command",
     # Installs software, and signs a CLI in to the user's account. Both mutate
     # the machine on the user's behalf, and neither can ever be pre-authorized:
     # the only grant that skips this gate covers ``run_shell_command`` reads
@@ -1440,6 +1471,8 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+|(?:next|then|finally)[,.]?\s+(?!we\b))?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
+    # Only a bare "Starting now."; "Starting with X ... now" is often a fact.
+    r"|starting now(?:[.!]|\.\.\.|…)?$"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
     r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
     r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
@@ -1447,6 +1480,9 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 )
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
+)
+_STEP_HEADING_PATTERN = re.compile(
+    r"(?:execution\s+)?step\s+(\d+)\s*/\s*(\d+)\s*:?", re.IGNORECASE
 )
 # "Before finalizing, I will perform one final search…": a step never taken.
 _ANNOUNCED_ACTION_PATTERN = re.compile(
@@ -1637,6 +1673,10 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
         for line in heading_lines
     ):
         return "narration"
+    # Only a bare "Step 1/3" heading with nothing under it; any step text is content.
+    step = _STEP_HEADING_PATTERN.fullmatch(last_line)
+    if step and int(step.group(1)) < int(step.group(2)):
+        return "narration"
     return None
 
 
@@ -1706,6 +1746,148 @@ def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
         if len(future) >= 2 and tool_steps:
             return paragraphs[plan_at], tool_steps[0]
     return None
+
+
+# The user told this turn not to act: "use no tools", "don't do anything
+# yet", "answer only with a plan". "Don't run anything yet" forbids running,
+# not writing the files asked for; "don't do anything else" limits the work.
+# "Don't touch anything, just read config.py": the ban is followed by work.
+_NO_ACTION_THEN_WORK = (
+    r"(?:read|open|look|check|inspect|run|execute|fix|edit|write|update|change"
+    r"|create|save|delete|remove|move|install|search|grep|list|modify|apply)"
+)
+_NO_ACTION_BAN = r"\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?"
+_NO_ACTION_BAN_END = (
+    rf"(?![\s,;:—–-]*(?:(?:just|only|but|and|then)\s+)?{_NO_ACTION_THEN_WORK}\b)"
+    r"(?=\s*(?:$|[.,;:!?)\]—–-]|(?:in\s+this\s+turn|yet|now|for\s+now|until"
+    r"|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b))"
+)
+_NO_ACTION_REQUEST_PATTERN = re.compile(
+    rf"(?P<forbid>{_NO_ACTION_BAN}"
+    r"(?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing))"
+    rf"\s+(?:any\s+tools?|tools){_NO_ACTION_BAN_END}"
+    # "Fix foo.py but don't touch anything" limits the work; it does not stop it.
+    rf"|(?<!\bbut\s)(?<!\band\s)(?<!\bthen\s){_NO_ACTION_BAN}"
+    r"(?:do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+"
+    rf"(?:anything|any\s+files?){_NO_ACTION_BAN_END})"
+    r"|\b(?:answer|reply|respond)\s+(?:only|just)\s+with\s+(?:a|an|the|your)\s+"
+    r"(?:[\w-]+\s+){0,3}plan\b"
+    r"|\b(?:only|just)\s+(?:give|write|show|send|outline)\s+(?:me\s+)?"
+    r"(?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}plan\b"
+    # "Plan only." stands as its own clause, not "the plan only covers X".
+    r"|(?:^|[.;:!?(]\s*|\b(?:give|send|show)\s+me\s+)(?:(?:a|the|your)\s+)?"
+    r"plan\s+only\b(?=\s*(?:$|[.,;:!?)]|please\b))"
+    r"|(?<!\bnot\s)\bonly\s+(?:a|the)\s+plan\b"
+    r"(?=\s*(?:$|[.,;:!?)]|please\b|for\s+now\b|then\b))"
+    r"|\b(?:use|call|run)\s+no\s+tools\b",
+    re.IGNORECASE,
+)
+
+# "... until you've read X", "... but that one", "... except config.yaml": the
+# ban has a way out that the request itself wants taken.
+_NO_ACTION_EXCEPTION_PATTERN = re.compile(
+    r"\s*,?\s*(?:(?:until|till|before|unless)\s+you\b"
+    r"|(?:except|besides|other\s+than|apart\s+from)\b"
+    r"|but\s+(?:for\s+)?(?:that|this|the|those|these)\b)",
+    re.IGNORECASE,
+)
+
+# "Last time you answered without reading any files": a report, not a ban.
+_NARRATED_PAST_PATTERN = re.compile(
+    r"\b(?:you|we|i|it|they)\s+(?:\w+\s+)?(?:\w+ed|did|got|gave|wrote|said|ran"
+    r"|went|made)\b[^.!?\n]*$",
+    re.IGNORECASE,
+)
+
+# "... then do step 1", "and then carry it out": the plan is only the start.
+_PLAN_THEN_ACT_PATTERN = re.compile(
+    r"\b(?:then|after\s+that|afterwards?|next)\s*,?\s+(?:you\s+(?:can|should|may)\s+)?"
+    r"(?:do|carry|execute|run|go|start|implement|apply|proceed|make|create"
+    r"|write|perform|begin|continue|follow)\b",
+    re.IGNORECASE,
+)
+
+# "Why does foo.py fail? Don't touch anything": the sentence before a "touch"
+# ban asks for an investigation, so the ban bars edits, not reading.
+_INVESTIGATION_ASK_PATTERN = re.compile(
+    r"^[\s,;:—–-]*(?:(?:please|can\s+you|could\s+you|would\s+you|help\s+me)\s+)?"
+    r"(?:find|investigate|explain|review|debug|diagnose|analy[sz]e"
+    r"|summari[sz]e|tell\s+me|show\s+me|figure\s+out|look|check|inspect|read"
+    r"|open|search|trace|describe|audit|walk\s+me\s+through)\b",
+    re.IGNORECASE,
+)
+# Something in the workspace to investigate, not small talk ("how are you?").
+_WORK_OBJECT_PATTERN = re.compile(
+    r"[\w-]\.[A-Za-z]{1,6}\b|[\\/]"
+    r"|\b(?:bug|error|fail\w*|crash\w*|build|tests?|code|function|class"
+    r"|module|config\w*|logs?|script|repo\w*|exception|trace\w*|files?"
+    r"|folder|director(?:y|ies))\b",
+    re.IGNORECASE,
+)
+
+
+def _asks_to_investigate(text: str) -> bool:
+    """Whether the clause just before a ban asks for something to be looked into."""
+    # The ban's own sentence so far, or the sentence it follows.
+    clause = re.split(r"(?<=[.!?])\s+|\n", text.rstrip())[-1]
+    if not _WORK_OBJECT_PATTERN.search(clause):
+        return False
+    return bool(
+        _INVESTIGATION_ASK_PATTERN.match(clause) or clause.rstrip().endswith("?")
+    )
+
+
+def _no_action_requests(request: str) -> List[str]:
+    """Each way the user's own words this turn forbid acting, by kind.
+
+    "plan" asks for a plan and nothing else, "edits" bars edits during an
+    investigation the request asks for, "act" bars acting at all. A ban the
+    request lifts itself, a report of an earlier turn, and a plan followed by
+    "then do it" are not such a request.
+    """
+    text = (request or "").replace("’", "'")
+    found = []
+    for match in _NO_ACTION_REQUEST_PATTERN.finditer(text):
+        after = text[match.end() :]
+        lowered = match.group().lower()
+        if match.group("forbid"):
+            if _NO_ACTION_EXCEPTION_PATTERN.match(after):
+                continue
+            narrative = lowered.startswith(("without", "never"))
+            if narrative and _NARRATED_PAST_PATTERN.search(text[: match.start()]):
+                continue
+            if "touch" in lowered and _asks_to_investigate(text[: match.start()]):
+                found.append("edits")
+                continue
+        elif _PLAN_THEN_ACT_PATTERN.search(after):
+            continue
+        found.append("plan" if "plan" in lowered else "act")
+    return found
+
+
+def _asks_for_no_action(request: str) -> bool:
+    """Whether the user's own words this turn forbid acting.
+
+    Such a request wins over GAIA's nudges to do an announced step.
+    """
+    return bool(_no_action_requests(request))
+
+
+def _asks_not_to_look(request: str) -> bool:
+    """Whether the ban also covers looking, so look-first nudges stay off.
+
+    "Why does foo.py fail? Don't touch anything" still wants foo.py read.
+    """
+    return any(kind != "edits" for kind in _no_action_requests(request))
+
+
+def _asks_for_a_plan_only(request: str) -> bool:
+    """Whether this turn asked for a plan and nothing else ("answer only with a plan").
+
+    "Use no tools" alone still wants an answer: one that states a file's
+    contents unread keeps its note. A plan names files it has yet to read.
+    """
+    return "plan" in _no_action_requests(request)
 
 
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
@@ -1868,6 +2050,49 @@ _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
 #: Written files whose figures are checked, and input files read as evidence.
 _MAX_CHECKED_DELIVERABLES = 8
+# Post-edit read-back. Repair steps are granted on top of max_steps, so a model
+# under budget pressure has no reason to skip fixing what it broke.
+_VERIFY_REPAIR_STEPS = 2
+# Rounds per turn; past that the turn is looping and the gaps go into the answer.
+_MAX_EDIT_VERIFICATIONS = 2
+# Past this size a file is checked for presence only.
+_VERIFY_MAX_BYTES = 2 * 1024 * 1024
+# JSON files that conventionally allow comments and trailing commas.
+_JSONC_NAMES = frozenset(
+    {"devcontainer.json", ".devcontainer.json", ".eslintrc.json", ".babelrc.json"}
+)
+
+
+def _is_jsonc(path: Path) -> bool:
+    """Whether a .json file is JSONC by convention, so strict parsing misjudges it."""
+    name = path.name.lower()
+    if name in _JSONC_NAMES or name.startswith(("tsconfig", "jsconfig")):
+        return True
+    return any(part.lower() == ".vscode" for part in path.parts[:-1])
+
+
+def _parse_problem(path: Path, text: str) -> Optional[str]:
+    """Why *text* does not parse as *path*'s type, or None (unchecked types pass)."""
+    suffix = path.suffix.lower()
+    if suffix in (".py", ".pyi"):
+        try:
+            ast.parse(text)
+        except (SyntaxError, ValueError) as e:
+            return f"`{path}` no longer parses as Python: {e}"
+    elif suffix == ".json" and not _is_jsonc(path):
+        try:
+            json.loads(text)
+        except ValueError as e:
+            return f"`{path}` is no longer valid JSON: {e}"
+    return None
+
+
+_EDIT_VERIFICATION_PROMPT = (
+    "[check:edits] The files you changed this turn were read back off disk "
+    "and these did not come out right:\n{problems}\n\nFix them now, then "
+    "answer. You have {steps} extra steps for this and they are not charged "
+    "against your step budget."
+)
 # Tools that could hand-edit a file save_extracted_items exported this turn.
 _INVENTORY_HAND_EDITS = frozenset(
     {
@@ -1963,16 +2188,102 @@ _NON_FILE_SUFFIXES = frozenset(
 )
 
 
-def _names_a_file(sentence: str) -> bool:
-    """True when the sentence names somewhere on disk."""
-    if _FILE_TARGET_PATTERN.search(sentence):
-        return True
+_NEGATED_OUTPUT = (
+    r"(?:nothing|none(?:\s+of\s+(?:them|(?:the|these|those|your|my)\s+[\w-]+))?"
+    r"|no\s+(?:[\w-]+\s+)?(?:files?|outputs?|changes|data|cop(?:y|ies)"
+    r"|backups?|documents?|reports?))"
+)
+# "No file was written": the write verb's subject says nothing was saved.
+_NEGATED_SUBJECT_PATTERN = re.compile(
+    rf"(?:^|[^\w'-]){_NEGATED_OUTPUT}\s+$", re.IGNORECASE
+)
+# "No files besides notes.md": the exception is a save it claims.
+_SAVE_EXCEPTION = (
+    r"(?:except|besides|other\s+than|apart\s+from|aside\s+from|save\s+for)"
+)
+_SAVE_EXCEPTION_PATTERN = re.compile(rf"\b{_SAVE_EXCEPTION}\b", re.IGNORECASE)
+# "I wrote no file", "I saved nothing": so does its object.
+_NEGATED_OBJECT_PATTERN = re.compile(
+    rf"\s+{_NEGATED_OUTPUT}\b(?!\s+(?:but|{_SAVE_EXCEPTION})\b)", re.IGNORECASE
+)
+
+
+# "... stored as your bookshelf slot", "saved to memory": what was kept is a
+# remembered fact. "it" between verb and "as" is a file ("saved it as your …").
+_REMEMBERED_AFTER_PATTERN = re.compile(
+    r"\s+(?:earlier\s+|previously\s+)?(?:as\s+your\b"
+    r"|(?:in|to|into)\s+(?:my\s+|your\s+)?(?:long-term\s+)?memor(?:y|ies)\b(?!\.\w))",
+    re.IGNORECASE,
+)
+# "the `granite-1812` I have stored": the thing kept is a value, not a path.
+_VALUE_BEFORE_PATTERN = re.compile(r"`([^`\n]+)`\s+(?:that\s+|which\s+)?$")
+_CLAUSE_END_PATTERN = re.compile(r"[,;:—–]|\s-\s")
+
+
+def _has_file_extension(text: str) -> bool:
+    """A dotted token whose suffix is a file extension."""
     # A suffix with no letter is a version or a clock time, not an extension.
     return any(
         any(char.isalpha() for char in suffix)
         and suffix.lower() not in _NON_FILE_SUFFIXES
-        for suffix in _DOTTED_TOKEN_PATTERN.findall(sentence)
+        for suffix in _DOTTED_TOKEN_PATTERN.findall(text)
     )
+
+
+def _names_a_path(text: str) -> bool:
+    """A slash or a file name with an extension: somewhere on disk."""
+    if re.search(r"[\\/]", text):
+        return True
+    return _has_file_extension(text)
+
+
+def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool:
+    """Whether this write verb tells of a fact kept in memory, not of a file."""
+    after = _REMEMBERED_AFTER_PATTERN.match(sentence, match.end())
+    if after and "memor" in after.group().lower():
+        return True
+    # "the `summary` I saved, at out/s.md": a path anywhere makes it a save.
+    if _names_a_path(sentence):
+        return False
+    # "saved to `notes`": so does a destination in the verb's own clause.
+    clause = _CLAUSE_END_PATTERN.split(sentence[match.end() :], maxsplit=1)[0]
+    if _names_a_file(clause):
+        return False
+    if after:
+        return True
+    head = _VALUE_BEFORE_PATTERN.search(sentence[: match.start()])
+    if head is None:
+        return False
+    token = head.group(1)
+    return not (re.search(r"[\\/~]", token) or _names_a_file(token))
+
+
+def _is_write_claim(sentence: str, denials: bool) -> bool:
+    """A write verb in *sentence*; with *denials* false, not one negated.
+
+    *denials* (a turn that asked for a save) reads every write verb as a
+    claim, a remembered value included: the save is owed either way.
+    """
+    return any(
+        denials
+        or (
+            not _describes_a_remembered_value(sentence, match)
+            and not (
+                _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
+                and not _SAVE_EXCEPTION_PATTERN.search(sentence, match.end())
+            )
+            and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
+        )
+        for pattern in _FILE_WRITE_CLAIM_PATTERNS
+        for match in pattern.finditer(sentence)
+    )
+
+
+def _names_a_file(sentence: str) -> bool:
+    """True when the sentence names somewhere on disk."""
+    if _FILE_TARGET_PATTERN.search(sentence):
+        return True
+    return _has_file_extension(sentence)
 
 
 def _is_plan_narration(sentence: str) -> bool:
@@ -1988,13 +2299,15 @@ def _is_plan_narration(sentence: str) -> bool:
     )
 
 
-def _claims_file_write(answer: str) -> bool:
+def _claims_file_write(answer: str, denials: bool = False) -> bool:
     """True when the prose asserts a file has already been written to disk.
 
     A sentence must carry both a completed write verb and a file/path target,
     so "I saved the routine to notes/routine.md" fires while "I created a
     summary of the meeting" does not. Fenced code is ignored — a sample
     command is not a claim — and so is a sentence in a planning frame.
+    "No file was written" is not a claim unless *denials* is set, which a
+    turn that asked for a save uses: it still names the save that is owed.
     """
     prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
     prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
@@ -2003,9 +2316,19 @@ def _claims_file_write(answer: str) -> bool:
             continue
         if not _names_a_file(sentence):
             continue
-        if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
+        if _is_write_claim(sentence, denials):
             return True
     return False
+
+
+def _write_claims_for(evidence: CompletionEvidence) -> Callable[[str], bool]:
+    """The save-claim test for this turn's completion check.
+
+    Asked to save, "nothing was written" still names the save that is owed.
+    """
+    if evidence.instructed:
+        return functools.partial(_claims_file_write, denials=True)
+    return _claims_file_write
 
 
 _PLACEHOLDER_TOKEN = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
@@ -2871,6 +3194,7 @@ Do NOT wrap conversational replies in JSON.
         # the entries from _turn_error_start on.
         self.error_history = []
         self._turn_error_start = 0
+        self._turn_unasked_removals = []
         # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
         # if called outside the normal process_query loop (e.g. directly in a
         # test); _process_query_impl resets this per-turn.
@@ -2899,12 +3223,20 @@ Do NOT wrap conversational replies in JSON.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
         self._turn_ungrounded: List[str] = []
+        # The user's own words this turn ask only for a plan, not an answer.
+        self._turn_plan_only_requested = False
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
         # The model that wrote its own tool-call markup in this session, if any.
         self._own_markup_model: Optional[str] = None
         self._budget_notices_on = budget_notices_enabled()
+        # Post-edit verification bookkeeping; reset per turn below.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings: List[str] = []
+        # Whether each file parsed before this turn's first write to it.
+        self._edit_parse_baseline: Dict[str, bool] = {}
+        self._verify_edits_on = verify_edits_enabled()
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -3014,6 +3346,7 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     # Before the prompt is composed: it decides the tool format.
                     LemonadeManager.learn_tool_calling(probe_client, model_id)
+                    LemonadeManager.learn_reasoning(probe_client, model_id)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -3101,6 +3434,8 @@ Do NOT wrap conversational replies in JSON.
         # Rebuilt by every process_query; None before the first turn.
         self._extraction_ledger: Optional[ExtractionLedger] = None
         self._completion_evidence: Optional[CompletionEvidence] = None
+        # Backups this session's edits made (keys, file names), across turns.
+        self._session_backups: Tuple[set, set] = (set(), set())
 
         # Declarative skills: compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -3925,8 +4260,8 @@ Do NOT wrap conversational replies in JSON.
             if cloud_model_provider(model_id):
                 # A cloud reasoning model can spend its whole budget thinking
                 # about one dense page; copying quotes needs little reasoning.
-                effort = cloud_lowest_reasoning_effort(model_id)
-                sampling = {"reasoning_effort": effort} if effort else {}
+                # None: no configured cloud_reasoning_effort is added either.
+                sampling = {"reasoning_effort": cloud_lowest_reasoning_effort(model_id)}
             else:
                 # Local anti-repetition penalties fight verbatim quote copying.
                 sampling = {
@@ -4189,6 +4524,10 @@ Do NOT wrap conversational replies in JSON.
             None if self._active_tool_filter is None else list(self._active_tool_filter)
         )
         return schemas
+
+    def _history_tool_schemas(self):
+        """The tool schemas history is budgeted against."""
+        return self._openai_tools
 
     def _thin_tool_schemas(self) -> bool:
         """True when ``tools=`` carries thin schemas, with full docs on request.
@@ -6971,6 +7310,19 @@ Do NOT wrap conversational replies in JSON.
             return float(override)
         return tool_execution_timeout()
 
+    def _loop_guard_key(self, tool_name: str, tool_args: Any) -> Tuple[str, str]:
+        """What the repeat-call guard compares: the tool's ``dedup_key``
+        arguments when it declares one, else every argument."""
+        dedup_key = (self._tools_registry.get(tool_name) or {}).get("dedup_key")
+        # A non-dict payload has no named arguments to project.
+        if not dedup_key or not isinstance(tool_args, dict):
+            return (tool_name, str(tool_args))
+        projected = {name: tool_args.get(name) for name in dedup_key}
+        return (
+            tool_name,
+            json.dumps(projected, sort_keys=True, default=str, ensure_ascii=False),
+        )
+
     def _requested_tool_timeout(
         self, tool_name: str, tool_args: Dict[str, Any]
     ) -> Optional[float]:
@@ -7497,6 +7849,8 @@ Do NOT wrap conversational replies in JSON.
                 logger.info("Turn scope refused %s: %s", tool_name, refused["error"])
                 return refused
         evidence = getattr(self, "_completion_evidence", None)
+        if outermost:
+            self._note_edit_parse_baseline(tool_name, tool_args)
         before = (
             evidence.snapshot(
                 tool_name,
@@ -7519,6 +7873,7 @@ Do NOT wrap conversational replies in JSON.
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
             if outermost:
+                self._note_edit_removals(tool_args, result)
                 result = self._flag_planted_instructions(tool_name, tool_args, result)
             return result
 
@@ -7536,6 +7891,7 @@ Do NOT wrap conversational replies in JSON.
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
+            self._note_edit_removals(tool_args, result)
             return self._flag_planted_instructions(tool_name, tool_args, result)
         finally:
             self._tool_timing_depth = 0
@@ -7559,6 +7915,40 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    def _note_edit_removals(self, tool_args: Any, result: Any) -> None:
+        """Keep the lines a "change nothing else" edit removed unasked."""
+        args = tool_args if isinstance(tool_args, dict) else {}
+        old, new = args.get("old_content"), args.get("new_content")
+        if not isinstance(old, str) or not isinstance(new, str):
+            return
+        if self._is_error_result(result):
+            return
+        request = getattr(self, "_original_user_input", None) or getattr(
+            self, "_current_query", ""
+        )
+        if not limits_edit(str(request or "")):
+            return
+        removals = getattr(self, "_turn_unasked_removals", None)
+        if removals is None:
+            return
+        raw_path = str(args.get("file_path") or "")
+        path = os.path.abspath(raw_path) if raw_path else ""
+        key = os.path.normcase(path)
+        path = next((p for p, _ in removals if os.path.normcase(p) == key), path)
+
+        def _fold(line: str) -> str:
+            return " ".join(line.split()).lower()
+
+        restored = {_fold(line) for line in new.splitlines()}
+        removals[:] = [
+            (p, line)
+            for p, line in removals
+            if os.path.normcase(p) != key or _fold(line) not in restored
+        ]
+        for line in unasked_removals(old, new, str(request)):
+            if (path, line) not in removals:
+                removals.append((path, line))
 
     def _flag_planted_instructions(
         self, tool_name: str, tool_args: Any, result: Any
@@ -10273,6 +10663,7 @@ Do NOT wrap conversational replies in JSON.
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
+            plan_only=getattr(self, "_turn_plan_only_requested", False),
         )
 
     def _deliverable_findings(
@@ -10291,7 +10682,7 @@ Do NOT wrap conversational replies in JSON.
             return []
         records = getattr(self, "_turn_tool_executions", None) or []
         written_keys = {evidence.key(p) for p in written}
-        inputs = []
+        inputs, input_names = [], []
         for raw in input_paths(records) + mentioned_paths(query):
             path = path_locator(roots)(raw)
             if path is None or evidence.key(path) in written_keys:
@@ -10302,7 +10693,10 @@ Do NOT wrap conversational replies in JSON.
                 and not validator.validate_read(path, prompt_user=False)[0]
             ):
                 continue
-            inputs.append(blocks_text(self._deliverable_blocks(path)))
+            text = blocks_text(self._deliverable_blocks(path))
+            inputs.append(text)
+            if text.strip():
+                input_names.append(path)
             if len(inputs) >= _MAX_CHECKED_DELIVERABLES:
                 break
         return file_findings(
@@ -10311,6 +10705,7 @@ Do NOT wrap conversational replies in JSON.
             query=query,
             context=history,
             inputs=inputs,
+            input_names=input_names,
             answer=answer,
         )
 
@@ -10409,6 +10804,10 @@ Do NOT wrap conversational replies in JSON.
         note = self._planted_instructions_note(body)
         if note:
             body = f"{body.rstrip()}\n\n{note}"
+        removals = getattr(self, "_turn_unasked_removals", None) or []
+        removed = removal_note(removals, body)
+        if removed:
+            body = f"{body.rstrip()}\n\n{removed}"
         if not statement:
             return body
         return f"{body.rstrip()}\n\n{statement}"
@@ -10418,6 +10817,159 @@ Do NOT wrap conversational replies in JSON.
         return {
             key for key, item in self._completion_evidence.files.items() if item.written
         }
+
+    def _files_written_this_turn(self) -> List[str]:
+        """Text files a file-editing tool wrote this turn, from the evidence ledger.
+
+        Not ``_turn_file_edits`` alone: no shipped file tool sets the
+        ``operation`` field that feeds it. Generated outputs, executor-written
+        files and mtime-inferred entries are left out.
+        """
+        paths: List[str] = []
+        evidence = getattr(self, "_completion_evidence", None)
+        files = getattr(evidence, "files", None) or {}
+        removed = getattr(evidence, "removed", None) or set()
+        for item in files.values():
+            if item.written and item.edited and not item.inferred:
+                paths.append(item.path)
+        for edit in getattr(self, "_turn_file_edits", None) or []:
+            raw = (edit or {}).get("file_path")
+            if not raw:
+                continue
+            if evidence is not None:
+                try:
+                    key = evidence.key(str(raw))
+                except (OSError, ValueError):
+                    key = None
+                item = files.get(key)
+                # Deleted on purpose, or rewritten since by something that is
+                # not a file-editing tool: no longer this edit's result.
+                if key in removed or (item is not None and not item.edited):
+                    continue
+            paths.append(str(raw))
+        return paths
+
+    def _verify_turn_edits(self) -> List[str]:
+        """Count a read-back round and keep its findings as the latest ones."""
+        problems = self._edit_problems()
+        self._edit_verification_rounds = (
+            getattr(self, "_edit_verification_rounds", 0) + 1
+        )
+        self._edit_verification_findings = problems
+        logger.debug(
+            "Post-edit verification round %d: %d problem(s)",
+            self._edit_verification_rounds,
+            len(problems),
+        )
+        return problems
+
+    def _edit_problems(self) -> List[str]:
+        """Read this turn's edits back: still there, not empty, still parses.
+
+        Read-only and in-process, through the read boundary without prompting.
+        Binary files are skipped; files over ``_VERIFY_MAX_BYTES`` are checked
+        for presence only.
+        """
+        problems: List[str] = []
+        seen: set = set()
+        validator = self._read_validator()
+        for raw in self._files_written_this_turn():
+            path = Path(str(raw))
+            key = os.path.normcase(str(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            if path.suffix.lower() in _BINARY_SUFFIXES:
+                continue
+            if validator is not None:
+                try:
+                    allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                except (OSError, ValueError):
+                    allowed = False
+                if not allowed:
+                    continue
+            try:
+                if not path.is_file():
+                    problems.append(
+                        f"`{path}` was edited this turn but is not on disk now."
+                    )
+                    continue
+                size = path.stat().st_size
+                if size > _VERIFY_MAX_BYTES:
+                    continue
+                data = path.read_bytes()
+            except OSError as e:
+                problems.append(f"`{path}` could not be read back after its edit: {e}")
+                continue
+            if b"\x00" in data:
+                continue
+            text = data.decode("utf-8-sig", errors="replace")
+            if not text.strip():
+                # Same exemptions the write-time stand-in check grants.
+                if not (
+                    _empty_by_design(str(path))
+                    or _requested_empty(
+                        str(path), getattr(self, "_current_query", None)
+                    )
+                ):
+                    problems.append(f"`{path}` is empty after this turn's edit.")
+                continue
+            problem = _parse_problem(path, text)
+            # A file that already failed to parse before the turn touched it
+            # is not this turn's breakage to repair.
+            if problem and self._parsed_before(path) is not False:
+                problems.append(problem)
+        return problems
+
+    def _baseline_key(self, path: str, root: Optional[str] = None) -> Optional[str]:
+        evidence = getattr(self, "_completion_evidence", None)
+        try:
+            key = evidence.key(path, root) if evidence is not None else path
+        except (OSError, ValueError):
+            return None
+        return os.path.normcase(str(key))
+
+    def _parsed_before(self, path: Path) -> Optional[bool]:
+        key = self._baseline_key(str(path))
+        baseline = getattr(self, "_edit_parse_baseline", None) or {}
+        return baseline.get(key) if key is not None else None
+
+    def _note_edit_parse_baseline(self, tool_name: str, tool_args: Any) -> None:
+        """Before a turn's first write to a file, note whether that file parsed."""
+        if tool_name not in WRITE_TOOLS or not isinstance(tool_args, dict):
+            return
+        if not getattr(self, "_verify_edits_on", False):
+            return
+        raw = tool_args.get("file_path") or tool_args.get("path")
+        if not isinstance(raw, str) or not raw or "\x00" in raw:
+            return
+        key = self._baseline_key(raw, tool_args.get("project_dir"))
+        baseline = getattr(self, "_edit_parse_baseline", None)
+        if key is None or baseline is None or key in baseline:
+            return
+        path = Path(key)
+        if path.suffix.lower() not in (".py", ".pyi", ".json"):
+            return
+        validator = self._read_validator()
+        try:
+            if validator is not None:
+                allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                if not allowed:
+                    return
+            if not path.is_file():
+                baseline[key] = True  # a new file
+                return
+            if path.stat().st_size > _VERIFY_MAX_BYTES:
+                return
+            data = path.read_bytes()
+        except (OSError, ValueError) as e:
+            logger.debug("No pre-edit parse baseline for %s: %s", path, e)
+            return
+        if b"\x00" in data:
+            return
+        text = data.decode("utf-8-sig", errors="replace")
+        # An empty file parses: emptiness is judged separately after the edit.
+        baseline[key] = not text.strip() or _parse_problem(path, text) is None
 
     def _gate_unsealed_answer(
         self, answer: Optional[str], model_failed: bool = False
@@ -10437,7 +10989,9 @@ Do NOT wrap conversational replies in JSON.
         """
         self._check_extraction_sources()
         gaps = self._completion_evidence.gaps(
-            answer or "", _claims_file_write, readback=not model_failed
+            answer or "",
+            _write_claims_for(self._completion_evidence),
+            readback=not model_failed,
         )
         gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
@@ -10818,8 +11372,10 @@ Do NOT wrap conversational replies in JSON.
             return user_input
         note = (
             f"[GAIA: the user's message is {len(raw):,} characters long. Its full "
-            f"text is saved at {path}. To count, search or process it, read that "
-            "file with a tool; never copy the message into a tool call.]"
+            f"text is saved at {path}, exactly as typed: the file holds the "
+            "request itself too, not only the text it is about. To count, search "
+            "or process it, read that file with a tool; never copy the message "
+            "into a tool call.]"
         )
         return f"{note}\n\n{user_input}"
 
@@ -10844,6 +11400,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
         self._begin_turn_provenance()
+        self._turn_unasked_removals = []
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
         self._last_tool_schemas = None
@@ -10928,6 +11485,14 @@ Do NOT wrap conversational replies in JSON.
         )
         # Grounding gates that already asked for one correction this turn.
         grounding_fired: set = set()
+        # "Do not run anything, answer only with a plan": no nudge to act.
+        request_text = self._request_text(user_input)
+        no_action_requested = _asks_for_no_action(request_text)
+        # "Why does foo.py fail? Don't touch anything": look, but don't edit.
+        no_look_requested = _asks_not_to_look(request_text)
+        self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
+        if no_look_requested:
+            grounding_fired.add(LOOK)
 
         steps_taken = 0
         final_answer = None
@@ -10954,6 +11519,7 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         stopped_on_announced_step = False
         look_first_reprompted = False
+        save_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
         corrected_test_claims: set = set()
@@ -10999,10 +11565,11 @@ Do NOT wrap conversational replies in JSON.
         self._turn_ungrounded = []
         self._deliverable_cache = {}
         self._completion_evidence = CompletionEvidence(
-            user_input,
+            self._request_text(user_input),
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
             validator=self._read_validator(),
+            backups=self._session_backups,
         )
         # Files edited this turn, so an empty response can name what it left
         # behind. Per-turn: an instance persists across queries.
@@ -11012,6 +11579,13 @@ Do NOT wrap conversational replies in JSON.
         # between turns takes effect.
         self._budget_notices_sent = set()
         self._budget_notices_on = budget_notices_enabled()
+        # Per-turn too: a previous turn's edits are not this turn's to repair.
+        # The env knob is read here, not at import, so it can be changed
+        # between turns.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings = []
+        self._edit_parse_baseline = {}
+        self._verify_edits_on = verify_edits_enabled()
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -11663,7 +12237,10 @@ Do NOT wrap conversational replies in JSON.
                         cancelled_by_console = True
                         break
                     except Exception as e:
-                        logger.error(f"Unexpected error during streaming: {e}")
+                        if stopped_by_user(e):
+                            logger.info("Streaming stopped by the user: %s", e)
+                        else:
+                            logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
                         # Same rule as the non-streaming branch: only the probe
@@ -11851,7 +12428,10 @@ Do NOT wrap conversational replies in JSON.
                         self.console.stop_progress()
                         if self.debug:
                             print(f"[DEBUG] Error calling LLM: {e}")
-                        logger.error(f"Unexpected error calling LLM: {e}")
+                        if stopped_by_user(e):
+                            logger.info("LLM call stopped by the user: %s", e)
+                        else:
+                            logger.error(f"Unexpected error calling LLM: {e}")
 
                         # Did we hit a context-overflow mid-loop? Classify by
                         # structure-then-text since typed exceptions get
@@ -12445,9 +13025,9 @@ Do NOT wrap conversational replies in JSON.
 
                     # Loop detection — same shape as legacy path so
                     # repeated calls across iterations are still caught.
-                    current_call = (tool_name, str(tool_args))
+                    current_call = self._loop_guard_key(tool_name, tool_args)
                     tool_call_history.append(current_call)
-                    tool_call_log.append(current_call)
+                    tool_call_log.append((tool_name, str(tool_args)))
                     if len(tool_call_history) > loop_window:
                         tool_call_history.pop(0)
                     consecutive_count = _repeat_count(tool_call_history)
@@ -12501,7 +13081,6 @@ Do NOT wrap conversational replies in JSON.
                     _QUERY_TOOLS = (
                         "query_documents",
                         "query_specific_file",
-                        "query_indexed_documents",
                     )
                     if tool_name in _QUERY_TOOLS:
                         result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -12694,10 +13273,10 @@ Do NOT wrap conversational replies in JSON.
                 self.console.start_progress(f"Executing {tool_name}")
 
                 # Check for repeated tool calls (allow up to 3 identical calls)
-                current_call = (tool_name, str(tool_args))
+                current_call = self._loop_guard_key(tool_name, tool_args)
                 tool_call_history.append(current_call)
                 tool_call_log.append(
-                    current_call
+                    (tool_name, str(tool_args))
                 )  # Full unbounded log for workflow guards
 
                 # Enough recent calls to see a short cycle repeat to the limit
@@ -12784,7 +13363,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_documents",
                     "query_specific_file",
-                    "query_indexed_documents",
                 )
                 if tool_name in _QUERY_TOOLS:
                     result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -12967,8 +13545,7 @@ Do NOT wrap conversational replies in JSON.
                 # This is a known failure pattern — the agent stops mid-workflow.
                 _INDEX_TOOLS = (
                     "index_document",
-                    "index_documents",
-                    "index_dir",
+                    "index_directory",
                     "index_folder",
                 )
                 _PLANNING_PHRASES = (
@@ -13006,7 +13583,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_specific_file",
                     "query_documents",
-                    "query_indexed_documents",
                     "search_indexed_chunks",
                 )
                 last_index_pos = -1
@@ -13106,6 +13682,9 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 unfinished_kind = _unfinished_answer_kind(answer_candidate)
+                if no_action_requested and unfinished_kind == "narration":
+                    # A plan or a stated next step is what this turn asked for.
+                    unfinished_kind = None
                 can_reprompt_unfinished = (
                     steps_taken < steps_limit - 1
                     and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
@@ -13152,6 +13731,7 @@ Do NOT wrap conversational replies in JSON.
                 # Plan steps run outside tool_call_log; the turn record has them.
                 if (
                     not look_first_reprompted
+                    and not no_look_requested
                     and not tool_call_log
                     and not self._turn_tool_executions
                     and steps_taken < steps_limit - 1
@@ -13177,6 +13757,23 @@ Do NOT wrap conversational replies in JSON.
                         conversation.append({"role": "user", "content": correction})
                         continue
 
+                # "Please remember this" answered with "noted" and no save.
+                unsaved = getattr(self, "_unsaved_memory_request", None)
+                if unsaved and not save_reprompted and steps_taken < steps_limit - 1:
+                    called = {name for name, _ in tool_call_log} | {
+                        record.get("tool") for record in self._turn_tool_executions
+                    }
+                    nudge = unsaved(called)
+                    if nudge:
+                        save_reprompted = True
+                        logger.info(
+                            "[WORKFLOW] Asked to remember, nothing saved; asking "
+                            "the agent to save it"
+                        )
+                        messages.append({"role": "user", "content": nudge})
+                        conversation.append({"role": "user", "content": nudge})
+                        continue
+
                 # Universal planning-text guard: catch any short response that is
                 # only an intent sentence ("I'll check...", "Let me query...") with
                 # no actual answer, regardless of whether tools were already called.
@@ -13187,6 +13784,7 @@ Do NOT wrap conversational replies in JSON.
                 # The honest ending quotes the announcement; it is final, not planning.
                 is_planning_text = (
                     not stopped_on_announced_step
+                    and not no_action_requested
                     and len(answer_candidate) < 500
                     and any(
                         phrase in answer_candidate.lower()
@@ -13484,6 +14082,39 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     continue
 
+                # Last chance to catch an edit that reported success but left a
+                # missing, empty or unparsable file.
+                if self._verify_edits_on and self._files_written_this_turn():
+                    if self._edit_verification_rounds < _MAX_EDIT_VERIFICATIONS:
+                        edit_problems = self._verify_turn_edits()
+                        if edit_problems:
+                            steps_limit += _VERIFY_REPAIR_STEPS
+                            repair = {
+                                "role": "user",
+                                "content": _EDIT_VERIFICATION_PROMPT.format(
+                                    problems="\n".join(f"- {p}" for p in edit_problems),
+                                    steps=_VERIFY_REPAIR_STEPS,
+                                ),
+                            }
+                            messages.append(repair)
+                            conversation.append(dict(repair))
+                            logger.info(
+                                "Post-edit verification found %d problem(s); "
+                                "granted %d repair step(s) (limit now %d)",
+                                len(edit_problems),
+                                _VERIFY_REPAIR_STEPS,
+                                steps_limit,
+                            )
+                            continue
+                    else:
+                        # Out of repair rounds: still-broken files go into the answer.
+                        self._edit_verification_findings = self._edit_problems()
+                        completion_gaps.extend(
+                            p
+                            for p in self._edit_verification_findings
+                            if p not in completion_gaps
+                        )
+
                 unfinalized_answer = _without_tool_markup(answer_candidate)
                 if answer_before_completion_check is not None:
                     restored = _with_replaced_answer(
@@ -13495,7 +14126,9 @@ Do NOT wrap conversational replies in JSON.
                     if (
                         restored is not None
                         and not self._completion_evidence.gaps(
-                            restored, _claims_file_write, soft=restored_soft
+                            restored,
+                            _write_claims_for(self._completion_evidence),
+                            soft=restored_soft,
                         )
                         and not restored_soft
                     ):
@@ -13506,7 +14139,9 @@ Do NOT wrap conversational replies in JSON.
                 self._check_extraction_sources()
                 soft_gaps: List[str] = []
                 artifact_gaps = self._completion_evidence.gaps(
-                    answer_candidate, _claims_file_write, soft=soft_gaps
+                    answer_candidate,
+                    _write_claims_for(self._completion_evidence),
+                    soft=soft_gaps,
                 )
                 extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())
                 artifact_gaps.extend(extraction_gaps)
