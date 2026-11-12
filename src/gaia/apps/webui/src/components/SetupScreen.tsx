@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Cloud, Info, Loader2 } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Cloud, Eye, EyeOff, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
 import { shortModelName, useModelStore } from '../stores/modelStore';
 import { lemonadeKeyRejected } from '../utils/lemonade';
@@ -373,6 +373,11 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const [actionError, setActionError] = useState<string | null>(null);
     const [resumeOffer, setResumeOffer] = useState(false);
     const [cloudModel, setCloudModel] = useState<string | null>(null);
+    /** The cloud model the user picked from the price list; null keeps the provider's top pick. */
+    const [cloudPick, setCloudPick] = useState<string | null>(null);
+    /** The price list's top row, shown as chosen until another is picked; null without a priced list. */
+    const [cloudDefault, setCloudDefault] = useState<string | null>(null);
+    const [showKey, setShowKey] = useState(false);
     const [firstTasks, setFirstTasks] = useState<StartCard[]>([]);
     // Optional models added from the Download step, fetched and tested after the run.
     const [queued, setQueued] = useState<string[]>([]);
@@ -406,6 +411,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         ? chosenProvider
         : undefined;
     const cloudProviderBlocked = (id: ProviderId) => !!providerFor(id)?.blocked;
+    // The gateway is for AMD's network: hidden once it is known not to answer, unless already chosen.
+    const gatewayShown = gateway?.reachable !== false || choice === 'amd';
+    // Only a key GAIA or the server already holds can be left blank.
+    const savedKey = chosenProvider?.key_source === 'stored' || chosenProvider?.key_source === 'lemonade';
     const unavailable = (id: ProviderId) => cloudProviderBlocked(id) || (id === 'amd' && gateway?.reachable === false);
     const unavailableNote = (id: ProviderId) => cloudProviderBlocked(id)
         ? t('settings.privacy.localOnlyBlocked')
@@ -788,8 +797,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                 () => !mounted.current,
             );
             const { models } = await api.listProviderModels(choice);
-            const pick = models.find((m) => m.rank === 1) ?? models[0];
-            if (!pick) throw new Error(t('setup.key.noModels'));
+            // Connect the row shown as chosen; only a provider with no price list (the gateway) takes its top pick.
+            const wanted = cloudPick ?? cloudDefault;
+            const pick = wanted
+                ? models.find((m) => m.id === wanted)
+                : models.find((m) => m.rank === 1) ?? models[0];
+            if (!pick) throw new Error(wanted ? t('setup.key.modelNotOffered', { model: shortModelName(wanted) }) : t('setup.key.noModels'));
             await selectModel(pick.id);
             setCloudModel(pick.id);
             setKey('');
@@ -798,11 +811,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         } catch (err) {
             setKeyState({ busy: false, error: errorText(err), done: false });
         }
-    }, [choice, key, selectModel, usersServer, download, t, running]);
+    }, [choice, key, cloudPick, cloudDefault, selectModel, usersServer, download, t, running]);
 
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
         setChoice(id);
+        setCloudPick(null);
+        setCloudDefault(null);
         setKeyState({ busy: false, error: null, done: false });
     }, []);
 
@@ -965,6 +980,13 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         if (selection && isOptional(e) && selection.ticked.has(e.id) && !e.downloaded) expectedTests.push(e.roles[0]);
     }
     expectedTests.push('agent');
+
+    // The key worked: say so, and which model answers, before the download list.
+    const keyAccepted = cloud && keyState.done && cloudModel ? (
+        <p className="setup-ok setup-key-accepted" role="status">
+            <Check size={14} aria-hidden="true" /> {t('setup.key.accepted', { model: shortModelName(cloudModel) })}
+        </p>
+    ) : null;
 
     const optional = selection && !cloud ? catalog.filter((e) => isOptional(e) && !selection.ticked.has(e.id) && !e.downloaded
         && (canCreateImages(chatEntry) || !e.roles.includes('image_creation'))) : [];
@@ -1155,7 +1177,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <form id="setup-key-form" onSubmit={(e) => { e.preventDefault(); void connect(); }} className="setup-form">
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.key.title')}</h1>
                             <div className="setup-choices" role="radiogroup" aria-label={t('setup.key.provider')}>
-                                {CHOICES.filter((c) => c.id !== 'local').map((c) => (
+                                {CHOICES.filter((c) => c.id !== 'local' && (c.id !== 'amd' || gatewayShown)).map((c) => (
                                     <button
                                         key={c.id}
                                         type="button"
@@ -1174,7 +1196,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     </button>
                                 ))}
                             </div>
-                            {gateway?.reachable === false && (
+                            {gateway?.reachable === false && gatewayShown && (
                                 <button type="button" className="link-btn setup-start" onClick={recheckGateway}>{t('setup.key.checkAgain')}</button>
                             )}
 
@@ -1196,19 +1218,32 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                     <p className="setup-hint"><a href={GATEWAY_GUIDE_URL} target="_blank" rel="noreferrer">{t('setup.key.gatewayHelp')}</a></p>
                                 </section>
                             )}
-                            {!cloudProviderBlocked(choice) && <CloudPrices provider={choice} limit={3} />}
+                            {!cloudProviderBlocked(choice) && (
+                                <CloudPrices provider={choice} limit={3} picked={cloudPick} onPick={setCloudPick} onDefault={setCloudDefault} pickDisabled={keyState.busy || runGoing} />
+                            )}
+                            {!usersServer && (
+                                <>
+                                    <label className="setup-key-label" htmlFor="setup-key-input">
+                                        {t('setup.key.labelFor', { provider: choiceTitle(CHOICES.find((c) => c.id === choice) ?? CHOICES[1], t) })}
+                                    </label>
+                                    <div className="setup-row setup-key-row">
+                                        <input
+                                            id="setup-key-input"
+                                            className="settings-input"
+                                            type={showKey ? 'text' : 'password'}
+                                            autoComplete="off"
+                                            spellCheck={false}
+                                            value={key}
+                                            onChange={(e) => setKey(e.target.value)}
+                                            placeholder={savedKey ? t('setup.key.placeholder') : t('setup.key.placeholderNew')}
+                                        />
+                                        <button type="button" className="btn-secondary setup-key-show" aria-label={t(showKey ? 'setup.key.hide' : 'setup.key.show')} title={t(showKey ? 'setup.key.hide' : 'setup.key.show')} onClick={() => setShowKey((s) => !s)}>
+                                            {showKey ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+                                        </button>
+                                    </div>
+                                </>
+                            )}
                             <p className="setup-hint">{usersServer ? t('setup.key.usersServer') : t('setup.key.where')}</p>
-                            <div className="setup-row">
-                                {!usersServer && <input
-                                    className="settings-input"
-                                    type="password"
-                                    autoComplete="off"
-                                    value={key}
-                                    onChange={(e) => setKey(e.target.value)}
-                                    placeholder={t('setup.key.placeholder')}
-                                    aria-label={t('setup.key.label')}
-                                />}
-                            </div>
                             {envKey && !usersServer && !key && (
                                 <p className="setup-hint" role="status">{t('setup.key.foundEnv', { name: envKey.name, hint: envKey.key_hint ?? '' })}</p>
                             )}
@@ -1229,6 +1264,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
                             <p className="setup-lede">{t('setup.download.lede')}</p>
+                            {keyAccepted}
                             <p className="setup-hint" role="status"><Loader2 size={13} className="spin" aria-hidden="true" /> {t('setup.download.starting')}</p>
                         </>
                     )}
@@ -1237,6 +1273,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.download.title')}</h1>
                             <p className="setup-lede">{t('setup.download.lede')}</p>
+                            {keyAccepted}
                             {plan && <section className="setup-card" aria-label={t('setup.contents.title')}><DownloadContents plan={plan} run={fullRun} onRetry={retryRun} retryDisabled={busy} /></section>}
                             {(fullRun.models?.length ?? 0) > 0 ? (
                                 <div className={lostContact ? 'is-stale' : undefined}>

@@ -620,10 +620,12 @@ Open **Settings → Model** (or the model chip in the message box):
   which asks the OS once more.
   Connecting a provider, picking a cloud model, or connecting or testing a
   connector also asks again.
-- The AMD LLM Gateway is greyed out, here and on the first-run setup screen,
-  when its host can't be reached from this network. It reads "No network
+- In **Settings → Model**, the AMD LLM Gateway is greyed out when its host
+  can't be reached from this network. It reads "No network
   available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect
-  to AMD's network or VPN, then press **Check again**. When Lemonade runs on
+  to AMD's network or VPN, then press **Check again**. First-run setup leaves
+  the gateway off its list instead, unless you chose it before; open setup
+  again once you are on AMD's network to see it. When Lemonade runs on
   another machine, or a proxy carries this PC's traffic, the check is skipped and
   the gateway stays choosable.
 - In **Settings → Model**, recommended Fireworks models appear by default. Choose
@@ -1004,7 +1006,11 @@ right way round, and code always reads left to right.
 
 Before you pick a cloud model, setup and **Settings → Model** show what it
 costs per million tokens at the provider's list price; a model with no
-published price says "price unknown". **Settings → Model** also shows what
+published price says "price unknown". In setup the listed models are a
+choice: the provider's top pick is marked **Default** and picked, and the
+model you pick is the one chat uses. Once the key works, setup says so and
+names that model. The AMD LLM Gateway is listed only on a network that can
+reach it, unless you picked it before. **Settings → Model** also shows what
 this month's cloud chats have cost and lets you set a monthly limit. GAIA warns
 when you're close, and once you reach it, it stops before sending a chat to the
 cloud and tells you how to go on: raise the limit, allow more for this month,

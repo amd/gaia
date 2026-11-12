@@ -377,6 +377,23 @@ button.setup-rail-step:hover {
     color: var(--accent-green);
 }
 
+.setup-key-label {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.setup-key-row {
+    flex-wrap: nowrap;
+}
+
+.setup-key-accepted {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 14px;
+}
+
 .setup-content-name {
     display: block;
 }

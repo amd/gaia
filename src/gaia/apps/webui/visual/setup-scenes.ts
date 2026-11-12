@@ -470,6 +470,9 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: async (page) => {
             await toKey(page);
             await expect(page.locator('.setup-key-steps')).toBeVisible();
+            // Which model GAIA will use is a visible choice, and the key field has a visible name.
+            await expect(page.locator('.cloud-prices-list.is-pickable input[type="radio"]:checked')).toHaveCount(1);
+            await expect(page.locator('.setup-key-label')).toBeVisible();
         },
     },
     {
@@ -485,7 +488,9 @@ export const SETUP_SCENES: SetupScene[] = [
         answers: { gatewayReachable: false },
         reach: async (page) => {
             await toKey(page);
-            await expect(page.locator('.setup-choice.is-disabled')).toBeVisible();
+            // Off AMD's network the gateway isn't offered at all.
+            await expect(page.locator('.setup-choice')).toHaveCount(1);
+            await expect(page.locator('.setup-choice.is-disabled')).toHaveCount(0);
         },
     },
     {
