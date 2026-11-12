@@ -2972,7 +2972,7 @@ export const enMessages = {
     'mem.about.kind.reminder': 'Reminder',
     'mem.about.kind.note': 'Note',
     'mem.about.when': 'When to remind you',
-    'mem.about.addPlaceholder': 'Tell GAIA something about you, e.g. “I prefer short answers”',
+    'mem.about.addPlaceholder': 'Tell GAIA something about you',
     'mem.about.addLabel': 'Something GAIA should know about you',
     'mem.about.add': 'Add',
     'mem.about.forgotten': "Forgotten: “{content}” — GAIA won't learn it again from old chats.",
