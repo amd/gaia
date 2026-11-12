@@ -598,19 +598,31 @@ def provider_of(model_id: str) -> str:
     return prefix if prefix in (FIREWORKS, AMD) else LOCAL
 
 
-def model_label(model_id: str) -> str:
+def cloud_provider_name(model_id: str) -> Optional[str]:
+    """Who answers cloud *model_id*, or None for a local one.
+
+    Also names a provider GAIA only learned from Lemonade's model list.
+    """
+    from .._chat_helpers import _ui_cloud_provider
+
     provider = provider_of(model_id)
-    name = (
-        model_id.split(".", 1)[1].rsplit("/", 1)[-1] if provider != LOCAL else model_id
-    )
-    return f"{name} · {'local' if provider == LOCAL else _NAMES[provider]}"
+    if provider != LOCAL:
+        return _NAMES[provider]
+    return _ui_cloud_provider(model_id)
+
+
+def model_label(model_id: str) -> str:
+    cloud = cloud_provider_name(model_id)
+    if cloud is None:
+        return f"{model_id} · local"
+    return f"{model_id.split('.', 1)[1].rsplit('/', 1)[-1]} · {cloud}"
 
 
 def display_name(model_id: str) -> str:
     """The name a person reads: friendly for local models, bare for cloud ones."""
     from ..local_models import friendly_name
 
-    if provider_of(model_id) == LOCAL:
+    if cloud_provider_name(model_id) is None:
         return friendly_name(model_id)
     return model_id.split(".", 1)[1].rsplit("/", 1)[-1]
 
@@ -632,16 +644,19 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
             "display_name": None,
             "label": None,
             "remote": False,
+            "provider_name": None,
             "is_default": True,
             "config_error": str(e),
         }
-    provider = provider_of(model)
+    cloud = cloud_provider_name(model)
     return {
-        "provider": provider,
+        # The provider tab; ``local`` for a cloud provider GAIA has no tab for.
+        "provider": provider_of(model),
         "model": model,
         "display_name": display_name(model),
         "label": model_label(model),
-        "remote": provider != LOCAL,
+        "remote": cloud is not None,
+        "provider_name": cloud,
         "is_default": not chosen,
         "config_error": None,
         **_new_chat_location(model, chosen or None),

@@ -2863,7 +2863,9 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   <Accordion title="GET /api/providers/active">
     The model new turns run — the one a new chat starts on: the picked model,
     else `default_model` from `~/.gaia/config.json`, else Gemma. Carries
-    `display_name`, `downloaded` for a local model (`null` for a cloud
+    `display_name`, `remote` and `provider_name` (who answers a cloud model,
+    including a provider GAIA only learned from Lemonade's model list, whose
+    `provider` stays `local`), `downloaded` for a local model (`null` for a cloud
     model or while the server starts), and `inference_remote` /
     `inference_description`: where a new chat would be answered, by the rule
     session locations use (`null` when it can't tell). With an unreadable config, `model` is

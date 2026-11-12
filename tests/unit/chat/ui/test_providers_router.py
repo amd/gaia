@@ -680,6 +680,40 @@ def test_active_with_nothing_saved(client, lemonade, keys, db):
     assert body["downloaded"] is False
 
 
+def test_active_names_a_cloud_model_only_lemonade_lists_as_cloud(
+    client, lemonade, keys, db, monkeypatch
+):
+    """#7216: the chip warned this cloud model "isn't downloaded yet"."""
+    model = "opencode.big-model"
+    entry = {"id": model, "recipe": "cloud", "cloud_provider": "opencode"}
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", lemonade_client._CLOUD_MODELS)
+    monkeypatch.setattr(
+        lemonade_client, "_CLOUD_PROVIDERS", lemonade_client._CLOUD_PROVIDERS
+    )
+    lemonade_client.record_cloud_models({"data": [entry]})
+    lemonade.models = [entry]
+    db.set_setting("custom_model", model)
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["model"] == model
+    assert body["remote"] is True
+    assert body["inference_remote"] is True
+    assert body["downloaded"] is None
+    assert body["provider_name"] == "opencode"
+    assert body["label"] == "big-model · opencode"
+    assert body["display_name"] == "big-model"
+
+
+def test_active_names_the_provider_of_a_known_cloud_model(client, lemonade, keys, db):
+    db.set_setting("custom_model", "amd.DeepSeek-V4.1-Flash")
+    body = client.get("/api/providers/active").json()
+    assert body["remote"] is True
+    assert body["provider_name"] == "AMD LLM Gateway"
+    db.set_setting("custom_model", None)
+    assert client.get("/api/providers/active").json()["provider_name"] is None
+
+
 def test_active_restores_the_last_model_once_per_run(client, lemonade, keys, db):
     model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
     _write_config({"last_model": model})
