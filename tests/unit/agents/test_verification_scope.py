@@ -544,6 +544,9 @@ def test_trimming_a_checks_output_is_the_same_check(before, after):
         ("pytest -q && ruff check . | tail", "pytest -q"),
         ("pytest -q | tail -5; pytest tests/e2e", "pytest -q"),
         ("pytest -q | grep -v slow", "pytest -q 2>&1 | tail"),
+        # A ">" inside a quoted argument is not a redirect.
+        ('python -c "assert f()>0"', 'python -c "assert f()>5"'),
+        ('pytest -k "a>b"', 'pytest -k "a>c"'),
     ],
 )
 def test_a_different_command_stays_a_different_check(first, second):
@@ -568,6 +571,22 @@ def test_loop_says_nothing_when_the_fixed_rerun_trims_differently(agent):
     result = agent.process_query("fix the test", max_steps=5)
     assert result["verification"]["state"] == "verified"
     _assert_no_note(result["result"])
+
+
+def test_a_trimmed_rerun_that_still_fails_is_not_verified(agent):
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] != "verified"
 
 
 def test_a_named_check_tool_is_targeted_by_its_arguments():

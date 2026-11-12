@@ -193,7 +193,7 @@ def verification_check_label(
 _OUTPUT_TRIM_RE = re.compile(
     r"(?:\s*\|\s*(?:tail|head|tee|more|less|out-string|out-host"
     r"|select-object\s+-(?:first|last))(?:\s+[^|;&<>]*)?"
-    r"|\s*\d?>>?\s*(?:&\d|[^\s|;&<>]+))\s*$",
+    r"|\s+\d?>>?\s*(?:&\d|[^\s|;&<>]+))\s*$",
     re.IGNORECASE,
 )
 
