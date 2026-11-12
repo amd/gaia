@@ -36,6 +36,7 @@ beforeEach(() => {
     deleteSchedule.mockClear();
     useChatStore.setState({ showSchedules: true });
     useScheduleStore.setState({
+        draft: null,
         schedules: [],
         loading: false,
         error: null,

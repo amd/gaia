@@ -316,10 +316,11 @@ export function ScheduleManager() {
     useDialogFocus(dialogRef, true);
 
     // Create form state
-    const [showCreate, setShowCreate] = useState(false);
-    const [nlInput, setNlInput] = useState('');
-    const [scheduleName, setScheduleName] = useState('');
-    const [schedulePrompt, setSchedulePrompt] = useState('');
+    const [draft] = useState(() => useScheduleStore.getState().draft);
+    const [showCreate, setShowCreate] = useState(draft !== null);
+    const [nlInput, setNlInput] = useState(draft?.when ?? '');
+    const [scheduleName, setScheduleName] = useState(draft?.name ?? '');
+    const [schedulePrompt, setSchedulePrompt] = useState(draft?.prompt ?? '');
     const [parsed, setParsed] = useState<ParsedSchedule | null>(null);
     const [parsing, setParsing] = useState(false);
     const [creating, setCreating] = useState(false);
@@ -335,6 +336,11 @@ export function ScheduleManager() {
     const scheduleRejected = !parsing && parsed !== null && !parsed.valid;
     // The parser's reason is English; with no English in the input, the hint says what to fix.
     const showRejectReason = scheduleRejected && /[A-Za-z]/.test(nlInput);
+
+    useEffect(() => {
+        const filled = nlInput.trim() || scheduleName.trim() || schedulePrompt.trim();
+        useScheduleStore.getState().setDraft(filled ? { when: nlInput, name: scheduleName, prompt: schedulePrompt } : null);
+    }, [nlInput, scheduleName, schedulePrompt]);
 
     // Debounced parse of NL input
     const parseTimerRef = useRef<number | null>(null);

@@ -12,7 +12,7 @@ vi.mock('../../services/api');
 
 beforeEach(() => {
     useChatStore.setState({ showSchedules: true });
-    useScheduleStore.setState({ schedules: [], loading: false, error: null, loadSchedules: vi.fn(async () => {}) });
+    useScheduleStore.setState({ draft: null, schedules: [], loading: false, error: null, loadSchedules: vi.fn(async () => {}) });
 });
 
 describe('ScheduleManager', () => {
@@ -45,5 +45,31 @@ describe('ScheduleManager', () => {
         fireEvent.change(screen.getByPlaceholderText(/Describe your schedule/), { target: { value: 'whenever the moon is blue' } });
         expect(await screen.findByText(/didn.t understand that schedule/, {}, { timeout: 3000 })).toBeInTheDocument();
         expect(screen.getByText(/Try "every 30m"/).closest('.schedule-parsed-hint')).not.toBeNull();
+    });
+
+    it('keeps what was typed in the New schedule form when Escape closes the dialog', () => {
+        const first = render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
+        fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every 3 hours' } });
+        fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Stretch break' } });
+        fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Stand up and stretch.' } });
+        fireEvent.keyDown(document, { key: 'Escape' });
+        first.unmount();
+
+        render(<ScheduleManager />);
+        expect(screen.getByLabelText('When to run')).toHaveValue('every 3 hours');
+        expect(screen.getByLabelText('Name')).toHaveValue('Stretch break');
+        expect(screen.getByLabelText('Prompt')).toHaveValue('Stand up and stretch.');
+    });
+
+    it('starts with the form closed again after Cancel', () => {
+        const first = render(<ScheduleManager />);
+        fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
+        fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Stretch break' } });
+        fireEvent.click(screen.getByRole('button', { name: /Cancel/ }));
+        first.unmount();
+
+        render(<ScheduleManager />);
+        expect(screen.queryByLabelText('Name')).toBeNull();
     });
 });
