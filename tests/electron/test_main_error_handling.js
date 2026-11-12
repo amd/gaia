@@ -383,17 +383,134 @@ describe("installSafetyNet", () => {
     exitSpy.mockRestore();
   });
 
-  test.each([["crashed"], ["killed"], ["oom"], ["abnormal-exit"]])(
+  function mockWebContents({ destroyed = false } = {}) {
+    return { reload: jest.fn(), isDestroyed: jest.fn(() => destroyed) };
+  }
+
+  test.each([["crashed"], ["oom"]])(
+    "render-process-gone with %s reloads the window instead of quitting",
+    (reason) => {
+      const { installSafetyNet } = require(SAFETY_NET_PATH);
+      const dialog = mockDialog();
+      const app = mockApp(true);
+      app.quit = jest.fn();
+      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+      const wc = mockWebContents();
+
+      installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+      app.emit("render-process-gone", {}, wc, { reason, exitCode: 1 });
+
+      expect(wc.reload).toHaveBeenCalledTimes(1);
+      expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+      expect(app.quit).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(fs.readFileSync(logPath, "utf8")).toMatch(
+        new RegExp(`RENDER_PROCESS_GONE reason=${reason}; reloading the window`)
+      );
+
+      exitSpy.mockRestore();
+    }
+  );
+
+  test("a second renderer crash within the reload window is fatal", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+    let clock = 1000;
+    const wc = mockWebContents();
+
+    installSafetyNet({
+      logPath,
+      dialogModule: dialog,
+      appModule: app,
+      homedirFn: () => tmpDir,
+      rendererReloadWindowMs: 60000,
+      now: () => clock,
+    });
+    app.emit("render-process-gone", {}, wc, { reason: "crashed", exitCode: 1 });
+    clock += 59999;
+    app.emit("render-process-gone", {}, wc, { reason: "crashed", exitCode: 1 });
+
+    expect(wc.reload).toHaveBeenCalledTimes(1);
+    expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(1);
+
+    exitSpy.mockRestore();
+  });
+
+  test("a renderer crash after the reload window reloads again", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    app.quit = jest.fn();
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+    let clock = 1000;
+    const wc = mockWebContents();
+
+    installSafetyNet({
+      logPath,
+      dialogModule: dialog,
+      appModule: app,
+      rendererReloadWindowMs: 60000,
+      now: () => clock,
+    });
+    app.emit("render-process-gone", {}, wc, { reason: "crashed", exitCode: 1 });
+    clock += 60000;
+    app.emit("render-process-gone", {}, wc, { reason: "oom", exitCode: 1 });
+
+    expect(wc.reload).toHaveBeenCalledTimes(2);
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+
+    exitSpy.mockRestore();
+  });
+
+  test("a renderer crash whose window is already destroyed is fatal", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+    const wc = mockWebContents({ destroyed: true });
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app, homedirFn: () => tmpDir });
+    app.emit("render-process-gone", {}, wc, { reason: "crashed", exitCode: 1 });
+
+    expect(wc.reload).not.toHaveBeenCalled();
+    expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
+
+    exitSpy.mockRestore();
+  });
+
+  test("a reload that throws falls through to fatal and logs why", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+    const wc = mockWebContents();
+    wc.reload.mockImplementation(() => { throw new Error("reload boom"); });
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app, homedirFn: () => tmpDir });
+    app.emit("render-process-gone", {}, wc, { reason: "crashed", exitCode: 1 });
+
+    expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(logPath, "utf8")).toMatch(/RENDER_RELOAD_FAILED.*reload boom/);
+
+    exitSpy.mockRestore();
+  });
+
+  test.each([["killed"], ["abnormal-exit"], ["launch-failed"]])(
     "render-process-gone with %s still shows the crash dialog",
     (reason) => {
       const { installSafetyNet } = require(SAFETY_NET_PATH);
       const dialog = mockDialog();
       const app = mockApp(true);
-      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+        const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+      const wc = mockWebContents();
 
-      installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
-      app.emit("render-process-gone", {}, {}, { reason, exitCode: 1 });
+      installSafetyNet({ logPath, dialogModule: dialog, appModule: app, homedirFn: () => tmpDir });
+      app.emit("render-process-gone", {}, wc, { reason, exitCode: 1 });
 
+      expect(wc.reload).not.toHaveBeenCalled();
       expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
 
       exitSpy.mockRestore();

@@ -90,6 +90,12 @@ function appendLog(logPath, msg) {
 /** How long a fatal error's quit may take before the process is ended outright (ms). */
 const FATAL_EXIT_GRACE_MS = 25000;
 
+/** A second renderer crash within this window of a reload is treated as fatal (ms). */
+const RENDERER_RELOAD_WINDOW_MS = 60000;
+
+/** Renderer exit reasons that reloading the window can recover from. */
+const RELOADABLE_RENDERER_REASONS = new Set(["crashed", "oom"]);
+
 // ── Core installer ────────────────────────────────────────────────────────────
 
 /**
@@ -103,6 +109,8 @@ const FATAL_EXIT_GRACE_MS = 25000;
  * @param {Function} [opts.beforeQuit]  - Called before the fatal quit, e.g.
  *   so the quit guard does not ask the user to confirm it.
  * @param {number}   [opts.exitGraceMs] - Override for FATAL_EXIT_GRACE_MS.
+ * @param {number}   [opts.rendererReloadWindowMs] - Override for RENDERER_RELOAD_WINDOW_MS.
+ * @param {Function} [opts.now]         - Clock in ms, injected for tests.
  */
 function installSafetyNet({
   logPath,
@@ -112,6 +120,8 @@ function installSafetyNet({
   beforeQuit,
   exitGraceMs = FATAL_EXIT_GRACE_MS,
   holdCrashCount = () => false,
+  rendererReloadWindowMs = RENDERER_RELOAD_WINDOW_MS,
+  now = () => Date.now(),
 }) {
   const homedir = homedirFn || (() => os.homedir());
 
@@ -198,15 +208,39 @@ function installSafetyNet({
     if (!holdCrashCount()) writeCount(0, homedir);
   });
 
-  // Renderer and GPU-process crashes don't fire uncaughtException — route
-  // them through fatal() so they get the same dialog + counter treatment.
-  appModule.on("render-process-gone", (_event, _webContents, details) => {
+  let _lastRendererReloadAt = null;
+
+  // Renderer and GPU-process crashes don't fire uncaughtException, so they are
+  // handled here; the ones that can't be recovered go through fatal().
+  appModule.on("render-process-gone", (_event, webContents, details) => {
     const reason = details && details.reason;
+    const ts = new Date().toISOString();
     // The renderer exits cleanly when the app is signalled to stop (logout, a
     // stopped app unit); that is a shutdown, not a crash.
     if (reason === "clean-exit") {
-      appendLog(logPath, `[${new Date().toISOString()}] RENDER_PROCESS_EXITED reason=${reason}`);
+      appendLog(logPath, `[${ts}] RENDER_PROCESS_EXITED reason=${reason}`);
       return;
+    }
+    // The backend outlives the renderer, so reload the window onto it. A
+    // second crash soon after a reload is a loop and goes to fatal().
+    const t = now();
+    const recentlyReloaded =
+      _lastRendererReloadAt !== null && t - _lastRendererReloadAt < rendererReloadWindowMs;
+    const canReload =
+      RELOADABLE_RENDERER_REASONS.has(reason) &&
+      !recentlyReloaded &&
+      webContents &&
+      typeof webContents.reload === "function" &&
+      !(typeof webContents.isDestroyed === "function" && webContents.isDestroyed());
+    if (canReload) {
+      _lastRendererReloadAt = t;
+      appendLog(logPath, `[${ts}] RENDER_PROCESS_GONE reason=${reason}; reloading the window`);
+      try {
+        webContents.reload();
+        return;
+      } catch (reloadErr) {
+        appendLog(logPath, `[${ts}] RENDER_RELOAD_FAILED ${reloadErr.stack || reloadErr}`);
+      }
     }
     fatal(new Error(`render-process-gone: reason=${reason}`));
   });
@@ -328,6 +362,7 @@ module.exports = {
   installSafetyNet,
   installLogTee,
   FATAL_EXIT_GRACE_MS,
+  RENDERER_RELOAD_WINDOW_MS,
   readCount,
   runSafeModePrompt,
   SAFE_MODE_THRESHOLD,
