@@ -297,6 +297,17 @@ describe('Phone access', () => {
         expect(toggle).toHaveAttribute('aria-checked', 'true');
         window.removeEventListener('gaia:mobile-access-request', onRequest);
     });
+
+    it('shows no error for phone access the user never got running', async () => {
+        mocked.getTunnelStatus.mockResolvedValue({
+            active: false, url: null, token: null, startedAt: null, publicIp: null,
+            error: 'ngrok is not installed. Install it from https://ngrok.com/download or run: choco install ngrok',
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByRole('switch', { name: 'Phone access' });
+        await waitFor(() => expect(mocked.getTunnelStatus).toHaveBeenCalled());
+        expect(screen.queryByText(/ngrok/)).toBeNull();
+    });
 });
 
 describe('Permission mode', () => {

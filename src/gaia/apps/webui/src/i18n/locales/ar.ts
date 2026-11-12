@@ -2260,17 +2260,12 @@ const messages: Messages = {
     'update.err.withNote': '{error} {note}',
 
     // Mobile access: ngrok not installed
-    'mobile.ngrokRequired': 'ngrok مطلوب',
-    'mobile.setupTitle': 'إعداد ngrok (مرة واحدة)',
-    'mobile.setupIntro': 'يستخدم الوصول من الهاتف ngrok للوصول إلى هذا الجهاز من هاتفك.',
-    'mobile.setupInstall': 'ثبّته بالأمر أدناه، ثم اضغط «إعادة المحاولة».',
-    'mobile.setupDownload': 'نزّله لنظامك، ثم اضغط «إعادة المحاولة».',
-    'mobile.installCommand': 'أمر تثبيت ngrok',
-    'mobile.copyCommand': 'نسخ الأمر',
-    'mobile.copy': 'نسخ',
-    'mobile.copied': 'تم النسخ',
-    'mobile.downloadPage': 'صفحة تنزيل ngrok',
+    'mobile.ngrokRequired': 'يحتاج إلى ngrok',
+    'mobile.setupTitle': 'استخدم GAIA من هاتفك ما دام هذا الجهاز يعمل',
+    'mobile.setupIntro': 'يصل هاتفك إلى هذا الجهاز عبر ngrok، وهو تطبيق مساعد مجاني. نزّله وثبّته مرة واحدة، ثم اختر «إعادة المحاولة».',
+    'mobile.downloadPage': 'الحصول على ngrok',
     'mobile.retry': 'إعادة المحاولة',
+    'mobile.close': 'إغلاق',
 
     // Approving a calendar change
     'permission.calendar.event': 'الحدث',

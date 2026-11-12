@@ -1262,6 +1262,21 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`Mobile access without ngrok (${locale})`, async ({ page }) => {
+        const missing = { active: false, url: null, token: null, startedAt: null, publicIp: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
+        await open(page, '', locale, (p) => p.route('**/api/tunnel/start', (route) => route.fulfill({ json: missing })));
+        await page.locator('.sb-icon-btn').filter({ has: page.locator('.lucide-smartphone') }).click();
+        const dialog = page.locator('.mobile-modal');
+        await expect(dialog.locator('.tunnel-setup')).toBeVisible();
+        // Desktop text names what is needed and where to get it, never a command to run (#7415).
+        await expect(dialog).not.toContainText('choco');
+        // The status dot stays a dot; the setup screen's `.setup` class once stretched it into a bar.
+        const dot = await dialog.locator('.status-dot').boundingBox();
+        expect(dot && dot.width <= 10 && dot.height <= 10).toBe(true);
+        await shot(page, `mobile-access-ngrok-missing-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`Local only blocks cloud model picker (${locale})`, async ({ page }) => {
         await openModelPage(page, locale, { localOnly: true });
         const cloud = page.getByRole('radio', { name: /Fireworks AI/ });

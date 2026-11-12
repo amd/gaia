@@ -2259,17 +2259,12 @@ export const enMessages = {
     'update.err.withNote': '{error} {note}',
 
     // Mobile access: ngrok not installed
-    'mobile.ngrokRequired': 'ngrok required',
-    'mobile.setupTitle': 'Set up ngrok (one-time)',
-    'mobile.setupIntro': 'Mobile access uses ngrok to reach this PC from your phone.',
-    'mobile.setupInstall': 'Install it with the command below, then press Retry.',
-    'mobile.setupDownload': 'Download it for your system, then press Retry.',
-    'mobile.installCommand': 'ngrok install command',
-    'mobile.copyCommand': 'Copy command',
-    'mobile.copy': 'Copy',
-    'mobile.copied': 'Copied',
-    'mobile.downloadPage': 'ngrok download page',
+    'mobile.ngrokRequired': 'Needs ngrok',
+    'mobile.setupTitle': 'Use GAIA from your phone while this PC is on',
+    'mobile.setupIntro': 'Your phone reaches this PC through ngrok, a free helper app. Download and install it once, then choose Retry.',
+    'mobile.downloadPage': 'Get ngrok',
     'mobile.retry': 'Retry',
+    'mobile.close': 'Close',
 
     // Approving a calendar change
     'permission.calendar.event': 'Event',

@@ -13,7 +13,7 @@
   "components/FolderChip.tsx": 9,
   "components/MemoryDashboard.tsx": 1,
   "components/MessageBubble.tsx": 3,
-  "components/MobileAccessModal.tsx": 21,
+  "components/MobileAccessModal.tsx": 17,
   "components/ModelChip.tsx": 24,
   "components/PrivateChatButton.tsx": 4,
   "components/QueuedMessages.tsx": 7,

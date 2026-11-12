@@ -312,7 +312,8 @@ function PhoneAccess() {
                     {t('env.qr')}
                 </button>
             )}
-            {(error || status?.error) && <span className="sp-error">{error ?? status?.error}</span>}
+            {/* A failed start is explained in the Mobile access dialog; it isn't this switch's error. */}
+            {(error || (active && status?.error)) && <span className="sp-error">{error ?? status?.error}</span>}
         </Row>
     );
 }
