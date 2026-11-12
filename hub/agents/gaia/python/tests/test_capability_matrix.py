@@ -284,6 +284,7 @@ def test_eval_surface_state_is_derived_not_asserted(matrix):
         "gaia_shell",
         "gaia_skills_capture",
         "gaia_skills_lifecycle",
+        "gaia_skills_selection",
         "gaia_skills_tasks",
         "gaia_tool_selection",
         "gaia_voice",

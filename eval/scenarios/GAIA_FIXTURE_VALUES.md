@@ -276,7 +276,11 @@ Set up by the eval workflow, not by scenarios:
   fixture hub. Every `hub/skills/` skill is always installed: the flagship
   bundles them (from the checkout's `hub/skills/`, or packaged), so install
   and "not installed" scenarios use `unit-convert`, which exists only on the
-  fixture hub.
+  fixture hub. The category shares one home, so these three are order-coupled
+  (they run alphabetically): `skills_hub_install_use_remove` installs and
+  removes it, `skills_hub_search` needs it absent, and `skills_install_from_hub`
+  leaves it installed. Re-run `skills_hub_search` alone, or before
+  `skills_install_from_hub`, never after it.
 - `gaia_web`, `gaia_skills_tasks` (web-based skills): fixture server running.
 - `gaia_data`, `gaia_code`: fixture CSV / mini repo staged at `~/gaia-eval/`
   (see Path staging above).
