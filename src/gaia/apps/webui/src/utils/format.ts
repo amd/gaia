@@ -3,6 +3,16 @@
 
 /** Shared formatting utilities for the GAIA web UI. */
 
+/** A long file name cut in the middle, so its end and extension stay: "a_very_long_fi…ed_by_dana.txt". */
+export function middleTruncate(name: string, max = 32): string {
+  // Code points, so an emoji is never split into a lone surrogate.
+  const chars = Array.from(name);
+  if (chars.length <= max) return name;
+  const ext = Array.from(/\.[^.\s]{1,8}$/.exec(name)?.[0] ?? '').length;
+  const tail = Math.min(Math.max(Math.ceil(max * 0.45), ext + 4), max - 2);
+  return `${chars.slice(0, max - tail - 1).join('')}…${chars.slice(-tail).join('')}`;
+}
+
 /** Format bytes as human-readable size (e.g., "3.2 MB"). */
 export function formatSize(bytes: number): string {
   if (bytes <= 0) return '0 B';

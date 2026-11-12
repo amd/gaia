@@ -312,6 +312,17 @@
         ],
         "title": "Decision"
       },
+      "declined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Declined"
+      },
       "detail": {
         "anyOf": [
           {
@@ -3200,6 +3211,11 @@
   "ModelStatus": {
     "description": "Status of a custom model on the Lemonade server.",
     "properties": {
+      "checked": {
+        "default": false,
+        "title": "Checked",
+        "type": "boolean"
+      },
       "downloaded": {
         "default": false,
         "title": "Downloaded",
@@ -4689,6 +4705,61 @@
       }
     },
     "title": "SetupRunRequest",
+    "type": "object"
+  },
+  "SkillLinkAddRequest": {
+    "properties": {
+      "allow_code": {
+        "default": false,
+        "title": "Allow Code",
+        "type": "boolean"
+      },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      },
+      "names": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Names"
+      },
+      "pin": {
+        "title": "Pin",
+        "type": "string"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "pin"
+    ],
+    "title": "SkillLinkAddRequest",
+    "type": "object"
+  },
+  "SkillLinkRequest": {
+    "properties": {
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "SkillLinkRequest",
     "type": "object"
   },
   "SkipModelRequest": {

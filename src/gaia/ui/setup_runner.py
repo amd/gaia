@@ -1433,6 +1433,9 @@ class SetupRunner:
                 component, state = event.get("component"), event.get("state")
                 if self._run is not None and component and state:
                     self._run.components[component] = state
+                    # The last download figure belongs to the part before this one.
+                    if state == "active":
+                        self._run.percent = self._run.size = None
                     failure = event.get("kind") if state == "failed" else None
                     if failure:
                         self._run.component_kinds[component] = failure
