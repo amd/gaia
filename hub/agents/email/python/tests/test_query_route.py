@@ -1024,7 +1024,7 @@ def test_a_queued_email_turn_streams_its_place_in_line(app_client, monkeypatch):
     assert resp.status_code == 200, resp.text
     queue = [e for e in _parse_sse(resp.text) if e.get("phase") == "model_queue"]
     assert queue and queue[0]["queue"]["position"] == 1
-    assert "'gaia' is using it" in queue[0]["message"]
+    assert "another chat or task is using it" in queue[0]["message"]
     assert fake.priority == "interactive"
 
 

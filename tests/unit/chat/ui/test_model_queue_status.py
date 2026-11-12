@@ -139,7 +139,8 @@ async def test_a_streaming_turn_is_interactive_and_shows_its_model_wait(runtime)
     queue = [e for e in events if e.get("phase") == "model_queue"]
     assert queue, f"no model-queue status in the stream: {events}"
     assert queue[0]["status"] == "working"
-    assert "'email' is using it" in queue[0]["message"]
+    assert "another chat or task is using it" in queue[0]["message"]
+    assert "'email'" not in queue[0]["message"]
     assert "#2 of 3" in queue[0]["message"] and "(4s)" in queue[0]["message"]
     assert agent.seen == {
         "priority": "interactive",

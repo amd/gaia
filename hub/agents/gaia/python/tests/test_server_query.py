@@ -1417,7 +1417,7 @@ def test_a_queued_turn_streams_its_place_in_line(built, monkeypatch):
     assert queue[0]["type"] == "status"
     assert queue[0]["queue"]["position"] == 2
     assert queue[0]["queue"]["waited_s"] == 4.0
-    assert "'email' is using it" in queue[0]["message"]
+    assert "another chat or task is using it" in queue[0]["message"]
     assert queue[1]["message"] == "Got the model after waiting 9s"
     assert seen["priority"] == "interactive"
 

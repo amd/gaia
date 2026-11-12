@@ -26,6 +26,10 @@ describe('localizeLiveStatus', () => {
             'The model server stopped. GAIA is restarting it…',
             'Starting the model server…',
             'Reading page 4 of 12…',
+            'Waiting for the model — another chat or task is using it (8s)',
+            'Waiting for the model — another request from this app is using it, #2 of 3 in line (14s)',
+            'Waiting for the model — a higher-priority request goes first (3s)',
+            'Got the model after waiting 41s',
         ]) {
             expect(localizeLiveStatus(tEn, label)).toBe(label);
         }
@@ -51,6 +55,16 @@ describe('localizeLiveStatus', () => {
         expect(ar('Reading page 4 of 12…')).not.toBe('Reading page 4 of 12…');
     });
 
+    it('translates the model-queue lines for Arabic, keeping place and seconds', () => {
+        const waiting = ar('Waiting for the model — another chat or task is using it (8s)');
+        expect(waiting).toContain('بانتظار النموذج — تستخدمه محادثة أو مهمة أخرى (8 ث)');
+        const inLine = ar('Waiting for the model — another request from this app is using it, #2 of 3 in line (14s)');
+        expect(inLine).toContain('يستخدمه طلب آخر من هذا التطبيق');
+        expect(inLine).toContain('الترتيب 2 من 3');
+        expect(inLine).toContain('(14 ث)');
+        expect(ar('Got the model after waiting 41s')).toContain('بعد انتظار 41 ث');
+    });
+
     it('shows a line it does not know as written', () => {
         for (const label of [
             'Writing file — 120 characters so far',
@@ -58,6 +72,7 @@ describe('localizeLiveStatus', () => {
             "Downloading the embedding model 'nomic-embed-text-v2-moe-GGUF' for memory: 40%",
             'Downloading Whisper-Large-v3-Turbo through Lemonade (~1.60 GB)',
             'The model stopped sending — retrying now (1/1)',
+            "Waiting for the model — 'gaia' is using it for 'Gemma-4-E4B-it-GGUF' (8s)",
         ]) {
             expect(ar(label)).toBe(label);
         }

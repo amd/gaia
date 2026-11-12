@@ -964,12 +964,15 @@ def queue_status_event(event: dict) -> dict:
 
 
 def describe_wait(status: dict) -> str:
-    """A one-line, user-facing description of a queued wait."""
-    holder = status.get("holder")
+    """A one-line, user-facing description of a queued wait.
+
+    Never names the holder's agent id or model file: the Agent UI matches these
+    exact phrasings to translate them (``utils/liveStatus.ts``).
+    """
     if status.get("scope") == "process":
         ahead = "another request from this app is using it"
-    elif holder:
-        ahead = f"'{holder}' is using it for '{status.get('holder_model')}'"
+    elif status.get("holder"):
+        ahead = "another chat or task is using it"
     else:
         ahead = "a higher-priority request goes first"
     place = ""

@@ -459,7 +459,8 @@ receiver tell a queued turn from a dead one. Its `queue` object has `event`
 another request in the same agent), `position` and `queue_length` (1-based),
 `holder` and `holder_model` (who holds the model, for what), `held_for_s` and
 `waited_s`. Fields the wait cannot know are omitted. Show it as the live line
-("Waiting for the model — `<holder>` is using it, #2 of 3 in line (14s)"); a
+("Waiting for the model — another chat or task is using it, #2 of 3 in line (14s)",
+never the holder's agent id or model file); a
 wait has no deadline of its own unless the user set `GAIA_MODEL_LEASE_WAIT_S`.
 
 A phase lasts until the next phase, `token`, `tool_call` or `tool_result`. A
