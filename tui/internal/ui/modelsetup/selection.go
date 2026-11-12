@@ -28,6 +28,8 @@ type rowEntry struct {
 	leftGB      *float64 // still to download; nil when unknown
 	fullGB      float64
 	fits        *bool
+	fitCode     *string // "npu" hard-blocks: nothing can download it
+	fitReason   *string // the backend's words, for display
 	needGB      *float64
 	haveGB      *float64
 	// installed puts the row in the "already in Lemonade" group: on disk, not
@@ -62,6 +64,8 @@ func entryFrom(e setupapi.CatalogEntry) rowEntry {
 		partialGB:   e.PartialGB,
 		leftGB:      e.SizeGB,
 		fits:        e.Fits,
+		fitCode:     e.FitCode,
+		fitReason:   e.FitReason,
 		needGB:      e.NeedGB,
 		haveGB:      e.CapacityGB,
 		gaiaModel:   e.GaiaModel,
@@ -248,10 +252,10 @@ func (s *selection) applyVision() {
 // pickChat makes id the chat model. The one it replaces stops downloading, and
 // the jobs that depend on it follow: a chat model that reads images needs no
 // separate vision model, otherwise GAIA's is ticked again, and a compact model
-// can't take image creation.
+// can't take image creation. A model nothing here can run is refused.
 func (s *selection) pickChat(id string) {
 	r, ok := s.find(id)
-	if !ok {
+	if !ok || r.npuBlocked() {
 		return
 	}
 	if prev, ok := s.find(s.chat); ok && !prev.downloaded && !sameID(prev.id, r.id) {
@@ -323,7 +327,7 @@ func (s selection) find(id string) (rowEntry, bool) {
 // that is ticked, or one already in Lemonade.
 func (s selection) canChat(id string) bool {
 	r, ok := s.find(id)
-	if !ok || !r.chatable {
+	if !ok || !r.chatable || r.npuBlocked() {
 		return false
 	}
 	return r.installed || s.ticked[r.id]
@@ -369,6 +373,12 @@ func (s selection) fallbackChat() string {
 // skip to save for it, so its tick can't change anything.
 func (r rowEntry) kept() bool { return r.downloaded && !r.planned && !r.installed }
 
+// npuBlocked is a model the NPU can't run yet, so nothing on this PC can
+// download it: ensure_npu_backend refuses before the pull starts.
+func (r rowEntry) npuBlocked() bool {
+	return r.fits != nil && !*r.fits && r.fitCode != nil && *r.fitCode == "npu"
+}
+
 // toggle ticks or unticks a row, moving the chat model if it was unticked.
 // On a row already in Lemonade it makes that model the chat model instead.
 // It reports false when the row's tick can't change (a kept model).
@@ -378,13 +388,18 @@ func (s *selection) toggle(id string) bool {
 		return false
 	}
 	if r.installed {
-		if r.chatable {
+		if r.chatable && !r.npuBlocked() {
 			s.chat = r.id
 			s.chatChosen = true
 		}
 		return true
 	}
 	if r.kept() {
+		return false
+	}
+	// Nothing on this PC can download it, so its tick can only queue a pull
+	// that fails; leaving it ticked would keep it in the pending set.
+	if r.npuBlocked() {
 		return false
 	}
 	s.ticked[r.id] = !s.ticked[r.id]
@@ -431,7 +446,7 @@ func (s *selection) resetToRecommended(chat string) {
 func (s selection) pending() []rowEntry {
 	var out []rowEntry
 	for _, r := range s.rows {
-		if !r.installed && s.ticked[r.id] && r.needsDownload() {
+		if !r.installed && s.ticked[r.id] && r.needsDownload() && !r.npuBlocked() {
 			out = append(out, r)
 		}
 	}

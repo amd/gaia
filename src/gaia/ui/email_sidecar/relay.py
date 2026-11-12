@@ -218,6 +218,25 @@ _FRESH_CONSENT_TOOLS = frozenset(
 )
 
 
+class _NobodyToApprove(Exception):
+    """An unattended run reached a step that needs a person's approval."""
+
+
+def _unattended_approval_text(tool: str, profile: RelayProfile) -> str:
+    return (
+        f'GAIA stopped this unattended run at "{_tool_label(tool, profile)}": '
+        "that step needs your approval, and nobody is there to give it. "
+        "Unattended runs, such as scheduled tasks and autonomous goals, "
+        "can't use steps that ask first, "
+        "such as writing files or running commands. Ask GAIA in a chat "
+        "instead, where you can approve it."
+    )
+
+
+def _is_query_route(path: str, profile: RelayProfile) -> bool:
+    return path.rstrip("/") == f"/v1/{profile.agent_id}/query"
+
+
 def _user_wait(event: Dict[str, Any], answers_confirmations: bool) -> Optional[str]:
     """The prompt or question id the sidecar now waits on the user for, if any."""
     etype = event.get("type")
@@ -294,11 +313,12 @@ def _dispatch_one(
                 request["args"] = args
                 if event.get("args_truncated"):
                     request["args_truncated"] = True
-            handler._emit(request)
             if getattr(handler, "background_mode", False) is True:
-                # Unattended run (a schedule): nobody can answer, so deny now
-                # rather than park the sidecar until it times out.
-                handler.resolve_relay_confirmation(False, confirm_id)
+                # Unattended run (a schedule): nobody can answer, so end it here
+                # rather than race the sidecar, which ends a session-less run
+                # on its own and then 404s a deny.
+                raise _NobodyToApprove(_unattended_approval_text(tool, profile))
+            handler._emit(request)
             return False
 
     if etype == "status":
@@ -306,6 +326,8 @@ def _dispatch_one(
             "type": "status",
             "message": str(event.get("message", "")),
         }
+        if event.get("level") == "warning":
+            status["status"] = "warning"
         # The phase is what makes it the live line ("Reading your request").
         for key in ("phase", "words", "chars", "queue"):
             if key in event:
@@ -435,6 +457,12 @@ def _dispatch_one(
         context = event.get("context")
         if isinstance(context, dict):
             # Contract >= 2.21: the composer's meter, as an in-process turn streams it.
+            hidden = getattr(handler, "relay_hidden_turns", 0)
+            if hidden:
+                context = {
+                    **context,
+                    "turns_hidden": context.get("turns_hidden", 0) + hidden,
+                }
             handler.relay_context = context
             handler._emit({"type": "context_usage", **context})
         elif isinstance(event.get("context_error"), str):
@@ -795,8 +823,13 @@ def relay_query(
                 # The user answered or the sidecar's wait ended. A last event
                 # needs no model, so the turn ends without waiting in line.
                 if event.get("type") not in ("final", "error"):
-                    handler.come_back_to_model()
-                    if handler.cancelled.is_set():
+                    retake = handler.come_back_to_model()
+                    if retake is not True:
+                        # ``False`` means the handler emitted the named fatal
+                        # retake error; ``None`` is an ordinary user Stop. Keep
+                        # those terminal paths distinct (#6019).
+                        if retake is False:
+                            terminated = True
                         break
             if _dispatch_one(
                 handler, event, profile, answers_confirmations, offers_always
@@ -816,6 +849,17 @@ def relay_query(
         resp = handler.active_relay_response
         if resp is not None:
             resp.close()
+    except _NobodyToApprove as exc:
+        crashed = True
+        crash_message = str(exc)
+        logger.info(
+            "%s relay: unattended run_id=%s stopped at a step needing approval",
+            profile.agent_id,
+            rid,
+        )
+        resp = handler.active_relay_response
+        if resp is not None:
+            resp.close()
     except SidecarHTTPError as exc:
         if handler.cancelled.is_set():
             logger.info(
@@ -827,11 +871,12 @@ def relay_query(
         else:
             crashed = True
             detail = (exc.detail or "").strip()
-            if exc.status_code == 404:
+            if exc.status_code == 404 and _is_query_route(exc.path, profile):
                 # Backstop for the pre-flight version gate (#2109 Design 3):
                 # a pre-2.4 binary that somehow passed pre-flight (a stale or
                 # missing manager.api_version) 404s here instead — same
-                # actionable message either way.
+                # actionable message either way. A 404 from any other route
+                # (a run that already ended) says nothing about the version.
                 crash_message = profile.version_upgrade_message
             elif detail:
                 # Surface the sidecar's own actionable detail (e.g. the

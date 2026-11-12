@@ -392,9 +392,9 @@ type ChatModel struct {
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
 	// panel implemented only in the root model is absent there — which is why
-	// /help did nothing at all on that path. Under the hub, root intercepts
-	// ToggleHelpMsg before it reaches here and this stays closed, so the two
-	// never both draw.
+	// /help did nothing at all on that path. Under the root model, root
+	// intercepts ToggleHelpMsg before it reaches here and this stays closed, so
+	// the two never both draw.
 	help components.HelpState
 
 	// palette is the "/" command palette's open/selected state. Its filter
@@ -611,9 +611,8 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, de
 	return m.applyFirstBootGate()
 }
 
-// NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
-// CanReturnToHub) for a real catalog agent, so agentID is the catalog id
-// rather than NewChatModel's default of the display name.
+// NewChatModelForCatalogAgent creates a standalone ChatModel for a real catalog
+// agent, so agentID is the catalog id rather than NewChatModel's display name.
 func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
@@ -1053,6 +1052,12 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case discordDeclinedMsg:
 		return m.handleDiscordDeclined(msg)
+
+	case connectorsListMsg:
+		return m.handleConnectorsList(msg)
+
+	case connectorsActivatedMsg:
+		return m.handleConnectorsActivated(msg)
 
 	case updateCheckedMsg:
 		return m.handleUpdateChecked(msg)
@@ -1879,6 +1884,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
+	if isSkillsCommand(query) {
+		return m.submitSkillsCommand(query)
+	}
+	if isConnectorsPersonalize(query) {
+		return m.startConnectorsPersonalize(query)
+	}
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {
 			// Same shape as setFullAccess's capability check (fullaccess.go): refuse
@@ -1961,6 +1972,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/gateway":
 		return m, func() tea.Msg { return OpenGatewayMsg{} }
+
+	case "/sessions":
+		return m, func() tea.Msg { return OpenSessionsMsg{} }
+
+	case "/sessions all":
+		return m, func() tea.Msg { return OpenSessionsMsg{AllKinds: true} }
 
 	case "/clear":
 		return m.clearConversation()
@@ -2054,6 +2071,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/slack":
 		return m.startSlackCheck()
+
+	case "/connectors":
+		return m.startConnectorsList()
 
 	case "/slack setup":
 		if m.slackSetup != nil {
@@ -3810,15 +3830,7 @@ func (m ChatModel) View() string {
 	// empty, which it never is here, and the step count already rides the hint
 	// under --dev. Passing it kept a second renderer for one number alive, one
 	// that would print it in user mode the day the hint did come back empty.
-	barState := components.StatusBarState{
-		AgentName:        m.agentIdentity(),
-		Connected:        m.connected,
-		Streaming:        m.streaming,
-		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
-		Preparing:        m.warming || m.startup.inFlight,
-	}
-	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
-	statusBar := components.RenderStatusBar(barState, m.width)
+	statusBar := m.renderStatusBar()
 
 	// The full access banner sits OUTSIDE the viewport, directly under the header,
 	// so it is in every frame and cannot be scrolled away. When full access is off
@@ -3995,4 +4007,17 @@ func (m ChatModel) coreVersionSuffix() string {
 // renderIdentityChip is agentIdentity styled as a header segment.
 func (m ChatModel) renderIdentityChip() string {
 	return lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentIdentity())
+}
+
+// renderStatusBar is the one-row bar at the foot of the chat screen.
+func (m ChatModel) renderStatusBar() string {
+	barState := components.StatusBarState{
+		AgentName:        m.agentIdentity(),
+		Connected:        m.connected,
+		Streaming:        m.streaming,
+		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
+		Preparing:        m.warming || m.startup.inFlight,
+	}
+	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
+	return components.RenderStatusBar(barState, m.width)
 }

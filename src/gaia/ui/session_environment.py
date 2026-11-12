@@ -47,6 +47,12 @@ def load(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     return db.get_session_environment(session_id)
 
 
+_NOTE_OPENINGS = (
+    "[This chat is working in the folder ",
+    "[This chat is working in these folders: ",
+)
+
+
 def with_folder_note(message: str, folders: List[str]) -> str:
     """*message* as sent to the chat's agent, led by a note naming *folders*."""
     # A granted folder only widens the scope; the model must also be told it.
@@ -63,6 +69,15 @@ def with_folder_note(message: str, folders: List[str]) -> str:
             'When the user says "this folder" or "here", they mean these.]'
         )
     return f"{note}\n\n{message}"
+
+
+def without_folder_note(message: str) -> str:
+    """*message* without the note :func:`with_folder_note` leads it with."""
+    if message.startswith(_NOTE_OPENINGS):
+        _note, sep, rest = message.partition("]\n\n")
+        if sep:
+            return rest
+    return message
 
 
 def apply_to_agent(agent: Any, env: Dict[str, Any]) -> bool:
@@ -256,11 +271,13 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
 
     added = {_norm(p) for p in env["folders"]}
     managed = _norm(str(_managed_documents_dir()))
-    doc_paths = {
-        _norm(d["filepath"])
+    # A library copy's file name carries an id prefix; the person knows the original.
+    doc_names = {
+        _norm(d["filepath"]): d.get("filename")
         for d in db.get_session_documents(session_id)
         if d.get("filepath")
     }
+    doc_paths = set(doc_names)
     cwd = _norm(os.getcwd())
     from_env = {_norm(str(p)) for p in _env_scope_entries()}
     entries: Dict[str, Dict[str, Any]] = {}
@@ -286,6 +303,7 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
             source = "document"
         entries[key] = {
             "path": str(Path(path)),
+            "name": doc_names.get(key) or None,
             "kind": "file" if Path(path).is_file() else "folder",
             "source": source,
             # An attached document is removed from the chat's documents, which
@@ -295,7 +313,12 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "session_id": session_id,
         "folders": sorted(
-            entries.values(), key=lambda e: (e["kind"] != "folder", e["path"].lower())
+            entries.values(),
+            key=lambda e: (
+                e["kind"] != "folder",
+                (e["name"] or Path(e["path"]).name).lower(),
+                e["path"].lower(),
+            ),
         ),
         "removed": list(env["withheld"]),
         "internet": not env["internet_off"],

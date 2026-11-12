@@ -93,8 +93,8 @@ describe('DocumentLibrary with no chat open', () => {
         mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
         render(<DocumentLibrary />);
 
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
         await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']));
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
@@ -133,8 +133,8 @@ describe('DocumentLibrary with no chat open', () => {
         mockedApi.attachDocument.mockResolvedValue(undefined);
         render(<DocumentLibrary />);
 
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
 
         await waitFor(() => expect(mockedApi.attachDocument).toHaveBeenCalledWith('sess-1', 'doc-ok-1'));
         expect(useChatStore.getState().draftDocumentIds).toEqual([]);
@@ -155,8 +155,8 @@ describe('DocumentLibrary says where documents go', () => {
     });
 
     const indexPath = () => {
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: '/tmp/good.pdf' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: '/tmp/good.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     };
 
     it('names the open chat in the attach button label, for screen readers too', async () => {
@@ -187,6 +187,20 @@ describe('DocumentLibrary says where documents go', () => {
         await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']));
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
         expect(screen.getByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
+    });
+
+    it('drops the "will be attached" line when that document is removed', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
+        mockedApi.deleteDocument.mockResolvedValue(undefined as never);
+        render(<DocumentLibrary />);
+        fireEvent.change(screen.getByRole('combobox', { name: 'Add documents to' }), { target: { value: 'next' } });
+        indexPath();
+        expect(await screen.findByRole('status')).toHaveTextContent('good.pdf will be attached to your next new chat.');
+
+        fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
+
+        await waitFor(() => expect(screen.queryByText(/will be attached to your next new chat/)).toBeNull());
+        expect(useChatStore.getState().draftDocumentIds).toEqual([]);
     });
 
     it('says so when indexing worked but attaching did not', async () => {
@@ -344,8 +358,8 @@ describe('DocumentLibrary path box', () => {
     const emptyList = { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 };
 
     function submitPath(path: string) {
-        fireEvent.change(screen.getByLabelText('File path to index'), { target: { value: path } });
-        fireEvent.click(screen.getByRole('button', { name: 'Index' }));
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: path } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
     }
 
     it('indexes a folder path and says how many files it added and skipped', async () => {
@@ -440,24 +454,8 @@ describe('DocumentLibrary path box', () => {
     });
 });
 
-describe('DocumentLibrary chunk counts', () => {
-    it('says "1 chunk", not "1 chunks"', async () => {
-        mockedApi.listDocuments.mockResolvedValue({
-            documents: [{ ...COMPLETE_DOC, chunk_count: 1 }],
-            total: 1,
-            total_size_bytes: 2048,
-            total_chunks: 1,
-        });
-        render(<DocumentLibrary />);
-
-        await screen.findByText('good.pdf');
-
-        expect(screen.getByText('1 chunk')).toBeTruthy();
-        expect(screen.getByText(/· 1 chunk$/)).toBeTruthy();
-        expect(screen.queryByText(/1 chunks/)).toBeNull();
-    });
-
-    it('keeps the plural for other counts', async () => {
+describe('DocumentLibrary words', () => {
+    it('shows sizes, not internal chunk counts', async () => {
         mockedApi.listDocuments.mockResolvedValue({
             documents: [COMPLETE_DOC],
             total: 1,
@@ -468,8 +466,8 @@ describe('DocumentLibrary chunk counts', () => {
 
         await screen.findByText('good.pdf');
 
-        expect(screen.getByText('5 chunks')).toBeTruthy();
-        expect(screen.getByText(/· 5 chunks$/)).toBeTruthy();
+        expect(screen.queryByText(/chunk/)).toBeNull();
+        expect(screen.getByText('Drop files here to add them')).toBeTruthy();
     });
 });
 

@@ -922,7 +922,7 @@ def test_the_exemption_is_dropped_when_the_skill_unloads():
 def test_only_the_policy_enforcing_tool_can_be_exempt():
     """A grant must not wave through a tool that never runs the policy gate."""
     host = _Gated("gh")
-    for tool in ("run_cli_command", "write_file", "edit_file"):
+    for tool in ("wait_for_condition", "write_file", "edit_file"):
         assert host._tool_requires_confirmation(tool, {"command": "gh issue list"})
 
 
@@ -2475,6 +2475,90 @@ def test_an_inline_env_assignment_is_named_as_one():
 
 
 # ---------------------------------------------------------------------------
+# github-triage's SKILL.md describes these tiers to the model
+# ---------------------------------------------------------------------------
+
+_TRIAGE_SKILL = (
+    Path(__file__).resolve().parents[2]
+    / "hub"
+    / "skills"
+    / "github-triage"
+    / "SKILL.md"
+)
+
+_REFUSED_LEAD = "**Refused — nothing can approve these.**"
+
+#: Each SKILL.md paragraph that lists gh commands, and the tier it promises.
+_TRIAGE_TIERS = {
+    "**Reads — run with no prompt.**": ALLOW,
+    "**Writes — the user approves each one.**": TIER_CONFIRM,
+    _REFUSED_LEAD: TIER_REFUSE,
+    "**Outside this skill's grant — approved one run at a time.**": TIER_CONFIRM_ONCE,
+}
+
+
+def _triage_paragraph(lead: str) -> str:
+    """The SKILL.md paragraph that opens with *lead*, up to the next blank line."""
+    text = _TRIAGE_SKILL.read_text(encoding="utf-8")
+    start = text.index(lead)
+    end = text.find("\n\n", start)
+    return text[start : end if end != -1 else len(text)]
+
+
+def _named_gh_commands(paragraph: str) -> list[str]:
+    """Every `gh ...` span in *paragraph*, `a|b` expanded, plus a sample operand."""
+    commands = []
+    for span in re.findall(r"`(gh [^`]+)`", paragraph):
+        words = span.split()
+        for last in words[-1].split("|"):
+            commands.append(" ".join([*words[:-1], last, "1"]))
+    return commands
+
+
+def _triage_tier(command: str) -> str:
+    """The tier github-triage's grant really gives *command*: allow, or a block's."""
+    host = _Shell()
+    host._granted_binaries = BinaryGrants()
+    host._granted_binaries.grant("gh", skill_name="github-triage")
+    error, _ = host._validate_shell_command(command)
+    if error is not None:
+        return error.get("tier")
+    # Past the text gate, a call the grant does not cover gets the normal prompt.
+    covered = host.skill_grant_covers_call("run_shell_command", {"command": command})
+    return ALLOW if covered else TIER_CONFIRM
+
+
+@pytest.mark.parametrize("lead", list(_TRIAGE_TIERS))
+def test_github_triage_lists_each_command_under_the_tier_gaia_gives_it(lead):
+    """The skill said `gh issue close` could be approved once, so the agent
+    offered the user an approval that was never coming. Every command a
+    paragraph names must get that paragraph's tier from the real gate."""
+    commands = _named_gh_commands(_triage_paragraph(lead))
+    assert commands, f"no gh commands found under {lead}"
+    tiers = {command: _triage_tier(command) for command in commands}
+    wrong = {c: t for c, t in tiers.items() if t != _TRIAGE_TIERS[lead]}
+    assert not wrong, f"{lead} names commands GAIA tiers differently: {wrong}"
+
+
+def test_github_triage_offers_no_approval_path_for_a_refused_command():
+    refused = _triage_paragraph(_REFUSED_LEAD)
+    for command in (
+        "gh issue close",
+        "gh pr merge",
+        "gh label delete",
+        "gh repo delete",
+    ):
+        assert f"`{command}`" in refused, command
+    skill = _TRIAGE_SKILL.read_text(encoding="utf-8")
+    assert "approve it once; anything that deletes is refused" not in skill
+    for sentence in re.split(r"(?<=[.!?])\s+", refused):
+        if "approv" in sentence.lower():
+            assert re.search(
+                r"\b(?:nothing|no|never|cannot)\b", sentence, re.I
+            ), sentence
+
+
+# ---------------------------------------------------------------------------
 # gh reads run with no skill loaded, so nothing a read can carry may write,
 # leak a credential, or reach another server
 # ---------------------------------------------------------------------------
@@ -2580,90 +2664,6 @@ def test_gaia_reading_its_own_automations_does_not_ask(command):
 )
 def test_gaia_changes_and_other_commands_still_ask(command):
     assert _needs_modal(_Gated(), command) is True
-
-
-# ---------------------------------------------------------------------------
-# github-triage's SKILL.md describes these tiers to the model
-# ---------------------------------------------------------------------------
-
-_TRIAGE_SKILL = (
-    Path(__file__).resolve().parents[2]
-    / "hub"
-    / "skills"
-    / "github-triage"
-    / "SKILL.md"
-)
-
-_REFUSED_LEAD = "**Refused — nothing can approve these.**"
-
-#: Each SKILL.md paragraph that lists gh commands, and the tier it promises.
-_TRIAGE_TIERS = {
-    "**Reads — run with no prompt.**": ALLOW,
-    "**Writes — the user approves each one.**": TIER_CONFIRM,
-    _REFUSED_LEAD: TIER_REFUSE,
-    "**Outside this skill's grant — approved one run at a time.**": TIER_CONFIRM_ONCE,
-}
-
-
-def _triage_paragraph(lead: str) -> str:
-    """The SKILL.md paragraph that opens with *lead*, up to the next blank line."""
-    text = _TRIAGE_SKILL.read_text(encoding="utf-8")
-    start = text.index(lead)
-    end = text.find("\n\n", start)
-    return text[start : end if end != -1 else len(text)]
-
-
-def _named_gh_commands(paragraph: str) -> list[str]:
-    """Every `gh ...` span in *paragraph*, `a|b` expanded, plus a sample operand."""
-    commands = []
-    for span in re.findall(r"`(gh [^`]+)`", paragraph):
-        words = span.split()
-        for last in words[-1].split("|"):
-            commands.append(" ".join([*words[:-1], last, "1"]))
-    return commands
-
-
-def _triage_tier(command: str) -> str:
-    """The tier github-triage's grant really gives *command*: allow, or a block's."""
-    host = _Shell()
-    host._granted_binaries = BinaryGrants()
-    host._granted_binaries.grant("gh", skill_name="github-triage")
-    error, _ = host._validate_shell_command(command)
-    if error is not None:
-        return error.get("tier")
-    # Past the text gate, a call the grant does not cover gets the normal prompt.
-    covered = host.skill_grant_covers_call("run_shell_command", {"command": command})
-    return ALLOW if covered else TIER_CONFIRM
-
-
-@pytest.mark.parametrize("lead", list(_TRIAGE_TIERS))
-def test_github_triage_lists_each_command_under_the_tier_gaia_gives_it(lead):
-    """The skill said `gh issue close` could be approved once, so the agent
-    offered the user an approval that was never coming. Every command a
-    paragraph names must get that paragraph's tier from the real gate."""
-    commands = _named_gh_commands(_triage_paragraph(lead))
-    assert commands, f"no gh commands found under {lead}"
-    tiers = {command: _triage_tier(command) for command in commands}
-    wrong = {c: t for c, t in tiers.items() if t != _TRIAGE_TIERS[lead]}
-    assert not wrong, f"{lead} names commands GAIA tiers differently: {wrong}"
-
-
-def test_github_triage_offers_no_approval_path_for_a_refused_command():
-    refused = _triage_paragraph(_REFUSED_LEAD)
-    for command in (
-        "gh issue close",
-        "gh pr merge",
-        "gh label delete",
-        "gh repo delete",
-    ):
-        assert f"`{command}`" in refused, command
-    skill = _TRIAGE_SKILL.read_text(encoding="utf-8")
-    assert "approve it once; anything that deletes is refused" not in skill
-    for sentence in re.split(r"(?<=[.!?])\s+", refused):
-        if "approv" in sentence.lower():
-            assert re.search(
-                r"\b(?:nothing|no|never|cannot)\b", sentence, re.I
-            ), sentence
 
 
 def test_a_gh_read_with_no_skill_is_handed_argv_not_a_shell_string():

@@ -964,6 +964,40 @@ def test_an_unexpected_error_is_named_in_the_report_but_not_on_screen(monkeypatc
     assert "Setup failed: OSError: marker file is read-only" in every
 
 
+def test_a_report_asked_for_as_the_failure_record_starts_waits_for_it(monkeypatch):
+    # report() ran between the record thread being published and started, and
+    # joining an unstarted thread raises.
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+
+    def check(*_a, **_k):
+        raise OSError("marker file is read-only")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    errors = []
+    real_thread = threading.Thread
+
+    def ask_for_report():
+        try:
+            runner.report()
+        except RuntimeError as e:
+            errors.append(e)
+
+    class ReportFirst(real_thread):
+        def start(self):
+            if getattr(self, "_target", None) == runner._record_failure:
+                asker = real_thread(target=ask_for_report)
+                asker.start()
+                asker.join(timeout=0.5)  # it gets in first, if nothing stops it
+            super().start()
+
+    monkeypatch.setattr(sr.threading, "Thread", ReportFirst)
+    runner.start(False, chat_model_for=_local_chat)
+    _wait_done(runner)
+    runner.report()
+    assert errors == []
+
+
 def test_only_one_run_at_a_time_and_cancel(monkeypatch):
     proc = _FakeProc(_BlockingStdout())
     _popen(monkeypatch, proc)
@@ -1169,6 +1203,20 @@ def test_check_route_also_returns_the_cloud_steps(client, monkeypatch):
     assert body["steps"] == sr.step_labels(False)
     assert body["cloud_steps"] == sr.step_labels(True)
     assert body["cloud_steps"] != body["steps"]
+
+
+@pytest.mark.parametrize("seen_ready", [True, False])
+def test_check_route_says_whether_setup_was_ever_seen_ready(
+    client, monkeypatch, seen_ready
+):
+    """A set-up PC whose model server is down must not read as a first run."""
+    test_client, _ = client
+    down = {"ready": False, "stage": "server", "reasons": ["not reachable"]}
+    monkeypatch.setattr(setup_router, "check", lambda **_k: dict(down))
+    monkeypatch.setattr(setup_router, "is_initialized", lambda: seen_ready)
+    body = test_client.get("/api/setup/check").json()
+    assert body["stage"] == "server"
+    assert body["initialized"] is seen_ready
 
 
 def test_check_route_needs_the_ui_header(client, monkeypatch):

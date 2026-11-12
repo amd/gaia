@@ -176,14 +176,15 @@ jobs:
           npm run build
           test -f dist/index.html
 
-      # The same packages `pip install amd-gaia[ui]` gives an Agent UI user today.
+      # Every extra a listed command needs (FREEZE_EXTRAS in freeze.py): the
+      # frozen app has no pip to add one later.
       - name: Install the core + PyInstaller (frozen-build env)
         if: steps.want.outputs.build == 'true'
         shell: bash
         run: |
           set -euo pipefail
           uv venv .venv-freeze --python 3.12
-          uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
+          uv pip install --python .venv-freeze -e ".[ui,mcp,talk,notify]" pyinstaller
 
       - name: Freeze
         if: steps.want.outputs.build == 'true'
@@ -313,19 +314,26 @@ jobs:
             *) echo "run=false" >> "$GITHUB_OUTPUT"; echo "${KEY} was not built" ;;
           esac
 
-      - name: Prepare the Fedora container
+      - name: Let the Fedora container unpack the checkout
         if: steps.want.outputs.run == 'true' && matrix.container
-        # What a Fedora desktop has and lemond or its llama.cpp backend link.
-        run: >-
-          dnf install -y --setopt=install_weak_deps=False tar gzip findutils which procps-ng
-          libatomic openssl-libs libdrm libzstd zlib-ng-compat libstdc++ libgomp vulkan-loader
+        run: dnf install -y --setopt=install_weak_deps=False tar gzip
 
       - uses: actions/checkout@v7
         if: steps.want.outputs.run == 'true'
         with:
           ref: ${{ inputs.ref || inputs.tag || github.ref }}
-          sparse-checkout: installer/core/real_engine_check.sh
+          sparse-checkout: |
+            installer/core/real_engine_check.sh
+            installer/core/fedora-engine-packages.txt
           sparse-checkout-cone-mode: false
+
+      - name: Prepare the Fedora container
+        if: steps.want.outputs.run == 'true' && matrix.container
+        shell: bash
+        run: |
+          # shellcheck disable=SC2046  # one package per word
+          dnf install -y --setopt=install_weak_deps=False \
+            $(grep -v '^#' installer/core/fedora-engine-packages.txt)
 
       - uses: actions/download-artifact@v8
         if: steps.want.outputs.run == 'true'

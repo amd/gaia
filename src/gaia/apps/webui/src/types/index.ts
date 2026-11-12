@@ -245,6 +245,9 @@ export interface UnavailableConnectorRow {
     id: string;
     display_name: string;
     error: 'unavailable';
+    /** Set when the shared activations file can't be read; `path` names it. */
+    reason?: 'activations_unreadable';
+    path?: string;
 }
 
 /** One entry of GET /api/connectors. */
@@ -526,6 +529,8 @@ export interface ModelStatus {
     found: boolean;
     downloaded: boolean;
     loaded: boolean;
+    /** The model list was read, so `found` false means the ID isn't in it. */
+    checked: boolean;
 }
 
 export interface Settings {
@@ -537,7 +542,7 @@ export interface Settings {
     dynamic_tools: boolean;
     /** True when GAIA_DYNAMIC_TOOLS locks the value — the toggle reflects the effective value and disables. */
     dynamic_tools_locked: boolean;
-    /** Background agent behaviour; a legacy stored "autonomous" is reported as "goal_driven". */
+    /** Background agent behaviour; a legacy stored "autonomous" is migrated to "goal_driven". */
     agent_mode: 'manual' | 'goal_driven';
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
@@ -849,6 +854,8 @@ export interface AgentStep {
     result?: string;
     /** Whether this step completed successfully. */
     success?: boolean;
+    /** The user said no to this call, so it never ran (for type='tool'). */
+    declined?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */
@@ -909,9 +916,11 @@ export interface ProviderInfo {
     /**
      * `waiting_for_os_permission` while the OS holds the saved-key read for the
      * user's permission (a macOS keychain dialog): `key_source` is then unknown,
-     * not absent, and `key_message` says what to do.
+     * not absent, and `key_message` says what to do. `store_locked` once the
+     * user closed the store's unlock prompt: GAIA holds off asking for five
+     * minutes, or until Try again.
      */
-    key_state?: 'read' | 'waiting_for_os_permission';
+    key_state?: 'read' | 'waiting_for_os_permission' | 'store_locked';
     key_message?: string | null;
     models_discovered?: boolean;
     /** The provider's model list is down, so GAIA offers models it already knows. */
@@ -942,6 +951,8 @@ export interface ActiveModel {
     display_name?: string | null;
     label: string | null;
     remote: boolean;
+    /** Who answers a cloud model, including one GAIA has no provider tab for; null when local. */
+    provider_name?: string | null;
     is_default: boolean;
     /** Local model on disk; null for a cloud model or while the server starts. */
     downloaded?: boolean | null;
@@ -1230,4 +1241,54 @@ export interface ResourceUsage {
     networks_error?: string | null;
     /** Why NPUs can't be read, where they're read apart from GPUs (Linux). */
     npus_error?: string | null;
+}
+
+/** A library the Skills panel offers as a one-click add. */
+export interface FeaturedLibrary {
+    id: string;
+    name: string;
+    url: string;
+    description: string;
+}
+
+/** One permission a skill from a link declares, e.g. `network:read` and what it lets the skill do. */
+export interface LinkPermission {
+    grant: string;
+    text: string;
+}
+
+/** One skill found behind a pasted link (POST /api/skills/link/preview). */
+export interface LinkSkill {
+    name: string;
+    description: string;
+    /** Folder of the skill inside the library. */
+    path: string;
+    /** Ships tools.py or scripts/ — code that would run on this PC. */
+    has_code: boolean;
+    /** What the skill declares it may do: the raw grant and a plain-language sentence. */
+    permissions: LinkPermission[];
+    /** The permissions could not be read, so an empty list does not mean none. */
+    permissions_unreadable: boolean;
+    /** Security-audit verdict: ALLOW, REVIEW, or BLOCK. */
+    verdict: string;
+    findings: string[];
+    installed: boolean;
+    /** Installed from this same link before; adding it again updates it to the latest version. */
+    update: boolean;
+    /** Why this skill can't be added. */
+    error: string | null;
+}
+
+export interface LinkPreview {
+    link: string;
+    source: string;
+    skills: LinkSkill[];
+    /** What was audited; sent back on add so exactly this version installs. */
+    pin: string;
+    warning: string;
+}
+
+export interface LinkAddResult {
+    added: Array<{ name: string; updated: boolean; verdict: string; has_code: boolean; findings: string[] }>;
+    failed: Record<string, string>;
 }

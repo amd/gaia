@@ -211,12 +211,14 @@ const ROUTES: Record<string, unknown> = {
     'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
+    'GET /goals/health': { error: null },
     'GET /documents': DOCUMENTS,
     // Installed, so no screen shows the "GAIA agent isn't installed" notice unless its test asks.
     'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 },
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
+    'GET /skills/featured': { libraries: [{ id: 'pstack', name: 'pstack', url: 'https://github.com/michael-denyer/pstack-claude', description: 'Engineering workflows: design, review, CI fixes, TDD, PR hygiene (MIT)' }] },
     'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
     'GET /speech/model': { downloaded: true, size_gb: 0.3 },
@@ -499,13 +501,17 @@ export const BACKEND_RUNNING = {
     nextAttemptAt: null, lastExit: null, lastError: null, apiBase: null,
 };
 
-/** The Electron bridges the browser lacks, so desktop-only settings render. `host` is the tray-host check's answer. */
+/**
+ * The Electron bridges the browser lacks, so desktop-only settings render. `host` is the tray-host check's answer.
+ * `statusReadError`: `getStatus` rejects with it, as when the updater's IPC handler is missing.
+ */
 export async function withDesktopBridges(
     page: Page,
     update: Record<string, unknown> = {},
     host: { available: boolean; reason: string | null } = { available: true, reason: null },
+    statusReadError?: string,
 ): Promise<void> {
-    await page.addInitScript(({ state, host, running }) => {
+    await page.addInitScript(({ state, host, running, readError }) => {
         const tray = { minimizeToTray: true, startOnLogin: false, startMinimized: false };
         const status = {
             status: 'idle', version: null, progress: 0, releaseNotes: null, error: null, currentVersion: '0.25.4',
@@ -521,11 +527,11 @@ export async function withDesktopBridges(
                 backend: { getState: async () => running, restart: async () => running, onState: () => () => {} },
             }),
             gaiaUpdater: {
-                getStatus: same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
+                getStatus: readError ? async () => { throw new Error(readError); } : same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
                 resumeUpdates: same, setAutoUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
             },
         });
-    }, { state: update, host, running: BACKEND_RUNNING });
+    }, { state: update, host, running: BACKEND_RUNNING, readError: statusReadError ?? null });
 }
 
 /** A desktop app whose backend crashed: `restarting` or, once restarts ran out, `stopped`. */
@@ -621,10 +627,12 @@ export interface MemoryState {
     empty?: boolean;
     /** Every read fails, as when the memory store is locked. */
     failed?: boolean;
+    /** More memories than the first page holds. */
+    more?: boolean;
 }
 
 /** The Memory dashboard's endpoints: a few memories, goals and tools, or empty, off or failing. */
-export async function withMemory(page: Page, { enabled = true, empty = false, failed = false }: MemoryState = {}): Promise<void> {
+export async function withMemory(page: Page, { enabled = true, empty = false, failed = false, more = false }: MemoryState = {}): Promise<void> {
     const items = empty ? [] : MEMORY_ITEMS;
     const answers: Record<string, unknown> = {
         'GET /memory/settings': { memory_enabled: enabled, mcp_memory_enabled: false, system_discovery_consent: false },
@@ -646,7 +654,7 @@ export async function withMemory(page: Page, { enabled = true, empty = false, fa
             { date: '2026-10-15', conversations: 1, tool_calls: 5, knowledge_added: 2, errors: 1 },
             { date: '2026-10-16', conversations: 3, tool_calls: 0, knowledge_added: 2, errors: 1 },
         ],
-        'GET /memory/knowledge': { items, total: items.length, offset: 0, limit: 15 },
+        'GET /memory/knowledge': { items, total: items.length + (more ? 318 : 0), offset: 0, limit: 15 },
         'GET /memory/entities': empty ? [] : [{ entity: 'place:calgary', count: 1, last_updated: iso(60) }],
         'GET /memory/tools': empty ? [] : [
             { tool_name: 'run_shell', total_calls: 6, success_count: 4, failure_count: 2, denied_count: 1, success_rate: 0.67, avg_duration_ms: 1500, last_used: iso(20), last_error: 'Command timed out after 30 s' },

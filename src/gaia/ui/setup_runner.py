@@ -1433,6 +1433,9 @@ class SetupRunner:
                 component, state = event.get("component"), event.get("state")
                 if self._run is not None and component and state:
                     self._run.components[component] = state
+                    # The last download figure belongs to the part before this one.
+                    if state == "active":
+                        self._run.percent = self._run.size = None
                     failure = event.get("kind") if state == "failed" else None
                     if failure:
                         self._run.component_kinds[component] = failure
@@ -1625,9 +1628,10 @@ class SetupRunner:
             recording = threading.Thread(
                 target=self._record_failure, args=(run, cause), daemon=True
             )
+            # Started under the lock, so report() never joins an unstarted thread.
             with self._lock:
                 self._recording = recording
-            recording.start()
+                recording.start()
 
     def _record_failure(self, run: SetupRun, cause: Optional[BaseException]) -> None:
         record_id = _record_setup_failure(run, cause)

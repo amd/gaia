@@ -18,6 +18,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_CONTEXT_SIZE,
     DEFAULT_MODEL_NAME,
     PROBE_TIMEOUT,
+    ContextReloadUnverifiedError,
     InsufficientMemoryError,
     LemonadeClient,
     LemonadeClientError,
@@ -325,6 +326,14 @@ class LemonadeManager:
     # /models just to re-validate context size — even for "cool" or "no" replies.
     _last_recheck_time: float = 0.0
     _RECHECK_INTERVAL: float = 30.0  # seconds between re-checks
+
+    # (model id, requested ctx) -> (reloads the server answered with a smaller
+    # window, the window it last reported, when). Bounds a reload that never takes.
+    _unverified_reloads: Dict[Tuple[str, int], Tuple[int, int, float]] = {}
+    _MAX_UNVERIFIED_RELOADS = 2
+    # After the bound, one more reload is allowed per this many seconds, so
+    # freeing memory gets the user unstuck without restarting GAIA.
+    _UNVERIFIED_RELOAD_RETRY_AFTER: float = 60.0
 
     # Device tiers (``amd_npu``/``amd_dgpu``/``cpu``/…) already validated OK on
     # this host. Hardware is static per process, so once a tier passes we never
@@ -975,7 +984,12 @@ class LemonadeManager:
                         # usable; propagate like the first-init path below.
                         raise
                     except Exception as e:
+                        # Nothing was verified: report not-ready, and re-initialize next call.
+                        cls._initialized = False
                         cls._log.warning(f"Failed to re-check Lemonade status: {e}")
+                        if not quiet:
+                            cls.print_server_error(min_context_size)
+                        return False
                     return True
 
             cls._log.debug(f"Initializing Lemonade (min context: {min_context_size})")
@@ -1057,6 +1071,7 @@ class LemonadeManager:
                     if client._replay_cloud_key(chat_model):
                         # After the key replay: without a key it can only fail.
                         cls.learn_tool_calling(client, chat_model, key_replayed=True)
+                        cls.learn_reasoning(client, chat_model, key_replayed=True)
                     cls._ready_for_cloud = True
                     cls._remember_server(client)
                     cls._log.debug(
@@ -1376,6 +1391,77 @@ class LemonadeManager:
             )
 
     @classmethod
+    def learn_reasoning(
+        cls, client: "LemonadeClient", model: str, key_replayed: bool = False
+    ) -> None:
+        """Probe once whether a cloud model reasons when sent ``reasoning_effort``.
+
+        Runs only when ``cloud_reasoning_effort`` is not ``off``. Until a probe
+        says yes the model is sent no effort and runs in its provider's default
+        mode. A failed or inconclusive probe is logged and not repeated for
+        ``PROBE_RETRY_AFTER_S``.
+        """
+        from gaia.config import GaiaConfig
+        from gaia.llm.lemonade_client import (
+            PROBE_RETRY_AFTER_S,
+            CloudProbeStopped,
+            cloud_model_info,
+            learned_reasoning,
+            probe_cloud_reasoning,
+            reasoning_probe_recently_failed,
+            record_reasoning_probe_failure,
+        )
+
+        if cloud_model_info(model) is None or learned_reasoning(model) is not None:
+            return
+        effort = GaiaConfig.load().cloud_reasoning_effort
+        if effort == "off":
+            return
+        retry_in = f"{PROBE_RETRY_AFTER_S // 60} minutes"
+        if reasoning_probe_recently_failed(model):
+            if ("reasoning", model) not in cls._probe_skip_reported:
+                cls._probe_skip_reported.add(("reasoning", model))
+                cls._log.warning(
+                    "The reasoning probe for %s failed within the last %s; it "
+                    "runs without reasoning_effort until the next try. Remove it "
+                    "from reasoning_probe_failures in ~/.gaia/gateway.json to "
+                    "probe it now.",
+                    model,
+                    retry_in,
+                )
+            return
+        if not key_replayed and not client._replay_cloud_key(model):
+            cls._log.warning(
+                "Skipped the reasoning probe for %s: its cloud provider has no "
+                "usable key on this server yet.",
+                model,
+            )
+            return
+        try:
+            supported = probe_cloud_reasoning(client, model, effort)
+        except CloudProbeStopped as e:
+            cls._log.info("%s; it is probed again at the next start.", e)
+            return
+        except LemonadeClientError as e:
+            record_reasoning_probe_failure(model)
+            cls._log.warning(
+                "Could not probe reasoning for %s (%s); it runs without "
+                "reasoning_effort, and the probe is retried in %s.",
+                model,
+                e,
+                retry_in,
+            )
+            return
+        if supported is None:
+            record_reasoning_probe_failure(model)
+            cls._log.warning(
+                "The reasoning probe for %s was inconclusive; it runs without "
+                "reasoning_effort, and the probe is retried in %s.",
+                model,
+                retry_in,
+            )
+
+    @classmethod
     def _autostart(
         cls,
         client: "LemonadeClient",
@@ -1637,6 +1723,26 @@ class LemonadeManager:
                 requested_ctx,
             )
 
+        reload_key = (model_id, requested_ctx)
+        attempts, last_reported, last_time = cls._unverified_reloads.get(
+            reload_key, (0, 0, 0.0)
+        )
+        if attempts >= cls._MAX_UNVERIFIED_RELOADS:
+            waited = time.monotonic() - last_time
+            if waited >= cls._UNVERIFIED_RELOAD_RETRY_AFTER:
+                attempts = cls._MAX_UNVERIFIED_RELOADS - 1
+        if attempts >= cls._MAX_UNVERIFIED_RELOADS:
+            raise ContextReloadUnverifiedError(
+                cls._unverified_reload_message(
+                    client.base_url,
+                    model_id,
+                    requested_ctx,
+                    last_reported,
+                    min_context_size,
+                    attempts,
+                )
+            )
+
         cls._log.info(
             f"Auto-reloading '{model_id}' with ctx_size={requested_ctx} "
             f"(was {cls._context_size})"
@@ -1682,8 +1788,10 @@ class LemonadeManager:
             if new_ceiling:
                 cls._context_ceiling = new_ceiling
                 cls._context_ceiling_model = model_id
+            cls._context_size = effective_ctx
             success = effective_ctx >= min_context_size
             if success:
+                cls._unverified_reloads.pop(reload_key, None)
                 cls._log.info(
                     f"Model reloaded successfully with ctx_size={effective_ctx}"
                 )
@@ -1705,25 +1813,27 @@ class LemonadeManager:
                         f"trained context of {new_ceiling})."
                     )
             else:
-                # No known ceiling explains the shortfall — the server did
-                # not report the window it loaded, not a real per-model cap. Unlike the known-ceiling branch above,
-                # ``_context_ceiling`` stays unset here, so nothing would
-                # stop `ensure_ready` retrying this reload every recheck
-                # interval forever. Preserve the pre-#2992 behaviour: assume
-                # success and cache ``min_context_size`` to break the loop.
-                cls._log.warning(
-                    "ctx_size after reload: reported=%d (need %d). "
-                    "Assuming reload succeeded to prevent reload loop.",
+                # No ceiling explains the shortfall, so nothing else stops the
+                # recheck reloading again; count it and stop at the bound.
+                attempts += 1
+                cls._unverified_reloads[reload_key] = (
+                    attempts,
+                    reported_ctx,
+                    time.monotonic(),
+                )
+                message = cls._unverified_reload_message(
+                    client.base_url,
+                    model_id,
+                    requested_ctx,
                     reported_ctx,
                     min_context_size,
+                    attempts,
                 )
-                effective_ctx = min_context_size
-            # Always update the cached context size to the value determined
-            # above (honest when a real ceiling was found; the legacy
-            # loop-breaking assumption otherwise).
-            cls._context_size = effective_ctx
+                if attempts >= cls._MAX_UNVERIFIED_RELOADS:
+                    raise ContextReloadUnverifiedError(message)
+                cls._log.warning(message)
             return success
-        except LoadedModelMissingError:
+        except (LoadedModelMissingError, ContextReloadUnverifiedError):
             raise
         except Exception as e:
             cls._log.warning(f"Auto-reload failed: {e}")
@@ -1731,6 +1841,24 @@ class LemonadeManager:
         finally:
             # Re-acquire before returning to the `with cls._lock:` block.
             lock.acquire()
+
+    @staticmethod
+    def _unverified_reload_message(
+        base_url: str,
+        model_id: str,
+        requested_ctx: int,
+        reported_ctx: int,
+        min_context_size: int,
+        attempts: int,
+    ) -> str:
+        return (
+            f"Lemonade at {base_url} was asked to load {model_id} with "
+            f"ctx_size={requested_ctx}, but reports a {reported_ctx}-token "
+            f"window after {attempts} reload(s); GAIA needs {min_context_size}. "
+            "Free memory by closing other models or apps, or lower the context "
+            "size in Settings > Model; GAIA tries the reload again after about "
+            f"a minute. {lemonade_log_hint(base_url)}"
+        )
 
     @classmethod
     def is_initialized(cls) -> bool:
@@ -1781,6 +1909,7 @@ class LemonadeManager:
             cls._context_ceiling = None
             cls._context_ceiling_model = None
             cls._last_recheck_time = 0.0
+            cls._unverified_reloads = {}
             cls._validated_min_devices = set()
             # Signal before dropping it: waiters hold their own reference, and
             # the preload that would have set it is gone.

@@ -136,7 +136,9 @@ def _arg_strings(value: Any) -> Iterable[str]:
 
 #: Arguments that hold code a tool runs: its literals are not findings.
 _CODE_ARGS = ("code", "script", "command", "cmd")
-_CODE_NUMBER = re.compile(r"(?<![\w.])\d+(?:\.\d+)?(?![\w]|\.\d)")
+_CODE_NUMBER = re.compile(
+    r"(?<![\w.])(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?![\w]|\.\d)"
+)
 _OUTPUT_NUMBER = re.compile(
     r"(?<![\w.])\d{1,3}(?:,\d{3})+(?:\.\d+)?|(?<![\w.,])\d+(?:\.\d+)?"
 )
@@ -165,7 +167,10 @@ def evidence_text(record: Dict[str, Any], code_literals: bool = False) -> str:
         for key in _CODE_ARGS:
             code = args.get(key) if isinstance(args, dict) else None
             if isinstance(code, str):
-                literals.update(float(m) for m in _CODE_NUMBER.findall(code))
+                for match in _CODE_NUMBER.findall(code):
+                    # ``5,000`` is 5000 in a string, and 5 and 0 in a tuple.
+                    literals.add(float(match.replace(",", "")))
+                    literals.update(float(part) for part in match.split(","))
         literals -= {0.0, 1.0}
         if literals:
             text = _OUTPUT_NUMBER.sub(
@@ -298,6 +303,7 @@ def look_findings(
     records: Sequence[Dict[str, Any]],
     locate: Optional[Callable[[str], Optional[str]]] = None,
     history: str = "",
+    plan_only: bool = False,
 ) -> List[Finding]:
     """The request's files and symbols nothing read, and unbacked "not found"s.
 
@@ -315,7 +321,8 @@ def look_findings(
     Once the turn has read one of the request's targets, the others are
     candidates it chose to leave: they count only when the answer says it read
     them or says they don't exist. An answer that says it read a target counts
-    whether or not the file is on disk.
+    whether or not the file is on disk. The same holds for every target when
+    the user asked for a plan only (*plan_only*): it names files still to read.
     """
     targets = named_targets(query)
     if not targets:
@@ -329,7 +336,7 @@ def look_findings(
     found: List[str] = []
     where_is = {t: locate(t) if locate else None for t in targets if _is_file_name(t)}
     about_project = any(where_is.values()) or any(_ran(r) for r in records)
-    engaged = any(_read_it(t, records) for t in targets)
+    engaged = plan_only or any(_read_it(t, records) for t in targets)
     for target in targets:
         if _read_it(target, records) or _slashed(target) in earlier:
             continue
@@ -977,6 +984,7 @@ def ungrounded(
     *,
     history: str = "",
     locate: Optional[Callable[[str], Optional[str]]] = None,
+    plan_only: bool = False,
 ) -> List[Finding]:
     """Every gap between *answer* and this turn's tool record, look first.
 
@@ -984,7 +992,7 @@ def ungrounded(
     not look, or that its figures are unverified, has nothing left to correct
     about looking or figures — only a false report of work done still counts.
     """
-    findings = look_findings(answer, query, records, locate, history)
+    findings = look_findings(answer, query, records, locate, history, plan_only)
     if admits_unverified(answer):
         findings = [f for f in findings if f.note == _ABSENT_NOTE]
     else:

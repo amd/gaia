@@ -3558,11 +3558,12 @@ class InitCommand:
                     "   [bold]Failed models may be corrupted. To fix:[/bold]"
                 )
                 self.console.print(
-                    "   [dim]Option 1 - Delete all models and re-download:[/dim]"
+                    "   [dim]Option 1 - Delete this profile's models and "
+                    "re-download:[/dim]"
                 )
-                self.console.print("     [cyan]gaia uninstall --models --yes[/cyan]")
                 self.console.print(
-                    f"     [cyan]gaia init --profile {self.profile} --yes[/cyan]"
+                    f"     [cyan]gaia init --profile {self.profile} "
+                    "--force-models --yes[/cyan]"
                 )
                 self.console.print()
                 self.console.print(
@@ -4073,7 +4074,7 @@ class InitCommand:
                 )
             elif self.profile == "vlm":
                 self.console.print(
-                    "    [cyan]gaia cache status[/cyan]      Verify VLM model is available"
+                    "    [cyan]gaia download --list --agent vlm[/cyan]  Check the vision model is downloaded"
                 )
                 self.console.print(
                     "    [dim]Vision model ready! Use with the driver logs processor or VLM SDK:[/dim]"
@@ -4147,7 +4148,7 @@ class InitCommand:
                 )
             elif self.profile == "vlm":
                 self._print(
-                    "    gaia cache status      # Verify VLM model is available"
+                    "    gaia download --list --agent vlm  # Check the vision model is downloaded"
                 )
                 self._print("")
                 self._print(

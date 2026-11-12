@@ -32,6 +32,7 @@ from gaia.agents.tools._email.outgoing import (
     Recipients,
     SourceMessage,
 )
+from gaia.agents.tools._email.scopes import MICROSOFT_CONNECTOR_ID
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,11 @@ GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 # scanning.
 _LIST_SELECT = (
     "id,conversationId,subject,from,toRecipients,ccRecipients,"
-    "receivedDateTime,isRead,isDraft,flag,categories,bodyPreview"
+    "receivedDateTime,isRead,isDraft,flag,categories,bodyPreview,hasAttachments"
 )
+# Attachment metadata rides on the same request. The inner $select is what
+# keeps `contentBytes` (the file itself) off the wire.
+_ATTACHMENT_EXPAND = "attachments($select=name,contentType,size,isInline)"
 # Graph only needs the header collection when reading a full conversation;
 # keeping it off list/search calls avoids asking those endpoints for data the
 # caller does not use.
@@ -113,6 +117,19 @@ def _address_list(entities: Optional[Iterable[Dict[str, Any]]]) -> str:
     return ", ".join(p for p in (_address(e) for e in (entities or [])) if p)
 
 
+def _attachments(msg: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Name, type and size of each real attachment; inline images excluded."""
+    return [
+        {
+            "name": att.get("name") or "",
+            "mime_type": (att.get("contentType") or "").lower(),
+            "size": int(att.get("size") or 0),
+        }
+        for att in msg.get("attachments") or []
+        if not att.get("isInline")
+    ]
+
+
 def message_summary(
     msg: Dict[str, Any], *, include_body: bool = False
 ) -> Dict[str, Any]:
@@ -127,6 +144,7 @@ def message_summary(
         for header in msg.get("internetMessageHeaders") or []
         if header.get("name")
     }
+    attachments = _attachments(msg)
     summary: Dict[str, Any] = {
         "id": msg.get("id"),
         "thread_id": msg.get("conversationId") or msg.get("id"),
@@ -139,6 +157,9 @@ def message_summary(
         "flagged": flag in ("flagged", "complete"),
         "categories": list(msg.get("categories") or []),
         "preview": (msg.get("bodyPreview") or "").strip(),
+        # Graph's hasAttachments already ignores inline images.
+        "has_attachments": bool(attachments) or bool(msg.get("hasAttachments")),
+        "attachments": attachments,
         # Provider-neutral metadata consumed by the waiting-on-you detector.
         "auto_submitted": headers.get("auto-submitted", ""),
         "x_autoreply": headers.get("x-autoreply", ""),
@@ -231,17 +252,20 @@ class OutlookReadBackend:
         if response.status_code == 401:
             raise MailboxAuthError(
                 "Microsoft Graph rejected the access token (401). The Outlook "
-                "connection has expired or been revoked. Reconnect it with "
-                "`gaia connectors` (or Settings → Connectors in the Agent UI), "
-                f"then retry. (request: {where})"
+                "connection has expired or been revoked and needs reconnecting. "
+                f"(request: {where})",
+                connect=(MICROSOFT_CONNECTOR_ID,),
+                reconnect=(MICROSOFT_CONNECTOR_ID,),
             )
         if response.status_code == 403:
             raise MailboxAuthError(
                 "Microsoft Graph refused the request (403 — insufficient "
                 "permissions). The connected account has not granted "
-                "Mail.ReadWrite to this agent. Reconnect Microsoft with "
-                "`gaia connectors` and approve mail access. "
-                f"(request: {where}; code: {code or 'forbidden'})"
+                "Mail.ReadWrite to this agent, so it needs reconnecting with "
+                "mail access approved. "
+                f"(request: {where}; code: {code or 'forbidden'})",
+                connect=(MICROSOFT_CONNECTOR_ID,),
+                reconnect=(MICROSOFT_CONNECTOR_ID,),
             )
         if response.status_code == 404:
             raise MailboxError(
@@ -260,7 +284,7 @@ class OutlookReadBackend:
             f"Microsoft Graph request failed: {where} returned "
             f"{response.status_code}" + (f" ({code})" if code else "") + ". "
             "Retry; if it persists, check Microsoft 365 service status and "
-            "reconnect with `gaia connectors`."
+            "reconnect Microsoft under Settings > Connectors."
         )
 
     def _get(self, path: str, *, params: Optional[dict] = None) -> Any:
@@ -289,8 +313,9 @@ class OutlookReadBackend:
             raise MailboxError(
                 "Microsoft Graph returned no address for the connected account "
                 "(both `mail` and `userPrincipalName` were empty). The "
-                "connection is in an unusable state — reconnect Microsoft with "
-                "`gaia connectors`."
+                "connection is in an unusable state and needs reconnecting.",
+                connect=(MICROSOFT_CONNECTOR_ID,),
+                reconnect=(MICROSOFT_CONNECTOR_ID,),
             )
         return address
 
@@ -306,6 +331,7 @@ class OutlookReadBackend:
         params: Dict[str, Any] = {
             "$top": self._clamp(limit),
             "$select": _LIST_SELECT,
+            "$expand": _ATTACHMENT_EXPAND,
             "$orderby": "receivedDateTime desc",
         }
         if unread_only:
@@ -331,6 +357,7 @@ class OutlookReadBackend:
         params = {
             "$top": self._clamp(limit),
             "$select": _LIST_SELECT,
+            "$expand": _ATTACHMENT_EXPAND,
             "$search": f'"{query}"',
         }
         data = self._get("/me/messages", params=params)
@@ -348,7 +375,9 @@ class OutlookReadBackend:
             )
         # Quoted whole: a base64 id's `/` is data, never a path separator.
         path = f"/me/messages/{quote(message_id, safe='')}"
-        data = self._get(path, params={"$select": _FULL_SELECT})
+        data = self._get(
+            path, params={"$select": _FULL_SELECT, "$expand": _ATTACHMENT_EXPAND}
+        )
         return message_summary(data, include_body=True)
 
     def list_thread_ids(self, folder: str, *, limit: int = 50) -> Dict[str, Any]:
@@ -402,6 +431,7 @@ class OutlookReadBackend:
             params={
                 "$filter": f"conversationId eq '{thread_id}'",
                 "$select": _FULL_SELECT,
+                "$expand": _ATTACHMENT_EXPAND,
                 "$top": _THREAD_TOP,
             },
         )
