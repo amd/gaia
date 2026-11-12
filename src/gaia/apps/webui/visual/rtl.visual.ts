@@ -1103,7 +1103,7 @@ test('document being indexed', async ({ page }) => {
 for (const locale of ['en', 'ar']) {
     // A long library: one-line drop zone, a filter, and which chats each document is in.
     test(`a long document library says where each document is used (${locale})`, async ({ page }) => {
-        const docs = ['q3-board.pdf', 'lease-agreement-final.pdf', 'garden-notes.txt', 'ØªÙ‚Ø±ÙŠØ± Ø§Ù„Ù…ÙŠØ²Ø§Ù†ÙŠØ©.xlsx', 'meeting-notes.md', 'recipes.docx', 'taxes-2025.pdf']
+        const docs = ['q3-board.pdf', 'lease-agreement-final.pdf', 'garden-notes.txt', 'تقرير الميزانية.xlsx', 'meeting-notes.md', 'recipes.docx', 'taxes-2025.pdf']
             .map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096 * (i + 1), chunk_count: i + 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: i % 3 }));
         await open(page, '', locale, async (p) => {
             await p.route('**/api/documents', (route) => route.fulfill({ json: { documents: docs, total: docs.length, total_size_bytes: 1, total_chunks: 1 } }));
