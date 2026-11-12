@@ -49,10 +49,16 @@ logger = get_logger(__name__)
 INTERVAL_S = 1.0
 HISTORY_LEN = 60
 IDLE_STOP_S = 15.0
+#: Readings in a row with no data before the monitor says it cannot read.
+MAX_MISSED_SAMPLES = 5
 
 
 class ResourceProbeError(RuntimeError):
     """A counter source could not be opened or read."""
+
+
+class SampleMissed(ResourceProbeError):
+    """A counter had no data for one reading; a busy PC does this now and then."""
 
 
 @dataclass
@@ -558,7 +564,7 @@ class WindowsProbe:
         self._query.collect()
         cpu = self._query.value("cpu")
         if cpu is None:
-            raise ResourceProbeError("CPU utility counter returned no data")
+            raise SampleMissed("CPU utility counter returned no data")
         perf = self._query.value("perf")
         freq_mhz = self._query.value("freq")
         ghz = perf * freq_mhz / 100 / 1000 if perf is not None and freq_mhz else None
@@ -853,18 +859,21 @@ class PosixProbe:
         self._net: OptionalPart = OptionalPart(
             "network", lambda: NetworkRates(lambda: posix_networks(sys_net))
         )
+        self._freq_logged = False
         psutil.cpu_percent(interval=None)
 
     def sample(self) -> Sample:
-        # psutil has no cpu_freq on Apple silicon, and some Intel Macs can't
-        # read it; the speed is optional and shown blank.
+        # Macs often can't report the clock (psutil 7 raises SystemError on
+        # Apple silicon); the speed is optional and shown blank.
         read_freq = getattr(psutil, "cpu_freq", None)
         freq = None
         if read_freq is not None:
             try:
                 freq = read_freq()
-            except (OSError, NotImplementedError) as e:
-                logger.debug("CPU clock speed unavailable: %s", e)
+            except (OSError, NotImplementedError, SystemError) as e:
+                if not self._freq_logged:
+                    self._freq_logged = True
+                    logger.info("CPU clock speed unavailable: %s", e)
         vm = psutil.virtual_memory()
         devices = self._gpus.read(_read_sysfs_gpus)
         devices += self._npus.read(lambda npus: npus.sample())
@@ -944,13 +953,25 @@ class ResourceSampler:
         except Exception as e:  # reported through snapshot(), not swallowed
             self._fail("could not start", e)
             return
+        missed = 0
+        noted_a_miss = False
         try:
             while not self._stop.wait(self._interval):
                 try:
                     sample = probe.sample()
+                except SampleMissed as e:
+                    missed += 1
+                    if missed >= MAX_MISSED_SAMPLES:
+                        self._fail(f"had no data {missed} readings in a row", e)
+                        return
+                    if not noted_a_miss:
+                        logger.info("Resource monitor skipped a reading: %s", e)
+                        noted_a_miss = True
+                    continue
                 except Exception as e:  # reported through snapshot()
                     self._fail("sample failed", e)
                     return
+                missed = 0
                 with self._lock:
                     self._history.append(sample)
                     self._error = None

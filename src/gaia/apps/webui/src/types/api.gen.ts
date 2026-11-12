@@ -261,6 +261,7 @@ export interface AgentStepResponse {
   result?: string | null;
   ruleIds?: string[] | null;
   success?: boolean | null;
+  timedOut?: boolean | null;
   timestamp?: number;
   tool?: string | null;
   type: string;

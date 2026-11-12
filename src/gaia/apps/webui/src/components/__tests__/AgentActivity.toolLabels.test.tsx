@@ -120,6 +120,28 @@ it('says the user declined a call, not that it failed, even with a narration', (
     expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
 });
 
+it('says a call nobody answered timed out and never ran', () => {
+    const timedOut: AgentStep = {
+        ...step('run_shell_command', false, false), timedOut: true, narration: 'Running ls',
+        result: "Nobody answered the confirmation for 'run_shell_command' within 600 s, so it did not run.",
+    };
+    const { container } = render(<AgentActivity steps={[timedOut]} isActive={false} />);
+
+    expect(screen.getByText('Timed out, nothing ran: Running command')).toBeInTheDocument();
+    expect(screen.queryByText(/failed|declined|Nobody answered/)).toBeNull();
+    expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it('names a timed-out call in a folded summary, not as a decline', () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('run_shell_command', false, false), id: 2, timedOut: true },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Read file, a step timed out$/ })).toBeInTheDocument();
+});
+
 it('names a declined call in a folded summary', () => {
     const steps: AgentStep[] = [
         { ...step('read_file'), id: 1, detail: 'a' },
@@ -127,5 +149,7 @@ it('names a declined call in a folded summary', () => {
     ];
     render(<AgentActivity steps={steps} isActive={false} />);
 
-    expect(screen.getByRole('button', { name: /^Read file, you declined a step$/ })).toBeInTheDocument();
+    const summary = screen.getByRole('button', { name: /^Read file, you declined a step$/ });
+    expect(summary.querySelector('.lucide-ban')).not.toBeNull();
+    expect(summary.querySelector('.lucide-circle-check')).toBeNull();
 });

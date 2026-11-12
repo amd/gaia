@@ -13,7 +13,7 @@ import { create } from 'zustand';
 import type { GaiaNotification, NotificationType } from '../types/agent';
 import { confirmTool } from '../services/api';
 import { useChatStore } from './chatStore';
-import { ref } from '../i18n/registry';
+import { ref, type MessageKey } from '../i18n/registry';
 import { tEn, type Translate } from '../i18n/useT';
 
 // ── Constants ────────────────────────────────────────────────────────────
@@ -89,6 +89,13 @@ export function pathAccessTitle(args: unknown, followUp = false, t: Translate = 
  * A permission prompt's heading and question, worded from the call in the UI
  * language rather than from its stored English title and message.
  */
+/** Calls asked about in the user's words, not as "Allow running python?". */
+const PLAIN_TITLES: Record<string, MessageKey> = {
+  run_python: 'prompt.title.python',
+  execute_python_file: 'prompt.title.pythonFile',
+  run_shell_command: 'prompt.title.command',
+};
+
 export function permissionPromptText(
   n: GaiaNotification,
   t: Translate = tEn,
@@ -105,8 +112,9 @@ export function permissionPromptText(
     return { heading: t('prompt.trust.title'), question: t('prompt.trust.ask') };
   }
   const tool = mark(n.toolLabel ?? n.tool ?? '');
+  const plain = PLAIN_TITLES[n.tool ?? ''];
   return {
-    heading: t(n.toolLabel ? 'prompt.title.tool' : 'prompt.title.toolId', { tool }),
+    heading: plain ? t(plain) : t(n.toolLabel ? 'prompt.title.tool' : 'prompt.title.toolId', { tool }),
     question: t('prompt.needsOk', { tool }),
   };
 }
