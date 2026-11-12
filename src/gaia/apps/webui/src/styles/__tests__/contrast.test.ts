@@ -528,6 +528,8 @@ describe('component stylesheets route colour through tokens', () => {
     // canvas -- `getComputedStyle` resolves custom properties even where
     // `var()` is not accepted, which is how the QR modal dropped its pair.
     const LITERAL_ALLOWED: Record<string, string> = {
+        '/src/utils/connectorLogos.ts':
+            "each service's own brand colour for its mark; a theme token would recolour another company's logo",
         '/src/utils/logger.ts':
             'DevTools `%c` category palette -- never painted in the app',
         '/src/utils/palette.ts':

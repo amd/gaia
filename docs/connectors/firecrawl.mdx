@@ -1,0 +1,43 @@
+---
+title: "Firecrawl"
+icon: "fire"
+description: "Scrape, crawl and search web pages as clean text through Firecrawl."
+---
+
+<Info>
+  **Connector ID:** `mcp-firecrawl` · **Package:** `firecrawl-mcp@3.39.0` (started with `npx`; needs Node 18+ (`npx` on your PATH))
+</Info>
+
+## What GAIA can do
+
+GAIA can scrape a page, crawl a site, and search the web, getting clean text back. Each call uses Firecrawl credits.
+
+## Connect it
+
+1. In the Agent UI, click **Connectors** in the sidebar and open the **Firecrawl** tile.
+
+2. **Firecrawl API Key:** Get a key from your [Firecrawl dashboard](https://www.firecrawl.dev/app/api-keys).
+
+3. Click **Save**. GAIA starts the connector once to check it.
+
+Each value is stored in your OS credential store, never in a plain file.
+
+From a terminal instead:
+
+```bash
+gaia connectors configure mcp-firecrawl --set FIRECRAWL_API_KEY=...
+```
+
+## Use it
+
+Ask in chat, for example: "Read this page and summarise it: <link>."
+
+GAIA loads no connector tools once the connectors switched on for it add up to more than 50 tools. If it says some were not loaded, switch off the ones you are not using.
+
+## Disconnect
+
+Open the tile and click **Disconnect** (or `gaia connectors disconnect mcp-firecrawl`). Revoke the token at the service too if it may have leaked.
+
+## See also
+
+- [Connectors overview](/connectors)

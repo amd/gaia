@@ -1,0 +1,43 @@
+---
+title: "HubSpot"
+icon: "address-book"
+description: "Look up and update HubSpot contacts, companies, deals and tickets."
+---
+
+<Info>
+  **Connector ID:** `mcp-hubspot` · **Package:** `@hubspot/mcp-server@0.4.0` (started with `npx`; needs Node 18+ (`npx` on your PATH))
+</Info>
+
+## What GAIA can do
+
+GAIA can look up and update contacts, companies, deals and tickets. It can only do what the private app's scopes allow, and it asks before each change.
+
+## Connect it
+
+1. In the Agent UI, click **Connectors** in the sidebar and open the **HubSpot** tile.
+
+2. **HubSpot private app token:** In HubSpot, open **Settings → Integrations → Private Apps**, create an app with the CRM scopes GAIA should have, and copy its access token.
+
+3. Click **Save**. GAIA starts the connector once to check it.
+
+Each value is stored in your OS credential store, never in a plain file.
+
+From a terminal instead:
+
+```bash
+gaia connectors configure mcp-hubspot --set PRIVATE_APP_ACCESS_TOKEN=...
+```
+
+## Use it
+
+Ask in chat, for example: "Which deals closed this month?"
+
+GAIA loads no connector tools once the connectors switched on for it add up to more than 50 tools. If it says some were not loaded, switch off the ones you are not using.
+
+## Disconnect
+
+Open the tile and click **Disconnect** (or `gaia connectors disconnect mcp-hubspot`). Revoke the token at the service too if it may have leaked.
+
+## See also
+
+- [Connectors overview](/connectors)

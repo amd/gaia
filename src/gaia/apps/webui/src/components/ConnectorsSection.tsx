@@ -29,6 +29,8 @@ import { translator, useT, type Translate } from '../i18n/useT';
 import type { AgentMcpServer, ConnectorListEntry, ConnectorRow, UnavailableConnectorRow } from '../types';
 import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, missingFieldsMessage } from '../utils/connectorText';
 import { personalizeSourceKind, requestPersonalize } from '../utils/connectorPersonalize';
+import { CONNECTOR_CATEGORIES, connectorCategory, type ConnectorCategory } from '../utils/connectorCategories';
+import { ConnectorLogo } from './ConnectorLogo';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import { ltrIn } from './setup/format';
@@ -63,7 +65,6 @@ function scopeLabel(scope: string, t: Translate): string {
     return key ? t(key) : scope.split(/[/.:]/).pop() ?? scope;
 }
 
-const SEARCH_ABOVE = 6;
 
 // Canonical scope for MCP-server grants. Agents that consume MCP servers
 // dynamically declare no scopes of their own, so one-click activation
@@ -175,6 +176,8 @@ export function ConnectorsSection() {
     const [disconnectNotice, setDisconnectNotice] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    // null shows every category.
+    const [category, setCategory] = useState<ConnectorCategory | null>(null);
     // Set when a refresh shows a connector going from not connected to connected.
     const [justConnected, setJustConnected] = useState<ConnectorRow | null>(null);
     const connectorsRef = useRef<ConnectorListEntry[]>([]);
@@ -275,11 +278,18 @@ export function ConnectorsSection() {
         'error' in c ? [c.display_name] : [c.display_name, c.description, connectorDescriptionBare(t, c)];
     const shown = connectors.filter((c) => !q || searchText(c).some((s) => s.toLowerCase().includes(q)));
     const unavailable = shown.filter((c): c is UnavailableConnectorRow => 'error' in c);
-    const available = shown.filter((c): c is ConnectorRow => !('error' in c));
+    const matching = shown.filter((c): c is ConnectorRow => !('error' in c));
+    // Chips list only categories that have a match, each with its count.
+    const categories = CONNECTOR_CATEGORIES
+        .map((id) => ({ id, count: matching.filter((c) => connectorCategory(c.category) === id).length }))
+        .filter((c) => c.count > 0);
+    // A search that empties the chosen category shows every match instead of nothing.
+    const activeCategory = categories.some((c) => c.id === category) ? category : null;
+    const available = matching.filter((c) => !activeCategory || connectorCategory(c.category) === activeCategory);
     const connected = available.filter((c) => c.configured);
-    const accounts = available.filter((c) => !c.configured && c.type === 'oauth_pkce');
-    const servers = available.filter((c) => !c.configured && c.type !== 'oauth_pkce');
-    const nothingConnected = !connectors.some((c) => !('error' in c) && c.configured);
+    const groups = CONNECTOR_CATEGORIES
+        .map((id) => ({ id, rows: available.filter((c) => !c.configured && connectorCategory(c.category) === id) }))
+        .filter((g) => g.rows.length > 0);
 
     const tiles = (rows: ConnectorRow[]) => (
         <div className="connectors-list">
@@ -339,7 +349,7 @@ export function ConnectorsSection() {
                 </div>
             ) : (
                 <>
-                    {connectors.length > SEARCH_ABOVE && (
+                    {connectors.length > 0 && (
                         <input
                             className="settings-input"
                             type="search"
@@ -348,6 +358,30 @@ export function ConnectorsSection() {
                             placeholder={t('settings.connectors.search')}
                             aria-label={t('settings.connectors.search')}
                         />
+                    )}
+                    {categories.length > 1 && (
+                        <div className="connector-categories" role="group" aria-label={t('settings.connectors.categories')}>
+                            <button
+                                type="button"
+                                className={`connector-category${activeCategory ? '' : ' is-active'}`}
+                                aria-pressed={!activeCategory}
+                                onClick={() => setCategory(null)}
+                            >
+                                {t('settings.connectors.category.all')}
+                            </button>
+                            {categories.map((c) => (
+                                <button
+                                    key={c.id}
+                                    type="button"
+                                    className={`connector-category${activeCategory === c.id ? ' is-active' : ''}`}
+                                    aria-pressed={activeCategory === c.id}
+                                    onClick={() => setCategory(c.id)}
+                                >
+                                    {t(`settings.connectors.category.${c.id}`)}
+                                    <bdi dir="ltr" className="connector-category-count">{c.count}</bdi>
+                                </button>
+                            ))}
+                        </div>
                     )}
                     {connectors.length === 0 && !error && <p className="settings-hint">{t('settings.connectors.none')}</p>}
                     {q && shown.length === 0 && <p className="settings-hint">{t('settings.connectors.noMatch')}</p>}
@@ -363,16 +397,17 @@ export function ConnectorsSection() {
                             {tiles(connected)}
                         </SettingsDisclosure>
                     )}
-                    {accounts.length > 0 && (
-                        <SettingsDisclosure title={t('settings.connectors.accounts')} hint={t('settings.connectors.accountsHint')} count={accounts.length} defaultOpen={nothingConnected} forceOpen={!!q}>
-                            {tiles(accounts)}
+                    {groups.map((g) => (
+                        <SettingsDisclosure
+                            key={g.id}
+                            title={t(`settings.connectors.category.${g.id}`)}
+                            count={g.rows.length}
+                            defaultOpen
+                            forceOpen={!!q || !!activeCategory}
+                        >
+                            {tiles(g.rows)}
                         </SettingsDisclosure>
-                    )}
-                    {servers.length > 0 && (
-                        <SettingsDisclosure title={t('settings.connectors.servers')} hint={t('settings.connectors.serversHint')} count={servers.length} forceOpen={!!q}>
-                            {tiles(servers)}
-                        </SettingsDisclosure>
-                    )}
+                    ))}
                     {agentMcps.length > 0 && !q && (
                         <SettingsDisclosure title={t('settings.connectors.agentServers')} count={agentMcps.length}>
                             <AgentMcpsSection
@@ -401,6 +436,7 @@ function UnavailableTile({ connector }: { connector: UnavailableConnectorRow }) 
     return (
         <div className="connector-tile">
             <div className="connector-tile-header connector-tile-header--static">
+                <ConnectorLogo id={connector.id} name={connector.display_name} />
                 <bdi className="connector-tile-name">{connector.display_name}</bdi>
                 <span className="connector-status disabled">{t('settings.connectors.unavailableStatus')}</span>
             </div>
@@ -463,10 +499,13 @@ function ConnectorTile({
                     onClick={onToggle}
                     aria-expanded={expanded}
                 >
-                    <bdi className="connector-tile-name">{connector.display_name}</bdi>
-                    {connector.configured && (
-                        <span className="connector-tile-type">{connector.type === 'oauth_pkce' ? 'OAuth' : 'MCP'}</span>
-                    )}
+                    <ConnectorLogo id={connector.id} name={connector.display_name} />
+                    <span className="connector-tile-text">
+                        <bdi className="connector-tile-name">{connector.display_name}</bdi>
+                        {connector.description && !expanded && (
+                            <span className="connector-tile-desc"><bdi>{connectorDescription(t, connector)}</bdi></span>
+                        )}
+                    </span>
                     {renderStatus()}
                     <span className="connector-tile-chevron">
                         {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}

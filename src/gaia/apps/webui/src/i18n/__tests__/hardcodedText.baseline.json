@@ -6,7 +6,6 @@
   "components/ChatView.tsx": 14,
   "components/ConnectionBanner.tsx": 29,
   "components/ConnectorRetryBanner.tsx": 3,
-  "components/ConnectorsSection.tsx": 1,
   "components/ContextPanel.tsx": 1,
   "components/DocumentLibrary.tsx": 1,
   "components/FileBrowser.tsx": 32,

@@ -426,22 +426,25 @@ const connector = (id: string, display_name: string, type: string, over: Record<
 
 const CONNECTORS = [
     connector('google', 'Google', 'oauth_pkce', {
-        configured: true, account_id: 'someone.with.a.long.address@example.com',
+        configured: true, account_id: 'someone.with.a.long.address@example.com', category: 'workspace',
         description: 'Connect GAIA to your Google account for Gmail, Calendar, Drive, and more.',
     }),
-    connector('git', 'Git', 'mcp_server', { configured: true }),
-    connector('github-mcp', 'GitHub', 'mcp_server', { configured: true, enabled: false, mcp_env_keys: ['GITHUB_TOKEN'] }),
+    connector('git', 'Git', 'mcp_server', { configured: true, category: 'dev-tools' }),
+    connector('github-mcp', 'GitHub', 'mcp_server', { configured: true, enabled: false, mcp_env_keys: ['GITHUB_TOKEN'], category: 'dev-tools' }),
     // The catalog's own description, so the Arabic scenes show its translation.
     connector('microsoft', 'Microsoft', 'oauth_pkce', {
-        supports_device_code: true,
+        supports_device_code: true, category: 'workspace',
         description: 'Connect GAIA to your personal Microsoft account (Outlook.com, Hotmail, or Live) for Outlook mail, calendar, OneDrive, and more via Microsoft Graph. For a Microsoft 365 work or school account, use the Microsoft Work or School connector instead.',
     }),
     connector('slack', 'Slack', 'oauth_pkce', {
-        configurable: false, config_error: 'No client configured',
+        configurable: false, config_error: 'No client configured', category: 'communication',
         oauth_setup_fields: [{ key: 'client_id', label: 'Client ID', kind: 'text', required: true, placeholder: '1234.5678', help_md: 'From your Slack app.' }],
     }),
     ...['Brave Search', 'Notion', 'Postgres', 'Memory', 'Filesystem'].map((n) =>
-        connector(n.toLowerCase().replace(' ', '-'), n, 'mcp_server', { mcp_env_keys: n === 'Brave Search' ? ['BRAVE_API_KEY'] : [] })),
+        connector(n.toLowerCase().replace(' ', '-'), n, 'mcp_server', {
+            mcp_env_keys: n === 'Brave Search' ? ['BRAVE_API_KEY'] : [],
+            category: n === 'Brave Search' ? 'search' : n === 'Notion' ? 'productivity' : 'data',
+        })),
 ];
 
 /** Settings > Connectors with accounts and servers in each state, or the given rows. */

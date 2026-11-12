@@ -1,0 +1,47 @@
+---
+title: "Jira"
+icon: "list-check"
+description: "Search and read Jira issues, projects, boards and sprints."
+---
+
+<Info>
+  **Connector ID:** `mcp-jira` · **Package:** `mcp-atlassian==0.24.1` (started with `uvx`; needs [uv](https://docs.astral.sh/uv/) (`uvx` on your PATH))
+</Info>
+
+## What GAIA can do
+
+GAIA can search and read issues, projects, boards and sprints. It runs read-only: it cannot create or change issues. Confluence is not included.
+
+## Connect it
+
+1. In the Agent UI, click **Connectors** in the sidebar and open the **Jira** tile.
+
+2. **Jira site address:** The address you open Jira at, for example `https://your-team.atlassian.net`.
+
+3. **Atlassian account email:** The email you sign in to Atlassian with.
+
+4. **Atlassian API token:** Create one at [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) and paste it here.
+
+5. Click **Save**. GAIA starts the connector once to check it.
+
+Each value is stored in your OS credential store, never in a plain file.
+
+From a terminal instead:
+
+```bash
+gaia connectors configure mcp-jira --set JIRA_URL=... --set JIRA_USERNAME=... --set JIRA_API_TOKEN=...
+```
+
+## Use it
+
+Ask in chat, for example: "What is assigned to me in the current sprint?"
+
+GAIA loads no connector tools once the connectors switched on for it add up to more than 50 tools. If it says some were not loaded, switch off the ones you are not using.
+
+## Disconnect
+
+Open the tile and click **Disconnect** (or `gaia connectors disconnect mcp-jira`). Revoke the token at the service too if it may have leaked.
+
+## See also
+
+- [Connectors overview](/connectors)

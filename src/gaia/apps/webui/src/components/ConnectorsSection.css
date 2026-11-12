@@ -803,3 +803,66 @@ p.connector-check { flex-direction: row; align-items: center; gap: 6px; }
     margin: 0;
     font-size: 12px;
 }
+
+/* ── Browse: category chips, service marks ────────────────────── */
+
+.connector-categories {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.connector-category {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: var(--font-sans);
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-light);
+    border-radius: 999px;
+    cursor: pointer;
+}
+.connector-category:hover { border-color: var(--border); }
+.connector-category.is-active {
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border-color: var(--border);
+    font-weight: 600;
+}
+.connector-category-count { color: var(--text-muted); font-weight: 400; }
+
+.connector-logo {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    inline-size: 32px;
+    block-size: 32px;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+}
+.connector-logo--letter {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+
+.connector-tile-text {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    /* Shrink-wrapped, so a Latin name still sits at the start edge in a right-to-left page. */
+    align-items: flex-start;
+    gap: 2px;
+    min-inline-size: 0;
+    text-align: start;
+}
+.connector-tile-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+}
