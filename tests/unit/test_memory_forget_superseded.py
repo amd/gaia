@@ -86,3 +86,40 @@ def test_forgetting_an_old_version_leaves_the_newer_one(store, tmp_path):
 
 def test_forget_unknown_id_returns_false(store):
     assert store.forget("no-such-id") is False
+
+
+def test_a_sensitive_newer_version_keeps_older_ones_as_stems(store, tmp_path):
+    old = store.store("fact", "User's locker code is 5521 at the gym", context="global")
+    new = store.store(
+        "fact", "User's locker code changed to 8830", context="global", sensitive=True
+    )
+    store.update(old, superseded_by=new)
+
+    assert store.forget(new) is True
+
+    rows = _raw_rows(tmp_path / "memory.db", "SELECT content, sensitive FROM forgotten")
+    assert len(rows) == 2
+    assert all(flag == 1 for _, flag in rows)
+    assert "User's locker code is 5521 at the gym" not in [c for c, _ in rows]
+
+
+def test_forget_terminates_on_a_supersede_cycle(store, tmp_path):
+    a = store.store("fact", "User likes green tea", context="global")
+    b = store.store("fact", "User prefers oolong tea", context="global")
+    store.update(a, superseded_by=b)
+    store.update(b, superseded_by=a)
+
+    assert store.forget(a) is True
+    assert _raw_rows(tmp_path / "memory.db", "SELECT id FROM knowledge") == []
+
+
+def test_forget_with_copies_also_erases_a_copys_older_versions(store, tmp_path):
+    old = store.store("fact", "User lives in Lisbon", context="global")
+    copy = store.store("fact", "User lives in Madrid", context="global")
+    store.update(old, superseded_by=copy)
+    primary = store.store("fact", "Lives in Madrid.", context="global")
+
+    erased = store.forget_with_copies(primary)
+
+    assert set(erased) == {primary, copy}
+    assert _raw_rows(tmp_path / "memory.db", "SELECT id FROM knowledge") == []
