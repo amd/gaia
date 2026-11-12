@@ -54,6 +54,31 @@ namespace gaia {
 
 namespace {
 
+// The cancel check of the CommandCancelScope alive on this thread, if any.
+thread_local const std::function<bool()>* t_cancelled = nullptr;
+
+bool cancelRequestedHere() { return t_cancelled && *t_cancelled && (*t_cancelled)(); }
+
+#ifdef _WIN32
+// Commands, folders and file names are UTF-8 strings; Windows takes them wide.
+std::wstring widen(const std::string& utf8) {
+    if (utf8.empty()) return L"";
+    const int n = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    std::wstring wide(static_cast<size_t>(n), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), wide.data(), n);
+    return wide;
+}
+
+std::string narrow(const std::wstring& wide) {
+    if (wide.empty()) return "";
+    const int n = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), nullptr, 0,
+                                      nullptr, nullptr);
+    std::string utf8(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()), utf8.data(), n, nullptr, nullptr);
+    return utf8;
+}
+#endif
+
 /// Read up to maxBytes from a FILE*, returning the captured data.
 std::string readStream(FILE* stream, size_t maxBytes) {
     if (!stream) return "";
@@ -84,16 +109,16 @@ std::string readStream(FILE* stream, size_t maxBytes) {
 
 /// Save current working directory (Windows).
 std::string saveCwd() {
-    char buf[MAX_PATH];
-    if (_getcwd(buf, sizeof(buf))) {
-        return std::string(buf);
+    wchar_t buf[32768];
+    if (_wgetcwd(buf, static_cast<int>(sizeof(buf) / sizeof(buf[0])))) {
+        return narrow(buf);
     }
     return "";
 }
 
 /// Change working directory (Windows). Returns true on success.
 bool changeCwd(const std::string& dir) {
-    return _chdir(dir.c_str()) == 0;
+    return _wchdir(widen(dir).c_str()) == 0;
 }
 
 #else
@@ -292,9 +317,9 @@ ProcessResult runWithTimeout(const std::string& command,
         return result;
     };
 
-    STARTUPINFOEXA six;
+    STARTUPINFOEXW six;
     ZeroMemory(&six, sizeof(six));
-    STARTUPINFOA& si = six.StartupInfo;
+    STARTUPINFOW& si = six.StartupInfo;
     si.cb = sizeof(six);
     si.dwFlags = STARTF_USESTDHANDLES;
     si.hStdOutput = stdoutWriteH;
@@ -341,19 +366,18 @@ ProcessResult runWithTimeout(const std::string& command,
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
 
-    // Build command line: cmd /c <command>
-    std::string cmdLine = "cmd /c " + command;
-    // CreateProcessA needs a mutable char*
-    std::vector<char> cmdBuf(cmdLine.begin(), cmdLine.end());
-    cmdBuf.push_back('\0');
+    // Build command line: cmd /c <command>. CreateProcessW needs a mutable buffer.
+    std::wstring cmdLine = L"cmd /c " + widen(command);
 
-    BOOL created = CreateProcessA(
+    BOOL created = CreateProcessW(
         nullptr,
-        cmdBuf.data(),
+        cmdLine.data(),
         nullptr,
         nullptr,
         TRUE,          // inherit handles: only the three listed above
-        CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT,  // joins the job before it runs
+        // Suspended so it joins the job before it runs. Its own hidden console:
+        // a command must not draw on, read from or re-encode the user's terminal.
+        CREATE_SUSPENDED | EXTENDED_STARTUPINFO_PRESENT | CREATE_NO_WINDOW,
         nullptr,       // use parent environment
         nullptr,       // use parent working directory
         &si,
@@ -421,12 +445,24 @@ ProcessResult runWithTimeout(const std::string& command,
         ++readersDone;
     });
 
-    // Wait for process with timeout
-    DWORD waitResult = WaitForSingleObject(pi.hProcess,
-                                           static_cast<DWORD>(timeoutMs));
+    // Wait for the process in short slices, so a cancel is seen while it runs.
+    const bool limited = timeoutMs >= 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(limited ? timeoutMs : 0);
+    DWORD waitResult = WAIT_TIMEOUT;
+    for (;;) {
+        waitResult = WaitForSingleObject(pi.hProcess, 25);
+        if (waitResult != WAIT_TIMEOUT) break;
+        if (cancelRequestedHere()) {
+            result.cancelled = true;
+            break;
+        }
+        if (limited && std::chrono::steady_clock::now() >= deadline) {
+            result.timedOut = true;
+            break;
+        }
+    }
 
     if (waitResult == WAIT_TIMEOUT) {
-        result.timedOut = true;
         TerminateJobObject(job, 1);  // the shell and everything it started
         WaitForSingleObject(pi.hProcess, 5000);  // wait for termination
         result.exitCode = -1;
@@ -541,8 +577,11 @@ ProcessResult runWithTimeout(const std::string& command,
         auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - startTime).count();
 
-        if (elapsed >= timeoutMs) {
-            result.timedOut = true;
+        const bool cancelled = cancelRequestedHere();
+        if (cancelled || elapsed >= timeoutMs) {
+            result.cancelled = cancelled;
+            result.timedOut = !cancelled;
+            result.exitCode = -1;
             kill(-pid, SIGKILL);  // the whole group, not just the shell
             kill(pid, SIGKILL);   // backstop if setpgid did not take
             waitpid(pid, nullptr, 0);
@@ -617,6 +656,13 @@ ProcessResult runWithTimeout(const std::string& command,
 #endif  // _WIN32
 
 }  // anonymous namespace
+
+CommandCancelScope::CommandCancelScope(std::function<bool()> cancelled)
+    : check_(std::move(cancelled)), previous_(t_cancelled) {
+    t_cancelled = &check_;
+}
+
+CommandCancelScope::~CommandCancelScope() { t_cancelled = previous_; }
 
 // ---------------------------------------------------------------------------
 // ProcessRunner public API
@@ -740,16 +786,17 @@ bool isValidEnvName(const std::string& name) {
 std::map<std::string, std::string> captureProcessEnv() {
     std::map<std::string, std::string> out;
 #ifdef _WIN32
-    LPCH block = GetEnvironmentStringsA();
+    LPWCH block = GetEnvironmentStringsW();
     if (!block) return out;
-    for (LPCH entry = block; *entry != '\0';) {
-        const std::string item(entry);
-        entry += item.size() + 1;
+    for (LPWCH entry = block; *entry != L'\0';) {
+        const std::wstring wide(entry);
+        entry += wide.size() + 1;
+        const std::string item = narrow(wide);
         const size_t eq = item.find('=');
         if (eq == std::string::npos || eq == 0) continue;  // "=C:" style entries
         out[item.substr(0, eq)] = item.substr(eq + 1);
     }
-    FreeEnvironmentStringsA(block);
+    FreeEnvironmentStringsW(block);
 #else
 #   ifdef __APPLE__
     char** env = *_NSGetEnviron();
@@ -815,6 +862,13 @@ std::map<std::string, std::string> parseEnvLines(const std::string& text) {
     return out;
 }
 
+const char* const kTempPrefix = "gaia_shell_";
+
+void removeFile(const std::string& path) {
+    std::error_code ec;
+    sfs::remove(sfs::u8path(path), ec);
+}
+
 /// Create a uniquely-named temp file and write `contents` to it.
 /// Exclusive creation on both platforms so a pre-planted symlink or file in a
 /// shared temp directory cannot be written through.
@@ -824,16 +878,15 @@ bool writeTempFile(const std::string& extension,
 #ifdef _WIN32
     static std::atomic<unsigned> counter{0};
 
-    char tmpDir[MAX_PATH];
-    if (GetTempPathA(MAX_PATH, tmpDir) == 0) return false;
+    wchar_t tmpDir[MAX_PATH + 1];
+    if (GetTempPathW(MAX_PATH + 1, tmpDir) == 0) return false;
 
     for (int attempt = 0; attempt < 64; ++attempt) {
         std::ostringstream name;
-        name << tmpDir << "gaia_shell_" << GetCurrentProcessId() << "_"
-             << counter.fetch_add(1) << extension;
-        const std::string candidate = name.str();
+        name << kTempPrefix << GetCurrentProcessId() << "_" << counter.fetch_add(1) << extension;
+        const std::wstring candidate = std::wstring(tmpDir) + widen(name.str());
 
-        HANDLE handle = CreateFileA(candidate.c_str(), GENERIC_WRITE, 0,
+        HANDLE handle = CreateFileW(candidate.c_str(), GENERIC_WRITE, 0,
                                     nullptr, CREATE_NEW,
                                     FILE_ATTRIBUTE_NORMAL, nullptr);
         if (handle == INVALID_HANDLE_VALUE) continue;
@@ -847,10 +900,10 @@ bool writeTempFile(const std::string& extension,
         }
         CloseHandle(handle);
         if (!ok) {
-            std::remove(candidate.c_str());
+            DeleteFileW(candidate.c_str());
             return false;
         }
-        outPath = candidate;
+        outPath = narrow(candidate);
         return true;
     }
     return false;
@@ -860,7 +913,8 @@ bool writeTempFile(const std::string& extension,
     sfs::path dir = sfs::temp_directory_path(ec);
     if (ec) dir = sfs::path("/tmp");
 
-    std::string tmpl = (dir / "gaia_shell_XXXXXX").string();
+    // The pid is in the name so a later run can tell whose leftovers these are.
+    std::string tmpl = (dir / (std::string(kTempPrefix) + std::to_string(getpid()) + "_XXXXXX")).string();
     std::vector<char> buf(tmpl.begin(), tmpl.end());
     buf.push_back('\0');
 
@@ -889,7 +943,7 @@ class TempFileSet {
 public:
     void add(const std::string& path) { paths_.push_back(path); }
     ~TempFileSet() {
-        for (const auto& path : paths_) std::remove(path.c_str());
+        for (const auto& path : paths_) removeFile(path);
     }
 
 private:
@@ -897,7 +951,7 @@ private:
 };
 
 std::string readFileContents(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(sfs::u8path(path), std::ios::binary);
     if (!file.is_open()) return "";
     std::ostringstream buffer;
     buffer << file.rdbuf();
@@ -939,7 +993,7 @@ std::string batchQuote(const std::string& value) {
 /// Forward-slash form, which every POSIX shell — including a Git Bash or MSYS
 /// shell running on Windows — accepts.
 std::string genericPath(const std::string& path) {
-    return sfs::path(path).generic_string();
+    return sfs::u8path(path).generic_u8string();
 }
 
 const char* kEnvMarker = "---GAIA-ENV---";
@@ -957,6 +1011,11 @@ struct ShellSession::Impl {
     std::map<std::string, std::string> baselineEnv;
     std::map<std::string, std::string> overrides;   ///< set or changed by the session
     std::set<std::string> unset;                    ///< removed by the session
+    /// True once baselineEnv is the environment the shell itself starts with.
+    /// A shell rewrites what it inherits (Git Bash turns PATH into /c/... form),
+    /// and measured against the process's own environment every command would
+    /// seem to have changed those variables.
+    bool baselineFromShell = false;
 
     /// Generate the per-command script that restores state, invokes the
     /// command file, and reports the resulting cwd + environment to
@@ -996,6 +1055,8 @@ struct ShellSession::Impl {
             s << "exit $__gaia_rc\n";
         } else {
             s << "@echo off\r\n";
+            // The lines below, and what cd and set report, are UTF-8.
+            s << "chcp 65001 >nul\r\n";
             s << "cd /d \"" << batchQuote(cwd) << "\"\r\n";
             s << "if errorlevel 1 exit /b 127\r\n";
             for (const auto& name : unset) {
@@ -1066,14 +1127,16 @@ struct ShellSession::Impl {
 ShellSession::ShellSession(const std::string& startCwd, const std::string& shell)
     : impl_(new Impl()) {
     std::error_code ec;
+    static std::once_flag swept;
+    std::call_once(swept, [] { removeStaleTempFiles(); });
     sfs::path start = startCwd.empty() ? sfs::current_path(ec)
-                                       : sfs::path(startCwd);
+                                       : sfs::u8path(startCwd);
     if (!startCwd.empty()) {
         sfs::path resolved = sfs::weakly_canonical(start, ec);
         if (!ec) start = resolved;
     }
     if (start.empty()) start = sfs::path(".");
-    impl_->cwd = start.string();
+    impl_->cwd = start.u8string();
     impl_->startCwd = impl_->cwd;
     impl_->baselineEnv = captureProcessEnv();
 
@@ -1097,23 +1160,18 @@ ShellSession& ShellSession::shared() {
     return session;
 }
 
-ProcessResult ShellSession::run(const std::string& command,
-                                int timeoutMs,
-                                size_t maxOutputBytes) {
+namespace {
+
+/// Run `command` as one session script. `stateOut` receives what the script
+/// reported about the folder and environment it ended in.
+ProcessResult runSessionScript(const std::function<std::string(const std::string&, const std::string&)>& buildScript,
+                               bool posixScript, const std::string& shell, const std::string& command,
+                               int timeoutMs, size_t maxOutputBytes, std::string& stateOut) {
     ProcessResult result;
-
-    if (command.empty()) {
-        result.exitCode = -1;
-        result.stderr_output = "Empty command";
-        return result;
-    }
-
-    std::lock_guard<std::mutex> lock(impl_->mutex);
-
     // Removed however this function exits, including on a throw.
     TempFileSet temps;
 
-    const char* scriptExt = impl_->posixScript ? ".sh" : ".cmd";
+    const char* scriptExt = posixScript ? ".sh" : ".cmd";
     const std::string tempError =
         "ShellSession: could not create a temporary file in the system temp "
         "directory. Check that it exists and is writable.";
@@ -1137,8 +1195,7 @@ ProcessResult ShellSession::run(const std::string& command,
     temps.add(commandFile);
 
     std::string scriptFile;
-    if (!writeTempFile(scriptExt, impl_->buildScript(commandFile, stateFile),
-                       scriptFile)) {
+    if (!writeTempFile(scriptExt, buildScript(commandFile, stateFile), scriptFile)) {
         result.exitCode = -1;
         result.stderr_output = tempError;
         return result;
@@ -1146,17 +1203,112 @@ ProcessResult ShellSession::run(const std::string& command,
     temps.add(scriptFile);
 
     const std::string invocation =
-        impl_->posixScript
-            ? impl_->shell + " " + posixQuote(genericPath(scriptFile))
-            : "\"" + scriptFile + "\"";
+        posixScript ? shell + " " + posixQuote(genericPath(scriptFile)) : "\"" + scriptFile + "\"";
 
     // No cwd/env arguments: the script applies both inside the child, so the
     // calling process is never mutated and concurrent sessions cannot collide.
     result = ProcessRunner::run(invocation, timeoutMs, "", {}, maxOutputBytes);
+    stateOut = readFileContents(stateFile);
+    return result;
+}
 
-    impl_->absorbState(readFileContents(stateFile));
+}  // namespace
+
+ProcessResult ShellSession::run(const std::string& command,
+                                int timeoutMs,
+                                size_t maxOutputBytes) {
+    ProcessResult result;
+
+    if (command.empty()) {
+        result.exitCode = -1;
+        result.stderr_output = "Empty command";
+        return result;
+    }
+
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    const auto build = [this](const std::string& commandFile, const std::string& stateFile) {
+        return impl_->buildScript(commandFile, stateFile);
+    };
+
+    if (!impl_->baselineFromShell) {
+        // One empty command with nothing of the session's applied, to learn the shell's own environment.
+        std::map<std::string, std::string> overrides;
+        std::set<std::string> unset;
+        overrides.swap(impl_->overrides);
+        unset.swap(impl_->unset);
+        std::string state;
+        runSessionScript(build, impl_->posixScript, impl_->shell, impl_->posixScript ? ":" : "rem", 30000, 4096,
+                         state);
+        overrides.swap(impl_->overrides);
+        unset.swap(impl_->unset);
+        const size_t marker = state.find(kEnvMarker);
+        if (marker != std::string::npos) {
+            size_t envStart = marker + std::strlen(kEnvMarker);
+            while (envStart < state.size() && (state[envStart] == '\n' || state[envStart] == '\r')) ++envStart;
+            const auto own = impl_->posixScript ? parseEnvRecordsNul(state.substr(envStart))
+                                                : parseEnvLines(state.substr(envStart));
+            if (!own.empty()) {
+                impl_->baselineEnv = own;
+                impl_->baselineFromShell = true;
+            }
+        }
+    }
+
+    std::string state;
+    result = runSessionScript(build, impl_->posixScript, impl_->shell, command, timeoutMs, maxOutputBytes, state);
+    impl_->absorbState(state);
 
     return result;
+}
+
+size_t ShellSession::removeStaleTempFiles() {
+    std::error_code ec;
+    const sfs::path dir = sfs::temp_directory_path(ec);
+    if (ec) return 0;
+    size_t removed = 0;
+    for (auto it = sfs::directory_iterator(dir, sfs::directory_options::skip_permission_denied, ec);
+         !ec && it != sfs::directory_iterator(); it.increment(ec)) {
+        // Only this class's own names: gaia_shell_<pid>_<suffix>[.ext].
+        const std::string name = it->path().filename().u8string();
+        const size_t prefix = std::strlen(kTempPrefix);
+        if (name.compare(0, prefix, kTempPrefix) != 0) continue;
+        const size_t pidEnd = name.find('_', prefix);
+        if (pidEnd == std::string::npos || pidEnd == prefix || pidEnd - prefix > 10) continue;
+        const std::string digits = name.substr(prefix, pidEnd - prefix);
+        if (!std::all_of(digits.begin(), digits.end(), [](unsigned char c) { return std::isdigit(c) != 0; })) continue;
+        const std::string rest = name.substr(pidEnd + 1);
+        const size_t dot = rest.find('.');
+        const std::string suffix = rest.substr(0, dot);
+        const std::string ext = dot == std::string::npos ? "" : rest.substr(dot);
+        if (suffix.empty() ||
+            !std::all_of(suffix.begin(), suffix.end(), [](unsigned char c) { return std::isalnum(c) != 0; })) {
+            continue;
+        }
+        if (!ext.empty() && ext != ".state" && ext != ".sh" && ext != ".cmd") continue;
+
+        const unsigned long long pid = std::stoull(digits);
+        if (pid == 0 || pid > 0x7fffffffULL) continue;  // not a process id
+        bool alive = true;
+#ifdef _WIN32
+        if (pid == GetCurrentProcessId()) continue;
+        HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, static_cast<DWORD>(pid));
+        if (!process) {
+            // Access denied means it exists and belongs to someone else.
+            alive = GetLastError() != ERROR_INVALID_PARAMETER;
+        } else {
+            DWORD code = 0;
+            alive = !GetExitCodeProcess(process, &code) || code == STILL_ACTIVE;
+            CloseHandle(process);
+        }
+#else
+        if (pid == static_cast<unsigned long long>(getpid())) continue;
+        alive = !(kill(static_cast<pid_t>(pid), 0) != 0 && errno == ESRCH);
+#endif
+        if (alive) continue;
+        std::error_code removeEc;
+        if (sfs::remove(it->path(), removeEc) && !removeEc) ++removed;
+    }
+    return removed;
 }
 
 std::string ShellSession::cwd() const {
@@ -1166,12 +1318,12 @@ std::string ShellSession::cwd() const {
 
 bool ShellSession::setCwd(const std::string& dir) {
     std::error_code ec;
-    sfs::path resolved = sfs::weakly_canonical(sfs::path(dir), ec);
-    if (ec) resolved = sfs::path(dir);
+    sfs::path resolved = sfs::weakly_canonical(sfs::u8path(dir), ec);
+    if (ec) resolved = sfs::u8path(dir);
     if (!sfs::is_directory(resolved, ec)) return false;
 
     std::lock_guard<std::mutex> lock(impl_->mutex);
-    impl_->cwd = resolved.string();
+    impl_->cwd = resolved.u8string();
     return true;
 }
 

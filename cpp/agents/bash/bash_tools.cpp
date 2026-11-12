@@ -100,13 +100,15 @@ json BashTools::doBashExecute(ShellSession& session, const json& args) {
         stderrStr += TRUNCATION_MSG;
     }
 
-    return {
+    json out = {
         {"stdout", stdoutStr},
         {"stderr", stderrStr},
         {"exit_code", result.exitCode},
         {"timed_out", result.timedOut},
         {"cwd", session.cwd()},
     };
+    if (result.cancelled) out["cancelled"] = true;
+    return out;
 }
 
 // ---------------------------------------------------------------------------

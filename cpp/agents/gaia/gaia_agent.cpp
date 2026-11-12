@@ -159,7 +159,7 @@ std::string GaiaAgent::getSystemPrompt() const {
 ## How to work
 1. Look before you answer. If the request names files or a folder, list and read them first. Never say a file or fact does not exist without checking.
 2. Use tools to do the work, not to describe it. A request to create, fix, convert or save something is done only when the file exists on disk; write it with file_write or a program, then confirm it is there.
-3. For formats you cannot read as text (PDF, Word, Excel, PowerPoint, images, archives), run a program with bash_execute — for example python3 with pypdf/pdfplumber, python-docx, openpyxl/pandas or python-pptx, or pdftotext. Check what is installed first (env_inspect, or `python3 -c "import pandas"`); if a library is missing, say so and use another route rather than guessing.
+3. For formats you cannot read as text (PDF, Word, Excel, PowerPoint, images, archives), run a program with bash_execute — for example Python with pypdf/pdfplumber, python-docx, openpyxl/pandas or python-pptx, or pdftotext. Check what is installed first (env_inspect, or `python -c "import pandas"` with the Python command named under Environment); if a library is missing, say so and use another route rather than guessing.
 4. For data work, compute with a program (python, awk, sqlite) instead of doing arithmetic in your head, and check totals against the source.
 5. Verify. After a change, re-read the file, run the test or the program, and look at the output.
 6. Keep going until the task is finished or you are truly blocked, then answer.
@@ -252,6 +252,33 @@ std::string folderListing(const fs::path& dir) {
 }
 }  // namespace
 
+namespace {
+// The command that starts Python 3 here, or "" when there is none. On Windows
+// `python3` is usually a Store stub that runs nothing, and a model that tries
+// it first spends several steps hunting for an interpreter.
+const std::string& pythonCommand() {
+    static const std::string found = [] {
+#ifdef _WIN32
+        const char* const candidates[] = {"python", "py -3", "python3"};
+#else
+        const char* const candidates[] = {"python3", "python"};
+#endif
+        for (const char* candidate : candidates) {
+            try {
+                const ProcessResult r = ProcessRunner::run(std::string(candidate) + " --version", 5000);
+                if (r.exitCode == 0 && (r.stdout_output + r.stderr_output).find("Python 3") != std::string::npos) {
+                    return std::string(candidate);
+                }
+            } catch (const std::exception&) {
+                // Not startable counts as not there; the prompt then says none was found.
+            }
+        }
+        return std::string();
+    }();
+    return found;
+}
+}  // namespace
+
 std::string GaiaAgent::systemContext() const {
     std::ostringstream out;
     out << "\n\n## Environment\n";
@@ -272,6 +299,11 @@ std::string GaiaAgent::systemContext() const {
         for (const auto& r : options_.workspaceRoots) out << " " << r;
         out << ". Tools refuse other locations, so don't search the whole disk or the home "
                "folder. If a file the user needs isn't in these folders, say so.\n";
+    }
+    if (pythonCommand().empty()) {
+        out << "- Python: none found on PATH. Don't plan around it; say so if a task needs it.\n";
+    } else {
+        out << "- Python: run it as `" << pythonCommand() << "`.\n";
     }
 #ifdef _WIN32
     if (BashTools::detectShell().empty()) {

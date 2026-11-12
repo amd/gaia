@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -23,6 +24,24 @@ struct GAIA_API ProcessResult {
     std::string stderr_output;  ///< Captured stderr
     int exitCode = -1;          ///< Process exit code (-1 if not started)
     bool timedOut = false;      ///< True if process was killed due to timeout
+    bool cancelled = false;     ///< True if a CommandCancelScope ended it early
+};
+
+/// While one is alive, a command this thread runs through ProcessRunner or a
+/// ShellSession is ended, with everything it started, as soon as `cancelled`
+/// returns true. The check is polled a few dozen times a second from the
+/// thread that runs the command, and scopes nest.
+class GAIA_API CommandCancelScope {
+public:
+    explicit CommandCancelScope(std::function<bool()> cancelled);
+    ~CommandCancelScope();
+
+    CommandCancelScope(const CommandCancelScope&) = delete;
+    CommandCancelScope& operator=(const CommandCancelScope&) = delete;
+
+private:
+    std::function<bool()> check_;
+    const std::function<bool()>* previous_;
 };
 
 /// Cross-platform process execution utility.
@@ -120,10 +139,12 @@ public:
 ///   - stdin is `/dev/null`. An interactive command (`git commit` opening an
 ///     editor, `sudo`, `npm login`) returns immediately instead of sitting
 ///     until the timeout, because a tool call has no way to answer it.
-///   - On POSIX a timeout kills the command's whole process group, not just
-///     the shell — a build or test command spawns children, and leaving them
+///   - A timeout or a cancel (see CommandCancelScope) ends the command's whole
+///     tree, not just the shell: its process group on POSIX, its job on
+///     Windows. A build or test command spawns children, and leaving them
 ///     running is what makes a timed-out build loop worse than useless.
-///     Windows has no equivalent yet; it would need a Job Object.
+///
+/// Folders, commands and variables are UTF-8 strings on every platform.
 ///
 /// Example:
 /// @code
@@ -177,6 +198,11 @@ public:
     /// Process-wide default session, so a stateless tool callback can still
     /// participate in one continuous shell.
     static ShellSession& shared();
+
+    /// Delete the temp files (gaia_shell_<pid>_*) of sessions whose process is
+    /// gone, left behind when it was killed mid-command. Returns how many.
+    /// Runs once, when the first session is created.
+    static size_t removeStaleTempFiles();
 
 private:
     struct Impl;

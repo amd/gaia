@@ -160,6 +160,19 @@ ToolConfirmCallback makeStdinConfirmCallback() {
 // AllowedToolsStore
 // ---------------------------------------------------------------------------
 
+std::string gaiaHome() {
+    const std::string chosen = getEnvVar("GAIA_HOME");
+    if (!chosen.empty()) return chosen;
+#ifdef _WIN32
+    const std::string home = getEnvVar("USERPROFILE");
+    const char* sep = "\\";
+#else
+    const std::string home = getEnvVar("HOME");
+    const char* sep = "/";
+#endif
+    return home.empty() ? "" : home + sep + ".gaia";
+}
+
 std::string AllowedToolsStore::defaultConfigDir() {
 #ifdef _WIN32
     const char* name = "USERPROFILE";
@@ -168,14 +181,14 @@ std::string AllowedToolsStore::defaultConfigDir() {
     const char* name = "HOME";
     const char* sep = "/";
 #endif
-    const char* home = std::getenv(name);  // NOLINT(concurrency-mt-unsafe)
-    if (!home || !*home) {
+    const std::string home = gaiaHome();
+    if (home.empty()) {
         // A shared folder such as /tmp would let another account pre-approve tools.
-        throw std::runtime_error(std::string(name) +
-                                 " is not set, so there is no private folder for saved tool approvals. Set " + name +
+        throw std::runtime_error(std::string("Neither GAIA_HOME nor ") + name +
+                                 " is set, so there is no private folder for saved tool approvals. Set " + name +
                                  " to your home folder, or pass a folder to AllowedToolsStore.");
     }
-    return std::string(home) + sep + ".gaia" + sep + "security";
+    return home + sep + "security";
 }
 
 AllowedToolsStore::AllowedToolsStore()

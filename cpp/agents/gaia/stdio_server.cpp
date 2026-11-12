@@ -34,6 +34,7 @@ const char* const kLlmFailure = "Unable to complete task due to LLM error: ";
 // The TUI answers within its own 10 minutes; this only fires when nobody can.
 constexpr auto kOrphanedConfirmTimeout = std::chrono::minutes(15);
 constexpr int kStatusProbeSeconds = 3;
+constexpr auto kTokenBatch = std::chrono::milliseconds(30);
 constexpr size_t kMaxEventData = 20000;
 
 std::string dumps(const json& j) { return j.dump(-1, ' ', false, json::error_handler_t::replace); }
@@ -215,7 +216,10 @@ public:
     void printThought(const std::string&) override {}
     void printGoal(const std::string&) override {}
     void printPlan(const json&, int) override {}
-    void printToolUsage(const std::string& toolName) override { tool_ = toolName; }
+    void printToolUsage(const std::string& toolName) override {
+        flushTokens();
+        tool_ = toolName;
+    }
     void printToolComplete() override {}
     void prettyPrintJson(const json& data, const std::string& title) override {
         if (title == "Tool Args") {
@@ -238,7 +242,8 @@ public:
     void printFinalAnswer(const std::string&, const UsageStats&) override {}
     void printCompletion(int, int) override {}
     void printStreamEnd() override {
-        if (!inThink_ && !held_.empty()) server_.write({{"type", "token"}, {"delta", held_}});
+        if (!inThink_) pending_ += held_;
+        flushTokens();
         resetStream();
     }
     void printStreamToken(const std::string& token) override {
@@ -267,22 +272,36 @@ public:
             inThink_ = !inThink_;
             i = at + marker.size();
         }
-        if (!visible.empty()) server_.write({{"type", "token"}, {"delta", visible}});
+        // A fast model writes hundreds of tokens a second. One event each fills
+        // the pipe faster than a UI draws them, and a cancel then waits behind
+        // that backlog, so tokens are sent in small batches.
+        pending_ += visible;
+        if (std::chrono::steady_clock::now() - lastTokens_ >= kTokenBatch) flushTokens();
     }
 
 private:
     void status(const std::string& message) {
+        flushTokens();
         if (!message.empty()) server_.write({{"type", "status"}, {"message", message}});
+    }
+    void flushTokens() {
+        if (pending_.empty()) return;
+        server_.write({{"type", "token"}, {"delta", pending_}});
+        pending_.clear();
+        lastTokens_ = std::chrono::steady_clock::now();
     }
     void resetStream() {
         inThink_ = false;
         held_.clear();
+        pending_.clear();
     }
 
     StdioServer& server_;
     std::string tool_;
     bool inThink_ = false;
     std::string held_;
+    std::string pending_;
+    std::chrono::steady_clock::time_point lastTokens_{};
 };
 
 }  // namespace
@@ -713,7 +732,8 @@ json StdioServer::warmUp() {
     return {{"type", "final"}, {"answer", "warmed_up"}};
 }
 
-// Same payload as sidecar.cpp's memoryDump.
+// The store keeps no confidence score and no last-use time, so those keys are
+// left out rather than sent as a number that would read as a measurement.
 json StdioServer::memoryDump() {
     if (!options_.memory) {
         return {{"available", false}, {"reason", "Memory is off for this session (--no-memory)."}};
@@ -725,12 +745,16 @@ json StdioServer::memoryDump() {
     const auto entries = store.recall("", "", 300, true);
     json items = json::array(), byCategory = json::object(), byContext = json::object();
     int sensitive = 0;
+    std::set<std::string> entities;
     for (const auto& e : entries) {
         const std::string ctx = e.domain.empty() ? "global" : e.domain;
-        items.push_back({{"id", e.id}, {"category", e.category}, {"content", e.content},
-                         {"entity", e.entity.empty() ? json(nullptr) : json(e.entity)},
-                         {"context", ctx}, {"confidence", nullptr}, {"sensitive", e.sensitive},
-                         {"created_at", e.createdAt}, {"updated_at", e.updatedAt}, {"last_used", nullptr}});
+        json item = {{"id", e.id}, {"category", e.category}, {"content", e.content}, {"context", ctx},
+                     {"sensitive", e.sensitive}, {"created_at", e.createdAt}, {"updated_at", e.updatedAt}};
+        if (!e.entity.empty()) {
+            item["entity"] = e.entity;
+            entities.insert(e.entity);
+        }
+        items.push_back(std::move(item));
         byCategory[e.category] = byCategory.value(e.category, 0) + 1;
         byContext[ctx] = byContext.value(ctx, 0) + 1;
         if (e.sensitive) ++sensitive;
@@ -740,7 +764,7 @@ json StdioServer::memoryDump() {
     const size_t total = store.count();
     return {{"available", true},
             {"stats", {{"total_knowledge", total}, {"by_category", byCategory}, {"by_context", byContext},
-                       {"sensitive_count", sensitive}, {"entity_count", nullptr}, {"avg_confidence", nullptr}}},
+                       {"sensitive_count", sensitive}, {"entity_count", entities.size()}}},
             {"contexts", contexts}, {"shown", items.size()}, {"total", total}, {"items", items}};
 }
 

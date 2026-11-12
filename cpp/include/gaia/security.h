@@ -63,6 +63,11 @@ struct ToolInfo;
 /// command that goes online, or a fetch of a remote URL.
 GAIA_API std::string internetRefusal(const ToolInfo& tool, const json& args);
 
+/// The folder GAIA keeps this user's files in: $GAIA_HOME when set, else
+/// .gaia under the home folder (USERPROFILE on Windows, HOME elsewhere).
+/// Empty when neither is set. Every per-user default path starts here.
+GAIA_API std::string gaiaHome();
+
 /// Create a terminal-based confirm callback. Prompts on stderr, reads stdin.
 /// Auto-installed by Agent for interactive (non-silent) agents.
 GAIA_API ToolConfirmCallback makeStdinConfirmCallback();
