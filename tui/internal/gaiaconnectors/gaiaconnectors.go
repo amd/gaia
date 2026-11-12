@@ -26,9 +26,9 @@ const ListTimeout = 30 * time.Second
 var Binary = func() (string, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
-		return "", fmt.Errorf("the `gaia` CLI is not on PATH, so connectors " +
-			"cannot be listed. Install GAIA with `pip install amd-gaia`, or see " +
-			"https://amd-gaia.ai/docs/guides/install")
+		return "", fmt.Errorf("GAIA is not fully installed on this PC, so " +
+			"connectors cannot be listed. Open Connectors in the GAIA desktop " +
+			"app, or see https://amd-gaia.ai/docs/guides/install")
 	}
 	return bin, nil
 }
@@ -43,7 +43,7 @@ type Connector struct {
 	// Enabled is false for an MCP connector that is configured but switched off.
 	// Absent from older CLIs, so it defaults to true.
 	Enabled   *bool  `json:"enabled"`
-	AccountID   string `json:"account_id"`
+	AccountID string `json:"account_id"`
 }
 
 // List runs `gaia connectors list --json`.
