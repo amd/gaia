@@ -566,6 +566,25 @@ _CROSS_LANGUAGE_NOTE = (
 )
 
 
+def _where_mcp_servers_are_set_up(names: List[str], config_path: Path) -> str:
+    """Where the user fixes each of *names*: Settings for a connector, else the file."""
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    connectors = [REGISTRY.get(n).display_name for n in names if n in REGISTRY]
+    hand_added = [n for n in names if n not in REGISTRY]
+    where = []
+    if connectors:
+        where.append(f"Check {', '.join(connectors)} in Settings > Connectors.")
+    if hand_added:
+        verb = "is" if len(hand_added) == 1 else "are"
+        where.append(
+            f"{', '.join(hand_added)} {verb} set up in {config_path}: check the "
+            "command and settings there."
+        )
+    return " ".join(where)
+
+
 class ChatAgent(
     MemoryMixin,
     Agent,
@@ -2323,6 +2342,16 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             added = len(_TOOL_REGISTRY) - before
             if added > 0:
                 logger.info("Loaded %d MCP tool(s)", added)
+            failed = self._mcp_manager.failed_servers_for_agent(
+                self._namespaced_agent_id()
+            )
+            if failed:
+                reasons = "; ".join(f"{srv} ({err})" for srv, err in failed.items())
+                self._set_mcp_dropped_notice(
+                    f"MCP servers that could not start: {reasons}. "
+                    f"{_where_mcp_servers_are_set_up(list(failed), _mcp_config_path)}"
+                )
+                return
             self._set_mcp_dropped_notice(None)
         except Exception as e:  # pylint: disable=broad-except
             # A broken MCP setup must not stop the agent; the user is told.

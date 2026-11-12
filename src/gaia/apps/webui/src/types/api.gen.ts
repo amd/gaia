@@ -237,6 +237,7 @@ export interface AgentStepResponse {
   currentStep?: number | null;
   data?: unknown;
   decision?: string | null;
+  declined?: boolean | null;
   detail?: string | null;
   fileList?: FileListResponse | null;
   id: number;

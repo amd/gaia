@@ -348,14 +348,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const pending = pendingPrompt?.text;
         // Wait for the history load, or it would replace the message just sent;
         // and for GAIA to start, or the send would refuse a message already taken.
-        if (!pending || useChatStore.getState().isLoadingMessages || initializing) return;
-        useChatStore.getState().setPendingPrompt(null);
+        if (!pending || pendingPrompt.sending || useChatStore.getState().isLoadingMessages || initializing) return;
+        // Marked, not cleared, so New chat in the tick before the send can still take it back.
+        const handed = { ...pendingPrompt, sending: true };
+        useChatStore.getState().setPendingPrompt(handed);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
-        // clearing the prompt re-runs this effect, so no cleanup may cancel it.
+        // marking the prompt re-runs this effect, so no cleanup may cancel it.
         setTimeout(() => {
             openingRef.current = false;
-            if (mountedRef.current) sendMessageRef.current(pending, { opening: true });
+            const store = useChatStore.getState();
+            if (store.pendingPrompt !== handed) return;
+            if (!mountedRef.current) {
+                // Left for another chat: it goes out when this one is opened again.
+                store.setPendingPrompt({ sessionId: handed.sessionId, text: handed.text });
+                return;
+            }
+            store.setPendingPrompt(null);
+            sendMessageRef.current(pending, { opening: true });
         }, 0);
     }, [pendingPrompt, isLoadingMessages, initializing]);
 
@@ -1442,7 +1452,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [messages, handleResendMessage]);
 
-
+    // Continue a stopped reply: the partial answer stays in the chat history the model reads.
+    const handleContinue = useCallback(() => {
+        void sendMessageRef.current(t('msg.continuePrompt'));
+    }, [t]);
 
     // Title editing
     const startEditTitle = () => {
@@ -1625,7 +1638,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             ? msg.historyNotice ?? historyNotices.get(msg.id)
                             : undefined;
                         const cutOff = msg.role === 'assistant' && turnEnding(msg.content, msg.stopState) === 'interrupted';
-                        const canTryAgain = (msg.failed === true || cutOff) && !busy && !retiredAgent && !streamEnding
+                        const stopped = msg.role === 'assistant' && msg.stopState === 'stopped' && !msg.stopError;
+                        const canTryAgain = (msg.failed === true || cutOff || stopped) && !busy && !retiredAgent && !streamEnding
                             && idx === messages.length - 1;
                         const canRetry = !canTryAgain && !busy && !comparison && !retiredAgent && !streamEnding
                             && msg.role === 'assistant' && idx === messages.length - 1
@@ -1654,6 +1668,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                         />
                                     ) : undefined}
                                     onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
+                                    onContinue={canTryAgain && stopped ? handleContinue : undefined}
+                                    latest={msg.role === 'assistant' && idx === messages.length - 1}
                                     latencyMs={latency}
                                 />
                                 {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
