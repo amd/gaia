@@ -169,6 +169,13 @@ describe('What GAIA knows about you', () => {
         }));
     });
 
+    it('uses a placeholder short enough to read in the add box', async () => {
+        await renderAbout();
+
+        const placeholder = screen.getByRole('textbox', { name: /Something GAIA should know/ }).getAttribute('placeholder') ?? '';
+        expect(placeholder).toBe('Tell GAIA something about you');
+    });
+
     it('hides a sensitive item until asked, and never prints it when forgotten', async () => {
         await renderAbout();
 
