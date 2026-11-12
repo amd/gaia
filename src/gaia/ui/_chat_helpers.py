@@ -282,6 +282,10 @@ _IDLE_POLL_SECONDS = 0.2
 # How long an ended turn waits for its agent thread before freeing the model.
 _PRODUCER_STOP_GRACE_SECONDS = 5.0
 
+#: Status phases kept in a turn's saved steps: work the user waited on
+#: (``SPEECH_MODEL_DOWNLOADED_PHASE`` in ``audio_tools.py``).
+_RECORDED_PHASES = frozenset({"speech_model_downloaded"})
+
 # Chats whose stopped turn left its agent thread running (session_id -> thread).
 _stopping_sessions: dict[str, threading.Thread] = {}
 
@@ -5107,6 +5111,22 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "label": event["message"],
                             "active": False,
                             "success": False,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
+                elif (
+                    event_type == "status"
+                    and event.get("phase") in _RECORDED_PHASES
+                    and event.get("message")
+                ):
+                    step_id += 1
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "status",
+                            "label": event["message"],
+                            "active": False,
+                            "success": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )

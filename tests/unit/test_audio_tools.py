@@ -184,13 +184,13 @@ class TestTranscribeMedia:
             {
                 "start_progress": lambda self, msg: shown.append(("status", msg)),
                 "report_phase": lambda self, phase, msg, **f: shown.append(
-                    (RECORDING_STAGES[f["stage"]], msg)
+                    (RECORDING_STAGES[f["stage"]] if "stage" in f else phase, msg)
                 ),
             },
         )()
 
         def ensure_model(say=None, on_percent=None):
-            say("Downloading Whisper-Large-v3-Turbo through Lemonade (~1.55 GB)")
+            say("Downloading Whisper-Large-v3-Turbo through Lemonade (~1.62 GB)")
             for percent in (0, 40, 100):
                 on_percent(percent)
 
@@ -208,15 +208,26 @@ class TestTranscribeMedia:
             )
 
         assert result["status"] == "success", result
-        downloading = [msg for kind, msg in shown if "speech model" in msg]
+        # A phase of its own: a status without one never reaches the window.
+        downloading = [(kind, msg) for kind, msg in shown if "speech model" in msg]
         assert downloading == [
-            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), one time",
-            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), "
-            "one time — 0%",
-            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), "
-            "one time — 40%",
-            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), "
-            "one time — 100%",
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time (1.6 GB)",
+            ),
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time — 0% of 1.6 GB",
+            ),
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time — 40% of 1.6 GB",
+            ),
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time — 100% of 1.6 GB",
+            ),
+            ("speech_model_downloaded", "Downloaded the speech model (1.6 GB)"),
         ]
         # Its own state: nothing says "Transcribing" until the download is over.
         first_transcribe = next(

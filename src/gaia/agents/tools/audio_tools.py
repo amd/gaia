@@ -59,6 +59,11 @@ PROGRESS_STEP = 0.05
 RECORDING_STAGES = ("download", "decode", "transcribe", "voices", "prepare", "analyze")
 STAGE_RUNNING, STAGE_DONE, STAGE_SKIPPED = 0, 1, 2
 
+#: A missing speech model's download: a live line while it runs, a step once done.
+SPEECH_MODEL_DOWNLOAD_PHASE = "speech_model_download"
+SPEECH_MODEL_DOWNLOADED_PHASE = "speech_model_downloaded"
+SPEECH_MODEL_DOWNLOADING = "Downloading the speech model, one time"
+
 # How often a stage that reports nothing itself gets an estimate.
 PROGRESS_TICK_SECONDS = 3.0
 
@@ -1637,22 +1642,38 @@ class AudioToolsMixin:
         """
         from gaia.agents.base.tools import raise_if_cancelled
 
-        line = [""]
+        size = [""]
+        pulled = []
+
+        def report(phase: str, message: str) -> None:
+            logger.info("%s (%s)", message, client.model)
+            console = getattr(self, "console", None)
+            if console is not None and hasattr(console, "report_phase"):
+                console.report_phase(phase, message)
 
         def say(message: str) -> None:
-            size = re.search(r"\(~[\d.]+ GB\)", message)
-            line[0] = (
-                f"Downloading the speech model {client.model}"
-                + (f" {size.group(0)}" if size else "")
-                + ", one time"
+            pulled.append(True)
+            found = re.search(r"\(~([\d.]+) GB\)", message)
+            size[0] = f"{float(found.group(1)):.1f} GB" if found else ""
+            report(
+                SPEECH_MODEL_DOWNLOAD_PHASE,
+                SPEECH_MODEL_DOWNLOADING + (f" ({size[0]})" if size[0] else ""),
             )
-            self._report_progress(line[0])
 
         def on_percent(percent: int) -> None:
             raise_if_cancelled()
-            self._report_progress(f"{line[0]} — {percent}%")
+            report(
+                SPEECH_MODEL_DOWNLOAD_PHASE,
+                f"{SPEECH_MODEL_DOWNLOADING} — {percent}%"
+                + (f" of {size[0]}" if size[0] else ""),
+            )
 
         client.ensure_model(say=say, on_percent=on_percent)
+        if pulled:
+            report(
+                SPEECH_MODEL_DOWNLOADED_PHASE,
+                "Downloaded the speech model" + (f" ({size[0]})" if size[0] else ""),
+            )
 
     def _report_download(self, message: str) -> None:
         """Turn the downloader's progress lines into the download stage."""

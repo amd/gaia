@@ -51,6 +51,17 @@ describe('localizeLiveStatus', () => {
         expect(ar('Reading page 4 of 12…')).not.toBe('Reading page 4 of 12…');
     });
 
+    it('says the speech model download in the chosen language, with its percent and size', () => {
+        const running = 'Downloading the speech model, one time — 37% of 1.6 GB';
+        expect(localizeLiveStatus(tEn, running)).toBe(running);
+        expect(localizeLiveStatus(tEn, 'Downloading the speech model, one time (1.6 GB)'))
+            .toBe('Downloading the speech model, one time (1.6 GB)');
+        expect(localizeLiveStatus(tEn, 'Downloaded the speech model (1.6 GB)')).toBe('Downloaded the speech model (1.6 GB)');
+        expect(ar(running)).toContain('37%');
+        expect(ar(running)).toContain('1.6');
+        expect(ar(running)).toContain('نموذج الكلام');
+    });
+
     it('shows a line it does not know as written', () => {
         for (const label of [
             'Writing file — 120 characters so far',

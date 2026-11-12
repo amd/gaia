@@ -31,6 +31,12 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (m) return t('live.loadingModel', { model: m[1] });
     m = /^Reading page (\d+) of (\d+)…$/.exec(label);
     if (m) return t('live.readingPage', { page: m[1], total: m[2] });
+    m = /^Downloading the speech model, one time \(([\d.]+) GB\)$/.exec(label);
+    if (m) return t('live.speechModelStart', { size: m[1] });
+    m = /^Downloading the speech model, one time — (\d+)% of ([\d.]+) GB$/.exec(label);
+    if (m) return t('live.speechModelPercent', { percent: m[1], size: m[2] });
+    m = /^Downloaded the speech model \(([\d.]+) GB\)$/.exec(label);
+    if (m) return t('live.speechModelDone', { size: m[1] });
     m = /^Downloading (\S+)$/.exec(label);
     if (m) return t('live.downloadingModel', { model: m[1] });
     return label;
