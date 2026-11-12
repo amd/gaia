@@ -494,7 +494,11 @@ func probe(ctx context.Context, base, key string, connect time.Duration) ProbeRe
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 	httpc := &http.Client{
-		Transport:     &http.Transport{DialContext: (&net.Dialer{Timeout: connect}).DialContext},
+		// One request per client: a kept-alive connection would never be closed.
+		Transport: &http.Transport{
+			DialContext:       (&net.Dialer{Timeout: connect}).DialContext,
+			DisableKeepAlives: true,
+		},
 		Timeout:       10 * time.Second,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
