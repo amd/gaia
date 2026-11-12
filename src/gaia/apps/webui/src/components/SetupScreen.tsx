@@ -437,6 +437,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const gatewayShown = gateway?.reachable !== false || choice === 'amd';
     // Only a key GAIA or the server already holds can be left blank.
     const savedKey = chosenProvider?.key_source === 'stored' || chosenProvider?.key_source === 'lemonade';
+    // Local only is on: no cloud provider can be picked, so the cloud card says why instead.
+    const cloudBlocked = cloudProviderBlocked('fireworks') && cloudProviderBlocked('amd');
     const unavailable = (id: ProviderId) => cloudProviderBlocked(id) || (id === 'amd' && gateway?.reachable === false);
     const unavailableNote = (id: ProviderId) => cloudProviderBlocked(id)
         ? t('settings.privacy.localOnlyBlocked')
@@ -713,6 +715,9 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         setCustomizing(true);
         stepTo('models');
     }, [stepTo, running, viewing]);
+
+    // The plan screen's two ways to run GAIA; this PC is the one recommended.
+    const [where, setWhere] = useState<'local' | 'cloud'>('local');
 
     const toCloud = useCallback((provider: 'fireworks' | 'amd') => {
         if (running && viewing != null) return;
@@ -1116,48 +1121,73 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.plan.title')}</h1>
                             <p className="setup-lede">{t('setup.plan.lede')}</p>
-                            <section className="setup-hero" aria-label={t('setup.plan.label')}>
-                                <p className="setup-eyebrow">{selection.chatChosen ? t('setup.plan.yours') : t('setup.plan.recommended')}</p>
-                                <p className="setup-hero-title"><bdi>{t('setup.plan.run', { name: chatEntry?.name ?? '' })}</bdi></p>
-                                <dl className="setup-facts">
-                                    <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection).downloadGb ?? 0)}</bdi></dd></div>
-                                    <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{chatEntry && isNpu(chatEntry) ? t('setup.checks.npu') : hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
-                                    <div><dt>{t('setup.plan.diskAfter')}</dt><dd><bdi dir="ltr">{totals(plan, selection).afterGb != null ? formatSize(Math.max(0, totals(plan, selection).afterGb as number)) : '—'}</bdi></dd></div>
-                                </dl>
-                                <ul className="setup-reasons">
-                                    {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
-                                    {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
-                                        <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
-                                    )}
-                                    <li>{t('setup.plan.why.private')}</li>
-                                    {chatEntry && isNpu(chatEntry) && <li>{t('setup.plan.why.noImagesNpu')}</li>}
-                                    {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
-                                        <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
-                                    )}
-                                </ul>
-                                {pending.length > 0 && <p className="setup-hint">{t('setup.plan.cancelAnytime')}</p>}
-                                <SetupFooter>
+                            <div className="setup-where">
+                                <section className={`setup-hero setup-where-card${where === 'local' ? ' is-active' : ''}`} aria-label={t('setup.plan.label')} onClick={() => !runGoing && setWhere('local')}>
+                                    <p className="setup-eyebrow">{selection.chatChosen ? t('setup.plan.yours') : t('setup.plan.recommended')}</p>
+                                    <p className="setup-hero-title">
+                                        <input type="radio" name="setup-where" checked={where === 'local'} onChange={() => setWhere('local')} disabled={runGoing} aria-labelledby="setup-where-local" />
+                                        <bdi id="setup-where-local">{t('setup.plan.run', { name: chatEntry?.name ?? '' })}</bdi>
+                                    </p>
+                                    <dl className="setup-facts">
+                                        <div><dt>{t('setup.summary.download')}</dt><dd><bdi dir="ltr">{formatSize(totals(plan, selection).downloadGb ?? 0)}</bdi></dd></div>
+                                        <div><dt>{t('setup.plan.runsOn')}</dt><dd><bdi>{chatEntry && isNpu(chatEntry) ? t('setup.checks.npu') : hardware?.gpu_name ?? t('setup.plan.cpu')}</bdi></dd></div>
+                                        <div><dt>{t('setup.plan.diskAfter')}</dt><dd><bdi dir="ltr">{totals(plan, selection).afterGb != null ? formatSize(Math.max(0, totals(plan, selection).afterGb as number)) : '—'}</bdi></dd></div>
+                                    </dl>
+                                    <ul className="setup-reasons">
+                                        {!selection.chatChosen && <li>{t('setup.plan.why.evaluated')}</li>}
+                                        {chatEntry?.need_gb != null && chatEntry.capacity_gb != null && chatEntry.fits && (
+                                            <li>{t('setup.plan.why.fits', { need: formatFitGb(chatEntry.need_gb), have: formatFitGb(chatEntry.capacity_gb) })}</li>
+                                        )}
+                                        <li>{t('setup.plan.why.private')}</li>
+                                        {chatEntry && isNpu(chatEntry) && <li>{t('setup.plan.why.noImagesNpu')}</li>}
+                                        {biggerOption && biggerOption.id !== chatEntry?.id && biggerOption.need_gb != null && biggerOption.capacity_gb != null && (
+                                            <li>{t('setup.plan.why.bigger', { name: biggerOption.name, need: formatFitGb(biggerOption.need_gb), have: formatFitGb(biggerOption.capacity_gb) })}</li>
+                                        )}
+                                    </ul>
+                                    {pending.length > 0 && <p className="setup-hint">{t('setup.plan.cancelAnytime')}</p>}
+                                </section>
+                                <section className={`setup-hero setup-where-card${where === 'cloud' ? ' is-active' : ''}${cloudBlocked ? ' is-disabled' : ''}`} aria-label={t('setup.plan.cloudLabel')} onClick={() => !runGoing && !cloudBlocked && setWhere('cloud')}>
+                                    <p className="setup-hero-title">
+                                        <input type="radio" name="setup-where" checked={where === 'cloud'} onChange={() => setWhere('cloud')} disabled={runGoing || cloudBlocked} aria-labelledby="setup-where-cloud" />
+                                        <span id="setup-where-cloud">{t('setup.plan.cloud')}</span>
+                                    </p>
+                                    {cloudBlocked
+                                        ? <p className="setup-hint">{t('settings.privacy.localOnlyBlocked')}</p>
+                                        : (
+                                            <ul className="setup-reasons">
+                                                <li>{t('setup.plan.cloudWhy.noDownload')}</li>
+                                                <li>{t('setup.plan.cloudWhy.key')}</li>
+                                                <li>{t('setup.plan.cloudWhy.sent')}</li>
+                                            </ul>
+                                        )}
+                                </section>
+                            </div>
+                            <SetupFooter>
+                                <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>
+                                {where === 'cloud' ? (
+                                    <button type="button" className="btn-primary" onClick={useCloud} disabled={runGoing}>{t('setup.continue')}</button>
+                                ) : (
                                     <button type="button" className="btn-primary" onClick={() => (short ? setConfirm({ kind: 'low_disk' }) : void commit(false))} disabled={busy || blocked || runGoing}>
                                         {busy && <Loader2 size={13} className="spin" aria-hidden="true" />} {pending.length ? t('setup.plan.start') : t('setup.plan.startNoDownload')}
                                     </button>
-                                </SetupFooter>
-                                <div className="setup-row">
-                                    <button type="button" className="link-btn" onClick={customize} disabled={runGoing}>{t('setup.plan.customize')}</button>
-                                    <button type="button" className="link-btn" onClick={useCloud} disabled={runGoing}>{t('setup.plan.cloud')}</button>
-                                    {onClose && <button type="button" className="link-btn" onClick={onClose}>{t('setup.backToGaia')}</button>}
-                                </div>
-                                {blocked && (
-                                    <div className="setup-error" role="alert">
-                                        <p>{t('setup.blocked')}</p>
-                                        <details className="dl-details">
-                                            <summary>{t('setup.progress.details')}</summary>
-                                            <pre dir="ltr">{hardware?.blockers.join('\n')}</pre>
-                                        </details>
-                                    </div>
                                 )}
-                                {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
-                                {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
-                            </section>
+                            </SetupFooter>
+                            {onClose && (
+                                <div className="setup-row">
+                                    <button type="button" className="link-btn" onClick={onClose}>{t('setup.backToGaia')}</button>
+                                </div>
+                            )}
+                            {blocked && (
+                                <div className="setup-error" role="alert">
+                                    <p>{t('setup.blocked')}</p>
+                                    <details className="dl-details">
+                                        <summary>{t('setup.progress.details')}</summary>
+                                        <pre dir="ltr">{hardware?.blockers.join('\n')}</pre>
+                                    </details>
+                                </div>
+                            )}
+                            {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
+                            {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
                             <details className="setup-disclosure">
                                 <summary>{t('setup.plan.whatDownloads')}</summary>
                                 <DownloadContents plan={plan} models={pending} />

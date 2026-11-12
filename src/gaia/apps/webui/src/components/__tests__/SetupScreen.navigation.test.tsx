@@ -63,7 +63,8 @@ async function cloudRunGoing() {
     mockedApi.getSetupStatus.mockResolvedValueOnce({ state: 'idle' }).mockResolvedValue(RUNNING);
     render(<SetupScreen onReady={vi.fn()} />);
     await toPlan();
-    fireEvent.click(screen.getByRole('button', { name: 'Use a cloud model' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Use a cloud model' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
     await screen.findByRole('heading', { name: 'Connect a cloud provider' });
     fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'k' } });
     fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
@@ -100,7 +101,7 @@ describe('moving between steps during a run', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Back' }));
         await screen.findByRole('heading', { name: 'Your setup' });
         expect(screen.getByRole('button', { name: 'Customize' })).toBeDisabled();
-        expect(screen.getByRole('button', { name: 'Use a cloud model' })).toBeDisabled();
+        expect(screen.getByRole('radio', { name: 'Use a cloud model' })).toBeDisabled();
     });
 
     it('going back from the plan before any download stays on the checks', async () => {

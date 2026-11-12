@@ -1782,36 +1782,78 @@ _PLAN_THEN_ACT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# "Why does foo.py fail? Don't touch anything": the sentence before a "touch"
+# ban asks for an investigation, so the ban bars edits, not reading.
+_INVESTIGATION_ASK_PATTERN = re.compile(
+    r"^[\s,;:—–-]*(?:(?:please|can\s+you|could\s+you|would\s+you|help\s+me)\s+)?"
+    r"(?:find|investigate|explain|review|debug|diagnose|analy[sz]e"
+    r"|summari[sz]e|tell\s+me|show\s+me|figure\s+out|look|check|inspect|read"
+    r"|open|search|trace|describe|audit|walk\s+me\s+through)\b",
+    re.IGNORECASE,
+)
+# Something in the workspace to investigate, not small talk ("how are you?").
+_WORK_OBJECT_PATTERN = re.compile(
+    r"[\w-]\.[A-Za-z]{1,6}\b|[\\/]"
+    r"|\b(?:bug|error|fail\w*|crash\w*|build|tests?|code|function|class"
+    r"|module|config\w*|logs?|script|repo\w*|exception|trace\w*|files?"
+    r"|folder|director(?:y|ies))\b",
+    re.IGNORECASE,
+)
 
-def _no_action_requests(request: str) -> List[bool]:
-    """Each way the user's own words this turn forbid acting; True for a plan ask.
 
-    A ban the request lifts itself, a report of an earlier turn, and a plan
-    followed by "then do it" are not such a request.
+def _asks_to_investigate(text: str) -> bool:
+    """Whether the clause just before a ban asks for something to be looked into."""
+    # The ban's own sentence so far, or the sentence it follows.
+    clause = re.split(r"(?<=[.!?])\s+|\n", text.rstrip())[-1]
+    if not _WORK_OBJECT_PATTERN.search(clause):
+        return False
+    return bool(
+        _INVESTIGATION_ASK_PATTERN.match(clause) or clause.rstrip().endswith("?")
+    )
+
+
+def _no_action_requests(request: str) -> List[str]:
+    """Each way the user's own words this turn forbid acting, by kind.
+
+    "plan" asks for a plan and nothing else, "edits" bars edits during an
+    investigation the request asks for, "act" bars acting at all. A ban the
+    request lifts itself, a report of an earlier turn, and a plan followed by
+    "then do it" are not such a request.
     """
     text = (request or "").replace("’", "'")
     found = []
     for match in _NO_ACTION_REQUEST_PATTERN.finditer(text):
         after = text[match.end() :]
+        lowered = match.group().lower()
         if match.group("forbid"):
             if _NO_ACTION_EXCEPTION_PATTERN.match(after):
                 continue
-            narrative = match.group().lower().startswith(("without", "never"))
+            narrative = lowered.startswith(("without", "never"))
             if narrative and _NARRATED_PAST_PATTERN.search(text[: match.start()]):
+                continue
+            if "touch" in lowered and _asks_to_investigate(text[: match.start()]):
+                found.append("edits")
                 continue
         elif _PLAN_THEN_ACT_PATTERN.search(after):
             continue
-        found.append("plan" in match.group().lower())
+        found.append("plan" if "plan" in lowered else "act")
     return found
 
 
 def _asks_for_no_action(request: str) -> bool:
     """Whether the user's own words this turn forbid acting.
 
-    Such a request wins over GAIA's nudges to look first or to do an
-    announced step.
+    Such a request wins over GAIA's nudges to do an announced step.
     """
     return bool(_no_action_requests(request))
+
+
+def _asks_not_to_look(request: str) -> bool:
+    """Whether the ban also covers looking, so look-first nudges stay off.
+
+    "Why does foo.py fail? Don't touch anything" still wants foo.py read.
+    """
+    return any(kind != "edits" for kind in _no_action_requests(request))
 
 
 def _asks_for_a_plan_only(request: str) -> bool:
@@ -1820,7 +1862,7 @@ def _asks_for_a_plan_only(request: str) -> bool:
     "Use no tools" alone still wants an answer: one that states a file's
     contents unread keeps its note. A plan names files it has yet to read.
     """
-    return any(_no_action_requests(request))
+    return "plan" in _no_action_requests(request)
 
 
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
@@ -11244,8 +11286,10 @@ Do NOT wrap conversational replies in JSON.
         # "Do not run anything, answer only with a plan": no nudge to act.
         request_text = self._request_text(user_input)
         no_action_requested = _asks_for_no_action(request_text)
+        # "Why does foo.py fail? Don't touch anything": look, but don't edit.
+        no_look_requested = _asks_not_to_look(request_text)
         self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
-        if no_action_requested:
+        if no_look_requested:
             grounding_fired.add(LOOK)
 
         steps_taken = 0
@@ -13478,7 +13522,7 @@ Do NOT wrap conversational replies in JSON.
                 # Plan steps run outside tool_call_log; the turn record has them.
                 if (
                     not look_first_reprompted
-                    and not no_action_requested
+                    and not no_look_requested
                     and not tool_call_log
                     and not self._turn_tool_executions
                     and steps_taken < steps_limit - 1

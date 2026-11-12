@@ -438,6 +438,20 @@ test('new chat', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    test(`the new-chat message box stays put while typing (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const box = page.locator('.new-chat textarea').first();
+        await expect(box).toBeVisible();
+        const before = (await box.boundingBox())!;
+        await box.fill('h');
+        await shot(page, `new-chat-typed-${locale}`);
+        const after = (await box.boundingBox())!;
+        expect(Math.abs(after.y - before.y), 'the box jumped on the first keystroke').toBeLessThan(2);
+        await expect(page.locator('.new-chat-greeting')).toBeVisible();
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
         await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
             json: { cards: [], working_folder: { path: '/home/you/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true } },
@@ -588,6 +602,25 @@ for (const locale of ['ar', 'en']) {
         }
         expect(await audit(page)).toEqual([]);
         await answer.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a sent message opened for editing (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().focus();
+        await page.keyboard.press('ArrowUp');
+        const editor = page.locator('.msg-edit-input');
+        await expect(editor).toBeFocused();
+        await editor.press('End');
+        await page.keyboard.type(' and the owners');
+        expect(await audit(page)).toEqual([]);
+        const [box, bubble] = [await editor.boundingBox(), await page.locator('.msg-user:has(.msg-edit) .msg-inner').boundingBox()];
+        expect(box!.width).toBeGreaterThan(bubble!.width * 0.8);
+        await page.screenshot({ path: info.outputPath(`edit-message-${locale}.png`) });
+        await page.locator('.msg-assistant').last().hover();
+        await page.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
     });
 }
 

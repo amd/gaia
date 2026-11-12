@@ -7,6 +7,7 @@ import type { UseAttachments } from '../hooks/useAttachments';
 import { useT } from '../i18n/useT';
 import { middleTruncate } from '../utils/format';
 import { isVideoFile } from '../utils/mediaFiles';
+import { isEditLastKey } from '../utils/editLast';
 import type { Attachment } from '../types';
 import './Composer.css';
 
@@ -37,6 +38,8 @@ interface ComposerProps {
     leftControls?: ReactNode;
     /** Small inline controls before the send button (model). */
     rightControls?: ReactNode;
+    /** Up-arrow in an empty box: open the last sent message for editing. */
+    onEditLast?: () => void;
 }
 
 const MAX_INPUT_HEIGHT = 240;
@@ -46,7 +49,7 @@ export const MAX_MESSAGE_CHARS = 100_000;
 
 export function Composer({
     value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, answering = false, disabledReason, attachments,
-    placeholder, autoFocus, inputRef, leftControls, rightControls,
+    placeholder, autoFocus, inputRef, leftControls, rightControls, onEditLast,
 }: ComposerProps) {
     const t = useT();
     const ownRef = useRef<HTMLTextAreaElement | null>(null);
@@ -84,11 +87,16 @@ export function Composer({
     }, [value, shownPlaceholder, textareaRef]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (onEditLast && isEditLastKey(e, value)) {
+            e.preventDefault();
+            onEditLast();
+            return;
+        }
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             if (canSend) onSubmit();
         }
-    }, [canSend, onSubmit]);
+    }, [canSend, onSubmit, onEditLast, value]);
 
     const handleDrop = useCallback((e: React.DragEvent) => {
         if (!e.dataTransfer?.files?.length) return;

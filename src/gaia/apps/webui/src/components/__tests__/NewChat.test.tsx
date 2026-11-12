@@ -263,14 +263,25 @@ describe('NewChat empty state', () => {
         expect(container.querySelector('main.new-chat > canvas.npu-backdrop')).toHaveAttribute('aria-hidden', 'true');
     });
 
-    it('drops the composer to the bottom once typing starts, and back when the box is cleared', () => {
+    it('keeps the composer and greeting in place while typing', () => {
         const { container } = render(<NewChat onSend={vi.fn()} />);
         const main = container.querySelector('main.new-chat')!;
-        expect(main).not.toHaveClass('is-docked');
         fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'h' } });
-        expect(main).toHaveClass('is-docked');
+        expect(main).not.toHaveClass('is-docked');
+        expect(container.querySelector('.new-chat-greeting')).not.toHaveAttribute('aria-hidden', 'true');
         fireEvent.change(screen.getByLabelText('Message'), { target: { value: '' } });
         expect(main).not.toHaveClass('is-docked');
+    });
+
+    it('drops the composer to the bottom when the message is sent', async () => {
+        let finish: (v: boolean) => void = () => {};
+        const onSend = vi.fn(() => new Promise<boolean>((r) => { finish = r; }));
+        const { container } = render(<NewChat onSend={onSend} />);
+        const main = container.querySelector('main.new-chat')!;
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'hello' } });
+        fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+        await waitFor(() => expect(main).toHaveClass('is-docked'));
+        await act(async () => { finish(true); });
     });
 
     it('shows the working folder under the message box, where its picker opens', async () => {
