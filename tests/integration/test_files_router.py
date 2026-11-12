@@ -376,6 +376,16 @@ class TestFileBrowse:
             len(data["quick_links"]),
         )
 
+    def test_browse_says_the_home_folder_cannot_be_given_to_a_chat(
+        self, client, home_tmp_dir
+    ):
+        """The picker learns at browse time what the chat would refuse after Send."""
+        home = client.get("/api/files/browse").json()
+        assert "your home directory" in home["folder_refusal"]
+
+        sub = client.get("/api/files/browse", params={"path": str(home_tmp_dir)})
+        assert sub.json()["folder_refusal"] is None
+
     def test_browse_specific_directory(self, client, home_tmp_dir, sample_text_file):
         """Browse a known temp directory and verify the file appears."""
         resp = client.get("/api/files/browse", params={"path": str(home_tmp_dir)})

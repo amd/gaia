@@ -31,7 +31,7 @@ from gaia.env import child_env
 from gaia.upload_names import upload_copy_name
 from gaia.utils.user_folders import documents_dir
 
-from .. import generated_media
+from .. import generated_media, session_environment
 from ..models import (
     BrowseResponse,
     FileEntry,
@@ -398,11 +398,18 @@ async def browse_files(path: Optional[str] = None):
     # Sort: folders first, then files, alphabetically within each group
     entries.sort(key=lambda e: (e.type != "folder", e.name.lower()))
 
+    try:
+        session_environment.check_folder(str(resolved))
+        folder_refusal = None
+    except session_environment.EnvironmentChangeError as e:
+        folder_refusal = str(e)
+
     return BrowseResponse(
         current_path=str(resolved),
         parent_path=parent_path,
         entries=entries,
         quick_links=quick_links,
+        folder_refusal=folder_refusal,
     )
 
 
