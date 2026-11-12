@@ -705,6 +705,36 @@ def test_active_names_a_cloud_model_only_lemonade_lists_as_cloud(
     assert body["display_name"] == "big-model"
 
 
+def test_active_reads_the_catalog_to_name_a_cloud_model_on_a_cold_start(
+    client, lemonade, keys, db, monkeypatch
+):
+    """Right after a restart nothing has read Lemonade's list yet."""
+    model = "opencode.big-model"
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    monkeypatch.setattr(lemonade_client, "_CLOUD_PROVIDERS", {})
+    lemonade.models = [{"id": model, "recipe": "cloud", "cloud_provider": "opencode"}]
+    db.set_setting("custom_model", model)
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["remote"] is True
+    assert body["downloaded"] is None
+    assert body["provider_name"] == "opencode"
+
+
+def test_active_makes_no_claim_when_the_catalog_is_unreadable(
+    client, lemonade, keys, db, monkeypatch
+):
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    monkeypatch.setattr(lemonade_client, "_CLOUD_PROVIDERS", {})
+    lemonade.down = True
+    db.set_setting("custom_model", "opencode.big-model")
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["downloaded"] is None
+
+
 def test_active_names_the_provider_of_a_known_cloud_model(client, lemonade, keys, db):
     db.set_setting("custom_model", "amd.DeepSeek-V4.1-Flash")
     body = client.get("/api/providers/active").json()

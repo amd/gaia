@@ -611,6 +611,32 @@ def cloud_provider_name(model_id: str) -> Optional[str]:
     return _ui_cloud_provider(model_id)
 
 
+def _learn_cloud_models(model_id: str) -> None:
+    """Read Lemonade's catalog when only it can say whether *model_id* is cloud.
+
+    Right after a restart nothing has taught the in-memory cloud check yet.
+    """
+    from gaia.llm.lemonade_client import (
+        find_model_requirement,
+        may_be_cloud_model,
+        record_cloud_models,
+    )
+
+    if (
+        cloud_provider_name(model_id) is not None
+        or not may_be_cloud_model(model_id)
+        or find_model_requirement(model_id) is not None
+    ):
+        return
+    try:
+        status, body = _lemonade("GET", "models?show_all=true")
+    except ProviderError as e:
+        logger.info("Could not tell whether %s is a cloud model: %s", model_id, e)
+        return
+    if status < 400:
+        record_cloud_models(body)
+
+
 def model_label(model_id: str) -> str:
     cloud = cloud_provider_name(model_id)
     if cloud is None:
@@ -648,6 +674,7 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
             "is_default": True,
             "config_error": str(e),
         }
+    _learn_cloud_models(model)
     cloud = cloud_provider_name(model)
     return {
         # The provider tab; ``local`` for a cloud provider GAIA has no tab for.
