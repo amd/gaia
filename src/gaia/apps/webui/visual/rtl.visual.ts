@@ -422,6 +422,9 @@ for (const [title, locale, name] of [
         await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
         await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
         await expect(page.locator('.composer-attachment.has-error')).toHaveCount(0);
+        // A long name is cut in the middle, so its extension stays in view.
+        await expect(page.locator('.composer-attachment-name')).toHaveText(/\.(mp4|m4a)$/);
+        await shot(page, `attachment-name-${locale}`);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
     });
@@ -433,6 +436,31 @@ test('new chat', async ({ page }) => {
     await expect(page.locator('.sb-location-name')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const row = page.locator('.sb-row').filter({ hasText: 'Compare two lease PDFs' });
+        await expect(row).toBeVisible();
+        const rowBox = (await row.boundingBox())!;
+        const titleBox = (await row.locator('.sb-row-title').boundingBox())!;
+        // Rename, pin and delete appear over the row on hover, not in space kept beside the title.
+        expect(titleBox.width + 30, 'title cut short to leave room for hidden buttons').toBeGreaterThan(rowBox.width * 0.85);
+        await row.hover();
+        await expect(row.locator('.sb-row-delete')).toBeVisible();
+        await shot(page, `sidebar-row-hover-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        // While renaming, pin and delete sit beside the name box, not over the end of what is typed.
+        await row.locator('.sb-row-rename').click();
+        // The title gives way to the name box, so find the row by it now.
+        const edit = page.locator('.sb-row-edit');
+        await expect(edit).toBeFocused();
+        const editBox = (await edit.boundingBox())!;
+        const actionsBox = (await page.locator('.sb-row:has(.sb-row-edit) .sb-row-actions').boundingBox())!;
+        const overlap = Math.min(editBox.x + editBox.width, actionsBox.x + actionsBox.width) - Math.max(editBox.x, actionsBox.x);
+        expect(overlap, 'pin and delete cover the name being typed').toBeLessThanOrEqual(0);
+    });
+}
 
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
@@ -496,6 +524,28 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         await page.locator('.render-guide').first().screenshot({ path: info.outputPath(`guide-card-${locale}.png`) });
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the latest answer's actions sit under its text, at the start edge (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const answer = page.locator('.msg-assistant').last();
+        await expect(answer).toContainText('Action items from Aug 28');
+        const actions = answer.locator('.msg-actions');
+        await expect(actions).toHaveCSS('opacity', '1');
+        const [row, body] = [await actions.boundingBox(), await answer.locator('.msg-body').boundingBox()];
+        expect(row!.y).toBeGreaterThanOrEqual(body!.y + body!.height - 1);
+        const startGap = locale === 'ar'
+            ? Math.abs(row!.x + row!.width - (body!.x + body!.width))
+            : Math.abs(row!.x - body!.x);
+        expect(startGap).toBeLessThan(8);
+        for (const button of await actions.locator('button').all()) {
+            const box = await button.boundingBox();
+            expect(Math.min(box!.width, box!.height)).toBeGreaterThanOrEqual(28);
+        }
+        expect(await audit(page)).toEqual([]);
+        await answer.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
     });
 }
 
@@ -2847,6 +2897,30 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the context meter explains a fresh chat's fill and shows a dash before it is measured (${locale})`, async ({ page }) => {
+        const fresh = { ...MEASURED_CONTEXT, system: 7700, tools: 16000, documents: 0, history: 300, used: 24000, at_risk: [], at_risk_tokens: 0 };
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: fresh })));
+        await page.locator('button.context-meter').click();
+        await expect(page.locator('.context-meter-note.is-setup')).toBeVisible();
+        await shot(page, `context-meter-setup-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a reopened chat's context meter shows a dash, not an empty bar (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({
+                json: { available: false, reason: "Measured again with your next message: GAIA restarted or switched models since this chat's last answer." },
+            })));
+        const meter = page.locator('.context-meter.is-empty');
+        await expect(meter).toBeVisible();
+        await expect(meter.locator('.context-meter-bar')).toHaveCount(0);
+        await shot(page, `context-meter-unmeasured-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     await open(page);
@@ -2862,6 +2936,22 @@ test('composer chips stay whole at phone width', async ({ page }) => {
     const sorted = [...boxes].sort((x, y) => x.left - y.left);
     expect(sorted.filter((box, i) => i > 0 && box.left < sorted[i - 1].right - 1)).toEqual([]);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`a narrow window keeps the model name readable in the composer (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 820, height: 640 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
+        await expect(page.locator('button.context-meter')).toBeVisible();
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        await shot(page, `composer-narrow-${locale}`);
+        // The day's spend and the context bar give way before the model name is cut.
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 test('the library path row fits a phone', async ({ page }) => {
     await open(page);
