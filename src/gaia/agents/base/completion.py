@@ -155,7 +155,7 @@ _COUNTERFACTUAL = re.compile(
     # The clause's own ";" or dash goes too, or the save after it reads as
     # a second clause that destination_paths never reaches.
     r"(?:\s*(?:[;—–]|-(?=\s)))?"
-    rf"(?P<join>(?:\s*\b(?:and|so|then|instead)\b)+\s+(?={_WRITE_VERB}\b))?",
+    rf"(?P<join>,?(?:\s*\b(?:and|but|so|then|instead|yet)\b)+\s+(?={_WRITE_VERB}\b))?",
     re.I,
 )
 

@@ -100,4 +100,42 @@ describe('the first message of a new chat', () => {
         expect(document.querySelector('.msg-user')).toBe(shown);
         expect(document.querySelector('[data-message-id="42"]')?.classList.contains('msg-settled')).toBe(true);
     });
+
+    it('offers no message actions until the first message is saved', async () => {
+        let callbacks: api.StreamCallbacks | null = null;
+        mockedApi.sendMessageStream.mockImplementation((_sid, _msg, cbs) => {
+            callbacks = cbs as api.StreamCallbacks;
+            return new AbortController();
+        });
+        mockedApi.getSession.mockResolvedValue({ ...SESSION, title: 'Sleep tips', message_count: 2 });
+        render(<ChatView sessionId={SESSION.id} />);
+
+        const actionsOn = (sel: string) => Array.from(document.querySelectorAll(`${sel} .msg-actions button`))
+            .map((b) => b.getAttribute('aria-label'));
+        const NO_ACTIONS = ['Edit message', 'Resend message', 'Delete message', 'Try again'];
+        expect(document.querySelector('[data-message-id="-2"]')).not.toBeNull();
+        expect(actionsOn('[data-message-id="-2"]')).not.toEqual(expect.arrayContaining([expect.toBeOneOf(NO_ACTIONS)]));
+        expect(document.querySelector('.msg-try-again')).toBeNull();
+
+        await act(async () => { finishLoad(); });
+        await waitFor(() => expect(callbacks).not.toBeNull());
+        expect(actionsOn('.msg-user')).not.toEqual(expect.arrayContaining([expect.toBeOneOf(NO_ACTIONS)]));
+
+        mockedApi.getMessages.mockResolvedValue({
+            messages: [
+                { id: 41, session_id: SESSION.id, role: 'user', content: QUESTION, created_at: '', rag_sources: null },
+                { id: 42, session_id: SESSION.id, role: 'assistant', content: ANSWER, created_at: '', rag_sources: null },
+            ],
+            total: 2,
+        });
+        await act(async () => {
+            callbacks!.onDone({ type: 'done', message_id: 42, content: ANSWER } as StreamEvent);
+        });
+
+        await waitFor(() => expect(actionsOn('[data-message-id="41"]')).toEqual(
+            expect.arrayContaining(['Edit message', 'Resend message', 'Delete message']),
+        ));
+        expect(document.querySelector('[data-message-id="-2"]')).toBeNull();
+        await waitFor(() => expect(actionsOn('[data-message-id="42"]')).toContain('Try again'));
+    });
 });

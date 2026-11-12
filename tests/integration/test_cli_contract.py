@@ -313,6 +313,19 @@ def _not_timed_out_on_known_bug(rule: str, command: Command, run: Run) -> None:
         )
 
 
+def _no_hang_when_down(command: Command, up: Run, down: Run) -> None:
+    """A command that finishes with the server up must not outlast the limit with it down.
+
+    Retrying a dead server past the limit is how `gaia download --list` exits 0
+    on a down server and still slips past the exit-code check.
+    """
+    assert up.code is None or down.code is not None, (
+        f"`gaia {command.name}` finished with the model server up, but with it "
+        f"down it was still running at the {TIMEOUT_S} s limit:\n"
+        f"{down.output[-2000:]}"
+    )
+
+
 def _no_traceback(command: Command, run: Run, when: str) -> None:
     assert (
         "Traceback (most recent call last)" not in run.output
@@ -360,6 +373,7 @@ def test_model_server_contract(command, tmp_path):
         args += ["--base-url", DEAD_URL]
     down = _run(args, tmp_path / "down", DEAD_URL)
     _not_timed_out_on_known_bug("model server", command, down)
+    _no_hang_when_down(command, up, down)
     if down.code is None or command.name in REPORTS_SERVER_STATE:
         return
     assert down.code != 0 and down.output.strip(), (
@@ -423,3 +437,18 @@ def test_a_timeout_fails_a_known_bug_cell_instead_of_xpassing():
         assert mark.kwargs["strict"] is True
         assert mark.kwargs["raises"] is AssertionError
     assert not issubclass(pytest.fail.Exception, AssertionError)
+
+
+@pytest.mark.parametrize(
+    "up_code, down_code, hangs",
+    [(0, None, True), (1, None, True), (0, 1, False), (None, None, False)],
+)
+def test_a_hang_on_a_down_server_is_not_a_pass(up_code, down_code, hangs):
+    """Only a command that also outlasts the limit with the server up may do so down."""
+    command = Command(["download", "--list"], False)
+    up, down = Run(up_code, "", ""), Run(down_code, "", "")
+    if hangs:
+        with pytest.raises(AssertionError, match="still running"):
+            _no_hang_when_down(command, up, down)
+    else:
+        _no_hang_when_down(command, up, down)
