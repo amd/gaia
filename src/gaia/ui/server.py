@@ -445,7 +445,7 @@ class _ScheduledRuns:
         await turn_queue.acquire(f"schedule:{uuid.uuid4()}")
         try:
             cancel = threading.Event()
-            # Background mode: nobody is watching, so gated tools are denied.
+            # Background mode: nobody can approve, so a gated step ends the run.
             console = SSEOutputHandler(background_mode=True)
             worker = run_in_own_thread(
                 lambda: _run_scheduled_prompt(

@@ -301,7 +301,7 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 `changes_turn_id`, `surface`) is optional.
 
 `max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
-is **150** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
+is **1000** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
 `GAIA_AGENT_MAX_STEPS` in the sidecar's launch environment, still wins.
 
 `context` is the transcript you push. It replaces the agent's history for the

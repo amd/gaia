@@ -96,6 +96,16 @@ variables tune the cap:
 Both must be whole numbers of at least 1; any other value stops GAIA at startup
 with an error naming the variable.
 
+### Math-library threads
+
+Importing `gaia` sets `OPENBLAS_NUM_THREADS=2` when none of
+`OPENBLAS_NUM_THREADS`, `GOTO_NUM_THREADS` or `OMP_NUM_THREADS` is set. The
+OpenBLAS that numpy and FAISS bundle otherwise reserves about 150 MB of memory
+per CPU thread when it loads, about 5 GB per process on a 32-thread PC. Processes
+GAIA starts inherit the value. Set one of those variables before the process
+starts to choose another number; an application that imports numpy before
+`gaia` keeps numpy's own default.
+
 ---
 
 ## Local context window

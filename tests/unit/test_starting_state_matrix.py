@@ -153,15 +153,6 @@ RULES = {
 #: Cells that fail today, each naming its issue. Strict: fixing one without
 #: deleting its line fails the run.
 KNOWN_BUGS = {
-    ("cloud_picked_in_app", "memory_run_inference"): (
-        "amd/gaia#7218, fixed by open PR amd/gaia#7270"
-    ),
-    ("empty_cache", "memory_run_inference"): (
-        "amd/gaia#7218, fixed by open PR amd/gaia#7270"
-    ),
-    ("cloud_custom_model_id", "start_up_warm_up"): (
-        "amd/gaia#7217, fixed by open PR amd/gaia#7271"
-    ),
     ("cloud_picked_in_app", "scheduled_run"): "amd/gaia#7329, no fix yet",
     ("cloud_custom_model_id", "scheduled_run"): "amd/gaia#7329, no fix yet",
 }
