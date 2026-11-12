@@ -106,6 +106,25 @@ SAVE_CLAIMS = [
         "No file was harmed; I saved the output to out.csv.",
         id="negated-subject-elsewhere-then-a-save",
     ),
+    # A file is still a file when the sentence also talks about memory.
+    pytest.param("I saved report.md.", id="bare-file-object"),
+    pytest.param(
+        "The chart was saved as chart.png in the output folder.",
+        id="saved-as-a-file-name",
+    ),
+    pytest.param("The `report.md` I saved has the full table.", id="file-i-saved"),
+    pytest.param(
+        "I have stored the summary in memory.md as you asked.",
+        id="stored-in-a-file-called-memory",
+    ),
+    pytest.param(
+        "I saved it as your new default config file at ~/.app/config.json.",
+        id="saved-it-as-your-file",
+    ),
+    pytest.param(
+        "Your slot is stored in memory, and I saved the list to `slots.txt`.",
+        id="memory-then-a-real-save",
+    ),
 ]
 
 NON_CLAIMS = [
@@ -192,6 +211,31 @@ NON_CLAIMS = [
     pytest.param("None of the files were written.", id="none-of-the-files"),
     pytest.param("I have created no files.", id="i-have-created-no-files"),
     pytest.param("I saved nothing to disk.", id="i-saved-nothing"),
+    # rc18 round 2: a remembered value described as stored, beside a file.
+    pytest.param(
+        "(For what it's worth, that's a different thing from the `granite-1812` "
+        "I have stored as your bookshelf slot for volume 8 - the file's BIGFACT "
+        "line says `copper-1397`.)",
+        id="value-i-have-stored-as-your",
+    ),
+    pytest.param(
+        "The value I have stored as your bookshelf slot is granite-1812, which "
+        "differs from the file.",
+        id="stored-as-your",
+    ),
+    pytest.param(
+        "That's the `blue-42` I saved earlier, not the one in the file.",
+        id="backticked-value-i-saved",
+    ),
+    pytest.param(
+        "Your preferred folder is stored in my memory as `~/work`, and the file "
+        "agrees.",
+        id="is-stored-in-my-memory",
+    ),
+    pytest.param(
+        "I have saved to memory that your file naming preference is snake_case.",
+        id="saved-to-memory",
+    ),
     pytest.param("", id="empty"),
 ]
 

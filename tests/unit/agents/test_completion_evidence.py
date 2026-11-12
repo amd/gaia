@@ -1539,3 +1539,29 @@ def test_a_real_save_claim_on_a_read_only_question_still_has_a_gap(tmp_path):
     ledger = CompletionEvidence(_VENDOR_QUERY, str(tmp_path))
     answer = _VENDOR_ANSWER + " I saved the code to `renewal.txt`."
     assert "renewal.txt" in " ".join(ledger.gaps(answer, _claims_file_write))
+
+
+# rc18 round 2: a read-only answer that mentions a stored memory.
+_WAREHOUSE_QUERY = (
+    "Read the whole file C:/docs/big_8.txt and tell me the warehouse code "
+    "stated on the BIGFACT-8 line."
+)
+_WAREHOUSE_ANSWER = (
+    "The BIGFACT-8 line states the warehouse code is copper-1397. (For what "
+    "it's worth, that's a different thing from the `granite-1812` I have stored "
+    "as your bookshelf slot for volume 8 - the file's BIGFACT line says "
+    "`copper-1397`.)"
+)
+
+
+def test_a_stored_memory_mentioned_in_a_read_only_answer_has_no_gap(tmp_path):
+    ledger = CompletionEvidence(_WAREHOUSE_QUERY, str(tmp_path))
+    soft = []
+    assert ledger.gaps(_WAREHOUSE_ANSWER, _write_claims_for(ledger), soft=soft) == []
+    assert soft == []
+
+
+def test_a_stored_memory_does_not_cover_an_unbacked_save_beside_it(tmp_path):
+    ledger = CompletionEvidence(_WAREHOUSE_QUERY, str(tmp_path))
+    answer = _WAREHOUSE_ANSWER + "\n\nI saved the code to `report.md`."
+    assert "report.md" in " ".join(ledger.gaps(answer, _write_claims_for(ledger)))

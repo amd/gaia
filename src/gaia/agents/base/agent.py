@@ -1990,13 +1990,38 @@ _NEGATED_SUBJECT_PATTERN = re.compile(
 _NEGATED_OBJECT_PATTERN = re.compile(rf"\s+{_NEGATED_OUTPUT}\b", re.IGNORECASE)
 
 
+# "... stored as your bookshelf slot", "saved to memory": what was kept is a
+# remembered fact. "it" between verb and "as" is a file ("saved it as your …").
+_REMEMBERED_AFTER_PATTERN = re.compile(
+    r"\s+(?:earlier\s+|previously\s+)?(?:as\s+your\b"
+    r"|(?:in|to|into)\s+(?:my\s+|your\s+)?(?:long-term\s+)?memor(?:y|ies)\b(?!\.\w))",
+    re.IGNORECASE,
+)
+# "the `granite-1812` I have stored": the thing kept is a value, not a path.
+_VALUE_BEFORE_PATTERN = re.compile(r"`([^`\n]+)`\s+(?:that\s+|which\s+)?$")
+
+
+def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool:
+    """Whether this write verb tells of a fact kept in memory, not of a file."""
+    if _REMEMBERED_AFTER_PATTERN.match(sentence, match.end()):
+        return True
+    head = _VALUE_BEFORE_PATTERN.search(sentence[: match.start()])
+    if head is None:
+        return False
+    token = head.group(1)
+    return not (re.search(r"[\\/~]", token) or _names_a_file(token))
+
+
 def _is_write_claim(sentence: str, denials: bool) -> bool:
     """A write verb in *sentence*; with *denials* false, not one negated."""
     return any(
-        denials
-        or (
-            not _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
-            and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
+        not _describes_a_remembered_value(sentence, match)
+        and (
+            denials
+            or (
+                not _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
+                and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
+            )
         )
         for pattern in _FILE_WRITE_CLAIM_PATTERNS
         for match in pattern.finditer(sentence)
