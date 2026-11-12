@@ -249,6 +249,43 @@ def test_a_cancelled_task_stops_and_gets_no_response():
     assert not any(f.get("id") == 10 for f in wire.frames)
 
 
+def test_a_cancelled_id_is_forgotten_once_its_call_ends():
+    agent = FakeAgent(block=30)
+    server, wire = _server(agent)
+    _call(server, 14, "gaia_task", {"task": "slow"})
+    deadline = time.monotonic() + 5
+    while agent.saw_cancel is None and time.monotonic() < deadline:
+        time.sleep(0.01)
+    _send(server, None, "notifications/cancelled", {"requestId": 14})
+    for call in server._calls:
+        call.join(5)
+    assert server._cancelled == set()
+    # A client reusing the id after the cancel gets a normal reply.
+    agent.block = None
+    _call(server, 14, "gaia_task", {"task": "again"})
+    assert wire.wait_for(14)["result"]["isError"] is False
+
+
+def test_extra_arguments_cannot_widen_what_a_task_may_do():
+    agent = FakeAgent(answer="ok")
+    server, wire = _server(agent)
+    _call(
+        server,
+        15,
+        "gaia_task",
+        {
+            "task": "read it",
+            "full_access": True,
+            "skip_permissions": True,
+            "allowed_paths": ["/"],
+        },
+    )
+    assert wire.wait_for(15)["result"]["isError"] is False
+    assert [q for q, _ in agent.queries] == ["read it"]
+    assert not hasattr(agent, "full_access")
+    assert not hasattr(agent, "allowed_paths")
+
+
 def test_tasks_run_one_at_a_time_on_the_one_agent():
     agent = FakeAgent(block=0.2)
     server, wire = _server(agent)

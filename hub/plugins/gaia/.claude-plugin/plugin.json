@@ -8,5 +8,12 @@
   "homepage": "https://amd-gaia.ai/docs/guides/claude-code",
   "repository": "https://github.com/amd/gaia",
   "license": "MIT",
-  "keywords": ["gaia", "amd", "ryzen-ai", "local-llm", "mcp", "offload"]
+  "keywords": ["gaia", "amd", "ryzen-ai", "local-llm", "mcp", "offload"],
+  "mcpServers": {
+    "gaia": {
+      "type": "stdio",
+      "command": "gaia-agent",
+      "args": ["--mcp"]
+    }
+  }
 }

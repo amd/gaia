@@ -53,8 +53,8 @@ loads the same plugins.
 | # | Item | Done when |
 |---|---|---|
 | 1 | **`gaia-agent --mcp`**: stdio JSON-RPC server, background agent build, `gaia_task` and `gaia_status`, gated tools denied, a fresh conversation per task, a per-task time limit | Unit tests drive `initialize` → `tools/list` → `tools/call` against a fake agent and assert the exact wire shapes |
-| 2 | **Plugin and marketplace**: `plugin.json`, `.mcp.json`, the `gaia-offload` skill, root `marketplace.json` | `claude plugin validate` passes. A test checks the manifest paths exist and the MCP command matches the binary's flag |
-| 3 | **Docs**: a guide page (install, what gets offloaded, what doesn't, troubleshooting), CLI reference for `--mcp`, links from the two plans above | Pages listed in `docs.json` and the link checker passes |
+| 2 | **Plugin and marketplace**: `plugin.json` (which declares the MCP server), the `gaia-offload` skill, root `marketplace.json` | `claude plugin validate` passes. A test checks the manifest paths exist and the MCP command matches the binary's flag |
+| 3 | **Docs**: a guide page (install, what gets offloaded, what doesn't, troubleshooting), the `gaia-agent --mcp` flag in the agent's SPEC.md (cli.mdx covers only the `gaia` command), links from the two plans above | Pages listed in `docs.json` and the link checker passes |
 | 4 | **Real run**: install the plugin from a local checkout, have Claude offload a summary to GAIA on this PC | The answer comes from the local model, with the run's screenshots and timing in the PR |
 | 5 | **CI golden flow** | Part of [Two-command setup](/plans/embedded-onboarding) item 7, not this PR |
 | 6 | **Claude desktop Chat tab** | A `.mcpb` desktop extension that launches the same `gaia-agent --mcp`. Later PR |

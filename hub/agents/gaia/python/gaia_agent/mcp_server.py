@@ -472,7 +472,9 @@ class McpServer:
         except TaskError as exc:
             result = _error_result(str(exc))
         # A cancelled request gets no response, as the protocol asks.
-        if request_id not in self._cancelled:
+        if request_id in self._cancelled:
+            self._cancelled.discard(request_id)
+        else:
             self._reply(request_id, result)
 
 

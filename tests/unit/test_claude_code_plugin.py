@@ -6,6 +6,7 @@ with the ``gaia-agent`` flag they launch."""
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from gaia_agent.entry import MCP_SELECTOR
@@ -34,12 +35,27 @@ def test_the_marketplace_points_at_a_plugin_with_the_same_name_and_version():
 
 
 def test_the_mcp_server_launches_the_agent_binary_in_mcp_mode():
-    servers = _load(_plugin_dir() / ".mcp.json")["mcpServers"]
+    # In plugin.json, not .mcp.json: the repo's .gitignore drops every .mcp.json.
+    servers = _load(_plugin_dir() / ".claude-plugin" / "plugin.json")["mcpServers"]
     assert servers["gaia"] == {
         "type": "stdio",
         "command": "gaia-agent",
         "args": [MCP_SELECTOR],
     }
+
+
+def test_every_plugin_file_is_tracked_by_git():
+    tracked = subprocess.run(
+        ["git", "ls-files", "--", str(_plugin_dir())],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    on_disk = [
+        p.relative_to(REPO).as_posix() for p in _plugin_dir().rglob("*") if p.is_file()
+    ]
+    assert sorted(on_disk) == sorted(tracked)
 
 
 def test_every_skill_names_itself_after_its_folder():
