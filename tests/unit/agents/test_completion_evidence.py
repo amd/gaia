@@ -1495,3 +1495,120 @@ def test_a_script_literal_outside_the_read_grant_is_never_probed(tmp_path):
     assert ledger.key(str(other)) not in ledger.snapshot(
         "run_python", {"code": code}, validator
     )
+
+
+# A script's output beside the file the request named; a counterfactual write.
+
+
+def _script_run(ledger, script, make):
+    before = ledger.snapshot("execute_python_file", {"file_path": str(script)})
+    make()
+    ledger.record(
+        "execute_python_file",
+        {"file_path": str(script)},
+        {"status": "success", "return_code": 0, "stdout": "done"},
+        True,
+        before=before,
+    )
+
+
+def test_a_bare_output_a_script_wrote_beside_the_named_input_is_found(tmp_path):
+    """rc18 kx: "No successful write to `recon_tables.xlsx`" for a file on disk."""
+    kx = tmp_path / "kx"
+    kx.mkdir()
+    (kx / "reconciliation.md").write_text("# Recon\n")
+    query = (
+        f"Turn {kx / 'reconciliation.md'} into a Word document, recon_report.docx "
+        "in the same folder. Also make recon_tables.xlsx with one sheet per "
+        "category."
+    )
+    ledger = CompletionEvidence(query, str(tmp_path))
+    assert ledger.requested == ["recon_tables.xlsx"]
+    xlsx = kx / "recon_tables.xlsx"
+
+    _script_run(ledger, tmp_path / "build.py", lambda: xlsx.write_bytes(b"PK"))
+
+    assert not [g for g in gaps(ledger, "Both files are in kx.") if "recon_tables" in g]
+
+
+def test_a_bare_output_no_run_wrote_is_still_missing(tmp_path):
+    kx = tmp_path / "kx"
+    kx.mkdir()
+    (kx / "reconciliation.md").write_text("# Recon\n")
+    # Already there before the turn: not this turn's write.
+    (kx / "recon_tables.xlsx").write_bytes(b"PK")
+    query = f"Read {kx / 'reconciliation.md'} and make recon_tables.xlsx from it."
+    ledger = CompletionEvidence(query, str(tmp_path))
+
+    _script_run(ledger, tmp_path / "build.py", lambda: None)
+
+    assert any("recon_tables.xlsx" in g for g in gaps(ledger, "Done."))
+
+
+def test_a_bare_output_is_not_looked_for_in_a_folder_nobody_named(tmp_path):
+    other = tmp_path / "other"
+    other.mkdir()
+    ledger = CompletionEvidence("Make recon_tables.xlsx.", str(tmp_path))
+    stray = other / "recon_tables.xlsx"
+
+    _script_run(ledger, tmp_path / "build.py", lambda: stray.write_bytes(b"PK"))
+
+    assert any("recon_tables.xlsx" in g for g in gaps(ledger, "Done."))
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Here's what I would have written, read from `{src}`:",
+        "This is what I'd have saved, taken from `{src}`.",
+        "Had it been allowed, I would have written the totals from `{src}`.",
+    ],
+)
+def test_a_write_that_would_have_happened_names_no_file(tmp_path, sentence):
+    """rc18 ldeny: the input file was named as an unsaved output."""
+    src = tmp_path / "d3" / "pivot_q_region.xlsx"
+    notes = tmp_path / "ldeny" / "notes.txt"
+    ledger = CompletionEvidence(
+        f"Write a file called notes.txt in {notes.parent} containing the totals "
+        f"from {src}, then tell me what you wrote.",
+        str(tmp_path),
+    )
+    ledger.record(
+        "write_file",
+        {"file_path": str(notes)},
+        {"status": "denied", "error": "Tool 'write_file' was denied by the user."},
+        False,
+        executed=False,
+    )
+    answer = (
+        "The write was declined, and I won't retry it.\n\n"
+        + sentence.format(src=src)
+        + "\n\n1. North 444045.03"
+    )
+
+    found = gaps(ledger, answer)
+
+    assert not [g for g in found if "pivot_q_region" in g]
+    assert found == []
+
+
+def test_a_write_that_did_happen_is_still_a_claim(tmp_path):
+    """Only "would have" is exempt: "I have written" still needs its write."""
+    out = tmp_path / "notes.txt"
+    ledger = CompletionEvidence(f"Write the totals to {out}.", str(tmp_path))
+
+    found = gaps(ledger, f"I have written the totals to `{out}`.")
+
+    assert any("notes.txt" in g for g in found)
+
+
+def test_a_real_save_after_a_would_have_clause_is_still_a_claim(tmp_path):
+    other = tmp_path / "b.txt"
+    ledger = CompletionEvidence("Write the totals to a file.", str(tmp_path))
+
+    found = gaps(
+        ledger, f"I would have written it to a.txt, but I saved it to `{other}`."
+    )
+
+    assert any("b.txt" in g for g in found)
+    assert not [g for g in found if "a.txt" in g]

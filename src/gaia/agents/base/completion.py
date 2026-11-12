@@ -139,6 +139,14 @@ _FIRST_PERSON = re.compile(
     r"put|generated|made|copied)\b",
     re.I,
 )
+# "What I would have written, from x.xlsx": a write that did not happen is
+# not a claim. Only that clause goes; "..., but I saved y.md" still counts.
+_COUNTERFACTUAL = re.compile(
+    r"(?:\b(?:would|could|should|might)(?:n't|\s+not)?|\b(?:I|we)'d)\s+have\s+"
+    r"(?:\w+\s+)?(?:saved|written|stored|exported|created|put|generated|made|copied)"
+    r"\b[^,;]*",
+    re.I,
+)
 _EARLIER = re.compile(
     r"\b(?:previous|last|earlier|prior)\s+(?:session|conversation|turn|time|chat)\b|"
     r"\b(?:earlier|yesterday)\b",
@@ -497,6 +505,16 @@ class CompletionEvidence:
         self.unconfirmed: set[str] = set()
         self.requested, self.save_requested = save_obligations(query)
         self.instructed = save_instructed(query)
+        # The paths the request names and their folders: where a bare output
+        # ("also make tables.xlsx") lands.
+        self.named_folders = list(
+            dict.fromkeys(
+                folder
+                for path in mentioned_paths(query)
+                if ntpath.basename(path) != path
+                for folder in (self.key(path), os.path.dirname(self.key(path)))
+            )
+        )
         self.disk_tool_ran = False
         # (started ns, ended ns, succeeded, ledger sequence) per executor run.
         self.exec_windows: list[tuple[int, int, bool, int]] = []
@@ -849,6 +867,38 @@ class CompletionEvidence:
                 ):
                     self._written_by_executor(path)
 
+    def _find_bare_outputs(self, bare: set[str]) -> None:
+        """Look for a script-written bare output in the folders the turn named.
+
+        "Also make tables.xlsx" beside a named input lands in that input's
+        folder, not the agent's working directory.
+        """
+        written = {
+            os.path.normcase(os.path.basename(key))
+            for key, item in self.files.items()
+            if item.written
+        }
+        folders = list(
+            dict.fromkeys(
+                [
+                    os.path.dirname(key)
+                    for key, item in self.files.items()
+                    if item.written
+                ]
+                + self.named_folders
+            )
+        )
+        for path in bare:
+            name = os.path.basename(path)
+            if os.path.normcase(name) in written:
+                continue
+            for folder in folders:
+                if not (
+                    self.scratch
+                    and (folder == self.scratch or _inside(folder, self.scratch))
+                ):
+                    self._find_executor_writes(self.key(os.path.join(folder, name)))
+
     def delivered(self, tool: str, args: dict, original: Any, delivered: Any) -> None:
         data = _payload(delivered)
         if tool == "read_tool_output":
@@ -933,7 +983,9 @@ class CompletionEvidence:
         for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
             if _EARLIER.search(sentence):
                 continue
-            sentence = _CODE_BEHAVIOUR.sub("", _CONDITION.sub("", sentence))
+            sentence = _CODE_BEHAVIOUR.sub(
+                "", _CONDITION.sub("", _COUNTERFACTUAL.sub("", sentence))
+            )
             if not claims_file_write(sentence):
                 continue
             paths = destination_paths(sentence)
@@ -960,6 +1012,7 @@ class CompletionEvidence:
                 for key, item in self.files.items()
             ):
                 self._find_executor_writes(path)
+        self._find_bare_outputs(bare)
 
         bare_names = {os.path.basename(path) for path in bare}
 
