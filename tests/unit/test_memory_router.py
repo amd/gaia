@@ -2475,6 +2475,63 @@ class TestStreamInferenceModel:
         create.assert_called_once_with(model=lc.DEFAULT_MODEL_NAME)
         assert '"type": "error"' not in resp.text
 
+    def test_a_registered_model_listed_under_its_stripped_id_runs(
+        self, client, tmp_path
+    ):
+        # Lemonade lists ``user.X`` as ``X``; a downloaded copy must not be refused.
+        from gaia.llm import lemonade_client as lc
+
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "Other-Model-GGUF", "downloaded": True},
+                {"id": "my-model-gguf", "downloaded": True},
+            ],
+        }
+        with (
+            patch("gaia.ui._chat_helpers._runs_on_this_pc", return_value=True),
+            patch.object(lc.LemonadeClient, "list_models", return_value=payload),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="user.My-Model-GGUF", downloaded=None
+            )
+
+        create.assert_called_once_with(model="user.My-Model-GGUF")
+        assert '"type": "error"' not in resp.text
+
+    def test_another_downloaded_model_does_not_count(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "Qwen3-VL-4B-Instruct-GGUF", "downloaded": True},
+                {"id": lc.DEFAULT_MODEL_NAME, "downloaded": False},
+            ],
+        }
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME, downloaded=None
+            )
+
+        create.assert_not_called()
+        assert "isn't downloaded on this PC" in resp.text
+
+    def test_a_cloud_default_never_reads_the_download_catalog(self, client, tmp_path):
+        with patch.object(
+            memory_router_mod, "_downloaded_on_this_pc", side_effect=AssertionError
+        ) as check:
+            resp, create = self._stream(
+                client,
+                tmp_path,
+                default_model="fireworks.accounts/fireworks/models/x",
+                downloaded=None,
+            )
+
+        check.assert_not_called()
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
     def test_an_unreadable_download_check_refuses(self, client, tmp_path):
         from gaia.llm import lemonade_client as lc
 
