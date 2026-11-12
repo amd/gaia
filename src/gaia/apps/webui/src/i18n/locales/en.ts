@@ -956,6 +956,7 @@ export const enMessages = {
     'perm.askNote': 'GAIA asks before it edits files, runs commands or uses tools that change things.',
     'perm.full': 'Full access',
     'perm.fullNote': 'Runs every tool and command without asking, in this chat only.',
+    'perm.fullPendingNote': 'Full access starts from the next step. The question already waiting still needs your answer.',
     'offline.text': 'Offline: internet is off for this chat, so GAIA won\'t search the web or open pages.',
     'offline.error': 'Couldn\'t turn it on: {error}',
     'offline.turnOn': 'Turn on',
