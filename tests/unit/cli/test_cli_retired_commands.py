@@ -28,6 +28,8 @@ def _subcommands():
         ["email", "triage"],
         ["email", "--autonomy", "on", "--json"],
         ["email", "-h"],
+        ["--base-url", "http://127.0.0.1:1", "email"],
+        ["--base-url=http://127.0.0.1:1", "--cli", "email", "triage"],
     ],
 )
 def test_gaia_email_points_at_the_flagship(monkeypatch, capsys, argv):
@@ -54,6 +56,29 @@ def test_gaia_email_points_at_the_flagship(monkeypatch, capsys, argv):
     ],
 )
 def test_only_the_retired_name_in_command_position_is_caught(argv):
+    assert cli._retired_command_message(argv) is None
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["agent", "list"],
+        ["--base-url", "http://127.0.0.1:1", "agent", "list", "--json"],
+    ],
+)
+def test_gaia_agent_list_says_there_is_one_agent(monkeypatch, capsys, argv):
+    monkeypatch.setattr(sys, "argv", ["gaia", *argv])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "invalid choice" not in err
+    assert "ships one agent" in err
+    assert "gaia agent status" in err
+
+
+@pytest.mark.parametrize("argv", [["agent", "status"], ["agent"], ["hub", "list"]])
+def test_other_agent_commands_are_not_caught(argv):
     assert cli._retired_command_message(argv) is None
 
 

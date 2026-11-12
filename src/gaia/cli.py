@@ -1134,9 +1134,41 @@ RETIRED_TOP_LEVEL_COMMANDS = {
 }
 
 
-def _retired_command_message(argv) -> Optional[str]:
-    """The replacement for a removed top-level command, or ``None``."""
-    return RETIRED_TOP_LEVEL_COMMANDS.get(argv[0]) if argv else None
+RETIRED_AGENT_LIST_MESSAGE = (
+    "`gaia agent list` was removed: GAIA ships one agent, the flagship, so "
+    "there is nothing to list. Run `gaia chat` to use it, or `gaia agent "
+    "status` to see whether it is running."
+)
+
+
+def _command_tokens(argv, parser) -> list:
+    """*argv* from the command on, with the top-level flags before it dropped."""
+    takes_value = {
+        flag: action.nargs != 0
+        for action in parser._actions
+        for flag in action.option_strings
+    }
+    i = 0
+    while i < len(argv):
+        token = argv[i]
+        if not token.startswith("-"):
+            return list(argv[i:])
+        name = token.split("=", 1)[0]
+        if name not in takes_value:
+            return []
+        i += 2 if takes_value[name] and "=" not in token else 1
+    return []
+
+
+def _retired_command_message(argv, parser=None) -> Optional[str]:
+    """The replacement for a removed command, or ``None``."""
+    tokens = _command_tokens(argv, parser or build_parser())
+    if not tokens:
+        return None
+    if tokens[0] == "agent":
+        rest = [t for t in tokens[1:] if not t.startswith("-")]
+        return RETIRED_AGENT_LIST_MESSAGE if rest[:1] == ["list"] else None
+    return RETIRED_TOP_LEVEL_COMMANDS.get(tokens[0])
 
 
 def _positive_int(value: str) -> int:
@@ -4682,7 +4714,7 @@ def main():
     parser = build_parser()
     log = get_logger(__name__)
 
-    retired = _retired_command_message(sys.argv[1:])
+    retired = _retired_command_message(sys.argv[1:], parser)
     if retired:
         parser.exit(2, f"gaia: error: {retired}\n")
 
