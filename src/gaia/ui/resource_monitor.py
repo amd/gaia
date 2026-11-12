@@ -853,18 +853,21 @@ class PosixProbe:
         self._net: OptionalPart = OptionalPart(
             "network", lambda: NetworkRates(lambda: posix_networks(sys_net))
         )
+        self._freq_logged = False
         psutil.cpu_percent(interval=None)
 
     def sample(self) -> Sample:
-        # psutil has no cpu_freq on Apple silicon, and some Intel Macs can't
-        # read it; the speed is optional and shown blank.
+        # Macs often can't report the clock (psutil 7 raises SystemError on
+        # Apple silicon); the speed is optional and shown blank.
         read_freq = getattr(psutil, "cpu_freq", None)
         freq = None
         if read_freq is not None:
             try:
                 freq = read_freq()
-            except (OSError, NotImplementedError) as e:
-                logger.debug("CPU clock speed unavailable: %s", e)
+            except (OSError, NotImplementedError, SystemError) as e:
+                if not self._freq_logged:
+                    self._freq_logged = True
+                    logger.info("CPU clock speed unavailable: %s", e)
         vm = psutil.virtual_memory()
         devices = self._gpus.read(_read_sysfs_gpus)
         devices += self._npus.read(lambda npus: npus.sample())
