@@ -1922,7 +1922,7 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.connector-tile-header', { hasText: 'Brave Search' }).click();
             await page.locator('.mcp-key-input').fill('BSA-not-a-real-key');
-            await page.locator('.btn-model-save').click();
+            await page.locator('.configure-actions .btn-primary').click();
             const offer = page.locator('.connector-personalize--offer');
             await expect(offer).toBeVisible();
             await offer.scrollIntoViewIfNeeded();
@@ -3550,7 +3550,7 @@ for (const locale of ['ar', 'en']) {
         await expect(panel.locator('.notification-center-title')).toContainText(ar ? 'الإشعارات' : 'Notifications');
         await expect(panel.getByRole('tab').first()).toContainText(ar ? 'الكل' : 'All');
         await expect(panel.locator('.notification-response-badge')).toContainText(ar ? 'تم الرفض' : 'Denied');
-        await expect(panel.locator('.notification-footer-btn').first()).toContainText(ar ? 'تعليم الكل كمقروء' : 'Mark All Read');
+        await expect(panel.locator('.notification-footer-btn').first()).toContainText(ar ? 'تعليم الكل كمقروء' : 'Mark all read');
         expect(await audit(page)).toEqual([]);
         // Agent names, titles, bodies and policy reasons are the notification's own text, not the panel's.
         if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
