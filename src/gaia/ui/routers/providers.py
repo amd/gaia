@@ -477,6 +477,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
         raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+    listed = _model_entries(body)
     offered: List[str] = []
     if provider == LOCAL:
         offered = [*_suggested_local_models()]
@@ -485,7 +486,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
     added = _added_models() if provider == LOCAL else []
     offered += [e["id"] for e in added]
     out: List[Dict[str, Any]] = []
-    for m in body.get("data") or []:
+    for m in listed:
         model_id = str(m.get("id") or "")
         if not model_id or not _is_chat_model(m):
             continue
@@ -544,6 +545,16 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _model_entries(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The model entries of a ``/models`` answer; a malformed one is named, not a 500."""
+    from .system import _catalog_entries
+
+    try:
+        return _catalog_entries(body)
+    except ValueError as e:
+        raise ProviderError(str(e)) from e
 
 
 def _added_models() -> List[Dict[str, Any]]:
@@ -1681,7 +1692,7 @@ def _lemonade_catalog() -> List[Dict[str, Any]]:
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
         raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
-    return list(body.get("data") or [])
+    return _model_entries(body)
 
 
 @router.post("/api/providers/local/custom/check")

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, detectLemonade, getLemonadeTarget, redactSecrets, setLemonadeTarget } from '../api';
+import { ApiError, detectLemonade, getLemonadeTarget, listProviderModels, redactSecrets, setLemonadeTarget } from '../api';
 
 function jsonResponse(body: unknown, status = 200): Response {
     return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -61,6 +61,17 @@ describe('Lemonade target API', () => {
         const detail = 'Saved, but the GAIA daemon did not switch: timed out';
         fetchMock().mockResolvedValue(jsonResponse({ detail }, 502));
         await expect(setLemonadeTarget({ mode: 'gaia' })).rejects.toThrow(detail);
+    });
+
+    it("shows the backend's own sentence on a 502, not a guess that it is down", async () => {
+        const detail = "Lemonade's model list came back in an unexpected shape (it answers, but not with a list of models).";
+        fetchMock().mockResolvedValue(jsonResponse({ detail }, 502));
+        await expect(listProviderModels('local')).rejects.toThrow(detail);
+    });
+
+    it.each(['', 'Bad Gateway', '<html><body>502</body></html>'])('still calls a 502 with no sentence (%j) unavailable', async (text) => {
+        fetchMock().mockResolvedValue(new Response(text, { status: 502 }));
+        await expect(listProviderModels('local')).rejects.toThrow('Service unavailable. Is the backend running?');
     });
 
     it('keeps the named fields when it rewords a 502', async () => {

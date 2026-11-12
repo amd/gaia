@@ -2504,3 +2504,22 @@ def test_restore_keeps_a_listed_cloud_model_off_under_local_only(
     assert restore["status"] == "failed", restore
     assert "Local only is on" in restore["message"]
     assert db.get_setting("custom_model") is None
+
+
+# ── A model server that answers, but not with a model list ─────────────────
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"object": "list", "data": "x"}, {"data": ["Qwen3-4B-GGUF"]}, {"data": None}],
+)
+@pytest.mark.parametrize("provider", ["local", "fireworks"])
+def test_a_malformed_model_list_is_named_not_a_server_error(
+    client, lemonade, keys, body, provider
+):
+    lemonade.answers[("GET", "models?show_all=true")] = (200, body)
+    resp = client.get(f"/api/providers/{provider}/models")
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "model list came back in an unexpected shape" in detail
+    assert "Settings > Advanced > Model server" in detail
