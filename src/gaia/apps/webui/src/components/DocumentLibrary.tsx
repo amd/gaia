@@ -13,6 +13,7 @@ import { log } from '../utils/logger';
 import { requestErrorParam } from '../utils/requestErrors';
 import { formatSize } from '../utils/format';
 import { examplePath } from '../utils/platform';
+import { cleanPastedPath } from '../utils/pastedPath';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
@@ -586,8 +587,8 @@ export function DocumentLibrary() {
 
     const handleFolderSubmit = useCallback(async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!folderPath.trim()) return;
-        const typed = folderPath.trim();
+        const typed = cleanPastedPath(folderPath);
+        if (!typed) return;
         log.doc.info(`Indexing from path input: ${typed}`);
         const added = await uploadFile(typed, typed.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || 'file');
         if (added) setFolderPath('');
