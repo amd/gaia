@@ -19,6 +19,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +42,7 @@ from gaia.agents.tools.command_timeouts import (
     resolve_timeout,
     terminate_process_tree,
 )
+from gaia.agents.tools.fetcher_args import destinations as fetch_destinations
 from gaia.agents.tools.package_installs import (
     install_refusal_hint,
     system_install_target,
@@ -648,54 +650,16 @@ _LOCAL_NAME_ENDINGS = (".local", ".lan", ".internal", ".home.arpa")
 _LOOPBACK_NAMES = ("localhost", "localtest.me", "lvh.me", "vcap.me")
 
 #: Services whose names answer with the address written inside the name.
-_ADDRESS_IN_NAME_ENDINGS = (".nip.io", ".sslip.io")
+_ADDRESS_IN_NAME_ENDINGS = (".nip.io", ".sslip.io", ".xip.io", ".traefik.me")
 
 _IPV4_PART = re.compile(r"0x[0-9a-f]+|0[0-7]*|[1-9][0-9]*")
 _DOTTED_IN_NAME = re.compile(r"(?:^|[.-])(\d{1,3}(?:[.-]\d{1,3}){3})$")
 _HEX_IN_NAME = re.compile(r"(?:^|[.-])([0-9a-f]{8})$")
 
-#: Fetcher flags whose value is a number, so ``--max-time 10.5`` is no address.
-_NUMBER_FLAGS = frozenset(
-    {
-        "-m",
-        "--max-time",
-        "--connect-timeout",
-        "--retry",
-        "--retry-delay",
-        "--retry-max-time",
-        "--limit-rate",
-        "--max-filesize",
-        "--max-redirs",
-        "--max-redirect",
-        "--speed-limit",
-        "--speed-time",
-        "-y",
-        "-Y",
-        "-C",
-        "--continue-at",
-        "--keepalive-time",
-        "--expect100-timeout",
-        "--parallel-max",
-        "--rate",
-        "-t",
-        "--tries",
-        "-T",
-        "--timeout",
-        "--dns-timeout",
-        "--read-timeout",
-        "-w",
-        "--wait",
-        "--waitretry",
-        "-l",
-        "--level",
-        "-Q",
-        "--quota",
-        "-timeoutsec",
-        "-maximumredirection",
-        "-maximumretrycount",
-        "-retryintervalsec",
-    }
-)
+
+def _folded(text: str) -> str:
+    """*text* as a resolver reads it: full-width digits, letters and dots as ASCII."""
+    return unicodedata.normalize("NFKC", text).replace("\u3002", ".")
 
 
 def _numeric_ipv4(name: str) -> Optional[ipaddress.IPv4Address]:
@@ -747,7 +711,7 @@ def private_destination(host: str) -> str:
     """
     from gaia.web.client import _is_blocked_ip
 
-    name = host.strip("[]").rstrip(".").lower()
+    name = _folded(host).strip("[]").rstrip(".").lower()
     if name in _LOOPBACK_NAMES or name.endswith(
         tuple(f".{known}" for known in _LOOPBACK_NAMES)
     ):
@@ -764,12 +728,8 @@ def private_destination(host: str) -> str:
     return "your local network" if _is_blocked_ip(ip) else ""
 
 
-def _operand_host(token: str, after: str) -> str:
-    """The host a fetcher reads from its bare operand *token*, or "" for none.
-
-    *after* is the token before it: a number after a flag is that flag's value
-    unless it has a port or path, or is too large to be anything but an address.
-    """
+def _operand_host(token: str) -> str:
+    """The host a fetcher reads from its bare operand *token*, or "" for none."""
     address = re.split(r"[/?#]", token, maxsplit=1)[0].rsplit("@", 1)[-1]
     if not address.startswith("["):
         address = address.rsplit(":", 1)[0]
@@ -777,12 +737,23 @@ def _operand_host(token: str, after: str) -> str:
     if number is None:
         named = "." in address or ":" in address or "localhost" in address
         return address if named else ""
-    if address == token and after.startswith("-"):
-        if after in _NUMBER_FLAGS or after.lower() in _NUMBER_FLAGS:
-            return ""
-        if "." not in address and 0 < int(number) < 2**24:
-            return ""
+    # A bare count such as `curl 3`: 0.0.0.3 is nowhere, and nobody means it.
+    if address == token and "." not in address and 0 < int(number) < 2**24:
+        return ""
     return address
+
+
+def _fetched_hosts(program: str, arguments: List[str]) -> List[str]:
+    """The hosts a fetcher's *arguments* make it connect to."""
+    hosts = []
+    for word in fetch_destinations(program, arguments):
+        if "://" in word:
+            hosts.extend(match.group(1) for match in _URL_HOST.finditer(word))
+            continue
+        address = _operand_host(word)
+        if address:
+            hosts.append(address)
+    return hosts
 
 
 #: Programs that can open a connection to an address on their line.
@@ -807,6 +778,8 @@ _NETWORK_PROGRAMS = _FETCHERS | frozenset(
         "ncat",
         "telnet",
         "ftp",
+        "certutil",
+        "bitsadmin",
     }
 )
 
@@ -818,25 +791,30 @@ def _private_hosts(
 
     With *whole_line*, every address on the line counts; otherwise only those
     handed to a program that can connect, so ``grep http://localhost f`` is not
-    turned into a prompt it never needed.
+    turned into a prompt it never needed. A line of fetchers alone is read
+    argument by argument instead, so a header or body that holds an address
+    does not count.
     """
+    programs = [
+        _interpreter_name(segment[0]) for step in steps for segment in step.segments
+    ]
+    only_fetchers = bool(programs) and all(name in _FETCHERS for name in programs)
     hosts = (
-        [match.group(1) for match in _URL_HOST.finditer(command)] if whole_line else []
+        [match.group(1) for match in _URL_HOST.finditer(_folded(command))]
+        if whole_line and not only_fetchers
+        else []
     )
     for step in steps:
         for segment in step.segments:
             program = _interpreter_name(segment[0])
             if program not in _NETWORK_PROGRAMS:
                 continue
-            hosts.extend(m.group(1) for m in _URL_HOST.finditer(" ".join(segment)))
-            if program not in _FETCHERS:
-                continue
-            for after, token in zip(segment, segment[1:]):
-                if token.startswith("-") or "://" in token:
-                    continue
-                address = _operand_host(token, after)
-                if address:
-                    hosts.append(address)
+            words = [_folded(word) for word in segment[1:]]
+            if program in _FETCHERS:
+                # Only the words it connects to: not a file name, body or header.
+                hosts.extend(_fetched_hosts(program, words))
+            else:
+                hosts.extend(m.group(1) for m in _URL_HOST.finditer(" ".join(words)))
     found = []
     for host in dict.fromkeys(hosts):
         where = private_destination(host)
