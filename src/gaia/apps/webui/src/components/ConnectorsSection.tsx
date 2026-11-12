@@ -65,6 +65,14 @@ function scopeLabel(scope: string, t: Translate): string {
 
 const SEARCH_ABOVE = 6;
 
+// Words people search by that a connector's name and description never say.
+const MAIL_ACCOUNT_KEYWORDS = ['email', 'e-mail', 'inbox', 'calendar'];
+const SEARCH_KEYWORDS: Record<string, string[]> = {
+    google: MAIL_ACCOUNT_KEYWORDS,
+    microsoft: MAIL_ACCOUNT_KEYWORDS,
+    microsoft_work: MAIL_ACCOUNT_KEYWORDS,
+};
+
 // Canonical scope for MCP-server grants. Agents that consume MCP servers
 // dynamically declare no scopes of their own, so one-click activation
 // auto-grants this when no prior grant exists.
@@ -272,7 +280,9 @@ export function ConnectorsSection() {
 
     const q = query.trim().toLowerCase();
     const searchText = (c: ConnectorListEntry) =>
-        'error' in c ? [c.display_name] : [c.display_name, c.description, connectorDescriptionBare(t, c)];
+        'error' in c
+            ? [c.display_name]
+            : [c.display_name, c.description, connectorDescriptionBare(t, c), ...(SEARCH_KEYWORDS[c.id] ?? [])];
     const shown = connectors.filter((c) => !q || searchText(c).some((s) => s.toLowerCase().includes(q)));
     const unavailable = shown.filter((c): c is UnavailableConnectorRow => 'error' in c);
     const available = shown.filter((c): c is ConnectorRow => !('error' in c));

@@ -69,4 +69,20 @@ describe('ConnectorsSection groups', () => {
         fireEvent.change(screen.getByRole('searchbox', { name: 'Search connectors' }), { target: { value: 'nothing here' } });
         expect(screen.getByText('No connectors match.')).toBeInTheDocument();
     });
+
+    it('finds the mail accounts when searching for email', async () => {
+        const servers = ['Notion', 'Postgres', 'Memory', 'Filesystem', 'Brave', 'Fetch'].map((n) => row(n, 'mcp_server'));
+        list([
+            row('google', 'oauth_pkce', { display_name: 'Google', description: 'Gmail and Google Calendar' }),
+            row('microsoft_work', 'oauth_pkce', { display_name: 'Microsoft Work', description: 'Outlook mail' }),
+            ...servers,
+        ]);
+        render(<ConnectorsSection />);
+        await screen.findByText('Google');
+        fireEvent.change(screen.getByRole('searchbox', { name: 'Search connectors' }), { target: { value: 'Email' } });
+        expect(screen.getByText('Google')).toBeInTheDocument();
+        expect(screen.getByText('Microsoft Work')).toBeInTheDocument();
+        expect(screen.queryByText('Notion')).not.toBeInTheDocument();
+        expect(screen.queryByText('No connectors match.')).not.toBeInTheDocument();
+    });
 });
