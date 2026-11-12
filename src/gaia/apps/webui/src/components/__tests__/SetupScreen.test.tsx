@@ -1234,7 +1234,73 @@ describe('SetupScreen: cloud', () => {
         expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toHaveAttribute('aria-checked', 'true');
         expect(screen.getByRole('link', { name: /Open Fireworks API keys/ })).toHaveAttribute('href', 'https://app.fireworks.ai/settings/users/api-keys');
         expect(screen.getByText('Create a new API key and copy it.')).toBeInTheDocument();
-        expect(screen.getByLabelText('API key')).toHaveAttribute('type', 'password');
+        expect(screen.getByLabelText('Fireworks AI API key')).toHaveAttribute('type', 'password');
+    });
+
+    it('labels the key field, mentions a saved key only when there is one, and can show the key', async () => {
+        await open();
+        await toKey();
+        const field = screen.getByLabelText('Fireworks AI API key');
+        expect(field).toHaveAttribute('placeholder', 'Paste your API key');
+        fireEvent.change(field, { target: { value: 'fw-secret' } });
+        const show = screen.getByRole('button', { name: 'Show key' });
+        fireEvent.click(show);
+        expect(field).toHaveAttribute('type', 'text');
+        fireEvent.click(screen.getByRole('button', { name: 'Hide key' }));
+        expect(field).toHaveAttribute('type', 'password');
+    });
+
+    it('offers to leave the key blank only when one is saved', async () => {
+        mockedApi.listProviders.mockResolvedValue({
+            providers: [{ id: 'fireworks', name: 'Fireworks AI', remote: true, privacy_notice: '', key_source: 'stored', key_hint: '1234' }],
+            active: null,
+            lemonade_error: null,
+        } as unknown as Awaited<ReturnType<typeof api.listProviders>>);
+        await open();
+        await toKey();
+        await waitFor(() => expect(screen.getByLabelText('Fireworks AI API key')).toHaveAttribute('placeholder', 'Paste your API key (leave blank to use one you saved before)'));
+    });
+
+    it('lists the models as a choice with the default picked, and connects the one picked', async () => {
+        connects('fireworks');
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: [
+                { model: 'fireworks.m1', name: 'm1', rank: 1, note: 'best overall', price: null },
+                { model: 'fireworks.m2', name: 'm2', rank: 2, note: 'cheapest', price: null },
+            ],
+        });
+        mockedApi.startSetup.mockResolvedValue({ state: 'running', skip_chat_model: true, steps: [], models: [] });
+        await open();
+        await toKey();
+        const group = await screen.findByRole('radiogroup', { name: 'The model GAIA uses' });
+        const first = within(group).getByRole('radio', { name: /^m1/ });
+        expect(first).toBeChecked();
+        expect(first.closest('label')).toHaveTextContent('m1 · Default · best overall');
+        fireEvent.click(within(group).getByRole('radio', { name: /^m2/ }));
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw-key' } });
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m2'));
+        // Moving on says the key worked and which model answers.
+        expect(await screen.findByText('Key accepted. Answers will come from m2.')).toBeInTheDocument();
+    });
+
+    it('fails loudly when the picked model is not offered to the key', async () => {
+        connects('fireworks');
+        mockedApi.getCloudPrices.mockResolvedValue({
+            provider: 'fireworks', source: 'Fireworks AI list price', note: null,
+            models: [
+                { model: 'fireworks.m1', name: 'm1', rank: 1, note: null, price: null },
+                { model: 'fireworks.gone', name: 'gone', rank: 2, note: null, price: null },
+            ],
+        });
+        await open();
+        await toKey();
+        fireEvent.click(await screen.findByRole('radio', { name: /^gone/ }));
+        fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
+        expect(await screen.findByRole('alert')).toHaveTextContent("gone isn't offered to this key. Pick another model.");
+        expect(mockedApi.selectModel).not.toHaveBeenCalled();
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
     });
 
     it('blocks cloud setup choices under Local only without loading their prices', async () => {
@@ -1273,7 +1339,7 @@ describe('SetupScreen: cloud', () => {
         expect(await screen.findByText(
             'Found a Fireworks AI key in your environment (ends …0000). Test and connect to use it.',
         )).toBeInTheDocument();
-        fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'fw_test_000' } });
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw_test_000' } });
         expect(screen.queryByText(/Found a Fireworks AI key/)).not.toBeInTheDocument();
     });
 
@@ -1296,7 +1362,7 @@ describe('SetupScreen: cloud', () => {
         await open();
         await toKey();
         expect(railLabels()).toEqual(['Check this PC', 'Your setup', 'Download', 'Test', 'Ready']);
-        fireEvent.change(screen.getByLabelText('API key'), { target: { value: 'fw-key' } });
+        fireEvent.change(screen.getByLabelText('Fireworks AI API key'), { target: { value: 'fw-key' } });
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
         fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('fireworks.m1'));
@@ -1359,7 +1425,7 @@ describe('SetupScreen: cloud', () => {
         await toKey();
         fireEvent.click(screen.getByRole('radio', { name: /AMD LLM Gateway/ }));
         expect(await screen.findByText(/doesn.t send your server a key or change its setup/)).toBeInTheDocument();
-        expect(screen.queryByLabelText('API key')).not.toBeInTheDocument();
+        expect(screen.queryByLabelText(/API key/)).not.toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Test and connect/ }));
         await waitFor(() => expect(mockedApi.selectModel).toHaveBeenCalledWith('amd.m1'));
         expect(mockedApi.connectProviderWaitingForOs).toHaveBeenCalledWith('amd', { api_key: undefined }, expect.any(Function), expect.any(Function));
@@ -1380,7 +1446,7 @@ describe('SetupScreen: cloud', () => {
         localStorage.setItem('gaia-setup-choice', 'fireworks');
         mockedApi.getSetupStatus.mockResolvedValue({ ...READY, skip_chat_model: true });
         renderSetup();
-        expect(await screen.findByLabelText('API key').catch(() => startChatting())).toBeInTheDocument();
+        expect(await screen.findByLabelText('Fireworks AI API key').catch(() => startChatting())).toBeInTheDocument();
     });
 
     // Product bug: a saved cloud choice survives to the plan screen, whose button then starts a cloud run with no key.
@@ -1623,16 +1689,26 @@ describe('SetupScreen: an unreachable AMD gateway (#5604)', () => {
     });
     const amd = () => screen.getByRole('radio', { name: /AMD LLM Gateway/ });
 
-    it("greys out the gateway choice and says it needs AMD's network", async () => {
+    it("hides the gateway from a PC that can't reach it, so only AMD's network sees it", async () => {
+        mockedApi.listProviders.mockResolvedValue(gateway(false));
+        await open();
+        await toKey();
+        await waitFor(() => expect(screen.queryByRole('radio', { name: /AMD LLM Gateway/ })).toBeNull());
+        expect(screen.queryByRole('button', { name: 'Check the AMD gateway again' })).toBeNull();
+        expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
+    });
+
+    it("greys out a gateway the user chose before and says it needs AMD's network", async () => {
+        localStorage.setItem('gaia-setup-choice', 'amd');
         mockedApi.listProviders.mockResolvedValue(gateway(false));
         await open();
         await toKey();
         await waitFor(() => expect(amd()).toBeDisabled());
         expect(amd()).toHaveTextContent("Unavailable: needs AMD's network or VPN.");
-        expect(screen.getByRole('radio', { name: /Fireworks AI/ })).toBeEnabled();
     });
 
     it('enables the gateway after Check again, once it answers', async () => {
+        localStorage.setItem('gaia-setup-choice', 'amd');
         mockedApi.listProviders.mockResolvedValue(gateway(false));
         await open();
         await toKey();
@@ -1657,6 +1733,7 @@ describe('SetupScreen: an unreachable AMD gateway (#5604)', () => {
     });
 
     it('keeps the gateway unavailable when Check again still finds no network', async () => {
+        localStorage.setItem('gaia-setup-choice', 'amd');
         mockedApi.listProviders.mockResolvedValue(gateway(false));
         await open();
         await toKey();
