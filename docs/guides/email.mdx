@@ -161,6 +161,16 @@ That is a local ledger write — no browser, no OAuth round-trip. It replaces th
 - **Full access doesn't skip this** — in the terminal UI and Agent UI the send still asks. Where nobody can answer, as with `gaia -p --dangerously-skip-permissions` or `GAIA_AUTO_APPROVE_TOOLS`, the send is refused and nothing goes out. Discarding or changing a saved draft are the mail actions full access runs unasked, since nothing leaves the mailbox.
 - **Untrusted input** — message bodies are wrapped in `<<<UNTRUSTED_EMAIL_BODY_*>>>` delimiters and flagged when they show phishing signals ([#4150](https://github.com/amd/gaia/issues/4150)). That is not a general injection defence: the flagship also holds web, file, and shell tools, so treat mail from untrusted senders as untrusted input.
 
+## Upgrading from the email agent
+
+The standalone email agent is gone; the GAIA agent does mail now. The first time GAIA starts after the upgrade it:
+
+- removes the old agent's install folder (`~/.gaia/agents/email`), unless the folder holds anything GAIA did not put there, such as an agent of your own with that name. Then it is left alone and the log says why.
+- takes back the mailbox access the old agent had been granted. Your Google or Microsoft connection stays; press **Connect** in the chat, or grant the GAIA agent under Settings › Connectors, to use it.
+- tells you, in one notification and the GAIA log, which emails the old agent had scheduled. They will not be sent. Ask GAIA in a chat to send them instead.
+
+The old agent's own data stays in `~/.gaia/email/` and nothing reads it any more. Delete the folder when you no longer need it; `gaia uninstall --purge` removes it with the rest of GAIA's data.
+
 ## Troubleshooting
 
 ### "This Google connection lacks …"

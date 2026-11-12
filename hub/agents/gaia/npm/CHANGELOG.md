@@ -104,6 +104,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `send-email` skill, with the Google or Microsoft connector. Organizing,
   undo, briefings and autonomous runs went with the old agent. See the Email
   section in the README.
+  On upgrade GAIA removes the old agent's install folder when it is provably
+  that install, takes back the connector access it held, and names any
+  scheduled email that will no longer be sent. The old agent's data stays in
+  `~/.gaia/email/`. Installing the `email` agent id is refused.
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`
   result now carries `render: "media"` with the saved file's absolute path, type,
