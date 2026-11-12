@@ -79,6 +79,33 @@
 
 .msg-action-btn:hover,
 .msg-copy:hover { background: var(--bg-hover); color: var(--text-primary); }
+
+/* An answer's actions sit in a row under its text, at the start edge. */
+.msg-assistant .msg-inner {
+    display: flex;
+    flex-direction: column;
+}
+.msg-assistant .msg-header {
+    order: 1;
+    justify-content: flex-start;
+}
+.msg-assistant .msg-actions {
+    position: static;
+    margin-block-start: 4px;
+    margin-inline-start: -6px;
+}
+/* The latest answer's stay in view; older ones show on hover or focus. */
+.msg-latest .msg-actions { opacity: 1; }
+.msg-actions .msg-action-btn,
+.msg-actions .msg-copy {
+    justify-content: center;
+    min-width: 28px;
+    min-height: 28px;
+    padding: 6px;
+}
+.msg-actions svg { width: 16px; height: 16px; }
+/* Delete stands apart from the everyday actions. */
+.msg-actions .msg-delete { margin-inline-start: 10px; }
 .msg-copy.copied { color: var(--accent-green); }
 
 /* A reply being read stays stoppable without hovering it. */

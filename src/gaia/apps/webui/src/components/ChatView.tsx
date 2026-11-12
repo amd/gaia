@@ -1669,6 +1669,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     ) : undefined}
                                     onTryAgain={canTryAgain ? () => handleTryAgain(msg) : undefined}
                                     onContinue={canTryAgain && stopped ? handleContinue : undefined}
+                                    latest={msg.role === 'assistant' && idx === messages.length - 1}
                                     latencyMs={latency}
                                 />
                                 {msg.failure === 'model_server_down' && idx === messages.length - 1 && !busy && (
