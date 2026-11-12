@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useRef, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, X } from 'lucide-react';
 import { Popover } from './Popover';
 import { ContextPanel } from './ContextPanel';
 import { pluralKey } from '../i18n/registry';
@@ -139,20 +139,43 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
 }
 
 /** Says which turns leave the model's view next, before they go. */
+/** One line above the composer when older turns are about to leave the model's view; details on request. */
 export function ContextWarning({ usage }: { usage: ContextUsage | null }) {
     const t = useT();
+    const [open, setOpen] = useState(false);
+    // Dismissed for these turns only; another turn coming up to the edge shows it again.
+    const [dismissed, setDismissed] = useState<string | null>(null);
     if (!usage || usage.at_risk.length === 0) return null;
+    const key = usage.at_risk.join('\n');
+    if (dismissed === key) return null;
     const n = usage.at_risk.length;
     return (
         <div className="context-warning" role="status">
             <AlertTriangle size={13} aria-hidden="true" />
-            <span>
-                {t.plural('ctx.meter.warning', n)}{' '}
-                {usage.at_risk.map((q, i) => (
-                    <span key={i}>{i > 0 && ', '}<q>{q}</q></span>
-                ))}
-                {'. '}{t('ctx.meter.warningSaved')}
-            </span>
+            <div className="context-warning-body">
+                <span>{t('ctx.warning.short')}</span>{' '}
+                <button type="button" className="link-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+                    {open ? t('ctx.warning.hideDetails') : t('ctx.warning.details')}
+                </button>
+                {open && (
+                    <p className="context-warning-details">
+                        {t.plural('ctx.meter.warning', n)}{' '}
+                        {usage.at_risk.map((q, i) => (
+                            <span key={i}>{i > 0 && ', '}<q>{q}</q></span>
+                        ))}
+                        {'. '}{t('ctx.meter.warningSaved')}
+                    </p>
+                )}
+            </div>
+            <button
+                type="button"
+                className="btn-icon-sm context-warning-close"
+                onClick={() => { setDismissed(key); setOpen(false); }}
+                aria-label={t('ctx.warning.dismiss')}
+                title={t('ctx.warning.dismiss')}
+            >
+                <X size={12} aria-hidden="true" />
+            </button>
         </div>
     );
 }

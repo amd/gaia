@@ -2821,7 +2821,14 @@ for (const locale of ['ar', 'en']) {
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
         const meter = page.locator('button.context-meter');
         await expect(meter).toBeVisible();
-        await expect(page.locator('.context-warning')).toBeVisible();
+        const warning = page.locator('.context-warning');
+        await expect(warning).toBeVisible();
+        // One short line by default, so it never covers the end of the chat.
+        expect((await warning.boundingBox())!.height).toBeLessThan(60);
+        await shot(page, `context-warning-${locale}`);
+        await warning.getByRole('button', { expanded: false }).click();
+        await shot(page, `context-warning-details-${locale}`);
+        expect(await audit(page)).toEqual([]);
         await meter.click();
         await expect(page.locator('.context-meter-panel')).toBeVisible();
         expect(await audit(page)).toEqual([]);

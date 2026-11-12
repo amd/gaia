@@ -398,6 +398,8 @@ describe('ContextMeter entry point', () => {
 
         it('translates the warning above the composer', () => {
             const { container } = render(<ContextWarning usage={usage({ at_risk: ['first question', 'second'] })} />);
+            expect(text(container)).toContain('أصبحت هذه المحادثة طويلة');
+            fireEvent.click(container.querySelector('.context-warning-body button')!);
             expect(text(container)).toContain('أقدم الأدوار التي قد تخرج من نطاق رؤية النموذج تاليًا (2):');
             expect(text(container)).toContain('تبقى محفوظة، ويمكنك أن تطلب من GAIA استرجاعها.');
         });
