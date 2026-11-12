@@ -639,6 +639,8 @@ class AgentStepResponse(BaseModel):
     success: Optional[bool] = None
     # The user said no to this call; a reload must not show it as failed.
     declined: Optional[bool] = None
+    # Nobody answered its prompt in time; it never ran either.
+    timedOut: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
     planNarrations: Optional[List[str]] = None

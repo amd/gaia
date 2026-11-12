@@ -21,7 +21,7 @@ interface MobileAccessModalProps {
     /** Explicitly stop the tunnel (shown only while the tunnel is active). */
     onStop?: () => void;
     error?: string | null;
-    /** Set when ngrok is not installed: this OS's install commands (may be empty). */
+    /** Set when ngrok is not installed; the commands are for the CLI, never shown here. */
     setupCommands?: string[] | null;
     /** Try starting the tunnel again, e.g. after installing ngrok. */
     onRetry?: () => void;
@@ -32,7 +32,6 @@ const NGROK_DOWNLOAD_URL = 'https://ngrok.com/download';
 export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommands, onRetry }: MobileAccessModalProps) {
     const [status, setStatus] = useState<TunnelStatus | null>(null);
     const [copied, setCopied] = useState(false);
-    const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
     const t = useT();
     const needsSetup = Array.isArray(setupCommands);
     // Nothing to poll for or scan while the tunnel cannot start.
@@ -138,14 +137,6 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
         });
     }, [status]);
 
-    const copyCommand = useCallback((command: string) => {
-        navigator.clipboard.writeText(command).then(() => {
-            setCopiedCommand(command);
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-            copyTimerRef.current = setTimeout(() => setCopiedCommand(null), 2000);
-        }).catch((err) => log.system.error('Could not copy the ngrok install command', err));
-    }, []);
-
     // Clean up copy timer on unmount
     useEffect(() => {
         return () => {
@@ -160,14 +151,14 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
         : '';
 
     return (
-        <div ref={dialogRef} className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Mobile access">
+        <div ref={dialogRef} className="modal-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={t('sidebar.mobileAccess')}>
             <div className="modal-panel mobile-modal" onClick={(e) => e.stopPropagation()}>
                 <div className="modal-header">
                     <h3 style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <Smartphone size={18} />
-                        Mobile access
+                        {t('sidebar.mobileAccess')}
                     </h3>
-                    <button className="btn-icon" onClick={onClose} aria-label="Close">
+                    <button className="btn-icon" onClick={onClose} aria-label={t('mobile.close')}>
                         <X size={18} />
                     </button>
                 </div>
@@ -176,10 +167,10 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                     {/* Status indicator */}
                     <div className="tunnel-status">
                         <span className={`status-dot ${
-                            status?.active ? 'active' :
-                            needsSetup ? 'setup' :
-                            error ? 'error' :
-                            'starting'
+                            status?.active ? 'is-active' :
+                            needsSetup ? 'is-setup' :
+                            error ? 'is-error' :
+                            'is-starting'
                         }`} />
                         <span>
                             {status?.active
@@ -197,23 +188,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                     {needsSetup && (
                         <div className="tunnel-setup">
                             <div className="tunnel-setup-title">{t('mobile.setupTitle')}</div>
-                            <p>
-                                {t('mobile.setupIntro')}{' '}
-                                {setupCommands.length > 0 ? t('mobile.setupInstall') : t('mobile.setupDownload')}
-                            </p>
-                            {setupCommands.map((command) => (
-                                <div className="tunnel-url-row tunnel-setup-command" key={command}>
-                                    <input type="text" readOnly dir="ltr" value={command} aria-label={t('mobile.installCommand')} />
-                                    <button
-                                        className={`copy-url-btn ${copiedCommand === command ? 'copied' : ''}`}
-                                        onClick={() => copyCommand(command)}
-                                        title={t('mobile.copyCommand')}
-                                    >
-                                        {copiedCommand === command ? <Check size={13} /> : <Copy size={13} />}
-                                        {copiedCommand === command ? t('mobile.copied') : t('mobile.copy')}
-                                    </button>
-                                </div>
-                            ))}
+                            <p>{t('mobile.setupIntro')}</p>
                             <a href={NGROK_DOWNLOAD_URL} target="_blank" rel="noopener noreferrer" className="tunnel-setup-link">
                                 {t('mobile.downloadPage')} <ExternalLink size={11} />
                             </a>
@@ -317,7 +292,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                                 <RotateCw size={13} /> {t('mobile.retry')}
                             </button>
                         )}
-                        <button className="btn-secondary" onClick={onClose}>Close</button>
+                        <button className="btn-secondary" onClick={onClose}>{t('mobile.close')}</button>
                     </div>
                 </div>
             </div>
