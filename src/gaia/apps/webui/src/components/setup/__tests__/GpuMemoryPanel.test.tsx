@@ -78,6 +78,34 @@ describe('GPU memory: what a bigger share unlocks', () => {
         expect(screen.queryByText('Recommended', { selector: '.gpu-tag' })).toBeNull();
     });
 
+    it('picks keeping the current share when that is the advice, with Keep as is the main way on', () => {
+        const onSkip = vi.fn();
+        const status = gpuStatus({
+            recommended_setting_gb: null,
+            models: [{ id: 'Qwen3.6-35B-A3B-GGUF', size_gb: 23.3, need_gb: 27, default: true, fits_now: true, fits_at_setting_gb: null }],
+        });
+        render(<Harness initial={status} onSkip={onSkip} />);
+        expect(screen.getByRole('radio', { name: 'Keep 32.0 GB (current)' })).toHaveAttribute('aria-checked', 'true');
+        // Nothing sells a change nobody asked for.
+        expect(screen.queryByText(/With .* for the GPU/)).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Show me how' })).toBeNull();
+        const keep = screen.getByRole('button', { name: 'Keep as is' });
+        expect(keep).toHaveClass('btn-primary');
+        fireEvent.click(keep);
+        expect(onSkip).toHaveBeenCalled();
+        // Picking a size brings the ways to change it back.
+        fireEvent.click(screen.getByRole('radio', { name: 'GPU 64.0 GB' }));
+        expect(screen.queryByRole('button', { name: 'Keep as is' })).toBeNull();
+    });
+
+    it('still preselects the recommended size when a change is the advice, with keeping offered first', () => {
+        render(<Harness initial={gpuStatus()} />);
+        const radios = screen.getAllByRole('radio');
+        expect(radios[0]).toHaveAccessibleName('Keep 32.0 GB (current)');
+        expect(radios[0]).toHaveAttribute('aria-checked', 'false');
+        expect(screen.getByRole('radio', { name: 'GPU 64.0 GB Recommended' })).toHaveAttribute('aria-checked', 'true');
+    });
+
     it('lets setup skip the step', () => {
         const onSkip = vi.fn();
         render(<Harness initial={gpuStatus()} onSkip={onSkip} />);
