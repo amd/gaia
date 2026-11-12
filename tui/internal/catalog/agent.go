@@ -81,6 +81,9 @@ type Agent struct {
 	// switch into a launch failure. Empty means "no developer mode", the safe
 	// default for every entry that has not declared one.
 	DevArgs []string
+	// Native marks the C++ agent (gaiacpp): it has no Claude provider and needs
+	// no Python setup, so launch flags and readiness checks differ for it.
+	Native bool
 
 	// --- Agent Hub fields, populated from GET /daemon/v1/catalog ---
 

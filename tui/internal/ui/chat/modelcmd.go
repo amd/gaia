@@ -78,6 +78,10 @@ func (m ChatModel) refuseModelSwitch(arg string) string {
 	}
 
 	if client.IsClaudeModelID(arg) {
+		if m.nativeAgent() {
+			return client.NativeClaudeUnavailable + " Nothing was switched: this session is still on " +
+				m.currentModelName() + "."
+		}
 		if _, ok := client.KnownClaudeModel(arg); ok {
 			return ""
 		}
@@ -125,11 +129,20 @@ func (m ChatModel) refuseModelSwitch(arg string) string {
 // suggesting it to a local session both misreads the state and pushes
 // off-machine inference at someone who may have no ANTHROPIC_API_KEY.
 func (m ChatModel) remoteAlternative() string {
+	if m.nativeAgent() {
+		return "Or pick a cloud model with /provider."
+	}
 	if m.claudeMode {
 		return "Or stay on Claude — this session already is."
 	}
 	return "Or move to Claude with `/model " + client.ExampleClaudeModelID +
 		"`, which sends the conversation to Anthropic and needs ANTHROPIC_API_KEY."
+}
+
+// nativeAgent reports whether this session's agent is the C++ one (gaiacpp).
+func (m ChatModel) nativeAgent() bool {
+	c, ok := m.client.(interface{ Native() bool })
+	return ok && c.Native()
 }
 
 // currentModelName names the model this session is on right now, for a
