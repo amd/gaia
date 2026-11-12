@@ -1760,6 +1760,15 @@ for (const locale of ['ar', 'en']) {
             await check(page, 'form-valid');
         });
 
+        // A schedule couldn't be changed: you deleted it and typed it in again.
+        test('editing a schedule', async ({ page }) => {
+            await openSchedules(page);
+            await page.locator('.schedule-card').first().getByRole('button', { name: locale === 'ar' ? /تعديل/ : /^Edit$/ }).click();
+            await expect(page.locator('.schedule-form-title')).toBeVisible();
+            await expect(page.locator('.schedule-nl-input')).toHaveValue('Weekdays at 8:00 AM');
+            await check(page, 'form-edit');
+        });
+
         test('new schedule with a "when" GAIA cannot read', async ({ page }) => {
             await openSchedules(page);
             await page.locator('.schedule-modal .btn-primary').click();

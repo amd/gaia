@@ -1457,6 +1457,39 @@
     "title": "DownloadProgress",
     "type": "object"
   },
+  "EditScheduleRequest": {
+    "description": "Request to change when a scheduled task runs and what it asks.",
+    "properties": {
+      "interval": {
+        "description": "New schedule, in the words the create form accepts",
+        "title": "Interval",
+        "type": "string"
+      },
+      "prompt": {
+        "description": "New prompt to execute on each run",
+        "title": "Prompt",
+        "type": "string"
+      },
+      "timezone": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "IANA time zone the schedule's times are in. Defaults to the server machine's zone.",
+        "title": "Timezone"
+      }
+    },
+    "required": [
+      "interval",
+      "prompt"
+    ],
+    "title": "EditScheduleRequest",
+    "type": "object"
+  },
   "EvalMailboxRequest": {
     "properties": {
       "attached": {

@@ -47,6 +47,22 @@ class UpdateScheduleRequest(BaseModel):
     )
 
 
+class EditScheduleRequest(BaseModel):
+    """Request to change when a scheduled task runs and what it asks."""
+
+    interval: str = Field(
+        ..., description="New schedule, in the words the create form accepts"
+    )
+    prompt: str = Field(..., description="New prompt to execute on each run")
+    timezone: Optional[str] = Field(
+        None,
+        description=(
+            "IANA time zone the schedule's times are in. Defaults to the "
+            "server machine's zone."
+        ),
+    )
+
+
 class ScheduleDescription(BaseModel):
     """When a schedule runs, as data the UI words in its own language.
 
@@ -264,6 +280,23 @@ async def update_schedule(
                 status_code=400,
                 detail=f"Invalid status: '{request.status}'. Use 'paused', 'active', or 'cancelled'.",
             )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.patch("/api/schedules/{name:path}", response_model=ScheduleResponse)
+async def edit_schedule(
+    name: str,
+    request: EditScheduleRequest,
+    scheduler: Scheduler = Depends(get_scheduler),
+):
+    """Change when a scheduled task runs and what it asks; its chat and history stay."""
+    try:
+        return await scheduler.edit_task(
+            name, interval=request.interval, prompt=request.prompt, tz=request.timezone
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Schedule '{name}' not found")
     except ValueError as e:

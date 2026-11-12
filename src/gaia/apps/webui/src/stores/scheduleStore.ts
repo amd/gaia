@@ -62,6 +62,8 @@ interface ScheduleState {
 
     loadSchedules: () => Promise<void>;
     createSchedule: (name: string, interval: string, prompt: string) => Promise<void>;
+    /** Change when a schedule runs and what it asks; throws so the form can show why. */
+    editSchedule: (name: string, interval: string, prompt: string) => Promise<void>;
     updateScheduleStatus: (name: string, status: string) => Promise<void>;
     runScheduleNow: (name: string) => Promise<void>;
     deleteSchedule: (name: string) => Promise<void>;
@@ -109,6 +111,20 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
         } catch (err) {
             // The create form shows this error itself, so don't repeat it above the list.
             log.api.error('Failed to create schedule', err);
+            throw err;
+        }
+    },
+
+    editSchedule: async (name, interval, prompt) => {
+        try {
+            const updated = await api.editSchedule(name, interval, prompt);
+            set((state) => ({
+                schedules: state.schedules.map((s) => (s.name === name ? updated : s)),
+                actionError: null,
+            }));
+        } catch (err) {
+            // The edit form shows this error itself.
+            log.api.error(`Failed to edit schedule "${name}"`, err);
             throw err;
         }
     },

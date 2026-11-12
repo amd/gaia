@@ -1178,6 +1178,72 @@ class Scheduler:
         logger.info("Resumed scheduled task '%s'", name)
         return task.to_dict()
 
+    async def edit_task(
+        self,
+        name: str,
+        interval: str,
+        prompt: str,
+        tz: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Change when a task runs and what it asks, keeping its name, chat and history.
+
+        An active task's next run is worked out again from the new schedule;
+        a paused one stays paused.
+
+        Raises:
+            KeyError: If task not found.
+            ValueError: If the schedule is invalid, the prompt is empty,
+                ``tz`` is not a known time zone, or a run is in flight.
+        """
+        if not prompt.strip():
+            raise ValueError(
+                "The prompt is empty. Say what GAIA should do on each run."
+            )
+        config = parse_schedule_input(interval)
+        if config.interval_seconds <= 0:
+            raise ValueError(config.description)
+        config.timezone = resolve_zone(tz).key
+
+        async with self._lock:
+            task = self._tasks.get(name)
+            if not task:
+                raise KeyError(f"Task '{name}' not found")
+            if task._executing:
+                raise ValueError(
+                    f"'{name}' is running now. Edit it once this run finishes."
+                )
+
+            if task._timer_task and not task._timer_task.done():
+                task._timer_task.cancel()
+                try:
+                    await task._timer_task
+                except asyncio.CancelledError:
+                    pass
+                task._timer_task = None
+
+            task.prompt = prompt
+            task.interval_seconds = config.interval_seconds
+            task.schedule_config = config.to_json()
+            if task.status == "active":
+                task.next_run_at = compute_next_run(
+                    config, after=datetime.now(timezone.utc)
+                ).isoformat()
+            self._db.edit_scheduled_task(
+                task.id,
+                prompt=task.prompt,
+                interval_seconds=task.interval_seconds,
+                schedule_config=task.schedule_config,
+                next_run_at=task.next_run_at,
+            )
+
+            if task.status == "active" and self._running:
+                task._timer_task = asyncio.create_task(
+                    self._run_loop(task), name=f"sched:{name}"
+                )
+
+        logger.info("Edited scheduled task '%s'", name)
+        return task.to_dict()
+
     async def delete_task(self, name: str) -> bool:
         """Delete a scheduled task entirely.
 

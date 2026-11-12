@@ -1242,6 +1242,11 @@ export async function createSchedule(name: string, interval: string, prompt: str
     return apiFetch('POST', '/schedules', { name, interval, prompt, timezone: browserTimeZone() });
 }
 
+/** Change when a schedule runs and what it asks; its chat and run history stay. */
+export async function editSchedule(name: string, interval: string, prompt: string): Promise<Schedule> {
+    return apiFetch('PATCH', `/schedules/${encodeURIComponent(name)}`, { interval, prompt, timezone: browserTimeZone() });
+}
+
 export async function updateSchedule(name: string, status: string): Promise<Schedule> {
     return apiFetch('PUT', `/schedules/${encodeURIComponent(name)}`, { status });
 }

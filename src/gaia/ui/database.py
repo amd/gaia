@@ -2095,6 +2095,31 @@ class ChatDatabase:
                 ),
             )
 
+    def edit_scheduled_task(
+        self,
+        task_id: str,
+        *,
+        prompt: str,
+        interval_seconds: int,
+        schedule_config: str,
+        next_run_at: str | None,
+    ) -> None:
+        """Change what a scheduled task asks and when it runs.
+
+        Raises:
+            KeyError: if no task has *task_id*.
+        """
+        with self._transaction():
+            cursor = self._conn.execute(
+                """UPDATE scheduled_tasks
+                   SET prompt = ?, interval_seconds = ?, schedule_config = ?,
+                       next_run_at = ?
+                   WHERE id = ?""",
+                (prompt, interval_seconds, schedule_config, next_run_at, task_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(f"Scheduled task '{task_id}' not found")
+
     def claim_scheduled_run(
         self, task_id: str, expected_next_run_at: str | None, next_run_at: str
     ) -> bool:

@@ -2448,6 +2448,13 @@ Recurring prompts run on a cron-like interval — see [`gaia schedule`](/referen
     Pause, resume, or cancel a scheduled task via `{"status": ...}`.
   </Accordion>
 
+  <Accordion title="PATCH /api/schedules/{name}">
+    Change when a scheduled task runs and what it asks, via `{"interval": ..., "prompt": ...}` and
+    the same optional `timezone` as create. The name, chat and run history stay; an active task's
+    next run is worked out again, a paused one stays paused. `400` for a schedule GAIA can't read,
+    an empty prompt, or while a run of it is in flight.
+  </Accordion>
+
   <Accordion title="POST /api/schedules/{name}/run">
     Run a scheduled task once now; its next scheduled time stays as it was. Returns the task with
     `running: true` and runs in the background. `409` while a run of it is already in flight.

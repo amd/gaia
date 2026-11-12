@@ -54,7 +54,7 @@ describe('New schedule form', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         expect(screen.getByLabelText('When to run').tagName).toBe('TEXTAREA');
         expect(screen.getByLabelText('Name').tagName).toBe('INPUT');
-        expect(screen.getByLabelText('Prompt').tagName).toBe('TEXTAREA');
+        expect(screen.getByLabelText('What GAIA does').tagName).toBe('TEXTAREA');
     });
 
     it('ties the reason a schedule was rejected to the schedule field', async () => {
