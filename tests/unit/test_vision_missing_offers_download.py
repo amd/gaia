@@ -63,6 +63,9 @@ def test_the_image_tools_name_the_model_they_need(host, call):
     assert result["needs_model"] == "vision"
     assert f"'{GEMMA}' is not downloaded" in result["error"]
     assert "Do not try to read the image another way" in result["hint"]
+    # The TUI and `gaia -p` run these tools too, and have no download button.
+    assert "the app offers" not in result["hint"]
+    assert "as the error says" in result["hint"]
 
 
 def _drain(handler: SSEOutputHandler) -> list:

@@ -40,8 +40,8 @@ DEFAULT_VLM_MODEL = "Gemma-4-E4B-it-GGUF"
 VISION_MISSING_HINT = (
     "Reading images needs the vision model, which isn't downloaded. Do not try "
     "to read the image another way (code, a script, the file's bytes). Tell the "
-    "user GAIA needs the vision model to see images and that the app offers to "
-    "download it, then stop."
+    "user GAIA needs the vision model to see images and how to download it, as "
+    "the error says, then stop."
 )
 
 
