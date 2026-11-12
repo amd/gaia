@@ -95,14 +95,6 @@ describe('isAuthRequiredMessage', () => {
         ).toBe(true);
     });
 
-    // Work Microsoft 365 detection (#2629) — isAuthRequiredMessage checks for
-    // "microsoft_work is not currently connected" explicitly; it is not a
-    // substring of the personal-connector phrase.
-    it('returns true for NOT_CONNECTED: microsoft_work prefix', () => {
-        expect(
-            isAuthRequiredMessage('NOT_CONNECTED: microsoft_work is not currently connected.')
-        ).toBe(true);
-    });
 });
 
 describe('detectProvider', () => {
@@ -134,27 +126,13 @@ describe('detectProvider', () => {
         expect(detectProvider('AGENT_NOT_GRANTED: this agent is not granted.')).toBe('all');
     });
 
-    // Work Microsoft 365 detection (#2629)
-    it('returns microsoft_work when the literal connector id is mentioned', () => {
-        expect(
-            detectProvider('NOT_CONNECTED: microsoft_work is not currently connected.')
-        ).toBe('microsoft_work');
-    });
-
-    it('returns microsoft_work when "microsoft 365" is mentioned, not personal microsoft', () => {
-        expect(
-            detectProvider('Your Microsoft 365 account needs to be reconnected.')
-        ).toBe('microsoft_work');
-    });
-
-    it('returns microsoft_work for office365 wording', () => {
-        expect(detectProvider('Please reconnect your office365 mailbox.')).toBe('microsoft_work');
-    });
-
-    it('does not classify a personal Outlook message as work', () => {
-        expect(detectProvider('NOT_CONNECTED: microsoft is not currently connected.')).toBe(
-            'microsoft',
-        );
+    // GAIA reads Gmail and Outlook only, so work wording gets the Microsoft button.
+    it.each([
+        'NOT_CONNECTED: microsoft_work is not currently connected.',
+        'Your Microsoft 365 account needs to be reconnected.',
+        'Please reconnect your office365 mailbox.',
+    ])('treats work-account wording as Microsoft: %s', (message) => {
+        expect(detectProvider(message)).toBe('microsoft');
     });
 });
 

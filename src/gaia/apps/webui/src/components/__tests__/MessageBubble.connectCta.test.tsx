@@ -35,9 +35,11 @@ describe('MessageBubble connect prompt', () => {
     it('offers every provider when the reply names none', () => {
         render(<MessageBubble message={reply('AUTH_REQUIRED: connect an email account to continue.')} />);
 
-        for (const name of ['Connect Google', 'Connect Microsoft', 'Connect Microsoft 365']) {
+        for (const name of ['Connect Google', 'Connect Microsoft']) {
             expect(screen.getByRole('button', { name })).toBeTruthy();
         }
+        // GAIA cannot read a work Microsoft 365 mailbox, so it is not offered.
+        expect(screen.queryByRole('button', { name: 'Connect Microsoft 365' })).toBeNull();
     });
 
     it('shows no connect prompt under an ordinary reply', () => {
