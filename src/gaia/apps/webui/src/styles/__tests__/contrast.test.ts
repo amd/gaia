@@ -917,6 +917,12 @@ describe('status hues stay on status', () => {
         '.mem-cat-badge.reminder': 'a reminder is the attention category',
         '.mem-priority-high': 'highest priority, ranked against the other tints',
         '.mem-success-rate.low': 'a failing success rate',
+        // Dictation: red is the live-microphone light, the one convention a person reads at a glance.
+        '.composer.is-recording': 'the microphone is live',
+        '.composer-livebox-cursor': 'the microphone is live',
+        '.composer-mic.is-recording': 'the microphone is live',
+        '.composer-mic.is-recording:hover:not(:disabled)': 'the microphone is live',
+        '.composer-rec-time': 'the microphone is live',
     };
 
     // A `[data-theme]` override is the same control in the other theme, so it

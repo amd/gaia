@@ -203,6 +203,9 @@ class RelayProfile:
     #: Contract version from which ``GET /sessions/{id}/tools`` lists the tools
     #: the session's agent has. ``None`` means the agent has no such route.
     min_tools_api_version: Optional[Tuple[int, int]] = None
+    #: Contract version from which ``/query`` takes ``reply_style`` for voice
+    #: turns. ``None`` means voice turns can't be relayed to this agent.
+    min_reply_style_api_version: Optional[Tuple[int, int]] = None
     #: Shown in Agent info when the installed agent can't list its tools.
     tools_upgrade_message: str = ""
     #: Shown when the agent itself fails to start (it crashed or never got
@@ -617,6 +620,8 @@ GAIA_PROFILE = RelayProfile(
     min_surface_api_version=(2, 20),
     # 2.22 added /query's reasoning field.
     min_reasoning_api_version=(2, 22),
+    # 2.28 added /query's reply_style field.
+    min_reply_style_api_version=(2, 28),
     # 2.21 added /query's final.context.
     min_context_api_version=(2, 21),
     context_upgrade_message=(
@@ -799,6 +804,15 @@ def surface_supported(profile: RelayProfile, api_version: Optional[str]) -> bool
     Same evidence rule as :func:`api_version_supported`: no version, no claim.
     """
     floor = profile.min_surface_api_version
+    return floor is not None and _meets(api_version, floor)
+
+
+def reply_style_supported(profile: RelayProfile, api_version: Optional[str]) -> bool:
+    """True when *api_version* takes ``/query``'s ``reply_style`` field.
+
+    Same evidence rule as :func:`api_version_supported`: no version, no claim.
+    """
+    floor = profile.min_reply_style_api_version
     return floor is not None and _meets(api_version, floor)
 
 

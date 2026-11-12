@@ -13,6 +13,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/phone"
 	"github.com/amd/gaia/tui/internal/setupapi"
 	"github.com/amd/gaia/tui/internal/setupapi/setupapitest"
 )
@@ -42,6 +43,12 @@ func TestMain(m *testing.M) {
 		return &setupapitest.Fake{PlanErr: errors.New("test: no daemon"), GPUErr: errors.New("test: no daemon")}
 	}
 	newGPUProbeAPI = newChatSetupAPI
+	// Nor may the phone banner reach a real one: a daemon with no phone routes.
+	newPhoneAPI = func(bool) *phone.Client {
+		return phone.New(func(context.Context, string, string, []byte) (int, []byte, error) {
+			return 404, []byte(`{"detail":"Not Found"}`), nil
+		})
+	}
 	code := m.Run()
 	os.RemoveAll(home)
 	os.Exit(code)

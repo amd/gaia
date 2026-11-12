@@ -59,6 +59,16 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Added
 
+- **The agent can change its own voice settings.** A new tool,
+  `set_voice_setting`, changes the voice, speed, volume, captions, chime or wake
+  word when the user asks ("use a different voice", "speak slower"). It
+  refuses every other setting and tells the agent to point the user to
+  Settings. The registered tool count goes from 105 to 106.
+- **Spoken replies sound like talk.** A voice turn now asks for a short,
+  conversational spoken summary in English, tells the agent the words came
+  from speech recognition so it asks again instead of guessing at a
+  misheard request, and never has it tell the user to type a command.
+
 - **The agent can draft, reply, forward and send mail.** A new bundled skill,
   `send-email`, works on Gmail and Outlook through the mailbox the reading tools
   use. The agent loads it when asked to send, reply to, forward or draft an
@@ -87,6 +97,18 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   and saying to reconnect in Settings -> Connectors. A host app forwarding a
   connection for `installed:gaia` now needs `gmail.readonly` and `gmail.compose`
   in its consent.
+
+### Added
+
+- **Voice turns (contract 2.28).** `/query` takes `reply_style: "voice"` for a
+  turn that will be spoken aloud. The agent then writes a short status line
+  before each tool call and opens its answer with a `<spoken>…</spoken>`
+  summary of at most 40 words, so dictation and voice mode in the Agent UI and
+  the TUI can speak the outcome and show the detail. Typed turns are
+  unchanged, including their cached prompt.
+- **`alert_owner`.** With phone alerts on and "Agents may alert me" allowed,
+  the agent can ask GAIA to reach the user by text or call. The user hears a
+  fixed sentence, never the agent's words; the reason shows in GAIA's apps.
 
 ### Changed
 

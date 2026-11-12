@@ -680,6 +680,13 @@ func (c *Client) refresh(ctx context.Context, old *Instance, path string) (*Inst
 	return fresh, nil
 }
 
+// RefreshToken re-reads instance.json after the daemon refused old's token on a
+// connection Do cannot make for the caller (a WebSocket upgrade). It returns
+// the fresh, verified instance, or an error when the token did not rotate.
+func (c *Client) RefreshToken(ctx context.Context, old *Instance) (*Instance, error) {
+	return c.refresh(ctx, old, APIPrefix)
+}
+
 // afterRestart prepares a call for a daemon that replaced the one it was meant
 // for. That daemon starts with no sidecars, so a RunScoped call has nothing to
 // go to, and a relayed call needs its agent ensured there first.

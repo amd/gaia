@@ -88,6 +88,11 @@ REVIEWED: dict[tuple[str, str], tuple[tuple[str, str], str, str]] = {
         "metadata adds 'dependency licenses'; the wheel's 15 bundled PDFium licences are permissive "
         "(FreeType under FTL; ICU's GPL text covers only an Autoconf build script)",
     ),
+    ("go", "github.com/coder/websocket"): (
+        ("1.8", "2.0"),
+        "ISC",
+        "the module's LICENSE.txt is the ISC text with no title line, so the scanner finds no licence name",
+    ),
 }
 
 # Wheels that bundle third-party code their License-Expression doesn't cover:

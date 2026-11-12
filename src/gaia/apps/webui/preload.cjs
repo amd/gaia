@@ -57,6 +57,11 @@ contextBridge.exposeInMainWorld("gaiaAPI", {
     setKeepAwake: (on) => ipcRenderer.invoke("power:keep-awake", on),
   },
 
+  system: {
+    // Opens the OS microphone privacy pane; resolves false where there is none.
+    openMicSettings: () => ipcRenderer.invoke("system:open-mic-settings"),
+  },
+
   // ── OS folder picker; resolves the chosen path, or null on cancel ─────
   dialog: {
     pickFolder: (defaultPath) => ipcRenderer.invoke("dialog:pick-folder", defaultPath),

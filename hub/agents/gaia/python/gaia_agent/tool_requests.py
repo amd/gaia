@@ -62,6 +62,22 @@ _MEDIA_NAMED = (
 )
 
 
+# A request about GAIA's own voice: "change your voice", "speak slower".
+_VOICE_SETTING_NAMED = re.compile(
+    r"\byour\s+(?:own\s+)?(?:voice|volume|speed|accent)\b"
+    r"|\b(?:speak|talk)\s+(?:a\s+(?:bit|little)\s+)?(?:slower|faster|louder|quieter|softer|more\s+(?:slowly|quietly|loudly))\b"
+    r"|\b(?:different|another|male|female|british|american)\s+voice\b"
+    r"|\bchange\s+(?:the\s+)?voice\b"
+    r"|\bwake\s+word\b"
+    r"|\b(?:the|that|your)\s+(?:beep|chime|ding|tone)\b"
+    r"|\b(?:turn|switch)\s+(?:the\s+)?captions\s+(?:on|off)\b"
+    r"|\b(?:turn|switch)\s+(?:on|off)\s+(?:the\s+)?captions\b"
+    r"|\b(?:be|a\s+(?:bit|little))\s+(?:louder|quieter)\b"
+    r"|\b(?:turn|bring)\s+(?:the\s+)?volume\s+(?:up|down)\b",
+    re.IGNORECASE,
+)
+
+
 def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
     """Return the registry tools *user_input* explicitly asks for, in order.
 
@@ -92,4 +108,10 @@ def requested_tools(user_input: str, registry: Iterable[str]) -> List[str]:
     for pattern, name in _MEDIA_NAMED:
         if pattern.search(user_input) and name in names and name not in found:
             found.append(name)
+    if (
+        _VOICE_SETTING_NAMED.search(user_input)
+        and "set_voice_setting" in names
+        and "set_voice_setting" not in found
+    ):
+        found.append("set_voice_setting")
     return found

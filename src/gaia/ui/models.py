@@ -565,6 +565,8 @@ class ChatRequest(BaseModel):
     document_ids: Optional[List[str]] = None
     stream: bool = True
     agent_type: Optional[str] = Field(None, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    #: "voice" asks for a spoken summary first; see docs/plans/voice.mdx.
+    reply_style: Literal["text", "voice"] = "text"
 
 
 class SourceInfo(BaseModel):

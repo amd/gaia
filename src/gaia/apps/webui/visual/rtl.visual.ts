@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, PHONE_ALERTS, PHONE_SETTINGS, PHONE_STATUS, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, VOICE_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -1637,7 +1637,7 @@ test('no spending chip on a model on this PC', async ({ page }) => {
     await expect(page.locator('.spend-meter')).toHaveCount(0);
 });
 
-for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'voice', 'phone', 'privacy', 'advanced']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {
         await open(page, '', 'ar', withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -3337,5 +3337,463 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
             await page.screenshot({ path: info.outputPath(`crashed-${placement}-${locale}.png`) });
         });
+    }
+}
+// ── Dictation and voice mode ─────────────────────────────────────────────────
+
+/**
+ * A voice socket and microphone the test drives: the app's own controller,
+ * worklets and screen run; only the server and the mic are stood in.
+ * `window.__voice.serve(event)` plays the server, `speech(ms)` sends speech PCM.
+ */
+function fakeVoice(opts: { micDenied?: boolean }): void {
+    type Fake = { onopen: (() => void) | null; onmessage: ((e: { data: unknown }) => void) | null; onclose: unknown; onerror: unknown; sent: unknown[] };
+    const sockets: Fake[] = [];
+    const Real = window.WebSocket;
+    class FakeVoiceSocket {
+        readyState = 0;
+        binaryType = 'blob';
+        sent: unknown[] = [];
+        onopen: (() => void) | null = null;
+        onmessage: ((e: { data: unknown }) => void) | null = null;
+        onclose: unknown = null;
+        onerror: unknown = null;
+        constructor(readonly url: string) {
+            sockets.push(this);
+            setTimeout(() => { this.readyState = 1; this.onopen?.(); }, 0);
+        }
+        send(data: unknown) { this.sent.push(typeof data === 'string' ? JSON.parse(data) : (data as ArrayBuffer).byteLength); }
+        close() { this.readyState = 3; }
+    }
+    const Patched = function (url: string | URL, protocols?: string | string[]) {
+        return String(url).includes('/api/voice/session') ? new FakeVoiceSocket(String(url)) : new Real(url, protocols);
+    } as unknown as typeof WebSocket;
+    Object.assign(Patched, { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 });
+    window.WebSocket = Patched;
+    const last = () => sockets[sockets.length - 1];
+    Object.assign(window, {
+        __voice: {
+            serve: (event: object) => last().onmessage?.({ data: JSON.stringify(event) }),
+            // A rising and falling tone at 24 kHz, as Kokoro's PCM would arrive.
+            speech: (ms: number) => {
+                const n = Math.round(24 * ms);
+                const pcm = new Int16Array(n);
+                for (let i = 0; i < n; i++) pcm[i] = Math.round(Math.sin(i / 12) * 9000 * Math.sin((Math.PI * i) / n));
+                last().onmessage?.({ data: pcm.buffer });
+            },
+            sent: () => last()?.sent ?? [],
+        },
+    });
+    // A quiet tone stands in for the person speaking.
+    navigator.mediaDevices.getUserMedia = async () => {
+        if (opts.micDenied) throw new DOMException('Permission denied', 'NotAllowedError');
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const out = ctx.createMediaStreamDestination();
+        osc.connect(out);
+        osc.start();
+        return out.stream;
+    };
+}
+
+type VoiceWindow = { __voice: { serve: (e: object) => void; speech: (ms: number) => void; sent: () => unknown[] } };
+const serveVoice = (page: Page, event: object) => page.evaluate((e) => (window as unknown as VoiceWindow).__voice.serve(e), event);
+/** Wait until the app has opened its voice socket and sent `start`. */
+const voiceConnected = (page: Page) =>
+    expect.poll(() => page.evaluate(() => (window as unknown as VoiceWindow).__voice.sent().length)).toBeGreaterThan(0);
+
+const SPOKEN = 'You had four invoices last week, totaling $3,412.50. The biggest is from Northwind.';
+const SPOKEN_AR = 'وجدت أربع فواتير من الأسبوع الماضي، مجموعها 3,412.50 دولارًا. أكبرها من نورثويند.';
+const VOICE_DETAIL = '| Vendor | File | Total |\n|---|---|---|\n| Northwind | invoice-northwind-1026.pdf | $1,980.00 |\n| Contoso Print | INV-88213.pdf | $712.50 |\n| Fabrikam Cloud | fabrikam_oct.pdf | $455.00 |\n| Litware | litware-invoice-1031.pdf | $265.00 |';
+
+/** The voice turn as /chat/send streams it: narration, a tool, then the answer opening with <spoken>. */
+const voiceTurn = (locale: string) => {
+    const narration = locale === 'ar' ? 'سأبحث في مجلد التنزيلات عن فواتير الأسبوع الماضي.' : "Let me look in your Downloads for last week's invoices.";
+    return [
+        { type: 'chunk', content: narration },
+        { type: 'commentary', content: narration },
+        { type: 'tool_start', tool: 'search_files', detail: '~/Downloads/*invoice*', narration: locale === 'ar' ? 'البحث في مجلد التنزيلات' : 'Searching: ~/Downloads/*invoice*' },
+        { type: 'tool_result', summary: '4 PDFs found', success: true },
+        { type: 'tool_start', tool: 'read_file', detail: '4 files', narration: '' },
+        { type: 'tool_result', summary: '4 totals extracted', success: true },
+        { type: 'chunk', content: `<spoken>${locale === 'ar' ? SPOKEN_AR : SPOKEN}</spoken>\n\n${VOICE_DETAIL}` },
+    ];
+};
+
+const statusFor = (locale: string, over: Record<string, unknown> = {}) => ({
+    ...VOICE_STATUS,
+    ...(locale === 'ar' ? { language: 'ar', speaks: false, asr_model: 'Whisper-Base', models: [{ id: 'Whisper-Base', purpose: 'transcription', downloaded: true, size_gb: 0.15 }] } : {}),
+    ...over,
+});
+
+function withVoice(locale: string, { status = statusFor(locale), micDenied = false }: { status?: unknown; micDenied?: boolean } = {}) {
+    return async (page: Page) => {
+        await page.addInitScript(fakeVoice, { micDenied });
+        await page.addInitScript(streamThenWait, voiceTurn(locale));
+        await page.route('**/api/voice/status**', (route) => route.fulfill({ json: status }));
+    };
+}
+
+/** At phone width the closed sidebar drawer waits off screen by design. */
+async function hideClosedDrawer(page: Page): Promise<void> {
+    await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+}
+
+async function checkVoice(page: Page, locale: string, name: string): Promise<void> {
+    await shot(page, name);
+    // On a phone voice mode is full screen: the chat under it is out of sight.
+    await page.addStyleTag({ content: 'body:has(.voice-screen.is-phone) .task-view > :not(.voice-screen) { display: none !important; }' });
+    expect(await audit(page), name).toEqual([]);
+    // What was said and the answer are the conversation, not interface text.
+    if (locale === 'ar') expect(await untranslated(page, '.voice-screen', 'bdi, pre, .vs-result, .vs-you, .vs-said'), name).toEqual([]);
+}
+
+const VOICE_SIZES = [['desktop', { width: 1400, height: 900 }], ['phone', { width: 375, height: 812 }]] as const;
+
+for (const locale of ['en', 'ar']) {
+    for (const theme of ['light', 'dark'] as const) {
+        for (const [size, viewport] of VOICE_SIZES) {
+            test(`voice mode, every state (${locale}, ${theme}, ${size})`, async ({ page }) => {
+                await page.setViewportSize(viewport);
+                await open(page, `#${ANSWER_SESSION}`, locale, withVoice(locale), theme);
+                if (size === 'phone') await hideClosedDrawer(page);
+                const tag = `voice-${locale}-${theme}-${size}`;
+
+                // The empty composer offers voice in place of Send.
+                const voiceButton = page.locator('.composer-send.is-voice');
+                await expect(voiceButton).toBeVisible();
+                await voiceButton.click();
+                const screenEl = page.locator('.voice-screen');
+                await expect(screenEl).toBeVisible();
+                await expect(screenEl.locator('.vs-state')).toHaveClass(/is-warming/);
+                await checkVoice(page, locale, `${tag}-1-warming`);
+
+                await voiceConnected(page);
+                const start = await page.evaluate(() => (window as unknown as VoiceWindow).__voice.sent()[0]);
+                expect(start).toEqual({ type: 'start', purpose: 'voice', language: locale });
+                await serveVoice(page, { type: 'ready', speech: locale === 'en' });
+                await serveVoice(page, { type: 'speech_started' });
+                await serveVoice(page, { type: 'partial', text: locale === 'ar' ? 'ابحث عن فواتير الأسبوع الماضي في' : "Find last week's invoices in my" });
+                await expect(screenEl.locator('.vs-state')).toHaveClass(/is-listening/);
+                if (locale === 'ar') await expect(page.locator('.vs-note')).toBeVisible();
+                await checkVoice(page, locale, `${tag}-2-listening`);
+
+                await serveVoice(page, { type: 'speech_stopped' });
+                await serveVoice(page, { type: 'final', text: locale === 'ar' ? 'ابحث عن فواتير الأسبوع الماضي في مجلد التنزيلات واجمعها.' : "Find last week's invoices in my Downloads and total them." });
+                await expect(screenEl.locator('.vs-state')).toHaveClass(/is-thinking/);
+                if (size === 'desktop') {
+                    await expect(screenEl.locator('.vs-log .vs-row.is-tool').nth(1)).toBeVisible();
+                } else {
+                    await expect(screenEl.locator('.vs-logbar')).toBeVisible();
+                }
+                await checkVoice(page, locale, `${tag}-3-thinking`);
+                if (size === 'phone') {
+                    await screenEl.locator('.vs-logbar').click();
+                    await expect(screenEl.locator('.vs-sheet')).toHaveClass(/is-open/);
+                    await page.waitForTimeout(400);
+                    await checkVoice(page, locale, `${tag}-3b-sheet`);
+                    await screenEl.locator('.vs-sheet-close').click();
+                }
+
+                if (locale === 'en') {
+                    // The spoken block went to the socket as it streamed.
+                    const sent = await page.evaluate(() => (window as unknown as VoiceWindow).__voice.sent());
+                    expect(sent).toContainEqual({ type: 'speak_end' });
+                    await serveVoice(page, { type: 'speaking', kind: 'spoken' });
+                    await serveVoice(page, { type: 'spoken_piece', kind: 'spoken', text: 'You had four invoices last week,' });
+                    await page.evaluate(() => (window as unknown as VoiceWindow).__voice.speech(1800));
+                    await expect(screenEl.locator('.vs-state')).toHaveClass(/is-speaking/);
+                    await page.waitForTimeout(700);
+                    await checkVoice(page, locale, `${tag}-4-speaking`);
+                    await screenEl.locator('.vs-big').click();
+                    await expect(screenEl.locator('.vs-state')).not.toHaveClass(/is-speaking/);
+                } else {
+                    // Shown, not spoken: the summary is the caption, fully lit.
+                    await expect(screenEl.locator('.vs-said')).toContainText('وجدت أربع فواتير');
+                    await checkVoice(page, locale, `${tag}-4-caption`);
+                }
+
+                await page.keyboard.press('Escape');
+                await expect(screenEl).toHaveCount(0);
+                // Back in the chat: the turn is an ordinary message, its spoken block a lead line.
+                await expect(page.locator('.msg-spoken-lead').last()).toBeVisible();
+                await expect(page.locator('.chat-view, .task-view').first()).not.toContainText('<spoken>');
+                await shot(page, `${tag}-5-chat`);
+                // At phone width the Arabic chat row is crowded with or without voice; check what voice adds.
+                const problems = await audit(page);
+                expect(size === 'desktop' ? problems : problems.filter((p) => /msg-spoken-lead|composer-(mic|send)/.test(p))).toEqual([]);
+            });
+        }
+    }
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`voice mode, paused and reduced motion off (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withVoice(locale));
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+        await page.locator('.composer-send.is-voice').click();
+        await voiceConnected(page);
+        await serveVoice(page, { type: 'ready', speech: locale === 'en' });
+        await expect(page.locator('.vs-state')).toHaveClass(/is-live/);
+        await page.waitForTimeout(500);
+        await shot(page, `voice-${locale}-motion-listening`);
+        await page.locator('.vs-big').click();
+        await expect(page.locator('.vs-state')).toHaveClass(/is-paused/);
+        await expect(page.locator('.vs-state')).not.toHaveClass(/is-live/);
+        await checkVoice(page, locale, `voice-${locale}-paused`);
+    });
+
+    test(`voice mode, speech models missing (${locale})`, async ({ page }) => {
+        const status = statusFor(locale, {
+            ready: false, error_code: 'model_missing', error: 'Voice needs speech models: Moonshine-Tiny-Streaming, kokoro-v1',
+            models: [
+                { id: locale === 'ar' ? 'Whisper-Base' : 'Moonshine-Tiny-Streaming', purpose: 'transcription', downloaded: false, size_gb: 0.15 },
+                ...(locale === 'ar' ? [] : [{ id: 'kokoro-v1', purpose: 'tts', downloaded: false, size_gb: 0.34 }]),
+            ],
+        });
+        await open(page, `#${ANSWER_SESSION}`, locale, withVoice(locale, { status }));
+        await page.locator('.composer-send.is-voice').click();
+        const card = page.locator('.vs-error.is-model_missing');
+        await expect(card).toBeVisible();
+        await expect(card.locator('.vs-error-size').first()).toHaveText('0.15 GB');
+        await checkVoice(page, locale, `voice-${locale}-error-model-missing`);
+        await page.setViewportSize({ width: 375, height: 812 });
+        await hideClosedDrawer(page);
+        await checkVoice(page, locale, `voice-${locale}-error-model-missing-phone`);
+    });
+
+    test(`voice mode, microphone refused (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withVoice(locale, { micDenied: true }), 'dark');
+        await page.locator('.composer-send.is-voice').click();
+        await expect(page.locator('.vs-error.is-mic_denied')).toBeVisible();
+        await checkVoice(page, locale, `voice-${locale}-error-mic-denied`);
+    });
+
+    test(`dictation in the composer (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withVoice(locale));
+        await page.locator('textarea').first().fill(locale === 'ar' ? 'ملاحظة للفريق:' : 'Note for the team:');
+        await expect(page.locator('.composer-send:not(.is-voice)')).toBeVisible();
+        await page.locator('.composer-mic').click();
+        await expect(page.locator('.composer.is-recording')).toBeVisible();
+        await voiceConnected(page);
+        await serveVoice(page, { type: 'ready', speech: false });
+        await serveVoice(page, { type: 'final', text: locale === 'ar' ? 'انتقل العرض إلى يوم الخميس.' : 'The demo moved to Thursday.' });
+        await serveVoice(page, { type: 'partial', text: locale === 'ar' ? 'من يستطيع إحضار' : 'who can bring the' });
+        await expect(page.locator('.composer-livebox-partial')).not.toBeEmpty();
+        await expect(page.locator('.composer-rec-time')).toBeVisible();
+        await shot(page, `dictation-${locale}-recording`);
+        expect(await audit(page)).toEqual([]);
+        await page.setViewportSize({ width: 375, height: 812 });
+        await hideClosedDrawer(page);
+        await shot(page, `dictation-${locale}-recording-phone`);
+        // The rest of this phone row is crowded already; these are the parts dictation adds.
+        expect((await audit(page)).filter((p) => /composer-(mic|rec|livebox|dictation)/.test(p))).toEqual([]);
+        await page.keyboard.press('Enter');
+        await serveVoice(page, { type: 'final', text: locale === 'ar' ? 'من يستطيع إحضار جهاز العرض؟' : 'Who can bring the projector?' });
+        await expect(page.locator('.composer.is-recording')).toHaveCount(0);
+        await expect(page.locator('textarea').first()).toHaveValue(locale === 'ar'
+            ? 'ملاحظة للفريق: انتقل العرض إلى يوم الخميس. من يستطيع إحضار جهاز العرض؟'
+            : 'Note for the team: The demo moved to Thursday. Who can bring the projector?');
+    });
+
+    for (const theme of ['light', 'dark'] as const) {
+        test(`settings voice pane (${locale}, ${theme})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route('**/api/voice/status**', (route) => route.fulfill({ json: statusFor(locale, { models: [
+                    { id: 'Moonshine-Tiny-Streaming', purpose: 'transcription', downloaded: true, size_gb: 0.1 },
+                    { id: 'kokoro-v1', purpose: 'tts', downloaded: false, size_gb: 0.34 },
+                ] }) }));
+            }, theme);
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="voice"]').click();
+            await expect(page.locator('#voice-turns')).toHaveValue('hands_free');
+            await expect(page.locator('#read-aloud-voice')).toHaveValue('bf_emma');
+            await shot(page, `settings-voice-${locale}-${theme}`);
+            await page.locator('.settings-scroll').evaluate((el) => el.scrollTo(0, el.scrollHeight));
+            await shot(page, `settings-voice-${locale}-${theme}-bottom`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+        });
+    }
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`voice mode shows a permission card in place, and says so (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.addInitScript(fakeVoice, { micDenied: false });
+            await p.addInitScript(streamThenWait, PYTHON_PROMPT);
+            await p.route('**/api/voice/status**', (route) => route.fulfill({ json: statusFor(locale) }));
+        });
+        await page.locator('.composer-send.is-voice').click();
+        await voiceConnected(page);
+        await serveVoice(page, { type: 'ready', speech: locale === 'en' });
+        await serveVoice(page, { type: 'final', text: locale === 'ar' ? 'كم عدد الأحرف في ملاحظاتي؟' : 'How long are my notes?' });
+        await expect(page.locator('.voice-screen .vs-prompt .perm-card')).toBeVisible();
+        // One card only: the composer's copy steps aside while voice mode is open.
+        await expect(page.locator('.perm-card')).toHaveCount(1);
+        await expect(page.locator('.vs-row.is-note').last()).toBeVisible();
+        await checkVoice(page, locale, `voice-${locale}-permission`);
+    });
+}
+
+// ── Phone alerts ─────────────────────────────────────────────────────────────
+
+const PHONE_SIZES = [['desktop', { width: 1400, height: 900 }], ['phone', { width: 375, height: 812 }]] as const;
+/** Contact labels, what the simulated phone said and alert reasons are user or service text, not interface text. */
+const PHONE_USER_TEXT = 'bdi, select, time';
+const PHONE_STATUS_FIRST = { ...PHONE_STATUS, configured: false, from_number: '', contacts: [], open_alerts: 0, calls_today: 0, texts_today: 0, awake: null };
+
+async function openPhonePane(page: Page): Promise<void> {
+    const sidebar = page.getByRole('button', { name: /Open sidebar/ });
+    if (await sidebar.isVisible()) await sidebar.click();
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="phone"]').click();
+    await expect(page.locator('.phone-settings')).toBeVisible();
+    await expect(page.locator('.phone-settings .spin')).toHaveCount(0);
+}
+
+const openAllSections = (page: Page) =>
+    page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+
+async function checkPhone(page: Page, locale: string, name: string): Promise<void> {
+    await shot(page, name);
+    expect(await audit(page), name).toEqual([]);
+    if (locale === 'ar') expect(await untranslated(page, '.settings-scroll', PHONE_USER_TEXT), name).toEqual([]);
+}
+
+for (const locale of ['en', 'ar']) {
+    for (const theme of ['light', 'dark'] as const) {
+        for (const [size, viewport] of PHONE_SIZES) {
+            test(`settings phone pane, set up (${locale}, ${theme}, ${size})`, async ({ page }) => {
+                await page.setViewportSize(viewport);
+                await open(page, '', locale, undefined, theme);
+                await openPhonePane(page);
+                await openAllSections(page);
+                await expect(page.locator('.phone-alert').first()).toBeVisible();
+                await expect(page.locator('.phone-sim li')).toHaveCount(3);
+                const tag = `phone-${locale}-${theme}-${size}`;
+                await checkPhone(page, locale, `${tag}-1-top`);
+                for (const [i, part] of [['2', '.phone-rules'], ['3', '.phone-limits'], ['4', '.phone-alerts'], ['5', '.phone-sim']] as const) {
+                    await page.locator(part).first().scrollIntoViewIfNeeded();
+                    await checkPhone(page, locale, `${tag}-${i}-${part.slice(7)}`);
+                }
+            });
+        }
+    }
+
+    test(`settings phone pane, first time and the Twilio keys (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/phone/status', (route) => route.fulfill({ json: { ...PHONE_STATUS_FIRST } }));
+            await p.route('**/api/phone/alerts**', (route) => route.fulfill({ json: { alerts: [] } }));
+            await p.route('**/api/phone/keys', (route) => route.fulfill({
+                status: 422, json: { detail: { code: 'bad_credentials', message: 'Twilio rejected the Account SID or Auth Token.' } },
+            }));
+        });
+        await openPhonePane(page);
+        await expect(page.locator('.phone-intro')).toBeVisible();
+        await expect(page.getByRole('button', { name: locale === 'ar' ? /استخدام الهاتف التجريبي/ : 'Use the Simulated phone' })).toBeVisible();
+        await checkPhone(page, locale, `phone-${locale}-first-time`);
+        await page.locator('.phone-provider input[value="twilio"]').check();
+        await page.locator('#phone-sid').fill('AC' + '0'.repeat(32));
+        await page.locator('#phone-token').fill('not-a-real-token');
+        await page.locator('#phone-from').fill('+15557654321');
+        await page.locator('.phone-twilio button[type="submit"]').click();
+        await expect(page.locator('.phone-error')).toBeVisible();
+        await expect(page.locator('#phone-token')).toHaveValue('');
+        await page.locator('.phone-twilio').scrollIntoViewIfNeeded();
+        await checkPhone(page, locale, `phone-${locale}-twilio-rejected`);
+        await page.setViewportSize({ width: 375, height: 812 });
+        await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+        await page.locator('.phone-twilio').scrollIntoViewIfNeeded();
+        await checkPhone(page, locale, `phone-${locale}-twilio-rejected-phone`);
+    });
+
+    test(`settings phone pane, adding a second number takes two codes (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/phone/contacts', (route) => route.fulfill({ json: {
+                verification_id: 'a'.repeat(32), number: '+49 •••• 7788', needs_confirm_code: true, confirm_sent_to: '+1 •••• 4567', expires_in: 600,
+            } }));
+            await p.route('**/api/phone/contacts/confirm', (route) => route.fulfill({
+                status: 422, json: { detail: { code: 'verification_failed', message: 'That code is wrong. 2 tries left.', tries_left: 2 } },
+            }));
+        });
+        await openPhonePane(page);
+        await openAllSections(page);
+        await page.locator('#phone-add-number').fill('+4915112347788');
+        await page.locator('#phone-add-label').fill(locale === 'ar' ? 'هاتف السفر' : 'Travel phone');
+        await page.locator('.phone-add button[type="submit"]').click();
+        await expect(page.locator('#phone-confirm-code')).toBeVisible();
+        await page.locator('#phone-code').fill('123456');
+        await page.locator('#phone-confirm-code').fill('654321');
+        await page.locator('.phone-code button[type="submit"]').click();
+        await expect(page.locator('.phone-error')).toContainText(locale === 'ar' ? 'المحاولات المتبقية' : '2 tries left');
+        await page.locator('.phone-code').scrollIntoViewIfNeeded();
+        await checkPhone(page, locale, `phone-${locale}-two-codes`);
+    });
+
+    test(`settings phone pane over mobile access: a change says where to make it (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/phone/settings', (route) => (route.request().method() === 'PUT'
+                ? route.fulfill({ status: 403, json: { detail: 'Change this on the PC running GAIA.' } })
+                : route.fallback()));
+        });
+        await openPhonePane(page);
+        await page.locator('.phone-settings .settings-card').first().locator('.setting-row').click();
+        await expect(page.locator('.phone-error')).toContainText(locale === 'ar' ? 'غيّر هذا على الجهاز' : 'Change this on the PC running GAIA.');
+        await checkPhone(page, locale, `phone-${locale}-mobile-refused`);
+    });
+
+    for (const [size, viewport] of PHONE_SIZES) {
+        for (const theme of ['light', 'dark'] as const) {
+            test(`open phone alert banner (${locale}, ${theme}, ${size})`, async ({ page }) => {
+                await page.setViewportSize(viewport);
+                await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+                    await p.route('**/api/phone/status', (route) => route.fulfill({ json: { ...PHONE_STATUS, enabled: true, open_alerts: 2 } }));
+                    await p.route('**/api/phone/alerts?open=true', (route) => route.fulfill({ json: { alerts: [
+                        PHONE_ALERTS[0], { ...PHONE_ALERTS[0], id: 13, kind: 'approval_waiting' },
+                    ] } }));
+                }, theme);
+                const banner = page.locator('.phone-banner');
+                await expect(banner).toBeVisible();
+                await expect(banner).toContainText(locale === 'ar' ? 'فشلت مهمة مجدولة' : 'Scheduled job failed');
+                if (size === 'phone') await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+                await shot(page, `phone-banner-${locale}-${theme}-${size}`);
+                // At phone width the Arabic chat row below is crowded already; check what the banner adds.
+                const problems = await audit(page);
+                expect(size === 'desktop' ? problems : problems.filter((p) => /phone-banner|link-btn/.test(p))).toEqual([]);
+                if (locale === 'ar') expect(await untranslated(page, '.phone-banner')).toEqual([]);
+                await banner.locator('.link-btn').first().click();
+                await expect(page.locator('.phone-settings')).toBeVisible();
+                await expect(page.locator('#phone-alerts .settings-disclosure')).toHaveAttribute('open', '');
+            });
+        }
+    }
+}
+
+for (const locale of ['en', 'ar']) {
+    for (const theme of ['light', 'dark'] as const) {
+        for (const [size, viewport] of PHONE_SIZES) {
+            test(`settings phone pane, talk on calls (${locale}, ${theme}, ${size})`, async ({ page }) => {
+                await page.setViewportSize(viewport);
+                await open(page, '', locale, async (p) => {
+                    await p.route('**/api/phone/settings', (route) => route.fulfill({ json: { ...PHONE_SETTINGS, pin_set: true, talk_available: true, voice: 'bm_george' } }));
+                }, theme);
+                await openPhonePane(page);
+                const group = page.locator('.phone-talk');
+                await page.locator('.settings-disclosure', { has: group }).locator('summary').click();
+                await expect(page.locator('.phone-talk-status.is-ready')).toBeVisible();
+                await expect(page.locator('#phone-voice')).toHaveValue('bm_george');
+                await page.locator('.phone-talk').scrollIntoViewIfNeeded();
+                if (size === 'phone') await page.addStyleTag({ content: '.sb:not(.is-open) { display: none; }' });
+                await checkPhone(page, locale, `phone-talk-${locale}-${theme}-${size}-ready`);
+                await group.locator('.phone-actions button').first().click();
+                await expect(page.locator('#phone-pin')).toBeVisible();
+                await page.locator('#phone-pin').fill('12');
+                await page.locator('.phone-pin button[type="submit"]').click();
+                await expect(page.locator('.phone-pin .settings-error')).toBeVisible();
+                await page.locator('.phone-pin').scrollIntoViewIfNeeded();
+                await checkPhone(page, locale, `phone-talk-${locale}-${theme}-${size}-pin`);
+            });
+        }
     }
 }

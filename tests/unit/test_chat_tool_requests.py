@@ -100,3 +100,41 @@ def test_only_registered_tools_are_returned():
     """A profile without the shell tools gets no shell request."""
     assert requested_tools("run pwd in the shell", {"read_file"}) == []
     assert requested_tools("call delete_everything now", REGISTRY) == []
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Can you change your voice?",
+        "Use a different voice.",
+        "Switch to a British voice.",
+        "Speak a bit slower please.",
+        "Talk louder.",
+        "Can you be quieter?",
+        "Turn the volume down.",
+        "Turn off the captions.",
+        "Stop using the wake word.",
+    ],
+)
+def test_requests_about_her_own_voice_ask_for_the_setting_tool(message):
+    registry = REGISTRY | {"set_voice_setting", "text_to_speech"}
+    assert "set_voice_setting" in requested_tools(message, registry)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "What is the volume of a cylinder?",
+        "Add captions to this video file.",
+        "She has a lovely voice.",
+        "Speed up this query.",
+        "Check my email.",
+    ],
+)
+def test_other_requests_do_not_ask_for_the_setting_tool(message):
+    registry = REGISTRY | {"set_voice_setting", "text_to_speech"}
+    assert "set_voice_setting" not in requested_tools(message, registry)
+
+
+def test_the_setting_tool_is_not_offered_where_it_is_not_registered():
+    assert requested_tools("Change your voice.", REGISTRY) == []

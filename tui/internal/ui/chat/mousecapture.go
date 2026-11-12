@@ -33,7 +33,7 @@ import (
 // wheel mode does not, and All-Motion tracking is noticeably chattier over
 // SSH than Cell-Motion — see applyMouseCapture.
 func (m ChatModel) overlayOpen() bool {
-	return m.palette.open || m.question != nil
+	return m.palette.open || m.question != nil || m.phonePanel != nil
 }
 
 // applyMouseCapture reconciles m.mouseCaptured (and which motion mode it is

@@ -25,6 +25,7 @@
     "search_past_conversations",
     "search_web",
     "set_loop_state",
+    "set_voice_setting",
     "sign_in_cli",
     "text_to_speech",
     "update_memory",

@@ -124,6 +124,7 @@ const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
 const { chromiumSwitches } = require("./services/chromium-switches.cjs");
 const { titleBarKind, titleBarOptions } = require("./services/window-frame.cjs");
+const { installMediaPermissions } = require("./services/media-permissions.cjs");
 
 // No ozone switch: Electron 38+ already picks Wayland or X11, and users override with --ozone-platform=x11.
 for (const [name, value] of chromiumSwitches({ platform: process.platform, env: process.env })) {
@@ -1071,6 +1072,13 @@ app.whenReady().then(async () => {
       console.error(`[main] ${err.message}`);
     }
   }
+  installMediaPermissions({
+    session: session.defaultSession,
+    ipcMain,
+    shell,
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+  });
   createWindow();
   initializeServices();
   engineInstall = createEngineInstall({

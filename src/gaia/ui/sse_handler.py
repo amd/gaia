@@ -574,6 +574,8 @@ class SSEOutputHandler(OutputHandler):
 
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
+        # Names this handler's pending card to the phone alert watch.
+        self._approval_key = f"approval:{uuid.uuid4().hex}"
         self.cancelled = threading.Event()
         self._start_time: Optional[float] = None
         self._step_count = 0
@@ -697,6 +699,10 @@ class SSEOutputHandler(OutputHandler):
             self._text_since_tool = ""
         elif etype == "answer":
             self._text_since_tool = ""
+        elif etype == "permission_request" and not self.background_mode:
+            from gaia.ui.approval_alerts import WATCH
+
+            WATCH.shown(self._approval_key)
         elif etype in ("thinking", "status") and event.get("retracts_answer"):
             # The text shown since the last tool was reasoning, or a reply that
             # was cut off; either way it is not commentary.
@@ -2393,7 +2399,13 @@ class SSEOutputHandler(OutputHandler):
             self._confirm_result = (approved or always) and not timed_out
             self._confirm_timed_out = timed_out
             self._confirm_event.set()
+        self._approval_answered()
         return True
+
+    def _approval_answered(self) -> None:
+        from gaia.ui.approval_alerts import WATCH
+
+        WATCH.answered(self._approval_key)
 
     def close_active_relay_response(self) -> None:
         """Force-close a live email-relay HTTP response, if any (#2109).
@@ -2654,6 +2666,7 @@ class SSEOutputHandler(OutputHandler):
                 return False
             self._relay_confirm_id = None
             self._relay_always_scope = None
+        self._approval_answered()
         if always:
             decision = "always"
         else:
@@ -2663,6 +2676,8 @@ class SSEOutputHandler(OutputHandler):
 
     def signal_done(self):
         """Signal that the agent has finished processing."""
+        # A turn that ended leaves no card waiting.
+        self._approval_answered()
         # Flush any pending thinking content
         if self._in_thinking and self._stream_buffer:
             self._emit({"type": "thinking", "content": self._stream_buffer})

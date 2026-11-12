@@ -21,12 +21,15 @@ import (
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/gaiainit"
+	"github.com/amd/gaia/tui/internal/phone"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/components"
 
 	"github.com/amd/gaia/tui/internal/ui/modelsetup"
+	"github.com/amd/gaia/tui/internal/ui/phonepanel"
 	"github.com/amd/gaia/tui/internal/ui/providers"
 	"github.com/amd/gaia/tui/internal/ui/theme"
+	"github.com/amd/gaia/tui/internal/voice"
 )
 
 // eventMsg and doneMsg carry the channel they came from. Bubble Tea cannot
@@ -152,6 +155,12 @@ var (
 	answerPanelStyle = lipgloss.NewStyle().
 				Foreground(theme.Text).
 				PaddingLeft(answerGutter)
+
+	// What GAIA said aloud, above the detail it put on screen.
+	spokenLeadStyle = lipgloss.NewStyle().
+			Foreground(theme.Text).
+			Bold(true).
+			PaddingLeft(answerGutter)
 )
 
 // answerGutter is the answer's left padding; userPrefix labels a question.
@@ -187,8 +196,21 @@ type ChatModel struct {
 	// the /agents case below refuses with an actionable message instead of
 	// silently doing nothing.
 	hubClient agents.HubAgentLister
-	messages  []Message
-	activity  []ActivityItem
+	// dictation is Ctrl+R / /dictate recording into the composer; voice is
+	// the /talk screen. Each owns one daemon voice session, told apart by id.
+	dictation *dictationState
+	voice     *voiceMode
+	voiceSeq  int
+	// phonePanel is /phone; phoneBanner is the one-line open-alert notice,
+	// and phoneBannerOff stops its poll for a daemon without phone alerts.
+	phonePanel     *phonepanel.Model
+	phoneBanner    string
+	phoneBannerOff bool
+	phoneBannerAPI *phone.Client
+	// nextReplyStyle is the reply style the next startTurn asks for, once.
+	nextReplyStyle string
+	messages       []Message
+	activity       []ActivityItem
 	// expandWork shows every work log in full — narration, stage lines and
 	// multi-row outcomes — instead of one row per step. Ctrl+O toggles it.
 	expandWork bool
@@ -689,6 +711,10 @@ func (m ChatModel) Init() tea.Cmd {
 		// memory share to change, so only there does the palette offer it.
 		cmds = append(cmds, probeGPUCmd())
 	}
+	if m.agentID == setupAgentID {
+		// Open phone alerts show as a one-line banner; quiet when there are none.
+		cmds = append(cmds, phoneBannerPoll(0))
+	}
 	if m.agentID == setupAgentID && m.initialQuery == "" {
 		// The one-time Slack offer. Gated on an empty initial query so a user
 		// who launched with a question gets their answer, not an ad; and run
@@ -843,6 +869,8 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// Once per Update, so every path that opens or closes a prompt is timed.
 	next.trackUserWait(time.Now())
+	// Here, like the queue drain below: a voice turn can end down any path.
+	next.settleVoiceTurn()
 
 	// Reconciled once per Update, here rather than at every call site that
 	// can open or close an overlay (a keystroke, a canonical needs_input
@@ -913,6 +941,12 @@ func queuedSendWatchdogAfter(turnSeq int, d time.Duration) tea.Cmd {
 }
 
 func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if next, cmd, handled := m.routePhoneMsg(msg); handled {
+		return next, cmd
+	}
+	if next, cmd, handled := m.routeVoiceMsg(msg); handled {
+		return next, cmd
+	}
 	if next, cmd, handled := m.handleReadAloudMsg(msg); handled {
 		return next, cmd
 	}
@@ -1117,6 +1151,7 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.lastEventAt = time.Now()
+		m.observeVoiceTurn(msg.event)
 		return m.handleEvent(msg.event)
 
 	case doneMsg:
@@ -1431,6 +1466,19 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// The /talk screen owns the keyboard, but Ctrl+C keeps its meaning.
+	if m.voice != nil && msg.Type != tea.KeyCtrlC {
+		return m.handleVoiceKey(msg)
+	}
+	// Dictation stops on Esc and Enter (Enter never sends what is still
+	// being transcribed); every other key edits the composer as usual.
+	if m.dictation != nil && (msg.Type == tea.KeyEsc || msg.Type == tea.KeyEnter) {
+		if m.dictation.missing != "" && !m.dictation.downloading {
+			return m.endDictation(""), nil
+		}
+		return m.stopDictation()
+	}
+
 	// /copy's picker owns the arrows, Enter and Esc while it is open; any
 	// other key closes it and then does what it always does.
 	if m.pick.open {
@@ -1594,6 +1642,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyCtrlT:
 		return m.toggleAppMouse()
+
+	case tea.KeyCtrlR:
+		return m.toggleDictation()
 
 	case tea.KeyCtrlO:
 		return m.toggleWorkDetail()
@@ -1933,6 +1984,15 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/gateway":
 		return m, func() tea.Msg { return OpenGatewayMsg{} }
 
+	case "/dictate":
+		return m.toggleDictation()
+
+	case "/talk":
+		return m.openVoiceMode()
+
+	case "/phone":
+		return m.openPhonePanel()
+
 	case "/clear":
 		return m.clearConversation()
 
@@ -2079,6 +2139,10 @@ func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFn = cancel
+	if m.nextReplyStyle != "" {
+		ctx = client.WithReplyStyle(ctx, m.nextReplyStyle)
+		m.nextReplyStyle = ""
+	}
 
 	m.turnSeq++
 	seq := m.turnSeq
@@ -2512,6 +2576,9 @@ func (m ChatModel) chatChromeRows() int {
 	if banner := m.renderFullAccessBanner(); banner != "" {
 		rows += lipgloss.Height(banner)
 	}
+	if m.renderPhoneBanner() != "" {
+		rows++
+	}
 	return rows
 }
 
@@ -2696,8 +2763,17 @@ func (m *ChatModel) updateViewport() {
 	// — same indent, same wrap — so the text does not jump when `final` replaces
 	// the streamed tokens with the authoritative copy.
 	if buf := m.buffer; m.streaming && buf != "" {
-		sb.WriteString(answerPanelStyle.Width(m.answerWidth()).Render(buf))
-		sb.WriteString("\n")
+		if lead, detail := voice.DisplayParts(buf); lead != "" || detail != buf {
+			if lead != "" {
+				sb.WriteString(spokenLeadStyle.Width(m.answerWidth()).Render(lead))
+				sb.WriteString("\n\n")
+			}
+			buf = detail
+		}
+		if buf != "" {
+			sb.WriteString(answerPanelStyle.Width(m.answerWidth()).Render(buf))
+			sb.WriteString("\n")
+		}
 	}
 
 	m.vpContent = linkify(sb.String(), m.viewport.Width)
@@ -2920,15 +2996,22 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		return userStyle.Render(prefix + strings.ReplaceAll(body, "\n", "\n"+indent))
 
 	case RoleAssistant:
-		content := msg.Content
-		if msg.Rendered != "" {
-			if wrap := m.answerWidth() - 2; msg.renderedWrap != wrap {
-				msg.Rendered = components.RenderMarkdown(msg.Content)
+		// A voice turn's answer opens with the <spoken> summary GAIA said;
+		// it reads as a bold lead line above the detail, tags removed.
+		lead, detail := voice.DisplayParts(msg.Content)
+		content := detail
+		if msg.Rendered != "" || lead != "" {
+			if wrap := m.answerWidth() - 2; msg.renderedWrap != wrap || msg.leadSplit != (lead != "") {
+				msg.Rendered = components.RenderMarkdown(detail)
 				msg.renderedWrap = wrap
+				msg.leadSplit = lead != ""
 			}
 			content = trimBlankLines(msg.Rendered)
 		}
 		panel := answerPanelStyle.Width(m.answerWidth()).Render(content)
+		if lead != "" {
+			panel = spokenLeadStyle.Width(m.answerWidth()).Render(lead) + "\n\n" + panel
+		}
 
 		if stats := m.answerStats(msg); stats != "" {
 			panel += "\n" + activityStyle.Render("  "+stats)
@@ -3716,6 +3799,9 @@ func (m ChatModel) contentHeaderRows() int {
 	if m.renderFullAccessBanner() != "" {
 		n++
 	}
+	if m.renderPhoneBanner() != "" {
+		n++
+	}
 	n++ // divider immediately above the viewport
 	return n
 }
@@ -3732,6 +3818,12 @@ func (m ChatModel) View() string {
 	}
 	if m.width == 0 {
 		return m.renderWelcome()
+	}
+	if m.voice != nil {
+		return m.help.Render(m.voiceView(), m.width, m.height)
+	}
+	if m.phonePanel != nil {
+		return m.help.Render(m.phonePanel.View(), m.width, m.height)
 	}
 
 	header := m.renderHeader()
@@ -3795,6 +3887,9 @@ func (m ChatModel) View() string {
 	if banner := m.renderFullAccessBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
+	if banner := m.renderPhoneBanner(); banner != "" {
+		rows = append(rows, banner)
+	}
 	rows = append(rows, divider, vpView)
 	// Pinned between the transcript and the composer: the agent is parked on
 	// this question, so it belongs in every frame, above the input the user
@@ -3803,7 +3898,11 @@ func (m ChatModel) View() string {
 	if m.confirmation != nil && m.confirmRows > 0 {
 		rows = append(rows, clipConfirmation(m.confirmation.View(), m.confirmRows))
 	}
-	rows = append(rows, divider, inputView, statusBar)
+	composerTop := divider
+	if m.dictation != nil {
+		composerTop = m.renderDictationBorder()
+	}
+	rows = append(rows, composerTop, inputView, statusBar)
 	base := lipgloss.JoinVertical(lipgloss.Left, rows...)
 
 	// The "/" palette draws over everything the same way the help panel does

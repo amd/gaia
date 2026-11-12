@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { apiFetch, sendMessageStream, uploadDocumentBlob, uploadFile, uploadMedia } from '../api';
 import { createKnowledge, deleteKnowledge, editKnowledge } from '../memoryApi';
+import { pollPhoneStatus } from '../phoneApi';
 import { speak } from '../speechApi';
 
 const jsonResponse = (body: unknown) =>
@@ -75,6 +76,11 @@ describe('every mutating request carries x-gaia-ui', () => {
         expect(uiHeaderOf(fetchMock)).toBe('1');
     });
 
+    it('polling for open phone alerts', async () => {
+        await pollPhoneStatus();
+        expect(uiHeaderOf(fetchMock)).toBe('1');
+    });
+
     it.each([
         ['adding a memory', () => createKnowledge({ content: 'likes tea' } as Parameters<typeof createKnowledge>[0])],
         ['editing a memory', () => editKnowledge('k1', { content: 'likes coffee' } as Parameters<typeof editKnowledge>[1])],
@@ -118,6 +124,7 @@ const SOURCES = import.meta.glob(['/src/**/*.{ts,tsx}', '!/src/**/__tests__/**',
 const RAW_REQUESTS: Record<string, { fetch: number; xhr: number }> = {
     '/src/services/api.ts': { fetch: 5, xhr: 1 },
     '/src/services/memoryApi.ts': { fetch: 1, xhr: 0 },
+    '/src/services/phoneApi.ts': { fetch: 1, xhr: 0 },
     '/src/services/setupApi.ts': { fetch: 1, xhr: 0 },
     '/src/services/speechApi.ts': { fetch: 1, xhr: 0 },
 };

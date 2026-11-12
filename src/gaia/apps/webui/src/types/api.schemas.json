@@ -748,6 +748,15 @@
         "title": "Message",
         "type": "string"
       },
+      "reply_style": {
+        "default": "text",
+        "enum": [
+          "text",
+          "voice"
+        ],
+        "title": "Reply Style",
+        "type": "string"
+      },
       "session_id": {
         "title": "Session Id",
         "type": "string"
@@ -1455,6 +1464,19 @@
       "model_name"
     ],
     "title": "DownloadProgress",
+    "type": "object"
+  },
+  "DownloadRequest": {
+    "properties": {
+      "model": {
+        "title": "Model",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "title": "DownloadRequest",
     "type": "object"
   },
   "EvalMailboxRequest": {
@@ -5951,6 +5973,299 @@
       "quality"
     ],
     "title": "Voice",
+    "type": "object"
+  },
+  "VoiceModel": {
+    "properties": {
+      "downloaded": {
+        "title": "Downloaded",
+        "type": "boolean"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "purpose": {
+        "title": "Purpose",
+        "type": "string"
+      },
+      "size_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size Gb"
+      }
+    },
+    "required": [
+      "id",
+      "purpose",
+      "downloaded"
+    ],
+    "title": "VoiceModel",
+    "type": "object"
+  },
+  "VoiceSettings": {
+    "properties": {
+      "asr_model": {
+        "default": "auto",
+        "title": "Asr Model",
+        "type": "string"
+      },
+      "captions": {
+        "default": true,
+        "title": "Captions",
+        "type": "boolean"
+      },
+      "chime": {
+        "default": true,
+        "title": "Chime",
+        "type": "boolean"
+      },
+      "language": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Language"
+      },
+      "silence_ms": {
+        "default": 500,
+        "title": "Silence Ms",
+        "type": "integer"
+      },
+      "status_updates": {
+        "default": true,
+        "title": "Status Updates",
+        "type": "boolean"
+      },
+      "turn_taking": {
+        "default": "hands_free",
+        "title": "Turn Taking",
+        "type": "string"
+      },
+      "volume": {
+        "default": 100,
+        "title": "Volume",
+        "type": "integer"
+      },
+      "wake_word": {
+        "default": true,
+        "title": "Wake Word",
+        "type": "boolean"
+      }
+    },
+    "title": "VoiceSettings",
+    "type": "object"
+  },
+  "VoiceSettingsUpdate": {
+    "properties": {
+      "asr_model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Asr Model"
+      },
+      "captions": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Captions"
+      },
+      "chime": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Chime"
+      },
+      "language": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Language"
+      },
+      "silence_ms": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Silence Ms"
+      },
+      "status_updates": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Status Updates"
+      },
+      "turn_taking": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Turn Taking"
+      },
+      "volume": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Volume"
+      },
+      "wake_word": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Wake Word"
+      }
+    },
+    "title": "VoiceSettingsUpdate",
+    "type": "object"
+  },
+  "VoiceStatus": {
+    "properties": {
+      "asr_model": {
+        "title": "Asr Model",
+        "type": "string"
+      },
+      "captions": {
+        "title": "Captions",
+        "type": "boolean"
+      },
+      "chime": {
+        "default": true,
+        "title": "Chime",
+        "type": "boolean"
+      },
+      "error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error"
+      },
+      "error_code": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Error Code"
+      },
+      "language": {
+        "title": "Language",
+        "type": "string"
+      },
+      "models": {
+        "items": {
+          "$ref": "#/components/schemas/VoiceModel"
+        },
+        "title": "Models",
+        "type": "array"
+      },
+      "ready": {
+        "title": "Ready",
+        "type": "boolean"
+      },
+      "silence_ms": {
+        "title": "Silence Ms",
+        "type": "integer"
+      },
+      "speaks": {
+        "title": "Speaks",
+        "type": "boolean"
+      },
+      "status_updates": {
+        "title": "Status Updates",
+        "type": "boolean"
+      },
+      "tts_model": {
+        "title": "Tts Model",
+        "type": "string"
+      },
+      "turn_taking": {
+        "title": "Turn Taking",
+        "type": "string"
+      },
+      "volume": {
+        "default": 100,
+        "title": "Volume",
+        "type": "integer"
+      },
+      "wake_word": {
+        "default": true,
+        "title": "Wake Word",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "ready",
+      "language",
+      "asr_model",
+      "tts_model",
+      "speaks",
+      "turn_taking",
+      "silence_ms",
+      "status_updates",
+      "captions"
+    ],
+    "title": "VoiceStatus",
     "type": "object"
   },
   "WarmUpStatus": {

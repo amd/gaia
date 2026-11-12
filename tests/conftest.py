@@ -168,6 +168,26 @@ def _fixed_machine_memory(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _phone_alerts_stay_in_the_test(monkeypatch):
+    """Keep alert hooks (a failed schedule) off the developer's running daemon,
+    which could otherwise ring a real phone. Raised alerts are recorded on
+    ``gaia.phone.client.sent`` instead."""
+    from gaia.phone import client as phone_client
+
+    sent = []
+    monkeypatch.setattr(phone_client, "sent", sent, raising=False)
+    monkeypatch.setattr(
+        phone_client, "_post", lambda path, body: sent.append((path, body))
+    )
+    monkeypatch.setattr(phone_client, "get_settings", lambda: None)
+
+    def no_daemon(*_a, **_k):
+        raise RuntimeError("tests never reach a running daemon")
+
+    monkeypatch.setattr(phone_client, "call_daemon", no_daemon)
+
+
+@pytest.fixture(autouse=True)
 def _reset_model_broker_state():
     """Isolate the model-slot broker's process-global state between tests (#2248).
 

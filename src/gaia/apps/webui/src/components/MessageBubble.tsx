@@ -32,6 +32,7 @@ import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type FoundPage, type LibraryDoc,
 } from '../utils/citations';
+import { leadLine } from '../voice/spoken';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -535,6 +536,13 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     );
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
+    // A voice turn's answer opens with its spoken summary: shown as a lead line, never as tags.
+    const { lead, body } = useMemo(
+        () => (message.role === 'assistant' ? leadLine(cleanedContent) : { lead: '', body: cleanedContent }),
+        [cleanedContent, message.role],
+    );
+    const plainText = lead ? `${lead}\n\n${body}`.trim() : message.content;
+    const readText = lead ? `${lead}\n\n${body}`.trim() : cleanedContent;
     const readAloudId = `${message.session_id}:${message.id}`;
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -566,11 +574,11 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
 
     const handleCopy = useCallback(() => {
         if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(message.content).catch(() => {});
+            navigator.clipboard.writeText(plainText).catch(() => {});
         } else {
             // Fallback for non-HTTPS contexts (common for localhost)
             const textarea = document.createElement('textarea');
-            textarea.value = message.content;
+            textarea.value = plainText;
             textarea.style.position = 'fixed';
             textarea.style.opacity = '0';
             document.body.appendChild(textarea);
@@ -581,7 +589,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         setCopied(true);
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
         copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [message.content]);
+    }, [plainText]);
 
     const handleDelete = useCallback(() => {
         if (!confirmDelete) {
@@ -630,8 +638,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
-                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
-                                <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
+                            {message.role === 'assistant' && !isError && readText.trim() && (
+                                <ReadAloudButton messageId={readAloudId} content={readText} />
                             )}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
@@ -664,7 +672,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             running={!!isStreaming}
                             awaitingUser={awaitingUser}
                             toolStatus={isStreaming ? toolStatus : null}
-                            answer={isStreaming ? undefined : cleanedContent}
+                            answer={isStreaming ? undefined : body}
                             liveLine={isStreaming && (
                                 <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
                             )}
@@ -703,7 +711,10 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             />
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
-                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
+                        <>
+                            {lead && <p className="msg-spoken-lead" dir="auto">{lead}</p>}
+                            <RenderedContent content={body} showCursor={isStreaming && !!(lead || body) && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
+                        </>
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
