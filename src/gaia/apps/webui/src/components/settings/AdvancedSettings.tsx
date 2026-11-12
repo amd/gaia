@@ -31,6 +31,8 @@ export function AdvancedSettings() {
     const [settingsLoaded, setSettingsLoaded] = useState(false);
     const [savingModel, setSavingModel] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+    /** A saved ID the model server doesn't list ('unlisted') or couldn't be asked about ('unchecked'). */
+    const [saveNote, setSaveNote] = useState<{ kind: 'unlisted' | 'unchecked'; id: string } | null>(null);
     const [justSaved, setJustSaved] = useState(false);
     const justSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -90,6 +92,7 @@ export function AdvancedSettings() {
         const payload = trimmed.length > 0 ? trimmed : '';
         setSavingModel(true);
         setSaveError(null);
+        setSaveNote(null);
         setJustSaved(false);
         try {
             log.system.info('Saving custom_model override', { custom_model: payload });
@@ -97,6 +100,10 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
+            const checked = updated.model_status;
+            if (nextValue && checked && !checked.found) {
+                setSaveNote({ kind: checked.checked ? 'unlisted' : 'unchecked', id: nextValue });
+            }
             setJustSaved(true);
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
             justSavedTimerRef.current = setTimeout(() => setJustSaved(false), 2200);
@@ -307,7 +314,7 @@ export function AdvancedSettings() {
                         className={`model-input${savedCustomModel ? ' has-override' : ''}`}
                         placeholder={t.bare('settings.advanced.customPlaceholder')}
                         value={customModel}
-                        onChange={(e) => { setCustomModel(e.target.value); setSaveError(null); setJustSaved(false); }}
+                        onChange={(e) => { setCustomModel(e.target.value); setSaveError(null); setSaveNote(null); setJustSaved(false); }}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && !savingModel && customModelDirty && settingsLoaded) {
                                 e.preventDefault();
@@ -339,6 +346,18 @@ export function AdvancedSettings() {
                 </div>
                 <p className="model-status-hint">{t('settings.advanced.customIds')}</p>
                 {saveError && <SaveError message={saveError} />}
+                {saveNote && (
+                    <div className="model-warning" role="status">
+                        <AlertCircle size={14} />
+                        <div className="model-warning-content">
+                            <p>
+                                {saveNote.kind === 'unlisted'
+                                    ? t('settings.advanced.customNotListed', { id: saveNote.id })
+                                    : t('settings.advanced.customNotChecked')}
+                            </p>
+                        </div>
+                    </div>
+                )}
             </SettingsDisclosure>
 
             <SettingsDisclosure title={t('settings.advanced.dynamicTitle')}>

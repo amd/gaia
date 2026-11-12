@@ -298,6 +298,8 @@ class ModelStatus(BaseModel):
     found: bool = False
     downloaded: bool = False
     loaded: bool = False
+    #: The model list was read, so ``found`` False means the id isn't in it.
+    checked: bool = False
 
 
 class PolicyNotice(BaseModel):

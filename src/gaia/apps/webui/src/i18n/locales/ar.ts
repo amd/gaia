@@ -1774,6 +1774,8 @@ const messages: Messages = {
     'settings.advanced.customPlaceholder': 'استخدام النموذج المختار في قسم النموذج',
     'settings.advanced.customAria': 'تجاوز النموذج المخصص',
     'settings.advanced.customSave': 'حفظ النموذج المخصص',
+    'settings.advanced.customNotListed': 'تم الحفظ، لكن خادم النماذج لا يُدرج «{id}». تحقق من المعرّف: ستفشل الرسائل إذا لم يكن النموذج موجودًا.',
+    'settings.advanced.customNotChecked': 'تم الحفظ، لكن تعذّر على GAIA التحقق من هذا المعرّف لأن خادم النماذج لا يستجيب.',
     'settings.advanced.customIds': 'يقبل معرّف نموذج Lemonade (مثل Qwen3-4B-Instruct-2507-GGUF) أو معرّف HuggingFace (مثل unsloth/Qwen3-4B-GGUF).',
     'settings.advanced.save': 'حفظ',
     'settings.advanced.saved': 'تم الحفظ',

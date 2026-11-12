@@ -1774,6 +1774,8 @@ export const enMessages = {
     'settings.advanced.customPlaceholder': 'Use the model chosen under Model',
     'settings.advanced.customAria': 'Custom model override',
     'settings.advanced.customSave': 'Save custom model',
+    'settings.advanced.customNotListed': "Saved, but the model server doesn't list “{id}”. Check the ID: messages will fail if the model doesn't exist.",
+    'settings.advanced.customNotChecked': "Saved, but GAIA couldn't check this ID because the model server isn't answering.",
     'settings.advanced.customIds': 'Accepts a Lemonade model ID (e.g. Qwen3-4B-Instruct-2507-GGUF) or a HuggingFace ID (e.g. unsloth/Qwen3-4B-GGUF).',
     'settings.advanced.save': 'Save',
     'settings.advanced.saved': 'Saved',
