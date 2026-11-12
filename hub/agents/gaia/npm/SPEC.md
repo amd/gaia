@@ -507,6 +507,9 @@ UI's Context panel shows. `window` is the model's context window in tokens,
 by kind; `categories` lists the panel's rows (their tokens add up to `used`),
 `tool_loading` which tools ride every request, and `tokenizer.exact` whether
 the counts came from the loaded model's own tokenizer or the shared estimate.
+A caller that sends `turns` gets it measured over those turns plus this turn's
+`model_messages`, tool results included, so `turns_in_view` and `turns_hidden`
+count whole turns; turns the caller left out itself are not in either count.
 A turn that was stopped or ended on a model failure carries no `context`; a
 measurement that failed carries `context_error`, one sentence saying why, and
 the answer still stands. Older binaries send neither, so read `context` only

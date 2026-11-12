@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **`final.context` counts what the next turn really carries.** With `turns`,
+  the measurement split a text-tool model's recorded tool results into turns
+  of their own and counted this turn as its question and answer only, so a
+  large file read could push history past its budget while `turns_hidden`
+  stayed 0. It now measures whole turns, this turn's tool results included.
+
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's
   chat template had shown it. So every turn after a tool call re-read the whole

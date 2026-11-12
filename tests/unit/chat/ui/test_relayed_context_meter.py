@@ -73,6 +73,64 @@ def test_an_old_agents_final_changes_nothing():
     assert h.relay_context is None and h.relay_context_error is None
 
 
+def test_turns_the_relay_left_out_count_as_hidden():
+    """The sidecar measures only the turns it was sent; the rest are hidden too.
+
+    In v0.26.0-rc18 a 71-turn chat lost turns 1-22 from the model's view at
+    turn 35 while the meter said none were hidden, so the model denied facts
+    the user gave in turn 1 and nothing on screen explained why.
+    """
+    h = SSEOutputHandler()
+    h.relay_hidden_turns = 22
+    measured = {**_USAGE, "turns_in_view": 13, "turns_hidden": 0}
+
+    relay._dispatch_one(
+        h, {"type": "final", "answer": "Paris.", "context": measured}, GAIA_PROFILE
+    )
+
+    [meter] = [e for e in _events(h) if e["type"] == "context_usage"]
+    assert meter["turns_hidden"] == 22
+    assert meter["turns_in_view"] == 13
+    assert h.relay_context["turns_hidden"] == 22
+
+
+def _turn(i: int, chars: int) -> list:
+    return [
+        {"role": "user", "content": f"question {i}"},
+        {"role": "assistant", "content": "x" * chars},
+    ]
+
+
+def test_the_relay_records_how_many_turns_it_left_out(monkeypatch):
+    from gaia.agents.base import history
+
+    turns = [_turn(i, 4000) for i in range(10)]
+    # Exactly the cost of the five newest turns: they fit, a sixth does not.
+    budget = sum(history.turn_cost(t) for t in turns[5:])
+    monkeypatch.setattr(history, "relayed_history_budget", lambda *a, **k: budget)
+    monkeypatch.setattr(helpers, "_ui_cloud_provider", lambda model: None)
+    h = SSEOutputHandler()
+
+    kept = helpers._relayed_turns(turns, "m", "q", h, None)
+
+    assert h.relay_hidden_turns == len(turns) - len(kept) > 0
+    cut = [e for e in _events(h) if e.get("status") == "history_cut"]
+    assert cut and cut[0]["turns"] == h.relay_hidden_turns
+
+
+def test_history_exactly_at_budget_hides_nothing():
+    from gaia.agents.base import history
+
+    turns = [_turn(i, 4000) for i in range(6)]
+    budget = sum(history.turn_cost(t) for t in turns)
+
+    assert history.fit_turns(turns, budget) == turns
+    # One token over evicts down to half the budget, oldest first.
+    over = history.fit_turns(turns, budget - 1)
+    assert over == turns[len(turns) - len(over) :]
+    assert sum(history.turn_cost(t) for t in over) <= (budget - 1) // 2
+
+
 @pytest.mark.parametrize(
     "version, expected",
     [("2.21", True), ("2.22", True), ("2.20", False), (None, False), ("junk", False)],

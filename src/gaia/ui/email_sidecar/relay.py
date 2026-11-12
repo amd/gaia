@@ -435,6 +435,12 @@ def _dispatch_one(
         context = event.get("context")
         if isinstance(context, dict):
             # Contract >= 2.21: the composer's meter, as an in-process turn streams it.
+            hidden = getattr(handler, "relay_hidden_turns", 0)
+            if hidden:
+                context = {
+                    **context,
+                    "turns_hidden": context.get("turns_hidden", 0) + hidden,
+                }
             handler.relay_context = context
             handler._emit({"type": "context_usage", **context})
         elif isinstance(event.get("context_error"), str):

@@ -2203,7 +2203,8 @@ def _relayed_turns(
     """The chat's recorded turns that fit *model_id*'s history budget, kept whole.
 
     A turn larger than the whole budget is sent shortened (#5864); turns newly
-    out of the model's view stream a ``history_cut`` status.
+    out of the model's view stream a ``history_cut`` status, and how many turns
+    were left out is kept on *sse_handler* for the sidecar's measurement.
     """
     from gaia.agents.base.history import CutReporter, fit_turns, relayed_history_budget
 
@@ -2225,7 +2226,9 @@ def _relayed_turns(
             }
         )
 
-    return fit_turns(turns, budget, on_cut, reporter)
+    kept = fit_turns(turns, budget, on_cut, reporter)
+    sse_handler.relay_hidden_turns = len(turns) - len(kept)
+    return kept
 
 
 #: What a stopped turn's reply is saved as when it wrote no text.
