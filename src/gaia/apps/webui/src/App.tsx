@@ -11,6 +11,7 @@ import { LogsDialog } from './components/LogsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { buildPersonalizePrompt, PERSONALIZE_EVENT, type PersonalizeRequest } from './utils/connectorPersonalize';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
@@ -533,7 +534,7 @@ function App() {
         let session;
         try {
             session = await api.createSession({
-                title: 'New Task',
+                title: 'New chat',
                 agent_type: FLAGSHIP_AGENT_ID,
                 document_ids: store.draftDocumentIds,
                 private: store.draftPrivate,
@@ -623,6 +624,18 @@ function App() {
         newChat();
         startChat(`Load the \`${name}\` skill, then tell me briefly what it lets you do.`)
             .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+    }, [newChat, startChat]);
+
+    useEffect(() => {
+        const onPersonalize = (e: Event) => {
+            const req = (e as CustomEvent<PersonalizeRequest>).detail;
+            useChatStore.getState().closeSettings();
+            newChat();
+            startChat(buildPersonalizePrompt(req))
+                .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+        };
+        window.addEventListener(PERSONALIZE_EVENT, onPersonalize);
+        return () => window.removeEventListener(PERSONALIZE_EVENT, onPersonalize);
     }, [newChat, startChat]);
 
     const finishSetup = useCallback((first?: StartCard) => {

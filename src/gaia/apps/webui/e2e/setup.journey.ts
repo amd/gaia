@@ -108,7 +108,8 @@ test('the cloud path hides an unreachable gateway, and offers it once the host a
     const toKey = async () => {
         await open();
         await pastChecks(page, say);
-        await page.getByRole('button', { name: say('setup.plan.cloud') }).click();
+        await page.getByRole('radio', { name: say('setup.plan.cloud') }).check();
+        await page.getByRole('button', { name: say('setup.continue') }).click();
         await expect(stepTitle(page)).toHaveText(say('setup.key.title'));
     };
     await toKey();

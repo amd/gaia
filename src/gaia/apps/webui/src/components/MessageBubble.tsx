@@ -1,9 +1,9 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useId, useLayoutEffect, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -27,6 +27,8 @@ import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
 import { useLogsStore } from '../stores/logsStore';
+import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
+import { dropAnswerDrafts } from '../utils/answerDrafts';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type FoundPage, type LibraryDoc,
@@ -52,6 +54,18 @@ interface MessageBubbleProps {
     extraActions?: React.ReactNode;
     /** Shows a labelled Try again under a failed, cut-off or stopped reply, which asks the user to press it. */
     onTryAgain?: () => void;
+    /** Asks the same question again with the same model (answers only). */
+    onRegenerate?: () => void;
+    /** Opens this message for editing (user messages only). */
+    onEditStart?: (message: Message) => void;
+    /** Whether this message is open for editing. */
+    editing?: boolean;
+    /** Text typed into the editor before it last closed; null starts from the message. */
+    editDraft?: string | null;
+    onEditDraft?: (text: string) => void;
+    /** Sends the edited text in place of this message and everything after it. */
+    onEdit?: (message: Message, text: string) => void;
+    onEditCancel?: () => void;
     /** Shows Continue under a stopped reply that wrote something. */
     onContinue?: () => void;
     /** The chat's latest answer, whose actions stay in view. */
@@ -469,15 +483,76 @@ export function turnEnding(content: string, stopState: Message['stopState'], fai
     return failed ? 'failed' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+const EDITOR_MAX_HEIGHT = 320;
+
+/** A sent message opened for editing: Enter sends it again, Escape puts it back. */
+function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
+    original: string;
+    draft?: string | null;
+    onDraft?: (text: string) => void;
+    onSend: (text: string) => void;
+    onCancel: () => void;
+}) {
+    const t = useT();
+    const [text, setText] = useState(draft ?? original);
+    const ref = useRef<HTMLTextAreaElement>(null);
+    const changed = text.trim() !== '' && text !== original;
+
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+    }, []);
+
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, EDITOR_MAX_HEIGHT)}px`;
+    }, [text]);
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            onCancel();
+        } else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            if (changed) onSend(text);
+        }
+    };
+
+    return (
+        <div className="msg-edit">
+            <textarea
+                ref={ref}
+                className="msg-edit-input"
+                value={text}
+                onChange={(e) => { setText(e.target.value); onDraft?.(e.target.value); }}
+                onKeyDown={handleKeyDown}
+                aria-label={t('msg.editLabel')}
+                rows={1}
+                dir="auto"
+                {...CLAIMS_ESCAPE}
+            />
+            <div className="msg-edit-actions">
+                <button type="button" className="btn-secondary msg-edit-btn" onClick={onCancel}>{t('msg.editCancel')}</button>
+                <button type="button" className="btn-primary msg-edit-btn" onClick={() => onSend(text)} disabled={!changed}>
+                    {t('msg.editSend')}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
-    const echo = useMemo(
-        () => (message.role === 'assistant' && !isStreaming && agentSteps
-            ? dropErrorsEchoedInAnswer(agentSteps, message.content)
-            : { steps: agentSteps, echoed: false }),
-        [agentSteps, message.content, message.role, isStreaming],
-    );
+    const echo = useMemo(() => {
+        if (message.role !== 'assistant' || !agentSteps) return { steps: agentSteps, echoed: false };
+        const steps = dropAnswerDrafts(agentSteps, message.content);
+        return isStreaming ? { steps, echoed: false } : dropErrorsEchoedInAnswer(steps, message.content);
+    }, [agentSteps, message.content, message.role, isStreaming]);
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
     const place = useInferencePlace();
     const showServerLog = useLogsStore((s) => s.show);
@@ -579,8 +654,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             <div className="msg-inner">
                 <div className="msg-header">
                     <div className="msg-header-left" />
-                    {!isStreaming && (
+                    {!isStreaming && !editing && (
                         <div className="msg-actions">
+                            {message.role === 'user' && onEditStart && onEdit && (
+                                <button
+                                    type="button"
+                                    className="msg-action-btn"
+                                    onClick={() => onEditStart(message)}
+                                    title={t('msg.edit')}
+                                    aria-label={t('msg.edit')}
+                                >
+                                    <Pencil size={12} />
+                                </button>
+                            )}
                             {/* Resend button - user messages only */}
                             {message.role === 'user' && onResend && (
                                 <button
@@ -590,6 +676,17 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                     aria-label={t('msg.resend')}
                                 >
                                     <RefreshCw size={12} />
+                                </button>
+                            )}
+                            {message.role === 'assistant' && onRegenerate && (
+                                <button
+                                    type="button"
+                                    className="msg-action-btn"
+                                    onClick={onRegenerate}
+                                    title={t('msg.tryAgain')}
+                                    aria-label={t('msg.tryAgain')}
+                                >
+                                    <RotateCw size={12} />
                                 </button>
                             )}
                             {extraActions}
@@ -647,7 +744,15 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     ))}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
-                    {collapsibleUser ? (
+                    {editing && onEdit ? (
+                        <MessageEditor
+                            original={message.content}
+                            draft={editDraft}
+                            onDraft={onEditDraft}
+                            onSend={(text) => onEdit(message, text)}
+                            onCancel={() => onEditCancel?.()}
+                        />
+                    ) : collapsibleUser ? (
                         <>
                             <div
                                 ref={userBodyRef}

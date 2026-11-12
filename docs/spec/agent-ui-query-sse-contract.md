@@ -394,6 +394,12 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `guide` | `{ kind: "guide", guideType: "recipe"\|"workout"\|"howto"\|"checklist"\|"itinerary", title: string, description: string, notes: string, servings: integer\|null, items: string[], steps: string[] }` — `items` are the ingredients, equipment, materials, checklist entries or packing list; `steps` are the recipe steps, exercises, how-to steps or one line per day ("Day 1 - Lisbon: …"), and `[]` for a checklist; `servings` is set only for a recipe. The bundled `guides` skill's `guides/show_recipe`, `guides/show_workout`, `guides/show_how_to`, `guides/show_checklist` and `guides/show_itinerary` emit it |
 | `calculator` | `{ kind: "calculator", calculator: "tip", title: string, currency: string, inputs: { bill: number, tipPercent: number, people: integer } }` or `{ kind: "calculator", calculator: "loan", title: string, currency: string, inputs: { amount: number, annualRatePercent: number, years: number, downPayment: number } }` — starting numbers only; the card computes the tip, total and per-person share, or the monthly payment, total paid and interest, and recomputes as the person edits them. `title` may be `""`; `currency` is an ISO 4217 code such as `"EUR"`. The bundled `calculators` skill's `calculators/show_tip_calculator` and `calculators/show_loan_calculator` emit it |
 
+One more key is not a primitive an agent picks, but the host's own:
+
+| `render` | `data` schema |
+|---|---|
+| `connect_account` | `{ kind: "connect_account", providers: string[], agent_id?: string, reconnect?: string[], success: boolean, status: "ok"\|"error", display_message: string }` — a tool found no usable account. `providers` are connector ids to offer a Connect button for, and only `google`, `microsoft` and `microsoft_work` are allowed: a card naming any other connector is dropped, not drawn; `agent_id` is the namespaced agent that gets access when sign-in completes. `reconnect` lists the providers that were connected already (an expired or under-scoped connection), so a host does not read their being connected as the fix. Any tool whose result carries a `connect_card` object gets it (the mail and calendar tools add one when the caller's `surface` is `agent_ui`), so the button never depends on what the model writes. `success`, `status` and `display_message` repeat the tool's outcome for a host that derives the tool row from `data` |
+
 Rules every receiver implements and every producer can rely on:
 
 - **Fallback, never nothing.** An unknown `render` key renders an explicit
@@ -829,6 +835,28 @@ or a smaller model or longer prompt shrank the budget), so a stable cut is
 reported once. The model is told on every such turn, not once: the oldest user
 message it is sent opens with a one-sentence note that earlier turns exist and
 are no longer shown.
+
+### 10.4 Session listing
+
+Launched with `--history-file <dir>/<id>.sqlite3 --session-kind <kind>`, the
+agent keeps a listing beside the transcript so a host can show and reopen the
+session without reading SQLite. `<id>.json` holds `version`, `id`, `title` (the
+first line of the first question), `kind`, `status`, `created_at`, `updated_at`,
+`pid` and `turns`, and is replaced atomically on every change. `status` is
+`running` while a turn runs, `waiting` while it is parked on a
+`needs_confirmation`, then `done` or `failed` by the turn's terminal event; `pid`
+is cleared to 0 on a clean exit. `<id>.jsonl` gains one line per finished turn:
+`{"user", "answer"}` or `{"user", "error"}`. `clear_conversation` empties it.
+The agent holds an exclusive lock on the first byte of `<id>.lock` for its whole
+life; that lock, not `pid`, is how a host tells an open session from a closed
+one, since it dies with the process and a reused pid cannot fake it. Reopening
+a session takes the lock and rewrites `<id>.json` at once (a status left at
+`running` or `waiting` becomes `failed`); if another process still holds the
+lock after a short wait (a host's probe takes and drops it), the agent refuses
+to start. `<id>` must be hex, as the TUI mints it.
+Only real turns move the listing — sentinels and `/model` do not. Without
+`--session-kind` nothing is written. The TUI passes `chat`; other launchers name
+their own kind (`eval`, `scheduled`), which the TUI hides by default.
 
 Over stdio the agent never sends `needs_confirmation.confirm_url` or
 `error.source`. The TUI decodes them for other transports, and it sets `source`
