@@ -123,3 +123,59 @@ def test_index_folder_indexes_on_one_embedder_load(fake_rag, tmp_path, monkeypat
     assert resp.status_code == 200, resp.text
     assert resp.json()["indexed"] == 6
     assert fake_rag.loads == 1
+
+
+def test_a_failed_file_gives_the_embedder_up_and_the_rest_share_one(
+    fake_rag, tmp_path, monkeypatch
+):
+    paths = _files(tmp_path / "small", 4)
+    real = _FakeRAG.index_document
+
+    def flaky(self, path, **kwargs):
+        if Path(path).name == "station_001.txt":
+            if self.embedder is None:
+                type(self).loads += 1
+            raise RuntimeError("embedder dropped mid-file")
+        return real(self, path, **kwargs)
+
+    monkeypatch.setattr(_FakeRAG, "index_document", flaky)
+
+    async def run():
+        out = []
+        with helpers.one_embedder_load():
+            for p in paths:
+                try:
+                    out.append(await helpers._index_document(p))
+                except Exception:  # pylint: disable=broad-except
+                    out.append("failed")
+        return out
+
+    assert asyncio.run(run()) == [1, "failed", 1, 1]
+    # The failing file took the first load with it; the next file reloads.
+    assert fake_rag.loads == 2
+
+
+def test_two_batches_at_once_never_share_an_embedder(fake_rag, tmp_path):
+    a = _files(tmp_path / "a", 3)
+    b = _files(tmp_path / "b", 3)
+
+    async def run():
+        await asyncio.gather(_index_all(a, batch=True), _index_all(b, batch=True))
+
+    asyncio.run(run())
+
+    assert fake_rag.loads == 2
+
+
+def test_the_embedder_is_not_kept_after_the_batch_ends(fake_rag, tmp_path):
+    paths = _files(tmp_path / "small", 3)
+
+    async def run():
+        with helpers.one_embedder_load():
+            await helpers._index_document(paths[0])
+            await helpers._index_document(paths[1])
+        await helpers._index_document(paths[2])
+
+    asyncio.run(run())
+
+    assert fake_rag.loads == 2
