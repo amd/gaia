@@ -711,6 +711,21 @@ def _key_still_settling(provider: str) -> bool:
     return time.monotonic() - started < KEY_SETTLE_SECONDS
 
 
+def _listed_as_cloud(model_id: str) -> bool:
+    """True when the model server's own list has *model_id* as a cloud model.
+
+    Reads the list, which also teaches the in-memory cloud check every other
+    part of the UI classifies by.
+    """
+    from gaia.llm.lemonade_client import is_cloud_model, record_cloud_models
+
+    status, body = _lemonade("GET", "models?show_all=true")
+    if status >= 400:
+        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+    record_cloud_models(body)
+    return is_cloud_model(model_id)
+
+
 def _check_model_available(model_id: str) -> Optional[str]:
     """None when *model_id* can run now, else why not.
 
@@ -742,6 +757,11 @@ def _check_model_available(model_id: str) -> Optional[str]:
         models = _list_models(provider)
         found = _listed(models, model_id)
         if found is None:
+            # The local list leaves out cloud entries from a provider with no tab.
+            if provider == LOCAL and _listed_as_cloud(model_id):
+                if cloud_blocked():
+                    return "Local only is on, so cloud models can't run"
+                return None
             return "the model is no longer listed"
         if provider != LOCAL:
             return None

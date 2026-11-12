@@ -2389,3 +2389,54 @@ def test_only_fireworks_falls_back_to_known_models(client, lemonade, keys, model
     assert model_list["keys_checked"] == []
     assert model_list["restarts"] == []
     assert KEY not in resp.text
+
+
+# ── A cloud model from a provider GAIA has no tab for ──────────────────────
+
+_OTHER_CLOUD = "othercloud.big-model"
+_OTHER_CLOUD_LISTED = {
+    "id": _OTHER_CLOUD,
+    "recipe": "cloud",
+    "cloud_provider": "othercloud",
+    "labels": ["tool-calling"],
+}
+
+
+@pytest.fixture
+def forget_cloud_models():
+    yield
+    lemonade_client.record_cloud_models({"data": []})
+
+
+def test_restore_accepts_a_cloud_model_only_the_model_server_lists(
+    client, lemonade, keys, db, forget_cloud_models
+):
+    """Saved as Custom model ID with last_provider ``local``: no tab, still listed."""
+    db.set_setting("custom_model", _OTHER_CLOUD)
+    _write_config({"last_model": _OTHER_CLOUD, "last_provider": "local"})
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    body = client.get("/api/providers/active").json()
+    assert body["restore"] == {"status": "restored", "message": None}
+    assert db.get_setting("custom_model") == _OTHER_CLOUD
+    assert keys["ensure"] == []  # no key of GAIA's own to replay for it
+
+
+def test_restore_still_fails_for_an_unlisted_dotted_id(
+    client, lemonade, keys, db, forget_cloud_models
+):
+    _write_config({"last_model": "othercloud.gone-model", "last_provider": "local"})
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    restore = client.get("/api/providers/active").json()["restore"]
+    assert restore["status"] == "failed"
+    assert "no longer listed" in restore["message"]
+
+
+def test_restore_keeps_a_listed_cloud_model_off_under_local_only(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    _write_config({"last_model": _OTHER_CLOUD, "last_provider": "local"})
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    restore = client.get("/api/providers/active").json()["restore"]
+    assert restore["status"] == "failed", restore
+    assert "Local only is on" in restore["message"]
+    assert db.get_setting("custom_model") is None
