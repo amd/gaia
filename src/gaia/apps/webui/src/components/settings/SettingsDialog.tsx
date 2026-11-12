@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { lazy, Suspense, useRef } from 'react';
+import { lazy, Suspense, useLayoutEffect, useRef } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
@@ -36,6 +36,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     const open = useChatStore((s) => s.openSettings);
     const close = useChatStore((s) => s.closeSettings);
     const panel = useRef<HTMLDivElement>(null);
+    const scroller = useRef<HTMLDivElement>(null);
 
     const isOpen = section !== null;
     useEscapeToClose(isOpen, close);
@@ -44,6 +45,11 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     useDialogFocus(panel, isOpen, () =>
         panel.current?.querySelector<HTMLElement>('.settings-nav-item.is-active'),
     );
+
+    // One scroller serves every tab, so a new tab would open at the last one's offset.
+    useLayoutEffect(() => {
+        if (scroller.current) scroller.current.scrollTop = 0;
+    }, [section]);
 
     if (!section) return null;
 
@@ -86,7 +92,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                     <button type="button" className="settings-close" onClick={close} aria-label={t('settings.close')}>
                         <X size={18} />
                     </button>
-                    <div className="settings-scroll">
+                    <div ref={scroller} className="settings-scroll">
                         {/* Keyed so a crashed section clears when another is picked. */}
                         <ErrorBoundary key={section} area={`settings.${section}`}>
                             <Suspense fallback={<p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}>

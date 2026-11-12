@@ -1062,7 +1062,14 @@ for (const locale of ['ar', 'en']) {
         // Wheel over the pane, the way a person scrolls, so the rule doesn't name the scroller.
         await page.mouse.move(dialogBox.x + dialogBox.width / 2, dialogBox.y + dialogBox.height / 2);
         await page.mouse.wheel(0, 10_000);
-        await expect.poll(async () => (await title.boundingBox())?.y ?? 0).toBeLessThan(titleBefore.y - 100);
+        await expect.poll(() => dialog.locator('.settings-scroll').evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+        // The tab title stays in view as a header (#7402).
+        const titleAfter = await title.boundingBox();
+        expect(titleAfter && titleAfter.y >= dialogBox.y && titleAfter.y < titleBefore.y + 1).toBe(true);
+        const titleShown = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-pane-title'),
+            [titleAfter!.x + titleAfter!.width / 2, titleAfter!.y + titleAfter!.height / 2]);
+        expect(titleShown, 'scrolled rows are drawn over the tab title').toBe(true);
+        await shot(page, `settings-sticky-title-${locale}`);
 
         const after = await close.boundingBox();
         if (!after) throw new Error('close button left the layout after scrolling');
@@ -1072,6 +1079,11 @@ for (const locale of ['ar', 'en']) {
         const onTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-close'),
             [after.x + after.width / 2, after.y + after.height / 2]);
         expect(onTop, 'the close button is covered by scrolled content').toBe(true);
+
+        // Another tab opens at its own top, not at this one's scroll offset.
+        await dialog.locator('[data-section="general"]').click();
+        await expect(title).toHaveText(/General|عام/);
+        expect(await dialog.locator('.settings-scroll').evaluate((el) => el.scrollTop)).toBe(0);
     });
 }
 

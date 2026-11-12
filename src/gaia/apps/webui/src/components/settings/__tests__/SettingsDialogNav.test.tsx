@@ -31,4 +31,14 @@ describe('SettingsDialog nav', () => {
         expect(general).not.toHaveAttribute('aria-current');
         expect(screen.getByText('model pane')).toBeInTheDocument();
     });
+
+    it('opens every tab at its top, not where the last tab was scrolled to', () => {
+        const { container } = render(<SettingsDialog onUseSkill={vi.fn()} />);
+        const pane = container.ownerDocument.querySelector('.settings-scroll') as HTMLElement;
+        pane.scrollTop = 900;
+
+        fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+
+        expect(pane.scrollTop).toBe(0);
+    });
 });

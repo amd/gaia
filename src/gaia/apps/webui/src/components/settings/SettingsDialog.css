@@ -83,7 +83,7 @@
     position: absolute;
     top: 14px;
     inset-inline-end: 14px;
-    z-index: 1;
+    z-index: 2;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -116,6 +116,16 @@
     color: var(--text-primary);
     font-size: 18px;
     font-weight: 600;
+}
+
+/* The tab title stays in view, and rows scroll under it rather than under the close button. */
+.settings-scroll > .settings-pane > .settings-pane-title {
+    position: sticky;
+    top: -24px;
+    z-index: 1;
+    margin: -24px -28px 0;
+    padding: 24px 28px 10px;
+    background: var(--bg-primary);
 }
 
 .settings-pane-lede {
@@ -798,6 +808,12 @@
 
     .settings-scroll {
         padding: 18px 16px 28px;
+    }
+
+    .settings-scroll > .settings-pane > .settings-pane-title {
+        top: -18px;
+        margin: -18px -16px 0;
+        padding: 18px 16px 10px;
     }
 
     .model-in-use-field {
