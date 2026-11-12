@@ -6,6 +6,7 @@ import { ChevronRight } from 'lucide-react';
 import { useT } from '../../i18n/useT';
 import * as api from '../../services/api';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
+import { useModelStore } from '../../stores/modelStore';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { formatSize } from '../setup/format';
 import type { PreflightReport, SetupPlan } from '../../types';
@@ -22,6 +23,7 @@ export function SetupSettings() {
     const openSettings = useChatStore((s) => s.openSettings);
     const closeSettings = useChatStore((s) => s.closeSettings);
     const runSetupAgain = useChatStore((s) => s.runSetupAgain);
+    const active = useModelStore((s) => s.active);
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [hardware, setHardware] = useState<PreflightReport | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -32,7 +34,9 @@ export function SetupSettings() {
         api.getOnboardingPreflight().then(setHardware).catch((err) => setError(err instanceof Error ? err.message : String(err)));
     }, []);
 
-    const chat = plan?.catalog?.find((e) => e.id === plan.chat_model.id);
+    // The plan's chat model is setup's local pick; a cloud user runs something else.
+    const planned = plan?.catalog?.find((e) => e.id === plan.chat_model.id);
+    const chatName = active?.model ? (active.label ?? active.display_name ?? active.model) : planned?.name ?? null;
     const installed = (plan?.catalog ?? []).filter((e) => e.downloaded);
     const installedGb = installed.reduce((sum, e) => sum + (e.full_size_gb ?? 0), 0);
     const device = [hardware?.gpu_name, hardware?.npu_detected ? t('setup.checks.npu') : null].filter(Boolean).join(' · ');
@@ -40,7 +44,7 @@ export function SetupSettings() {
         {
             title: t('settings.setup.where'),
             rows: [
-                { label: t('settings.setup.chatRuns'), value: chat?.name ?? null, section: 'model' },
+                { label: t('settings.setup.chatRuns'), value: chatName, section: 'model' },
                 { label: t('settings.setup.cloudKeys'), value: null, section: 'model' },
             ],
         },
@@ -77,7 +81,7 @@ export function SetupSettings() {
             <div className="settings-setup-status">
                 <span>
                     <strong>{t('settings.setup.ready')}</strong>
-                    {chat && <span className="settings-hint"> <bdi>{t('settings.setup.running', { name: chat.name })}</bdi></span>}
+                    {chatName && <span className="settings-hint"> <bdi>{t('settings.setup.running', { name: chatName })}</bdi></span>}
                 </span>
                 <button type="button" className="btn-secondary" data-testid="setup-run-again" onClick={() => setAsking(true)}>
                     {t('settings.setup.runAgain')}

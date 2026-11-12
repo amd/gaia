@@ -188,7 +188,11 @@ list are resolved, and leaves out any further older turns they no longer leave
 room for (logged as a warning).
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
-history budget; the newest turn is retained if it fits. The full stored trace
+history budget; the newest turn is retained if it fits. The oldest turn still
+replayed then opens with `HIDDEN_TURNS_NOTE` (`gaia.agents.base.history`), one
+sentence telling the model that earlier turns exist and are no longer shown, so
+it does not deny what they said. The note is added to the copy sent to the
+model, never to the stored turn. The full stored trace
 remains in SQLite, and exclusions produce a warning in the backend log. When a
 streamed turn hides more turns than the session's last streamed turn did (a
 longer chat, or a smaller model's budget), the stream sends one `status` event
@@ -229,7 +233,7 @@ for msg in messages:
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add_document` | `(filename, filepath, file_hash, file_size?, chunk_count?) -> Dict` | Add document to library (deduplicates by hash) |
+| `add_document` | `(filename, filepath, file_hash, file_size?, chunk_count?) -> Dict` | Add document to library (deduplicates by hash; a known path with new content updates its row) |
 | `get_document` | `(doc_id) -> Optional[Dict]` | Get document by ID |
 | `list_documents` | `() -> List[Dict]` | List all documents |
 | `delete_document` | `(doc_id) -> bool` | Delete a document |
@@ -705,7 +709,8 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "model_status": {
         "found": true,
         "downloaded": true,
-        "loaded": false
+        "loaded": false,
+        "checked": true
       }
     }
     ```
@@ -713,11 +718,11 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Description |
     |-------|------|-------------|
     | `custom_model` | string or null | HuggingFace model ID overriding the default, or `null` if using the default model. |
-    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), and `loaded` (currently active). |
+    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), `loaded` (currently active), and `checked` (the model list was read; when `false`, `found` says nothing). Settings notes a saved ID that is unlisted or could not be checked. |
   </Accordion>
 
   <Accordion title="PUT /api/settings">
-    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string / `null` to clear the override and revert to the default model.
+    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and revert to the default model; omitting it or sending `null` leaves it unchanged. The value is also saved as `last_model` in `~/.gaia/config.json` (cleared with it), so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on, including one from a provider GAIA knows only from the model server's list; when that list can't be read to tell, the save is refused with `503`.
 
     **Request:**
     ```json
@@ -728,7 +733,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
 
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
-    | `custom_model` | string or null | No | HuggingFace model ID to use instead of the default. Empty string or `null` clears the override. |
+    | `custom_model` | string or null | No | Model ID to use instead of the default. An empty string clears the override; `null` leaves it unchanged. |
 
     **Response:** Same shape as `GET /api/settings`.
   </Accordion>
@@ -1338,7 +1343,7 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="POST /api/documents/upload-path">
-    Index a document by file path. The file is hashed for deduplication -- if the same file was already indexed, the existing document is returned.
+    Index a document by file path. The file is hashed for deduplication -- if the same file was already indexed, the existing document is returned. A file already in the library at the same path but with new content keeps its row, updated to the new content.
 
     **Request:**
     ```json
@@ -1548,7 +1553,7 @@ agent at once, so they take effect on its next step.
     ```json
     {
       "session_id": "...",
-      "folders": [{"path": "C:\\work", "kind": "folder", "source": "added", "removable": true}],
+      "folders": [{"path": "C:\\work", "name": null, "kind": "folder", "source": "added", "removable": true}],
       "removed": ["C:\\work\\private"],
       "internet": true,
       "enforced": true,
@@ -1558,7 +1563,9 @@ agent at once, so they take effect on its next step.
 
     `folders` is every folder and file the agent may read and write;
     `source` is `added`, `gaia_documents`, `scratch`, `document`,
-    `working_folder` or `approved` (granted during the chat). `removable` is
+    `working_folder` or `approved` (granted during the chat). `name` is an
+    attached document's own name (its library copy's file name carries an id
+    prefix), else `null`. `removable` is
     false for an attached document, which leaves through the chat's document
     list. `enforced` covers the folders and is false for an agent that runs as
     its own process (a relayed sidecar); removing a folder then refuses with
@@ -1988,7 +1995,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="DELETE /api/memory/knowledge/{knowledge_id}">
-    Delete a knowledge entry.
+    Delete a knowledge entry. An entry about the user is recorded as forgotten, and current copies of it (the same fact about the same subject, however it was worded or tagged, in any context) are forgotten with it; the response then lists every erased id as `knowledge_ids`.
   </Accordion>
 
   <Accordion title="GET /api/memory/upcoming">
@@ -2184,7 +2191,8 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     — each `insight` event is a candidate fact awaiting approval. It runs on
     the machine's default local chat model (`default_model` in
     `~/.gaia/config.json`), never the chat's cloud model; a cloud
-    `default_model` ends the stream with an `error` event.
+    `default_model`, or a local one that isn't downloaded yet, ends the stream
+    with an `error` event rather than a download.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
@@ -2366,6 +2374,13 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
     Aggregate counts by status, for the dashboard header cards.
   </Accordion>
 
+  <Accordion title="GET /api/goals/health">
+    `{"error": string | null}`. `error` says why the background loop could
+    not read the goal store on its last tick, so approved goals are not
+    running; it is `null` once the store reads again. The UI shows it as a
+    notification and in Memory › Goals.
+  </Accordion>
+
   <Accordion title="GET /api/goals/pending-approval">
     Agent-inferred goals awaiting user review.
   </Accordion>
@@ -2493,6 +2508,10 @@ plan and make one set of choices.
   <Accordion title="GET /api/setup/check">
     Runs `gaia init --check --profile gaia --json` and returns its result plus
     the step list: `{"ready": bool, "stage": ..., "reasons": [...], "steps": [...]}`.
+    `initialized` is true once setup was seen ready on this PC. With it, a
+    `"server"` stage (the model server isn't answering) is an outage, not a
+    first run: the app keeps its chats, says so, and re-checks when the server
+    answers.
 
     **Query params:** `skip_chat_model` (the chat runs on a cloud provider, so
     only the embedding model is needed locally), `load` (also check that the
@@ -2863,7 +2882,9 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   <Accordion title="GET /api/providers/active">
     The model new turns run — the one a new chat starts on: the picked model,
     else `default_model` from `~/.gaia/config.json`, else Gemma. Carries
-    `display_name`, `downloaded` for a local model (`null` for a cloud
+    `display_name`, `remote` and `provider_name` (who answers a cloud model,
+    including a provider GAIA only learned from Lemonade's model list, whose
+    `provider` stays `local`), `downloaded` for a local model (`null` for a cloud
     model or while the server starts), and `inference_remote` /
     `inference_description`: where a new chat would be answered, by the rule
     session locations use (`null` when it can't tell). With an unreadable config, `model` is
@@ -2896,6 +2917,13 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     Clear the key from Lemonade and from the OS credential store. Returns
     `{"removed": bool}`. On the user's own Lemonade only GAIA's stored copy is
     removed; the server keeps its key.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/key-store/retry">
+    Let the next key read ask the OS to unlock the credential store again. After
+    a dismissed or refused unlock prompt GAIA stops reading the store for five
+    minutes, and providers report `key_state: "store_locked"`; the Try again
+    button calls this. Returns `{"retrying": true}`.
   </Accordion>
 
   <Accordion title="GET /api/providers/{provider}/models">
@@ -3022,9 +3050,9 @@ model with no known price reads as unknown, never $0. Cloud models from
   </Accordion>
 
   <Accordion title="GET /api/spending">
-    This month's cloud chat turns in the Agent UI at list price, without cache
-    discounts. A turn that fails or is stopped before it answers isn't counted,
-    so the total can read lower than the bill as well as higher: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
+    This month's cloud chat turns in the Agent UI at list price, cached input at
+    its cached rate (the basis each answer's own cost uses). A turn stopped before any reply isn't counted, nor is one that fails before any reply with no usage reported (an answer stopped partway is, since the provider may bill it),
+    so the total can read lower than the bill as well as higher: `total_usd`, `turns` (every counted turn, the next two kinds included), `unpriced_turns` (turns on a model with no
     known price, counted apart), `unreported_turns` (turns on a priced model that
     sent no usage, such as a stopped answer, also counted apart), `by_model` (each
     entry carries its own `unpriced_turns` and `unreported_turns`), `limit_usd`, and `state`

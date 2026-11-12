@@ -211,6 +211,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /tunnel/status': { active: false, url: null, token: null, startedAt: null, error: null, publicIp: null },
     'GET /mcp/status': { servers: [] },
     'GET /schedules': SCHEDULES,
+    'GET /goals/health': { error: null },
     'GET /documents': DOCUMENTS,
     // Installed, so no screen shows the "GAIA agent isn't installed" notice unless its test asks.
     'GET /agents': { agents: [{ id: 'gaia', name: 'GAIA', description: '', source: 'installed', conversation_starters: [], models: [] }], total: 1 },
@@ -598,10 +599,12 @@ export interface MemoryState {
     empty?: boolean;
     /** Every read fails, as when the memory store is locked. */
     failed?: boolean;
+    /** More memories than the first page holds. */
+    more?: boolean;
 }
 
 /** The Memory dashboard's endpoints: a few memories, goals and tools, or empty, off or failing. */
-export async function withMemory(page: Page, { enabled = true, empty = false, failed = false }: MemoryState = {}): Promise<void> {
+export async function withMemory(page: Page, { enabled = true, empty = false, failed = false, more = false }: MemoryState = {}): Promise<void> {
     const items = empty ? [] : MEMORY_ITEMS;
     const answers: Record<string, unknown> = {
         'GET /memory/settings': { memory_enabled: enabled, mcp_memory_enabled: false, system_discovery_consent: false },
@@ -623,7 +626,7 @@ export async function withMemory(page: Page, { enabled = true, empty = false, fa
             { date: '2026-10-15', conversations: 1, tool_calls: 5, knowledge_added: 2, errors: 1 },
             { date: '2026-10-16', conversations: 3, tool_calls: 0, knowledge_added: 2, errors: 1 },
         ],
-        'GET /memory/knowledge': { items, total: items.length, offset: 0, limit: 15 },
+        'GET /memory/knowledge': { items, total: items.length + (more ? 318 : 0), offset: 0, limit: 15 },
         'GET /memory/entities': empty ? [] : [{ entity: 'place:calgary', count: 1, last_updated: iso(60) }],
         'GET /memory/tools': empty ? [] : [
             { tool_name: 'run_shell', total_calls: 6, success_count: 4, failure_count: 2, denied_count: 1, success_rate: 0.67, avg_duration_ms: 1500, last_used: iso(20), last_error: 'Command timed out after 30 s' },
