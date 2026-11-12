@@ -397,11 +397,30 @@
     letter-spacing: 0.04em;
 }
 
-/* Plain-text question: agent/tool-derived content, never markdown/innerHTML. */
+/* The question: agent/tool-derived content, formatting only (QuestionText). */
 .render-needs-input__question {
     margin: 0 0 10px;
-    white-space: pre-wrap;
     word-break: break-word;
+}
+
+/* Line breaks the model typed stay; the gaps between blocks do not. */
+.render-needs-input__question p,
+.render-needs-input__question li {
+    white-space: pre-wrap;
+}
+
+.render-needs-input__question > *,
+.render-needs-input__question li p {
+    margin: 0;
+}
+
+.render-needs-input__question > * + * {
+    margin-top: 6px;
+}
+
+.render-needs-input__question ul,
+.render-needs-input__question ol {
+    padding-inline-start: 20px;
 }
 
 .render-needs-input__options {
