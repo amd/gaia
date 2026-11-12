@@ -79,10 +79,6 @@ KNOWN_BUGS = {
     ("model server", "chat"): "amd/gaia#7345",
     ("model server", "-p Reply with one word."): "amd/gaia#7345",
 }
-if sys.platform != "win32":
-    # Windows reads the token from the console and waits; elsewhere it crashes.
-    KNOWN_BUGS[("traceback", "gateway auth")] = "amd/gaia#7336"
-
 #: Commands whose --base-url is not the model server's address.
 OTHER_BASE_URL = {
     "gateway install": "its --base-url is the gateway's address",

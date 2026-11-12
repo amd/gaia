@@ -157,15 +157,10 @@ KNOWN_BROKEN = {
     "connectors connect": "amd/gaia#7334",
     "mcp engineering": "amd/gaia#7335",
     "mcp code-index": "amd/gaia#7335",
-    "slack setup": "amd/gaia#7336",
     "youtube": "amd/gaia#7337",
     "perf-vis": "amd/gaia#7337",
     "agent init": "amd/gaia#7337",
 }
-
-if sys.platform != "win32":
-    # Windows reads the token from the console and waits; elsewhere it crashes.
-    KNOWN_BROKEN["gateway auth"] = "amd/gaia#7336"
 
 #: Output that means a command could not load its own code. A frozen app has no
 #: pip, so a remedy that names it is as dead as the import.
