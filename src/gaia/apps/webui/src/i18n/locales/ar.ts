@@ -2415,8 +2415,6 @@ const messages: Messages = {
     'mem.loadFailed': 'تعذّر تحميل بيانات الذاكرة. هل الخادم الخلفي يعمل؟',
     'mem.retry': 'إعادة المحاولة',
     'mem.cancel': 'إلغاء',
-    'mem.on': 'تشغيل',
-    'mem.off': 'إيقاف',
     'mem.running': 'جارٍ التشغيل…',
     'mem.saving': 'جارٍ الحفظ…',
     'mem.listSeparator': '، ',

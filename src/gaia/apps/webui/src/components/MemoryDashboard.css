@@ -9,7 +9,15 @@
     height: 100%;
     background: var(--bg-primary);
     overflow: hidden;
+    font-variant-numeric: tabular-nums;
 }
+/* Every tab sits in the same centred column; About you keeps its narrower reading width. */
+.memory-dashboard-body > :not(.mem-about) {
+    max-width: 1080px;
+    margin-inline: auto;
+}
+/* Tool names are code, so they stay monospace. */
+.mem-tool-name { font-family: var(--font-mono); }
 .mem-beta { letter-spacing: 0.5px; }
 /* Headers and badges here run at 10 px; the gloss's 11 px floor would set the English above the Arabic. */
 .memory-dashboard-page .i18n-gloss.i18n-gloss {
@@ -59,12 +67,11 @@
 .mem-section:last-child { margin-bottom: 0; }
 
 .mem-section-title {
-    font-size: 11px;
+    font-size: 13px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 2px;
-    color: var(--text-muted);
+    font-family: var(--font-sans);
+    letter-spacing: 0;
+    color: var(--text-secondary);
     margin-bottom: 14px;
     display: flex; align-items: center; gap: 8px;
 }
@@ -98,15 +105,14 @@
     font-weight: 700;
     color: var(--text-muted);
     letter-spacing: 0;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 .mem-section-add-btn {
     display: inline-flex; align-items: center; gap: 5px;
     padding: 4px 10px;
     font-size: 11px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
+    font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border-radius: var(--radius-md);
     border: 1px solid var(--border);
@@ -132,7 +138,7 @@
     padding: 3px 10px;
     font-size: 10px;
     font-weight: 700;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border: none;
     background: transparent;
@@ -149,7 +155,7 @@
 /* ── 1. Header Stat Cards ────────────────────────────────────── */
 .mem-stat-cards {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 14px;
     margin-bottom: 28px;
 }
@@ -184,15 +190,9 @@
     font-size: 11px;
     color: var(--text-muted);
     margin-top: 2px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 
-/* Color accents for stat cards */
-.mem-stat-card[data-accent="purple"] .mem-stat-value { color: var(--accent-purple); }
-.mem-stat-card[data-accent="blue"] .mem-stat-value { color: var(--accent-blue); }
-.mem-stat-card[data-accent="green"] .mem-stat-value { color: var(--accent-green); }
-.mem-stat-card[data-accent="red"] .mem-stat-value { color: var(--accent); }
-.mem-stat-card[data-accent="gold"] .mem-stat-value { color: var(--accent-yellow); }
 
 /* ── 2. Activity Timeline (CSS bar chart) ────────────────────── */
 .mem-activity-chart {
@@ -239,7 +239,7 @@
     bottom: -22px;
     font-size: 9px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     white-space: nowrap;
 }
 
@@ -248,7 +248,7 @@
     gap: 16px;
     margin-top: 10px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
 }
 .mem-activity-legend-item {
@@ -272,7 +272,7 @@
     border-radius: var(--radius-sm);
     padding: 6px 10px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-primary);
     white-space: nowrap;
     pointer-events: none;
@@ -292,7 +292,7 @@
 .mem-filter-select {
     padding: 7px 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-input);
@@ -322,8 +322,7 @@
     padding: 4px 11px;
     font-size: 11px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
+    font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border-radius: var(--radius-full);
     border: 1px solid var(--border);
@@ -371,7 +370,7 @@
     padding-block: 7px;
     padding-inline: 32px 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-input);
@@ -409,9 +408,8 @@
     padding: 8px 12px;
     font-size: 10px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
@@ -443,8 +441,7 @@
     padding: 2px 8px;
     font-size: 10px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
+    font-family: var(--font-sans);
     letter-spacing: 0.5px;
     border-radius: var(--radius-full);
     white-space: nowrap;
@@ -457,7 +454,7 @@
 /* Confidence bar */
 .mem-confidence {
     display: flex; align-items: center; gap: 6px;
-    font-family: var(--font-mono); font-size: 12px;
+    font-family: var(--font-sans); font-size: 12px;
     color: var(--text-secondary);
 }
 .mem-confidence-bar {
@@ -509,13 +506,13 @@
     font-size: 11px;
     color: var(--accent-blue);
     cursor: pointer;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 .mem-entity-link:hover { text-decoration: underline; }
 
 .mem-due-badge {
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     white-space: nowrap;
 }
 .mem-due-badge.overdue { color: var(--danger); }
@@ -524,7 +521,7 @@
 
 .mem-date-cell {
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     white-space: nowrap;
 }
@@ -571,7 +568,7 @@
     justify-content: space-between;
     margin-top: 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
 }
 .mem-pagination-btns {
@@ -582,7 +579,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     transition: all var(--duration) var(--ease);
 }
@@ -608,9 +605,8 @@
     padding: 8px 12px;
     font-size: 10px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
     border-bottom: 1px solid var(--border);
     white-space: nowrap;
@@ -619,7 +615,7 @@
 .mem-tool-table td {
     padding: 10px 12px;
     border-bottom: 1px solid var(--border-light);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 12px;
 }
 
@@ -672,7 +668,7 @@
     padding-block: 8px;
     padding-inline: 32px 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-input);
@@ -710,7 +706,7 @@
     font-size: 12px;
     font-weight: 600;
     color: var(--danger);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     white-space: nowrap;
 }
 
@@ -757,7 +753,7 @@
     display: flex;
     gap: 12px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
     flex-shrink: 0;
     margin-inline-start: 12px;
@@ -809,15 +805,14 @@
 .mem-conv-turn-time {
     font-size: 10px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     flex-shrink: 0;
 }
 .mem-conv-turn-role {
     font-size: 10px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     margin-bottom: 4px;
 }
 .mem-conv-turn-role.user { color: var(--accent-blue); }
@@ -870,7 +865,7 @@
 }
 .mem-temporal-date {
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
     margin-top: 2px;
 }
@@ -887,6 +882,7 @@
 
 @container (max-width: 860px) {
     .mem-two-col { grid-template-columns: minmax(0, 1fr); }
+    .mem-stat-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @container (max-width: 640px) {
     .mem-stat-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -914,7 +910,7 @@
     padding: 40px;
     color: var(--text-muted);
     font-size: 13px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     gap: 10px;
 }
 .mem-spinner {
@@ -944,9 +940,8 @@
 .mem-inline-form-row label {
     font-size: 11px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
     width: 80px;
     flex-shrink: 0;
@@ -957,7 +952,7 @@
     flex: 1;
     padding: 7px 12px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     background: var(--bg-input);
@@ -1015,14 +1010,13 @@
 .mem-detail-label {
     font-size: 10px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1px;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
 }
 .mem-detail-value {
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-primary);
     word-break: break-all;
 }
@@ -1067,7 +1061,7 @@
 }
 .mem-embedding-label {
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     white-space: nowrap;
 }
@@ -1099,7 +1093,7 @@
     width: 100%;
     padding: 9px 14px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-primary);
     border-radius: var(--radius-md);
     transition: background var(--duration-fast) var(--ease);
@@ -1151,7 +1145,7 @@
     align-items: center;
     gap: 5px;
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     cursor: pointer;
     white-space: nowrap;
@@ -1198,7 +1192,7 @@
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg);
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-primary);
     animation: toastIn var(--duration) var(--ease);
     pointer-events: auto;
@@ -1218,17 +1212,29 @@
 .mem-toggle {
     position: relative;
     flex-shrink: 0;
-    min-inline-size: 40px;
-    height: 22px;
-    border-radius: 11px;
+    width: 36px;
+    height: 20px;
+    border-radius: var(--radius-full);
     border: none;
     background: var(--border);
     cursor: pointer;
-    padding: 0 8px;
-    transition: background var(--duration) var(--ease);
+    padding: 0;
+    transition: background var(--duration-fast) var(--ease);
 }
 .mem-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
-.mem-toggle-on { background: var(--accent-green); }
+.mem-toggle-on { background: var(--accent); }
+.mem-toggle-knob {
+    position: absolute;
+    top: 2px;
+    inset-inline-start: 2px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--switch-knob);
+    transition: transform var(--duration-fast) var(--ease);
+}
+.mem-toggle-on .mem-toggle-knob { transform: translateX(16px); }
+.mem-toggle-on:dir(rtl) .mem-toggle-knob { transform: translateX(-16px); }
 
 /* New-style setting rows (memory-enabled, delete-all) */
 .mem-setting-row {
@@ -1283,7 +1289,7 @@
     padding-top: 14px;
     border-top: 1px solid var(--border-light);
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
     display: flex;
     align-items: center;
@@ -1306,10 +1312,9 @@
     padding: 10px 18px;
     border: none;
     background: none;
-    font-size: 12px;
+    font-size: 13px;
     font-weight: 500;
-    font-family: var(--font-mono);
-    letter-spacing: 0.5px;
+    font-family: var(--font-sans);
     color: var(--text-muted);
     cursor: pointer;
     border-bottom: 2px solid transparent;
@@ -1342,7 +1347,7 @@
 .mem-profile-card-title {
     font-size: 13px;
     font-weight: 600;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-primary);
     display: flex;
     align-items: center;
@@ -1365,7 +1370,7 @@
     align-items: center;
     gap: 6px;
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-secondary);
     cursor: pointer;
 }
@@ -1388,7 +1393,7 @@
     padding: 8px;
     max-height: 200px;
     overflow-y: auto;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-size: 12px;
     line-height: 1.6;
     scrollbar-width: thin;
@@ -1422,9 +1427,8 @@
 .mem-review-header {
     font-size: 11px;
     font-weight: 600;
-    font-family: var(--font-mono);
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
+    font-family: var(--font-sans);
+    letter-spacing: 0;
     color: var(--text-muted);
 }
 .mem-review-list {
@@ -1467,7 +1471,7 @@
 .mem-conf-badge {
     flex-shrink: 0;
     font-size: 10px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--text-muted) 12%, transparent);
@@ -1476,7 +1480,7 @@
 .mem-source-badge {
     flex-shrink: 0;
     font-size: 10px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     padding: 2px 6px;
     border-radius: var(--radius-sm);
     background: color-mix(in srgb, var(--text-muted) 12%, transparent);
@@ -1485,7 +1489,7 @@
 .mem-domain-badge {
     flex-shrink: 0;
     font-size: 10px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     font-weight: 600;
     padding: 2px 8px;
     border-radius: var(--radius-sm);
@@ -1511,7 +1515,7 @@
 }
 .mem-review-select-links {
     font-size: 11px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--text-muted);
 }
 .mem-link-btn {
@@ -1537,7 +1541,7 @@
     border: 1px solid color-mix(in srgb, var(--accent-green) 25%, transparent);
     border-radius: var(--radius-md);
     font-size: 12px;
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
     color: var(--accent-green);
 }
 .mem-profile-empty {
@@ -1545,7 +1549,7 @@
     text-align: center;
     font-size: 12px;
     color: var(--text-muted);
-    font-family: var(--font-mono);
+    font-family: var(--font-sans);
 }
 
 /* ── Responsive ──────────────────────────────────────────────── */
@@ -1818,7 +1822,6 @@
 .mem-about-group-title {
     font-size: 12px;
     font-weight: 600;
-    text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--text-muted);
     margin: 0 0 8px;

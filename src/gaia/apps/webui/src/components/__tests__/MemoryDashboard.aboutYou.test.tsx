@@ -94,7 +94,7 @@ describe('What GAIA knows about you', () => {
 
         // Lessons and session summaries are filtered on the server, so paging covers user facts only.
         expect(mockedApi.getKnowledge).toHaveBeenCalledWith(expect.objectContaining({ about_user: true }));
-        expect(screen.queryByText('Success Rate')).not.toBeInTheDocument();
+        expect(screen.queryByText('Success rate')).not.toBeInTheDocument();
         expect(screen.queryByText(/llm_extract/)).not.toBeInTheDocument();
         expect(screen.queryByText(/confidence/i)).not.toBeInTheDocument();
     });
@@ -103,7 +103,7 @@ describe('What GAIA knows about you', () => {
         await renderAbout();
         fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
 
-        expect(await screen.findByText('Success Rate')).toBeInTheDocument();
+        expect(await screen.findByText('Success rate')).toBeInTheDocument();
     });
 
     it('forgets an item in one click, and can undo it', async () => {
@@ -366,7 +366,7 @@ describe('Profile saves refresh the other views (#4814)', () => {
 
         fireEvent.click(await screen.findByRole('button', { name: 'None' }));
         expect(screen.getByRole('checkbox', { name: /Uses VS Code/ })).not.toBeChecked();
-        fireEvent.click(screen.getByRole('button', { name: 'Select All' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
         expect(screen.getByRole('checkbox', { name: /Uses VS Code/ })).toBeChecked();
     });
 });
