@@ -23,9 +23,10 @@ from typing import Any, Collection, Dict, Iterable, List, Optional, Tuple
 from fastapi import HTTPException
 
 from gaia.logger import get_logger
+from gaia.upload_names import reserve_copy_path
 
 from .database import ChatDatabase
-from .routers.documents import _sanitize_stem, _short_id
+from .routers.documents import _sanitize_stem
 from .utils import (
     ALLOWED_EXTENSIONS,
     compute_file_hash,
@@ -96,7 +97,7 @@ def _record_copy(
 
     managed = managed_documents_dir()
     managed.mkdir(parents=True, exist_ok=True)
-    copy = managed / f"{_short_id()}_{_sanitize_stem(path.stem)}{path.suffix.lower()}"
+    copy = reserve_copy_path(managed, _sanitize_stem(path.stem), path.suffix.lower())
     shutil.copyfile(path, copy)
     file_stat = copy.stat()
     doc = db.add_document(

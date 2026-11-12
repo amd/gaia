@@ -14,7 +14,9 @@ from gaia.ui.sse_handler import _summarize_tool_result
 from gaia.ui.utils import attached_upload_paths, resolve_upload_links, uploads_dir
 from gaia.upload_names import (
     display_file_name,
-    upload_copy_name,
+    place_copy,
+    reserve_copy_path,
+    upload_copy_stem,
     upload_original_name,
 )
 
@@ -36,7 +38,7 @@ HOSTILE_NAMES = [
 
 @pytest.mark.parametrize("name", HOSTILE_NAMES)
 def test_any_name_becomes_one_the_web_ui_serves(name):
-    assert WEB_UI_SERVES.fullmatch(upload_copy_name(name, ".pdf"))
+    assert WEB_UI_SERVES.fullmatch(upload_copy_stem(name) + ".pdf")
 
 
 @pytest.mark.parametrize(
@@ -51,12 +53,21 @@ def test_any_name_becomes_one_the_web_ui_serves(name):
     ],
 )
 def test_the_copy_is_cited_by_its_readable_name(name, shown):
-    copy = Path("home") / "chat" / "uploads" / upload_copy_name(name, ".pdf")
+    copy = Path("home") / "chat" / "uploads" / (upload_copy_stem(name) + ".pdf")
     assert display_file_name(str(copy)) == shown
 
 
-def test_two_uploads_of_one_file_get_different_copies():
-    assert upload_copy_name("a.pdf", ".pdf") != upload_copy_name("a.pdf", ".pdf")
+def test_a_copy_keeps_the_name_the_user_gave(tmp_path):
+    assert reserve_copy_path(tmp_path, "notes", ".txt") == tmp_path / "notes.txt"
+
+
+def test_two_uploads_of_one_name_get_different_copies_cited_alike(tmp_path):
+    first = reserve_copy_path(tmp_path, "notes", ".txt")
+    second = reserve_copy_path(tmp_path, "notes", ".txt")
+    assert first != second
+    assert second.name.endswith("_notes.txt")
+    copy = tmp_path.parent / "chat" / "uploads" / second.name
+    assert display_file_name(str(copy)) == "notes.txt"
 
 
 @pytest.mark.parametrize(
@@ -109,4 +120,24 @@ def test_an_uploaded_attachment_reaches_the_agent(client, name):
     copy = str(uploads_dir().resolve() / upload["filename"])
     assert copy in resolved
     assert attached_upload_paths(resolved) == [copy]
-    assert upload_original_name(copy)
+    assert display_file_name(copy)
+
+
+def test_the_agent_is_given_the_name_the_user_attached(client):
+    upload = client.post(
+        "/api/files/upload", files={"file": ("notes.txt", b"hello", "text/plain")}
+    ).json()
+    resolved = resolve_upload_links(f"Read it\n\n[notes.txt]({upload['url']})")
+    assert Path(attached_upload_paths(resolved)[0]).name == "notes.txt"
+
+
+def test_attaching_one_file_twice_keeps_one_plainly_named_copy(tmp_path):
+    first = place_copy(tmp_path, "notes", ".txt", b"hello")
+    assert (
+        place_copy(tmp_path, "notes", ".txt", b"hello")
+        == first
+        == tmp_path / "notes.txt"
+    )
+    changed = place_copy(tmp_path, "notes", ".txt", b"changed")
+    assert changed != first and changed.read_bytes() == b"changed"
+    assert first.read_bytes() == b"hello"

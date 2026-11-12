@@ -28,7 +28,7 @@ from starlette.requests import ClientDisconnect
 
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
 from gaia.env import child_env
-from gaia.upload_names import upload_copy_name
+from gaia.upload_names import place_copy, upload_copy_stem
 from gaia.utils.user_folders import documents_dir
 
 from .. import generated_media
@@ -243,16 +243,15 @@ async def upload_file(file: UploadFile = File(...)):
     upload_root = uploads_dir()
     upload_root.mkdir(parents=True, exist_ok=True)
 
-    # Unique copy name: random ID, sanitized original name, original extension
-    unique_name = upload_copy_name(original_name, ext)
-    dest_path = upload_root / unique_name
-
-    # Write file to disk
+    # The copy keeps the sanitized original name; an id is added only if it is taken.
     try:
-        dest_path.write_bytes(content)
+        dest_path = place_copy(
+            upload_root, upload_copy_stem(original_name), ext, content
+        )
     except OSError as e:
-        logger.error("Failed to save uploaded file %s: %s", unique_name, e)
+        logger.error("Failed to save uploaded file %s: %s", original_name, e)
         raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+    unique_name = dest_path.name
 
     # Determine content type
     content_type = file.content_type or "application/octet-stream"
