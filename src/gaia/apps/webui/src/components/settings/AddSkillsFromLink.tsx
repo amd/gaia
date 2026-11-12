@@ -4,24 +4,27 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
+import { useT, type Translate } from '../../i18n/useT';
+import { requestErrorText } from '../../utils/requestErrors';
 import type { FeaturedLibrary, LinkAddResult, LinkPreview, LinkSkill } from '../../types';
-
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
 /** Ready to add: readable, not blocked, new or an update, and code only when allowed. */
 const addable = (s: LinkSkill, allowCode: boolean) =>
     !s.error && (!s.installed || s.update) && (allowCode || !s.has_code);
 
-function summarize(result: LinkAddResult): string {
+function summarize(result: LinkAddResult, t: Translate): string {
     const updated = result.added.filter((a) => a.updated).map((a) => a.name);
     const added = result.added.filter((a) => !a.updated).map((a) => a.name);
-    const part = (verb: string, names: string[]) =>
-        names.length > 3 ? `${verb} ${names.length} skills.` : `${verb} ${names.join(', ')}.`;
-    return [added.length ? part('Added', added) : '', updated.length ? part('Updated', updated) : ''].filter(Boolean).join(' ');
+    const part = (verb: 'added' | 'updated', names: string[]) =>
+        names.length > 3
+            ? t(`settings.skills.link.${verb}Count`, { n: names.length })
+            : t(`settings.skills.link.${verb}`, { names: names.join(', ') });
+    return [added.length ? part('added', added) : '', updated.length ? part('updated', updated) : ''].filter(Boolean).join(' ');
 }
 
 /** Paste a link to a skill or a skills library, review what it holds, then add it. */
 export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
+    const t = useT();
     const [url, setUrl] = useState('');
     const [busy, setBusy] = useState<'preview' | 'add' | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -35,9 +38,9 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
         let cancelled = false;
         api.listFeaturedSkillLibraries()
             .then((r) => { if (!cancelled) setFeatured(r.libraries); })
-            .catch((err) => { if (!cancelled) setError(`Could not load suggested libraries: ${errorText(err)}`); });
+            .catch((err) => { if (!cancelled) setError(t('settings.skills.link.featuredFailed', { error: requestErrorText(err, t) })); });
         return () => { cancelled = true; };
-    }, []);
+    }, [t]);
 
     const read = async (link: string) => {
         if (!link.trim()) return;
@@ -50,7 +53,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
             setPreview(p);
             setPicked(new Set(p.skills.filter((s) => addable(s, false)).map((s) => s.name)));
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err, t));
         } finally {
             setBusy(null);
         }
@@ -67,7 +70,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
             setUrl('');
             if (r.added.length) onAdded();
         } catch (err) {
-            setError(errorText(err));
+            setError(requestErrorText(err, t));
         } finally {
             setBusy(null);
         }
@@ -94,7 +97,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
     return (
         <div className="settings-card skill-link">
             <div className="skill-link-top">
-                <span className="settings-label">Add skills</span>
+                <span className="settings-label">{t('settings.skills.link.title')}</span>
                 {featured.map((f) => (
                     <button
                         key={f.id}
@@ -103,9 +106,9 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                         onClick={() => { setUrl(f.url); void read(f.url); }}
                         disabled={busy !== null}
                         title={f.description}
-                        aria-label={`Get ${f.name}: ${f.description}`}
+                        aria-label={t('settings.skills.link.getAria', { name: f.name, description: f.description })}
                     >
-                        Get {f.name}
+                        {t('settings.skills.link.get', { name: f.name })}
                     </button>
                 ))}
             </div>
@@ -120,13 +123,13 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                         const pasted = e.clipboardData.getData('text').trim();
                         if (pasted) { e.preventDefault(); setUrl(pasted); void read(pasted); }
                     }}
-                    placeholder="Paste a GitHub, skills.sh or .zip link"
-                    title="A GitHub repo or folder, owner/repo, a skills.sh page, or an https .zip. A library adds every skill in it."
-                    aria-label="Link to a skill or skills library"
+                    placeholder={t('settings.skills.link.placeholder')}
+                    title={t('settings.skills.link.hint')}
+                    aria-label={t('settings.skills.link.aria')}
                     disabled={busy !== null}
                 />
                 <button type="submit" className="btn-secondary" disabled={!url.trim() || busy !== null}>
-                    {busy === 'preview' ? <><Loader2 size={13} className="spin" /> Reading…</> : 'Read'}
+                    {busy === 'preview' ? <><Loader2 size={13} className="spin" /> {t('settings.skills.link.reading')}</> : t('settings.skills.link.read')}
                 </button>
             </form>
             {error && <p className="settings-error" role="alert">{error}</p>}
@@ -136,32 +139,32 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                     <details className="skill-link-warning" role="note">
                         <summary>
                             <AlertTriangle size={14} aria-hidden="true" />
-                            Only add skills from people you trust.
+                            {t('settings.skills.link.trust')}
                         </summary>
-                        <p>{preview.warning}</p>
+                        <p><bdi>{preview.warning}</bdi></p>
                     </details>
                     <div className="skill-link-head">
-                        <span>{preview.skills.length} in <code>{preview.source}</code></span>
+                        <span>{t('settings.skills.link.found', { n: preview.skills.length, source: preview.source })}</span>
                         {selectable.length > 1 && (
                             <button
                                 type="button"
                                 className="btn-secondary"
                                 onClick={() => setPicked(allPicked ? new Set() : new Set(selectable.map((s) => s.name)))}
                             >
-                                {allPicked ? 'None' : 'All'}
+                                {allPicked ? t('settings.skills.link.none') : t('settings.skills.link.all')}
                             </button>
                         )}
                     </div>
                     <ul className="skill-list skill-link-list">
                         {preview.skills.map((s) => {
                             const can = addable(s, allowCode);
-                            const tag = s.error ? (s.verdict === 'BLOCK' ? 'blocked' : 'unreadable')
-                                : s.installed && !s.update ? 'installed elsewhere'
-                                : s.update ? 'update'
+                            const tag = s.error ? (s.verdict === 'BLOCK' ? t('settings.skills.link.tagBlocked') : t('settings.skills.link.tagUnreadable'))
+                                : s.installed && !s.update ? t('settings.skills.link.tagElsewhere')
+                                : s.update ? t('settings.skills.link.tagUpdate')
                                 : null;
                             const why = s.error
-                                ?? (s.installed && !s.update ? 'A skill with this name is already installed from somewhere else.'
-                                    : s.update ? 'Installed from this link before. Adding it again updates it to the latest version.'
+                                ?? (s.installed && !s.update ? t('settings.skills.link.whyElsewhere')
+                                    : s.update ? t('settings.skills.link.whyUpdate')
                                     : null);
                             const hasDetails = !!why || s.findings.length > 0 || (s.has_code && !allowCode);
                             return (
@@ -172,22 +175,22 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                                             checked={can && picked.has(s.name)}
                                             disabled={!can}
                                             onChange={() => toggle(s.name)}
-                                            aria-label={`Add ${s.name}`}
+                                            aria-label={t('settings.skills.link.addAria', { name: s.name })}
                                         />
                                         <span className="skill-row-text">
                                             <span className="skill-row-name">
                                                 {s.name}
                                                 {tag && <span className={`skill-link-tag${s.error ? ' is-bad' : ''}`}>{tag}</span>}
-                                                {s.has_code && <span className="skill-link-tag">code</span>}
-                                                {s.verdict === 'REVIEW' && <span className="skill-link-tag">review</span>}
+                                                {s.has_code && <span className="skill-link-tag">{t('settings.skills.link.tagCode')}</span>}
+                                                {s.verdict === 'REVIEW' && <span className="skill-link-tag">{t('settings.skills.link.tagReview')}</span>}
                                             </span>
-                                            {s.description && <span className="skill-row-desc skill-link-desc" title={s.description}>{s.description}</span>}
+                                            {s.description && <span className="skill-row-desc skill-link-desc" title={s.description}><bdi>{s.description}</bdi></span>}
                                             {hasDetails && (
                                                 <details className="skill-link-findings">
-                                                    <summary>Details</summary>
-                                                    {why && <p>{why}</p>}
-                                                    {s.has_code && !allowCode && <p>Ships code. Tick Include skills with code to add it.</p>}
-                                                    {s.findings.length > 0 && <ul>{s.findings.map((f) => <li key={f}>{f}</li>)}</ul>}
+                                                    <summary>{t('settings.skills.link.details')}</summary>
+                                                    {why && <p><bdi>{why}</bdi></p>}
+                                                    {s.has_code && !allowCode && <p>{t('settings.skills.link.shipsCode')}</p>}
+                                                    {s.findings.length > 0 && <ul>{s.findings.map((f) => <li key={f}><bdi>{f}</bdi></li>)}</ul>}
                                                 </details>
                                             )}
                                         </span>
@@ -198,16 +201,16 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                     </ul>
                     <div className="skill-link-actions">
                         {hasCode && (
-                            <label className="skill-link-code" title="Their scripts can run on this PC with your permissions.">
+                            <label className="skill-link-code" title={t('settings.skills.link.codeHint')}>
                                 <input type="checkbox" checked={allowCode} onChange={(e) => toggleCode(e.target.checked)} />
-                                <span>Include skills with code</span>
+                                <span>{t('settings.skills.link.includeCode')}</span>
                             </label>
                         )}
                         <button type="button" className="btn-secondary" onClick={() => setPreview(null)} disabled={busy !== null}>
-                            Cancel
+                            {t('settings.skills.link.cancel')}
                         </button>
                         <button type="button" className="btn-primary" onClick={() => void add()} disabled={picked.size === 0 || busy !== null}>
-                            {busy === 'add' ? <><Loader2 size={13} className="spin" /> Adding…</> : `Add ${picked.size}`}
+                            {busy === 'add' ? <><Loader2 size={13} className="spin" /> {t('settings.skills.link.adding')}</> : t('settings.skills.link.add', { n: picked.size })}
                         </button>
                     </div>
                 </div>
@@ -215,12 +218,12 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
 
             {result && (
                 <div className="skill-link-result" role="status">
-                    {result.added.length > 0 && <p>{summarize(result)}</p>}
+                    {result.added.length > 0 && <p>{summarize(result, t)}</p>}
                     {Object.keys(result.failed).length > 0 && (
                         <details>
-                            <summary>{Object.keys(result.failed).length} not added</summary>
+                            <summary>{t('settings.skills.link.notAdded', { n: Object.keys(result.failed).length })}</summary>
                             <ul className="grant-list">
-                                {Object.entries(result.failed).map(([name, why]) => <li key={name}><code>{name}</code> — {why}</li>)}
+                                {Object.entries(result.failed).map(([name, why]) => <li key={name}><bdi dir="ltr"><code>{name}</code></bdi> — <bdi>{why}</bdi></li>)}
                             </ul>
                         </details>
                     )}

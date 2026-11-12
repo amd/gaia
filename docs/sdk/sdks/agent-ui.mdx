@@ -3090,6 +3090,33 @@ model with no known price reads as unknown, never $0. Cloud models from
   <Accordion title="DELETE /api/skills/{name}/preferences">
     Forget every saved preference of the skill. Returns `{"skill", "reset"}`.
   </Accordion>
+
+  <Accordion title="GET /api/skills/featured">
+    The skill libraries the Skills panel offers as one-click adds. Returns
+    `{"libraries": [{"id", "name", "url", "description"}]}`.
+  </Accordion>
+
+  <Accordion title="POST /api/skills/link/preview">
+    List and audit the skills behind a pasted link without installing any.
+    Body: `{"url"}`. Returns `{"link", "source", "pin", "warning", "skills":
+    [{"name", "description", "path", "has_code", "verdict", "findings",
+    "installed", "update", "error"}]}`. **400** when the link cannot be read
+    or holds no skill.
+  </Accordion>
+
+  <Accordion title="POST /api/skills/link/add">
+    Add skills behind a link to `~/.gaia/skills`. Body: `{"url", "names",
+    "allow_code", "force", "pin"}`; omit `names` to add every addable skill,
+    and send the preview's `pin` so what lands is what was reviewed. Skills
+    that ship code are refused unless `allow_code` is true. Returns
+    `{"added": [...], "failed": {name: reason}}`. **400** when the link cannot
+    be read or changed since the preview.
+  </Accordion>
+
+  <Accordion title="DELETE /api/skills/{name}">
+    Remove a skill from `~/.gaia/skills`. Returns `{"removed"}`. **404** when
+    no such skill is installed, **400** for a skill that ships with GAIA.
+  </Accordion>
 </AccordionGroup>
 
 ### Hub
