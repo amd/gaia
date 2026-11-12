@@ -15,12 +15,54 @@
     min-width: 0;
 }
 
-/* One width for every state mark, so the info icons line up. */
+/* Name and size on one line; the size never pushes the name out. */
+.popover-item-body.is-inline {
+    flex-direction: row;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.popover-item-meta {
+    flex-shrink: 0;
+    margin-inline-start: auto;
+    color: var(--text-muted);
+    font-size: var(--fs-caption);
+    font-variant-numeric: tabular-nums;
+}
+
+.popover-subheading {
+    padding: 8px 8px 2px;
+    color: var(--text-muted);
+    font-size: var(--fs-caption);
+}
+
+.model-download-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 2px 4px 6px;
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.model-download-confirm-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.model-download-confirm-actions > button {
+    height: 26px;
+    padding: 0 10px;
+    font-size: var(--fs-label);
+}
+
+/* One width for every state mark, so the info icons line up; a translated label may widen it. */
 .popover-row-state {
     display: flex;
     justify-content: center;
     flex-shrink: 0;
-    width: 52px;
+    min-width: 52px;
+    white-space: nowrap;
 }
 
 .popover-item-note.is-warning,

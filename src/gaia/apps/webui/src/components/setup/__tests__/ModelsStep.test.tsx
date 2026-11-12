@@ -172,7 +172,7 @@ describe('Choose your models', () => {
         const onRetryPlan = vi.fn();
         const onUseRecommended = vi.fn();
         render(<Harness plan={null} planError="500" onRetryPlan={onRetryPlan} onUseRecommended={onUseRecommended} />);
-        expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t read the model list from the AI engine: 500');
+        expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t read the model list from the model server: 500');
         fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
         expect(onRetryPlan).toHaveBeenCalledTimes(1);
         fireEvent.click(screen.getByRole('button', { name: 'Use the recommended set' }));
