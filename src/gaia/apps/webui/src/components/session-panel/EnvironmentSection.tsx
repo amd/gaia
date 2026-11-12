@@ -15,6 +15,7 @@ import { requestErrorText } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useInferencePlace, useModelStore, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
+import { useNotificationStore, selectSessionPermissionPrompt } from '../../stores/notificationStore';
 import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { useSessionEnvironment } from '../../hooks/useSessionEnvironment';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
@@ -325,6 +326,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     const [mode, setMode] = useState<PermissionMode | null>(null);
     const [confirming, setConfirming] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const promptWaiting = useNotificationStore((s) => selectSessionPermissionPrompt(sessionId)(s) !== null);
 
     useEffect(() => {
         let live = true;
@@ -372,6 +374,7 @@ function Permission({ sessionId }: { sessionId: string }) {
                 ))}
             </div>
             {note && <span className="sp-meta">{t(note)}</span>}
+            {mode === 'full_access' && promptWaiting && <span className="sp-meta" role="status">{t('perm.fullPendingNote')}</span>}
             {confirming && (
                 <span className="sp-confirm" role="alert">
                     {t('env.fullAccessWarn')}
