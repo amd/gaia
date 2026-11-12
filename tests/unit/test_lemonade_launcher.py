@@ -701,6 +701,7 @@ def test_start_hint_not_installed_on_supported_platform_points_at_gaia_init(
         "gaia.llm.lemonade_launcher.resolve_lemonade",
         return_value=LemonadeTooling(found=False, kind="none"),
     )
+    mocker.patch("gaia.llm.lemonade_client.configured_lemonade_url", return_value=None)
 
     hint = describe_start_hint()
 
@@ -710,6 +711,37 @@ def test_start_hint_not_installed_on_supported_platform_points_at_gaia_init(
             "or set LEMONADE_SERVER_PATH to an existing install."
         )
     )
+
+
+def test_start_hint_chosen_server_not_installed_here_never_points_at_gaia_init(
+    mocker,
+):
+    """A server the user pointed GAIA at isn't fixed by installing one here."""
+    from gaia.llm.lemonade_launcher import (
+        LemonadeTooling,
+        StartHint,
+        describe_start_hint,
+    )
+
+    mocker.patch("platform.system", return_value="Windows")
+    mocker.patch(
+        "gaia.llm.lemonade_launcher.resolve_lemonade",
+        return_value=LemonadeTooling(found=False, kind="none"),
+    )
+    mocker.patch(
+        "gaia.llm.lemonade_client.configured_lemonade_url",
+        return_value="http://localhost:1",
+    )
+
+    hint = describe_start_hint()
+
+    assert hint == StartHint(
+        instruction=(
+            "GAIA is set to use the Lemonade Server at http://localhost:1, which "
+            "GAIA doesn't run. Start it where it runs, then retry."
+        )
+    )
+    assert "gaia init" not in hint.instruction
 
 
 def test_start_hint_instruction_embeds_the_command_verbatim(mocker):

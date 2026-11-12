@@ -7,7 +7,7 @@ import { SetupSettings } from '../SetupSettings';
 import * as api from '../../../services/api';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
-import type { ActiveModel, SetupPlan } from '../../../types';
+import type { ActiveModel, SetupPlan, SystemStatus } from '../../../types';
 
 vi.mock('../../../services/api');
 const mockedApi = vi.mocked(api);
@@ -27,6 +27,7 @@ beforeEach(() => {
     mockedApi.getSetupPlan.mockResolvedValue(plan);
     mockedApi.getOnboardingPreflight.mockResolvedValue({ gpu_name: 'Radeon', npu_detected: false, ram_gb: 64 } as never);
     useModelStore.setState({ active: null });
+    useChatStore.setState({ systemStatus: null });
 });
 
 describe('SetupSettings', () => {
@@ -55,6 +56,14 @@ describe('SetupSettings', () => {
         fireEvent.click(screen.getByRole('button', { name: /GPU memory/ }));
         expect(useChatStore.getState().settingsJump?.target).toBe('#settings-gpu-title');
         expect(useChatStore.getState().settingsProvider).toBe('local');
+    });
+
+    it('says the model server is not answering instead of Ready while it is down', async () => {
+        useChatStore.setState({ systemStatus: { lemonade_running: false } as SystemStatus });
+        render(<SetupSettings />);
+        expect(await screen.findByText('The model server isn’t answering')).toBeTruthy();
+        expect(screen.queryByText('Ready')).toBeNull();
+        expect(screen.queryByText(/^Running /)).toBeNull();
     });
 
     it('counts only the models the plan says are on this PC', async () => {

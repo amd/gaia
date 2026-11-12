@@ -27,6 +27,8 @@ export function SetupSettings() {
     const closeSettings = useChatStore((s) => s.closeSettings);
     const runSetupAgain = useChatStore((s) => s.runSetupAgain);
     const active = useModelStore((s) => s.active);
+    // Every chat, cloud ones included, goes through the model server.
+    const serverDown = useChatStore((s) => s.systemStatus?.lemonade_running === false);
     const [plan, setPlan] = useState<SetupPlan | null>(null);
     const [hardware, setHardware] = useState<PreflightReport | null>(null);
     const [error, setError] = useState<string | null>(null);
@@ -82,10 +84,17 @@ export function SetupSettings() {
             <h2 className="settings-pane-title">{t('settings.section.setup')}</h2>
             <p className="settings-hint">{t('settings.setup.lede')}</p>
             <div className="settings-setup-status">
-                <span>
-                    <strong>{t('settings.setup.ready')}</strong>
-                    {chatName && <span className="settings-hint"> <bdi>{t('settings.setup.running', { name: chatName })}</bdi></span>}
-                </span>
+                {serverDown ? (
+                    <span role="status">
+                        <strong>{t('settings.setup.serverDown')}</strong>
+                        <span className="settings-hint"> {t('settings.setup.serverDownHint')}</span>
+                    </span>
+                ) : (
+                    <span>
+                        <strong>{t('settings.setup.ready')}</strong>
+                        {chatName && <span className="settings-hint"> <bdi>{t('settings.setup.running', { name: chatName })}</bdi></span>}
+                    </span>
+                )}
                 <button type="button" className="btn-secondary" data-testid="setup-run-again" onClick={() => setAsking(true)}>
                     {t('settings.setup.runAgain')}
                 </button>

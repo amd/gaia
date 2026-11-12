@@ -172,7 +172,7 @@ describe('AdvancedSettings', () => {
         render(<AdvancedSettings />);
 
         expect(await screen.findByText('Not Installed')).toBeInTheDocument();
-        expect(screen.getByText('Set it up to run models on this PC. Cloud providers still work.')).toBeInTheDocument();
+        expect(screen.getByText('Set it up to run models on this PC. Cloud models need it too.')).toBeInTheDocument();
         expect(screen.queryByText(/normally starts on its own/)).not.toBeInTheDocument();
         // The first sits on the status card; the closed server section carries another.
         fireEvent.click(screen.getAllByRole('button', { name: 'Set up local models' })[0]);
