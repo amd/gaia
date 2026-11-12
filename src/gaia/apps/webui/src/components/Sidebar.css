@@ -253,6 +253,15 @@
     pointer-events: auto;
 }
 
+/* While renaming they stay beside the name box, so they never cover what is typed. */
+.sb-row-actions.is-editing {
+    position: static;
+    padding-inline-start: 0;
+    background: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+}
+
 .sb-row-main {
     display: flex;
     align-items: center;

@@ -244,7 +244,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                     </Popover>
                 </>
             )) : (
-                <span className="sb-row-actions">
+                <span className={`sb-row-actions${editing ? ' is-editing' : ''}`}>
                     {!editing && (
                         <button
                             type="button"
