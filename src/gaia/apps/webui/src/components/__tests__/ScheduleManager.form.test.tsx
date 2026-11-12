@@ -6,10 +6,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIRM_DELETE_MS, ScheduleManager } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
-import { ApiError, parseScheduleInput } from '../../services/api';
+import { ApiError } from '../../services/api';
+import { parseScheduleInput } from '../../services/scheduleApi';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const schedule: Schedule = {
     id: 'id-1',

@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { fireEvent, render, screen } from '@testing-library/react';
-import * as api from '../../services/api';
+import * as api from '../../services/scheduleApi';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleManager } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 beforeEach(() => {
     useChatStore.setState({ showSchedules: true });

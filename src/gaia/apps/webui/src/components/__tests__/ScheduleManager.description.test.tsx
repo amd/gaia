@@ -6,12 +6,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ScheduleManager, describeSchedule } from '../ScheduleManager';
 import { useChatStore } from '../../stores/chatStore';
 import { useScheduleStore } from '../../stores/scheduleStore';
-import { parseScheduleInput } from '../../services/api';
+import { parseScheduleInput } from '../../services/scheduleApi';
 import { stripIsolates } from '../../i18n/registry';
 import { translator } from '../../i18n/useT';
 import type { ParsedSchedule, Schedule, ScheduleDescription } from '../../types';
 
 vi.mock('../../services/api');
+vi.mock('../../services/scheduleApi');
 
 const parts = (p: Partial<ScheduleDescription> & Pick<ScheduleDescription, 'kind'>): ScheduleDescription => ({
     count: null, unit: null, days: null, time: null, start_hour: null, end_hour: null, ...p,

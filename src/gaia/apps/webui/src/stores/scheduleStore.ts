@@ -5,7 +5,7 @@
 
 import { create } from 'zustand';
 import type { Schedule, ScheduleResult } from '../types';
-import * as api from '../services/api';
+import * as api from '../services/scheduleApi';
 import { getT } from '../i18n/useT';
 import { log } from '../utils/logger';
 import { useNotificationStore } from './notificationStore';
