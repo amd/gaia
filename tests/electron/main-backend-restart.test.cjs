@@ -213,6 +213,11 @@ test("a crashed window is offered a reload; GAIA keeps running", () => {
   expect(body).toMatch(/contents !== mainWindow\.webContents[\s\S]{0,200}_fatalHandler\(/);
   // Reload builds the URL afresh, so a backend restarted on a new port is reached.
   expect(body).toMatch(/choice === "reload"[\s\S]{0,120}await loadApp\(\)/);
+  // A reload that fails is logged, not turned into the stack-trace crash box: a page
+  // that dies again while loading fires render-process-gone, which asks again.
+  const reload = body.slice(body.indexOf('choice === "reload"'), body.indexOf("} else {"));
+  expect(reload).toMatch(/try \{\s*await loadApp\(\);\s*\} catch \(err\) \{[\s\S]*console\.error\(/);
+  expect(reload).not.toMatch(/_fatalHandler\(/);
   // Quit goes through the quit guard, which asks about work still running.
   expect(body).toMatch(/app\.quit\(\)/);
   expect(body).not.toMatch(/fatalQuitting = true/);

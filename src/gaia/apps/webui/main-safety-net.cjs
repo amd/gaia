@@ -105,7 +105,8 @@ const FATAL_EXIT_GRACE_MS = 25000;
  * @param {number}   [opts.exitGraceMs] - Override for FATAL_EXIT_GRACE_MS.
  * @param {Function} [opts.onRendererGone] - Called with (webContents, details)
  *   when a window's page dies while GAIA runs on, e.g. to offer a reload.
- *   Without it, or if it throws, the crash is fatal.
+ *   Without it, or if it throws synchronously, the crash is fatal; an async
+ *   handler must handle its own failures.
  */
 function installSafetyNet({
   logPath,

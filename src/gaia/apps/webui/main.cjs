@@ -584,7 +584,12 @@ async function handleRendererGone(contents, { reason }) {
     console.log(`[main] Window stopped working (${reason}): user chose ${choice}`);
     if (choice === "reload") {
       // Built afresh, so a backend restarted on a new port is the one it reaches.
-      await loadApp();
+      try {
+        await loadApp();
+      } catch (err) {
+        // A page that dies again while loading fires render-process-gone, which asks again.
+        console.error(`[main] Reload after window crash failed: ${err.stack || err}`);
+      }
     } else {
       app.quit();
     }
