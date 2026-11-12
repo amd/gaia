@@ -429,7 +429,7 @@ private:
         cfg.baseUrl = getEnvVar("LEMONADE_BASE_URL", defaultBaseUrl());
         cfg.modelId = opts_.defaultModel.empty() ? "Gemma-4-E4B-it-GGUF" : opts_.defaultModel;
         cfg.contextSize = 32768;
-        cfg.maxTokens = 8192;
+        cfg.maxTokens = 16384;
         cfg.temperature = 0.2;
         cfg.silentMode = true;
         cfg.streaming = true;
@@ -438,8 +438,14 @@ private:
         cfg.apiKey = lemonadeKey_;
         GaiaAgent::Options o;
         if (s.roots.empty()) {
-            const std::string home = getEnvVar("USERPROFILE", getEnvVar("HOME"));
-            o.workspaceRoots = {home.empty() ? fs::current_path().string() : home};
+            // Roots are UTF-8; the environment's narrow strings are the code page on Windows.
+#ifdef _WIN32
+            const wchar_t* profile = _wgetenv(L"USERPROFILE");
+            const fs::path home = profile ? fs::path(profile) : fs::path();
+#else
+            const fs::path home = fs::u8path(getEnvVar("HOME"));
+#endif
+            o.workspaceRoots = {(home.empty() ? fs::current_path() : home).u8string()};
         } else {
             o.workspaceRoots.assign(s.roots.begin(), s.roots.end());
         }

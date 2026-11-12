@@ -559,6 +559,44 @@ std::vector<ToolCall> parseToolCallsArray(const json& arr) {
     return calls;
 }
 
+UsageStats extractUsage(const json& responseJson);
+
+/// What a streamed reply's events say beyond its text.
+struct StreamSummary {
+    UsageStats usage;          // sent in the last event when the request asks for it
+    std::string finishReason;  // "stop", "length", "tool_calls"
+    bool reasoned = false;     // the model sent reasoning, whether or not it answered
+};
+
+StreamSummary summarizeStream(const std::string& raw) {
+    StreamSummary summary;
+    for (size_t pos = 0; pos < raw.size();) {
+        size_t end = raw.find('\n', pos);
+        if (end == std::string::npos) end = raw.size();
+        const std::string line = raw.substr(pos, end - pos);
+        pos = end + 1;
+        if (line.rfind("data:", 0) != 0) continue;
+        const json event = json::parse(line.substr(5), nullptr, false);
+        if (!event.is_object()) continue;
+        if (event.contains("usage") && event["usage"].is_object()) summary.usage = extractUsage(event);
+        const auto choices = event.find("choices");
+        if (choices == event.end() || !choices->is_array() || choices->empty()) continue;
+        const json& choice = (*choices)[0];
+        if (!choice.is_object()) continue;
+        const auto finish = choice.find("finish_reason");
+        if (finish != choice.end() && finish->is_string()) summary.finishReason = finish->get<std::string>();
+        const auto delta = choice.find("delta");
+        if (delta == choice.end() || !delta->is_object()) continue;
+        for (const char* key : {"reasoning_content", "reasoning"}) {
+            const auto text = delta->find(key);
+            if (text != delta->end() && text->is_string() && !text->get_ref<const std::string&>().empty()) {
+                summary.reasoned = true;
+            }
+        }
+    }
+    return summary;
+}
+
 UsageStats extractUsage(const json& responseJson) {
     UsageStats usage;
     if (responseJson.contains("usage") && responseJson["usage"].is_object()) {
@@ -653,10 +691,7 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
         if (!streamedToolCalls.empty()) {
             validateStreamedToolCalls(streamedToolCalls);
             if (!accumulated.empty()) console_->printStreamEnd();
-            UsageStats usage;
-            try {
-                usage = extractUsage(json::parse(rawResponse));
-            } catch (...) {}
+            const UsageStats usage = summarizeStream(rawResponse).usage;
             if (cfg.debug) {
                 std::cerr << "[LLM] streamed tool_calls=" << streamedToolCalls.size() << std::endl;
             }
@@ -665,14 +700,7 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
 
         if (!accumulated.empty()) {
             console_->printStreamEnd();
-            // Streaming responses may include usage in the final chunk;
-            // attempt to extract from the raw bytes.
-            UsageStats usage;
-            try {
-                const json responseJson = json::parse(rawResponse);
-                usage = extractUsage(responseJson);
-            } catch (...) {}
-            return {accumulated, usage, {}};
+            return {accumulated, summarizeStream(rawResponse).usage, {}};
         }
 
         // Fallback: server returned a non-streaming response despite "stream":true.
@@ -705,7 +733,16 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
             } catch (...) {}
         }
 
-        throw std::runtime_error("Streaming response contained no tokens");
+        const StreamSummary summary = summarizeStream(rawResponse);
+        if (summary.finishReason == "length") {
+            throw std::runtime_error(
+                "The model reached its reply limit of " + std::to_string(cfg.maxTokens) +
+                " tokens before giving an answer" +
+                (summary.reasoned ? " (its reasoning used the whole limit)" : "") +
+                ". Raise maxTokens (--max-tokens) or ask for a shorter answer.");
+        }
+        throw UnreadableLlmReply(summary.reasoned ? "The model sent reasoning but no answer"
+                                                  : "Streaming response contained no tokens");
     }
 
     // ---- Non-streaming path ----
