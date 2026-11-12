@@ -69,6 +69,8 @@ export const enMessages = {
     'modelStatus.pillAria.stopped': '{text}, model stopped',
     'modelStatus.sentTo': 'Chat history is sent to {name}',
     'modelStatus.runsHere': 'Runs on this PC',
+    'modelStatus.local': 'Local',
+    'modelStatus.localNotice': 'Using {model} on this machine. GAIA is not sending this conversation to any cloud provider.',
     'modelStatus.label': 'Model status',
     'modelStatus.checking': 'Checking the model…',
     'modelStatus.state.loaded': 'Loaded',
