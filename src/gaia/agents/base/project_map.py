@@ -478,13 +478,15 @@ def working_directory_line(workspace: Optional[str] = None) -> str:
     )
 
 
-def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
+def resolve_project_root(
+    explicit: Optional[str] = None, start: Optional[str] = None
+) -> Optional[str]:
     """The project this task is about, or ``None`` when there isn't one.
 
-    Order: *explicit* argument, then ``GAIA_PROJECT_ROOT``, then the working
-    directory or the nearest repository above it — searching upward until the
-    home directory or the filesystem root, and never
-    :func:`is_agent_own_source`.
+    Order: *explicit* argument, then ``GAIA_PROJECT_ROOT``, then *start* (the
+    session's working directory, else the process's) or the nearest repository
+    above it — searching upward until the home directory or the filesystem
+    root, and never :func:`is_agent_own_source`.
 
     ``None`` is a real answer, not a degraded one — an agent answering questions
     from a home directory is not in a project, and inventing a map of ``~``
@@ -503,7 +505,7 @@ def resolve_project_root(explicit: Optional[str] = None) -> Optional[str]:
             )
         return str(path.resolve())
 
-    cwd = Path.cwd().resolve()
+    cwd = Path(start).expanduser().resolve() if start else Path.cwd().resolve()
     home = Path.home().resolve()
     # Walk to the home directory or the filesystem root, the way git does. A
     # fixed depth cap looks safe and silently skips the map on ordinary trees:
@@ -855,8 +857,11 @@ class ProjectMapMixin:
         never end up describing two different trees after a ``chdir``.
         """
         if not hasattr(self, "_project_map_root_cache"):
+            from gaia.agents.tools.workspace_paths import _workspace_default
+
             explicit = getattr(getattr(self, "config", None), "project_root", None)
-            root = resolve_project_root(explicit)
+            # A daemon-spawned sidecar's cwd is the daemon's; the client's folder wins.
+            root = resolve_project_root(explicit, start=_workspace_default(self))
             in_scope = getattr(
                 getattr(self, "path_validator", None), "in_env_scope", None
             )
