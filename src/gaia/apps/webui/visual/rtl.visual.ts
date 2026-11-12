@@ -499,6 +499,28 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`the latest answer's actions sit under its text, at the start edge (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const answer = page.locator('.msg-assistant').last();
+        await expect(answer).toContainText('Action items from Aug 28');
+        const actions = answer.locator('.msg-actions');
+        await expect(actions).toHaveCSS('opacity', '1');
+        const [row, body] = [await actions.boundingBox(), await answer.locator('.msg-body').boundingBox()];
+        expect(row!.y).toBeGreaterThanOrEqual(body!.y + body!.height - 1);
+        const startGap = locale === 'ar'
+            ? Math.abs(row!.x + row!.width - (body!.x + body!.width))
+            : Math.abs(row!.x - body!.x);
+        expect(startGap).toBeLessThan(8);
+        for (const button of await actions.locator('button').all()) {
+            const box = await button.boundingBox();
+            expect(Math.min(box!.width, box!.height)).toBeGreaterThanOrEqual(28);
+        }
+        expect(await audit(page)).toEqual([]);
+        await answer.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
