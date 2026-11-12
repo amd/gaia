@@ -142,6 +142,21 @@ SAVE_CLAIMS = [
         "No files were saved other than results.csv.",
         id="negated-subject-other-than",
     ),
+    # The exception after a comma, past "else", or ahead of the denial.
+    pytest.param(
+        "I saved nothing, except the summary to `out/summary.md`.",
+        id="nothing-comma-except",
+    ),
+    pytest.param("I wrote nothing else besides `out/r.md`.", id="nothing-else-besides"),
+    pytest.param("I created no other file than `out/r.md`.", id="no-other-file-than"),
+    pytest.param("I saved nothing else but `out/r.md`.", id="nothing-else-but"),
+    pytest.param(
+        "Apart from `out/report.md`, no file was written.",
+        id="exception-before-negated-subject",
+    ),
+    pytest.param(
+        "Except for `out/r.md`, I saved nothing.", id="exception-before-negated-object"
+    ),
     # A file in the verb's own clause beats a remembered-value reading.
     pytest.param(
         "Here's the `summary` I saved to `out/summary.md`.",

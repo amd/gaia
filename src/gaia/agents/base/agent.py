@@ -2093,8 +2093,10 @@ _SAVE_EXCEPTION = (
 )
 _SAVE_EXCEPTION_PATTERN = re.compile(rf"\b{_SAVE_EXCEPTION}\b", re.IGNORECASE)
 # "I wrote no file", "I saved nothing": so does its object.
+# "I saved nothing else than r.md": "but" or "than" after it names a save.
 _NEGATED_OBJECT_PATTERN = re.compile(
-    rf"\s+{_NEGATED_OUTPUT}\b(?!\s+(?:but|{_SAVE_EXCEPTION})\b)", re.IGNORECASE
+    rf"\s+{_NEGATED_OUTPUT}\b(?!(?:\s+(?:else|other))?\s+(?:but|than)\b)",
+    re.IGNORECASE,
 )
 
 
@@ -2154,15 +2156,20 @@ def _is_write_claim(sentence: str, denials: bool) -> bool:
     *denials* (a turn that asked for a save) reads every write verb as a
     claim, a remembered value included: the save is owed either way.
     """
+    # An exception anywhere ("Apart from r.md, no file was written",
+    # "I saved nothing, except r.md") names a save the denial leaves out.
+    excepted = _SAVE_EXCEPTION_PATTERN.search(sentence) is not None
     return any(
         denials
         or (
             not _describes_a_remembered_value(sentence, match)
-            and not (
-                _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
-                and not _SAVE_EXCEPTION_PATTERN.search(sentence, match.end())
+            and (
+                excepted
+                or not (
+                    _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
+                    or _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
+                )
             )
-            and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
         )
         for pattern in _FILE_WRITE_CLAIM_PATTERNS
         for match in pattern.finditer(sentence)
