@@ -12,9 +12,9 @@ time** — both are published artifacts it downloads and verifies. The terminal 
 is the published `terminal-hub` component, the same binary a full GAIA install
 runs as `gaia-tui`, so its behaviour cannot differ from that one. By default everything
 runs on the local machine against a local model server, and nothing you type or index
-leaves it. If you pick a cloud provider (Fireworks AI or the AMD LLM Gateway in the
-terminal UI, or `provider: "claude"` on `/query`), the conversation is sent to that
-provider.
+leaves it. If you pick a cloud provider (Fireworks AI, the AMD LLM Gateway or Claude
+in the terminal UI, or `provider: "claude"` on `/query`), the conversation is sent to
+that provider.
 
 Two ways in:
 
