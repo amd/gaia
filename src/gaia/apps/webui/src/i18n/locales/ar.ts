@@ -200,6 +200,16 @@ const messages: Messages = {
     'newChat.docs.attachIt': 'إرفاقه',
     'newChat.docs.attachAll': 'إرفاق المستندات كلها ({n})',
     'newChat.docs.choose': 'اختيار',
+
+    // مجلدات المحادثة الجديدة
+    'folderChip.add': 'إضافة مجلد',
+    'folderChip.addHint': 'أضف مجلدًا يمكن لهذه المحادثة القراءة منه والكتابة فيه.',
+    'folderChip.worksIn': 'يعمل GAIA في {path}.',
+    'folderChip.worksInOwn': 'يعمل GAIA في مجلده الخاص، {path}.',
+    'folderChip.gaiaFolder': 'مجلد GAIA',
+    'folderChip.ownFixedHint': 'أرفق ملفًا أو شغّل GAIA من مجلد مشروع للعمل هناك.',
+    'folderChip.picked': 'يمكن لهذه المحادثة القراءة من {path} والكتابة فيه.',
+    'folderChip.remove': 'لا تمنح هذه المحادثة {name}',
     'newChat.setupFailed.title': 'لم يكتمل الإعداد الأولي لـ GAIA، لذا ستفشل المحادثة التي تستخدم نموذج هذا الجهاز.',
     'newChat.setupFailed.hint': 'استخدم نموذجًا سحابيًا، أو اختر نموذجًا أصغر.',
     'newChat.setupFailed.choose': 'اختيار نموذج',

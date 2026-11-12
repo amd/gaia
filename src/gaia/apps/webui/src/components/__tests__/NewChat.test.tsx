@@ -281,13 +281,14 @@ describe('NewChat empty state', () => {
         expect(container.querySelector('.composer')).not.toContainElement(chip);
     });
 
-    it("says when GAIA works in its own folder", async () => {
+    it("names no folder when GAIA works in its own, and says what Add a folder does", async () => {
         vi.mocked(api.getStartScreen).mockResolvedValue({
             ...START, working_folder: { path: '/home/u/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true },
         });
         render(<NewChat onSend={vi.fn()} />);
-        const chip = (await screen.findByText('documents')).parentElement!;
-        expect(chip.getAttribute('title')).toMatch(/its own folder/);
+        const add = await screen.findByRole('button', { name: 'Add a folder' });
+        expect(add.getAttribute('title')).toMatch(/its own folder, \/home\/u\/\.gaia\/documents\. Add a folder this chat can read and write\./);
+        expect(screen.queryByText('documents')).not.toBeInTheDocument();
     });
 
     it('picks a folder for the chat from the folder chip, and drops it again', async () => {
@@ -300,20 +301,21 @@ describe('NewChat empty state', () => {
         }).mockResolvedValueOnce({ current_path: '/home/u/site', parent_path: '/home/u', entries: [], quick_links: [] });
         render(<NewChat onSend={vi.fn()} />);
 
-        fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
         fireEvent.click(await screen.findByRole('button', { name: 'site' }));
         await screen.findByText('No folders inside.');
         fireEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
 
         expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-        const chip = screen.getByRole('button', { name: 'Folder for this chat: my-project, plus site' });
-        // Picking adds a folder; the working folder stays in the label.
-        expect(chip).toHaveTextContent('my-project + site');
+        // Picking adds a folder as its own chip; the working folder stays beside it.
+        expect(screen.getByText('site').parentElement).toHaveAttribute('title', 'This chat can read and write /home/u/site.');
+        expect(screen.getByText('my-project')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Add a folder' })).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: "Don't give this chat site" }));
         expect(useChatStore.getState().draftFolder).toBeNull();
-        expect(screen.getByRole('button', { name: 'Folder for this chat: my-project' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Add a folder' })).toBeInTheDocument();
     });
 
     describe('in the desktop app', () => {
@@ -330,9 +332,9 @@ describe('NewChat empty state', () => {
             pickFolder.mockResolvedValue('/home/u/site');
             render(<NewChat onSend={vi.fn()} />);
 
-            fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
 
-            expect(await screen.findByRole('button', { name: 'Folder for this chat: my-project, plus site' })).toBeInTheDocument();
+            expect(await screen.findByRole('button', { name: "Don't give this chat site" })).toBeInTheDocument();
             expect(pickFolder).toHaveBeenCalledWith('/home/u/my-project');
             expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -343,7 +345,7 @@ describe('NewChat empty state', () => {
             pickFolder.mockResolvedValue(null);
             render(<NewChat onSend={vi.fn()} />);
 
-            fireEvent.click(await screen.findByRole('button', { name: 'Folder for this chat: my-project' }));
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
 
             await waitFor(() => expect(pickFolder).toHaveBeenCalledTimes(1));
             expect(useChatStore.getState().draftFolder).toBeNull();
@@ -356,7 +358,7 @@ describe('NewChat empty state', () => {
         render(<NewChat onSend={vi.fn()} />);
 
         expect(await screen.findByText('my-project')).toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: /Folder for this chat/ })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Add a folder' })).not.toBeInTheDocument();
     });
 
     it('starts with text handed over from setup', () => {

@@ -434,6 +434,19 @@ test('new chat', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['en', 'ar']) {
+    test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
+            json: { cards: [], working_folder: { path: '/home/you/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true } },
+        })));
+        const add = page.locator('.new-chat-meta button.new-chat-folder');
+        await expect(add).toBeVisible();
+        await expect(page.locator('.new-chat-meta')).not.toContainText('documents');
+        await shot(page, `new-chat-add-folder-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
         test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {

@@ -200,6 +200,16 @@ export const enMessages = {
     'newChat.docs.attachIt': 'Attach it',
     'newChat.docs.attachAll': 'Attach all {n}',
     'newChat.docs.choose': 'Choose',
+
+    // The new chat's folders
+    'folderChip.add': 'Add a folder',
+    'folderChip.addHint': 'Add a folder this chat can read and write.',
+    'folderChip.worksIn': 'GAIA works in {path}.',
+    'folderChip.worksInOwn': 'GAIA works in its own folder, {path}.',
+    'folderChip.gaiaFolder': "GAIA's folder",
+    'folderChip.ownFixedHint': 'Attach a file or start GAIA from a project folder to work there.',
+    'folderChip.picked': 'This chat can read and write {path}.',
+    'folderChip.remove': "Don't give this chat {name}",
     'newChat.setupFailed.title': 'GAIA’s first-run setup didn’t finish, so a chat on this PC’s model will fail.',
     'newChat.setupFailed.hint': 'Use a cloud model, or pick a smaller one.',
     'newChat.setupFailed.choose': 'Choose a model',
