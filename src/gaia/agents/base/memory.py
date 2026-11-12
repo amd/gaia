@@ -81,6 +81,7 @@ from gaia.agents.base.memory_store import (
     MemoryContentError,
     MemoryScrubError,
     content_stems,
+    fact_words,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.agents.base.tool_outcome import (
@@ -99,6 +100,7 @@ from gaia.llm.lemonade_client import (
     backend_crash_remedy,
     configured_lemonade_url,
     find_model_requirement,
+    reasoning_headroom,
 )
 from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
@@ -440,9 +442,9 @@ def _forget_shared(words: set, content: str) -> set:
     }
 
 
-def _forget_text(item: Dict) -> str:
-    """*item*'s words in order, for telling copies of one memory apart."""
-    return " ".join(re.findall(r"[a-z0-9]+", str(item.get("content", "")).lower()))
+def _forget_text(item: Dict) -> Tuple[str, ...]:
+    """*item*'s words bar filler, for telling copies of one memory apart."""
+    return fact_words(str(item.get("content", "")))
 
 
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
@@ -3514,7 +3516,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     messages=[{"role": "user", "content": prompt}],
                     system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
                     temperature=0.1,
-                    max_tokens=256,
+                    max_tokens=256
+                    + reasoning_headroom(getattr(self.chat, "effective_model", None)),
                     **self._side_request_kwargs(),
                 )
 
@@ -3591,11 +3594,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                         e,
                     )
 
-            except json.JSONDecodeError:
-                logger.debug(
-                    "[MemoryMixin] reconciliation JSON parse failed for pair %s/%s",
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "[MemoryMixin] reconciliation reply for pair %s/%s was not JSON "
+                    "(%s) — it will be re-checked next startup",
                     id_a[:8],
                     id_b[:8],
+                    e,
                 )
             except Exception as e:
                 logger.debug(
@@ -6185,15 +6190,18 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Remove one memory: its ID from recall, or the user's words for it (e.g. 'allergic to shellfish'). Words erase only the one memory they clearly match; otherwise nothing is erased and the matching IDs come back. To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
+            ctx = mixin._memory_context
+            contexts = None if ctx == "global" else (ctx, "global")
             try:
                 # forget(), not delete(): extraction must not learn it again.
-                removed = mixin._memory_store.forget(knowledge_id)
+                erased_ids = mixin._memory_store.forget_with_copies(
+                    knowledge_id, contexts
+                )
             except ValueError as exc:
                 return {"status": "error", "message": str(exc)}
             matches: List[Dict] = []
             candidates: List[Dict] = []
-            erased_ids = [knowledge_id] if removed else []
-            if not removed:
+            if not erased_ids:
                 description = knowledge_id
                 try:
                     matches, candidates = mixin._forget_lookup(description)
@@ -6209,8 +6217,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "display_message": "Couldn't search memory, so nothing was erased",
                     }
                 for item in matches:
-                    if mixin._memory_store.forget(item["id"]):
-                        erased_ids.append(item["id"])
+                    if item["id"] not in erased_ids:
+                        erased_ids += mixin._memory_store.forget_with_copies(
+                            item["id"], contexts
+                        )
             if erased_ids:
                 for kid in erased_ids:
                     mixin._faiss_remove(kid)

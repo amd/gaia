@@ -298,7 +298,7 @@ uv run python -m gaia.mcp.servers.agent_ui_mcp --host 0.0.0.0 --allow-remote
                               └──────────┘ └──────────┘ └──────────┘
 ```
 
-The MCP server is a thin wrapper around the Agent UI REST API. When you call `send_message`, it streams the response via SSE (Server-Sent Events) from the backend, collects tool outputs and agent steps, and returns the complete result. The web UI receives the same SSE events simultaneously, so you see real-time activity in the browser.
+The MCP server is a thin wrapper around the Agent UI REST API. When you call `send_message`, it streams the response via SSE (Server-Sent Events) from the backend, collects tool outputs and agent steps, and returns the complete result. If the turn failed, the result also carries `"status": "error"` and the reason in `"detail"`. The web UI receives the same SSE events simultaneously, so you see real-time activity in the browser.
 
 ---
 
