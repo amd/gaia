@@ -221,6 +221,9 @@ std::string toolCall(const std::string& name, const json& args) {
 
 std::string answer(const std::string& text) { return reply({{"role", "assistant"}, {"content", text}}); }
 
+const std::string kStopNote =
+    "(The user stopped this reply before it finished. Don't continue it unless they ask again.)";
+
 std::string sse(const std::vector<std::string>& deltas) {
     std::string raw;
     for (const auto& d : deltas) {
@@ -928,6 +931,64 @@ TEST_F(GaiacppStdio, CancelDuringAModelCallEndsTheTurn) {
     const json next = waitTerminal(2);
     ASSERT_TRUE(next.is_object());
     EXPECT_EQ(next["answer"], "Back.");
+}
+
+TEST_F(GaiacppStdio, ARequestCancelledDuringAModelCallIsNotPendingOnTheNextTurn) {
+    Release release;
+    mock_.holdNextResponse(release.promise.get_future().share());
+    start();
+    ask("write a long essay about rivers");
+    ASSERT_TRUE(waitRequests(mock_, 1));
+    control({{"gaia_control", "cancel"}});
+    ASSERT_TRUE(logBuf_.waitForText("stopping the running turn"));
+    release.now();
+    ASSERT_TRUE(waitTerminal(1).is_object());
+
+    mock_.pushResponse(answer("4"));
+    ask("what is 2 + 2?");
+    const json next = waitTerminal(2);
+    ASSERT_TRUE(next.is_object());
+    EXPECT_EQ(next["answer"], "4");
+
+    const json messages = json::parse(mock_.receivedBodies().at(1))["messages"];
+    ASSERT_EQ(messages.size(), 4u) << messages.dump(2);
+    EXPECT_EQ(messages[1]["role"], "user");
+    EXPECT_EQ(messages[1]["content"], "write a long essay about rivers");
+    EXPECT_EQ(messages[2]["role"], "assistant");
+    EXPECT_FALSE(messages[2].contains("tool_calls"));
+    const std::string stopped = messages[2]["content"];
+    ASSERT_GE(stopped.size(), kStopNote.size());
+    EXPECT_EQ(stopped.substr(stopped.size() - kStopNote.size()), kStopNote) << stopped;
+    EXPECT_EQ(messages[3]["role"], "user");
+    EXPECT_EQ(messages[3]["content"], "what is 2 + 2?");
+}
+
+TEST_F(GaiacppStdio, ACancelDuringAToolStepLeavesAValidConversationForTheNextTurn) {
+    const fs::path out = work_ / "out.txt";
+    mock_.pushResponse(toolCall("file_write", {{"path", out.string()}, {"content", "hi"}}));
+    start();
+    ask("write it");
+    ASSERT_TRUE(waitFor("needs_confirmation").is_object());
+    control({{"gaia_control", "cancel"}});
+    ASSERT_TRUE(waitTerminal(1).is_object());
+    EXPECT_FALSE(fs::exists(out));
+
+    mock_.pushResponse(answer("4"));
+    ask("what is 2 + 2?");
+    const json next = waitTerminal(2);
+    ASSERT_TRUE(next.is_object());
+    EXPECT_EQ(next["answer"], "4");
+
+    const json messages = json::parse(mock_.receivedBodies().at(1))["messages"];
+    std::vector<std::string> roles;
+    for (const auto& m : messages) roles.push_back(m.value("role", ""));
+    ASSERT_EQ(roles, (std::vector<std::string>{"system", "user", "assistant", "tool", "assistant", "user"}))
+        << messages.dump(2);
+    ASSERT_EQ(messages[2]["tool_calls"].size(), 1u);
+    EXPECT_EQ(messages[3]["tool_call_id"], messages[2]["tool_calls"][0]["id"]);
+    EXPECT_EQ(messages[4]["content"], kStopNote);
+    EXPECT_FALSE(messages[4].contains("tool_calls"));
+    EXPECT_EQ(messages[5]["content"], "what is 2 + 2?");
 }
 
 TEST_F(GaiacppStdio, ACancelForAQueryNotStartedYetEndsItWithoutRunningIt) {
@@ -1956,7 +2017,9 @@ TEST_F(GaiacppStdioBinary, CancelEndsARunningShellCommandOverPipes) {
 }
 
 TEST_F(GaiacppStdioBinary, ATurnInAFolderWithANonAsciiNameRunsShellCommandsAndReads) {
-    const std::string cafe = "caf\xc3\xa9 notes", nihon = "\xe6\x97\xa5\xe6\x9c\xac data";
+    // Cyrillic is outside the Western code page, where a narrow path fails.
+    const std::string cafe = "\xd0\xbf\xd1\x80\xd0\xbe\xd0\xb5\xd0\xba\xd1\x82 caf\xc3\xa9",
+                      nihon = "\xe6\x97\xa5\xe6\x9c\xac data";
     const fs::path folder = dir_ / fs::u8path(cafe);
     fs::create_directories(folder);
     fs::create_directories(dir_ / fs::u8path(nihon));

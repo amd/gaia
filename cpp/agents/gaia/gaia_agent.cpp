@@ -280,6 +280,13 @@ const std::string& pythonCommand() {
 }
 }  // namespace
 
+void GaiaAgent::onTurnStart() {
+    std::error_code ec;
+    std::string listing = folderListing(fs::current_path(ec));
+    std::lock_guard<std::mutex> lock(turnListingMu_);
+    turnListing_ = std::move(listing);
+}
+
 std::string GaiaAgent::systemContext() const {
     std::ostringstream out;
     out << "\n\n## Environment\n";
@@ -287,9 +294,13 @@ std::string GaiaAgent::systemContext() const {
     // UTF-8, not the code page: the prompt goes into a JSON request body.
     out << "- Working directory: " << fs::current_path(ec).u8string() << "\n";
     // A small model guesses at file names and concludes a file is missing; this shows it what is there.
-    if (const std::string listing = folderListing(fs::current_path(ec)); !listing.empty()) {
-        out << "- In it when this turn began: " << listing << "\n";
+    std::optional<std::string> listing;
+    {
+        std::lock_guard<std::mutex> lock(turnListingMu_);
+        listing = turnListing_;
     }
+    if (!listing) listing = folderListing(fs::current_path(ec));
+    if (!listing->empty()) out << "- In it when this turn began: " << *listing << "\n";
     const std::time_t now = std::time(nullptr);
     char date[32];
     std::strftime(date, sizeof date, "%Y-%m-%d (%A)", std::localtime(&now));

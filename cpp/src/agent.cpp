@@ -1526,6 +1526,43 @@ void repairToolCallPairing(std::vector<Message>& messages) {
     }
     messages = std::move(kept);
 }
+
+// A stopped request left with no reply reads as pending, and the model carries it out next turn.
+const char* const kStoppedReplyNote =
+    "(The user stopped this reply before it finished. Don't continue it unless they ask again.)";
+
+void appendStopNote(std::vector<Message>& messages) {
+    if (!messages.empty() && messages.back().role == MessageRole::ASSISTANT &&
+        messages.back().toolCalls.empty() && !messages.back().parts.has_value()) {
+        Message& last = messages.back();
+        if (!last.content.empty()) last.content += "\n\n";
+        last.content += kStoppedReplyNote;
+        return;
+    }
+    Message note;
+    note.role = MessageRole::ASSISTANT;
+    note.content = kStoppedReplyNote;
+    messages.push_back(std::move(note));
+}
+
+// Values of a call written as <parameter=key> tags are text; each gets the type its tool declares.
+json typeTextArgs(const ToolRegistry& tools, const std::string& toolName, json args) {
+    const ToolInfo* tool = tools.findTool(toolName);
+    if (!tool) tool = tools.findTool(tools.resolveName(toolName));
+    if (!tool) return args;
+    for (const auto& param : tool->parameters) {
+        const auto it = args.find(param.name);
+        if (it == args.end() || !it->is_string()) continue;
+        const json typed = json::parse(it->get<std::string>(), nullptr, false);
+        const bool fits = (param.type == ToolParamType::INTEGER && typed.is_number_integer()) ||
+                          (param.type == ToolParamType::NUMBER && typed.is_number()) ||
+                          (param.type == ToolParamType::BOOLEAN && typed.is_boolean()) ||
+                          (param.type == ToolParamType::ARRAY && typed.is_array()) ||
+                          (param.type == ToolParamType::OBJECT && typed.is_object());
+        if (fits) *it = typed;
+    }
+    return args;
+}
 } // namespace
 
 void Agent::setHistory(std::vector<Message> history) {
@@ -1632,6 +1669,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
     const std::string userInput = summarizeUserInput(userMessages);
     turnRequest_ = userInput;
+    onTurnStart();
 
     console_->printProcessingStart(userInput, stepsLimit, cfg.modelId);
 
@@ -1655,6 +1693,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     int budgetLevelSent = std::numeric_limits<int>::max();  // this level and every higher one was sent
     std::vector<std::string> budgetNotices;
     bool failed = false;
+    bool incomplete = false;  // stopped short, but with an answer
+    bool lastToolFailed = false;
     bool loopWarned = false;
     bool emptyNudged = false;
     int malformedStreak = 0;
@@ -1868,10 +1908,12 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 toolMsg.content = recordToolOutput(toolResult, cfg.maxToolResultChars);
                 messages.push_back(toolMsg);
 
+                lastToolFailed = false;
                 if (auto err = toolFailure(toolResult)) {
                     ++errorCount;
                     lastError = *err;
                     executionState_ = AgentState::ERROR_RECOVERY;
+                    lastToolFailed = true;
                 }
             }
 
@@ -1931,6 +1973,22 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             console_->printGoal(parsed.goal);
         }
 
+        if (parsed.malformedToolCall.has_value()) {
+            console_->printWarning("Malformed tool call: " + *parsed.malformedToolCall);
+            if (++malformedStreak > 2) {
+                finalAnswer = "Unable to complete task: the model wrote a tool call that could "
+                              "not be run three times in a row (" + *parsed.malformedToolCall + ")";
+                failed = true;
+                break;
+            }
+            Message retry;
+            retry.role = MessageRole::USER;
+            retry.content = "[Your tool call was not run] " + *parsed.malformedToolCall +
+                            " Send the complete call again, or give your final answer.";
+            messages.push_back(retry);
+            continue;
+        }
+
         // ---- Handle final answer ----
         if (parsed.answer.has_value()) {
             if (auto pushback = reviewOnce(parsed.answer.value())) {
@@ -1961,6 +2019,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             std::string toolName = parsed.toolName.value();
             json toolArgs = parsed.toolArgs.value_or(json::object());
             if (toolArgs.is_null()) toolArgs = json::object();
+            if (parsed.toolArgsAreText) toolArgs = typeTextArgs(tools_, toolName, std::move(toolArgs));
+            malformedStreak = 0;
 
             // Loop detection — a call, or a short cycle of calls, repeated maxConsecutiveRepeats times
             if (const int period = loopPeriod(toolCallHistory, toolName, toolArgs,
@@ -2000,10 +2060,12 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             toolMsg.content = recordToolOutput(toolResult, cfg.maxToolResultChars);
             messages.push_back(toolMsg);
 
+            lastToolFailed = false;
             if (auto err = toolFailure(toolResult)) {
                 ++errorCount;
                 lastError = *err;
                 executionState_ = AgentState::ERROR_RECOVERY;
+                lastToolFailed = true;
             }
 
             continue;
@@ -2044,10 +2106,11 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 totalUsage += closingResult.usage;
                 logLlmCall(stepsTaken, closingStarted, closingResult.usage);
                 std::string text = closingResult.content;
-                if (!cfg.useNativeToolCalls()) {
-                    ParsedResponse p = parseLlmResponse(text);
-                    if (p.answer.has_value()) text = *p.answer;
-                    else if (p.toolName.has_value()) text.clear();
+                const ParsedResponse p = parseLlmResponse(text);
+                if (!cfg.useNativeToolCalls() && p.answer.has_value()) {
+                    text = *p.answer;
+                } else if (p.toolName.has_value() || p.malformedToolCall.has_value()) {
+                    text.clear();  // a tool call written as text is not an answer
                 }
                 if (!text.empty()) {
                     Message reply;
@@ -2070,8 +2133,11 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                               ? "Task stopped: the model returned empty replies."
                               : "Reached maximum steps limit (" + std::to_string(stepsLimit) + " steps).";
             console_->printWarning(finalAnswer);
+            failed = true;
+        } else if (stopReason != "loop" || lastToolFailed) {
+            // A loop the model then answered from is a finished turn, as in the Python agent.
+            incomplete = true;
         }
-        failed = true;  // the task is unfinished
     }
     if (finalAnswer.empty() && cancelRequested()) {
         finalAnswer = "[Cancelled after " + std::to_string(stepsTaken) + " step(s)]";
@@ -2114,13 +2180,15 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                        messages.begin() + (static_cast<int>(messages.size()) - cfg.maxHistoryMessages));
     }
     repairToolCallPairing(messages);
+    const bool stopped = cancelRequested();
+    if (stopped) appendStopNote(messages);
     conversationHistory_ = messages;
 
     json result = {
         {"result", finalAnswer},
         {"steps_taken", stepsTaken},
         {"steps_limit", stepsLimit},
-        {"status", cancelRequested() ? "cancelled" : (failed ? "error" : "success")},
+        {"status", stopped ? "cancelled" : failed ? "error" : incomplete ? "incomplete" : "success"},
         {"tool_errors", errorCount},
         {"tool_calls", turnToolCalls_.size()},
         {"llm_calls", llmCallLog.size()}

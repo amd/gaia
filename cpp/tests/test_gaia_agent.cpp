@@ -204,6 +204,51 @@ TEST(GaiaAgentTest, ALargeFolderIsListedUpToALimit) {
     EXPECT_EQ(system.find("file160.txt"), std::string::npos);
 }
 
+TEST(GaiaAgentTest, AFileWrittenThisTurnIsNotListedAsThereWhenTheTurnBegan) {
+    Workdir w;
+    std::ofstream(w.path / "old.txt") << "x";
+    const fs::path before = fs::current_path();
+    fs::current_path(w.path);
+    bench::MockLlmServer mock;
+    const json write = {{"id", "c1"},
+                        {"type", "function"},
+                        {"function",
+                         {{"name", "file_write"},
+                          {"arguments", json{{"path", (w.path / "hello.txt").string()}, {"content", "hi"}}.dump()}}}};
+    mock.pushResponse(json{{"choices",
+                            json::array({{{"message",
+                                           {{"role", "assistant"},
+                                            {"content", nullptr},
+                                            {"tool_calls", json::array({write})}}}}})}}
+                          .dump());
+    mock.pushResponse(answer("Created hello.txt."));
+    mock.pushResponse(answer("Yes."));
+    bool written = false;
+    {
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        agent.toolRegistry().setConfirmCallback(
+            [](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+        agent.processQuery("Create hello.txt");
+        written = fs::exists(w.path / "hello.txt");
+        agent.processQuery("Is it there?");
+    }
+    fs::current_path(before);
+
+    ASSERT_TRUE(written);
+    ASSERT_EQ(mock.receivedBodies().size(), 3u);
+    auto listing = [&](size_t request) {
+        const std::string system = json::parse(mock.receivedBodies()[request])["messages"][0]["content"];
+        const size_t at = system.find("- In it when this turn began: ");
+        return at == std::string::npos ? std::string() : system.substr(at, system.find('\n', at) - at);
+    };
+    EXPECT_EQ(listing(0), "- In it when this turn began: old.txt, out/");
+    EXPECT_EQ(listing(1), listing(0)) << "the second call of the turn must not list the file the turn created";
+    EXPECT_EQ(listing(2), "- In it when this turn began: hello.txt, old.txt, out/");
+    const std::string first = json::parse(mock.receivedBodies()[0])["messages"][0]["content"];
+    const std::string second = json::parse(mock.receivedBodies()[1])["messages"][0]["content"];
+    EXPECT_EQ(first, second) << "the prompt stays the same within a turn";
+}
+
 TEST(GaiaAgentTest, AnalyzeImageSendsTheImageToTheModel) {
     Workdir w;
     // Smallest valid PNG: 1x1 transparent pixel.

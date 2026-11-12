@@ -39,7 +39,7 @@ The return value on LLM failure:
 
 A run also returns `llm_calls` and `tool_calls` (counts), `usage` when the server reports token counts (`prompt_tokens`, `completion_tokens`, `total_tokens`, `cached_tokens`, `peak_context_tokens`), and `telemetry`, which lists each model request and each tool call with its step and time.
 
-Your application should check the `status` field (`success`, `error` or `cancelled`) — there is no exception to catch. HTTP timeouts: 30s connection, 120s read.
+Your application should check the `status` field (`success`, `incomplete` when the turn stopped short but `result` holds a closing answer, `error` or `cancelled`) — there is no exception to catch. HTTP timeouts: 30s connection, 120s read.
 
 ## Tool Calling Protocols
 

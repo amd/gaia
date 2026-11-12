@@ -8,6 +8,7 @@
 #pragma once
 
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -64,6 +65,9 @@ protected:
     /// Sends an answer back once when it says a file was saved that doesn't exist.
     std::optional<std::string> reviewFinalAnswer(const std::string& answer) override;
 
+    /// Lists the working folder once, so every model call of the turn shows it as it began.
+    void onTurnStart() override;
+
 public:
     /// Files the answer says were created or saved, as written in it.
     static std::vector<std::string> claimedFiles(const std::string& answer);
@@ -80,6 +84,8 @@ private:
     bool memoryOff() const { return options_.memoryOff && options_.memoryOff->load(); }
 
     Options options_;
+    mutable std::mutex turnListingMu_;
+    std::optional<std::string> turnListing_;  // unset until the first turn starts
     std::unique_ptr<SkillLibrary> skills_;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;

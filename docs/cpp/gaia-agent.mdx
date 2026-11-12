@@ -139,7 +139,7 @@ gaiacpp --prompt-file prompt.txt
 `--output-format json` prints one line:
 
 ```json
-{"result": "…", "status": "success", "steps": 3, "tool_errors": 0,
+{"result": "…", "status": "success", "is_error": false, "steps": 3, "tool_errors": 0,
  "model": "…", "duration_s": 5.2, "peak_rss_mb": 16.7, "cpu_s": 0.03,
  "num_steps": 3, "num_llm_calls": 3, "num_tool_calls": 2, "error_count": 0,
  "input_tokens": 14547, "cached_tokens": 8492, "output_tokens": 199,
@@ -148,7 +148,18 @@ gaiacpp --prompt-file prompt.txt
            "cached_tokens": 8492, "peak_context_tokens": 5042}}
 ```
 
-`status` is `success`, `error` (the model failed, the step budget ran out, or a tool-call loop was stopped) or `cancelled` (Ctrl+C). `peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. `cpu_s` is the CPU time that same process used, in seconds. Progress goes to stderr, so stdout carries only the answer. `--debug` turns on verbose logging.
+`status` is one of:
+
+| `status` | Meaning | Exit code |
+|----------|---------|-----------|
+| `success` | The turn finished with an answer. A turn stopped for repeating a tool call counts when the model then answered from what it had. | 0 |
+| `incomplete` | The turn stopped short but `result` holds the model's own closing answer: the step budget ran out, or it was stopped for repeating a call that kept failing. | 1 |
+| `error` | There is no usable answer: the model server failed, or the turn stopped and the model gave no closing answer. | 1 |
+| `cancelled` | Ctrl+C. | 1 |
+
+`is_error` is true for every status but `success`. These are the same statuses and exit codes as `gaia -p`, which says `failed` where `gaiacpp` says `error`.
+
+`peak_rss_mb` is the agent process's own peak memory; programs it ran are not counted. `cpu_s` is the CPU time that same process used, in seconds. Progress goes to stderr, so stdout carries only the answer. `--debug` turns on verbose logging.
 
 The counters use the same names as `gaia -p --output-format json`, so one script can read both agents:
 
