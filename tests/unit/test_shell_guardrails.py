@@ -1145,6 +1145,60 @@ class TestHeredocCannotHideARefusedCommand:
     def test_ordinary_heredocs_still_run(self, command):
         assert check(command, bypass=True) is None
 
+    #: Openers that name their target with a plain expansion.
+    EXPANSION_OPENERS = [
+        "cat > \"${OUT}/a.txt\" <<'EOF'\nhello world\nEOF",
+        'cat > "${OUT}/a.json" <<\'EOF\'\n{"a": 1}\nEOF',
+        "cat > ${OUT}/a.txt <<'EOF'\nhello world\nEOF",
+        'cat > "${DIR}/${NAME}.txt" <<EOF\nhello $USER\nEOF',
+        "cat > \"$(pwd)/a.txt\" <<'EOF'\nhello world\nEOF",
+        'cat > "$(dirname "$0")/a.txt" <<\'EOF\'\nhello world\nEOF',
+        "cat > \"$(git rev-parse --show-toplevel)/n.md\" <<'EOF'\n# Notes\nhi\nEOF",
+        "cat > \"${OUT}/$(date +%s).log\" <<'EOF'\nhello world\nEOF",
+        "cat > '${OUT}' <<'EOF'\nhello world\nEOF",
+        "git commit -m \"$(cat <<'EOF'\nfix: thing\n\nhello body\nEOF\n)\"",
+    ]
+
+    @pytest.mark.parametrize("command", EXPANSION_OPENERS)
+    def test_a_plain_expansion_on_the_opener_still_runs(self, command):
+        assert check(command, bypass=True) is None
+
+    #: Unquoted bodies with backslash-continued lines.
+    CONTINUED_BODIES = [
+        "cat > Dockerfile <<EOF\nFROM ubuntu\nRUN apt-get update \\\n"
+        "    && apt-get install -y curl\nEOF",
+        "cat > Makefile <<EOF\nall:\n\tgcc -o app \\\n\t  main.c\nEOF",
+        "cat > notes.txt <<EOF\nhello \\\n  world \\\n  again\nEOF",
+        "cat > notes.txt <<-EOF\n\thello \\\n\tworld\n\tEOF",
+        'cat > "${OUT}/Dockerfile" <<EOF\nRUN make \\\n  install\nEOF',
+        # A doubled backslash is an escaped backslash, not a continuation.
+        "cat > paths.txt <<EOF\nC:\\\\\\\\\nhello world\nEOF",
+    ]
+
+    @pytest.mark.parametrize("command", CONTINUED_BODIES)
+    def test_a_continued_body_line_still_runs(self, command):
+        assert check(command, bypass=True) is None
+
+    #: Expansions and continuations sh could read differently from the scan.
+    UNREADABLE_SHAPES = [
+        # A case pattern's ')' does not close the substitution.
+        'echo "$(case a in a) echo " <<EOF ;; esac)\n'
+        '"; rm -rf x; echo "\nEOF\n" ;; esac)"',
+        # '<<' quoted inside a substitution is data.
+        "echo $(echo '<<EOF')\nrm -rf x\nEOF",
+        # A heredoc inside a one-line substitution.
+        "echo $(cat <<EOF)\nrm -rf x\nEOF",
+        # An operator expansion can hide syntax.
+        "echo ${OUT}${x:-<<EOF}\nrm -rf x\nEOF",
+        # Shells disagree on whether a continued line can end the body.
+        "cat <<EOF\nhello \\\nEOF\nrm -rf x",
+    ]
+
+    @pytest.mark.parametrize("command", UNREADABLE_SHAPES)
+    def test_an_unreadable_expansion_or_continuation_is_still_walked(self, command):
+        assert "rm -rf x" in _strip_heredoc_bodies(command)
+        assert check(command, bypass=True) is not None
+
 
 class TestReadOnlySubGuardsLiftUnderBypassOnly:
     """The find/sort/uniq/git/PowerShell guards all encode "this binary may not

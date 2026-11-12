@@ -1887,6 +1887,63 @@ _HEREDOC_WORD = re.compile(r"[A-Za-z0-9_.-]+")
 #: Characters that end an unquoted word for sh.
 _SHELL_METACHARS = " \t|&;()<>"
 
+_PLAIN_PARAM = (
+    r"\$(?:[A-Za-z_][A-Za-z0-9_]*|[0-9@*#?$!-]|\{(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\})"
+)
+
+#: Expansions the scan can skip because sh ends them where it does: a plain
+#: ``${NAME}``, or a one-line ``$(...)`` with no parens, heredoc, comment,
+#: backslash or backtick that could move where sh closes it.
+_HEREDOC_SAFE_EXPANSION = re.compile(
+    r"\$\{(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+)\}"
+    r"|\$\((?:[^()'\"`$\\<#\n]|'[^'\n]*'"
+    r"|\"(?:[^\"`$\\\n]|" + _PLAIN_PARAM + r")*\"|" + _PLAIN_PARAM + r")*\)"
+)
+
+#: A ``case`` pattern's bare ``)`` would close the ``$(`` early.
+_CASE_WORD = re.compile(r"(?<![\w-])case(?![\w-])")
+
+
+def _safe_expansion_end(line: str, col: int) -> Optional[int]:
+    """Where a plain expansion at *col* ends, or None if there is none."""
+    match = _HEREDOC_SAFE_EXPANSION.match(line, col)
+    if match is None or _CASE_WORD.search(match.group()):
+        return None
+    return match.end()
+
+
+def _continues(line: str) -> bool:
+    """Whether *line* ends in an unescaped backslash (a line continuation)."""
+    return (len(line) - len(line.rstrip("\\"))) % 2 == 1
+
+
+def _is_terminator(
+    lines: list, first: int, last: int, word: str, strip_tabs: bool
+) -> bool:
+    """Whether the logical body line ``lines[first..last]`` ends the body.
+
+    A backslash-joined line is joined the way sh does. If any reading of it —
+    joined or not, tabs stripped per physical line or not — is the terminator,
+    shells may disagree, so the scan gives up.
+    """
+
+    def strip(text: str) -> str:
+        return text.lstrip("\t") if strip_tabs else text
+
+    if first == last:
+        return strip(lines[first]) == word
+    head = [line[:-1] for line in lines[first:last]]
+    tail = lines[last]
+    readings = {
+        strip(head[0]) + "".join(head[1:]) + tail,
+        "".join(strip(piece) for piece in head) + strip(tail),
+        strip(tail),
+        tail,
+    }
+    if word in readings:
+        raise _UnreadableHeredoc
+    return False
+
 
 class _UnreadableHeredoc(Exception):
     """The heredoc scan met shell text it cannot read the way sh does."""
@@ -1946,12 +2003,20 @@ def _scan_heredoc_bodies(lines: list) -> list:
                 quote = None if char == "'" else quote
                 col += 1
                 continue
+            end = _safe_expansion_end(line, col) if char == "$" else None
             if quote == '"':
+                if end is not None:
+                    col = end
+                    continue
                 if char == "`" or line.startswith(("$(", "${", "$["), col):
                     raise _UnreadableHeredoc
                 if char == '"':
                     quote = None
                 col += 2 if char == "\\" else 1
+                continue
+            if end is not None:
+                col = end
+                word_start = False
                 continue
             if line.startswith(_HEREDOC_UNMODELLED, col):
                 raise _UnreadableHeredoc
@@ -1986,16 +2051,16 @@ def _scan_heredoc_bodies(lines: list) -> list:
         word_start = True
         for word, strip_tabs, quoted in pending:
             first = index
-            while index < len(lines):
-                body_line = lines[index].lstrip("\t") if strip_tabs else lines[index]
-                if body_line == word:
-                    break
+            while True:
+                last = index
                 # sh joins an unquoted body's backslash-newline before matching.
-                if not quoted and body_line.endswith("\\"):
+                while not quoted and last < len(lines) and _continues(lines[last]):
+                    last += 1
+                if last >= len(lines):
                     raise _UnreadableHeredoc
-                index += 1
-            if index == len(lines):
-                raise _UnreadableHeredoc
+                if _is_terminator(lines, index, last, word, strip_tabs):
+                    break
+                index = last + 1
             spans.append((first, index))
             index += 1
         pending = []
