@@ -254,6 +254,18 @@ def test_posix_probe_without_a_clock_reading_leaves_the_speed_blank(
     assert 0 <= s.cpu_percent <= 100
 
 
+def test_posix_probe_survives_a_clock_read_raising_system_error(tmp_path, monkeypatch):
+    def broken_freq():
+        raise SystemError(
+            "<built-in function cpu_freq> returned a result with an exception set"
+        )
+
+    monkeypatch.setattr(psutil, "cpu_freq", broken_freq, raising=False)
+    s = rm.PosixProbe(drm_root=tmp_path).sample()
+    assert s.cpu_ghz is None
+    assert s.memory_total_bytes == psutil.virtual_memory().total
+
+
 def test_posix_probe_reads_amd_gpus_from_sysfs(tmp_path):
     dev = tmp_path / "card1" / "device"
     dev.mkdir(parents=True)
