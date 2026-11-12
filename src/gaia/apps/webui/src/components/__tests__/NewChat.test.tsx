@@ -69,6 +69,24 @@ describe('NewChat and the document library', () => {
         expect(screen.getByText(/1 more document in your library/)).toBeInTheDocument();
     });
 
+    it('shows a few attached documents and folds the rest behind a count', async () => {
+        const many = Array.from({ length: 600 }, (_, i) => libraryDoc(`m${i}`, `file${i}.txt`));
+        vi.mocked(api.listDocuments).mockResolvedValue({ documents: many, total: 600, total_size_bytes: 0, total_chunks: 0 });
+        useChatStore.setState({ draftDocumentIds: many.map((d) => d.id) });
+        render(<NewChat onSend={vi.fn()} />);
+
+        const more = await screen.findByRole('button', { name: '+597 more' });
+        const list = screen.getByRole('list', { name: 'Documents for this chat' });
+        expect(list.querySelectorAll('.new-chat-doc')).toHaveLength(3);
+
+        fireEvent.click(more);
+        expect(list.querySelectorAll('.new-chat-doc')).toHaveLength(600);
+        expect(list).toHaveClass('new-chat-doc-list--expanded');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
+        expect(list.querySelectorAll('.new-chat-doc')).toHaveLength(3);
+    });
+
     it('opens the library to choose documents', async () => {
         render(<NewChat onSend={vi.fn()} />);
 

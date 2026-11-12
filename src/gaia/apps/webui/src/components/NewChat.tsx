@@ -90,6 +90,8 @@ function attachWholeLibrary() {
         .map((d) => d.id));
 }
 
+const DOC_CHIPS_SHOWN = 3;
+
 /**
  * A chat searches only the documents attached to it: show what this one will
  * get, and offer the rest of the library.
@@ -100,15 +102,21 @@ function LibraryDocuments() {
     const draftIds = useChatStore((s) => s.draftDocumentIds);
     const removeDraftDocument = useChatStore((s) => s.removeDraftDocument);
     const setShowDocLibrary = useChatStore((s) => s.setShowDocLibrary);
+    const [expanded, setExpanded] = useState(false);
     const attached = documents.filter((d) => draftIds.includes(d.id));
     const offered = documents.filter((d) => d.indexing_status === 'complete' && !draftIds.includes(d.id));
     if (!attached.length && !offered.length) return null;
     const n = offered.length;
+    const shown = expanded ? attached : attached.slice(0, DOC_CHIPS_SHOWN);
+    const hidden = attached.length - shown.length;
     return (
         <div className="new-chat-docs">
             {attached.length > 0 && (
-                <ul className="new-chat-doc-list" aria-label={t('newChat.docs.forChat')}>
-                    {attached.map((d) => (
+                <ul
+                    className={`new-chat-doc-list${expanded ? ' new-chat-doc-list--expanded' : ''}`}
+                    aria-label={t('newChat.docs.forChat')}
+                >
+                    {shown.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
                             <span dir="auto">{d.filename}</span>
@@ -122,6 +130,20 @@ function LibraryDocuments() {
                             </button>
                         </li>
                     ))}
+                    {hidden > 0 && (
+                        <li>
+                            <button type="button" className="link-btn new-chat-doc-toggle" onClick={() => setExpanded(true)}>
+                                {t('newChat.docs.showMore', { n: hidden })}
+                            </button>
+                        </li>
+                    )}
+                    {expanded && attached.length > DOC_CHIPS_SHOWN && (
+                        <li>
+                            <button type="button" className="link-btn new-chat-doc-toggle" onClick={() => setExpanded(false)}>
+                                {t('newChat.docs.showLess')}
+                            </button>
+                        </li>
+                    )}
                 </ul>
             )}
             {n > 0 && (

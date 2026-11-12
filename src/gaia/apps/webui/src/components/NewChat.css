@@ -184,6 +184,15 @@
     list-style: none;
 }
 
+.new-chat-doc-list--expanded {
+    max-height: 30vh;
+    overflow-y: auto;
+}
+
+.new-chat-doc-toggle {
+    font-size: 12px;
+}
+
 .new-chat-doc {
     display: inline-flex;
     align-items: center;
