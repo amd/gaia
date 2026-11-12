@@ -412,6 +412,7 @@ export const enMessages = {
     'activity.thoughtFor': 'Thought for {time}',
     'activity.waiting': 'Waiting for you',
     'activity.usedSkill': 'Used {name} skill',
+    'activity.skillFailed': 'Could not use {name} skill',
     'activity.usingSkill': 'Using skill: {name}',
     'activity.blocked': 'Blocked by policy',
     'activity.hitError': 'Hit an error',
