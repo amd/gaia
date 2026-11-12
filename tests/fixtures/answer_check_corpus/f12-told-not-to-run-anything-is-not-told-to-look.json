@@ -1,0 +1,23 @@
+{
+  "kind": "turn",
+  "finding": "F12 (amd/gaia#7181)",
+  "why": "A request that forbids acting must not be answered with GAIA's own 'look first' message, which the model read as the user's newest instruction.",
+  "request": "For toybox/dates.py, do NOT run anything in this turn. Answer only with a three-step plan for adding tests.",
+  "files": {
+    "toybox/dates.py": "x = 1\n"
+  },
+  "model": [
+    {
+      "answer": "1. I will read toybox/dates.py to see what it exports.\n2. I will add a test for each date helper.\n3. I will run the new tests."
+    }
+  ],
+  "expect": {
+    "model_calls": 1,
+    "model_never_told": [
+      "Look with your tools first"
+    ],
+    "answer_has": [
+      "2. I will add a test for each date helper."
+    ]
+  }
+}

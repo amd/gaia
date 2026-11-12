@@ -90,8 +90,42 @@ it('leaves hidden memory steps out of a folded summary', () => {
 });
 
 it('names a tool it has no label for, rather than "Used tool"', () => {
-    render(<AgentActivity steps={[step('generate_image')]} isActive={false} />);
+    render(<AgentActivity steps={[step('frobnicate_widget')]} isActive={false} />);
 
-    expect(screen.getByText('Used generate image')).toBeInTheDocument();
+    expect(screen.getByText('Used frobnicate widget')).toBeInTheDocument();
     expect(screen.queryByText('Used tool')).toBeNull();
+});
+
+it.each([
+    ['run_python', true, 'Running Python'],
+    ['request_user_input', true, 'Asking you'],
+    ['answer_question_about_image', false, 'Looking at image failed'],
+    ['generate_image', false, 'Made image'],
+])('gives the flagship\'s %s step a plain label', (tool, active, label) => {
+    const failed = label.endsWith('failed');
+    render(<AgentActivity steps={[step(tool, active, !failed)]} isActive={active} />);
+
+    expect(screen.getByText(label)).toBeInTheDocument();
+});
+
+it('says the user declined a call, not that it failed, even with a narration', () => {
+    const declined: AgentStep = {
+        ...step('run_python', false, false), declined: true, narration: 'Running Python',
+        result: "Error: Tool 'run_python' was denied by the user.",
+    };
+    const { container } = render(<AgentActivity steps={[declined]} isActive={false} />);
+
+    expect(screen.getByText('You declined: Running Python')).toBeInTheDocument();
+    expect(screen.queryByText(/failed|denied by the user/)).toBeNull();
+    expect(container.querySelector('.flow-tool')).not.toHaveClass('error');
+});
+
+it('names a declined call in a folded summary', () => {
+    const steps: AgentStep[] = [
+        { ...step('read_file'), id: 1, detail: 'a' },
+        { ...step('run_python', false, false), id: 2, declined: true },
+    ];
+    render(<AgentActivity steps={steps} isActive={false} />);
+
+    expect(screen.getByRole('button', { name: /^Read file, you declined a step$/ })).toBeInTheDocument();
 });
