@@ -1579,10 +1579,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setActionError(null);
         const failures = await addDroppedFiles(sessionId, documents);
         if (failures.length > 0) {
-            setActionError(failures.map(({ name, stage, error }) => t(
-                stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
-                { name, error: requestErrorParam(error) },
-            )).join(' '));
+            setActionError(failures.map(({ name, stage, error }) => (stage === 'unreadable'
+                ? t('docsBar.failedTitle', { name })
+                : t(
+                    stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
+                    { name, error: requestErrorParam(error) },
+                ))).join(' '));
         }
     }, [sessionId, attach, t]);
 
