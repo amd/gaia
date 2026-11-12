@@ -113,7 +113,15 @@ Resolution order:
 
 1. `project_root` on `GaiaAgentConfig`
 2. the `GAIA_PROJECT_ROOT` environment variable
-3. the working directory, or the nearest repository above it — searching upward until the home directory or the filesystem root, whichever comes first
+3. the session's working directory, or the nearest repository above it — searching upward until the home directory or the filesystem root, whichever comes first
+
+The session's working directory is the folder the client said it was started
+in — the terminal app sends its start folder with every request (`/query`'s
+`working_directory`) — and otherwise the agent process's own working directory.
+The daemon starts the agent in its own folder, so without the client's folder
+the map would describe the daemon's folder, not your project. Sending the start
+folder changes only where relative paths and the map resolve; it does not change
+which folders the agent may read.
 
 A working directory anywhere inside **GAIA's own source tree** is rejected — in
 dev mode the agent sidecar is launched from its package directory inside the

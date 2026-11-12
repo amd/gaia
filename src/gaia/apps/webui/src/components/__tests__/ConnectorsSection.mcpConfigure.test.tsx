@@ -172,7 +172,7 @@ describe('MCP connector configure panel', () => {
             });
             await openTile(row);
             fireEvent.change(screen.getByPlaceholderText('xoxb-…'), { target: { value: 'xapp-1' } });
-            fireEvent.click(document.querySelector('.configure-actions .btn-model-save')!);
+            fireEvent.click(document.querySelector('.configure-actions .btn-primary')!);
             const error = await waitFor(() => {
                 const el = document.querySelector('.configure-error');
                 expect(el).not.toBeNull();
@@ -257,6 +257,14 @@ describe('MCP connector configure panel', () => {
         expect(screen.queryByText('Who can use it')).toBeNull();
         expect(screen.queryByText('No agents require access to this connector.')).toBeNull();
         useChatStore.setState({ agents: [] as never });
+    });
+
+    it('shows no per-agent grants block when no agent needs this connector', async () => {
+        useChatStore.setState({ agents: [] as never });
+        await openTile(mcpRow({ id: 'mcp-git', display_name: 'Git', configured: true }));
+        await waitFor(() => expect(mocked.listConnectorActivations).toHaveBeenCalled());
+        expect(screen.queryByText('Per-agent grants')).toBeNull();
+        expect(document.querySelector('.connection-grants')).toBeNull();
     });
 
     it('turning the single switch on also resumes a paused connector', async () => {
