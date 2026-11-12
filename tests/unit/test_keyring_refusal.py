@@ -124,3 +124,40 @@ def test_a_read_that_returned_a_key_is_not_reported_locked():
         read_within("cloud-key:fireworks", read_while_another_slot_is_refused, "key")
         == "fw_saved_key_123456"
     )
+
+
+def test_concurrent_pollers_across_slots_open_the_prompt_once(dismissed):
+    import threading
+
+    gate = threading.Barrier(16)
+    outcomes = []
+
+    def poll(slot):
+        gate.wait()
+        for _ in range(10):
+            try:
+                read_within(
+                    f"cloud-key:{slot}",
+                    lambda: cloud_keys.recall_key(slot),
+                    "a saved key",
+                )
+            except CredentialStoreLocked:
+                outcomes.append("locked")
+            else:
+                outcomes.append("read")
+
+    slots = ["fireworks", "openai", "anthropic", "google"] * 4
+    threads = [threading.Thread(target=poll, args=(s,)) for s in slots]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+
+    # Racing first reads may each reach the keyring once; no poll after that does.
+    assert dismissed.reads <= len(set(slots))
+    assert outcomes.count("read") == 0
+    reads_after_race = dismissed.reads
+    for slot in set(slots):
+        with pytest.raises(CredentialStoreLocked):
+            read_within(f"cloud-key:{slot}", lambda: cloud_keys.recall_key(slot), "k")
+    assert dismissed.reads == reads_after_race
