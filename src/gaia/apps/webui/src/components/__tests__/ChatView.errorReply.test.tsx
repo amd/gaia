@@ -399,6 +399,35 @@ describe('Try again never deletes an answer written since the failure', () => {
         expect(server).toEqual([]);
     });
 
+    it('queues the question instead of dropping it when GAIA is starting (#7284)', async () => {
+        await sendAndFail(new Error('Lemonade returned 500'));
+        let release!: () => void;
+        const gate = new Promise<void>((r) => { release = r; });
+        const realDelete = mockedApi.deleteMessagesFrom.getMockImplementation()!;
+        mockedApi.deleteMessagesFrom.mockImplementationOnce(async (sid, id) => {
+            await gate;
+            return realDelete(sid, id);
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        });
+        await waitFor(() => expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledTimes(1));
+        await act(async () => {
+            useChatStore.setState({ systemStatus: { init_state: 'initializing' } as never });
+            release();
+        });
+
+        await waitFor(() => expect(useChatStore.getState().messageQueues[SESSION.id]?.map((m) => m.text)).toEqual(['summarize the report']));
+        expect(sends).toHaveLength(1);
+        expect(server).toEqual([]);
+
+        // Once GAIA is up the queued question goes out.
+        await act(async () => { useChatStore.setState({ systemStatus: null }); });
+        await waitFor(() => expect(sends).toHaveLength(2));
+        expect(sends[1].text).toBe('summarize the report');
+    });
+
     it('does not queue the question again when the chat is deleted mid-delete', async () => {
         await sendAndFail(new Error('Lemonade returned 500'));
         let release!: () => void;

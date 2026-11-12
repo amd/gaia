@@ -1344,7 +1344,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
 
         removeMessagesFrom(message.id);
-        sendMessage(text);
+        // A send refused while GAIA starts would lose the question deleted above; queue it.
+        if (isStarting(useChatStore.getState().systemStatus)) setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+        else sendMessage(text);
     }, [sessionId, isStreaming, removeMessagesFrom, setMessages, setQueue, sendMessage, isStale, addNotification, t]);
 
     // This view sends its chat's queue while open; the background dispatcher does it otherwise.
