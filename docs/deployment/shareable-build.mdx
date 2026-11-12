@@ -46,7 +46,7 @@ rather than a link error deep in the NSIS log.
 
 | Path | What |
 |---|---|
-| `%LOCALAPPDATA%\Programs\GAIA\gaia-tui.exe` | The terminal UI. Its folder is added to the **user** PATH — no admin rights anywhere in this install. |
+| `%LOCALAPPDATA%\Programs\GAIA\gaia-cli.exe` | The terminal UI. Its folder is added to the **user** PATH — no admin rights anywhere in this install. |
 | `%USERPROFILE%\.gaia\agents\gaia\gaia-agent.exe` | The frozen flagship, in the hub install root the TUI searches. One copy, not two. |
 | `%USERPROFILE%\.gaia\agents\gaia\.installed` | The install sentinel. **Load-bearing**: without it the TUI treats the agent as an unverified install and refuses to spawn it (`catalog.findInstalledBinaryIn`, #3062). |
 
