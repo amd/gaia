@@ -5132,6 +5132,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "label": event["message"],
                             "active": False,
                             "success": True,
+                            "kept": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
                         }
                     )

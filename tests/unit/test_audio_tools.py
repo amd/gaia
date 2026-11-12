@@ -6,7 +6,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -321,6 +321,33 @@ class TestTranscribeMedia:
 
         assert "load" not in [k for k, _ in shown]
         assert not [m for _, m in shown if "speech model" in m]
+
+    def test_the_terminal_shows_the_speech_model_download(self):
+        """`gaia chat` draws phases with its spinner; it went quiet during the download."""
+        from gaia.agents.base.console import AgentConsole
+        from gaia.audio.lemonade_asr import NpuPart
+
+        def ensure_model(say=None, on_percent=None):
+            say("Downloading Whisper-Large-v3-Turbo through Lemonade (~1.62 GB)")
+            on_percent(40)
+
+        client = MagicMock(model="Whisper-Large-v3-Turbo")
+        client.ensure_model.side_effect = ensure_model
+        client.npu_part.return_value = NpuPart(size_gb=0.74)
+        client.is_loaded.return_value = False
+        host = Host()
+        host.console = AgentConsole()
+        with patch.object(AgentConsole, "start_progress") as spinner:
+            host._download_speech_model(client)
+
+        shown = [c.args[0] for c in spinner.call_args_list]
+        assert shown == [
+            "Downloading the speech model, one time (2.4 GB)",
+            "Downloading the speech model, one time — 40% of 1.6 GB, "
+            "then 0.7 GB for the NPU",
+            "Downloading the speech model's NPU part, one time (0.7 GB)",
+            "Downloaded the speech model (2.4 GB)",
+        ]
 
     def test_a_failed_speech_model_download_is_the_tools_error(self, tmp_path):
         source = tmp_path / "standup.wav"

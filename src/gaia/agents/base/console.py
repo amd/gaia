@@ -2044,6 +2044,11 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
 
         self.progress.start(message, show_timer=show_timer)
 
+    def report_phase(self, phase: str, message: str, **counts: int) -> None:
+        """A terminal shows a phase as its spinner line."""
+        if message:
+            self.start_progress(message)
+
     def stop_progress(self) -> None:
         """Stop the progress indicator."""
         self.progress.stop()

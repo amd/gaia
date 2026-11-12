@@ -90,6 +90,19 @@
     color: var(--accent-yellow);
 }
 
+.flow-done {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+.flow-done > svg {
+    flex-shrink: 0;
+    color: var(--accent-green, var(--text-muted));
+}
+
 .flow-live-line {
     padding: 2px 0;
 }

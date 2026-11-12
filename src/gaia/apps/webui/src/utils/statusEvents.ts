@@ -46,7 +46,7 @@ export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: numbe
     }
     if (event.phase === SPEECH_MODEL_DOWNLOADED && msg) {
         // A download the user waited on stays in the turn's steps.
-        const done = { label: localizeLiveStatus(getT(), msg), active: false };
+        const done = { label: localizeLiveStatus(getT(), msg), active: false, success: true, kept: true };
         const last = store.agentSteps[store.agentSteps.length - 1];
         if (last && last.type === 'status' && last.active) store.updateLastAgentStep({ ...done, detail: undefined });
         else store.addAgentStep({ id: ++stepIdRef.current, type: 'status', timestamp: Date.now(), ...done });

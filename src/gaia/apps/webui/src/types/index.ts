@@ -854,6 +854,8 @@ export interface AgentStep {
     result?: string;
     /** Whether this step completed successfully. */
     success?: boolean;
+    /** A finished status the user waited on, such as a download; drawn with the turn (for type='status'). */
+    kept?: boolean;
     /** The user said no to this call, so it never ran (for type='tool'). */
     declined?: boolean;
     /** Whether this step is currently running. */
