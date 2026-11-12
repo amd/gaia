@@ -34,6 +34,8 @@ export interface ApiSchemas {
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
   DeviceUsage: DeviceUsage;
+  DiscordConnectRequest: DiscordConnectRequest;
+  DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -260,6 +262,7 @@ export interface AgentStepResponse {
   result?: string | null;
   ruleIds?: string[] | null;
   success?: boolean | null;
+  timedOut?: boolean | null;
   timestamp?: number;
   tool?: string | null;
   type: string;
@@ -467,6 +470,14 @@ export interface DeviceUsage {
    * Load of the device's busiest engine.
    */
   percent: number;
+}
+export interface DiscordConnectRequest {
+  model?: string | null;
+  token: string;
+}
+export interface DiscordStartRequest {
+  model?: string | null;
+  take_over?: boolean;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
