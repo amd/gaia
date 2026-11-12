@@ -18,7 +18,10 @@ that the two interoperate. So both suites assert against **these** vectors:
 
 - `vectors.json` — the expected digests. **Do not regenerate this to make a test
   pass.** If a digest changes, the wire format changed: bump `AUDIT_ENGINE`, and
-  update both implementations together.
+  update both implementations together. `engine` moves with every
+  `AUDIT_ENGINE` bump even when, as for 0.2.0, the rule change does not touch
+  this tree and every digest stays the same. Recompute the digests with
+  `content_digest` / `manifest_digest` before changing any of them.
 - `tree/` — a small skill tree covering the cases that distinguish the algorithm:
   nested `scripts/`, a `__pycache__` that must be ignored, and CRLF content.
 

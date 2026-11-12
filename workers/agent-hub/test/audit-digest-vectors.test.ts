@@ -70,6 +70,6 @@ describe("manifestDigest cross-language vectors", () => {
 
   it("names the engine version the vectors were produced by", () => {
     // A digest change is a wire-format change; the engine version must move.
-    expect(vectors.engine).toBe("gaia-skill-audit/0.1.0");
+    expect(vectors.engine).toBe("gaia-skill-audit/0.2.0");
   });
 });

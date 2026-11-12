@@ -47,7 +47,11 @@ from typing import Any, Callable, Optional
 
 from gaia.hub.catalog import Fetcher, get_hub_base_url
 from gaia.logger import get_logger
-from gaia.skills.audit.findings import content_digest, ignore_bytecode_caches
+from gaia.skills.audit.findings import (
+    AUDIT_ENGINE,
+    content_digest,
+    ignore_bytecode_caches,
+)
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
 from gaia.skills.format import (
     SKILL_FILENAME,
@@ -338,6 +342,7 @@ def install_skill(
                             artifact_sha256=artifact.sha256,
                             artifact_filename=artifact.filename,
                             content_digest=installed_digest,
+                            digest_engine=AUDIT_ENGINE,
                             claimed_tier=claimed,
                             attested_tier=attested,
                             installed_tier=tier,

@@ -489,7 +489,11 @@ def capture_skill(
         )
 
     resolver = manager if manager is not None else SkillManager()
-    from gaia.skills.audit.findings import content_digest, ignore_bytecode_caches
+    from gaia.skills.audit.findings import (
+        AUDIT_ENGINE,
+        content_digest,
+        ignore_bytecode_caches,
+    )
 
     kind = _classify_source(source)
     failed_verification = tuple(failed_verification)
@@ -578,6 +582,7 @@ def capture_skill(
                         source=SOURCE_CAPTURED,
                         origin=origin,
                         content_digest=landed_digest,
+                        digest_engine=AUDIT_ENGINE,
                         claimed_tier=previous_tier,
                         installed_tier=LOWEST_TIER,
                         permissions=list(landed.gaia.permissions),
@@ -688,7 +693,11 @@ def import_bundle(
         SkillPermissionError: a permission is un-bridged or above the ceiling.
         SkillValidationError: the ``SKILL.md`` fails the schema gate.
     """
-    from gaia.skills.audit.findings import content_digest, ignore_bytecode_caches
+    from gaia.skills.audit.findings import (
+        AUDIT_ENGINE,
+        content_digest,
+        ignore_bytecode_caches,
+    )
     from gaia.skills.install import SkillInstallError, _gate_tier
 
     resolver = manager if manager is not None else SkillManager()
@@ -749,6 +758,7 @@ def import_bundle(
                     source=source,
                     origin=origin,
                     content_digest=landed_digest,
+                    digest_engine=AUDIT_ENGINE,
                     claimed_tier=previous_tier,
                     installed_tier=LOWEST_TIER,
                     permissions=list(landed.gaia.permissions),
@@ -814,6 +824,23 @@ def capture_entry(skill: Skill) -> Optional[LockEntry]:
     return entry
 
 
+def _reaudit_entry(skill: Skill) -> Optional[LockEntry]:
+    """The lock entry when *skill* awaits re-audit after a digest-rule change.
+
+    Code trust earned under an older rule is not carried over: the current rule
+    covers files the old one never checked.
+    """
+    directory = skill.directory
+    if directory is None:
+        return None
+    entry = SkillLock.load(directory.parent).get(skill.name)
+    if entry is None:
+        return None
+    from gaia.skills.drift import reaudit_required
+
+    return entry if reaudit_required(entry, directory) else None
+
+
 def _grants_a_binary(skill: Skill) -> bool:
     """True when the skill asks for a policied CLI (``shell:execute:<binary>``)."""
     from gaia.skills.binaries import resolve_binary_policies
@@ -848,6 +875,13 @@ def code_is_deferred(skill: Skill) -> bool:
 
     # A repo's own .claude/skills arrive with a clone: having them is not consent.
     if skill.root == ROOT_CLAUDE_PROJECT:
+        return True
+    if _reaudit_entry(skill) is not None:
+        log.warning(
+            "Skill '%s' was checked by an older GAIA and needs re-auditing — its "
+            "code is off until then.",
+            skill.name,
+        )
         return True
     entry = capture_entry(skill)
     if entry is None:
@@ -890,6 +924,11 @@ def deferred_remedy(skill: Skill) -> str:
         return (
             f"`gaia skill import {shell_path(skill.directory)}{flag}`, then {promote}"
         )
+    reaudit = _reaudit_entry(skill)
+    if reaudit is not None:
+        from gaia.skills.drift import reaudit_remedy
+
+        return ", then ".join(f"`{command}`" for command in reaudit_remedy(reaudit))
     return promote
 
 

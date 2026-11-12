@@ -27,7 +27,7 @@ from gaia.governance.schemas import DecisionType, GovernanceDecision
 
 #: Engine id + version. Bumped whenever a rule change can move a verdict, so a
 #: recorded catalog entry always names the engine that produced it.
-AUDIT_ENGINE = "gaia-skill-audit/0.1.0"
+AUDIT_ENGINE = "gaia-skill-audit/0.2.0"
 
 Severity = Literal["info", "low", "medium", "high", "critical"]
 
@@ -343,8 +343,38 @@ def content_digest(directory: Path | str) -> str:
     different content.
     """
     directory = Path(directory)
+    return _digest_files(directory, auditable_files(directory))
+
+
+#: The engine whose :func:`content_digest` left out ``node_modules`` and
+#: ``.pyc``/``.pyo``/``.so``/``.zip`` files. A lock entry with no recorded
+#: engine was hashed by it.
+LEGACY_DIGEST_ENGINE = "gaia-skill-audit/0.1.0"
+_LEGACY_EXCLUDED_DIRS = DIGEST_EXCLUDED_DIRS | {"node_modules"}
+_LEGACY_EXCLUDED_SUFFIXES = frozenset({".pyc", ".pyo", ".so", ".zip"})
+
+
+def legacy_content_digest(directory: Path | str) -> str:
+    """:func:`content_digest` as :data:`LEGACY_DIGEST_ENGINE` computed it.
+
+    Lets a digest recorded before the rule changed still be checked: if these
+    bytes match it, nothing that digest covered has changed.
+    """
+    directory = Path(directory)
+    files = [
+        path
+        for path in auditable_files(directory)
+        if path.suffix not in _LEGACY_EXCLUDED_SUFFIXES
+        and not any(
+            part in _LEGACY_EXCLUDED_DIRS for part in path.relative_to(directory).parts
+        )
+    ]
+    return _digest_files(directory, files)
+
+
+def _digest_files(directory: Path, files: list[Path]) -> str:
     digest = hashlib.sha256()
-    for path in auditable_files(directory):
+    for path in files:
         payload = path.read_bytes()
         relative = path.relative_to(directory).as_posix()
         digest.update(relative.encode("utf-8"))

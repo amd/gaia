@@ -1,6 +1,6 @@
 {
   "_comment": "Cross-language digest vectors for issue #2468. Do not regenerate to make a test pass; see README.md.",
-  "engine": "gaia-skill-audit/0.1.0",
+  "engine": "gaia-skill-audit/0.2.0",
   "manifest_digest": {
     "skill_md_lf": "sha256:67e831ec08103837dce078a01e1472a66747693b272fe2ee26603ff60e64f949",
     "skill_md_crlf_normalizes_to_the_same": "sha256:67e831ec08103837dce078a01e1472a66747693b272fe2ee26603ff60e64f949",

@@ -1253,7 +1253,13 @@ def _handle_remove(args: argparse.Namespace) -> int:
 
 def _handle_lock(args: argparse.Namespace) -> int:
     """Check the user root against ``skill-lock.json``, or re-record it."""
-    from gaia.skills.drift import DRIFT_UNRECORDED, DRIFT_UNTRACKED, check_drift, relock
+    from gaia.skills.drift import (
+        DRIFT_REAUDIT,
+        DRIFT_UNRECORDED,
+        DRIFT_UNTRACKED,
+        check_drift,
+        relock,
+    )
 
     root = _manager().user_root
 
@@ -1281,6 +1287,17 @@ def _handle_lock(args: argparse.Namespace) -> int:
         print(
             f"⚠ {len(unrecorded)} skill(s) in {root} predate content digests, so "
             f"{report.lock_file.name} cannot verify them{also}:\n",
+            file=sys.stderr,
+        )
+        print(report.render(), file=sys.stderr)
+        return EXIT_INVALID
+
+    reaudit = [d for d in report.drifts if d.kind == DRIFT_REAUDIT]
+    if reaudit and len(reaudit) == len(notable):
+        print(
+            f"⚠ {len(reaudit)} skill(s) in {root} were checked by an older GAIA "
+            "and need re-auditing under this version's rules. Their files are "
+            "unchanged; their code stays off until you re-check them:\n",
             file=sys.stderr,
         )
         print(report.render(), file=sys.stderr)

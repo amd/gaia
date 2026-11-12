@@ -44,7 +44,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from gaia.logger import get_logger
-from gaia.skills.audit.findings import content_digest
+from gaia.skills.audit.findings import (
+    AUDIT_ENGINE,
+    LEGACY_DIGEST_ENGINE,
+    content_digest,
+    legacy_content_digest,
+)
 from gaia.skills.errors import SkillDriftError, SkillError
 from gaia.skills.format import SKILL_FILENAME, Skill, parse_skill_metadata
 from gaia.skills.lock import (
@@ -73,6 +78,10 @@ DRIFT_UNTRACKED = "untracked"
 #: A lock entry written before content digests were recorded — content cannot be
 #: checked at all, which is not the same as "checked and clean".
 DRIFT_UNRECORDED = "unrecorded"
+#: The digest was recorded under an older audit engine's rule. Every file that
+#: rule covered is unchanged, but the current rule covers more, so the skill
+#: needs re-auditing — an update, not tampering.
+DRIFT_REAUDIT = "reaudit"
 
 DRIFT_KINDS = (
     DRIFT_VERSION,
@@ -81,7 +90,38 @@ DRIFT_KINDS = (
     DRIFT_MISSING,
     DRIFT_UNTRACKED,
     DRIFT_UNRECORDED,
+    DRIFT_REAUDIT,
 )
+
+
+def _recorded_engine(entry: LockEntry) -> str:
+    return entry.digest_engine or LEGACY_DIGEST_ENGINE
+
+
+def reaudit_required(entry: LockEntry, directory: Path) -> bool:
+    """Whether *entry*'s digest only fails because the digest rule changed.
+
+    True when the digest was recorded under an older engine, the current rule no
+    longer matches, and the rule it was recorded under still does. A mismatch
+    under the recorded rule too is an edit, and is reported as content drift.
+    """
+    if not entry.content_digest or _recorded_engine(entry) == AUDIT_ENGINE:
+        return False
+    if _recorded_engine(entry) != LEGACY_DIGEST_ENGINE:
+        # A rule this build does not know cannot clear a mismatch.
+        return False
+    if content_digest(directory) == entry.content_digest:
+        return False
+    return legacy_content_digest(directory) == entry.content_digest
+
+
+def reaudit_remedy(entry: LockEntry) -> list[str]:
+    """The commands, in order, that re-audit *entry* under the current rule."""
+    if entry.source == SOURCE_HUB:
+        return [f"gaia skill install {entry.name} --force"]
+    if entry.captured:
+        return ["gaia skill lock --relock", f"gaia skill promote {entry.name}"]
+    return ["gaia skill lock --relock"]
 
 
 def _attested(entry: LockEntry) -> bool:
@@ -284,6 +324,27 @@ def _content_drift(entry: LockEntry, directory: Path) -> Optional[Drift]:
     actual = content_digest(directory)
     if actual == entry.content_digest:
         return None
+    if reaudit_required(entry, directory):
+        return Drift(
+            skill=entry.name,
+            kind=DRIFT_REAUDIT,
+            expected=entry.content_digest,
+            actual=actual,
+            fatal=False,
+            summary=(
+                f"'{entry.name}' was checked by an older GAIA "
+                f"({_recorded_engine(entry)}). Its files are unchanged, but this "
+                f"GAIA ({AUDIT_ENGINE}) also checks compiled modules, archives "
+                "and node_modules, so it needs re-auditing. Its code is off "
+                "until then."
+            ),
+            remediation=(
+                "Run "
+                + " then ".join(f"'{command}'" for command in reaudit_remedy(entry))
+                + " to re-check it under this version's rules."
+            ),
+            path=str(directory),
+        )
     fatal = _attested(entry)
     return Drift(
         skill=entry.name,
@@ -336,7 +397,9 @@ def _would_launder(entry: LockEntry, drift: Drift) -> bool:
     """
     if drift.fatal:
         return True
-    return drift.kind == DRIFT_UNRECORDED and _attested(entry)
+    # The older rule never covered the files the current one adds, so stamping
+    # them would claim the signature vouched for bytes nothing checked.
+    return drift.kind in (DRIFT_UNRECORDED, DRIFT_REAUDIT) and _attested(entry)
 
 
 def _inspect(entry: LockEntry, directory: Path) -> list[Drift]:
@@ -591,9 +654,15 @@ def _relock_locked(root: Path, lock: SkillLock) -> RelockResult:
                 f"'gaia skill remove {name}'."
             )
 
-        before = (entry.version, entry.installed_tier, entry.content_digest)
+        before = (
+            entry.version,
+            entry.installed_tier,
+            entry.content_digest,
+            entry.digest_engine,
+        )
         entry.version = skill.version or entry.version
         entry.content_digest = content_digest(directory)
+        entry.digest_engine = AUDIT_ENGINE
         entry.permissions = list(skill.gaia.permissions)
         entry.path = str(directory)
         if entry.source == SOURCE_LOCAL:
@@ -602,7 +671,12 @@ def _relock_locked(root: Path, lock: SkillLock) -> RelockResult:
             # entry's is the enforced tier — never overwritten from the file
             # it governs.
             entry.installed_tier = skill.security_tier
-        if before != (entry.version, entry.installed_tier, entry.content_digest):
+        if before != (
+            entry.version,
+            entry.installed_tier,
+            entry.content_digest,
+            entry.digest_engine,
+        ):
             updated.append(name)
 
     for directory in sorted(_skill_dirs(root)):
@@ -623,6 +697,7 @@ def _relock_locked(root: Path, lock: SkillLock) -> RelockResult:
                 requested="",
                 source=SOURCE_LOCAL,
                 content_digest=content_digest(directory),
+                digest_engine=AUDIT_ENGINE,
                 claimed_tier=skill.security_tier,
                 installed_tier=skill.security_tier,
                 permissions=list(skill.gaia.permissions),
