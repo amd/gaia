@@ -634,7 +634,7 @@ def test_a_dismissed_keyring_prompt_is_not_reopened_by_polling(
     for view in body.json()["providers"][1:]:
         assert view["key_state"] == "store_locked"
         assert view["key_source"] is None
-        assert "will not ask again" in view["key_message"]
+        assert "won't ask again for 5 minutes" in view["key_message"]
 
     assert client.post("/api/providers/key-store/retry").json() == {"retrying": True}
     client.get("/api/providers")
@@ -650,7 +650,7 @@ def test_connecting_with_a_locked_store_is_not_answered_as_a_wait(
     client.get("/api/providers")
     resp = client.post("/api/providers/fireworks/connect", json={})
     assert resp.status_code == 423, resp.text
-    assert "will not ask again" in resp.json()["detail"]
+    assert "won't ask again for 5 minutes" in resp.json()["detail"]
     # Connect is the user's action: it asked the store once more.
     assert dismissed_keyring["reads"] == 2
 

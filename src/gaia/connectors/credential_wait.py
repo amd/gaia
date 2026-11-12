@@ -15,9 +15,10 @@ read in flight: later calls wait on the same read and take its result once the
 user answers, so polling never piles up threads or dialogs.
 
 Once the user closes an unlock prompt, every read raises
-:class:`CredentialStoreLocked` without touching the store until something the
-user did lifts it (:func:`gaia.connectors.store.retry_keyring`): a poll that
-read again would put a new prompt up at once.
+:class:`CredentialStoreLocked` without touching the store for
+:data:`gaia.connectors.store.HOLD_SECONDS`, or until something the user did
+lifts it (:func:`gaia.connectors.store.retry_keyring`): a poll that read again
+would put a new prompt up at once.
 """
 
 from __future__ import annotations

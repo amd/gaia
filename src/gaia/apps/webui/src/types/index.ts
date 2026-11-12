@@ -910,7 +910,8 @@ export interface ProviderInfo {
      * `waiting_for_os_permission` while the OS holds the saved-key read for the
      * user's permission (a macOS keychain dialog): `key_source` is then unknown,
      * not absent, and `key_message` says what to do. `store_locked` once the
-     * user closed the store's unlock prompt: GAIA stops asking until Try again.
+     * user closed the store's unlock prompt: GAIA holds off asking for five
+     * minutes, or until Try again.
      */
     key_state?: 'read' | 'waiting_for_os_permission' | 'store_locked';
     key_message?: string | null;

@@ -237,7 +237,7 @@ _MIN_KEY_LENGTH_FOR_HINT = 16
 
 #: ``key_state`` while the OS holds the stored-key read for the user's permission.
 KEY_WAITING = "waiting_for_os_permission"
-#: ``key_state`` once the user closed the store's unlock prompt; GAIA stops asking.
+#: ``key_state`` once the user closed the store's unlock prompt; GAIA holds off asking.
 KEY_LOCKED = "store_locked"
 
 

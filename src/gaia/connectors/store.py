@@ -212,14 +212,28 @@ class KeyringRefused(ConnectorsError):
     """The credential store stayed locked: its unlock prompt was dismissed."""
 
 
+#: How long a dismissed prompt holds reads back. Long enough that pollers stop
+#: reopening it; short enough that a process nobody retries in (the daemon's
+#: token refresh) recovers once the user unlocks the store elsewhere.
+HOLD_SECONDS = 300.0
+
 _refusal_lock = threading.Lock()
 _refusal: Optional[str] = None
+_refused_at = 0.0
+# One read probes the store once a hold expires; the rest stay held until it ends.
+_probing = False
+
+
+def _held_locked() -> bool:
+    return _refusal is not None and (
+        _probing or time.monotonic() - _refused_at < HOLD_SECONDS
+    )
 
 
 def keyring_refusal() -> Optional[str]:
     """Why reads are held back after a dismissed unlock prompt, or None."""
     with _refusal_lock:
-        return _refusal
+        return _refusal if _held_locked() else None
 
 
 def retry_keyring() -> None:
@@ -230,28 +244,40 @@ def retry_keyring() -> None:
 
 
 def _refuse(error: Exception) -> KeyringRefused:
-    global _refusal
+    global _refusal, _refused_at
+    minutes = max(1, round(HOLD_SECONDS / 60))
     message = (
         "The OS credential store is locked: its unlock prompt was closed "
-        f"({error}). GAIA will not ask again on its own; to unlock it, choose "
-        "Try again under Settings → Model, or connect or test a connector."
+        f"({error}). GAIA won't ask again for {minutes} minutes; to unlock it "
+        "now, choose Try again under Settings → Model, or connect or test a "
+        "connector."
     )
     with _refusal_lock:
         _refusal = message
-    logger.warning("Keyring read refused; holding reads until the user retries")
+        _refused_at = time.monotonic()
+    logger.warning(
+        "Keyring read refused; holding reads for %ds or until the user retries",
+        HOLD_SECONDS,
+    )
     return KeyringRefused(message)
 
 
 def _kr_raw_get(username: str) -> Optional[str]:
+    global _probing
     # Every read after a dismissed prompt would open a new one at once.
-    refusal = keyring_refusal()
-    if refusal:
-        raise KeyringRefused(refusal)
+    with _refusal_lock:
+        if _held_locked():
+            raise KeyringRefused(_refusal)
+        probe = _refusal is not None
+        if probe:
+            _probing = True
     try:
-        return keyring.get_password(SERVICE_NAME, username)
+        value = keyring.get_password(SERVICE_NAME, username)
     except (keyring.errors.KeyringLocked, keyring.errors.InitError) as e:
         raise _refuse(e) from e
     except keyring.errors.KeyringError as e:
+        if probe:
+            retry_keyring()
         raise ConnectorsError(
             f"Keyring get_password failed: {e}. Install a system "
             "credential store (gnome-keyring on Linux, or rely on "
@@ -259,6 +285,13 @@ def _kr_raw_get(username: str) -> Optional[str]:
             "configure it, and restart GAIA. See "
             "docs/security/connections.mdx."
         ) from e
+    finally:
+        if probe:
+            with _refusal_lock:
+                _probing = False
+    if probe:
+        retry_keyring()
+    return value
 
 
 def _kr_raw_delete(username: str) -> None:
