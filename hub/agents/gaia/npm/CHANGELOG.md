@@ -155,6 +155,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   (answer only with a plan, use no tools, don't do anything yet) now turns
   both checks off. "Don't run anything yet" alone still lets the agent write
   the files it was asked for, and "don't do anything else" keeps both checks.
+  Such an answer no longer ends with a note that a named file was not read.
+  A ban the request lifts itself ("don't touch anything until you've read X",
+  "only a plan, then do step 1") is not a request not to act.
 
 ## [0.3.5]
 

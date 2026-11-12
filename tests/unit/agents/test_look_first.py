@@ -201,6 +201,59 @@ def test_a_request_not_to_act_is_not_sent_to_look(agent, workspace):
     assert PLAN in result["result"]
 
 
+READ_NOTHING_PLAN = (
+    "1. I will load the module.\n2. I will add a test for each date helper.\n"
+    "3. I will run the new tests."
+)
+PLAN_ONLY_REQUEST = (
+    "For toybox/dates.py I want tests. Use no tools in this turn. Answer only "
+    "with a three-step plan."
+)
+
+
+def test_a_plan_the_user_asked_for_gets_no_note_about_not_looking(agent, workspace):
+    """rc18 round 2: "I haven't confirmed this works - I didn't read `x` this turn"."""
+    _script(agent, _answer(READ_NOTHING_PLAN))
+
+    result = agent.process_query(PLAN_ONLY_REQUEST, max_steps=10)
+
+    assert result["result"].strip() == READ_NOTHING_PLAN
+
+
+@pytest.mark.parametrize(
+    "answer, reason",
+    [
+        (
+            "I read toybox/dates.py and it exports three helpers.",
+            "I didn't read `toybox/dates.py` this turn",
+        ),
+        (
+            "toybox/dates.py doesn't exist in this workspace.",
+            "I said something doesn't exist without searching for it this turn",
+        ),
+    ],
+)
+def test_a_plan_only_turn_still_notes_a_false_claim_about_the_file(
+    agent, workspace, answer, reason
+):
+    # Another check may ask once for a rewrite; the model repeats itself.
+    _script(agent, _answer(answer), _answer(answer))
+
+    result = agent.process_query(PLAN_ONLY_REQUEST, max_steps=10)
+
+    assert reason in result["result"]
+
+
+def test_an_unread_file_is_still_noted_when_the_user_did_not_forbid_looking(
+    agent, workspace
+):
+    _script(agent, _answer(GUESS), _answer(GUESS))
+
+    result = agent.process_query("What does toybox/dates.py do?", max_steps=10)
+
+    assert "I didn't read `toybox/dates.py` this turn" in result["result"]
+
+
 def test_forbidding_extra_work_still_sends_the_answer_to_look(agent, workspace):
     sent = _script(agent, _answer(GUESS), _answer(GUESS))
 

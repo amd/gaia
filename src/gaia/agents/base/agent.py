@@ -1725,18 +1725,43 @@ def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
 # yet", "answer only with a plan". "Don't run anything yet" forbids running,
 # not writing the files asked for; "don't do anything else" limits the work.
 _NO_ACTION_REQUEST_PATTERN = re.compile(
-    r"\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?"
+    r"(?P<forbid>\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?"
     r"(?:(?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing))"
     r"\s+(?:any\s+tools?|tools)"
     r"|(?:do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+"
     r"(?:anything|any\s+files?))"
     r"(?=\s*(?:$|[.,;:!?)\]—–-]|(?:in\s+this\s+turn|yet|now|for\s+now|until"
-    r"|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b))"
+    r"|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b)))"
     r"|\b(?:answer|reply|respond)\s+(?:only|just)\s+with\s+(?:a|an|the|your)\s+"
     r"(?:[\w-]+\s+){0,3}plan\b"
     r"|\b(?:only|just)\s+(?:give|write|show|send|outline)\s+(?:me\s+)?"
     r"(?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}plan\b"
-    r"|\bplan\s+only\b|\bonly\s+(?:a|the)\s+plan\b",
+    r"|\bplan\s+only\b|\bonly\s+(?:a|the)\s+plan\b"
+    r"|\b(?:use|call|run)\s+no\s+tools\b",
+    re.IGNORECASE,
+)
+
+# "... until you've read X", "... but that one", "... except config.yaml": the
+# ban has a way out that the request itself wants taken.
+_NO_ACTION_EXCEPTION_PATTERN = re.compile(
+    r"\s*,?\s*(?:(?:until|till|before|unless)\s+you\b"
+    r"|(?:except|besides|other\s+than|apart\s+from)\b"
+    r"|but\s+(?:for\s+)?(?:that|this|the|those|these)\b)",
+    re.IGNORECASE,
+)
+
+# "Last time you answered without reading any files": a report, not a ban.
+_NARRATED_PAST_PATTERN = re.compile(
+    r"\b(?:you|we|i|it|they)\s+(?:\w+\s+)?(?:\w+ed|did|got|gave|wrote|said|ran"
+    r"|went|made)\b[^.!?\n]*$",
+    re.IGNORECASE,
+)
+
+# "... then do step 1", "and then carry it out": the plan is only the start.
+_PLAN_THEN_ACT_PATTERN = re.compile(
+    r"\b(?:then|after\s+that|afterwards?|next)\s*,?\s+(?:you\s+(?:can|should|may)\s+)?"
+    r"(?:do|carry|execute|run|go|start|implement|apply|proceed|make|create"
+    r"|write|perform|begin|continue|follow)\b",
     re.IGNORECASE,
 )
 
@@ -1745,9 +1770,22 @@ def _asks_for_no_action(request: str) -> bool:
     """Whether the user's own words this turn forbid acting: a plan is the answer.
 
     Such a request wins over GAIA's nudges to look first or to do an
-    announced step.
+    announced step. A ban the request lifts itself, a report of an earlier
+    turn, and a plan followed by "then do it" are not such a request.
     """
-    return bool(_NO_ACTION_REQUEST_PATTERN.search((request or "").replace("’", "'")))
+    text = (request or "").replace("’", "'")
+    for match in _NO_ACTION_REQUEST_PATTERN.finditer(text):
+        after = text[match.end() :]
+        if match.group("forbid"):
+            if _NO_ACTION_EXCEPTION_PATTERN.match(after):
+                continue
+            narrative = match.group().lower().startswith(("without", "never"))
+            if narrative and _NARRATED_PAST_PATTERN.search(text[: match.start()]):
+                continue
+        elif _PLAN_THEN_ACT_PATTERN.search(after):
+            continue
+        return True
+    return False
 
 
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
@@ -10356,6 +10394,7 @@ Do NOT wrap conversational replies in JSON.
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
+            told_not_to_look=getattr(self, "_turn_no_action_requested", False),
         )
 
     def _deliverable_findings(
@@ -11022,6 +11061,7 @@ Do NOT wrap conversational replies in JSON.
         grounding_fired: set = set()
         # "Do not run anything, answer only with a plan": no nudge to act.
         no_action_requested = _asks_for_no_action(self._request_text(user_input))
+        self._turn_no_action_requested = no_action_requested
         if no_action_requested:
             grounding_fired.add(LOOK)
 
