@@ -76,7 +76,6 @@ KNOWN_BUGS = {
     ("traceback", "connectors connect contract-walk"): "amd/gaia#7334",
     ("traceback", "mcp engineering --backend claude"): "amd/gaia#7335",
     ("traceback", "mcp code-index"): "amd/gaia#7335",
-    ("model server", "api start"): "amd/gaia#7344",
     ("model server", "chat"): "amd/gaia#7345",
     ("model server", "-p Reply with one word."): "amd/gaia#7345",
 }
@@ -188,7 +187,9 @@ def _params(commands_: list, rule: str):
         marks = []
         reason = KNOWN_BUGS.get((rule, command.name))
         if reason:
-            marks.append(pytest.mark.xfail(reason=reason, strict=True))
+            marks.append(
+                pytest.mark.xfail(reason=reason, strict=True, raises=AssertionError)
+            )
         yield pytest.param(command, id=command.name, marks=marks)
 
 
@@ -302,6 +303,16 @@ def _args(command: Command) -> list:
     return args
 
 
+def _not_timed_out_on_known_bug(rule: str, command: Command, run: Run) -> None:
+    """A known bug a command never reached must not read as fixed."""
+    issue = KNOWN_BUGS.get((rule, command.name))
+    if issue and run.code is None:
+        pytest.fail(
+            f"`gaia {command.name}` was stopped at the {TIMEOUT_S} s limit "
+            f"before reaching {issue}"
+        )
+
+
 def _no_traceback(command: Command, run: Run, when: str) -> None:
     assert (
         "Traceback (most recent call last)" not in run.output
@@ -315,6 +326,7 @@ def test_no_command_ends_in_a_traceback(command, tmp_path):
     if command.base_url:
         args += ["--base-url", DEAD_URL]
     run = _run(args, tmp_path / "down", DEAD_URL)
+    _not_timed_out_on_known_bug("traceback", command, run)
     _no_traceback(command, run, "with the model server down")
 
 
@@ -328,6 +340,7 @@ def test_model_server_contract(command, tmp_path):
         up = _run(args, tmp_path / "up", default.base_url)
         asked = bool(named.requests or default.requests)
         stray = [f"{r.method} {r.path}" for r in default.requests]
+    _not_timed_out_on_known_bug("model server", command, up)
     _no_traceback(command, up, "with the model server up")
     if command.base_url:
         assert not stray, (
@@ -346,6 +359,7 @@ def test_model_server_contract(command, tmp_path):
     if command.base_url:
         args += ["--base-url", DEAD_URL]
     down = _run(args, tmp_path / "down", DEAD_URL)
+    _not_timed_out_on_known_bug("model server", command, down)
     if down.code is None or command.name in REPORTS_SERVER_STATE:
         return
     assert down.code != 0 and down.output.strip(), (
@@ -372,3 +386,40 @@ def test_most_commands_are_started():
     every: list = []
     _walk(build_parser(), [], every)
     assert len(COMMANDS) > 0.7 * len(every)
+
+
+@pytest.mark.parametrize("code", [None, 0, 1])
+def test_a_timeout_never_reads_as_a_fixed_bug(code):
+    """A stopped run proves nothing, so a known-bug cell fails instead of passing."""
+    (rule, name), issue = next(iter(KNOWN_BUGS.items()))
+    run = Run(code, "", "")
+    if code is None:
+        with pytest.raises(pytest.fail.Exception, match=issue):
+            _not_timed_out_on_known_bug(rule, Command(name.split(), False), run)
+    else:
+        _not_timed_out_on_known_bug(rule, Command(name.split(), False), run)
+    # A long-running command with no known bug is still allowed to time out.
+    _not_timed_out_on_known_bug(
+        rule, Command(["no-such-command"], False), Run(None, "", "")
+    )
+    # Same command, other rule: its timeout is not this bug's business.
+    other = "model server" if rule == "traceback" else "traceback"
+    if (other, name) not in KNOWN_BUGS:
+        _not_timed_out_on_known_bug(
+            other, Command(name.split(), False), Run(None, "", "")
+        )
+
+
+def test_a_timeout_fails_a_known_bug_cell_instead_of_xpassing():
+    """pytest.fail is not an AssertionError, so raises= keeps it from counting as the bug."""
+    marks = [
+        mark
+        for param in _params(COMMANDS, "traceback")
+        for mark in param.marks
+        if mark.name == "xfail"
+    ]
+    assert marks, "no known-bug cell to check"
+    for mark in marks:
+        assert mark.kwargs["strict"] is True
+        assert mark.kwargs["raises"] is AssertionError
+    assert not issubclass(pytest.fail.Exception, AssertionError)
