@@ -118,6 +118,8 @@ SUMMARY_VIEW_KEYS = (
     "success",
     # The tool's own outcome word, e.g. "skipped" when a private chat saves nothing.
     "status",
+    # False on a call refused before it ran, so a relayed refusal contacted nothing.
+    "executed",
     "summary_truncated",
     "command_output",
     "latency_ms",
@@ -379,6 +381,9 @@ class CanonicalTranslator:
             out = [{"type": "status", "message": message, "retracts_answer": True}]
         else:
             out = self._user_status(message)
+        if out and event.get("status") == "warning":
+            # The one sub-field kept: a client shows a warning, not just a live line.
+            out[0]["level"] = "warning"
         phase = event.get("phase")
         if out and isinstance(phase, str) and phase:
             out[0]["phase"] = phase

@@ -315,8 +315,8 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
         }
-        // Merge consecutive status steps
-        if (step.type === 'status' && prev && prev.type === 'status' && step.active !== false) {
+        // Merge consecutive status steps, never over a warning
+        if (step.type === 'status' && prev && prev.type === 'status' && prev.success !== false && step.active !== false) {
             result[result.length - 1] = { ...step, label: step.label || prev.label };
             return;
         }
@@ -442,7 +442,7 @@ function isTurnError(row: ActivityRow): boolean {
     return row.type === 'error' || row.type === 'policy_alert';
 }
 
-/** A warning the agent raised mid-turn ("Execution paused"); it carries no phase for the live line. */
+/** A warning the agent raised mid-turn ("Execution paused"); it carries no phase for the live line, and stays with the turn. */
 function isWarning(row: ActivityRow): boolean {
     return row.type === 'status' && row.success === false;
 }
@@ -566,13 +566,13 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     }
 
     const lastIndex = timeline.length - 1;
-    const visibleRows = (rows: ActivityRow[], live: boolean) =>
-        rows.filter((r) => (shownWhenDone(r) || (live && isWarning(r))) && !isPlanShownLive(r, livePlan));
+    const visibleRows = (rows: ActivityRow[]) =>
+        rows.filter((r) => (shownWhenDone(r) || isWarning(r)) && !isPlanShownLive(r, livePlan));
     // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
     const openCalls = timeline.reduce((n, item, i) => {
         if (item.kind !== 'steps') return n;
         const live = running && i === lastIndex;
-        const visible = visibleRows(item.rows, live);
+        const visible = visibleRows(item.rows);
         if (visible.length < 2 && !live) return n;
         const open = openGroups.get(item.id) ?? (live || visible.some(isTurnError));
         return open ? n + visible.filter((r) => r.type === 'tool').length : n;
@@ -586,7 +586,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                         return <FlowNote key={item.row.id} text={item.row.detail ?? ''} />;
                     }
                     const live = running && i === lastIndex;
-                    const visible = visibleRows(item.rows, live);
+                    const visible = visibleRows(item.rows);
                     if (visible.length === 0) return null;
                     const failed = visible.some(isTurnError);
                     // A lone row is already one line; folding it would only add a click.
@@ -613,6 +613,8 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                 </button>
                             )}
                             {open && <div className="flow-steps-rows">{shown.map(renderRow)}</div>}
+                            {/* A warning never hides behind the fold. */}
+                            {!open && visible.filter(isWarning).map(renderRow)}
                         </div>
                     );
                 })}

@@ -1394,7 +1394,7 @@ _QUERY_SSE_RESPONSES = {
         "description": (
             "Server-Sent Events stream (text/event-stream). Each `data:` line is "
             "one canonical event discriminated on `type`: status {message, "
-            "phase?, queue?, retracts_answer?} | token {delta} | "
+            "level?, phase?, queue?, retracts_answer?} | token {delta} | "
             "reasoning {delta, retracts_answer?} | "
             "tool_call {tool, args} | tool_result {tool, data, render?} | "
             "needs_confirmation {run_id, action, summary, confirm_id?, "
