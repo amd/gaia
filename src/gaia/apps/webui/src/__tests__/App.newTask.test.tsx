@@ -179,7 +179,7 @@ describe('a new chat', () => {
         await sendFirstMessage('hello there');
 
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
-        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ title: 'New Task', agent_type: 'gaia' });
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ title: 'New chat', agent_type: 'gaia' });
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
         expect(mocked.sendMessageStream.mock.calls[0].slice(0, 2)).toEqual(['sess-new-0001', 'hello there']);
     });

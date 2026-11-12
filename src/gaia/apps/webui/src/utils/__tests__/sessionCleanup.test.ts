@@ -32,6 +32,11 @@ describe('isAbandonedDraft', () => {
         expect(isAbandonedDraft('s1', baseState)).toBe(true);
     });
 
+    it('is true for an untouched "New chat" draft, the title new chats get now', () => {
+        const state = { ...baseState, sessions: [session({ title: 'New chat' })] };
+        expect(isAbandonedDraft('s1', state)).toBe(true);
+    });
+
     it('is false when the session is unknown', () => {
         expect(isAbandonedDraft('missing', baseState)).toBe(false);
     });

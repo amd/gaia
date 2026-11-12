@@ -523,7 +523,7 @@ function App() {
         let session;
         try {
             session = await api.createSession({
-                title: 'New Task',
+                title: 'New chat',
                 agent_type: FLAGSHIP_AGENT_ID,
                 document_ids: store.draftDocumentIds,
                 private: store.draftPrivate,

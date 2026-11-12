@@ -499,6 +499,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A new chat whose empty history is still loading when its first message goes out. */
+async function withSlowNewChat(page: Page): Promise<void> {
+    const created = { ...SESSIONS[0], title: 'New chat', message_count: 0 };
+    await page.route((url) => url.pathname === '/api/sessions', (route) =>
+        route.request().method() === 'POST' ? route.fulfill({ json: created }) : route.fallback());
+    await page.route((url) => url.pathname === `/api/chat/permissions/${ANSWER_SESSION}`, (route) =>
+        route.request().method() === 'PUT' || route.request().method() === 'POST'
+            ? route.fulfill({ json: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] } })
+            : route.fallback());
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, () => { /* never answers */ });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a new chat's first message shows at once, with no skeleton (${locale})`, async ({ page }, info) => {
+        await open(page, '', locale, withSlowNewChat);
+        await page.locator('textarea').first().fill('Give me three tips for better sleep.');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.msg-user')).toHaveText('Give me three tips for better sleep.');
+        await expect(page.locator('.skeleton-messages')).toHaveCount(0);
+        await expect(page.locator('.streaming-bubble .thinking-indicator')).toBeVisible();
+        await expect(page.locator('.task-title')).toHaveText(locale === 'en' ? 'New chat' : /محادثة جديدة/);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`first-send-${locale}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
