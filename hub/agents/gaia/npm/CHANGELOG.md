@@ -105,7 +105,7 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   undo, briefings and autonomous runs went with the old agent. See the Email
   section in the README.
   On upgrade GAIA removes the old agent's install folder when it is provably
-  that install, takes back the connector access it held, and names any
+  that install, clears its leftover connector state, and names any
   scheduled email that will no longer be sent. The old agent's data stays in
   `~/.gaia/email/`. Installing the `email` agent id is refused.
 - **Generated images and audio arrive as a `media` card.** A successful
