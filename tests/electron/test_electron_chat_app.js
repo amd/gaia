@@ -1129,7 +1129,10 @@ describe('Chat App Integration', () => {
     it('should prompt differently on an empty chat, a reply, and during a running reply', () => {
       expectTranslated(chatContent, "messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}", 'composer.placeholder', 'Ask GAIA anything');
       expect(EN_MESSAGES['composer.reply']).toBe('Reply to GAIA');
-      expect(chatContent).toContain('placeholder={isStreaming');
+      // A waiting question outranks the queue: the box answers it.
+      expect(chatContent).toContain('placeholder={answeringId');
+      expect(chatContent).toContain("? t('composer.answerQuestion')");
+      expect(chatContent).toContain(': isStreaming');
       expectTranslated(chatContent, "? t('composer.queueNext')", 'composer.queueNext', 'Queue your next message');
     });
 
@@ -1432,7 +1435,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have aria-label on file path input', () => {
-      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to index');
+      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to add');
     });
 
     it('should have aria-label on close button', () => {

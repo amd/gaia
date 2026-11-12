@@ -81,6 +81,7 @@ from gaia.agents.base.memory_store import (
     MemoryContentError,
     MemoryScrubError,
     content_stems,
+    fact_words,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.agents.base.tool_outcome import (
@@ -99,6 +100,7 @@ from gaia.llm.lemonade_client import (
     backend_crash_remedy,
     configured_lemonade_url,
     find_model_requirement,
+    reasoning_headroom,
 )
 from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
@@ -440,9 +442,9 @@ def _forget_shared(words: set, content: str) -> set:
     }
 
 
-def _forget_text(item: Dict) -> str:
-    """*item*'s words in order, for telling copies of one memory apart."""
-    return " ".join(re.findall(r"[a-z0-9]+", str(item.get("content", "")).lower()))
+def _forget_text(item: Dict) -> Tuple[str, ...]:
+    """*item*'s words bar filler, for telling copies of one memory apart."""
+    return fact_words(str(item.get("content", "")))
 
 
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
@@ -613,6 +615,12 @@ SAVE_WHEN_ASKED_PROMPT = (
     "The user asked you to remember this, but no remember call ran, so nothing "
     "was saved. Call `remember` now with what they asked you to keep, then give "
     "your answer."
+)
+#: Ends a remember error caused by an argument: extraction can still keep the fact.
+SAVE_FAILED_ON_ARGUMENT = (
+    " This call stored nothing. Call remember again with a valid value; if you "
+    "don't, tell the user the save failed, not that it won't be remembered: "
+    "GAIA may still learn the fact from this chat."
 )
 
 
@@ -1147,6 +1155,15 @@ def _classify_embedding_failure(exc: Exception) -> str:
     if any(marker in text for marker in _MODEL_LOAD_FAILED_MARKERS):
         return MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED
     return MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE
+
+
+#: What remember / update_memory say when they refuse a secret. Unsaid, the
+#: model took "not stored" as "gone" and denied a secret still on screen.
+_CREDENTIAL_NOT_STORED = (
+    "Not stored — this looks like a credential (API key, password, or similar "
+    "secret). GAIA does not keep secrets in memory, so a new chat won't know "
+    "it. The user's message is still in this chat, as it was sent."
+)
 
 
 class MemoryMixin(ProceduralMemoryMixin):
@@ -2369,10 +2386,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
             pool_by_id = {item["id"]: item for item in candidate_pool}
 
-            # Preserve FAISS ranking order, only keep items that pass filters
+            # Preserve FAISS ranking order, only keep items that pass filters.
+            # The embedding BLOB is for the index; results go to the model.
             for kid, _score in faiss_hits:
                 item = pool_by_id.get(kid)
                 if item is not None:
+                    item.pop("embedding", None)
                     vector_results.append(item)
 
         # Step 3: FTS5 BM25 search
@@ -3525,7 +3544,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     messages=[{"role": "user", "content": prompt}],
                     system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
                     temperature=0.1,
-                    max_tokens=256,
+                    max_tokens=256
+                    + reasoning_headroom(getattr(self.chat, "effective_model", None)),
                     **self._side_request_kwargs(),
                 )
 
@@ -3602,11 +3622,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                         e,
                     )
 
-            except json.JSONDecodeError:
-                logger.debug(
-                    "[MemoryMixin] reconciliation JSON parse failed for pair %s/%s",
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "[MemoryMixin] reconciliation reply for pair %s/%s was not JSON "
+                    "(%s) — it will be re-checked next startup",
                     id_a[:8],
                     id_b[:8],
+                    e,
                 )
             except Exception as e:
                 logger.debug(
@@ -5824,7 +5846,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {
                     "status": "error",
                     "message": (
-                        f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}"
+                        f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}."
+                        + SAVE_FAILED_ON_ARGUMENT
                     ),
                 }
 
@@ -5868,11 +5891,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
                 return {
                     "status": "skipped",
-                    "message": (
-                        "Not stored — this looks like a credential (API key, "
-                        "password, or similar secret). GAIA does not keep "
-                        "secrets in memory; use a password manager instead."
-                    ),
+                    "message": _CREDENTIAL_NOT_STORED
+                    + " Use a password manager instead.",
                 }
 
             if category not in UNSOURCED_CATEGORIES and mixin._unrequested_material(
@@ -5891,7 +5911,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 except ValueError:
                     return {
                         "status": "error",
-                        "message": "Invalid due_at. Use ISO 8601 format.",
+                        "message": "Invalid due_at. Use ISO 8601 format."
+                        + SAVE_FAILED_ON_ARGUMENT,
                     }
 
             # The agent owns scoping. A label the model picks can file a
@@ -6170,11 +6191,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     )
                     return {
                         "status": "skipped",
-                        "message": (
-                            "Not stored — this looks like a credential (API "
-                            "key, password, or similar secret). GAIA does not "
-                            "keep secrets in memory."
-                        ),
+                        "message": _CREDENTIAL_NOT_STORED,
                     }
                 # Untruncated: the store checks it for markup, then truncates.
                 kwargs["content"] = content
@@ -6270,15 +6287,18 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Remove one memory: its ID from recall, or the user's words for it (e.g. 'allergic to shellfish'). Words erase only the one memory they clearly match; otherwise nothing is erased and the matching IDs come back. To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
+            ctx = mixin._memory_context
+            contexts = None if ctx == "global" else (ctx, "global")
             try:
                 # forget(), not delete(): extraction must not learn it again.
-                removed = mixin._memory_store.forget(knowledge_id)
+                erased_ids = mixin._memory_store.forget_with_copies(
+                    knowledge_id, contexts
+                )
             except ValueError as exc:
                 return {"status": "error", "message": str(exc)}
             matches: List[Dict] = []
             candidates: List[Dict] = []
-            erased_ids = [knowledge_id] if removed else []
-            if not removed:
+            if not erased_ids:
                 description = knowledge_id
                 try:
                     matches, candidates = mixin._forget_lookup(description)
@@ -6294,8 +6314,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "display_message": "Couldn't search memory, so nothing was erased",
                     }
                 for item in matches:
-                    if mixin._memory_store.forget(item["id"]):
-                        erased_ids.append(item["id"])
+                    if item["id"] not in erased_ids:
+                        erased_ids += mixin._memory_store.forget_with_copies(
+                            item["id"], contexts
+                        )
             if erased_ids:
                 for kid in erased_ids:
                     mixin._faiss_remove(kid)

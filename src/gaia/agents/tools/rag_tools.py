@@ -1462,18 +1462,20 @@ class RAGToolsMixin:
                                 f"[query_specific_file] '{basename}' not indexed — "
                                 f"auto-indexing '{resolved}' before querying"
                             )
+                            # Recorded as index_document records it, so the
+                            # session never lists one file under two spellings.
                             idx_result, job = _index_within_budget(
                                 rag,
                                 resolved,
                                 on_indexed=functools.partial(
-                                    self._attach_indexed_document, file_path
+                                    self._attach_indexed_document, disk_path
                                 ),
                             )
                             if idx_result is None:
                                 return _indexing_in_progress(job)
                             if idx_result.get("success"):
                                 save_warning = self._attach_indexed_document(
-                                    file_path, idx_result
+                                    disk_path, idx_result
                                 )
                                 # Re-match after auto-indexing
                                 # Include resolved (absolute) path since index_document
@@ -2209,6 +2211,17 @@ class RAGToolsMixin:
                         }
                     if result.get("error_type") in _CACHE_LOCK_HINTS:
                         return _index_cache_error(result, file_path)
+                    if result.get("error_type") == "vision_model_failed":
+                        return {
+                            "status": "error",
+                            "error": result.get("error"),
+                            "error_type": "vision_model_failed",
+                            "file_name": result.get("file_name", Path(file_path).name),
+                            "hint": (
+                                "The vision model failed, not the file. Tell the user "
+                                "the error: it names the model and how to fix it."
+                            ),
+                        }
                     err = result.get("error", f"Failed to index: {file_path}")
                     hint = (
                         "The file is empty (0 bytes) — tell the user there is no content to read."

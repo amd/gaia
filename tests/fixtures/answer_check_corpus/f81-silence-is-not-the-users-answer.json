@@ -1,0 +1,23 @@
+{
+  "kind": "question",
+  "finding": "F81 (amd/gaia#7294)",
+  "why": "Nobody answered the question. The model must hear that, not get its own default back as if the user had picked it.",
+  "question": {
+    "message": "What kind of cleanup do you want for la1?",
+    "choices": [
+      "Organize into subfolders by type",
+      "Delete duplicates"
+    ],
+    "default_if_no_response": "Organize into subfolders by type",
+    "timeout_seconds": 300
+  },
+  "reply": null,
+  "expect": {
+    "result_has": [
+      "__NO_RESPONSE__"
+    ],
+    "result_is_not": [
+      "Organize into subfolders by type"
+    ]
+  }
+}
