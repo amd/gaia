@@ -422,6 +422,9 @@ for (const [title, locale, name] of [
         await page.locator('input[type="file"]').first().setInputFiles({ name, mimeType: 'video/mp4', buffer: Buffer.from('media') });
         await expect(page.locator('.composer-attachment-state:not([role="alert"])')).toBeVisible();
         await expect(page.locator('.composer-attachment.has-error')).toHaveCount(0);
+        // A long name is cut in the middle, so its extension stays in view.
+        await expect(page.locator('.composer-attachment-name')).toHaveText(/\.(mp4|m4a)$/);
+        await shot(page, `attachment-name-${locale}`);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('recording.png') });
     });
@@ -433,6 +436,58 @@ test('new chat', async ({ page }) => {
     await expect(page.locator('.sb-location-name')).toBeVisible();
     expect(await audit(page)).toEqual([]);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`the new-chat message box stays put while typing (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const box = page.locator('.new-chat textarea').first();
+        await expect(box).toBeVisible();
+        const before = (await box.boundingBox())!;
+        await box.fill('h');
+        await shot(page, `new-chat-typed-${locale}`);
+        const after = (await box.boundingBox())!;
+        expect(Math.abs(after.y - before.y), 'the box jumped on the first keystroke').toBeLessThan(2);
+        await expect(page.locator('.new-chat-greeting')).toBeVisible();
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
+            json: { cards: [], working_folder: { path: '/home/you/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true } },
+        })));
+        const add = page.locator('.new-chat-meta button.new-chat-folder');
+        await expect(add).toBeVisible();
+        await expect(page.locator('.new-chat-meta')).not.toContainText('documents');
+        await shot(page, `new-chat-add-folder-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const row = page.locator('.sb-row').filter({ hasText: 'Compare two lease PDFs' });
+        await expect(row).toBeVisible();
+        const rowBox = (await row.boundingBox())!;
+        const titleBox = (await row.locator('.sb-row-title').boundingBox())!;
+        // Rename, pin and delete appear over the row on hover, not in space kept beside the title.
+        expect(titleBox.width + 30, 'title cut short to leave room for hidden buttons').toBeGreaterThan(rowBox.width * 0.85);
+        await row.hover();
+        await expect(row.locator('.sb-row-delete')).toBeVisible();
+        await shot(page, `sidebar-row-hover-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        // While renaming, pin and delete sit beside the name box, not over the end of what is typed.
+        await row.locator('.sb-row-rename').click();
+        // The title gives way to the name box, so find the row by it now.
+        const edit = page.locator('.sb-row-edit');
+        await expect(edit).toBeFocused();
+        const editBox = (await edit.boundingBox())!;
+        const actionsBox = (await page.locator('.sb-row:has(.sb-row-edit) .sb-row-actions').boundingBox())!;
+        const overlap = Math.min(editBox.x + editBox.width, actionsBox.x + actionsBox.width) - Math.max(editBox.x, actionsBox.x);
+        expect(overlap, 'pin and delete cover the name being typed').toBeLessThanOrEqual(0);
+    });
+}
 
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
@@ -498,6 +553,234 @@ for (const locale of ['ar', 'en']) {
         await page.locator('.render-calc').screenshot({ path: info.outputPath(`loan-card-${locale}.png`) });
     });
 }
+
+/** A new chat whose empty history is still loading when its first message goes out. */
+async function withSlowNewChat(page: Page): Promise<void> {
+    const created = { ...SESSIONS[0], title: 'New chat', message_count: 0 };
+    await page.route((url) => url.pathname === '/api/sessions', (route) =>
+        route.request().method() === 'POST' ? route.fulfill({ json: created }) : route.fallback());
+    await page.route((url) => url.pathname === `/api/chat/permissions/${ANSWER_SESSION}`, (route) =>
+        route.request().method() === 'PUT' || route.request().method() === 'POST'
+            ? route.fulfill({ json: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] } })
+            : route.fallback());
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, () => { /* never answers */ });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a new chat's first message shows at once, with no skeleton (${locale})`, async ({ page }, info) => {
+        await open(page, '', locale, withSlowNewChat);
+        await page.locator('textarea').first().fill('Give me three tips for better sleep.');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.msg-user')).toHaveText('Give me three tips for better sleep.');
+        await expect(page.locator('.skeleton-messages')).toHaveCount(0);
+        await expect(page.locator('.streaming-bubble .thinking-indicator')).toBeVisible();
+        await expect(page.locator('.task-title')).toHaveText(locale === 'en' ? 'New chat' : /محادثة جديدة/);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`first-send-${locale}.png`) });
+    });
+}
+
+async function withFailedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Give me three tips for better sleep.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'Error: `fireworks.no-such-model` isn\'t available on Fireworks AI (HTTP 404).',
+                        inference_stats: { seconds: 2, place: 'via Fireworks AI' },
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a failed answer is footed as failed (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFailedAnswer);
+        const footer = page.locator('.msg-assistant .msg-stats-summary');
+        await expect(footer).toContainText(locale === 'en' ? 'Failed after' : 'فشلت بعد');
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').hover();
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`failed-answer-${locale}.png`) });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`the latest answer's actions sit under its text, at the start edge (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const answer = page.locator('.msg-assistant').last();
+        await expect(answer).toContainText('Action items from Aug 28');
+        const actions = answer.locator('.msg-actions');
+        await expect(actions).toHaveCSS('opacity', '1');
+        const [row, body] = [await actions.boundingBox(), await answer.locator('.msg-body').boundingBox()];
+        expect(row!.y).toBeGreaterThanOrEqual(body!.y + body!.height - 1);
+        const startGap = locale === 'ar'
+            ? Math.abs(row!.x + row!.width - (body!.x + body!.width))
+            : Math.abs(row!.x - body!.x);
+        expect(startGap).toBeLessThan(8);
+        for (const button of await actions.locator('button').all()) {
+            const box = await button.boundingBox();
+            expect(Math.min(box!.width, box!.height)).toBeGreaterThanOrEqual(28);
+        }
+        expect(await audit(page)).toEqual([]);
+        await answer.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a sent message opened for editing (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().focus();
+        await page.keyboard.press('ArrowUp');
+        const editor = page.locator('.msg-edit-input');
+        await expect(editor).toBeFocused();
+        await editor.press('End');
+        await page.keyboard.type(' and the owners');
+        expect(await audit(page)).toEqual([]);
+        const [box, bubble] = [await editor.boundingBox(), await page.locator('.msg-user:has(.msg-edit) .msg-inner').boundingBox()];
+        expect(box!.width).toBeGreaterThan(bubble!.width * 0.8);
+        await page.screenshot({ path: info.outputPath(`edit-message-${locale}.png`) });
+        await page.locator('.msg-assistant').last().hover();
+        await page.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
+    });
+}
+
+/** A turn GAIA re-checked: the model wrote its answer, read the file back, then wrote it again. */
+const CHECKED_ANSWER = [
+    'Done — except the last step, which you declined.',
+    '',
+    '| Month | Total |',
+    '|---|---|',
+    '| October 2026 | 47.70 |',
+    '| November 2026 | 36.75 |',
+    '| **Grand total** | **84.45** |',
+    '',
+    '**Renamed:** `draft_old.txt` → `draft_archive.txt`',
+].join('\n');
+
+async function withCheckedAnswer(page: Page): Promise<void> {
+    const step = (id: number, extra: Record<string, unknown>) => ({ id, active: false, timestamp: id, ...extra });
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Total both expense files into summary.md and rename draft_old.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `${CHECKED_ANSWER}\n\nSay the word and I'll add the line.`, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            step(1, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(2, { type: 'tool', label: 'Write file', tool: 'write_file', success: true }),
+                            step(3, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER }),
+                            step(4, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(5, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER.replace('declined.', 'declined (read back to confirm).') }),
+                            step(6, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a re-checked answer shows once (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCheckedAnswer);
+        await expect(page.locator('.md-table')).toHaveCount(1);
+        await expect(page.locator('.msg-assistant')).not.toContainText('read back to confirm');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`checked-answer-${locale}.png`) });
+    });
+}
+
+async function withStoppedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write about the history of canals', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: 'The earliest canals carried water to fields, not boats. In Mesopotamia', created_at: NOW.toISOString(), rag_sources: null, stopped: true },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a stopped answer offers Continue and Try again (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withStoppedAnswer);
+        const actions = page.locator('.msg-assistant .msg-try-again');
+        await expect(actions).toHaveCount(2);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`stopped-answer-${locale}.png`) });
+    });
+}
+
+/** The Connect card a mail tool sends when no account is usable. */
+const CONNECT_CARD = { kind: 'connect_account', providers: ['google', 'microsoft'], agent_id: 'installed:gaia', success: false, status: 'error', display_message: 'Needs a connected account' };
+
+async function withConnectCard(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Did my landlord email me about the lease?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        // No marker and no command: the button comes from the tool result alone.
+                        content: "I can't check yet because no mail account is connected. Use the Connect button above, then ask me again.",
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'list_inbox', active: false, success: false, render: 'connect_account', data: CONNECT_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a tool with no account shows the Connect card (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withConnectCard);
+        const card = page.locator('.render-connect');
+        await expect(card.locator('.render-connect__button')).toHaveCount(2);
+        await expect(card.locator('.render-connect__button').first()).toContainText('Google');
+        await expect(card).not.toContainText('gaia connectors');
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`connect-card-${locale}.png`) });
+        await shot(page, `connect-card-${locale}`);
+    });
+
+    test(`the Connect card says which account is already connected (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await withConnectCard(p); await withConnectors(p); });
+        const card = page.locator('.render-connect');
+        await expect(card.locator('.render-connect__connected')).toHaveCount(1);
+        await expect(card.locator('.render-connect__button--quiet')).toHaveCount(1);
+        // Returning with the account connected offers to run the question again.
+        await expect(page.locator('.connector-retry-banner')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`connect-card-connected-${locale}.png`) });
+        await shot(page, `connect-card-connected-${locale}`);
+    });
+}
+
+test('the Connect card fits a phone', async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withConnectCard);
+    await expect(page.locator('.render-connect__button')).toHaveCount(2);
+    // The closed sidebar drawer waits off screen at this width; judge the card.
+    const problems = (await audit(page)).filter((p) => p.includes('render-connect') || p.includes('scrolls sideways'));
+    expect(problems).toEqual([]);
+    await page.locator('.render-connect').screenshot({ path: info.outputPath('connect-card-phone.png') });
+    await shot(page, 'connect-card-phone');
+});
 
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
@@ -585,6 +868,92 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         await expect(seconds).toHaveText(/^\d+s$/);
         expect(await seconds.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
         await shot(page, `live-status-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const QUESTION_EVENTS = [
+    {
+        type: 'needs_input', request_id: 'q-1', question: 'Which colour do you prefer?',
+        options: [
+            { value: 'red', label: 'Red', description: '' },
+            { value: 'green', label: 'Green', description: '' },
+            { value: 'blue', label: 'Blue', description: '' },
+        ],
+        allow_free_text: true, sensitive: false, timeout_seconds: 300,
+    },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`a waiting question is answered from the message box and kept as a record (${locale})`, async ({ page }) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, QUESTION_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.route('**/api/chat/user-input', (route) => route.fulfill({ json: { status: 'ok', request_id: 'q-1' } }));
+        const box = page.getByRole('textbox').first();
+        await box.fill('Ask me a colour');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__option')).toHaveCount(3);
+        await expect(box).toBeFocused();
+        await expect(page.locator('.render-needs-input__hint').last(), 'the question is hidden under the message box').toBeInViewport({ ratio: 1 });
+        await shot(page, `question-waiting-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await box.fill('2');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__answered-note')).toBeVisible();
+        await expect(page.locator('.queued-message')).toHaveCount(0);
+        await shot(page, `question-answered-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+/** A multi-step turn that reasons before every call, then keeps thinking. */
+function holdOnThoughtfulSteps(): void {
+    const realFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+        if (!url.includes('/api/chat/send')) return realFetch(input, init);
+        const files = ['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt'];
+        const events = files.flatMap((f) => [
+            { type: 'thinking', content: `I need to read ${f} next.` },
+            { type: 'tool_start', tool: 'read_file', detail: `file_path: ${f}`, narration: `Reading file: ${f}` },
+            { type: 'tool_end', success: true, result: 'Read 2 KB' },
+        ]).concat([{ type: 'thinking', content: 'Now add up the months.' }]);
+        const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+                for (const e of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`));
+            },
+        });
+        return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a running turn lists its steps, not a thought between each (${locale})`, async ({ page }) => {
+        await page.addInitScript(holdOnThoughtfulSteps);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const box = page.getByRole('textbox').first();
+        await box.fill('Read the four files');
+        await box.press('Enter');
+        const live = page.locator('.flow-steps.live');
+        await expect(live.locator('.flow-tool')).toHaveCount(4);
+        await expect(live.locator('.flow-tool-thought-mark')).toHaveCount(4);
+        await expect(live.locator('.flow-reasoning')).toHaveCount(1);
+        await expect(live.locator('.flow-thought-hacker')).toHaveCount(0);
+        await shot(page, `thoughtful-steps-${locale}`);
+        await live.locator('.flow-tool-header').first().click();
+        await expect(live.locator('.flow-tool-thought')).toContainText('expenses_oct.csv');
+        await shot(page, `thoughtful-steps-open-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -1075,6 +1444,54 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** Starts with digits, like a real Hugging Face org: unisolated, an Arabic line moves them to its end. */
+const UNLISTED_ID = '01-ai/no-such-model-violet-otter';
+const CUSTOM_TITLE = { ar: 'معرّف نموذج مخصص', en: 'Custom model ID' };
+const CUSTOM_NOTE = {
+    ar: { unlisted: 'لا يُدرج', unchecked: 'تعذّر على GAIA التحقق' },
+    en: { unlisted: "doesn't list", unchecked: "couldn't check this ID" },
+};
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const checked of [true, false]) {
+        const state = checked ? 'unlisted' : 'unchecked';
+        test(`a saved custom model the server ${checked ? 'does not list' : 'could not check'} gets a note (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/settings', (route) => {
+                if (route.request().method() !== 'PUT') return route.fallback();
+                return route.fulfill({ json: {
+                    custom_model: UNLISTED_ID, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+                    model_status: { found: false, downloaded: false, loaded: false, checked },
+                } });
+            }));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            const dialog = page.getByRole('dialog');
+            await dialog.locator('[data-section="advanced"]').click();
+            const section = dialog.locator('details.settings-disclosure', { has: page.locator('summary', { hasText: CUSTOM_TITLE[locale] }) });
+            await section.locator('summary').first().scrollIntoViewIfNeeded();
+            await section.locator('summary').first().click();
+            const input = section.locator('input.model-input');
+            await input.fill(UNLISTED_ID);
+            await input.press('Enter');
+
+            const note = section.locator('.model-warning[role="status"]');
+            await expect(note).toContainText(CUSTOM_NOTE[locale][state]);
+            await note.scrollIntoViewIfNeeded();
+            await shot(page, `custom-model-${state}-${locale}`);
+            if (checked) {
+                // The ID is its own bidi island in the Arabic sentence, under the section title and in the box.
+                await expect(note).toContainText(UNLISTED_ID);
+                if (locale === 'ar') expect(await note.textContent()).toContain(`⁨${UNLISTED_ID}⁩`);
+                expect(await section.locator('.settings-disclosure-hint').textContent()).toBe(`⁦${UNLISTED_ID}⁩`);
+                expect(await input.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            } else {
+                await expect(note).not.toContainText(UNLISTED_ID);
+            }
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.model-warning')).toEqual([]);
+        });
+    }
+}
+
 /** Text left in English in the Arabic UI, outside names, numbers and the English gloss. */
 const leftoverEnglish = (root: Page) =>
     root.locator('.setup').evaluate((setup) => {
@@ -1288,6 +1705,31 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, null);
+            await p.route('**/api/providers/active', (route) => route.fulfill({
+                json: {
+                    provider: 'fireworks', model: 'fireworks.glm-5p3-flash', label: 'glm-5p3-flash', remote: true,
+                    provider_name: 'Fireworks AI', is_default: false, restore: { status: 'none', message: null },
+                },
+            }));
+        });
+        await page.locator('.composer-chip').filter({ hasText: 'glm-5p3-flash' }).click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-heading').first()).toHaveText('Fireworks AI');
+        await expect(menu.locator('.popover-subheading')).toBeVisible();
+        await shot(page, `model-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await menu.getByRole('option', { name: /gpt-oss 20B/ }).click();
+        await expect(menu.locator('.model-download-confirm')).toContainText('3 GB');
+        await shot(page, `model-menu-confirm-${locale}`);
+        // The question scrolls into view under its row, so the list is scrolled on purpose here.
+        expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
         const openConnectors = async (page: Page, rows?: unknown[], extra?: Record<string, unknown>) => {
@@ -1336,6 +1778,34 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.oauth-setup-form').scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-setup`);
             await expect(page.locator('button button')).toHaveCount(0);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connected tile offers Personalize, and connecting a server offers it in a banner', async ({ page }) => {
+            const brave = { id: 'brave-search', display_name: 'Brave Search', type: 'mcp_server', icon: null, category: 'general',
+                tier: 'core', description: 'Lets GAIA work with Brave Search on your behalf.', configurable: true, enabled: true,
+                account_id: null, default_scopes: [], available_scopes: [], mcp_env_keys: ['BRAVE_API_KEY'], oauth_setup_fields: [] };
+            await openConnectors(page, undefined, {
+                'POST /connectors/brave-search/configure': {},
+                'POST /connectors/brave-search/test': { ok: true, detail: '' },
+                'GET /connectors/brave-search': { ...brave, configured: true },
+            });
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            const row = page.locator('.connector-detail .connector-personalize');
+            await expect(row).toBeVisible();
+            await row.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-personalize-tile`);
+            expect(await audit(page)).toEqual([]);
+
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Brave Search' }).click();
+            await page.locator('.mcp-key-input').fill('BSA-not-a-real-key');
+            await page.locator('.btn-model-save').click();
+            const offer = page.locator('.connector-personalize--offer');
+            await expect(offer).toBeVisible();
+            await offer.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-personalize-offer`);
             expect(await audit(page)).toEqual([]);
         });
 
@@ -1628,6 +2098,31 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `spend-popover-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.spend-meter-panel')).toEqual([]);
+    });
+}
+
+const MONTH_SPENDING = {
+    month: '2026-10', total_usd: 3.42, turns: 37, unpriced_turns: 4, unreported_turns: 5,
+    limit_usd: 20, state: 'ok', by_model: [], price_source: 'list price',
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`monthly spending headline leaves out unpriced and unreported turns (${locale})`, async ({ page }) => {
+        await openModelPage(page, locale);
+        await page.route((url) => url.pathname === '/api/spending', (route) => route.fulfill({ json: MONTH_SPENDING }));
+        await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+        const spending = page.locator('section.spending');
+        await expect(spending.locator('.spending-total')).toContainText('$3.42');
+        await expect(spending.locator('.spending-total')).toContainText('$20');
+        await expect(spending.locator('.spending-total')).toContainText(locale === 'ar' ? 'أدوار المحادثة السحابية: 28' : /28 cloud chat turns/);
+        await expect(spending.locator('p.settings-hint')).toHaveCount(2);
+        await expect(spending.locator('p.settings-hint').nth(0)).toContainText(locale === 'ar' ? '(4)' : 'Plus 4 turns on models with an unknown price');
+        await expect(spending.locator('p.settings-hint').nth(1)).toContainText(locale === 'ar' ? '(5)' : 'Plus 5 turns whose usage wasn’t reported');
+        await spending.scrollIntoViewIfNeeded();
+        await scrollPane(page, 'bottom');
+        await shot(page, `spending-month-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, 'section.spending')).toEqual([]);
     });
 }
 
@@ -2659,6 +3154,92 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const CHANGE_PROMPTS = {
+    write: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-write',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\summary.md', content: '# Expenses Summary\n\n| Month | Total |\n|---|---|\n| October | 412.50 |\n| November | 388.10 |\n\nGrand total: 800.60\n' },
+    },
+    edit: {
+        type: 'permission_request', tool: 'edit_file', tool_label: 'editing file', confirm_id: 'c-edit',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\notes.txt', old_content: '- owner: Dana\n', new_content: '- owner: Dana\nreviewed\n' },
+    },
+    // A right-to-left override would draw the line reversed; it shows as a code instead.
+    hidden: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-hidden',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\run.py', content: 'ok = 1\n# \u202Eevil()\n' },
+    },
+    // A right-to-left mark before each statement would draw them in reverse order.
+    rlm: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-rlm',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\run.py', content: 'title = "مرحبا"\n\u200Fsafe_step(); \u200Fdelete_everything();\n' },
+    },
+};
+
+/** Left edge of `needle` as drawn inside `selector`, so a test can check visual order. */
+async function drawnLeft(page: Page, selector: string, needle: string): Promise<number> {
+    return page.locator(selector).evaluate((el, word) => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const at = node.textContent?.indexOf(word) ?? -1;
+            if (at < 0) continue;
+            const range = document.createRange();
+            range.setStart(node, at);
+            range.setEnd(node, at + word.length);
+            return range.getBoundingClientRect().left;
+        }
+        throw new Error(`${word} not drawn`);
+    }, needle);
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const [kind, prompt] of Object.entries(CHANGE_PROMPTS)) {
+        test(`a ${kind} prompt shows what will land in the file (${locale})`, async ({ page }) => {
+            await page.addInitScript(streamThenWait, [prompt]);
+            await open(page, `#${ANSWER_SESSION}`, locale);
+            await page.locator('textarea').first().fill('update my notes');
+            await page.keyboard.press('Enter');
+            const preview = page.locator('.perm-card-change');
+            await expect(preview).toBeVisible();
+            await expect(page.locator('.perm-card-pre').filter({ hasText: '"file_path"' })).toHaveCount(0);
+            if (kind === 'rlm') {
+                const shown = '[data-testid="perm-write-preview"]';
+                await expect(page.locator(shown)).toContainText('[U+200F]safe_step(); [U+200F]delete_everything();');
+                await expect(page.getByTestId('perm-change-unseen')).toBeVisible();
+                expect(await drawnLeft(page, shown, 'safe_step')).toBeLessThan(await drawnLeft(page, shown, 'delete_everything'));
+            }
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+            await shot(page, `permission-${kind}-${locale}`);
+        });
+    }
+}
+
+const DECLINED_STEPS = [
+    { type: 'tool_start', tool: 'answer_question_about_image', narration: 'Looking at the image' },
+    { type: 'tool_result', success: false, summary: "Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded" },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'run_python', narration: 'Running Python' },
+    { type: 'tool_result', success: false, status: 'denied', summary: "Tool 'run_python' was denied by the user." },
+    { type: 'tool_end', success: false },
+    { type: 'tool_start', tool: 'request_user_input', narration: 'Asking you a question' },
+];
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`steps name the action, and a declined call says so (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, DECLINED_STEPS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('what colour is the picture?');
+        await page.keyboard.press('Enter');
+        const rows = page.locator('.flow-steps.live .flow-tool');
+        await expect(rows).toHaveCount(3);
+        await expect(rows.nth(1)).toHaveClass(/declined/);
+        if (locale === 'en') await expect(rows.nth(1).locator('.flow-tool-label')).toHaveText('You declined: Running Python');
+        await expect(page.locator('.flow-tool-label').filter({ hasText: /run python|request user input/ })).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `declined-steps-${locale}`);
+    });
+}
+
 const PATH_PROMPT = [{
     type: 'permission_request', tool: 'allow_path_access', tool_label: 'allowing path access', confirm_id: 'c-path',
     args: { path: 'C:\\Users\\you\\Documents\\sales_data_2025.csv', kind: 'file' },
@@ -2821,7 +3402,14 @@ for (const locale of ['ar', 'en']) {
         await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
         const meter = page.locator('button.context-meter');
         await expect(meter).toBeVisible();
-        await expect(page.locator('.context-warning')).toBeVisible();
+        const warning = page.locator('.context-warning');
+        await expect(warning).toBeVisible();
+        // One short line by default, so it never covers the end of the chat.
+        expect((await warning.boundingBox())!.height).toBeLessThan(60);
+        await shot(page, `context-warning-${locale}`);
+        await warning.getByRole('button', { expanded: false }).click();
+        await shot(page, `context-warning-details-${locale}`);
+        expect(await audit(page)).toEqual([]);
         await meter.click();
         await expect(page.locator('.context-meter-panel')).toBeVisible();
         expect(await audit(page)).toEqual([]);
@@ -2847,6 +3435,30 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the context meter explains a fresh chat's fill and shows a dash before it is measured (${locale})`, async ({ page }) => {
+        const fresh = { ...MEASURED_CONTEXT, system: 7700, tools: 16000, documents: 0, history: 300, used: 24000, at_risk: [], at_risk_tokens: 0 };
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: fresh })));
+        await page.locator('button.context-meter').click();
+        await expect(page.locator('.context-meter-note.is-setup')).toBeVisible();
+        await shot(page, `context-meter-setup-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a reopened chat's context meter shows a dash, not an empty bar (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({
+                json: { available: false, reason: "Measured again with your next message: GAIA restarted or switched models since this chat's last answer." },
+            })));
+        const meter = page.locator('.context-meter.is-empty');
+        await expect(meter).toBeVisible();
+        await expect(meter.locator('.context-meter-bar')).toHaveCount(0);
+        await shot(page, `context-meter-unmeasured-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     await open(page);
@@ -2862,6 +3474,22 @@ test('composer chips stay whole at phone width', async ({ page }) => {
     const sorted = [...boxes].sort((x, y) => x.left - y.left);
     expect(sorted.filter((box, i) => i > 0 && box.left < sorted[i - 1].right - 1)).toEqual([]);
 });
+
+for (const locale of ['en', 'ar']) {
+    test(`a narrow window keeps the model name readable in the composer (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 820, height: 640 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
+        await expect(page.locator('button.context-meter')).toBeVisible();
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        await shot(page, `composer-narrow-${locale}`);
+        // The day's spend and the context bar give way before the model name is cut.
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
+        expect(await audit(page)).toEqual([]);
+    });
+}
 
 test('the library path row fits a phone', async ({ page }) => {
     await open(page);
@@ -3338,4 +3966,86 @@ for (const locale of ['ar', 'en']) {
             await page.screenshot({ path: info.outputPath(`crashed-${placement}-${locale}.png`) });
         });
     }
+}
+
+
+const SKILL_LINK = 'https://github.com/michael-denyer/pstack-claude';
+const SKILL_LINK_PIN = `commit:${'4f2a9c1e'.repeat(5)}`;
+const linkSkill = (name: string, description: string, over: Record<string, unknown> = {}) => ({
+    name, description, path: `skills/${name}`, has_code: false, permissions: [], permissions_unreadable: false, verdict: 'ALLOW',
+    findings: [], installed: false, update: false, error: null, ...over,
+});
+const SKILL_LINK_PREVIEW = {
+    link: SKILL_LINK,
+    source: 'michael-denyer/pstack-claude',
+    pin: SKILL_LINK_PIN,
+    warning: 'Skills from a link are written by someone else. A skill\'s instructions steer what GAIA does with your files, shell, and accounts, and a skill that ships code (tools.py or scripts/) runs that code on this PC. GAIA audits each skill and refuses anything the audit blocks, but an audit is not a guarantee. Only add skills from people you trust, and read what they do first.',
+    skills: [
+        linkSkill('design-review', 'Review a design doc for gaps before any code is written.'),
+        linkSkill('docs-lookup', 'Look up library documentation and cite the page it came from.', {
+            permissions: [{ grant: 'network:read:*.readthedocs.io', text: 'Read pages and data from sites matching *.readthedocs.io' }],
+            verdict: 'REVIEW',
+            findings: ['[REVIEW] network: fetches remote content — check what it sends'],
+        }),
+        linkSkill('ملخص-الاجتماع', 'يلخص محضر الاجتماع ويستخرج المهام.', { permissions: [{ grant: 'scratch:write', text: 'Write files in a temporary folder that is emptied after each use' }] }),
+        linkSkill('ci-fix', 'Reproduce a red CI job locally and fix the cause.', {
+            has_code: true,
+            permissions: [{ grant: 'scratch:write', text: 'Write files in a temporary folder that is emptied after each use' }],
+        }),
+        linkSkill('pr-hygiene', 'Tidy a pull request before review.', { installed: true, update: true }),
+        linkSkill('release-notes', 'Draft release notes from merged pull requests.', { installed: true }),
+        linkSkill('gh-triage', 'Label and triage GitHub issues.', {
+            permissions: [{ grant: 'shell:execute:gh', text: 'Run the \'gh\' command: GitHub CLI — reads issues, pull requests, releases, and runs; comments, pull requests, and labels only with your per-command approval.' }],
+            error: 'Skill \'gh-triage\' declares permission(s) above the \'experimental\' ceiling: shell:execute. Install a copy signed at \'community\' or higher from the hub instead.',
+        }),
+    ],
+};
+const SKILL_LINK_RESULT = {
+    added: [
+        { name: 'design-review', updated: false, verdict: 'ALLOW', has_code: false, findings: [] },
+        { name: 'docs-lookup', updated: false, verdict: 'REVIEW', has_code: false, findings: [] },
+        { name: 'pr-hygiene', updated: true, verdict: 'ALLOW', has_code: false, findings: [] },
+    ],
+    failed: { 'ملخص-الاجتماع': 'A skill with this name is already installed from somewhere else. Remove it first, or pass --force to replace it.' },
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`add skills from a link: preview and result (${locale})`, async ({ page }) => {
+        const posted: Array<Record<string, unknown>> = [];
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/skills/link/*', async (route) => {
+                const body = route.request().postDataJSON() as Record<string, unknown>;
+                posted.push(body);
+                await route.fulfill({ json: route.request().url().endsWith('/preview') ? SKILL_LINK_PREVIEW : SKILL_LINK_RESULT });
+            });
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        const field = page.locator('.skill-link-form input');
+        await field.fill(SKILL_LINK);
+        await field.press('Enter');
+
+        const preview = page.locator('.skill-link-preview');
+        await expect(preview).toBeVisible();
+        await expect(preview.locator('.skill-link-perms')).toHaveCount(SKILL_LINK_PREVIEW.skills.length);
+        await expect(preview.locator('.skill-link-perms code', { hasText: 'network:read:*.readthedocs.io' })).toBeVisible();
+        await preview.locator('details:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await preview.scrollIntoViewIfNeeded();
+        await shot(page, `skills-link-preview-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.skill-link-preview')).toEqual([]);
+        await scrollPane(page, 'bottom');
+        await shot(page, `skills-link-preview-${locale}-bottom`);
+
+        await preview.locator('.skill-link-actions .btn-primary').click();
+        const result = page.locator('.skill-link-result');
+        await expect(result).toBeVisible();
+        expect(posted[posted.length - 1]).toMatchObject({ url: SKILL_LINK, pin: SKILL_LINK_PIN });
+        await result.locator('details:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await result.scrollIntoViewIfNeeded();
+        await shot(page, `skills-link-result-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
+    });
 }

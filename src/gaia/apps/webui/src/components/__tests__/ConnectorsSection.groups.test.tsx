@@ -74,7 +74,27 @@ describe('ConnectorsSection groups', () => {
         expect(within(servers).getByText('Git')).toBeInTheDocument();
         expect(screen.queryByText('Connected', { selector: '.settings-disclosure-title' })).not.toBeInTheDocument();
         expect(within(servers).getByText('Connected')).toBeInTheDocument();
-        expect(screen.getByRole('status')).toHaveTextContent('Git is connected.');
+    });
+
+    it('announces a new connection once, and the card stays put after "Not now"', async () => {
+        const git = row('Git', 'mcp_server');
+        list([row('Microsoft', 'oauth_pkce'), git]);
+        mocked.configureConnector.mockResolvedValue({} as never);
+        mocked.getConnector.mockResolvedValue({ ...git, configured: true });
+        render(<ConnectorsSection />);
+        await screen.findByText('Git');
+        fireEvent.click(screen.getByText('MCP servers', { selector: '.settings-disclosure-title' }));
+        fireEvent.click(screen.getByRole('button', { name: /^Git/ }));
+        fireEvent.click(document.querySelector('.configure-actions .btn-primary, .configure-actions button')!);
+
+        await screen.findByText('Git is connected.');
+        expect(screen.getAllByText('Git is connected.')).toHaveLength(1);
+        // The card carries only its status; the sentence belongs to the offer above the list.
+        expect(within(group('MCP servers')).queryByText('Git is connected.')).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+        expect(screen.queryByText('Git is connected.')).not.toBeInTheDocument();
+        expect(within(group('MCP servers')).getByText('Connected')).toBeInTheDocument();
     });
 
     it('calls a turned-off connector Paused, and a working one Connected', async () => {
