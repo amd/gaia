@@ -116,6 +116,22 @@ describe('a set-up install whose model server is down at launch', () => {
         expect(text()).not.toContain(NOTICE);
     });
 
+    it('does not re-check in a loop when the poll and the check disagree', async () => {
+        render(<App />);
+        await advance(0);
+        const asked = mocked.checkSetup.mock.calls.length;
+
+        act(() => {
+            useChatStore.getState().setSystemStatus({ lemonade_running: true, model_loaded: 'x', initialized: true } as never);
+        });
+        await advance(0);
+        await advance(0);
+
+        expect(mocked.checkSetup.mock.calls.length).toBe(asked + 1);
+        expect(text()).toContain(NOTICE);
+        expect(text()).not.toContain('First-run setup');
+    });
+
     it('offers setup from the notice, for a server that will not come back', async () => {
         render(<App />);
         await advance(0);
