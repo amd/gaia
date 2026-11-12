@@ -31,8 +31,9 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
     const money = useMemo(() => ({ locale: userLocale(), currency: wire.currency }), [wire.currency]);
     const [values, setValues] = useState<Record<string, number>>(() => ({ ...wire.inputs }));
     const [notice, setNotice] = useState<string | null>(null);
-    const title = wire.title?.trim() || spec.defaultTitle;
+    const title = wire.title?.trim() || t(spec.defaultTitle);
     const results = spec.results(values);
+    const copiedNotice = t('cards.copied');
 
     useEffect(() => {
         if (!notice) return;
@@ -41,9 +42,9 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
     }, [notice]);
 
     const onCopy = () => {
-        copyGuide(formatCalculatorText(title, spec, values, money)).then(
-            () => setNotice('Copied'),
-            (err: unknown) => setNotice(`Couldn't copy: ${err instanceof Error ? err.message : String(err)}`),
+        copyGuide(formatCalculatorText(title, spec, values, money, t)).then(
+            () => setNotice(copiedNotice),
+            (err: unknown) => setNotice(t('cards.copyFailed', { error: err instanceof Error ? err.message : String(err) })),
         );
     };
 
@@ -52,7 +53,7 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
             <header className="render-calc__header">
                 <h3 className="render-guide__title">{title}</h3>
                 <button type="button" className="render-guide__icon" onClick={onCopy} aria-label={t('cards.copy')} title={t('cards.copy')}>
-                    {notice === 'Copied' ? <Check size={15} /> : <Copy size={15} />}
+                    {notice === copiedNotice ? <Check size={15} /> : <Copy size={15} />}
                 </button>
             </header>
             <p className="render-guide__notice" role="status">{notice}</p>
@@ -72,8 +73,8 @@ function Calculator({ wire }: { wire: CalculatorWire }) {
             <dl className="render-calc__results" aria-live="polite">
                 {results.map((line) => (
                     <div key={line.label} className={`render-calc__result${line.primary ? ' is-primary' : ''}`}>
-                        <dt>{line.label}</dt>
-                        <dd>{formatValue(line.value, line.format, money)}</dd>
+                        <dt>{t(line.label)}</dt>
+                        <dd>{formatValue(line.value, line.format, money, t)}</dd>
                     </div>
                 ))}
             </dl>
@@ -94,7 +95,8 @@ function NumberField({ field, value, money, onChange }: NumberFieldProps) {
     const [draft, setDraft] = useState<string | null>(null);
     const sliderMax = Math.min(field.max, Math.max(field.sliderMax ?? field.max, value));
     const prefix = field.format === 'currency' ? currencySymbol(money) : '';
-    const suffix = field.format === 'percent' ? '%' : field.format === 'years' ? 'yrs' : '';
+    const suffix = field.format === 'percent' ? '%' : field.format === 'years' ? t.bare('cards.yearsShort') : '';
+    const label = t(field.label);
 
     const onType = (text: string) => {
         setDraft(text);
@@ -107,7 +109,7 @@ function NumberField({ field, value, money, onChange }: NumberFieldProps) {
     return (
         <div className="render-calc__field">
             <label className="render-calc__label">
-                <span>{field.label}</span>
+                <span>{label}</span>
                 <span className="render-calc__box">
                     {prefix && <span className="render-calc__affix">{prefix}</span>}
                     <input
@@ -117,7 +119,7 @@ function NumberField({ field, value, money, onChange }: NumberFieldProps) {
                         max={field.max}
                         step={field.step}
                         value={draft ?? String(value)}
-                        aria-label={field.label}
+                        aria-label={label}
                         onChange={(e) => onType(e.target.value)}
                         onBlur={() => setDraft(null)}
                     />
@@ -131,8 +133,8 @@ function NumberField({ field, value, money, onChange }: NumberFieldProps) {
                 max={sliderMax}
                 step={field.step}
                 value={value}
-                aria-label={t('cards.slider', { name: field.label })}
-                aria-valuetext={formatValue(value, field.format, money)}
+                aria-label={t('cards.slider', { name: label })}
+                aria-valuetext={formatValue(value, field.format, money, t)}
                 onChange={(e) => {
                     setDraft(null);
                     onChange(Number(e.target.value));

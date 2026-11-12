@@ -121,6 +121,23 @@ def test_a_new_session_receives_its_working_directory(built, tmp_path):
     assert agent.kwargs["working_directory"] == str(workspace)
 
 
+def test_a_working_directory_alone_leaves_the_file_scope_alone(built, tmp_path):
+    """The TUI sends only its start folder (#3591); that must not narrow scope."""
+    client, agents = built
+    start = tmp_path / "home" / "project"
+    start.mkdir()
+    elsewhere = tmp_path / "home" / "notes"
+    elsewhere.mkdir()
+
+    response = _query(client, session_id="s1", working_directory=str(start))
+
+    assert response.status_code == 200, response.text
+    [agent] = agents
+    assert "allowed_paths" not in agent.kwargs
+    assert agent.kwargs["working_directory"] == str(start)
+    assert _allowed(agent, elsewhere)
+
+
 def test_a_relative_working_directory_is_refused(built):
     client, agents = built
 
