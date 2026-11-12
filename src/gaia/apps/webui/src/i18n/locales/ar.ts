@@ -2459,6 +2459,8 @@ const messages: Messages = {
     'mem.about.retry': 'حاول مجددًا',
     'mem.about.empty': 'لم يحفظ GAIA أي شيء عنك بعد.',
     'mem.about.emptyHint': 'أخبره في محادثة («تذكّر أنني أسكن في كالغاري») أو أضف شيئًا أعلاه.',
+    'mem.about.showing': 'يظهر هنا {shown} من أصل {total} من الذكريات',
+    'mem.about.showMore': 'عرض المزيد',
     'mem.about.editLabel': 'تعديل الذكرى',
     'mem.about.save': 'حفظ',
     'mem.about.cancel': 'إلغاء',

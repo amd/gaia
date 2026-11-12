@@ -2458,6 +2458,8 @@ export const enMessages = {
     'mem.about.retry': 'Try again',
     'mem.about.empty': "GAIA hasn't saved anything about you yet.",
     'mem.about.emptyHint': 'Tell it in a chat (“remember that I live in Calgary”) or add something above.',
+    'mem.about.showing': 'Showing {shown} of {total} memories',
+    'mem.about.showMore': 'Show more',
     'mem.about.editLabel': 'Edit memory',
     'mem.about.save': 'Save',
     'mem.about.cancel': 'Cancel',

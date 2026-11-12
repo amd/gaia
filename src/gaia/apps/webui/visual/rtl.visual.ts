@@ -3021,6 +3021,12 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'about-editing');
         });
 
+        test('about you, more than one page', async ({ page }) => {
+            await openMemory(page, locale, { more: true });
+            await expect(page.locator('.mem-about-more .btn-secondary')).toBeVisible();
+            await checkMemory(page, locale, 'about-more');
+        });
+
         test('about you, empty', async ({ page }) => {
             await openMemory(page, locale, { empty: true });
             await expect(page.locator('.mem-about-empty')).toBeVisible();
