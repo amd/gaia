@@ -29,6 +29,7 @@ export function PrivacySettings() {
     const [localOnly, setLocalOnly] = useState<boolean | null>(null);
     const [savingPolicy, setSavingPolicy] = useState(false);
     const [policyResult, setPolicyResult] = useState<{ ok: boolean; text: string } | null>(null);
+    const [openError, setOpenError] = useState<string | null>(null);
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
     useEffect(() => {
@@ -73,6 +74,15 @@ export function PrivacySettings() {
             setSavingPolicy(false);
         }
     }, [localOnly, savingPolicy, t]);
+
+    const openDataDir = useCallback(async (path: string) => {
+        setOpenError(null);
+        try {
+            await api.openFileOrFolder(path, false);
+        } catch (err) {
+            setOpenError(t('settings.privacy.openFolderFailed', { error: err instanceof Error ? err.message : String(err) }));
+        }
+    }, [t]);
 
     const clearAll = useCallback(async () => {
         if (!confirm) {
@@ -126,6 +136,7 @@ export function PrivacySettings() {
                 )}
             </section>
             <section className="settings-card" aria-label={t('settings.privacy.whereTitle')}>
+                <h3 className="settings-label">{t('settings.privacy.whereTitle')}</h3>
                 <p className="settings-note">{t('settings.privacy.stays')}</p>
                 <p className={place?.remote ? 'settings-note' : 'settings-hint'}>
                     {place?.remote
@@ -133,13 +144,20 @@ export function PrivacySettings() {
                         : place ? t('settings.privacy.local') : t('settings.privacy.unknown')}
                 </p>
                 {dataDir && (
-                    <div className="setting-row setting-row-path">
-                        <span>{t('settings.privacy.dataFolder')}</span>
-                        <bdi dir="ltr" className="setting-path">{dataDir}</bdi>
-                    </div>
+                    <>
+                        <div className="setting-row">
+                            <span>{t('settings.privacy.dataFolder')}</span>
+                            <button type="button" className="link-btn" onClick={() => void openDataDir(dataDir)} title={dataDir}>
+                                {t('settings.privacy.openFolder')}
+                            </button>
+                        </div>
+                        <p className="settings-hint"><bdi dir="ltr">{dataDir}</bdi></p>
+                        {openError && <p className="settings-error" role="alert">{openError}</p>}
+                    </>
                 )}
             </section>
             <section className="settings-card" aria-label={t('settings.privacy.reportTitle')}>
+                <h3 className="settings-label">{t('settings.privacy.reportTitle')}</h3>
                 <p className="settings-note">{t('settings.privacy.reportNote')}</p>
                 <TroubleshootingReport classes={REPORT_CLASSES} />
             </section>
@@ -147,6 +165,7 @@ export function PrivacySettings() {
                 <UndoHistorySettings />
             </SettingsDisclosure>
             <section className="settings-card" aria-label={t('settings.privacy.deleteTitle')}>
+                <h3 className="settings-label">{t('settings.privacy.deleteTitle')}</h3>
                 <p className="danger-warning">
                     {sessions.length === 0 ? t('settings.privacy.nothingToDelete') : t('settings.privacy.deleteWarning')}
                 </p>
