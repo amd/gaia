@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from gaia.agents.base.tool_outcome import tool_result_dict
+from gaia.config import gaia_home
 
 WRITE_TOOLS = frozenset(
     {
@@ -478,7 +479,12 @@ class CompletionEvidence:
     """Evidence for this turn, with no reads outside the tool permission boundary."""
 
     def __init__(
-        self, query: str, root: str | None, scratch: Any = None, validator: Any = None
+        self,
+        query: str,
+        root: str | None,
+        scratch: Any = None,
+        validator: Any = None,
+        backups: tuple[set[str], set[str]] | None = None,
     ):
         self.root = root or os.getcwd()
         self.validator = validator
@@ -508,8 +514,8 @@ class CompletionEvidence:
         # key -> the path as the write tool reported it, for showing the user.
         self.written_as: dict[str, str] = {}
         # Backups write tools made before changing a file: keys and file names.
-        self.backups: set[str] = set()
-        self.backup_names: set[str] = set()
+        # *backups* carries them from earlier turns, and is added to in place.
+        self.backups, self.backup_names = backups or (set(), set())
 
     def key(self, path: str, root: str | None = None) -> str:
         return _normalize_key(
@@ -1082,14 +1088,20 @@ class CompletionEvidence:
         return gaps
 
     def _is_backup(self, path: str) -> bool:
-        """Whether *path* names a backup a write tool reported this turn.
+        """Whether *path* names a backup a write tool made, this turn or before.
 
         By file name too: answers shorten the backup folder ("backups\\...\\").
+        A file on disk in GAIA's backup folder is one an earlier turn made.
         """
-        return (
-            self.key(path) in self.backups
+        key = self.key(path)
+        if (
+            key in self.backups
             or os.path.normcase(ntpath.basename(path)) in self.backup_names
-        )
+        ):
+            return True
+        cache_dir = getattr(self.validator, "cache_dir", None)
+        folder = self.key(str((cache_dir or gaia_home() / "cache") / "backups"))
+        return _inside(key, folder) and os.path.isfile(key)
 
     def _large_and_checked(self, item: FileEvidence) -> bool:
         """A large script output shown in part counts; a small one is read whole."""

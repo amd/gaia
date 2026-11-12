@@ -1550,3 +1550,60 @@ def test_a_bak_file_no_tool_reported_is_still_a_claim(tmp_path):
     assert "todo.txt.20261111_000000_000000.bak" in " ".join(
         ledger.gaps(answer, _claims_file_write)
     )
+
+
+# rc18 round 2: a later turn names the backup an earlier turn's edit made.
+class _CacheOnly:
+    def __init__(self, cache_dir):
+        self.cache_dir = cache_dir
+
+
+def _later_turn(tmp_path, exists=True):
+    cache = tmp_path / ".gaia" / "cache"
+    backup = cache / "backups" / "C" / "todo.txt.20261111_143048_506821.bak"
+    if exists:
+        backup.parent.mkdir(parents=True)
+        backup.write_text("- milk\n", encoding="utf-8")
+    ledger = CompletionEvidence(
+        "Remind me where the backup of todo.txt went. Do not use any tools.",
+        str(tmp_path),
+        validator=_CacheOnly(cache),
+    )
+    return ledger, backup
+
+
+def test_a_backup_from_an_earlier_turn_is_not_a_claimed_output(tmp_path):
+    ledger, backup = _later_turn(tmp_path)
+    answer = f"A backup of todo.txt was written to `{backup}`."
+    soft = []
+    assert ledger.gaps(answer, _claims_file_write, soft=soft) == []
+    assert soft == []
+
+
+def test_a_backup_that_is_not_on_disk_is_still_a_claim(tmp_path):
+    ledger, backup = _later_turn(tmp_path, exists=False)
+    answer = f"A backup of todo.txt was written to `{backup}`."
+    soft = []
+    assert ledger.gaps(answer, _claims_file_write, soft=soft) == []
+    assert backup.name in " ".join(soft)
+
+
+def test_a_file_outside_the_backup_folder_is_still_a_claim(tmp_path):
+    ledger, _ = _later_turn(tmp_path)
+    report = tmp_path / "report.md"
+    report.write_text("old\n", encoding="utf-8")
+    answer = f"I saved the summary to `{report}`."
+    assert "report.md" in " ".join(ledger.gaps(answer, _claims_file_write))
+
+
+def test_backups_carried_from_earlier_turns_match_by_name(tmp_path):
+    first, _, backup = _edit_turn(tmp_path)
+    later = CompletionEvidence(
+        "Where did the backup go?",
+        str(tmp_path),
+        backups=(first.backups, first.backup_names),
+    )
+    answer = f"A backup was written to `backups\\...\\{backup.name}`."
+    soft = []
+    assert later.gaps(answer, _claims_file_write, soft=soft) == []
+    assert soft == []
