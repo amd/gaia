@@ -644,6 +644,8 @@ const messages: Messages = {
     'docs.cancelFailed': 'تعذّر إلغاء فهرسة {name}: {error}',
     'docs.openFolderFailed': 'تعذّر فتح المجلد الذي يحتوي {name}: {error}',
     'docs.dismissError': 'إغلاق الخطأ',
+    'docs.removed': 'أُزيل {name} من مكتبتك. الملف على جهازك لم يُمسّ.',
+    'docs.undo': 'تراجع',
     'time.justNow': 'الآن',
     'time.minutesAgo': 'قبل {n} د',
     'time.hoursAgo': 'قبل {n} س',

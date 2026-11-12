@@ -3,7 +3,7 @@
 
 import { ensureModel } from '../stores/modelNeededStore';
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw } from 'lucide-react';
+import { X, Upload, Trash2, FileText, FolderOpen, Search, StopCircle, CheckCircle, AlertCircle, Loader, Clock, Link2, RefreshCcw, Undo2 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
@@ -48,6 +48,11 @@ function describeFolderResult(folderName: string, result: IndexFolderResponse): 
 
 /** How often an indexing document's status (and progress) is asked for. */
 export const INDEX_POLL_MS = 1000;
+
+/** How long a removed document can be put back before it is deleted. */
+export const REMOVE_UNDO_MS = 6000;
+
+interface PendingRemoval { id: string; name: string }
 
 /** The progress map with `id` set to `progress`, or dropped once there is none. */
 function withProgress(map: Record<string, api.IndexProgress>, id: string, progress: api.IndexProgress | null | undefined) {
@@ -140,6 +145,10 @@ export function DocumentLibrary() {
     const [folderNotice, setFolderNotice] = useState<string | null>(null);
     // Why the last remove, cancel or open-folder failed
     const [actionError, setActionError] = useState<string | null>(null);
+    // A removed document stays on the server until its Undo runs out
+    const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
+    const pendingRemovalRef = useRef<PendingRemoval | null>(null);
+    const removalTimer = useRef<number | null>(null);
     // The library couldn't be listed: an empty list would look like the documents are gone
     const [loadError, setLoadError] = useState<{ err: unknown } | null>(null);
     // Documents with a reindex in flight — guards double-click and shows progress
@@ -436,14 +445,13 @@ export function DocumentLibrary() {
         }
     }, [uploadFileBlob]);
 
-    const handleDeleteDoc = useCallback(async (id: string) => {
-        const name = documents.find((d) => d.id === id)?.filename || id;
+    const commitRemoval = useCallback(async ({ id, name }: PendingRemoval) => {
         log.doc.info(`Deleting document: ${name}`);
-        setActionError(null);
         try {
             await api.deleteDocument(id);
         } catch (err) {
             log.doc.error(`Failed to delete document: ${name}`, err);
+            setPendingRemoval((p) => (p?.id === id ? null : p));
             setActionError(t('docs.deleteFailed', { name, error: requestErrorParam(err) }));
             return;
         }
@@ -451,8 +459,40 @@ export function DocumentLibrary() {
         removeDraftDocument(id);
         // The list now, not when the click happened: a poll may have refreshed it meanwhile.
         setDocuments(useChatStore.getState().documents.filter((d) => d.id !== id));
+        setPendingRemoval((p) => (p?.id === id ? null : p));
         log.doc.info(`Deleted document: ${name}`);
-    }, [documents, setDocuments, removeDraftDocument, t]);
+    }, [setDocuments, removeDraftDocument, t]);
+
+    /** Deletes the removal waiting on Undo now, if there is one. */
+    const flushRemoval = useCallback(() => {
+        if (removalTimer.current !== null) clearTimeout(removalTimer.current);
+        removalTimer.current = null;
+        const pending = pendingRemovalRef.current;
+        pendingRemovalRef.current = null;
+        if (pending) void commitRemoval(pending);
+    }, [commitRemoval]);
+
+    const handleDeleteDoc = useCallback((id: string) => {
+        const name = documents.find((d) => d.id === id)?.filename || id;
+        setActionError(null);
+        flushRemoval();
+        const pending = { id, name };
+        pendingRemovalRef.current = pending;
+        setPendingRemoval(pending);
+        removalTimer.current = window.setTimeout(flushRemoval, REMOVE_UNDO_MS);
+    }, [documents, flushRemoval]);
+
+    const undoRemoval = useCallback(() => {
+        if (removalTimer.current !== null) clearTimeout(removalTimer.current);
+        removalTimer.current = null;
+        pendingRemovalRef.current = null;
+        setPendingRemoval(null);
+    }, []);
+
+    // Closing the library doesn't cancel a removal; only Undo does.
+    const flushOnClose = useRef(flushRemoval);
+    flushOnClose.current = flushRemoval;
+    useEffect(() => () => flushOnClose.current(), []);
 
     const handleOpenFolder = useCallback(async (filepath: string, filename: string) => {
         log.doc.info(`Opening folder for: ${filepath}`);
@@ -749,6 +789,17 @@ export function DocumentLibrary() {
                         </div>
                     )}
 
+                    {pendingRemoval && (
+                        <div key={pendingRemoval.id} className="doc-folder-notice doc-removed-notice" role="status">
+                            <Trash2 size={14} />
+                            <span>{t('docs.removed', { name: pendingRemoval.name })}</span>
+                            {/* The Remove button just left with its row; keep keyboard focus in the dialog. */}
+                            <button type="button" className="doc-undo" onClick={undoRemoval} autoFocus>
+                                <Undo2 size={12} /> {t('docs.undo')}
+                            </button>
+                        </div>
+                    )}
+
                     {folderNotice && (
                         <div className="doc-folder-notice" role="status">
                             <CheckCircle size={14} />
@@ -760,7 +811,7 @@ export function DocumentLibrary() {
                     )}
 
                     {/* Stats */}
-                    {documents.length > 0 && (
+                    {documents.length > 0 && !pendingRemoval && (
                         <div className="doc-stats">
                             <span>{t.plural('docs.count', documents.length)}</span>
                             <span>&middot;</span>
@@ -788,7 +839,7 @@ export function DocumentLibrary() {
                                 <span>{t('docs.emptyHint')}</span>
                             </div>
                         )}
-                        {documents.map((doc) => (
+                        {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
                             <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
                                     <span className="doc-name" dir="auto">{doc.filename}</span>

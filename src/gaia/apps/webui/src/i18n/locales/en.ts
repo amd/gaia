@@ -644,6 +644,8 @@ export const enMessages = {
     'docs.cancelFailed': 'Couldn\'t cancel indexing {name}: {error}',
     'docs.openFolderFailed': 'Couldn\'t open the folder for {name}: {error}',
     'docs.dismissError': 'Dismiss error',
+    'docs.removed': 'Removed {name} from your library. The file on your PC is untouched.',
+    'docs.undo': 'Undo',
     'time.justNow': 'just now',
     'time.minutesAgo': '{n}m ago',
     'time.hoursAgo': '{n}h ago',

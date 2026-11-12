@@ -711,8 +711,16 @@ for (const locale of ['ar', 'en']) {
 
         listable = true;
         await page.locator('.doc-load-error button').click();
+        // Row actions used to be invisible until hover, even with keyboard focus on them.
+        const actions = page.locator('.doc-row-actions').first();
+        expect(Number(await actions.evaluate((el) => getComputedStyle(el).opacity))).toBeGreaterThanOrEqual(0.5);
+        await page.locator('.doc-delete').focus();
+        await expect(actions).toHaveCSS('opacity', '1');
         await page.locator('.doc-delete').click();
-        await expect(page.locator('.doc-action-error')).toBeVisible();
+        await expect(page.locator('.doc-removed-notice')).toBeVisible();
+        await shot(page, `documents-${locale}-removed-undo`);
+        expect(await audit(page)).toEqual([]);
+        await expect(page.locator('.doc-action-error')).toBeVisible({ timeout: 10_000 });
         await shot(page, `documents-${locale}-remove-failed`);
         expect(await audit(page)).toEqual([]);
     });

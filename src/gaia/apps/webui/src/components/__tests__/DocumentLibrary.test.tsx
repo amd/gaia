@@ -1,9 +1,9 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DocumentLibrary } from '../DocumentLibrary';
+import { DocumentLibrary, REMOVE_UNDO_MS } from '../DocumentLibrary';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document } from '../../types';
@@ -117,7 +117,11 @@ describe('DocumentLibrary with no chat open', () => {
         useChatStore.setState({ draftDocumentIds: ['doc-ok-1'] });
         render(<DocumentLibrary />);
 
-        fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
+        const remove = await screen.findByRole('button', { name: 'Remove good.pdf' });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        fireEvent.click(remove);
+        act(() => { vi.advanceTimersByTime(REMOVE_UNDO_MS); });
+        vi.useRealTimers();
 
         await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual([]));
     });
