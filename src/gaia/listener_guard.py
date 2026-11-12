@@ -23,6 +23,7 @@ logger = get_logger(__name__)
 _CLIENT_RESET_WINERRORS = frozenset({64, 1236, 10053, 10054})
 
 _GUARDED = "_gaia_accept_survives_resets"
+# Private names from CPython's asyncio/windows_events.py (loop._proactor, accept_coro).
 _ACCEPT_TASK = "IocpProactor.accept.<locals>.accept_coro"
 
 
