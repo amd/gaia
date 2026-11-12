@@ -1122,6 +1122,22 @@ def _hide_subcommands(subparsers, names) -> None:
 HIDDEN_TOP_LEVEL_COMMANDS = ("hub",)
 HIDDEN_AGENT_COMMANDS = ("init", "version", "pack", "publish", "login")
 
+# Removed commands: old scripts get the replacement instead of "invalid choice".
+RETIRED_TOP_LEVEL_COMMANDS = {
+    "email": (
+        "`gaia email` was removed along with the standalone email agent. The "
+        "flagship agent reads, drafts and sends Gmail or Outlook mail now: run "
+        '`gaia chat` and ask it, e.g. "what\'s waiting on me in my inbox?". '
+        "To connect a mailbox and grant it to the flagship, follow "
+        "https://amd-gaia.ai/docs/guides/email#setup"
+    ),
+}
+
+
+def _retired_command_message(argv) -> Optional[str]:
+    """The replacement for a removed top-level command, or ``None``."""
+    return RETIRED_TOP_LEVEL_COMMANDS.get(argv[0]) if argv else None
+
 
 def _positive_int(value: str) -> int:
     """argparse type: an integer of at least 1."""
@@ -4665,6 +4681,10 @@ def main():
     use_os_trust_store()
     parser = build_parser()
     log = get_logger(__name__)
+
+    retired = _retired_command_message(sys.argv[1:])
+    if retired:
+        parser.exit(2, f"gaia: error: {retired}\n")
 
     args = parser.parse_args()
     apply_login_path()  # after parsing, so --version and -h skip the shell
