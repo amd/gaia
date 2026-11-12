@@ -61,7 +61,10 @@ const HARDWARE = {
 } as unknown as PreflightReport;
 
 const START: StartScreen = {
-    cards: [{ skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false }],
+    cards: [
+        { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research: ', needs_input: true },
+        { skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false },
+    ],
     working_folder: { path: '/w', name: 'w', gaia_folder: false, choosable: true },
 };
 
@@ -129,7 +132,8 @@ async function toModels() {
 }
 
 async function toKey() {
-    fireEvent.click(screen.getByRole('button', { name: 'Use a cloud model' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Use a cloud model' }));
+    clickContinue();
     await screen.findByRole('heading', { name: 'Connect a cloud provider' });
 }
 
@@ -148,9 +152,9 @@ describe('SetupScreen: checking this PC', () => {
         renderSetup();
         expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         await waitFor(() => expect(mockedApi.getSetupPlan).toHaveBeenCalled());
-        // While it checks, only its log and the troubleshooting report can be pressed.
+        // While it checks, only "Having trouble?" can be pressed; the logs and report wait behind it.
         const enabled = () => screen.queryAllByRole('button').filter((b) => !(b as HTMLButtonElement).disabled).map((b) => b.textContent?.trim());
-        expect(enabled()).toEqual(['Checks log', 'Save a troubleshooting report']);
+        expect(enabled()).toEqual(['Having trouble?']);
         expect(railStep('Check this PC')).toHaveAttribute('aria-current', 'step');
         answer(HARDWARE);
         expect(await screen.findByRole('region', { name: 'What setup found' })).toBeInTheDocument();
@@ -332,6 +336,30 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
 });
 
 describe('SetupScreen: the recommendation', () => {
+    it('offers this PC and the cloud as two equal choices, this PC recommended and picked', async () => {
+        await open();
+        const local = screen.getByRole('radio', { name: /^Run .* on this PC$/ });
+        const cloud = screen.getByRole('radio', { name: 'Use a cloud model' });
+        expect(local).toBeChecked();
+        expect(cloud).not.toBeChecked();
+        expect(screen.getByRole('region', { name: 'Recommended setup' })).toHaveTextContent('Recommended for this PC');
+        const cloudCard = screen.getByRole('region', { name: 'Cloud model' });
+        expect(cloudCard).toHaveTextContent('Nothing to download');
+        expect(cloudCard).toHaveTextContent('Each message and the chat history are sent to the provider.');
+        expect(cloudCard).not.toHaveTextContent('Recommended');
+        // Customize is its own button in the bottom bar, not a link beside the cloud choice.
+        const bar = within(document.querySelector('.setup-footer') as HTMLElement);
+        expect(bar.getByRole('button', { name: 'Customize' })).toHaveClass('btn-secondary');
+        expect(bar.getByRole('button', { name: /Download and start/ })).toHaveClass('btn-primary');
+        // Picking the cloud card makes the main action go there, and starts nothing.
+        fireEvent.click(cloudCard);
+        expect(cloud).toBeChecked();
+        expect(bar.queryByRole('button', { name: /Download and start/ })).toBeNull();
+        clickContinue();
+        await screen.findByRole('heading', { name: 'Connect a cloud provider' });
+        expect(mockedApi.startSetup).not.toHaveBeenCalled();
+    });
+
     it('shows what it will do before anything starts, with no stale error', async () => {
         mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
         await open();
@@ -517,11 +545,14 @@ describe('SetupScreen: first run, local', () => {
         const onReady = await startLocal();
         expect(await screen.findByRole('heading', { name: 'GAIA is ready' })).toBeInTheDocument();
         // Said once, by the heading; the card says what answers.
-        expect(screen.getByText('Qwen3.6-35B-A3B answers on this PC.')).toBeInTheDocument();
+        expect(screen.getByText('Answers come from Qwen3.6-35B-A3B, on this PC.')).toBeInTheDocument();
         expect(screen.queryByText(/GAIA is ready\./)).toBeNull();
         const summary = await screen.findByText('Reading images');
         expect(summary.closest('dl')).toHaveTextContent('ChatQwen3.6-35B-A3BReading imagesGemma-4-E4B-itDocuments and memoryembeddinggemma-300m');
-        fireEvent.click(await screen.findByRole('button', { name: /Check in/ }));
+        expect(await screen.findByText('Start with one of these, or just start chatting.')).toBeInTheDocument();
+        // Nothing to pick up on a first run.
+        expect(screen.queryByRole('button', { name: /Check in/ })).toBeNull();
+        fireEvent.click(await screen.findByRole('button', { name: /Research a topic/ }));
         await waitFor(() => expect(onReady).toHaveBeenCalledExactlyOnceWith(START.cards[0]));
     });
 
@@ -1438,7 +1469,7 @@ describe('SetupScreen: cloud', () => {
         expect(mockedApi.chooseSetupChatModel).not.toHaveBeenCalled();
         expect(mockedApi.skipSetupModel).not.toHaveBeenCalled();
         expect(await startChatting()).toBeInTheDocument();
-        expect(screen.getByText(/answers in the cloud\./)).toBeInTheDocument();
+        expect(screen.getByText(/, in the cloud\./)).toBeInTheDocument();
         expect(localStorage.getItem('gaia-setup-choice')).toBe('fireworks');
     });
 
@@ -1588,6 +1619,7 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
         await offer(FOUND);
         await screen.findByRole('form', { name: FORM });
+        fireEvent.click(screen.getByRole('button', { name: 'Having trouble?' }));
         fireEvent.click(screen.getByRole('button', { name: 'Checks log' }));
         await screen.findByText(/Waiting for you to choose which Lemonade GAIA uses/);
         const text = document.querySelector('.setup-log-pre')?.textContent ?? '';
@@ -1725,6 +1757,8 @@ describe("SetupScreen: the user's server isn't answering", () => {
         expect(await screen.findByRole('alert')).toHaveTextContent("Your Lemonade Server at 127.0.0.1:9 isn't answering.");
         expect(screen.getByText('Start Lemonade Server from the Lemonade tray icon.')).toBeInTheDocument();
         expect(screen.queryByText(/HTTPConnectionPool/)).not.toBeInTheDocument();
+        // A failed step opens "Having trouble?" by itself.
+        expect(screen.getByRole('button', { name: 'Having trouble?' })).toHaveAttribute('aria-expanded', 'true');
         fireEvent.click(screen.getByRole('button', { name: 'Checks log' }));
         expect(screen.getByText(/HTTPConnectionPool/)).toBeInTheDocument();
     });

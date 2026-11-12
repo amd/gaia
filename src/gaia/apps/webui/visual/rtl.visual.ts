@@ -438,6 +438,33 @@ test('new chat', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    test(`the new-chat message box stays put while typing (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const box = page.locator('.new-chat textarea').first();
+        await expect(box).toBeVisible();
+        const before = (await box.boundingBox())!;
+        await box.fill('h');
+        await shot(page, `new-chat-typed-${locale}`);
+        const after = (await box.boundingBox())!;
+        expect(Math.abs(after.y - before.y), 'the box jumped on the first keystroke').toBeLessThan(2);
+        await expect(page.locator('.new-chat-greeting')).toBeVisible();
+    });
+}
+
+for (const locale of ['en', 'ar']) {
+    test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
+            json: { cards: [], working_folder: { path: '/home/you/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true } },
+        })));
+        const add = page.locator('.new-chat-meta button.new-chat-folder');
+        await expect(add).toBeVisible();
+        await expect(page.locator('.new-chat-meta')).not.toContainText('documents');
+        await shot(page, `new-chat-add-folder-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
         await open(page, '', locale);
         const row = page.locator('.sb-row').filter({ hasText: 'Compare two lease PDFs' });
@@ -527,6 +554,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A new chat whose empty history is still loading when its first message goes out. */
+async function withSlowNewChat(page: Page): Promise<void> {
+    const created = { ...SESSIONS[0], title: 'New chat', message_count: 0 };
+    await page.route((url) => url.pathname === '/api/sessions', (route) =>
+        route.request().method() === 'POST' ? route.fulfill({ json: created }) : route.fallback());
+    await page.route((url) => url.pathname === `/api/chat/permissions/${ANSWER_SESSION}`, (route) =>
+        route.request().method() === 'PUT' || route.request().method() === 'POST'
+            ? route.fulfill({ json: { session_id: ANSWER_SESSION, mode: 'ask', grants: [] } })
+            : route.fallback());
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, () => { /* never answers */ });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a new chat's first message shows at once, with no skeleton (${locale})`, async ({ page }, info) => {
+        await open(page, '', locale, withSlowNewChat);
+        await page.locator('textarea').first().fill('Give me three tips for better sleep.');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.msg-user')).toHaveText('Give me three tips for better sleep.');
+        await expect(page.locator('.skeleton-messages')).toHaveCount(0);
+        await expect(page.locator('.streaming-bubble .thinking-indicator')).toBeVisible();
+        await expect(page.locator('.task-title')).toHaveText(locale === 'en' ? 'New chat' : /محادثة جديدة/);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`first-send-${locale}.png`) });
+    });
+}
+
 async function withFailedAnswer(page: Page): Promise<void> {
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
         route.fulfill({
@@ -578,6 +631,73 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`a sent message opened for editing (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await expect(page.getByText('Action items from Aug 28')).toBeVisible();
+        await page.locator('textarea').first().focus();
+        await page.keyboard.press('ArrowUp');
+        const editor = page.locator('.msg-edit-input');
+        await expect(editor).toBeFocused();
+        await editor.press('End');
+        await page.keyboard.type(' and the owners');
+        expect(await audit(page)).toEqual([]);
+        const [box, bubble] = [await editor.boundingBox(), await page.locator('.msg-user:has(.msg-edit) .msg-inner').boundingBox()];
+        expect(box!.width).toBeGreaterThan(bubble!.width * 0.8);
+        await page.screenshot({ path: info.outputPath(`edit-message-${locale}.png`) });
+        await page.locator('.msg-assistant').last().hover();
+        await page.screenshot({ path: info.outputPath(`answer-actions-${locale}.png`) });
+    });
+}
+
+/** A turn GAIA re-checked: the model wrote its answer, read the file back, then wrote it again. */
+const CHECKED_ANSWER = [
+    'Done — except the last step, which you declined.',
+    '',
+    '| Month | Total |',
+    '|---|---|',
+    '| October 2026 | 47.70 |',
+    '| November 2026 | 36.75 |',
+    '| **Grand total** | **84.45** |',
+    '',
+    '**Renamed:** `draft_old.txt` → `draft_archive.txt`',
+].join('\n');
+
+async function withCheckedAnswer(page: Page): Promise<void> {
+    const step = (id: number, extra: Record<string, unknown>) => ({ id, active: false, timestamp: id, ...extra });
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Total both expense files into summary.md and rename draft_old.txt', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `${CHECKED_ANSWER}\n\nSay the word and I'll add the line.`, created_at: NOW.toISOString(), rag_sources: null,
+                        agent_steps: [
+                            step(1, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(2, { type: 'tool', label: 'Write file', tool: 'write_file', success: true }),
+                            step(3, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER }),
+                            step(4, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                            step(5, { type: 'commentary', label: 'Commentary', detail: CHECKED_ANSWER.replace('declined.', 'declined (read back to confirm).') }),
+                            step(6, { type: 'tool', label: 'Read file', tool: 'read_file', success: true }),
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a re-checked answer shows once (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCheckedAnswer);
+        await expect(page.locator('.md-table')).toHaveCount(1);
+        await expect(page.locator('.msg-assistant')).not.toContainText('read back to confirm');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`checked-answer-${locale}.png`) });
+    });
+}
+
 async function withStoppedAnswer(page: Page): Promise<void> {
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
         route.fulfill({
@@ -601,6 +721,66 @@ for (const locale of ['ar', 'en']) {
         await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`stopped-answer-${locale}.png`) });
     });
 }
+
+/** The Connect card a mail tool sends when no account is usable. */
+const CONNECT_CARD = { kind: 'connect_account', providers: ['google', 'microsoft'], agent_id: 'installed:gaia', success: false, status: 'error', display_message: 'Needs a connected account' };
+
+async function withConnectCard(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Did my landlord email me about the lease?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        // No marker and no command: the button comes from the tool result alone.
+                        content: "I can't check yet because no mail account is connected. Use the Connect button above, then ask me again.",
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'list_inbox', active: false, success: false, render: 'connect_account', data: CONNECT_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a tool with no account shows the Connect card (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withConnectCard);
+        const card = page.locator('.render-connect');
+        await expect(card.locator('.render-connect__button')).toHaveCount(2);
+        await expect(card.locator('.render-connect__button').first()).toContainText('Google');
+        await expect(card).not.toContainText('gaia connectors');
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`connect-card-${locale}.png`) });
+        await shot(page, `connect-card-${locale}`);
+    });
+
+    test(`the Connect card says which account is already connected (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await withConnectCard(p); await withConnectors(p); });
+        const card = page.locator('.render-connect');
+        await expect(card.locator('.render-connect__connected')).toHaveCount(1);
+        await expect(card.locator('.render-connect__button--quiet')).toHaveCount(1);
+        // Returning with the account connected offers to run the question again.
+        await expect(page.locator('.connector-retry-banner')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`connect-card-connected-${locale}.png`) });
+        await shot(page, `connect-card-connected-${locale}`);
+    });
+}
+
+test('the Connect card fits a phone', async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withConnectCard);
+    await expect(page.locator('.render-connect__button')).toHaveCount(2);
+    // The closed sidebar drawer waits off screen at this width; judge the card.
+    const problems = (await audit(page)).filter((p) => p.includes('render-connect') || p.includes('scrolls sideways'));
+    expect(problems).toEqual([]);
+    await page.locator('.render-connect').screenshot({ path: info.outputPath('connect-card-phone.png') });
+    await shot(page, 'connect-card-phone');
+});
 
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
@@ -688,6 +868,51 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
         await expect(seconds).toHaveText(/^\d+s$/);
         expect(await seconds.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
         await shot(page, `live-status-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const QUESTION_EVENTS = [
+    {
+        type: 'needs_input', request_id: 'q-1', question: 'Which colour do you prefer?',
+        options: [
+            { value: 'red', label: 'Red', description: '' },
+            { value: 'green', label: 'Green', description: '' },
+            { value: 'blue', label: 'Blue', description: '' },
+        ],
+        allow_free_text: true, sensitive: false, timeout_seconds: 300,
+    },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`a waiting question is answered from the message box and kept as a record (${locale})`, async ({ page }) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, QUESTION_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.route('**/api/chat/user-input', (route) => route.fulfill({ json: { status: 'ok', request_id: 'q-1' } }));
+        const box = page.getByRole('textbox').first();
+        await box.fill('Ask me a colour');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__option')).toHaveCount(3);
+        await expect(box).toBeFocused();
+        await expect(page.locator('.render-needs-input__hint').last(), 'the question is hidden under the message box').toBeInViewport({ ratio: 1 });
+        await shot(page, `question-waiting-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await box.fill('2');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__answered-note')).toBeVisible();
+        await expect(page.locator('.queued-message')).toHaveCount(0);
+        await shot(page, `question-answered-${locale}`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -1219,6 +1444,54 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** Starts with digits, like a real Hugging Face org: unisolated, an Arabic line moves them to its end. */
+const UNLISTED_ID = '01-ai/no-such-model-violet-otter';
+const CUSTOM_TITLE = { ar: 'معرّف نموذج مخصص', en: 'Custom model ID' };
+const CUSTOM_NOTE = {
+    ar: { unlisted: 'لا يُدرج', unchecked: 'تعذّر على GAIA التحقق' },
+    en: { unlisted: "doesn't list", unchecked: "couldn't check this ID" },
+};
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const checked of [true, false]) {
+        const state = checked ? 'unlisted' : 'unchecked';
+        test(`a saved custom model the server ${checked ? 'does not list' : 'could not check'} gets a note (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/settings', (route) => {
+                if (route.request().method() !== 'PUT') return route.fallback();
+                return route.fulfill({ json: {
+                    custom_model: UNLISTED_ID, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+                    model_status: { found: false, downloaded: false, loaded: false, checked },
+                } });
+            }));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            const dialog = page.getByRole('dialog');
+            await dialog.locator('[data-section="advanced"]').click();
+            const section = dialog.locator('details.settings-disclosure', { has: page.locator('summary', { hasText: CUSTOM_TITLE[locale] }) });
+            await section.locator('summary').first().scrollIntoViewIfNeeded();
+            await section.locator('summary').first().click();
+            const input = section.locator('input.model-input');
+            await input.fill(UNLISTED_ID);
+            await input.press('Enter');
+
+            const note = section.locator('.model-warning[role="status"]');
+            await expect(note).toContainText(CUSTOM_NOTE[locale][state]);
+            await note.scrollIntoViewIfNeeded();
+            await shot(page, `custom-model-${state}-${locale}`);
+            if (checked) {
+                // The ID is its own bidi island in the Arabic sentence, under the section title and in the box.
+                await expect(note).toContainText(UNLISTED_ID);
+                if (locale === 'ar') expect(await note.textContent()).toContain(`⁨${UNLISTED_ID}⁩`);
+                expect(await section.locator('.settings-disclosure-hint').textContent()).toBe(`⁦${UNLISTED_ID}⁩`);
+                expect(await input.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            } else {
+                await expect(note).not.toContainText(UNLISTED_ID);
+            }
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.model-warning')).toEqual([]);
+        });
+    }
+}
+
 /** Text left in English in the Arabic UI, outside names, numbers and the English gloss. */
 const leftoverEnglish = (root: Page) =>
     root.locator('.setup').evaluate((setup) => {
@@ -1505,6 +1778,34 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.oauth-setup-form').scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-setup`);
             await expect(page.locator('button button')).toHaveCount(0);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connected tile offers Personalize, and connecting a server offers it in a banner', async ({ page }) => {
+            const brave = { id: 'brave-search', display_name: 'Brave Search', type: 'mcp_server', icon: null, category: 'general',
+                tier: 'core', description: 'Lets GAIA work with Brave Search on your behalf.', configurable: true, enabled: true,
+                account_id: null, default_scopes: [], available_scopes: [], mcp_env_keys: ['BRAVE_API_KEY'], oauth_setup_fields: [] };
+            await openConnectors(page, undefined, {
+                'POST /connectors/brave-search/configure': {},
+                'POST /connectors/brave-search/test': { ok: true, detail: '' },
+                'GET /connectors/brave-search': { ...brave, configured: true },
+            });
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            const row = page.locator('.connector-detail .connector-personalize');
+            await expect(row).toBeVisible();
+            await row.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-personalize-tile`);
+            expect(await audit(page)).toEqual([]);
+
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Brave Search' }).click();
+            await page.locator('.mcp-key-input').fill('BSA-not-a-real-key');
+            await page.locator('.btn-model-save').click();
+            const offer = page.locator('.connector-personalize--offer');
+            await expect(offer).toBeVisible();
+            await offer.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-personalize-offer`);
             expect(await audit(page)).toEqual([]);
         });
 
@@ -1797,6 +2098,31 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `spend-popover-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.spend-meter-panel')).toEqual([]);
+    });
+}
+
+const MONTH_SPENDING = {
+    month: '2026-10', total_usd: 3.42, turns: 37, unpriced_turns: 4, unreported_turns: 5,
+    limit_usd: 20, state: 'ok', by_model: [], price_source: 'list price',
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`monthly spending headline leaves out unpriced and unreported turns (${locale})`, async ({ page }) => {
+        await openModelPage(page, locale);
+        await page.route((url) => url.pathname === '/api/spending', (route) => route.fulfill({ json: MONTH_SPENDING }));
+        await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+        const spending = page.locator('section.spending');
+        await expect(spending.locator('.spending-total')).toContainText('$3.42');
+        await expect(spending.locator('.spending-total')).toContainText('$20');
+        await expect(spending.locator('.spending-total')).toContainText(locale === 'ar' ? 'أدوار المحادثة السحابية: 28' : /28 cloud chat turns/);
+        await expect(spending.locator('p.settings-hint')).toHaveCount(2);
+        await expect(spending.locator('p.settings-hint').nth(0)).toContainText(locale === 'ar' ? '(4)' : 'Plus 4 turns on models with an unknown price');
+        await expect(spending.locator('p.settings-hint').nth(1)).toContainText(locale === 'ar' ? '(5)' : 'Plus 5 turns whose usage wasn’t reported');
+        await spending.scrollIntoViewIfNeeded();
+        await scrollPane(page, 'bottom');
+        await shot(page, `spending-month-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, 'section.spending')).toEqual([]);
     });
 }
 
@@ -2826,6 +3152,66 @@ for (const locale of ['ar', 'en']) {
         if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
         await shot(page, `permission-python-${locale}`);
     });
+}
+
+const CHANGE_PROMPTS = {
+    write: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-write',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\summary.md', content: '# Expenses Summary\n\n| Month | Total |\n|---|---|\n| October | 412.50 |\n| November | 388.10 |\n\nGrand total: 800.60\n' },
+    },
+    edit: {
+        type: 'permission_request', tool: 'edit_file', tool_label: 'editing file', confirm_id: 'c-edit',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\notes.txt', old_content: '- owner: Dana\n', new_content: '- owner: Dana\nreviewed\n' },
+    },
+    // A right-to-left override would draw the line reversed; it shows as a code instead.
+    hidden: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-hidden',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\run.py', content: 'ok = 1\n# \u202Eevil()\n' },
+    },
+    // A right-to-left mark before each statement would draw them in reverse order.
+    rlm: {
+        type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-rlm',
+        args: { file_path: 'C:\\Users\\you\\Documents\\uxa\\run.py', content: 'title = "مرحبا"\n\u200Fsafe_step(); \u200Fdelete_everything();\n' },
+    },
+};
+
+/** Left edge of `needle` as drawn inside `selector`, so a test can check visual order. */
+async function drawnLeft(page: Page, selector: string, needle: string): Promise<number> {
+    return page.locator(selector).evaluate((el, word) => {
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const at = node.textContent?.indexOf(word) ?? -1;
+            if (at < 0) continue;
+            const range = document.createRange();
+            range.setStart(node, at);
+            range.setEnd(node, at + word.length);
+            return range.getBoundingClientRect().left;
+        }
+        throw new Error(`${word} not drawn`);
+    }, needle);
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const [kind, prompt] of Object.entries(CHANGE_PROMPTS)) {
+        test(`a ${kind} prompt shows what will land in the file (${locale})`, async ({ page }) => {
+            await page.addInitScript(streamThenWait, [prompt]);
+            await open(page, `#${ANSWER_SESSION}`, locale);
+            await page.locator('textarea').first().fill('update my notes');
+            await page.keyboard.press('Enter');
+            const preview = page.locator('.perm-card-change');
+            await expect(preview).toBeVisible();
+            await expect(page.locator('.perm-card-pre').filter({ hasText: '"file_path"' })).toHaveCount(0);
+            if (kind === 'rlm') {
+                const shown = '[data-testid="perm-write-preview"]';
+                await expect(page.locator(shown)).toContainText('[U+200F]safe_step(); [U+200F]delete_everything();');
+                await expect(page.getByTestId('perm-change-unseen')).toBeVisible();
+                expect(await drawnLeft(page, shown, 'safe_step')).toBeLessThan(await drawnLeft(page, shown, 'delete_everything'));
+            }
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+            await shot(page, `permission-${kind}-${locale}`);
+        });
+    }
 }
 
 const DECLINED_STEPS = [

@@ -138,6 +138,31 @@
     opacity: 1;
 }
 
+/* A sent message opened for editing takes the column's width. */
+.msg-user:has(.msg-edit) .msg-inner { width: min(80%, 620px); }
+.msg-edit {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.msg-edit-input {
+    width: 100%;
+    padding: 0;
+    border: none;
+    background: transparent;
+    resize: none;
+    line-height: inherit;
+    font-size: inherit;
+}
+.msg-edit-input:focus-visible { outline: none; }
+.msg-user:has(.msg-edit-input:focus-visible) .msg-inner { box-shadow: 0 0 0 2px var(--accent); }
+.msg-edit-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+.msg-edit-btn { height: 28px; }
+
 .msg-body {
     min-width: 0;
     font-size: 15px;

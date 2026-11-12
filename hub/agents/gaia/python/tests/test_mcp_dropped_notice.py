@@ -13,6 +13,7 @@ import pytest
 from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.console import SilentConsole
+from gaia.mcp.client.mcp_client import MCPTool
 
 
 class _Console:
@@ -27,8 +28,14 @@ class _Console:
 
 
 class _Client:
+    name = prefix = "fake"
+
     def __init__(self, n_tools):
-        self._tools = [{"name": f"t{i}"} for i in range(n_tools)]
+        # Real MCPTools: the agent converts each one before counting it.
+        self._tools = [
+            MCPTool(name=f"t{i}", description="d", input_schema={})
+            for i in range(n_tools)
+        ]
 
     def list_tools(self):
         return self._tools

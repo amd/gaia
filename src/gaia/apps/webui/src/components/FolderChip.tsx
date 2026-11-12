@@ -1,10 +1,11 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { ChevronDown, Folder, X } from 'lucide-react';
+import { Folder, Plus, X } from 'lucide-react';
 import { useFolderPicker } from '../hooks/useFolderPicker';
 import { useSessionEnvironment } from '../hooks/useSessionEnvironment';
 import { useChatStore } from '../stores/chatStore';
+import { useT } from '../i18n/useT';
 import type { StartScreen } from '../types';
 import './FolderChip.css';
 
@@ -12,59 +13,65 @@ type WorkingFolder = StartScreen['working_folder'];
 
 const baseName = (path: string) => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
-/** The new chat's folder: picks one more folder the chat may use, when the agent can be held to it. */
+/**
+ * The new chat's folders: where GAIA works, and an "Add a folder" button that
+ * gives this chat one more, when the agent can be held to it. GAIA's own
+ * documents folder is not named, since a user never chose it.
+ */
 export function FolderChip({ folder, disabled }: { folder: WorkingFolder; disabled?: boolean }) {
+    const t = useT();
     const picked = useChatStore((s) => s.draftFolder);
     const setPicked = useChatStore((s) => s.setDraftFolder);
     const { open, picker, error } = useFolderPicker(setPicked);
 
     const where = folder.gaia_folder
-        ? `GAIA works in its own folder, ${folder.path}.`
-        : `GAIA works in ${folder.path}.`;
+        ? t('folderChip.worksInOwn', { path: folder.path })
+        : t('folderChip.worksIn', { path: folder.path });
+    const working = !folder.gaia_folder && (
+        <span className="new-chat-folder" title={where}>
+            <Folder size={13} aria-hidden="true" />
+            <span className="new-chat-folder-name" dir="auto">{folder.name}</span>
+        </span>
+    );
 
     if (!folder.choosable) {
-        return (
-            <span
-                className="new-chat-folder"
-                title={folder.gaia_folder
-                    ? `${where} Attach a file or start GAIA from a project folder to work there.`
-                    : where}
-            >
+        return working || (
+            <span className="new-chat-folder" title={`${where} ${t('folderChip.ownFixedHint')}`}>
                 <Folder size={13} aria-hidden="true" />
-                <span className="new-chat-folder-name" dir="auto">{folder.name}</span>
+                <span className="new-chat-folder-name">{t('folderChip.gaiaFolder')}</span>
             </span>
         );
     }
 
     return (
         <>
-            <button
-                type="button"
-                className={`new-chat-folder is-button${picked ? ' is-on' : ''}`}
-                onClick={() => open(folder.path)}
-                disabled={disabled}
-                aria-haspopup="dialog"
-                aria-label={picked
-                    ? `Folder for this chat: ${folder.name}, plus ${baseName(picked)}`
-                    : `Folder for this chat: ${folder.name}`}
-                title={picked
-                    ? `This chat can read and write ${picked}. Click to pick another folder.`
-                    : `${where} Click to give this chat another folder.`}
-            >
-                <Folder size={13} aria-hidden="true" />
-                <span className="new-chat-folder-name" dir="auto">{picked ? `${folder.name} + ${baseName(picked)}` : folder.name}</span>
-                <ChevronDown size={12} aria-hidden="true" />
-            </button>
-            {picked && (
+            {working}
+            {picked ? (
+                <span className="new-chat-folder is-on" title={t('folderChip.picked', { path: picked })}>
+                    <Folder size={13} aria-hidden="true" />
+                    <span className="new-chat-folder-name" dir="auto">{baseName(picked)}</span>
+                    <button
+                        type="button"
+                        className="new-chat-folder-clear"
+                        onClick={() => setPicked(null)}
+                        disabled={disabled}
+                        aria-label={t('folderChip.remove', { name: baseName(picked) })}
+                        title={t('folderChip.remove', { name: baseName(picked) })}
+                    >
+                        <X size={12} aria-hidden="true" />
+                    </button>
+                </span>
+            ) : (
                 <button
                     type="button"
-                    className="btn-icon-sm new-chat-folder-clear"
-                    onClick={() => setPicked(null)}
+                    className="new-chat-folder is-button"
+                    onClick={() => open(folder.path)}
                     disabled={disabled}
-                    aria-label={`Don't give this chat ${baseName(picked)}`}
-                    title="Don't add this folder"
+                    aria-haspopup="dialog"
+                    title={`${where} ${t('folderChip.addHint')}`}
                 >
-                    <X size={12} />
+                    <Plus size={13} aria-hidden="true" />
+                    <span className="new-chat-folder-name">{t('folderChip.add')}</span>
                 </button>
             )}
             {error && <span className="new-chat-folder-error" role="alert">{error}</span>}
