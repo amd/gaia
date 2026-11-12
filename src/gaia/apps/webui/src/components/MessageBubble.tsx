@@ -28,6 +28,7 @@ import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
 import { useLogsStore } from '../stores/logsStore';
+import { dropAnswerDrafts } from '../utils/answerDrafts';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type FoundPage, type LibraryDoc,
@@ -509,12 +510,11 @@ export function turnEnding(content: string, stopState: Message['stopState']): Tu
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
-    const echo = useMemo(
-        () => (message.role === 'assistant' && !isStreaming && agentSteps
-            ? dropErrorsEchoedInAnswer(agentSteps, message.content)
-            : { steps: agentSteps, echoed: false }),
-        [agentSteps, message.content, message.role, isStreaming],
-    );
+    const echo = useMemo(() => {
+        if (message.role !== 'assistant' || !agentSteps) return { steps: agentSteps, echoed: false };
+        const steps = dropAnswerDrafts(agentSteps, message.content);
+        return isStreaming ? { steps, echoed: false } : dropErrorsEchoedInAnswer(steps, message.content);
+    }, [agentSteps, message.content, message.role, isStreaming]);
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
     const place = useInferencePlace();
     const showServerLog = useLogsStore((s) => s.show);
