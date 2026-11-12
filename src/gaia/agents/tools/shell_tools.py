@@ -51,6 +51,7 @@ from gaia.agents.tools.shell_deletes import (
 )
 from gaia.agents.tools.shell_session import ShellSession
 from gaia.agents.tools.workspace_paths import _workspace_default, _workspace_target
+from gaia.canonical_path import UncheckablePathError, canonical_path, join_under
 from gaia.env import child_env
 from gaia.tool_cancellation import tool_cancelled
 
@@ -1831,11 +1832,16 @@ def _flag_path_values(arg: str) -> list:
 
 
 def _protected_folder(resolved_path: str) -> Optional[str]:
-    """The credential folder *resolved_path* sits in, whatever the allowed scope."""
+    """The credential folder *resolved_path* sits in, whatever the allowed scope.
+
+    Raises:
+        UncheckablePathError: *resolved_path* is not a file on this PC.
+    """
     from gaia import security
 
+    canonical = Path(canonical_path(resolved_path, for_comparison=True))
     for folder in security.SECRET_DIRECTORIES:
-        if security._path_is_within(Path(resolved_path), Path(folder)):
+        if security._path_is_within(canonical, Path(folder)):
             return folder
     return None
 
@@ -2088,7 +2094,13 @@ def _git_path_flag_values(cmd_parts: list, cwd: str) -> list:
         else:
             break
         if name in _GIT_PATH_FLAGS:
-            resolved = base.joinpath(value).resolve()
+            try:
+                resolved = Path(
+                    canonical_path(join_under(base, value), for_comparison=True)
+                )
+            except UncheckablePathError:
+                # Unchanged here: the allowed-paths check refuses it.
+                resolved = base.joinpath(value)
             values.append((name, str(resolved)))
             if name == "-C":
                 base = resolved
@@ -3890,7 +3902,10 @@ class ShellToolsMixin:
             return False
         if os.path.getsize(path) > MAX_SHELL_DELETE_COPY_BYTES:
             return False
-        if _protected_folder(os.path.realpath(path)):
+        try:
+            if _protected_folder(path):
+                return False
+        except UncheckablePathError:
             return False
         return self._path_allowed(path, prompt_user=False)
 
@@ -3918,10 +3933,10 @@ class ShellToolsMixin:
         """
         if outside is None:
             return refusal
-        unaskable = getattr(
-            getattr(self, "path_validator", None), "_unaskable_reason", None
+        refusal_reason = getattr(
+            getattr(self, "path_validator", None), "grant_refusal_reason", None
         )
-        reason = unaskable(Path(path)) if callable(unaskable) else ""
+        reason = refusal_reason(path) if callable(refusal_reason) else ""
         if reason:
             scratch = getattr(self.path_validator, "scratch_hint", None)
             return {
@@ -3946,7 +3961,17 @@ class ShellToolsMixin:
         the allowed paths is collected for the prompt instead of refused.
         """
         try:
-            resolved = str(Path(cwd).joinpath(_expand_home(target)).resolve())
+            resolved = canonical_path(
+                join_under(cwd, _expand_home(target)), for_comparison=True
+            )
+        except UncheckablePathError as exc:
+            return cwd, {
+                **NOT_EXECUTED,
+                "status": "error",
+                "tier": TIER_REFUSE,
+                "error": f"Access denied: cd {exc}",
+                "has_errors": True,
+            }
         except (OSError, ValueError) as exc:
             return cwd, {
                 **NOT_EXECUTED,
@@ -4077,7 +4102,18 @@ class ShellToolsMixin:
     ) -> Optional[Dict[str, Any]]:
         """Refuse *candidate_path* when it resolves outside the allowed paths."""
         try:
-            resolved_path = str(Path(cwd).joinpath(candidate_path).resolve())
+            resolved_path = canonical_path(
+                join_under(cwd, candidate_path), for_comparison=True
+            )
+        except UncheckablePathError as exc:
+            return {
+                **NOT_EXECUTED,
+                "status": "error",
+                "tier": TIER_REFUSE,
+                "error": f"Access denied: {label} {exc}",
+                "has_errors": True,
+                "hint": "Pass a plain path inside an allowed folder.",
+            }
         except (OSError, ValueError) as exc:
             # Fail closed: a path nobody could resolve was never shown to be inside.
             logger.warning("Refusing unresolvable path '%s': %s", arg, exc)

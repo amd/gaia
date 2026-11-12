@@ -183,6 +183,7 @@ from gaia.agents.base.verification import (
 )
 
 # First-party imports
+from gaia.canonical_path import UncheckablePathError, canonical_path
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
@@ -2366,6 +2367,17 @@ def _with_resolved_target(prompt_args: Any, preflight: Any) -> Any:
     return {**prompt_args, "file_path": target}
 
 
+def _judged_path(path: str) -> str:
+    """*path* as the path validator judges it, or as given when it cannot.
+
+    One the validator cannot canonicalise is refused by it, with the reason.
+    """
+    try:
+        return canonical_path(path)
+    except UncheckablePathError:
+        return path
+
+
 def _record_refused_write(
     agent: Any, tool_name: str, tool_args: Any, result: Any
 ) -> None:
@@ -2389,7 +2401,7 @@ def _record_refused_write(
         return
     try:
         target = os.path.abspath(str(target_of(tool_args)))
-        real = os.path.realpath(target)
+        real = _judged_path(target)
     except (KeyError, TypeError, ValueError, OSError) as e:
         logger.debug("could not resolve the refused write's target: %s", e)
         return
@@ -3840,7 +3852,7 @@ Do NOT wrap conversational replies in JSON.
         ):
             return None
         try:
-            target = Path(os.path.realpath(str(target_of(prompt_args))))
+            target = Path(_judged_path(str(target_of(prompt_args))))
         except (KeyError, TypeError, ValueError, OSError) as e:
             logger.debug("could not resolve the write's target: %s", e)
             return None

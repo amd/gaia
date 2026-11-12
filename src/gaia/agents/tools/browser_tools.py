@@ -780,13 +780,12 @@ class BrowserToolsMixin:
                 return "Error: Browser tools not initialized. Download is disabled."
 
             validator = getattr(mixin, "_path_validator", None)
-            if not Path(save_to).expanduser().is_absolute():
-                save_to = str(_workspace_target(mixin, save_to))
+            # Saved under the same canonical folder the checks below judge.
+            save_to = str(_workspace_target(mixin, save_to))
 
             # Refuse a blocked folder (/etc, ~/.ssh, ...) before any request.
             if validator:
-                resolved_dir = str(Path(save_to).expanduser().resolve())
-                is_blocked, reason = validator.is_write_blocked(resolved_dir)
+                is_blocked, reason = validator.is_write_blocked(save_to)
                 if is_blocked:
                     return _download_refusal(reason)
 
