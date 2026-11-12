@@ -2,25 +2,41 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Check, Pause, RotateCw } from 'lucide-react';
+import { AlertCircle, Check, ChevronRight, Pause, RotateCw } from 'lucide-react';
 import { useT, type Translate } from '../../i18n/useT';
 import type { SetupModelProgress, SetupModelState, SetupRunStatus } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
+import { FollowLog } from './FollowLog';
+import { SetupFooter } from './SetupFooter';
 import { DownloadMeter, STALL_NOTICE_S, STALL_STUCK_S, formatBytes, formatEta, formatSize, formatSpeed, ltrIn, spokenEta, type Estimate } from './format';
 import { usePageVisible } from './motion';
 
 /** Cancelling past this much asks first. */
 const CONFIRM_CANCEL_BYTES = 1e9;
 
-/** Embedder first, then chat, then the rest: the order setup pulls them. */
-function order(m: SetupModelProgress): number {
+/** What is happening now on top, then what went wrong, what is done, and what waits. */
+const STATE_ORDER: Record<SetupModelState, number> = {
+    downloading: 0, verifying: 1, failed: 2, ready: 3, unchecked: 3, cancelled: 4, queued: 5, skipped: 6,
+};
+
+/** Within a state: embedder, then chat, then the rest. */
+function roleOrder(m: SetupModelProgress): number {
     if (m.roles.includes('embedding')) return 0;
     if (m.roles.includes('chat')) return 1;
     return 2;
 }
 
 export function sortedModels(models: SetupModelProgress[]): SetupModelProgress[] {
-    return [...models].filter((m) => m.state !== 'skipped').sort((a, b) => order(a) - order(b));
+    return [...models].filter((m) => m.state !== 'skipped')
+        .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || roleOrder(a) - roleOrder(b));
+}
+
+/** A log line the row already says: which model, its progress bar, or that it finished. */
+const REPEATS_ROW = /^\s*(Downloading:|Downloaded\b|\[[=\-\s>#]*\])/;
+
+/** The log is worth opening only once it says something the row doesn't. */
+export function logAddsDetail(lines: string[]): boolean {
+    return lines.some((l) => l.trim() && !REPEATS_ROW.test(l));
 }
 
 const STATE_KEY: Record<SetupModelState, Parameters<Translate>[0]> = {
@@ -38,7 +54,8 @@ const STATE_KEY: Record<SetupModelState, Parameters<Translate>[0]> = {
 export function downloadsActive(status: SetupRunStatus | null): boolean {
     if (!status) return false;
     if (status.state === 'running' || status.state === 'verifying') return true;
-    return !!status.models?.some((m) => m.state === 'downloading' || m.state === 'queued');
+    // A row verifying outside a run is Retry testing it again.
+    return !!status.models?.some((m) => m.state === 'downloading' || m.state === 'queued' || m.state === 'verifying');
 }
 
 function failureText(m: SetupModelProgress, name: string, freeGb: number | null, t: Translate): string {
@@ -52,6 +69,16 @@ function failureText(m: SetupModelProgress, name: string, freeGb: number | null,
         }
         case 'verify':
             return t('setup.fail.verify', { name });
+        case 'memory':
+            return t('setup.fail.testMemory', { name });
+        case 'stuck':
+            return t('setup.fail.testStuck', { name });
+        case 'answer':
+            return t('setup.fail.testAnswer', { name });
+        case 'window':
+            return t('setup.fail.testWindow', { name });
+        case 'path_too_long':
+            return t('setup.fail.pathTooLong', { name });
         default:
             return t('setup.fail.lemonade', { name });
     }
@@ -79,6 +106,9 @@ interface RowProps {
 function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume, onSkip, onRestart, busy, retryLater, checking, checkingFor }: RowProps) {
     const t = useT();
     const errId = useId();
+    const logId = useId();
+    const [showLog, setShowLog] = useState(false);
+    const lines = m.log ?? [];
     const pct = m.bytes_total > 0 ? Math.min(100, (m.bytes_done / m.bytes_total) * 100) : m.state === 'ready' ? 100 : 0;
     const state = t(STATE_KEY[m.state]);
     const retryingFor = m.retrying_until ? Math.max(0, Math.round(m.retrying_until - now / 1000)) : 0;
@@ -130,6 +160,19 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
                 <span className="dl-name"><bdi title={m.id}>{name}</bdi></span>
                 <span className="dl-state">{state}</span>
                 {m.state === 'downloading' && <bdi className="dl-pct">{Math.floor(pct)}%</bdi>}
+                {m.state !== 'failed' && logAddsDetail(lines) && (
+                    <button
+                        type="button"
+                        className="dl-log-toggle"
+                        onClick={() => setShowLog((v) => !v)}
+                        aria-expanded={showLog}
+                        aria-controls={logId}
+                        aria-label={t('setup.progress.logFor', { name })}
+                        title={t('setup.progress.logFor', { name })}
+                    >
+                        <ChevronRight size={14} className={showLog ? 'is-open' : ''} aria-hidden="true" />
+                    </button>
+                )}
             </div>
             <div
                 className="dl-track"
@@ -143,13 +186,15 @@ function ProgressRow({ model: m, name, estimate, now, freeGb, onRetry, onResume,
                 <span className="dl-fill" style={{ inlineSize: `${m.state === 'verifying' ? 100 : pct}%` }} />
             </div>
             {detail && <p className="dl-detail"><bdi>{detail}</bdi></p>}
+            {showLog && m.state !== 'failed' && logAddsDetail(lines) && <FollowLog lines={lines} id={logId} className="dl-log" />}
             {m.state === 'failed' && (
                 <div className="dl-fail">
                     <p className="dl-error" id={errId}>{failureText(m, name, freeGb, t)}</p>
-                    {m.error && (
+                    {/* What Lemonade said, in this download's log; the line above says it plainly. */}
+                    {(lines.length > 0 || m.error) && (
                         <details className="dl-details">
                             <summary>{t('setup.progress.details')}</summary>
-                            <pre>{m.error}</pre>
+                            <pre dir="ltr">{lines.length > 0 ? lines.join('\n') : m.error}</pre>
                         </details>
                     )}
                     {retryLater ? <p className="dl-detail">{t('setup.progress.retryLater')}</p> : (
@@ -231,8 +276,9 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
     const [announce, setAnnounce] = useState('');
     const [alert, setAlert] = useState('');
     const seen = useRef<{ states: Map<string, SetupModelState>; quarter: number } | null>(null);
-    // The run's load check: when each row started being checked, for its elapsed time.
-    const checking = status.state === 'verifying';
+    // The run's load check, or Retry testing a row again: when each row started, for its elapsed time.
+    const checking = status.state === 'verifying'
+        || (status.state !== 'running' && models.some((m) => m.state === 'verifying'));
     const checkStarted = useRef(new Map<string, number>());
 
     // A countdown (keep trying) and a check's elapsed time move between polls.
@@ -355,15 +401,18 @@ export function DownloadProgress({ status, names, freeGb = null, onCancel, onRet
                     />
                 ))}
             </ul>
-            <div className="setup-row dl-controls">
-                {active && onCancel && (
-                    <button type="button" className="btn-secondary" onClick={cancel} disabled={busy}>{t('setup.progress.cancel')}</button>
-                )}
-                {!active && cancelled.length > 1 && onResumeAll && (
-                    <button type="button" className="btn-primary" onClick={onResumeAll} disabled={busy}>{t('setup.progress.resumeAll')}</button>
-                )}
-                {active && <span className="setup-hint">{t('setup.progress.keepsGoing')}</span>}
-            </div>
+            {active && <p className="setup-hint dl-controls">{t('setup.progress.keepsGoing')}</p>}
+            {/* In setup, the screen's actions sit in its bottom bar like every other step's. */}
+            {((active && onCancel) || (!active && cancelled.length > 0 && onResumeAll)) && (
+                <SetupFooter>
+                    {active && onCancel && (
+                        <button type="button" className="btn-secondary" onClick={cancel} disabled={busy}>{t('setup.progress.cancel')}</button>
+                    )}
+                    {!active && cancelled.length > 0 && onResumeAll && (
+                        <button type="button" className="btn-primary" onClick={onResumeAll} disabled={busy}>{t('setup.progress.resumeAll')}</button>
+                    )}
+                </SetupFooter>
+            )}
             <span className="visually-hidden" aria-live="polite">{announce}</span>
             <span className="visually-hidden" role="alert">{alert}</span>
             {confirmCancel && (

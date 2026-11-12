@@ -6,6 +6,7 @@
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 import uuid
@@ -18,15 +19,22 @@ from pydantic import BaseModel, field_validator
 # Category sets come from the data layer. The dashboard may write the
 # chat-turn categories plus `profile`; `system` and `permission` are never typed
 # or approved in the UI. Only the eval-only admin seed takes the full set.
+from gaia.agents.base.inferred_insights import (
+    DEFAULT_CONFIDENCE,
+    normalize_confidence,
+    parse_inferred_insights,
+)
 from gaia.agents.base.memory_store import (
     USER_REVIEWED_CATEGORIES as _DASHBOARD_CATEGORIES,
 )
 from gaia.agents.base.memory_store import VALID_CATEGORIES as _VALID_CATEGORIES
 from gaia.agents.base.memory_store import (
     MemoryContentError,
+    MemoryScrubError,
     check_memory_content,
     is_about_user,
 )
+from gaia.llm.reasoning import strip_reasoning
 from gaia.ui.memory_settings import MEMORY_ENABLED_KEY, memory_enabled
 
 from ..database import ChatDatabase
@@ -505,11 +513,19 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    remove = store.forget if is_about_user(item) else store.delete
-    success = remove(knowledge_id, allow_privileged=True)
-    if not success:
+    if is_about_user(item):
+        # Copies of the same fact go too, or the deleted fact is still recalled.
+        deleted = store.forget_with_copies(knowledge_id, allow_privileged=True)
+    elif store.delete(knowledge_id, allow_privileged=True):
+        deleted = [knowledge_id]
+    else:
+        deleted = []
+    if not deleted:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    return {"status": "deleted", "knowledge_id": knowledge_id}
+    result: Dict[str, Any] = {"status": "deleted", "knowledge_id": knowledge_id}
+    if len(deleted) > 1:
+        result["knowledge_ids"] = deleted
+    return result
 
 
 @router.get("/api/memory/knowledge/{knowledge_id}")
@@ -614,7 +630,7 @@ def admin_seed(body: AdminSeedRequest) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# Entities & Contexts
+# Entities
 # ---------------------------------------------------------------------------
 
 
@@ -630,12 +646,6 @@ def get_entity(entity: str, limit: int = Query(20, ge=1, le=200)) -> List[Dict]:
     return _get_store().get_by_entity(entity, limit=limit)
 
 
-@router.get("/api/memory/contexts")
-def list_contexts(limit: int = Query(100, ge=1, le=500)) -> List[Dict]:
-    """List all contexts with their knowledge counts."""
-    return _get_store().get_contexts(limit=limit)
-
-
 # ---------------------------------------------------------------------------
 # Tool Performance
 # ---------------------------------------------------------------------------
@@ -645,23 +655,6 @@ def list_contexts(limit: int = Query(100, ge=1, le=500)) -> List[Dict]:
 def tool_summary() -> List[Dict]:
     """Per-tool performance stats."""
     return _get_store().get_tool_summary()
-
-
-@router.get("/api/memory/tools/{tool_name}/history")
-def tool_history(tool_name: str, limit: int = Query(50, ge=1, le=200)) -> List[Dict]:
-    """Recent call history for a specific tool."""
-    return _get_store().get_tool_history(tool_name, limit=limit)
-
-
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
-
-
-@router.get("/api/memory/errors")
-def recent_errors(limit: int = Query(20, ge=1, le=100)) -> List[Dict]:
-    """Recent tool errors across all tools."""
-    return _get_store().get_recent_errors(limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -942,14 +935,10 @@ def trigger_reconciliation(max_pairs: int = Query(20, ge=1, le=100)) -> Dict:
             )
             if hasattr(raw, "__iter__") and not isinstance(raw, str):
                 raw = "".join(raw)
-            raw = raw.strip()
-            # Strip <think> blocks from reasoning models
-            import re as _re
-
-            raw = _re.sub(r"<think>.*?</think>", "", raw, flags=_re.DOTALL).strip()
+            raw = strip_reasoning(raw)
             if raw.startswith("```"):
-                raw = _re.sub(r"^```(?:json)?\s*", "", raw)
-                raw = _re.sub(r"\s*```$", "", raw).strip()
+                raw = re.sub(r"^```(?:json)?\s*", "", raw)
+                raw = re.sub(r"\s*```$", "", raw).strip()
             try:
                 classification = json.loads(raw)
                 relationship = classification.get("relationship", "neutral")
@@ -1052,6 +1041,9 @@ def clear_all_memory() -> Dict:
     """
     try:
         return _get_store().clear_all()
+    except MemoryScrubError as exc:
+        logger.error("[memory router] clear_all scrub failed: %s", exc)
+        raise HTTPException(500, str(exc)) from exc
     except Exception as exc:
         logger.error("[memory router] clear_all failed: %s", exc)
         raise HTTPException(500, f"Clear failed: {type(exc).__name__}")
@@ -1391,9 +1383,10 @@ def stream_inference(include_browser: bool = Query(False)):
             from gaia.agents.base.discovery import SystemDiscovery
             from gaia.llm import create_client
             from gaia.llm.lemonade_client import (
-                cloud_model_provider,
+                LemonadeClientError,
                 resolve_default_chat_model,
             )
+            from gaia.ui._chat_helpers import _runs_on_this_pc
 
             discovery = SystemDiscovery()
             sections: list = []
@@ -1534,15 +1527,32 @@ def stream_inference(include_browser: bool = Query(False)):
             # The machine's default chat model, so no second model loads. Never
             # the UI's custom_model: that may be cloud, and this data stays local.
             model = resolve_default_chat_model()
-            if cloud_model_provider(model):
+            try:
+                local = _runs_on_this_pc(model)
+            except LemonadeClientError as e:
+                cid = _log_server_error("inference locality check failed", e)
+                yield _sse(
+                    {
+                        "type": "error",
+                        "message": (
+                            "Profile inference runs only on a local model, and "
+                            f"GAIA couldn't confirm that '{model}' is one: Lemonade's "
+                            "model list didn't load. Check that Lemonade is running "
+                            f"in Settings > Setup, then try again (id={cid})."
+                        ),
+                    }
+                )
+                yield _sse({"type": "done", "total": 0})
+                return
+            if not local:
                 yield _sse(
                     {
                         "type": "error",
                         "message": (
                             f"Profile inference runs only on a local model, but "
-                            f"the default model is the cloud model '{model}'. Set "
-                            "a local one with `gaia config set default_model "
-                            "<model>` and try again."
+                            f"the default model '{model}' isn't one this PC runs. "
+                            "Open Settings > Setup, press Run setup again and "
+                            "choose a local chat model, then try again."
                         ),
                     }
                 )
@@ -1584,22 +1594,8 @@ def stream_inference(include_browser: bool = Query(False)):
 
             yield _sse({"type": "log", "message": "Parsing insights..."})
             try:
-                cleaned = raw_response.strip()
-                if cleaned.startswith("```"):
-                    cleaned = "\n".join(cleaned.split("\n")[1:])
-                    if "```" in cleaned:
-                        cleaned = cleaned[: cleaned.rfind("```")]
-                insights = json.loads(cleaned.strip())
-                if not isinstance(insights, list):
-                    raise ValueError("Expected JSON array")
-                insights = [
-                    i
-                    for i in insights
-                    if isinstance(i, dict)
-                    and isinstance(i.get("content"), str)
-                    and i["content"].strip()
-                ]
-            except Exception as e:
+                insights, incomplete = parse_inferred_insights(raw_response)
+            except ValueError as e:
                 cid = _log_server_error("failed to parse LLM inference response", e)
                 yield _sse(
                     {
@@ -1612,19 +1608,40 @@ def stream_inference(include_browser: bool = Query(False)):
                 )
                 yield _sse({"type": "done", "total": 0})
                 return
+            if incomplete:
+                yield _sse(
+                    {
+                        "type": "log",
+                        "message": (
+                            "The LLM's reply was incomplete or malformed; "
+                            f"keeping the {len(insights)} insight(s) that parsed."
+                        ),
+                    }
+                )
 
+            sent = 0
             for insight in insights:
                 insight["content"] = insight["content"].strip()[:200]
-                try:
-                    insight["confidence"] = max(
-                        0.0, min(1.0, float(insight.get("confidence", 0.7)))
+                raw_confidence = insight.get("confidence", DEFAULT_CONFIDENCE)
+                confidence = normalize_confidence(raw_confidence)
+                if confidence is None:
+                    yield _sse(
+                        {
+                            "type": "log",
+                            "message": (
+                                f"Skipped insight {insight['content']!r}: "
+                                f"confidence {raw_confidence!r} is not a number "
+                                "or low/medium/high."
+                            ),
+                        }
                     )
-                except (ValueError, TypeError):
-                    insight["confidence"] = 0.7
+                    continue
+                insight["confidence"] = confidence
                 insight["domain"] = insight.get("domain", "general")
                 yield _sse({"type": "insight", "item": insight})
+                sent += 1
 
-            yield _sse({"type": "done", "total": len(insights)})
+            yield _sse({"type": "done", "total": sent})
 
         except Exception as exc:
             cid = _log_server_error("stream-inference failed", exc)

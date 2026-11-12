@@ -54,7 +54,6 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 | File | Scope |
 |------|-------|
 | `build_cpp.yml`, `benchmark_cpp.yml` | Native build |
-| `build-electron-apps.yml` | Electron packaging |
 | `build-installers.yml` | Installers |
 | `publish.yml`, `pypi.yml`, `update-release-branch.yml` | Release |
 

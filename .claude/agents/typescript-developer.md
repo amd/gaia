@@ -5,7 +5,7 @@ tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
 
-You write TypeScript for GAIA. The primary surface is the Agent UI (`src/gaia/apps/webui/`) — React + Vite + Electron + TypeScript. Legacy standalone apps under `src/gaia/apps/{jira,llm,example,...}/webui/` are still JavaScript.
+You write TypeScript for GAIA. The primary surface is the Agent UI (`src/gaia/apps/webui/`) — React + Vite + Electron + TypeScript.
 
 ## Output style
 

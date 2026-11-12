@@ -20,17 +20,10 @@
 }
 
 /* ── Step enter ─────────────────────────────────────────────────── */
-.setup-step.is-current > .setup-step-body,
-.setup-step.is-active > .setup-step-body {
-    animation: setupStepIn var(--duration) var(--ease);
-}
-
 @keyframes setupStepIn {
     from { opacity: 0; transform: translateY(8px); }
     to { opacity: 1; transform: translateY(0); }
 }
-
-.setup-step.is-pending .setup-step-label { color: var(--text-muted); }
 
 .setup-nav { justify-content: flex-end; margin-block-start: 4px; }
 
@@ -487,7 +480,22 @@
 .gpu-preset.is-active { border-color: var(--accent-light); background: var(--accent-dim); color: var(--accent); font-weight: 600; }
 .gpu-preset:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+.gpu-tag {
+    margin-inline-start: 2px;
+    padding: 1px 6px;
+    border-radius: var(--radius-full);
+    font-size: 11px;
+    font-weight: 600;
+}
+.gpu-tag.is-recommended { background: var(--accent-dim); color: var(--accent); }
+.gpu-tag.is-max { border: 1px solid var(--accent-yellow); color: var(--text-secondary); }
+
 .gpu-unlock { color: var(--text-primary); font-size: 13.5px; font-weight: 600; }
+.gpu-unlock.is-keep,
+.gpu-unlock.is-warn { display: flex; align-items: flex-start; gap: 6px; font-weight: 400; }
+.gpu-unlock > svg { flex: none; margin-block-start: 3px; }
+.gpu-unlock.is-keep > svg { color: var(--accent-green); }
+.gpu-unlock.is-warn > svg { color: var(--accent-yellow); }
 
 .gpu-notice {
     display: flex;
@@ -545,8 +553,9 @@
 @keyframes confirmIn { from { opacity: 0; transform: translateY(8px) scale(0.98); } to { opacity: 1; transform: none; } }
 
 /* ── Ready summary ─────────────────────────────────────────────── */
-.setup-summary-list { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
-.setup-summary-list > div { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; gap: 10px; }
+/* One label column for every row, so the values line up. */
+.setup-summary-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 16px; font-size: 13px; }
+.setup-summary-list > div { display: contents; }
 .setup-summary-list dt { color: var(--text-secondary); }
 .setup-summary-list dd { color: var(--text-primary); overflow-wrap: anywhere; }
 .setup-summary-list .is-warn dd { color: var(--accent-yellow); }
@@ -592,7 +601,6 @@
     .setup-models-footer .mc-summary-stats { flex-direction: row; gap: 2px 14px; }
     .setup-models-footer .mc-disk-warn { font-size: 12px; }
     .setup-models-footer .setup-keep-trying { font-size: 12.5px; }
-    .setup-step-body { margin-inline-start: 0; }
     .mc-row-top { flex-wrap: wrap; }
     .mc-actions { padding: 0 12px 10px; padding-inline-start: 40px; }
     .mc-summary-stats { flex-direction: column; gap: 2px; }
@@ -600,7 +608,8 @@
     .setup-banner .setup-row > button { flex: 1 1 auto; }
     .confirm-actions > button { flex: 1 1 100%; }
     .mc-default .mc-select { flex: 1 1 100%; }
-    .setup-summary-list > div { grid-template-columns: 1fr; gap: 0; }
+    .setup-summary-list { grid-template-columns: minmax(0, 1fr); gap: 0; }
+    .setup-summary-list dd { margin-block-end: 6px; }
 }
 
 /* ── Reduced motion: state changes are instant, loops stop ─────── */
@@ -614,7 +623,47 @@
     }
     .mc-skeleton { animation: none; }
     .dl-fill, .gpu-seg, .gpu-marker, .mc-disk-fill, .download-chip-bar > span { transition: none; }
-    .setup-step.is-current > .setup-step-body,
-    .setup-step.is-active > .setup-step-body,
     .dl-row.is-failed, .dl-row.is-ready .dl-icon, .setup-done { animation: none; }
 }
+
+.mc-chip.is-verified { background: var(--accent-green-dim); color: var(--accent-green); }
+.mc-chip.is-untested { background: var(--accent-yellow-dim); color: var(--accent-yellow); }
+.mc-job { display: flex; flex-direction: column; gap: 8px; }
+.mc-job-title { color: var(--text-primary); font-size: 14px; font-weight: 600; }
+.mc-job-line { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; color: var(--text-primary); font-size: 14px; }
+.mc-row.is-off { opacity: 0.7; }
+
+/* A phone: the model's name keeps a line of its own; state and log toggle go under it. */
+@media (max-width: 520px) {
+    .dl-row-head { flex-wrap: wrap; }
+    .dl-name { flex: 1 1 calc(100% - 40px); overflow-wrap: break-word; }
+    .dl-state { margin-inline-start: 22px; }
+}
+
+.setup-checks-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: inherit;
+}
+.setup-checks-toggle svg:last-child { color: var(--text-secondary); transition: transform var(--duration-fast) var(--ease); }
+.setup-checks-toggle svg.is-open { transform: rotate(90deg); }
+[dir="rtl"] .setup-checks-toggle svg:last-child:not(.is-open) { transform: scaleX(-1); }
+.setup-checks-done .setup-rows { margin-block-start: 8px; }
+
+.setup-backend {
+    display: grid;
+    gap: 8px;
+    justify-items: start;
+}
+
+.setup-npu-problems {
+    display: grid;
+    gap: 6px;
+    max-inline-size: 60ch;
+}
+.setup-npu-problems p,
+.setup-npu-problems ul { margin: 0; }
+.setup-npu-problems ul { padding-inline-start: 20px; display: grid; gap: 4px; }
+.setup-npu-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.setup-npu-error { color: var(--danger); }

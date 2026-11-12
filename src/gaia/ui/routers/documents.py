@@ -21,7 +21,7 @@ import uuid
 from pathlib import Path
 from typing import List
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
 from .._chat_helpers import UnreadableDocumentError, index_progress
@@ -447,9 +447,10 @@ async def upload_document_blob(
 
         # 5. Dedup by hash — if this content is already indexed, return the
         # existing doc and discard the partial. Fast path for "user dropped
-        # the same file twice."
+        # the same file twice." A row whose file is gone falls through, so
+        # add_document re-points it at this copy.
         existing = db.get_document_by_hash(file_hash)
-        if existing:
+        if existing and Path(existing.get("filepath") or "").is_file():
             logger.info(
                 "Blob upload dedup: %s matches existing doc %s",
                 display_name,
@@ -537,19 +538,6 @@ async def upload_document_blob(
         doc.get("chunk_count", 0),
     )
     return doc_to_response(doc)
-
-
-@router.get("/api/documents/monitor/status")
-async def monitor_status(request: Request):
-    """Get status of the document file monitor."""
-    monitor = getattr(request.app.state, "document_monitor", None)
-    if not monitor:
-        return {"running": False, "interval_seconds": 0, "reindexing": []}
-    return {
-        "running": monitor.is_running,
-        "interval_seconds": monitor._interval,
-        "reindexing": list(monitor.reindexing_docs),
-    }
 
 
 @router.get("/api/documents/{doc_id}/status")

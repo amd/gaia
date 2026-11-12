@@ -51,7 +51,7 @@ def _session(client, title):
 def test_nothing_running(client):
     resp = client.get("/api/system/work-in-progress")
     assert resp.status_code == 200
-    assert resp.json() == {"answers": [], "indexing": []}
+    assert resp.json() == {"answers": [], "indexing": [], "setup": False}
 
 
 def test_running_answers_are_named(client):
@@ -145,3 +145,21 @@ def test_unload_failure_says_why(client):
         "The model server did not unload Gemma-4-E4B-it-GGUF: "
         "Lemonade Server not reachable at http://localhost:13305"
     )
+
+
+@pytest.mark.parametrize(
+    "status, warned",
+    [
+        ({"state": "verifying", "models": []}, True),
+        ({"state": "ready", "models": [{"id": "m", "state": "downloading"}]}, True),
+        ({"state": "idle", "models": [{"id": "m", "state": "queued"}]}, True),
+        ({"state": "ready", "models": [{"id": "m", "state": "ready"}]}, False),
+    ],
+    ids=["checking", "retry-download", "settings-download", "done"],
+)
+def test_quitting_warns_while_setup_or_a_model_download_runs(client, status, warned):
+    from gaia.ui import setup_runner as sr
+
+    with patch.object(sr.runner, "status", return_value=status):
+        resp = client.get("/api/system/work-in-progress")
+    assert resp.json()["setup"] is warned

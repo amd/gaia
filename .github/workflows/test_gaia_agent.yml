@@ -38,14 +38,10 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
-      - '!src/gaia/apps/*/webui/**'
-      - '!src/gaia/electron/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
       - 'tests/unit/conftest.py'
-      - 'tests/unit/agents/conftest.py'
-      - 'tests/unit/chat/ui/conftest.py'
       - 'tests/integration/conftest.py'
       - 'tests/integration/test_gaia_sidecar_relay_live.py'
       - 'tests/unit/agents/test_binary_install_dispatch.py'
@@ -63,7 +59,10 @@ on:
       - 'tests/unit/test_skill_sets.py'
       - 'tests/unit/test_starter_skills.py'
       - 'tests/unit/test_stdio_permission_control.py'
+      - 'tests/unit/agents/test_engine_down_query_start.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
+      - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_warm_up.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
@@ -101,14 +100,10 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
-      - '!src/gaia/apps/*/webui/**'
-      - '!src/gaia/electron/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
       - 'tests/unit/conftest.py'
-      - 'tests/unit/agents/conftest.py'
-      - 'tests/unit/chat/ui/conftest.py'
       - 'tests/integration/conftest.py'
       - 'tests/integration/test_gaia_sidecar_relay_live.py'
       - 'tests/unit/agents/test_binary_install_dispatch.py'
@@ -126,7 +121,10 @@ on:
       - 'tests/unit/test_skill_sets.py'
       - 'tests/unit/test_starter_skills.py'
       - 'tests/unit/test_stdio_permission_control.py'
+      - 'tests/unit/agents/test_engine_down_query_start.py'
       - 'tests/unit/test_tool_loader_token_budget.py'
+      - 'tests/unit/test_tool_list_invariants.py'
+      - 'tests/unit/test_warm_up.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
@@ -240,6 +238,8 @@ jobs:
           # the cheapest lane that installs that wheel.
           python -m pytest \
             tests/unit/test_tool_loader_token_budget.py \
+            tests/unit/test_tool_list_invariants.py \
+            tests/unit/test_warm_up.py \
             tests/unit/eval/test_harness_flagship_target.py \
             -v --tb=short
 
@@ -277,6 +277,7 @@ jobs:
             tests/unit/test_execute_python_file_cwd.py \
             tests/unit/test_flagship_code_index_scope.py \
             tests/unit/test_stdio_permission_control.py \
+            tests/unit/agents/test_engine_down_query_start.py \
             -v --tb=short
 
       - name: Run Command-Injection Regression Tests

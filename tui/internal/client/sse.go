@@ -141,8 +141,6 @@ type SSEClient struct {
 	agentID string
 	daemon  *daemon.Client
 	opts    SSEOptions
-	// stream is reused across turns: one Transport per client, not per turn.
-	stream *http.Client
 	// cancelHTTP is the short-timeout client for the cancel POST.
 	cancelHTTP *http.Client
 
@@ -249,7 +247,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	closed := s.closed
 	s.mu.Unlock()
 	if closed {
-		return nil, fmt.Errorf("the %s agent connection is closed; relaunch the agent from the hub", s.agentID)
+		return nil, fmt.Errorf("the connection to the %s agent has closed; send your message again, and restart GAIA if it still fails", s.agentID)
 	}
 	runID, err := newRunID()
 	if err != nil {
@@ -549,8 +547,16 @@ func (s *SSEClient) consume(
 			followUps := append([]string(nil), handle.followUps...)
 			s.mu.Unlock()
 			s.appendTurn(query, answer, shown, followUps)
+		} else {
+			s.fileUnansweredFollowUps(handle, query, unansweredErrored)
 		}
 		return
+	}
+
+	if (ctx.Err() != nil || !delivered) && !timedOut.Load() {
+		s.fileUnansweredFollowUps(handle, query, unansweredCancelled)
+	} else {
+		s.fileUnansweredFollowUps(handle, query, unansweredErrored)
 	}
 
 	// No terminal event: report first (the user should not wait on a network
@@ -565,7 +571,7 @@ func (s *SSEClient) consume(
 			Source: "tui",
 		})
 	case ctx.Err() != nil || !delivered:
-		// The user cancelled the turn (Esc / hub exit) — the UI already says so.
+		// The user cancelled the turn (Esc / quit) — the UI already says so.
 		s.opts.Logf("sse: '%s' run %s cancelled by the caller", s.agentID, handle.runID)
 	case runCtx.Err() != nil:
 		// Close() cancelled the run without the caller's context ending.
@@ -967,9 +973,10 @@ func (s *SSEClient) SendFollowUp(ctx context.Context, text string) error {
 		// Two places to put it, because the turn's own user+assistant pair is
 		// only written when the turn ENDS. While the run is still the live one,
 		// it rides the handle and appendTurn files it between that pair, where
-		// it was said. If the turn settled during this round-trip, that pair is
-		// already written and the handle is read by nothing — so it goes
-		// straight on the end instead. Late, but present: the user has been
+		// it was said (fileUnansweredFollowUps does the same for a turn that
+		// ends without a `final`). If the turn settled during this round-trip,
+		// that pair is already written and the handle is read by nothing — so
+		// it goes straight on the end instead. Late, but present: the user has been
 		// told it was sent, and a conversation missing a line the user can see
 		// on their own screen is the worse of the two.
 		s.mu.Lock()
@@ -1035,6 +1042,37 @@ func (s *SSEClient) appendTurn(query, answer string, shown, followUps []string) 
 	s.mu.Unlock()
 }
 
+// Assistant-side notes for a turn that ended without an answer. Same metadata
+// framing as uiContextMarker, so the model reads them as a record, not a reply.
+const (
+	unansweredCancelled = "[ui-context: the user cancelled this turn before it was answered]"
+	unansweredErrored   = "[ui-context: this turn ended in an error before it was answered]"
+)
+
+// fileUnansweredFollowUps keeps follow-ups the sidecar confirmed on a turn that
+// ended without a `final`. The user was told they were delivered and still sees
+// them on screen, so they go into the next turn's context together with the
+// question they amended. A turn with no follow-ups leaves no trace, as before.
+//
+// The run is retired under the same lock it is read under: a follow-up landing
+// afterwards sees no live run and is appended straight to the transcript.
+func (s *SSEClient) fileUnansweredFollowUps(handle *runHandle, query, note string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.active == handle {
+		s.active = nil
+	}
+	if len(handle.followUps) == 0 {
+		return
+	}
+	s.transcript = append(s.transcript, Turn{Role: "user", Content: query})
+	for _, f := range handle.followUps {
+		s.transcript = append(s.transcript, Turn{Role: "user", Content: f})
+	}
+	s.transcript = append(s.transcript, Turn{Role: "assistant", Content: note})
+	handle.followUps = nil
+}
+
 // displayedCard renders a drawn card as the few lines a model needs to resolve
 // a reference to it. Deliberately lossy: senders and subjects are what users
 // point at, and a verbatim payload would crowd the context it is meant to help.
@@ -1072,8 +1110,8 @@ func displayedCard(tr event.CanonicalToolResultEvent) string {
 	return strings.Join(rows, "\n")
 }
 
-// Transcript returns a copy of the host-owned transcript pushed as `context`.
-func (s *SSEClient) Transcript() []Turn {
+// transcriptSnapshot returns a copy of the transcript pushed as `context`.
+func (s *SSEClient) transcriptSnapshot() []Turn {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Turn(nil), s.transcript...)

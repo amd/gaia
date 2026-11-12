@@ -277,21 +277,22 @@ def _run_turn(
     log_manager.configure_agent_console(debug=False)
 
     model = _resolve_model(model)
-    detected_base_url = _start_server(model, base_url)
-
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-    except ImportError as e:
-        from gaia.agents.install_hints import agent_import_error_message
-
-        raise RuntimeError(
-            agent_import_error_message(
-                e,
-                "The GAIA agent is not installed",
-                "gaia-agent-gaia",
-                next_step="Then re-run `gaia -p`.",
-            )
-        ) from e
+    except ImportError:
+        # The agent ships as its own binary here, as the apps do: run the turn
+        # on it through the daemon, which brings up the model server for it.
+        return _relay_turn(
+            text,
+            model=model,
+            verbose=verbose,
+            max_steps=max_steps,
+            skip_permissions=skip_permissions,
+            full_access=full_access,
+            base_url=base_url,
+            extra_paths=extra_paths,
+        )
+    detected_base_url = _start_server(model, base_url)
 
     agent = GaiaAgent(
         GaiaAgentConfig(
@@ -323,3 +324,78 @@ def _run_turn(
     return summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )
+
+
+def _relay_turn(
+    text: str,
+    *,
+    model: Optional[str],
+    verbose: bool,
+    max_steps: Optional[int],
+    skip_permissions: bool,
+    full_access: bool,
+    base_url: Optional[str],
+    extra_paths: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Run the turn on the GAIA agent's own binary, through the daemon.
+
+    Confirmation-gated tools are refused there, as -p refuses them in-process
+    without --dangerously-skip-permissions.
+    """
+    import io
+
+    from gaia.daemon.agent_query import ConsoleRenderer, run_query
+
+    if skip_permissions or full_access or base_url:
+        flag = (
+            "--full-access"
+            if full_access
+            else "--dangerously-skip-permissions" if skip_permissions else "--base-url"
+        )
+        raise RuntimeError(
+            f"{flag} needs the GAIA agent in this process, and here it runs as "
+            "its own program through GAIA's background service, which uses "
+            "GAIA's model server and asks before gated tools. Run without "
+            f"{flag}, or from a GAIA install that includes the agent package "
+            "(https://amd-gaia.ai/docs/reference/dev)."
+        )
+
+    cwd = os.getcwd()
+    renderer = ConsoleRenderer(out=io.StringIO(), err=io.StringIO())
+    started = time.time()
+    outcome = run_query(
+        "gaia",
+        text,
+        model=model,
+        max_steps=max_steps,
+        renderer=renderer,
+        working_directory=cwd,
+        allowed_paths=[cwd, *(extra_paths or [])],
+        # Sent, even empty, it makes the final carry the turn's model messages.
+        **({"turns": []} if verbose else {}),
+    )
+    succeeded = outcome.terminal_type == "final" and not outcome.failed
+    usage = outcome.usage or {}
+    result: Dict[str, Any] = {
+        "status": "success" if succeeded else "error",
+        "result": outcome.final_answer or "",
+        "steps_taken": usage.get("steps"),
+        "input_tokens": usage.get("input_tokens"),
+        "output_tokens": usage.get("tokens"),
+        "conversation": outcome.model_messages or [],
+    }
+    if not succeeded:
+        result["error"] = (
+            outcome.error_detail
+            or (outcome.final_answer if outcome.failed else "")
+            or "the GAIA agent's reply ended without an answer"
+        )
+    record = summarize(result, model, time.time() - started, verbose=verbose)
+    # Prefer the agent's own counts; a final without them keeps the conversation's.
+    for src, dst in (
+        ("tools_used", "num_tool_calls"),
+        ("cached_tokens", "cached_tokens"),
+    ):
+        if src in usage:
+            record[dst] = int(usage[src] or 0)
+    return record

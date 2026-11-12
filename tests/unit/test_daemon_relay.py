@@ -286,6 +286,8 @@ class _FakeManager:
         self.pid = None
         self.started_at = None
 
+    uses_ignored_lemonade = False
+
     @property
     def is_running(self):
         return self._running

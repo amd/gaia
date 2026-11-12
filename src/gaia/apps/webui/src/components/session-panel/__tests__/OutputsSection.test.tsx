@@ -4,11 +4,14 @@
 /** Outputs (#5277): everything the chat produced, newest first, with safe actions and undo states. */
 
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OutputsSection, OUTPUTS_SHOWN, whenText } from '../OutputsSection';
 import { announceUndo } from '../../../utils/undoEvents';
 import type { OutputItem } from '../../../types/sessionPanel';
 import { resetPanelState, SID, stubPanelApi } from './testUtils';
+import { stripIsolates } from '../../../i18n/registry';
+import { translator } from '../../../i18n/useT';
+import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../../test/dates';
 
 vi.mock('../../../services/api');
 
@@ -156,6 +159,13 @@ describe('OutputsSection', () => {
         expect(await screen.findByText(/Couldn't list what this chat produced: disk unreadable/)).toBeInTheDocument();
         expect(screen.queryByText(/Nothing yet/)).not.toBeInTheDocument();
     });
+
+    it('says GAIA cannot be reached instead of the raw "Failed to fetch" (#6588)', async () => {
+        mocked.getOutputs.mockRejectedValue(new TypeError('Failed to fetch'));
+        render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
+        expect(await screen.findByText(/Couldn't list what this chat produced: GAIA can't be reached right now/)).toBeInTheDocument();
+        expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+    });
 });
 
 describe('whenText', () => {
@@ -166,5 +176,25 @@ describe('whenText', () => {
         expect(whenText('2026-10-16 17:00:00', now)).toBe('3 h ago');
         expect(whenText(null, now)).toBe('');
         expect(whenText('garbage', now)).toBe('');
+    });
+});
+
+describe('Outputs dates follow the interface language', () => {
+    afterEach(resetUiLocale);
+
+    it('dates an item older than a day in Arabic', () => {
+        const text = stripIsolates(whenText('2026-03-14 10:00:00', Date.parse('2026-10-16T20:10:00Z'), translator('ar')));
+        expect(text).toMatch(ARABIC_MONTH);
+        expect(text).not.toMatch(ENGLISH_MONTH);
+    });
+
+    it('shows an older item date in Arabic in an Arabic UI', async () => {
+        setUiLocale('ar');
+        mocked.getOutputs.mockResolvedValue({ session_id: SID, items: [item({ name: 'old.csv', created_at: '2025-03-14 10:00:00' })] });
+        const { container } = render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
+        await screen.findByText('old.csv');
+        const list = stripIsolates(container.querySelector('.sp-list')!.textContent ?? '');
+        expect(list).toMatch(ARABIC_MONTH);
+        expect(list).not.toMatch(ENGLISH_MONTH);
     });
 });

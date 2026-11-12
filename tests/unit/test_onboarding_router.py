@@ -27,6 +27,12 @@ def default_model(monkeypatch):
     return chosen
 
 
+@pytest.fixture(autouse=True)
+def off_mac(monkeypatch):
+    """Macs skip the NPU check, so pin a PC platform for the NPU cases."""
+    monkeypatch.setattr(compatibility, "detect_platform", lambda: "linux-x64")
+
+
 @pytest.fixture
 def client(gaia_home_dir):  # noqa: ARG001 - fixture applies the env override
     app = create_app(db_path=":memory:")
@@ -67,6 +73,20 @@ def test_preflight_full_tier_compatible(client, monkeypatch):
     assert body["recommended_model"] == "Gemma-4-E4B-it-GGUF"
     # NPU present ⇒ no NPU warning.
     assert not any("NPU" in w for w in body["warnings"])
+
+
+def test_preflight_reports_memory_and_disk_in_the_gb_model_sizes_use(
+    client, monkeypatch
+):
+    # The probe reads GiB; setup shows these beside model sizes in decimal GB.
+    monkeypatch.setattr(onboarding_mod, "_probe_lemonade_devices", _stub_devices())
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 32.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 631.0)
+
+    body = client.get("/api/onboarding/preflight").json()
+    assert body["ram_gb"] == 34.4
+    assert body["disk_free_gb"] == 677.5
+    assert body["tier"] == "full"
 
 
 @pytest.mark.allow_network
@@ -124,6 +144,21 @@ def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch):
     assert "agent" not in joined.lower()
     assert "install" not in joined.lower()
     assert "optional" in joined.lower()
+
+
+@pytest.mark.allow_network
+def test_preflight_on_mac_has_no_npu_line(client, monkeypatch):
+    monkeypatch.setattr(compatibility, "detect_platform", lambda: "darwin-arm64")
+    monkeypatch.setattr(
+        onboarding_mod,
+        "_probe_lemonade_devices",
+        _stub_devices(npu_detected=False, gpu_name="Apple M3", gpu_vram_gb=None),
+    )
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 16.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+
+    body = client.get("/api/onboarding/preflight").json()
+    assert not any("NPU" in w for w in body["warnings"])
 
 
 @pytest.mark.allow_network

@@ -5,15 +5,20 @@
 # These tests run first to provide quick feedback on core SDK components
 #
 # What runs where (util/select_tests.py picks the files):
-#   pull request   Linux runs the test files the change can reach; Windows and
-#                  macOS run the ones among those that touch the OS.
+#   pull request, merge queue   Linux runs the test files the change can reach;
+#                  Windows and macOS run the ones among those that touch the OS.
+#                  The queue diffs the group against its base, as if its PRs
+#                  were one, and a group that changes nothing in the paths
+#                  filter below (docs only, say) runs no tests at all.
 #   push to main   Linux runs the full suite; Windows and macOS run the
 #                  OS-touching files the merge can reach.
-#   nightly        the full suite on all three, and Linux rebuilds the coverage
-#                  map the selection reads.
-#   dispatch, merge queue   the full suite on all three (the release gate
-#                  dispatches this workflow on the tagged commit).
-# A failure on any OS fails the run.
+#   nightly        the full suite on all three at the head of main, and Linux
+#                  rebuilds the coverage map the selection reads. A red nightly
+#                  files an issue, which the next green one closes.
+#   dispatch       the full suite on all three (the release gate dispatches this
+#                  workflow on the tagged commit).
+# A failure on any OS fails the run. "Unit Tests Result" is the one check to
+# require: it is green only when every lane passed or was meant to be skipped.
 
 name: Unit Tests
 
@@ -71,6 +76,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/connectors/slack.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
@@ -78,6 +84,7 @@ on:
       - 'docs/guides/npu.mdx'
       - 'docs/guides/starter-skills.mdx'
       - 'docs/guides/talk.mdx'
+      - 'docs/guides/tui.mdx'
       - 'docs/plans/desktop-installer.mdx'
       - 'docs/reference/cli.mdx'
       - 'docs/runbooks/google-oauth-client.md'
@@ -86,6 +93,8 @@ on:
       - 'docs/sdk/sdks/skills.mdx'
       - 'docs/sdk/utils/file-watcher.mdx'
       - 'docs/spec/chat-agent.mdx'
+      # The SSE contract test reads this specification directly.
+      - 'docs/spec/agent-ui-query-sse-contract.md'
       - 'hub/agents/*/npm/SKILL.md'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
@@ -140,6 +149,7 @@ on:
       - 'docs/releases/**'
       # Doc pages unit tests check against the code (drift and runnable-command tests).
       - 'docs/connectors/google.mdx'
+      - 'docs/connectors/slack.mdx'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/chat.mdx'
       - 'docs/guides/gaia.mdx'
@@ -147,6 +157,7 @@ on:
       - 'docs/guides/npu.mdx'
       - 'docs/guides/starter-skills.mdx'
       - 'docs/guides/talk.mdx'
+      - 'docs/guides/tui.mdx'
       - 'docs/plans/desktop-installer.mdx'
       - 'docs/reference/cli.mdx'
       - 'docs/runbooks/google-oauth-client.md'
@@ -155,6 +166,8 @@ on:
       - 'docs/sdk/sdks/skills.mdx'
       - 'docs/sdk/utils/file-watcher.mdx'
       - 'docs/spec/chat-agent.mdx'
+      # The SSE contract test reads this specification directly.
+      - 'docs/spec/agent-ui-query-sse-contract.md'
       - 'hub/agents/*/npm/SKILL.md'
   merge_group:
   workflow_dispatch:
@@ -190,6 +203,7 @@ jobs:
       linux_count: ${{ steps.pick.outputs.linux_count }}
       platform_full: ${{ steps.pick.outputs.platform_full }}
       platform_count: ${{ steps.pick.outputs.platform_count }}
+      linux_triggered: ${{ steps.pick.outputs.linux_triggered }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -201,8 +215,12 @@ jobs:
         with:
           python-version: '3.12'
 
+      # The selector reads this workflow's paths filter.
+      - name: Install PyYAML
+        run: python -m pip install 'pyyaml>=6,<7'
+
       - name: Restore the coverage map
-        if: github.event_name == 'pull_request' || github.event_name == 'push'
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'merge_group'
         uses: actions/cache/restore@v6
         with:
           path: test_map.json
@@ -214,11 +232,17 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          filter=()
           case "$EVENT" in
             pull_request) base="origin/$BASE_REF" ;;
+            # The group's head holds every batched PR, so this diff covers them
+            # all. The queue has no paths filter, so the selector applies ours.
+            merge_group) base="$QUEUE_BASE_SHA"
+                         filter=(--trigger-paths-from .github/workflows/test_unit.yml) ;;
             # Not event.before: a burst of merges drops the pending runs in
             # between, and their changes would never reach Windows or macOS.
             push) base=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow test_unit.yml \
@@ -229,16 +253,16 @@ jobs:
           # No earlier tested commit to diff against: run everything.
           if [ -z "$base" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             {
-              echo "linux_full=true"; echo "linux_count=0"
+              echo "linux_full=true"; echo "linux_count=0"; echo "linux_triggered=true"
               echo "platform_full=true"; echo "platform_count=0"
             } >> "$GITHUB_OUTPUT"
             echo "**Test selection** — full suite on every OS ($EVENT)" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           python util/select_tests.py select --base "$base" --map test_map.json \
-            --out linux.txt --github-output linux
+            "${filter[@]}" --out linux.txt --github-output linux
           python util/select_tests.py select --base "$base" --map test_map.json \
-            --platform-only --out platform.txt --github-output platform
+            "${filter[@]}" --platform-only --out platform.txt --github-output platform
           if [ "$EVENT" = push ]; then
             echo "linux_full=true" >> "$GITHUB_OUTPUT"
           fi
@@ -261,7 +285,12 @@ jobs:
     # Sized to suite growth, not a hang: ~44 min passing by 2026-10-13. The
     # nightly run's per-test coverage contexts add about three quarters.
     timeout-minutes: ${{ github.event_name == 'schedule' && 120 || 60 }}
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    # Skipped, not failed, when the merge-queue group touches nothing in the paths filter.
+    if: >-
+      !cancelled() && needs.select.result == 'success' &&
+      needs.select.outputs.linux_triggered != 'false' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false ||
+       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
     steps:
       - uses: actions/checkout@v7
 
@@ -299,8 +328,7 @@ jobs:
           # them. They live only in the [rag]/[ui] extras, which this job (like the
           # RAG dependencies above) does not install.
           # python-docx, python-pptx, openpyxl, reportlab and slack-sdk:
-          # tests/unit/rag/, tests/unit/chat/ui/test_xlsx_upload.py,
-          # tests/unit/eval/test_pdf_document_generator.py and
+          # tests/unit/rag/, tests/unit/chat/ui/test_xlsx_upload.py and
           # tests/unit/messaging/test_slack_sdk_contract.py importorskip them at
           # module level, so without them those files skip wholesale (#4206).
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout pytest-xdist \
@@ -455,6 +483,16 @@ jobs:
           echo ""
           pytest tests/integration/test_lemonade_embeddable_assets.py -v --tb=short
 
+      - name: Run Linux Lemonade glibc/OpenSSL check
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          GAIA_REQUIRE_RELEASE_API: ${{ startsWith(github.head_ref, 'deps/lemonade-') && '1' || '' }}
+        run: |
+          echo "=== Checking the pinned Linux lemond needs nothing newer than Ubuntu 24.04 ==="
+          echo "Lemonade 2026.45.3 needed GLIBC_2.43 and broke every Linux user (#6766)"
+          echo ""
+          pytest tests/integration/test_lemonade_linux_abi.py -v --tb=short
+
       - name: Run daemon integration tests
         env:
           GAIA_MEMORY_DISABLED: "1"
@@ -507,9 +545,15 @@ jobs:
   # ship unnoticed. Importing every module is enough to catch that, in seconds.
   import-floor-py310:
     name: Import Every Module (Linux, py3.10)
+    needs: select
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    # Skipped, not failed, when the merge-queue group touches nothing in the paths filter.
+    if: >-
+      !cancelled() && needs.select.result == 'success' &&
+      needs.select.outputs.linux_triggered != 'false' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false ||
+       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
     steps:
       - uses: actions/checkout@v7
 
@@ -536,9 +580,15 @@ jobs:
   # can see them; a new offline integration file belongs in this list.
   offline-integration:
     name: Offline Integration Tests
+    needs: select
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    # Skipped, not failed, when the merge-queue group touches nothing in the paths filter.
+    if: >-
+      !cancelled() && needs.select.result == 'success' &&
+      needs.select.outputs.linux_triggered != 'false' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false ||
+       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
     steps:
       - uses: actions/checkout@v7
 
@@ -760,3 +810,90 @@ jobs:
       - name: Check no GAIA daemon outlived the tests
         if: ${{ !cancelled() }}
         run: python util/check_no_daemons.py
+
+  # The check to require. A skipped job reads as passing to a required check,
+  # so requiring the lanes themselves would let a failed selection through as
+  # skipped lanes; this job runs whatever happened and judges each lane.
+  unit-tests-result:
+    name: Unit Tests Result
+    needs: [select, unit-tests, import-floor-py310, offline-integration, unit-tests-macos, unit-tests-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: >-
+      always() &&
+      (github.event_name != 'schedule' || github.repository == 'amd/gaia') &&
+      (github.event_name != 'pull_request' || github.event.pull_request.draft == false ||
+       contains(github.event.pull_request.labels.*.name, 'ready_for_ci'))
+    steps:
+      - name: Check every lane passed or was meant to be skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          LINUX_RUNS: ${{ needs.select.outputs.linux_triggered != 'false' }}
+          PLATFORM_RUNS: ${{ needs.select.outputs.platform_full == 'true' || needs.select.outputs.platform_count != '0' }}
+        run: |
+          set -euo pipefail
+          select=$(jq -r '.select.result' <<<"$NEEDS")
+          if [ "$select" != success ]; then
+            echo "::error::Select unit tests ended $select, so no lane's skip can be trusted."
+            exit 1
+          fi
+          failed=0
+          for job in unit-tests import-floor-py310 offline-integration unit-tests-macos unit-tests-windows; do
+            result=$(jq -r --arg j "$job" '.[$j].result' <<<"$NEEDS")
+            case "$job" in
+              unit-tests-macos|unit-tests-windows) must_run=$PLATFORM_RUNS ;;
+              *) must_run=$LINUX_RUNS ;;
+            esac
+            if [ "$result" = success ] || { [ "$result" = skipped ] && [ "$must_run" = false ]; }; then
+              echo "$job: $result"
+            else
+              echo "::error::$job ended $result (expected to run: $must_run)."
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+  # The nightly full run on main is what catches anything the selection on a
+  # PR or in the merge queue left out, so a red one files an issue.
+  nightly-alert:
+    name: Report the nightly result
+    needs: unit-tests-result
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ !cancelled() && github.event_name == 'schedule' && github.repository == 'amd/gaia' }}
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: .github/actions/auto-issue
+          persist-credentials: false
+
+      - name: File or update the nightly-failure issue
+        if: needs.unit-tests-result.result != 'success'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: report
+          key: unit-tests-nightly
+          title: "Nightly unit tests failed on main"
+          labels: |
+            bug
+            devops
+          assignees: kovtcharov-amd
+          body: |
+            The nightly full unit-test run on the head of main failed (Linux, Windows and macOS, no test selection). Pull requests and the merge queue run only the tests a change can reach, so this run is what catches a break the selection missed.
+
+            **Action required:** open the run, find the failing job, and fix or revert the change that broke it. The next green nightly closes this issue; each further red one comments here.
+
+            - Commit: ${{ github.sha }}
+            - Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            cc @kovtcharov-amd
+
+      - name: Close the nightly-failure issue once main is green again
+        if: needs.unit-tests-result.result == 'success'
+        uses: ./.github/actions/auto-issue
+        with:
+          mode: resolve
+          key: unit-tests-nightly

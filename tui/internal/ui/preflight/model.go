@@ -12,6 +12,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/ui/modelsetup"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // ProceedMsg tells the host every precondition is satisfied (or the user
@@ -42,6 +43,7 @@ const (
 	CheckTimeout     = 120*time.Second + gaiainit.VerifyTimeout + 30*time.Second
 	startTimeout     = 90 * time.Second // above client.py's 60s daemon start
 	ensureTimeout    = 15 * time.Minute
+	updateTimeout    = 20 * time.Second
 	provisionTimeout = 5 * time.Hour // the 82 GB Strix Halo default at ~5 MB/s; esc cancels
 	// defaultReadyHold is how long an all-green screen is held so the user sees
 	// what was verified before chat replaces it.
@@ -78,6 +80,10 @@ type Options struct {
 	// Motion overrides how much the screen animates; nil reads NO_MOTION,
 	// GAIA_REDUCED_MOTION, TERM and whether output is a terminal.
 	Motion *modelsetup.Motion
+	// OfferUpdate lets a blocked gate install a newer GAIA, the only way out
+	// when this build is what blocks it. Set only where the host runs the
+	// install on exit and no conversation would close with the gate.
+	OfferUpdate bool
 }
 
 // cancelBox holds the cancel func for whatever background work the screen has
@@ -164,6 +170,8 @@ type Model struct {
 	// the option under the cursor.
 	choosing bool
 	choice   int
+	// previous is the version before the last update, for `b`.
+	previous string
 
 	// setup is "choose your models" and the download after it, open over the
 	// checklist; nil when the checklist is on screen.
@@ -197,6 +205,11 @@ func newWith(r Runner, cfg Config, opts Options) Model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 
+	updates, err := update.ReadConfig()
+	if err != nil {
+		opts.Logf("preflight: update settings unreadable, so `b` is not offered: %v", err)
+	}
+
 	return Model{
 		cfg:       cfg,
 		r:         r,
@@ -207,6 +220,7 @@ func newWith(r Runner, cfg Config, opts Options) Model {
 		height:    24,
 		spin:      s,
 		cancel:    &cancelBox{},
+		previous:  updates.Previous,
 		autoTried: map[string]bool{},
 		stepsDone: opts.StepsDone,
 		motion:    motionFrom(opts),
@@ -265,9 +279,6 @@ func (m Model) Cancel() {
 	}
 }
 
-// RunnerLabel names the machinery behind this screen, for logs and snapshots.
-func (m Model) RunnerLabel() string { return m.r.Label() }
-
 // HeldForReview reports whether the screen is deliberately waiting for enter
 // rather than handing off. The renderer asks this rather than re-deriving it,
 // so the footer and the hand-off can never disagree about whether the launch
@@ -301,6 +312,14 @@ type provisionMsg struct {
 }
 type proceedTickMsg struct{}
 
+// updateFoundMsg is what `u` found: an install to run, or why there is none.
+type updateFoundMsg struct {
+	plan update.Plan
+	note string
+	err  error
+	gate *cancelBox
+}
+
 // --- commands --------------------------------------------------------------
 
 // begin builds the context for a piece of background work and parks its cancel
@@ -328,6 +347,48 @@ func (m Model) quickFixCmd(key string, kind FixKind, timeout time.Duration) tea.
 		res := r.Fix(ctx, cfg, kind, nil)
 		return fixDoneMsg{key: key, err: res.Err, note: res.Note, diag: res.Diagnosis}
 	}
+}
+
+func (m Model) updateCmd() tea.Cmd {
+	ctx := m.begin(updateTimeout)
+	gate := m.cancel
+	return func() tea.Msg {
+		st, err := update.Check(ctx)
+		if err != nil {
+			return updateFoundMsg{err: err, gate: gate}
+		}
+		if !st.Available {
+			return updateFoundMsg{note: st.Summary(), gate: gate}
+		}
+		p, err := update.NewPlan(st.Latest, false)
+		return updateFoundMsg{plan: p, err: err, gate: gate}
+	}
+}
+
+// backCmd plans the install `b` asked for: the version before the last update.
+func (m Model) backCmd() tea.Cmd {
+	ctx := m.begin(updateTimeout)
+	gate := m.cancel
+	tag := m.previous
+	return func() tea.Msg {
+		p, err := update.PlanTag(ctx, tag)
+		return updateFoundMsg{plan: p, err: err, gate: gate}
+	}
+}
+
+// offersUpdate reports whether `u` does anything on this screen.
+func (m Model) offersUpdate() bool {
+	if !m.opts.OfferUpdate || m.Busy() || m.choosing || !m.rep.Blocked() ||
+		update.Disabled() || update.IsDevBuild() {
+		return false
+	}
+	row, ok := m.focusedRow()
+	return !ok || !row.FirstRun
+}
+
+// offersBack reports whether `b` does anything: an update may be what broke this.
+func (m Model) offersBack() bool {
+	return m.offersUpdate() && update.Newer(update.Current, m.previous)
 }
 
 // autoStart applies the blocking row's AutoFix — starting a daemon or an agent
@@ -501,6 +562,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
 
+	case updateFoundMsg:
+		if msg.gate != m.cancel {
+			return m, nil
+		}
+		m.phase = phaseIdle
+		switch {
+		case msg.err != nil:
+			m.note = "Could not update GAIA: " + msg.err.Error()
+		case msg.note != "":
+			m.note = msg.note
+		default:
+			update.Schedule(msg.plan)
+			m.note = "Installing GAIA " + msg.plan.Tag + "…"
+			m.Abandon()
+			m.Cancel()
+			return m, tea.Quit
+		}
+		return m, nil
+
 	case reportMsg:
 		m.rep = msg.rep
 		if left := len(m.rep.Steps()); m.stepsBefore > 0 && left > 0 && left < m.stepsBefore {
@@ -667,7 +747,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "ctrl+c":
-		// Matches the hub and chat: ctrl+c leaves the app, not just the screen.
+		// Matches chat: ctrl+c leaves the app, not just the screen.
 		m.Abandon()
 		m.Cancel()
 		m.provisionCh, m.phase = nil, phaseIdle
@@ -735,6 +815,22 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.applyFix()
+
+	case "u":
+		if !m.offersUpdate() {
+			return m, nil
+		}
+		m.phase = phaseFixing
+		m.note = "Checking for a newer GAIA…"
+		return m, tea.Batch(m.updateCmd(), m.spin.Tick)
+
+	case "b":
+		if !m.offersBack() {
+			return m, nil
+		}
+		m.phase = phaseFixing
+		m.note = "Looking up GAIA " + m.previous + "…"
+		return m, tea.Batch(m.backCmd(), m.spin.Tick)
 
 	case "g":
 		row, ok := m.focusedRow()

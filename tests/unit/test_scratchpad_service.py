@@ -47,16 +47,25 @@ class TestCreateTable:
         assert "sales" in result
         assert "product TEXT, quantity INTEGER" in result
 
-    def test_create_table_sanitizes_name(self, scratchpad):
-        """Name with special characters gets cleaned to alphanumeric + underscore."""
-        result = scratchpad.create_table("my-data!@#table", "value TEXT")
+    def test_create_table_rejects_invalid_name(self, scratchpad):
+        """A name with punctuation is refused, not rewritten, and nothing is created."""
+        with pytest.raises(ValueError, match=r"\[A-Za-z_\]\[A-Za-z0-9_\]\*"):
+            scratchpad.create_table("my-data!@#table", "value TEXT")
 
-        # Special chars replaced with underscores
-        assert "my_data___table" in result
+        assert scratchpad.list_tables() == []
+
+    def test_names_differing_only_by_punctuation_do_not_collide(self, scratchpad):
+        """sales_2025 is created; sales-2025 is rejected instead of merging into it."""
+        scratchpad.create_table("sales_2025", "amount REAL")
+        scratchpad.insert_rows("sales_2025", [{"amount": 1.0}])
+
+        with pytest.raises(ValueError, match="Invalid table name 'sales-2025'"):
+            scratchpad.create_table("sales-2025", "amount REAL")
+        with pytest.raises(ValueError, match="Invalid table name 'sales-2025'"):
+            scratchpad.insert_rows("sales-2025", [{"amount": 2.0}])
 
         tables = scratchpad.list_tables()
-        assert len(tables) == 1
-        assert tables[0]["name"] == "my_data___table"
+        assert [(t["name"], t["rows"]) for t in tables] == [("sales_2025", 1)]
 
     def test_create_table_rejects_empty_columns(self, scratchpad):
         """Raises ValueError when columns string is empty."""
@@ -358,39 +367,57 @@ class TestDropTable:
 # ---------------------------------------------------------------------------
 
 
-class TestSanitizeName:
-    """Tests for _sanitize_name."""
+class TestValidateName:
+    """Tests for _validate_name."""
 
-    def test_sanitize_name_special_chars(self, scratchpad):
-        """Verify _sanitize_name cleans special characters to underscores."""
-        assert scratchpad._sanitize_name("hello-world") == "hello_world"
-        assert scratchpad._sanitize_name("my table!") == "my_table_"
-        assert scratchpad._sanitize_name("test@#$%") == "test____"
+    @pytest.mark.parametrize(
+        "name, suggestion",
+        [
+            ("hello-world", "hello_world"),
+            ("my table!", "my_table_"),
+            ("test@#$%", "test____"),
+            ("123abc", "t_123abc"),
+            ("1-2-3", "t_1_2_3"),
+            ("!", "_"),
+        ],
+    )
+    def test_invalid_names_rejected_with_rule_and_example(
+        self, scratchpad, name, suggestion
+    ):
+        """The error names the allowed characters, the pattern and a valid example."""
+        with pytest.raises(ValueError) as exc:
+            scratchpad._validate_name(name)
+        message = str(exc.value)
+        assert f"Invalid table name {name!r}" in message
+        assert "letters, digits and underscores" in message
+        assert "[A-Za-z_][A-Za-z0-9_]*" in message
+        assert f"For example: '{suggestion}'" in message
+        assert "db_tables" not in message
 
-    def test_sanitize_name_digit_prefix(self, scratchpad):
-        """Name starting with digit gets t_ prefix."""
-        assert scratchpad._sanitize_name("123abc") == "t_123abc"
-        assert scratchpad._sanitize_name("9tables") == "t_9tables"
+    def test_valid_names_unchanged(self, scratchpad):
+        """Valid identifiers pass through exactly as given."""
+        for name in ("my_table", "TestData", "a1b2c3", "_private", "t_123abc"):
+            assert scratchpad._validate_name(name) == name
 
-    def test_sanitize_name_valid_name_unchanged(self, scratchpad):
-        """Valid names with only alphanumerics and underscores pass through."""
-        assert scratchpad._sanitize_name("my_table") == "my_table"
-        assert scratchpad._sanitize_name("TestData") == "TestData"
-        assert scratchpad._sanitize_name("a1b2c3") == "a1b2c3"
-
-    def test_sanitize_name_empty_raises(self, scratchpad):
+    def test_empty_raises(self, scratchpad):
         """Empty or None name raises ValueError."""
         with pytest.raises(ValueError, match="empty"):
-            scratchpad._sanitize_name("")
+            scratchpad._validate_name("")
 
         with pytest.raises(ValueError, match="empty"):
-            scratchpad._sanitize_name(None)
+            scratchpad._validate_name(None)
 
-    def test_sanitize_name_truncates_long_names(self, scratchpad):
-        """Names longer than 64 characters are truncated."""
-        long_name = "a" * 100
-        result = scratchpad._sanitize_name(long_name)
-        assert len(result) == 64
+    def test_long_names_rejected_not_truncated(self, scratchpad):
+        """Truncation would also merge distinct names, so long names are refused."""
+        assert scratchpad._validate_name("a" * 64) == "a" * 64
+        with pytest.raises(ValueError, match="limit is 64"):
+            scratchpad._validate_name("a" * 65)
+
+    def test_table_created_by_old_rewrite_still_reachable(self, scratchpad):
+        """Stored names from the old rewrite (e.g. t_2025) are valid identifiers."""
+        scratchpad.execute("CREATE TABLE scratch_t_2025 (amount REAL)")
+        assert scratchpad.insert_rows("t_2025", [{"amount": 3.0}]) == 1
+        assert scratchpad.drop_table("t_2025") == "Table 't_2025' dropped."
 
 
 # ---------------------------------------------------------------------------

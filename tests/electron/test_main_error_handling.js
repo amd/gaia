@@ -253,6 +253,34 @@ describe("installSafetyNet", () => {
     exitSpy.mockRestore();
   });
 
+  test("a focused install screen does not reset the crash-loop counter", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+    const app = mockApp(false);
+    const gaiaDir = path.join(tmpDir, ".gaia");
+    const counterPath = path.join(gaiaDir, "electron-startup-failures.json");
+    fs.mkdirSync(gaiaDir, { recursive: true });
+    fs.writeFileSync(counterPath, JSON.stringify({ count: 2 }));
+    let installing = true;
+
+    installSafetyNet({
+      logPath,
+      dialogModule: mockDialog(),
+      appModule: app,
+      homedirFn: () => tmpDir,
+      holdCrashCount: () => installing,
+    });
+
+    app.emit("browser-window-focus");
+    expect(JSON.parse(fs.readFileSync(counterPath, "utf8")).count).toBe(2);
+
+    installing = false;
+    app.emit("browser-window-focus");
+    expect(JSON.parse(fs.readFileSync(counterPath, "utf8")).count).toBe(0);
+
+    exitSpy.mockRestore();
+  });
+
   // ── Test 8: render-process-gone handler installed ─────────────────────────
   // Renderer crashes don't fire uncaughtException; they fire
   // app.on('render-process-gone'). Must be routed through fatal handler.
@@ -333,6 +361,44 @@ describe("installSafetyNet", () => {
 
     exitSpy.mockRestore();
   });
+
+  // ── Test 9d: a renderer's clean exit is a shutdown, not a crash ────────────
+  // Stopping the app's unit (logout, `systemctl --user stop`) signals every
+  // process at once; the renderer exits cleanly before the main process quits.
+
+  test("render-process-gone with clean-exit logs it and shows no crash dialog", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+    app.emit("render-process-gone", {}, {}, { reason: "clean-exit", exitCode: 0 });
+
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    expect(dialog.showErrorBox).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(fs.readFileSync(logPath, "utf8")).toMatch(/RENDER_PROCESS_EXITED reason=clean-exit/);
+
+    exitSpy.mockRestore();
+  });
+
+  test.each([["crashed"], ["killed"], ["oom"], ["abnormal-exit"]])(
+    "render-process-gone with %s still shows the crash dialog",
+    (reason) => {
+      const { installSafetyNet } = require(SAFETY_NET_PATH);
+      const dialog = mockDialog();
+      const app = mockApp(true);
+      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+      installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+      app.emit("render-process-gone", {}, {}, { reason, exitCode: 1 });
+
+      expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
+
+      exitSpy.mockRestore();
+    }
+  );
 
   // ── Test 10: fatal handler writes to log before showing dialog ─────────────
   // If dialog.showErrorBox itself crashes, the log must already have the entry.

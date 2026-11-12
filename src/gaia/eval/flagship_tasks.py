@@ -63,6 +63,7 @@ from gaia.eval.bench import ghstub, harness, metering, swebench, therock, transc
 from gaia.eval.bench.config import BenchConfig
 from gaia.eval.bench.gateway import Gateway
 from gaia.eval.bench.leaks import Scrubber
+from gaia.eval.claude_credential import announce, resolve_claude_credential
 from gaia.eval.task_setups import SETUPS, remove_leftovers
 from gaia.llm.lemonade_client import (
     resolve_lemonade_api_key,
@@ -1758,10 +1759,7 @@ def judge_command(model: str, env: Mapping[str, str]) -> List[str]:
         )
     cmd = [claude, "-p", "--model", model, "--output-format", "json"]
     cmd += ["--tools", "", "--no-session-persistence"]
-    # --bare restricts auth to ANTHROPIC_API_KEY, so only with a key.
-    if env.get("ANTHROPIC_API_KEY"):
-        cmd.append("--bare")
-    return cmd
+    return cmd + resolve_claude_credential(env).cli_flags()
 
 
 def judge_batch(
@@ -1781,10 +1779,13 @@ def judge_batch(
         head = [RUBRIC, f"=== THE ORIGINAL PROJECT ===\n{project_snapshot()}"]
     payload = "\n\n".join([*head, *(_attempt_section(a) for a in attempts)])
     assert_provider_permitted("the Claude Code CLI")
+    cmd = judge_command(model, env)
+    credential = resolve_claude_credential(env)
+    announce(credential)
     # An empty working directory: the repo's CLAUDE.md is not the judge's brief.
     with tempfile.TemporaryDirectory(prefix="gaia-judge-") as cwd:
         proc = subprocess.run(
-            judge_command(model, env),
+            cmd,
             input=payload,
             capture_output=True,
             text=True,
@@ -1792,7 +1793,7 @@ def judge_batch(
             errors="replace",
             timeout=JUDGE_TIMEOUT_S,
             cwd=cwd,
-            env=dict(env),
+            env=credential.cli_env(env),
             check=False,
         )
     if proc.returncode != 0 and not proc.stdout.strip():

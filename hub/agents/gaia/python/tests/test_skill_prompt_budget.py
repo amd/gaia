@@ -74,6 +74,7 @@ class _StubAgent:
     _active_skill_names = Agent._active_skill_names
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
+    _drop_skill_tools = Agent._drop_skill_tools
     get_skills_system_prompt = Agent.get_skills_system_prompt
 
     def __init__(self, manager):

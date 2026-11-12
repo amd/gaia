@@ -9,6 +9,53 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Under the daemon, a forwarded-token hiccup no longer asks for a browser
+  re-sign-in (#6995).** A token the daemon hasn't re-forwarded yet, or an
+  unexpected error in the check, now reports `error` ("couldn't check") like the
+  standalone path; a token short on scopes reports `connection_missing_scopes`
+  with the scopes to add. Only a missing forwarded token still reports
+  `reauth_required`.
+
+### Changed
+
+- **Unattended scheduler failures now notify users with the right action.** Failed scheduled sends, snooze restores, and interrupted sends use distinct messages; an interrupted send warns that it may already have been delivered and advises checking Sent before retrying (#5411).
+
+- **Private and memory-off turns are now safe for the email sidecar (#5482, schema 2.16).** `POST /v1/email/query` accepts `memory: "on" | "private" | "off"`; private and memory-off modes suppress memory reads and writes before the agent loop starts. Older sidecars are refused for those turns instead of silently persisting email-derived memories.
+
+- **Needs Lemonade Server 2026.44.1 or newer.** `GET /v1/email/init` now
+  reports `min_version: "2026.44.1"` (was `10.2.0`) and answers not-ready on
+  anything older. GAIA updates its own Lemonade Server itself; the `hint` for
+  a user-run server points at https://lemonade-server.ai instead of a command.
+  `gaia-agent.yaml`'s `requirements.min_lemonade_version` moves with it.
+### Added
+
+- **The published OpenAPI contract now includes the sidecar's stateful Agent UI
+  routes (#6043, schema 2.15).** Session creation/deletion/history, memory and
+  autonomy controls, pending-tool confirmation, cancellation, and the SSE query
+  route were already served but absent from `openapi.email.json`; generated
+  clients can now discover and negotiate the complete supported surface.
+
+### Fixed
+
+- **A batch archive, label, star or mark that went through is no longer
+  reported as failed (#6994).** When the change landed in Gmail or Outlook but
+  its undo record could not be saved, the message was listed under `failed`, so
+  the agent could retry it or tell the user nothing changed. It is now listed
+  under `succeeded` with `action_id: null` and an `undo_error`, and the batch
+  result adds `not_undoable_count` and a summary saying it can't be undone.
+
+- **The OpenAPI contract lists the errors the `/query` routes return (#4429).**
+  `POST /v1/email/query` documents 400, 409, 500 and 502, `/query/{run_id}/cancel`
+  documents 404, and `/query/{run_id}/respond` documents 404 and 409. The routes
+  already returned them, but `openapi.email.json` listed only 200 and 422, so
+  generated clients never saw them. No request or response shape changed.
+
+- **A sidecar left running for days keeps working.** The one-file binary
+  unpacks its files into the OS temp folder, and macOS deletes files there
+  that are older than three days, so a long-running sidecar lost files it
+  still read. It now marks its own unpacked files as in use at startup and
+  every six hours. Leftovers from a sidecar that has exited still get
+  cleaned (#6850).
 - **A chat that switches model mid-conversation gets the model it asked
   for.** `POST /v1/email/query` with a `session_id` used to keep running the
   session's agent on whatever model it was first built with, even when a later

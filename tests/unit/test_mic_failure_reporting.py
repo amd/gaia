@@ -102,7 +102,7 @@ class TestTheMessageIsActionable:
     def test_it_says_what_to_try_next(self, recorder):
         message = recorder.device_error_message("open", OSError("nope"))
         assert "--audio-device-index" in message
-        assert "asr-list-audio-devices" in message
+        assert "gaia test --test-type asr-list-audio-devices" in message
 
     def test_it_copes_when_even_the_device_query_fails(self, recorder):
         with patch.object(sd, "query_devices", side_effect=OSError("no such device")):
@@ -302,108 +302,11 @@ class TestARequestedStopIsNotReportedAsAFailure:
         assert "self._stop_requested = False" in source
 
 
-class TestDroppedSpeechIsDecidedOnce:
-    """ "Dropped for the rest of this reply" has to mean it.
-
-    Without a latch every remaining chunk waits the full timeout again, so a
-    long answer stalls in five-second steps — the hang, slower.
-    """
-
-    @staticmethod
-    def _speak_with_a_full_queue():
-        """Rebuild the guard over a queue nothing consumes."""
-        import queue as _queue
-
-        text_queue = _queue.Queue(maxsize=1)
-        text_queue.put("already full")
-        log = MagicMock()
-        state = {"dropped": False}
-
-        def speak(item):
-            if state["dropped"]:
-                return False
-            try:
-                text_queue.put(item, timeout=0.05)
-                return True
-            except _queue.Full:
-                state["dropped"] = True
-                log.error("dropped")
-                return False
-
-        return speak, log, state
-
-    def test_the_first_failure_latches(self):
-        speak, _, state = self._speak_with_a_full_queue()
-
-        assert speak("one") is False
-        assert state["dropped"] is True
-
-    def test_later_chunks_return_immediately(self):
-        import time
-
-        speak, _, _ = self._speak_with_a_full_queue()
-        speak("one")  # latches
-
-        started = time.time()
-        for i in range(50):
-            assert speak(f"chunk {i}") is False
-        assert time.time() - started < 0.05
-
-    def test_the_error_is_logged_once_not_per_chunk(self):
-        speak, log, _ = self._speak_with_a_full_queue()
-
-        for i in range(10):
-            speak(f"chunk {i}")
-
-        assert log.error.call_count == 1
-
-    def test_the_real_guard_is_latched(self):
-        """Pins the production code, not just this reconstruction.
-
-        ``process_voice_input`` is the message processor
-        ``docs/spec/audio-client.mdx`` tells integrators to pass to
-        ``start_voice_chat``, so it is public surface even though nothing in
-        this tree calls it. ``TestTheLivePlaybackPathIsBounded`` covers the
-        path ``gaia talk`` itself takes.
-        """
-        import inspect
-
-        from gaia.audio.audio_client import AudioClient
-
-        source = inspect.getsource(AudioClient.process_voice_input)
-        assert "speech_dropped = False" in source
-        assert "nonlocal speech_dropped" in source
-        assert "if speech_dropped:" in source
-
-    def test_the_guarded_queue_is_actually_bounded(self):
-        """The latch above is unreachable on an unbounded queue.
-
-        ``queue.Full`` cannot be raised without a ``maxsize``, so dropping the
-        bound silently retires the whole drop-on-full path and leaves its
-        docstring describing behaviour the code no longer has. That happened
-        once; the assertions above stayed green through it, because they read
-        the latch and never the queue it depends on.
-        """
-        import inspect
-        import re
-
-        from gaia.audio.audio_client import AudioClient
-
-        source = inspect.getsource(AudioClient.process_voice_input)
-        match = re.search(r"text_queue = queue\.Queue\((.*?)\)", source)
-        assert match, "text_queue construction not found"
-        assert "maxsize=" in match.group(1), (
-            "process_voice_input's text_queue lost its bound, so the "
-            "queue.Full branch below it can never fire"
-        )
-
-
 class TestTheLivePlaybackPathIsBounded:
-    """``gaia talk`` speaks through ``speak_text``, not ``process_voice_input``.
+    """``gaia talk`` speaks through ``speak_text``.
 
     TalkSDK → ``start_voice_chat(voice_processor)`` → ``_process_audio_wrapper``
-    → the callback → ``speak_text``. The queue hang #3554 describes has the same
-    shape on both, but only this one is reachable.
+    → the callback → ``speak_text``, where the queue hang #3554 describes lived.
     """
 
     def test_speak_text_never_puts_without_a_timeout(self):

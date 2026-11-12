@@ -58,10 +58,20 @@ export interface AgentTool {
     category: string;
 }
 
+/** How a skill came to be loaded in a chat. */
+export type SkillOrigin = 'model' | 'auto' | 'always';
+
+export interface ActiveSkill {
+    name: string;
+    how: SkillOrigin;
+}
+
 export interface AgentCapabilities {
     session_id: string;
     agent_type: string;
     tools: AgentTool[];
+    /** Loaded skills, in load order; null when the agent runs elsewhere and doesn't report them. */
+    skills?: ActiveSkill[] | null;
 }
 
 export interface ChatFileChange {
@@ -119,9 +129,4 @@ export interface SessionGit {
     available: boolean;
     repos: GitRepo[];
     reason?: string;
-}
-
-export interface TunnelDevice {
-    name: string;
-    lastSeen: string;
 }

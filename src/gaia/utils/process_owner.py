@@ -14,13 +14,17 @@ reused its pid:
   ``/proc``. Both are exact and never move, unlike ``create_time()``, which
   Linux derives from the wall-clock boot time and so shifts when NTP steps
   the clock.
-* Elsewhere: ``create_time()``, which Windows and macOS keep as recorded at
-  creation, compared with a small tolerance for float rounding.
+* Elsewhere: the start time as recorded at creation, compared with a small
+  tolerance for float rounding. On macOS that is not ``create_time()``:
+  psutil 7.1+ shifts it by how far the boot time has moved since psutil was
+  imported, and a Mac's boot time moves when it sleeps, so a process running
+  since before a sleep would misread every newer process's start.
 """
 
 from __future__ import annotations
 
 import functools
+import inspect
 import os
 import secrets
 import sys
@@ -35,6 +39,11 @@ _TOKEN = secrets.token_urlsafe(8)
 _START_TOLERANCE = 0.01
 
 _LINUX = sys.platform.startswith("linux")
+#: psutil 7.1+ can read a start time without its boot-time shift, the reading
+#: psutil itself identifies a process by.
+_UNSHIFTED = (
+    "monotonic" in inspect.signature(psutil._psplatform.Process.create_time).parameters
+)
 
 
 @functools.lru_cache(maxsize=1)
@@ -60,7 +69,10 @@ def _started(pid: int) -> Optional[str]:
     if _LINUX:
         return _linux_start(pid)
     try:
-        return repr(psutil.Process(pid).create_time())
+        proc = psutil.Process(pid)
+        if _UNSHIFTED:
+            return repr(proc._proc.create_time(monotonic=True))
+        return repr(proc.create_time())
     except (psutil.NoSuchProcess, psutil.ZombieProcess):
         return None
 

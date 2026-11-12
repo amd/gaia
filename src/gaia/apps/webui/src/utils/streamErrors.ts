@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { ApiError, parseErrorDetail, StreamTimeoutError } from '../services/api';
+import { ApiError, parseErrorDetail, StreamTimeoutError, type StreamDroppedError } from '../services/api';
 import { getT, type Translate } from '../i18n/useT';
 
 /** How many times a turn's lost stream is re-attached before the view gives up. */
@@ -19,8 +19,14 @@ export function isStreamInterrupted(err: Error): boolean {
     return err.name === 'StreamStalledError' || err.name === 'StreamDroppedError';
 }
 
+/** The last re-attach never reached GAIA, so no run there can still be answering. */
+export function isGaiaUnreachable(err: Error): boolean {
+    return err.name === 'StreamDroppedError' && (err as StreamDroppedError).unreachable === true;
+}
+
 /** The view lost the turn, but its run may still finish server-side; resending would ask twice. */
 export function mayStillFinish(err: Error): boolean {
+    if (isGaiaUnreachable(err)) return false;
     return isStreamInterrupted(err) || err instanceof StreamTimeoutError;
 }
 
@@ -28,18 +34,16 @@ export function mayStillFinish(err: Error): boolean {
  * Plain words and a next step for a chat-stream failure the client can name,
  * or null to leave the message to the caller's generic handling.
  */
-export function describeStreamError(err: Error): string | null {
-    if (isStreamInterrupted(err)) {
-        return 'Lost the live view of this answer: the connection to GAIA dropped '
-            + `${MAX_STREAM_RECONNECTS + 1} times. The answer may still finish. Reopen this chat in a minute to see it.`;
-    }
+export function describeStreamError(err: Error, t: Translate = getT()): string | null {
+    if (isGaiaUnreachable(err)) return t('chatError.gaiaStopped');
+    if (isStreamInterrupted(err)) return t('chatError.liveViewLost', { n: MAX_STREAM_RECONNECTS + 1 });
     if (err instanceof StreamTimeoutError) {
         if (err.endpoint === 'send') {
             return `GAIA did not start this answer within ${Math.round(err.timeoutMs / 1000)} seconds; it may be busy or stuck. `
                 + 'If the chat list shows this chat running, reopen it later to see the answer. Otherwise, send the message again.';
         }
         return 'GAIA did not respond when this chat reconnected to its running answer. The answer may still finish: '
-            + 'check that GAIA is still running, then reopen this chat.';
+            + 'reopen this chat once GAIA is answering again.';
     }
     if (err instanceof ApiError) {
         const detail = err.detail ? parseErrorDetail(err.detail) : '';
@@ -62,12 +66,26 @@ const MODEL_SERVER_RE = /lemonade|\bLLM\b|could not get response/i;
 const CONNECTION_RE = /failed to fetch|networkerror|\bfetch\b/i;
 const TIMEOUT_RE = /timed out|timeout/i;
 
+/** The id a failed answer names its saved problem report by (`RECORD_ID_RE` in failure_record.py). */
+const FAILURE_RECORD_RE = /\bGF-\d{8}-\d{6}-[0-9a-f]{4}\b/;
+
+export function failureRecordId(text: string): string | null {
+    return FAILURE_RECORD_RE.exec(text)?.[0] ?? null;
+}
+
 /**
  * What a failed chat turn tells the user: the cause in plain words and what to
- * do next. Never the raw error text, which goes to the console log instead.
+ * do next. Never the raw error text, which goes to the console log instead,
+ * except the name of the problem report the server saved for it.
  */
 export function classifyChatError(err: Error, t: Translate = getT()): { kind: ChatErrorKind; text: string } {
-    const described = describeStreamError(err);
+    const cause = chatErrorCause(err, t);
+    const record = failureRecordId(err.message || '');
+    return record ? { ...cause, text: `${cause.text}\n\n${t('chatError.savedReport', { id: record })}` } : cause;
+}
+
+function chatErrorCause(err: Error, t: Translate): { kind: ChatErrorKind; text: string } {
+    const described = describeStreamError(err, t);
     if (described) return { kind: 'stream', text: described };
     const msg = err.message || '';
     if (CONTEXT_RE.test(msg)) return { kind: 'context', text: t('chatError.context') };

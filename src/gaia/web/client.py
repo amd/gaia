@@ -18,8 +18,6 @@ import re
 import socket
 import threading
 import time
-from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
@@ -29,8 +27,10 @@ import urllib3
 from requests.adapters import HTTPAdapter
 from urllib3.connectionpool import HTTPConnectionPool, HTTPSConnectionPool
 
+from gaia.llm.retry import parse_retry_after
 from gaia.logger import get_logger
 from gaia.tool_cancellation import ToolCancelled
+from gaia.utils.paths import WINDOWS_DEVICE_NAMES
 
 log = get_logger(__name__)
 
@@ -192,6 +192,7 @@ class _Deadline:
         self._thread_id = threading.get_ident()
         self._response = None
         self._done = False
+        self._paused = False
         self._timer = threading.Timer(seconds, self._fire)
         self._timer.daemon = True
 
@@ -240,7 +241,7 @@ class _Deadline:
 
     def _fire(self) -> None:
         with _SOCKETS_LOCK:
-            if self._done:
+            if self._done or self._paused:
                 return
             self.fired.set()
             sock = _THREAD_SOCKETS.get(self._thread_id)
@@ -249,6 +250,33 @@ class _Deadline:
             response = self._response
             if response is not None:
                 _abort_stream(response)
+
+    def run_without_clock(self, operation):
+        """Run a non-network pause without charging it to this deadline.
+
+        Rate-limit waits happen between requests, while no socket is open. The
+        wait still needs to be enforced, but it must not make a valid redirect
+        fail merely because the per-domain pacing interval is longer than the
+        overall fetch deadline.
+        """
+        with _SOCKETS_LOCK:
+            if self._done or self.fired.is_set():
+                raise self.error()
+            self._paused = True
+            self._timer.cancel()
+        started = time.monotonic()
+        try:
+            return operation()
+        finally:
+            elapsed = time.monotonic() - started
+            with _SOCKETS_LOCK:
+                self._at += elapsed
+                self._paused = False
+                if not self._done and not self.fired.is_set():
+                    remaining = max(0.0, self._at - time.monotonic())
+                    self._timer = threading.Timer(remaining, self._fire)
+                    self._timer.daemon = True
+                    self._timer.start()
 
 
 #: What a read cut short by the deadline (its timeout, or the timer's
@@ -640,22 +668,7 @@ _SEARCH_GATE = _SearchGate(min_interval=1.5)
 
 def _retry_after_seconds(response: requests.Response) -> Optional[float]:
     """The ``Retry-After`` header in seconds (delta or HTTP-date), if present."""
-    value = (response.headers or {}).get("Retry-After")
-    if not value:
-        return None
-    value = str(value).strip()
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        pass
-    try:
-        when = parsedate_to_datetime(value)
-    except (TypeError, ValueError):
-        log.debug("Unparseable Retry-After header: %r", value)
-        return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+    return parse_retry_after(response.headers)
 
 
 def fetch_error_text(exc: Exception) -> str:
@@ -970,7 +983,9 @@ class WebClient:
             # Rate limit for new domain
             new_domain = urlparse(redirect_url).hostname
             if new_domain != domain:
-                self._rate_limit_wait(new_domain)
+                deadline.run_without_clock(
+                    lambda domain=new_domain: self._rate_limit_wait(domain)
+                )
                 domain = new_domain
 
             current_url = redirect_url
@@ -1545,11 +1560,7 @@ class WebClient:
     # Windows opens the console device instead of a file, and ``CON.txt``
     # still resolves to the device. Avoid these even on non-Windows so
     # downloads remain portable.
-    _WINDOWS_RESERVED = frozenset(
-        {"CON", "PRN", "AUX", "NUL"}
-        | {f"COM{i}" for i in range(1, 10)}
-        | {f"LPT{i}" for i in range(1, 10)}
-    )
+    _WINDOWS_RESERVED = frozenset(name.upper() for name in WINDOWS_DEVICE_NAMES)
 
     @staticmethod
     def _sanitize_filename(raw_name: str) -> str:

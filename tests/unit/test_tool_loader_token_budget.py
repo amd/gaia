@@ -61,14 +61,14 @@ from gaia.eval.tool_cost import (  # noqa: E402
 # while nothing runs the file. This PR puts it in a CI lane, so the numbers
 # start being enforced from here.
 #
-# Reproducible, not machine-local: these are identical on Linux CI and on a
-# Windows dev box, measured through the loader-OFF `doc_agent` fixture below.
+# Measured on a Windows dev box through the loader-OFF `doc_agent` fixture
+# below. Linux CI measures the native pair ~0.2% higher, well inside the band.
 # Measuring with `dynamic_tools=True` instead gives a different tool count.
-EXPECTED_DOC_TOOL_COUNT = 44
+EXPECTED_DOC_TOOL_COUNT = 45
 BASELINE_TEXT_CHARS = 5910
-BASELINE_NATIVE_CHARS = 24870
+BASELINE_NATIVE_CHARS = 27273
 BASELINE_TEXT_TOKENS = 1260
-BASELINE_NATIVE_TOKENS = 6283
+BASELINE_NATIVE_TOKENS = 6888
 # Band tolerates trivial wording edits; a real tool add/remove blows past it
 # and should bump the baseline deliberately.
 TOLERANCE = 0.10
@@ -93,7 +93,7 @@ def doc_agent():
     """A deterministic doc-profile skeleton (built once for the module).
 
     Loader-off, so the registry is the pinned unfiltered baseline
-    (``load_tools`` is *not* registered) — keep it that way for the baseline
+    (``search_tools`` is *not* registered) — keep it that way for the baseline
     and slope/distribution pins below.
     """
     return build_doc_agent_skeleton(profile="doc", deterministic=True)
@@ -101,10 +101,10 @@ def doc_agent():
 
 @pytest.fixture(scope="module")
 def doc_agent_loader_on():
-    """Doc skeleton with the loader active, so ``load_tools`` is registered.
+    """Doc skeleton with the loader active, so ``search_tools`` is registered.
 
-    The CORE-floor guard must measure the set that actually ships every active
-    turn, which includes the always-on ``load_tools`` escape hatch (#1450). The
+    The CORE-floor guard must measure the set a session starts on, which
+    includes the always-on ``search_tools``. The
     loader-off ``doc_agent`` fixture omits it, and a filtered render silently
     drops any name absent from the registry — so the floor would under-count.
     """
@@ -223,16 +223,13 @@ def test_parse_ttft_from_committed_scorecard():
 # Measured reality (worth knowing — it tempers the original estimate): the
 # always-on CORE tools alone render ~40% of the native baseline, because the
 # memory tools carry the longest docstrings. So CORE-only is the best case
-# (~60% token reduction, right at the gate boundary), and a worst-case
-# ``max_tools=14`` loaded set lands around ~60% of baseline. The first-turn win
-# is real and large; whether it clears ≥60% in *TTFT* terms is what the live run
-# decides.
+# (~60% token reduction, right at the gate boundary). The first-turn win is real
+# and large; whether it clears ≥60% in *TTFT* terms is what the live run decides.
 
 # CORE is the always-on floor; its share of the registry sits near 40% on both
 # paths. The ceilings leave room for wording edits and bite on real bloat.
 CORE_NATIVE_SHARE_MAX = 0.45
 CORE_TEXT_SHARE_MAX = 0.45
-MAX_LOADED_NATIVE_SHARE_MAX = 0.70
 
 
 def _filtered_native_tokens(agent, names, tok) -> int:
@@ -248,7 +245,7 @@ def _filtered_text_tokens(agent, names, tok) -> int:
 def test_core_only_is_the_reduction_best_case(doc_agent_loader_on):
     """CORE-only (the always-on floor) renders well under half the baseline cost.
 
-    Uses the loader-on skeleton so ``load_tools`` — a CORE member that ships
+    Uses the loader-on skeleton so ``search_tools`` — a CORE member that ships
     every active turn — is in the registry and counted in the floor. Its own
     unfiltered render is the baseline, so this fails when CORE grows relative
     to the registry and stays quiet when the whole registry moves together.
@@ -269,29 +266,6 @@ def test_core_only_is_the_reduction_best_case(doc_agent_loader_on):
     assert text <= CORE_TEXT_SHARE_MAX * unfiltered["text_tokens"], (
         f"CORE text tokens {text} exceeded {CORE_TEXT_SHARE_MAX:.0%} of the "
         f"{unfiltered['text_tokens']}-token registry measured in this run."
-    )
-
-
-def test_max_loaded_set_substantially_shrinks_native_cost(doc_agent):
-    """A full ``max_tools=14`` loaded set still costs far less than the registry.
-
-    Uses the 14 *largest* doc tools as a conservative worst case: if even those
-    clear the ceiling, any real 14-tool selection does. Measured against the
-    same run's unfiltered cost, so adding tools to the registry can only move
-    this ratio in the direction it actually moved.
-    """
-    tok = get_tokenizer()
-    if tok is None:
-        pytest.skip("tiktoken not installed — token proxy unavailable")
-    cost = measure_tool_prompt_cost(doc_agent, tok=tok)
-    per = cost["per_tool"]
-    largest14 = sorted(per, key=lambda n: per[n]["native_tokens"], reverse=True)[:14]
-    native = _filtered_native_tokens(doc_agent, largest14, tok)
-    assert native <= MAX_LOADED_NATIVE_SHARE_MAX * cost["native_tokens"], (
-        f"worst-case 14-tool native tokens {native} exceeded "
-        f"{MAX_LOADED_NATIVE_SHARE_MAX:.0%} of the {cost['native_tokens']}-token "
-        "registry measured in this run — the loaded set is not shrinking as "
-        "expected."
     )
 
 

@@ -79,7 +79,6 @@ describe("creating the backend venv behind a TLS-inspecting proxy", () => {
     );
     await installer.installBackend({
       version: "0.25.0",
-      skipGaiaInit: true,
       isPackaged: false,
     });
     const calls = venvCalls(spawn);
@@ -93,7 +92,6 @@ describe("creating the backend venv behind a TLS-inspecting proxy", () => {
     await expect(
       installer.installBackend({
         version: "0.25.0",
-        skipGaiaInit: true,
         isPackaged: false,
       })
     ).rejects.toMatchObject({

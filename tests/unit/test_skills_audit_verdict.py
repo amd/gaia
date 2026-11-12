@@ -87,6 +87,18 @@ def test_unreadable_code_never_earns_allow(rule_id, tier):
     assert severity_verdict((_f("high", rule_id=rule_id),), tier) != "ALLOW"
 
 
+def test_outbound_url_finding_requires_review_at_the_experimental_tier():
+    findings = (_f("high", rule_id="body.injection.outbound_url"),)
+    assert severity_verdict(findings, "experimental") == "REVIEW"
+    assert not clears_tier(findings, "experimental")
+
+
+def test_outbound_url_finding_remains_reviewable_not_blocked():
+    findings = (_f("high", rule_id="body.injection.outbound_url"),)
+    assert severity_verdict(findings, "community") == "REVIEW"
+    assert severity_verdict(findings, "verified") == "BLOCK"
+
+
 def test_unparseable_code_is_held_for_review_at_the_advisory_tier():
     verdict, reason = verdict_for_tier(
         (_f("high", rule_id="code.unparseable"),), "experimental"

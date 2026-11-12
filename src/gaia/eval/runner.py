@@ -23,7 +23,6 @@ import logging
 import os
 import re
 import shutil
-import signal
 import statistics
 import subprocess
 import sys
@@ -35,20 +34,22 @@ from typing import Optional
 import requests
 import yaml
 
+from gaia.eval.claude_credential import announce, resolve_claude_credential
 from gaia.eval.claude_outage import (
-    API_KEY_VAR,
     CREDENTIAL,
     HEADLINES,
     QUOTA,
     UNREACHABLE,
     classify_driver_failure,
-    dotenv_only_api_key,
-    driver_api_key,
     switch_to_backup_account,
 )
 from gaia.eval.claude_usage import describe, merge_scenario_usage, usage_from_cli
 from gaia.eval.config import DEFAULT_AGENT_TYPE
 from gaia.eval.eval_lock import exclusive_eval
+from gaia.eval.fixture_env import fixture_fingerprint
+from gaia.eval.fixture_env import from_env as fixture_env_from_env
+from gaia.eval.fixture_env import localize
+from gaia.eval.process_tree import kill_tree as _kill_tree
 from gaia.eval.scenario_backend import ScenarioBackend, validate_approve_prompts
 from gaia.eval.scorecard import NOT_RUN, SKIPPED_STATUSES
 from gaia.llm.local_only import assert_provider_permitted, cloud_blocked
@@ -64,6 +65,27 @@ MCP_CONFIG = EVAL_DIR / "mcp-config.json"
 AGENT_UI_MCP_SERVER = "gaia-agent-ui"
 MANIFEST = CORPUS_DIR / "manifest.json"
 REAL_WORLD_CORPUS_DIR = CORPUS_DIR / "real_world"
+
+
+def eval_checkout_error() -> Optional[str]:
+    """Say why eval can't run when the repo's ``eval/`` assets are absent.
+
+    Scenarios, corpus and MCP config ship only in a source checkout, never in
+    the wheel, so an installed package resolves them into site-packages.
+    """
+    if SCENARIOS_DIR.is_dir():
+        return None
+    return (
+        "gaia eval agent needs a GAIA source checkout, but no scenarios "
+        f"directory exists at {SCENARIOS_DIR}. The scenarios, corpus and MCP "
+        "config live in the repository's eval/ directory and are not part of "
+        "the installed package.\n"
+        "  Clone the repo and install it in editable mode, then run from it:\n"
+        "    git clone https://github.com/amd/gaia && cd gaia\n"
+        '    uv pip install -e ".[eval,ui]" -e hub/agents/gaia/python\n'
+        "  See https://amd-gaia.ai/docs/guides/eval#prerequisites"
+    )
+
 
 # ── MCP interpreter resolution ────────────────────────────────────────────
 #
@@ -1182,11 +1204,11 @@ For each turn in the scenario:
      if the turn objective says otherwise.
    - pending_question: answer it in character with answer_question.
    Repeat until the turn is idle. If wait_for_turn times out, call it once more.
-3. Call get_messages(session_id) and judge the LAST assistant message, with its
+3. Call get_messages(session_id, full_replies=True) and judge the LAST assistant message, with its
    tool steps, using the PER-TURN JUDGE INSTRUCTIONS section above
 
 ### Phase 3: Full trace
-After all turns, call get_messages(session_id) for the persisted full trace.
+After all turns, call get_messages(session_id, full_replies=True) for the persisted full trace.
 
 ### Phase 4: Scenario judgment
 Evaluate holistically using the SCENARIO-LEVEL JUDGE INSTRUCTIONS section above
@@ -1711,6 +1733,10 @@ def preflight_check(backend_url, scenarios=None):
                 )
         except FileNotFoundError:
             errors.append("'claude' CLI not found on PATH — install Claude Code CLI")
+        try:
+            announce(resolve_claude_credential(), role="Claude eval driver")
+        except (ValueError, RuntimeError) as e:
+            errors.append(str(e))
 
     # Memory-category preflight — required only when memory scenarios are queued.
     # Memory scenarios call memory_clear(scope=all) to reset state between turns;
@@ -2082,6 +2108,8 @@ def run_scripted_scenario(
     and answers no questions, then is cleared so it never leaks into the next
     scenario.
     """
+    # A local run stages fixtures under its own folder and port (fixture_env).
+    scenario_data = localize(scenario_data, *fixture_env_from_env())
     kwargs.setdefault("scenario_backend", ScenarioBackend(backend_url, scenario_data))
     declined = _decline_commands(scenario_data)
     if not declined:
@@ -2123,51 +2151,19 @@ def run_scripted_scenario(
 _DRIVER_DRAIN_S = 30
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
-    """Kill *proc* and every process it started.
-
-    Killing only ``claude`` leaves its MCP server holding the output pipes, so
-    reading them blocks and the timeout fires minutes late.
-    """
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-            capture_output=True,
-            check=False,
-        )
-    else:
-        with contextlib.suppress(ProcessLookupError):
-            os.killpg(proc.pid, signal.SIGKILL)  # pylint: disable=no-member
-    with contextlib.suppress(OSError):
-        proc.kill()
-
-
-_warned_dotenv_api_key = False
-
-
 def _driver_auth():
     """Return ``(flags, env)`` for the ``claude -p`` driver's authentication.
 
-    ``--bare`` gives a clean subprocess (no hooks, no CLAUDE.md auto-load) but
-    also restricts auth to ``ANTHROPIC_API_KEY`` / ``apiKeyHelper`` — OAuth and
-    the keychain are never read. So it is used only with a key the operator
-    exported. A key that only a ``.env`` supplied is ignored *and* removed from
-    the child's environment, since the CLI prefers it over OAuth. ``env`` is
-    ``None`` when the child should inherit this process's environment as is.
+    Follows :func:`gaia.eval.claude_credential.resolve_claude_credential`. On
+    the subscription the child loses ``ANTHROPIC_API_KEY``, which the CLI would
+    prefer over OAuth. On a key, ``--bare`` gives a clean subprocess (no hooks,
+    no CLAUDE.md auto-load) and restricts auth to that key. ``env`` is ``None``
+    when the child should inherit this process's environment as is.
     """
-    global _warned_dotenv_api_key  # pylint: disable=global-statement
-    if driver_api_key():
-        return ["--bare"], None
-    if dotenv_only_api_key():
-        if not _warned_dotenv_api_key:
-            _warned_dotenv_api_key = True
-            logger.warning(
-                "Ignoring ANTHROPIC_API_KEY from a .env file for the eval driver "
-                "— it would disable your Claude Code login. Export it in the "
-                "shell to drive the eval with that key instead."
-            )
-        return [], {k: v for k, v in os.environ.items() if k != API_KEY_VAR}
-    return [], None
+    credential = resolve_claude_credential()
+    announce(credential, role="Claude eval driver")
+    env = credential.cli_env(os.environ)
+    return credential.cli_flags(), (None if env == dict(os.environ) else env)
 
 
 def _run_driver(
@@ -2913,6 +2909,63 @@ def _write_fix_history(run_dir, fix_history) -> None:
 BASELINE_META = "meta.json"
 
 
+def fixture_provenance() -> dict:
+    """Which fixtures a run measured and where it served them from.
+
+    Raises:
+        ValueError: ``GAIA_EVAL_ROOT`` or ``GAIA_EVAL_FIXTURE_PORT`` is malformed.
+    """
+    root, port = fixture_env_from_env()
+    return {
+        "fingerprint": fixture_fingerprint(REPO_ROOT),
+        "root": str(root) if root is not None else "~/gaia-eval",
+        "port": port if port is not None else 8765,
+    }
+
+
+def lemonade_provenance() -> dict:
+    """The Lemonade build the agent ran on, as its ``/health`` reports it."""
+    from gaia.llm.lemonade_client import LemonadeClient, lemonade_server_version
+
+    client = LemonadeClient(verbose=False, keep_alive=True)
+    return {
+        "base_url": client.base_url,
+        # None when /health does not answer or names no version; compare says so.
+        "version": lemonade_server_version(client),
+    }
+
+
+def measurement_warnings(baseline: dict, current: dict) -> list:
+    """Why two scorecards with the same scenarios may not have measured alike.
+
+    Different fixtures or a different Lemonade build can move a score with no
+    change to the agent, so ``--compare`` prints these before and after its
+    verdict. A side that predates the field contributes nothing.
+    """
+    warnings = []
+    configs = [(c.get("config") or {}) for c in (baseline, current)]
+    prints = [(c.get("fixtures") or {}).get("fingerprint") or {} for c in configs]
+    if prints[0].get("combined") and prints[1].get("combined"):
+        for part, label in (
+            ("fixtures", "tests/fixtures/gaia"),
+            ("scenarios", "eval/scenarios"),
+        ):
+            if prints[0].get(part) != prints[1].get(part):
+                warnings.append(
+                    f"{label} differs between the runs (fingerprint "
+                    f"{str(prints[0].get(part))[:12]} vs "
+                    f"{str(prints[1].get(part))[:12]}), so a flip may come from "
+                    "the fixtures, not the agent"
+                )
+    builds = [(c.get("lemonade") or {}).get("version") for c in configs]
+    if all(c.get("lemonade") for c in configs) and builds[0] != builds[1]:
+        warnings.append(
+            f"the runs used different Lemonade builds ({builds[0] or 'unknown'} "
+            f"vs {builds[1] or 'unknown'})"
+        )
+    return warnings
+
+
 class ScorecardMismatchError(ValueError):
     """Two scorecards measured different things, so diffing them means nothing."""
 
@@ -3004,19 +3057,22 @@ def _summary_over(results):
     return build_scorecard("subset", results, {})["summary"]
 
 
-def compare_scorecards(baseline_path, current_path):
+def compare_scorecards(baseline_path, current_path, require_same_setup=False):
     """Compare two scorecard.json files and print a regression/improvement report.
 
     Args:
         baseline_path: Path to the baseline scorecard.json (str or Path)
         current_path:  Path to the current/new scorecard.json (str or Path)
+        require_same_setup: Refuse, instead of warn, when the fixtures or the
+            Lemonade build differ (:func:`measurement_warnings`).
 
     Returns:
         dict with keys: improved, regressed, unchanged, only_in_baseline, only_in_current
 
     Raises:
         ScorecardMismatchError: the two were measured with a different agent
-            model or eval model (see :func:`check_comparable`).
+            model or eval model (see :func:`check_comparable`), or with
+            *require_same_setup*, on different fixtures or Lemonade builds.
     """
     baseline_path = Path(baseline_path)
     current_path = Path(current_path)
@@ -3031,6 +3087,16 @@ def compare_scorecards(baseline_path, current_path):
 
     check_comparable(baseline_path, baseline, current)
     set_warnings = scenario_set_warnings(baseline, current)
+    setup_warnings = measurement_warnings(baseline, current)
+    if require_same_setup and setup_warnings:
+        raise ScorecardMismatchError(
+            f"Not comparable with the baseline ({baseline_path}): "
+            + "; ".join(setup_warnings)
+            + ". Re-run on the baseline's fixtures and Lemonade build, or drop "
+            "--require-same-fixtures to diff anyway with these flagged."
+        )
+    for warning in setup_warnings:
+        print(f"[WARN] Different setup: {warning}.", file=sys.stderr)
 
     # Build per-scenario maps
     def scenario_map(sc):
@@ -3292,6 +3358,8 @@ def compare_scorecards(baseline_path, current_path):
     print(f"\n{'='*70}")
     for warning in set_warnings:
         print(f"[WARN] Different questions: {warning}.")
+    for warning in setup_warnings:
+        print(f"[WARN] Different setup: {warning}.")
     if partial:
         # The run stopped part-way; its NOT_RUN scenarios are excluded above,
         # so whatever follows describes only the part that ran.
@@ -3338,6 +3406,7 @@ def compare_scorecards(baseline_path, current_path):
         "not_run": not_run,
         "incomplete": partial or None,
         "scenario_set_warnings": set_warnings,
+        "measurement_warnings": setup_warnings,
     }
 
 
@@ -3440,6 +3509,11 @@ class AgentEvalRunner:
             result = run_audit()
             print(json.dumps(result, indent=2))
             return result
+
+        checkout_error = eval_checkout_error()
+        if checkout_error:
+            print(f"[ERROR] {checkout_error}", file=sys.stderr)
+            sys.exit(1)
 
         if fix_mode and resume_dir is None:
             require_clean_tree_for_fix()
@@ -3943,6 +4017,8 @@ class AgentEvalRunner:
             config["scenario_filter"] = list(requested_ids)
         provenance = scenario_provenance(scenarios)
         config["scenario_provenance"] = provenance
+        config["fixtures"] = fixture_provenance()
+        config["lemonade"] = lemonade_provenance()
         if provenance["overridden_builtins"]:
             print(
                 f"[WARN] {len(provenance['overridden_builtins'])} built-in "
@@ -4129,8 +4205,8 @@ def generate_corpus():
 
     The corpus is committed ground truth — the manifest's facts were written
     from these exact files — so nothing here rewrites it. Lists the documents,
-    then raises ``RuntimeError`` when the manifest is absent or names a file
-    that is not on disk.
+    then raises ``RuntimeError`` when the manifest is absent, names a file
+    that is not on disk, or a corpus file on disk is missing from it.
     """
     print("[CORPUS] Validating corpus against manifest.json...")
 
@@ -4178,6 +4254,28 @@ def generate_corpus():
             "the manifest entry if the document was renamed."
         )
     print("[CORPUS] All manifest files present on disk [OK]")
+
+    # And the other way around: a document added to disk without a manifest
+    # entry would score against facts that do not exist for it.
+    undeclared = []
+    for base, entries in ((docs_dir, doc_list), (adv_dir, adv_list)):
+        declared = {doc.get("filename") for doc in entries}
+        if base.exists():
+            for f in sorted(base.iterdir()):
+                if (
+                    f.is_file()
+                    and not f.name.startswith(".")
+                    and f.name not in declared
+                ):
+                    undeclared.append(str(f.relative_to(CORPUS_DIR)))
+
+    if undeclared:
+        raise RuntimeError(
+            f"{len(undeclared)} file(s) in {CORPUS_DIR} are not named in "
+            f"{MANIFEST}: {', '.join(undeclared)}. Add a manifest entry for "
+            "them, or remove the files if they were left behind."
+        )
+    print("[CORPUS] All corpus files declared in the manifest [OK]")
     print(f"\n[CORPUS] Done. Corpus at: {CORPUS_DIR}")
 
 

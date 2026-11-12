@@ -13,8 +13,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaia.agents.base.tools import describe_registry
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.ui import _chat_helpers, session_capabilities, session_environment
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarHTTPError
 from gaia.ui.server import create_app
 
 
@@ -71,8 +71,11 @@ def _new_session(client, agent_type=None):
     return session["id"], session["agent_type"]
 
 
-def _cache(session_id, agent_type, registry):
-    agent = SimpleNamespace(describe_tools=lambda: describe_registry(dict(registry)))
+def _cache(session_id, agent_type, registry, skills=()):
+    agent = SimpleNamespace(
+        describe_tools=lambda: describe_registry(dict(registry)),
+        describe_skills=lambda: list(skills),
+    )
     _chat_helpers._store_agent(session_id, "m", [], agent, agent_type)
     return agent
 
@@ -111,7 +114,22 @@ def test_lists_the_cached_agents_tools_with_a_category_each(client):
                 "category": "skill",
             },
         ],
+        "skills": [],
     }
+
+
+def test_lists_the_skills_the_chat_has_loaded_and_how(client):
+    sid, agent_type = _new_session(client)
+    skills = [
+        {"name": "gaia-voice", "how": "always"},
+        {"name": "analyze-recording", "how": "auto"},
+    ]
+    _cache(sid, agent_type, _REGISTRY, skills)
+
+    r = _get(client, sid)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["skills"] == skills
 
 
 def test_an_unknown_chat_is_a_404(client):
@@ -331,6 +349,8 @@ def test_extra_sidecar_fields_are_not_passed_through(client, sidecar):
     assert r.json()["tools"] == [
         {"name": "write_file", "description": "Write.", "category": "file_io"}
     ]
+    # A relayed agent doesn't report skills: null, never an empty list.
+    assert r.json()["skills"] is None
 
 
 def test_proxy_asks_the_sessions_tools_route():

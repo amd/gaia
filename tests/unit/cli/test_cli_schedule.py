@@ -161,7 +161,7 @@ def test_add_rejects_undeliverable_sink(parser, mock_store, capsys, sink_argv, r
     assert reason in capsys.readouterr().err
 
 
-def test_add_rejects_notification_sink_on_windows(parser, mock_store, mocker, capsys):
+def test_add_accepts_notification_sink_on_windows(parser, mock_store, mocker):
     mocker.patch("gaia.schedule.sinks.platform.system", return_value="Windows")
     args = _parse(
         parser,
@@ -169,11 +169,10 @@ def test_add_rejects_notification_sink_on_windows(parser, mock_store, mocker, ca
         + ["--sink", "notification"],
     )
 
-    with pytest.raises(SystemExit):
-        _handle_schedule(args)
+    _handle_schedule(args)
 
-    mock_store.add.assert_not_called()
-    assert "Windows" in capsys.readouterr().err
+    (constructed,) = mock_store.add.call_args.args
+    assert constructed.sink == "notification"
 
 
 def test_add_requires_name_and_cron(parser):
