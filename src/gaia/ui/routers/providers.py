@@ -1547,6 +1547,7 @@ def select_model(
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)
+    db.set_setting(PICKED_MODEL_SETTING, model_id)
     if provider_of(model_id) == LOCAL:
         from gaia.ui import warmup
 
@@ -1554,6 +1555,44 @@ def select_model(
         warmup.request_warm_up("model pick", fresh=True)
     clear_restore_notice()
     return _active_view(db)
+
+
+#: The model picked under Model, which a cleared Custom model ID goes back to.
+PICKED_MODEL_SETTING = "picked_model"
+
+
+def custom_model_override(db: ChatDatabase) -> Optional[str]:
+    """The Custom model ID in force; None while the picked model runs."""
+    custom = (db.get_setting("custom_model") or "").strip()
+    picked = (db.get_setting(PICKED_MODEL_SETTING) or "").strip()
+    return custom if custom and custom != picked else None
+
+
+def model_after_clearing_custom(db: ChatDatabase) -> Optional[str]:
+    """The model a cleared Custom model ID leaves running; None is the default.
+
+    The model picked under Model. With no pick on record, a cloud user keeps
+    their model unless the local default is on disk.
+    """
+    from gaia.config import GaiaConfigError
+
+    from ..database import resolved_default_model
+
+    picked = (db.get_setting(PICKED_MODEL_SETTING) or "").strip()
+    current = (db.get_setting("custom_model") or "").strip()
+    for model in (picked, current):
+        if model:
+            _learn_cloud_models(model)
+    if picked and not (cloud_blocked() and cloud_provider_name(picked)):
+        return picked
+    if not current or cloud_provider_name(current) is None or cloud_blocked():
+        return None
+    try:
+        default = {"remote": False, "model": resolved_default_model()}
+    except GaiaConfigError as e:
+        logger.info("Keeping %s: the default model can't be read: %s", current, e)
+        return current
+    return None if _local_downloaded(default) else current
 
 
 def clear_restore_notice() -> None:
@@ -1846,6 +1885,8 @@ def remove_custom_model(
         raise HTTPException(status_code=500, detail=str(e)) from e
     if _model_ids_match(db.get_setting("custom_model"), result["removed"]):
         db.set_setting("custom_model", None)
+    if _model_ids_match(db.get_setting(PICKED_MODEL_SETTING), result["removed"]):
+        db.set_setting(PICKED_MODEL_SETTING, None)
     return result
 
 

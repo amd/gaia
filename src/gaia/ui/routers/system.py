@@ -1100,7 +1100,9 @@ def _resolve_dynamic_tools_setting() -> tuple[bool, bool]:
 @router.get("/api/settings", response_model=SettingsResponse)
 async def get_settings(db: ChatDatabase = Depends(get_db)):
     """Get current user settings with model status."""
-    custom_model = db.get_setting("custom_model")
+    from .providers import custom_model_override
+
+    custom_model = custom_model_override(db)
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
@@ -1137,7 +1139,8 @@ async def update_settings(
     """Update user settings.
 
     Setting ``custom_model`` to an **empty string** clears the override
-    and reverts to the default model. Sending ``null`` (or omitting the
+    and reverts to the model picked under Model (the default model when
+    there is no pick; see ``model_after_clearing_custom``). Sending ``null`` (or omitting the
     field) is a no-op — by GAIA convention only explicit ``""`` clears.
     Pydantic *can* distinguish an explicit ``null`` from an unset field
     via ``model_fields_set``; we don't lean on that distinction here so
@@ -1156,7 +1159,9 @@ async def update_settings(
         from gaia.config import GaiaConfig, GaiaConfigError
 
         from .providers import (
+            PICKED_MODEL_SETTING,
             clear_restore_notice,
+            model_after_clearing_custom,
             provider_of,
             refuse_blocked_cloud_model,
         )
@@ -1165,8 +1170,11 @@ async def update_settings(
             refuse_blocked_cloud_model(value)
             logger.info("Custom model override set: %s", value)
         else:
-            logger.info("Custom model override cleared")
-            value = None
+            # Back to the model chosen under Model, as the field says.
+            value = model_after_clearing_custom(db)
+            logger.info("Custom model override cleared; running %s", value or "default")
+            if value:
+                db.set_setting(PICKED_MODEL_SETTING, value)
         # last_model is what the flagship sidecar warms and the next start restores.
         try:
             GaiaConfig.save_keys(
@@ -1258,7 +1266,9 @@ async def update_settings(
                 db.set_setting("custom_model", None)
         logger.info("Network policy set: %s", result["policy"].value)
 
-    custom_model = db.get_setting("custom_model")
+    from .providers import custom_model_override
+
+    custom_model = custom_model_override(db)
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
