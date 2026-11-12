@@ -234,7 +234,10 @@ def test_a_rejected_effort_fails_loudly_and_is_not_retried_without(monkeypatch):
             )
 
     assert "reasoning_effort=high" in str(raised.value)
-    assert "gaia config set cloud_reasoning_effort" in str(raised.value)
+    # The Agent UI shows this too, so it names the setting, not a CLI command.
+    assert "cloud_reasoning_effort" in str(raised.value)
+    assert "config.json" in str(raised.value)
+    assert "gaia config" not in str(raised.value)
     assert sent and all(b["reasoning_effort"] == "high" for b in sent)
     # A runtime 400 can have other causes; it does not unlearn the capability.
     assert lc.learned_reasoning(FLASH) is True

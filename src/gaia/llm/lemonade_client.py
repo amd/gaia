@@ -8044,8 +8044,8 @@ class LemonadeClient:
             error = LemonadeClientError(
                 f"{error} The request asked {model} to reason "
                 f"(reasoning_effort={reasoning_effort}), which it may not accept "
-                "at that level. Try `gaia config set cloud_reasoning_effort` with "
-                "another level, or `off` to stop sending it."
+                "at that level. If you set cloud_reasoning_effort, change it to "
+                "another level, or to off, in ~/.gaia/config.json."
             )
         if isinstance(error, CloudModelUnavailableError):
             _remember_cloud_availability(model, ok=False)
