@@ -18,6 +18,7 @@ from gaia.agents.base.agent import (
     Agent,
     _asks_for_a_plan_only,
     _asks_for_no_action,
+    _asks_not_to_look,
     _split_announced_step,
     _unfinished_answer_kind,
 )
@@ -727,6 +728,10 @@ REQUESTED_PLAN = (
         "I want only a plan.",
         "Give me the plan only.",
         "Show the sales trend, but don't use any tools yet.",
+        # Nothing before the ban asks for work: it still stops everything.
+        "Hi, how are you? Don't touch anything, I just want to chat.",
+        "I'll tell you what to do later. Don't touch anything until I say so.",
+        "I will change the config myself later. Don't touch anything.",
     ],
 )
 def test_requests_not_to_act_are_recognised(request_text):
@@ -778,6 +783,43 @@ def test_requests_not_to_act_are_recognised(request_text):
 )
 def test_requests_that_limit_the_work_are_not_requests_not_to_act(request_text):
     assert not _asks_for_no_action(request_text)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Find out why test_foo.py fails. Don't touch anything.",
+        "Look into the crash in server.py and explain it. Do not touch anything!",
+        "Why is the build failing? Don't touch anything.",
+        "Review config.py for bugs; don't touch anything for now.",
+        "Explain what main.py does without touching anything.",
+        "Can you check why the tests fail?\nDon't touch anything.",
+    ],
+)
+def test_a_touch_ban_on_an_investigation_bars_edits_not_looking(request_text):
+    # The edit ban still keeps the "do the step you announced" nudges off.
+    assert _asks_for_no_action(request_text)
+    assert not _asks_not_to_look(request_text)
+    assert not _asks_for_a_plan_only(request_text)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "Hi, how are you? Don't touch anything, I just want to chat.",
+        "I'll tell you what to do later. Don't touch anything until I say so.",
+        "I will change the config myself later. Don't touch anything.",
+        "What a mess. Don't touch anything.",
+        "How are you today? Don't touch anything.",
+        # The investigation is two sentences back, not the one before the ban.
+        "Find out why test_foo.py fails. I will look myself first. "
+        "Don't touch anything.",
+        "Don't touch anything.",
+    ],
+)
+def test_a_touch_ban_without_an_investigation_still_bars_looking(request_text):
+    assert _asks_for_no_action(request_text)
+    assert _asks_not_to_look(request_text)
 
 
 @pytest.mark.parametrize(
