@@ -134,3 +134,44 @@ async def test_a_re_index_that_cannot_be_saved_says_why(db, tmp_path):
     failed = db.get_document(doc_a["id"])
     assert failed["indexing_status"] == "failed"
     assert failed["last_error"] and "b.txt" in failed["last_error"]
+
+
+def test_a_chat_keeps_the_edited_file_and_a_stale_failure_is_cleared(db, tmp_path):
+    path = tmp_path / "notes.md"
+    path.write_text("v1", encoding="utf-8")
+    doc = _add(db, path)
+    session = db.create_session(title="t")
+    db.attach_document(session["id"], doc["id"])
+    db.update_document_status(doc["id"], "failed", last_error="stale")
+    _edit(path, "v2")
+
+    again = _add(db, path)
+
+    assert again["id"] == doc["id"]
+    assert again["indexing_status"] == "complete" and not again["last_error"]
+    assert [d["id"] for d in db.get_session_documents(session["id"])] == [doc["id"]]
+
+
+@pytest.mark.asyncio
+async def test_a_re_index_that_raises_says_why(db, tmp_path):
+    path = tmp_path / "broken.md"
+    path.write_text("v1", encoding="utf-8")
+    doc = _add(db, path)
+    _edit(path, "v2")
+
+    async def index(_filepath) -> int:
+        raise RuntimeError("embedder unreachable")
+
+    monitor = DocumentMonitor(db=db, index_fn=index, interval=0.1)
+    await monitor.start()
+    try:
+        for _ in range(100):
+            if db.get_document(doc["id"])["indexing_status"] == "failed":
+                break
+            await asyncio.sleep(0.05)
+    finally:
+        await monitor.stop()
+
+    failed = db.get_document(doc["id"])
+    assert failed["indexing_status"] == "failed"
+    assert "embedder unreachable" in failed["last_error"]
