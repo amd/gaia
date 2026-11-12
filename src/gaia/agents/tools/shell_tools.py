@@ -2825,7 +2825,8 @@ def _short_flags_hold(segment: list, letters: str) -> bool:
     )
 
 
-#: Long options that walk a tree, follow a link, or wait for more input.
+#: Long options that walk a tree, follow a link, wait for more input, or read
+#: the files a list names (``wc --files0-from``).
 _ASKING_LONG_OPTIONS = frozenset(
     {
         "--recursive",
@@ -2835,6 +2836,7 @@ _ASKING_LONG_OPTIONS = frozenset(
         "--devices",
         "--follow",
         "--show-signature",
+        "--files0-from",
     }
 )
 

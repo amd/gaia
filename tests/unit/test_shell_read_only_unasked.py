@@ -686,3 +686,11 @@ def test_endless_reads_devices_and_signatures_ask(host, tmp_path, command):
 def test_a_plain_tail_stays_unasked(host, tmp_path):
     (tmp_path / "notes.txt").write_text("hi\n")
     assert _unasked(host, tmp_path, "tail -n 5 notes.txt")
+
+
+def test_a_list_of_files_to_read_asks(host, tmp_path):
+    # The list can name files outside the allowed folders.
+    (tmp_path / "list").write_text("/etc/hostname\0")
+    assert not _unasked(host, tmp_path, "wc --files0-from list")
+    assert not _unasked(host, tmp_path, "wc -l --files0-from list")
+    assert _unasked(host, tmp_path, "wc -l list")
