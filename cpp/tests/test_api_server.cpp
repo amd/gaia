@@ -199,6 +199,32 @@ TEST(ApiServerTest, ApiKeyRequiredAcceptedAndRejected) {
     EXPECT_EQ(h.mock.requestCount(), 0);
 }
 
+TEST(ApiServerTest, ARefusedRequestWithABodyStillGetsItsStatus) {
+    // Refusing before the body is read resets the connection about one time in six.
+    ServerOptions o;
+    o.apiKey = "s3cret";
+    Harness h(o);
+    const std::string big = chatBody(userOnly(std::string(200000, 'x')));
+    for (int i = 0; i < 60; ++i) {
+        // A fresh connection each time: the server may close one after refusing on it.
+        auto unauthorized = h.client().Post("/v1/chat/completions", big, "application/json");
+        ASSERT_TRUE(unauthorized) << "connection lost on attempt " << i;
+        EXPECT_EQ(unauthorized->status, 401);
+        auto wrongType =
+            h.client().Post("/v1/chat/completions", {{"Authorization", "Bearer s3cret"}}, big, "text/plain");
+        ASSERT_TRUE(wrongType) << "connection lost on attempt " << i;
+        EXPECT_EQ(wrongType->status, 415);
+        auto foreign =
+            h.client().Post("/v1/chat/completions", {{"Origin", "http://evil.example"}}, big, "application/json");
+        ASSERT_TRUE(foreign) << "connection lost on attempt " << i;
+        EXPECT_EQ(foreign->status, 403);
+        auto deleteWithBody = h.client().Delete("/sessions/abc", big, "application/json");
+        ASSERT_TRUE(deleteWithBody) << "connection lost on attempt " << i;
+        EXPECT_EQ(deleteWithBody->status, 401);
+    }
+    EXPECT_EQ(h.mock.requestCount(), 0);
+}
+
 TEST(ApiServerTest, NoCorsByDefaultAndForeignOriginRejected) {
     Harness h;
     auto cli = h.client();
