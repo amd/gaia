@@ -1262,6 +1262,19 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`a skills search that matches nothing says so (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        const search = page.locator('.settings-pane input[type="search"]');
+        await search.fill('zzzz');
+        // Not a blank pane (#7410).
+        await expect(page.locator('.settings-pane [role="status"]')).toBeVisible();
+        await expect(page.locator('.settings-pane .link-btn')).toBeVisible();
+        await shot(page, `skills-search-none-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`Local only blocks cloud model picker (${locale})`, async ({ page }) => {
         await openModelPage(page, locale, { localOnly: true });
         const cloud = page.getByRole('radio', { name: /Fireworks AI/ });

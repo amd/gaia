@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import type { MessageKey, Params } from '../../i18n/registry';
@@ -27,14 +27,22 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
     const [invalid, setInvalid] = useState<Record<string, string>>({});
     const [error, setError] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    const search = useRef<HTMLInputElement>(null);
+    const active = useRef(true);
 
-    useEffect(() => {
-        let cancelled = false;
+    const load = useCallback(() => {
         api.listSkills()
-            .then((r) => { if (!cancelled) { setSkills(r.skills); setInvalid(r.invalid); } })
-            .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); });
-        return () => { cancelled = true; };
+            .then((r) => { if (active.current) { setSkills(r.skills); setInvalid(r.invalid); setError(null); } })
+            .catch((err) => { if (active.current) setError(err instanceof Error ? err.message : String(err)); });
     }, []);
+
+    // Read again when the window comes back, so a skill folder added meanwhile shows up.
+    useEffect(() => {
+        active.current = true;
+        load();
+        window.addEventListener('focus', load);
+        return () => { active.current = false; window.removeEventListener('focus', load); };
+    }, [load]);
 
     const q = query.trim().toLowerCase();
     const shown = (skills ?? []).filter((s) => !q || s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q));
@@ -46,8 +54,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
         <li key={s.name} className="skill-row">
             <div className="skill-row-text">
                 <span className="skill-row-name">
-                    {s.name}
-                    {s.version && <span className="skill-row-meta"> v{s.version}</span>}
+                    <span title={s.version ? `v${s.version}` : undefined}>{s.name}</span>
                     {s.always_on && <span className="skill-row-meta"> · {t('settings.skills.alwaysOn')}</span>}
                 </span>
                 <span className="skill-row-desc"><bdi>{s.description}</bdi></span>
@@ -77,6 +84,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
             {!skills && !error && <p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}
             {skills && skills.length > 6 && (
                 <input
+                    ref={search}
                     className="settings-input"
                     type="search"
                     value={query}
@@ -86,12 +94,20 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                 />
             )}
             {skills && skills.length === 0 && <p className="settings-hint">{t('settings.skills.none')}</p>}
+            {q && skills && skills.length > 0 && shown.length === 0 && (
+                <p className="settings-hint" role="status">
+                    {t('settings.skills.noMatch', { query: query.trim() })}{' '}
+                    <button type="button" className="link-btn" onClick={() => { setQuery(''); search.current?.focus(); }}>
+                        {t('settings.skills.clearSearch')}
+                    </button>
+                </p>
+            )}
             {grouped ? GROUPS.map((g) => {
                 const rows = shown.filter((s) => s.source === g.source);
                 const total = (skills ?? []).filter((s) => s.source === g.source).length;
                 if (rows.length === 0 && (q || !g.empty)) return null;
                 return (
-                    <SettingsDisclosure key={g.source} title={t(g.title)} count={total} hint={t(g.note, g.params)} defaultOpen={g.source === 'user'} forceOpen={!!q}>
+                    <SettingsDisclosure key={g.source} title={t(g.title)} count={total} hint={t(g.note, g.params)} defaultOpen={g.source === 'agent-bundled' || (g.source === 'user' && total > 0)} forceOpen={!!q}>
                         <section aria-label={t(g.title)}>
                             {rows.length === 0 ? <p className="settings-hint">{g.empty && t(g.empty, g.params)}</p> : <ul className="skill-list">{rows.map(renderRow)}</ul>}
                         </section>
