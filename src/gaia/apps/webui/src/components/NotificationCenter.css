@@ -77,16 +77,13 @@
 }
 
 /* ── Filter Bar ──────────────────────────────────────────────────────── */
+/* Tabs wrap to a second line rather than run off the panel's edge. */
 .notification-filter-bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 2px;
   padding: 8px 12px;
   border-bottom: 1px solid var(--border-light);
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.notification-filter-bar::-webkit-scrollbar {
-  display: none;
 }
 
 .notification-filter-tab {
