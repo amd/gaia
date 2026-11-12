@@ -93,6 +93,8 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound, canInstall
     const [busy, setBusy] = useState<'external' | 'gaia' | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [chosen, setChosen] = useState<'external' | 'gaia' | null>(null);
+    // GAIA's own runs the version GAIA is tested with, so it is the one preselected.
+    const [pick, setPick] = useState<'external' | 'gaia'>('gaia');
 
     const live = useRef(true);
     const detect = useCallback(async () => {
@@ -198,15 +200,37 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound, canInstall
             </p>
         );
     }
+    const options: Array<{ mode: 'gaia' | 'external'; title: MessageKey; note: MessageKey }> = [
+        { mode: 'gaia', title: 'setup.offer.useOwn', note: 'setup.offer.ownNote' },
+        { mode: 'external', title: 'setup.offer.useMine', note: 'setup.offer.mineNote' },
+    ];
     return (
-        <form id="setup-lemonade-form" className="setup-lemonade" aria-label={t('setup.offer.label')} onSubmit={(e) => { e.preventDefault(); void choose('external'); }}>
-            <span className="setup-choice-title">{t('setup.offer.title')}</span>
-            <span className="setup-choice-note"><bdi dir="ltr">Lemonade{found.version ? ` ${found.version}` : ''} · {found.url}</bdi></span>
+        <form id="setup-lemonade-form" className="setup-lemonade" aria-label={t('setup.offer.label')} onSubmit={(e) => { e.preventDefault(); void choose(pick); }}>
+            <fieldset className="setup-choices" disabled={!!busy}>
+                <legend className="setup-choice-title">{t('setup.offer.title')}</legend>
+                {options.map((o) => (
+                    <label key={o.mode} className={`setup-choice${pick === o.mode ? ' is-active' : ''}`}>
+                        <input type="radio" name="setup-server" value={o.mode} checked={pick === o.mode} onChange={() => { setPick(o.mode); setError(null); }} />
+                        <span>
+                            <span className="setup-choice-title">
+                                {t(o.title)}
+                                {o.mode === 'gaia' && <span className="setup-choice-tag">{t('setup.offer.recommended')}</span>}
+                            </span>
+                            <span className="setup-choice-note">{t(o.note)}</span>
+                        </span>
+                    </label>
+                ))}
+            </fieldset>
             <button type="button" className="setup-log-toggle setup-offer-more" onClick={() => setMore((m) => !m)} aria-expanded={more} aria-controls="setup-offer-detail">
                 <ChevronRight size={13} className={more ? 'is-open' : ''} aria-hidden="true" /> {t('setup.offer.whatGaiaDoes')}
             </button>
-            {more && <p className="setup-choice-note" id="setup-offer-detail">{t('setup.offer.whatGaiaDoesText')}</p>}
-            {needsKey && (
+            {more && (
+                <div id="setup-offer-detail">
+                    <p className="setup-choice-note"><bdi dir="ltr">Lemonade{found.version ? ` ${found.version}` : ''} · {found.url}</bdi></p>
+                    <p className="setup-choice-note">{t('setup.offer.whatGaiaDoesText')}</p>
+                </div>
+            )}
+            {pick === 'external' && needsKey && (
                 <input
                     className="settings-input"
                     type="password"
@@ -218,15 +242,12 @@ function ExistingLemonadeOffer({ onChosen, onNothingToOffer, onFound, canInstall
                 />
             )}
             {/* A rejected key names the setting it came from; say what to do instead. */}
-            {error && (needsKey
+            {error && (needsKey && pick === 'external'
                 ? <p className="setup-error" role="alert">{t('setup.offer.keyRejected')}</p>
                 : <SetupAlert text={error} />)}
             <SetupFooter>
-                <button type="submit" form="setup-lemonade-form" className="btn-secondary" disabled={!!busy || (needsKey && !key.trim())}>
-                    {busy === 'external' && <Loader2 size={13} className="spin" />} {t('setup.offer.useMine')}
-                </button>
-                <button type="button" className="btn-primary" disabled={!!busy} onClick={() => void choose('gaia')}>
-                    {busy === 'gaia' && <Loader2 size={13} className="spin" />} {t('setup.offer.useOwn')}
+                <button type="submit" form="setup-lemonade-form" className="btn-primary" disabled={!!busy || (pick === 'external' && needsKey && !key.trim())}>
+                    {busy && <Loader2 size={13} className="spin" />} {t('setup.continue')}
                 </button>
             </SetupFooter>
         </form>
@@ -293,7 +314,7 @@ function RunError({ run }: { run: SetupRunStatus }) {
     }
     return (
         <div className="setup-error" role="alert">
-            {/* GAIA's own AI engine is downloaded first, so a failure there is usually the internet. */}
+            {/* GAIA's own model server is downloaded first, so a failure there is usually the internet. */}
             <p>{t(run.components?.server === 'failed' ? 'setup.server.ownFailed' : 'setup.stopped')}</p>
             {run.error && (
                 <details className="dl-details">

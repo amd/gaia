@@ -866,7 +866,7 @@ describe('SetupScreen: downloading', () => {
         const list = within(await screen.findByRole('region', { name: 'Everything being set up' }));
         expect(list.getByText('Graphics support').closest('li')).toHaveTextContent('From github.com/ggml-org/llama.cpp');
         expect(list.getByText('Graphics support').closest('li')).toHaveTextContent('In progress');
-        expect(list.getByText("AI engine").closest('li')).toHaveTextContent('Ready');
+        expect(list.getByText("Model server").closest('li')).toHaveTextContent('Ready');
     });
 
     it('says why a component failed on its row and reruns setup from a Retry there', async () => {
@@ -1496,6 +1496,13 @@ describe('SetupScreen: cloud', () => {
 });
 
 describe('SetupScreen: a Lemonade the user already runs', () => {
+    const FORM = 'Which model server GAIA uses';
+    const pickMine = () => fireEvent.click(screen.getByRole('radio', { name: /^Use the one I have/ }));
+    const proceed = () => fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    const useMine = () => {
+        pickMine();
+        proceed();
+    };
     async function offer(found: LemonadeFound | null) {
         mockedApi.getLemonadeTarget.mockResolvedValue(TARGET);
         mockedApi.detectLemonade.mockResolvedValue({ found });
@@ -1504,39 +1511,53 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         await screen.findByRole('region', { name: 'What setup found' });
     }
 
-    it('offers it with what GAIA does there, and saves the URL on Use mine', async () => {
+    it('asks with two choices, each saying what it means, and keeps the address in the details', async () => {
         await offer(FOUND);
-        expect(await screen.findByRole('form', { name: 'Use your Lemonade Server' }))
-            .toHaveTextContent("GAIA found an AI engine already running on this PC. Use it, or install GAIA's own?Lemonade 10.3.0 · http://localhost:13305/api/v1");
-        // The detail waits behind its own chevron; the choice is what shows.
+        const form = await screen.findByRole('form', { name: FORM });
+        expect(within(form).getByRole('group', { name: 'This PC already runs a model server. Which one should GAIA use?' })).toBeInTheDocument();
+        const own = screen.getByRole('radio', { name: /^Install GAIA's own/ });
+        const mine = screen.getByRole('radio', { name: /^Use the one I have/ });
+        expect(own).toBeChecked();
+        expect(own.closest('label')).toHaveTextContent("Install GAIA's ownRecommendedThe version GAIA is tested with");
+        expect(mine.closest('label')).toHaveTextContent('Keeps one copy of each model.');
+        expect(mine.closest('label')).not.toHaveTextContent('Recommended');
+        // One name in setup: no "AI engine", and the address waits behind the chevron.
+        expect(document.body.textContent).not.toMatch(/AI engine/);
+        expect(form).not.toHaveTextContent('http://localhost:13305');
         const plain = "GAIA downloads and runs its models on your server. It leaves your server's settings and your own models as they are.";
-        expect(screen.queryByText(plain)).toBeNull();
-        const more = screen.getByRole('button', { name: 'What GAIA does on your server' });
+        const more = screen.getByRole('button', { name: 'About your model server' });
         expect(more).toHaveAttribute('aria-expanded', 'false');
         fireEvent.click(more);
         expect(screen.getByText(plain)).toBeInTheDocument();
-        fireEvent.click(screen.getByRole('button', { name: 'Use the one I have' }));
+        expect(form).toHaveTextContent('Lemonade 10.3.0 · http://localhost:13305/api/v1');
+    });
+
+    it('saves the URL when the user picks theirs', async () => {
+        await offer(FOUND);
+        await screen.findByRole('form', { name: FORM });
+        useMine();
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(
             { mode: 'external', base_url: FOUND.url, api_key: undefined },
         ));
-        expect(await screen.findByText(/GAIA will use the AI engine at http:\/\/localhost:13305\/api\/v1/)).toBeInTheDocument();
+        expect(await screen.findByText(/GAIA will use your model server at http:\/\/localhost:13305\/api\/v1/)).toBeInTheDocument();
     });
 
-    it('puts the server choice in the bottom bar, GAIA\'s own last and primary, with Continue back once it is made', async () => {
+    it('says the checks wait on the choice, and keeps one Continue in the bottom bar', async () => {
         await offer(FOUND);
-        await screen.findByRole('form', { name: 'Use your Lemonade Server' });
+        await screen.findByRole('form', { name: FORM });
+        expect(await screen.findByText('Waiting for your choice below')).toBeInTheDocument();
         const bar = () => [...(document.querySelector('.setup-footer') as HTMLElement).querySelectorAll('button')].map((b) => b.textContent?.trim());
-        await waitFor(() => expect(bar()).toEqual(['Use the one I have', "Install GAIA's own"]));
-        expect(screen.getByRole('button', { name: "Install GAIA's own" })).toHaveClass('btn-primary');
-        expect(screen.getByRole('button', { name: 'Use the one I have' })).toHaveClass('btn-secondary');
-        fireEvent.click(screen.getByRole('button', { name: "Install GAIA's own" }));
+        await waitFor(() => expect(bar()).toEqual(['Continue']));
+        expect(screen.getByRole('button', { name: 'Continue' })).toHaveClass('btn-primary');
+        proceed();
+        await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith({ mode: 'gaia' }));
         await waitFor(() => expect(bar()).toEqual(['Continue']));
     });
 
     it('keeps the Checks log free of unknown values and of a server verdict before the choice', async () => {
         mockedApi.getOnboardingPreflight.mockResolvedValue(HARDWARE);
         await offer(FOUND);
-        await screen.findByRole('form', { name: 'Use your Lemonade Server' });
+        await screen.findByRole('form', { name: FORM });
         fireEvent.click(screen.getByRole('button', { name: 'Checks log' }));
         await screen.findByText(/Waiting for you to choose which Lemonade GAIA uses/);
         const text = document.querySelector('.setup-log-pre')?.textContent ?? '';
@@ -1548,8 +1569,9 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
     it('reads the device and the models again from their server', async () => {
         await offer(FOUND);
         const plans = mockedApi.getSetupPlan.mock.calls.length;
-        fireEvent.click(await screen.findByRole('button', { name: 'Use the one I have' }));
-        await screen.findByText(/GAIA will use the AI engine at/);
+        await screen.findByRole('form', { name: FORM });
+        useMine();
+        await screen.findByText(/GAIA will use your model server at/);
         await waitFor(() => expect(mockedApi.getSetupPlan.mock.calls.length).toBeGreaterThan(plans));
         expect(mockedApi.getOnboardingPreflight).toHaveBeenCalledTimes(2);
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
@@ -1581,22 +1603,27 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
 
     it("saves GAIA's own when declined", async () => {
         await offer(FOUND);
-        fireEvent.click(await screen.findByRole('button', { name: /Install GAIA.s own/ }));
+        await screen.findByRole('form', { name: FORM });
+        proceed();
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith({ mode: 'gaia' }));
-        expect(await screen.findByText('GAIA will install its own AI engine.')).toBeInTheDocument();
+        expect(await screen.findByText('GAIA will install its own model server.')).toBeInTheDocument();
     });
 
     it('asks for the key a protected server needs, and never shows it back', async () => {
         await offer({ ...FOUND, status: 'needs_key' });
-        const key = await screen.findByLabelText('Lemonade API key');
+        await screen.findByRole('form', { name: FORM });
+        // The key belongs to their server: asked for once it is the one picked.
+        expect(screen.queryByLabelText('Model server API key')).toBeNull();
+        pickMine();
+        const key = screen.getByLabelText('Model server API key');
         expect(key).toHaveAttribute('type', 'password');
-        expect(screen.getByRole('button', { name: 'Use the one I have' })).toBeDisabled();
+        expect(screen.getByRole('button', { name: 'Continue' })).toBeDisabled();
         fireEvent.change(key, { target: { value: 'sk-secret' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Use the one I have' }));
+        proceed();
         await waitFor(() => expect(mockedApi.setLemonadeTarget).toHaveBeenCalledExactlyOnceWith(
             { mode: 'external', base_url: FOUND.url, api_key: 'sk-secret' },
         ));
-        await screen.findByText(/GAIA will use the AI engine at/);
+        await screen.findByText(/GAIA will use your model server at/);
         expect(document.body.textContent).not.toContain('sk-secret');
     });
 
@@ -1604,10 +1631,11 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         await offer(FOUND);
         const message = 'The Lemonade Server at http://localhost:13305/api/v1 rejected the API key. Check the key it was started with (its LEMONADE_API_KEY).';
         mockedApi.setLemonadeTarget.mockRejectedValue(Object.assign(new Error(message), { reason: 'bad_key' }));
-        fireEvent.click(await screen.findByRole('button', { name: 'Use the one I have' }));
+        await screen.findByRole('form', { name: FORM });
+        useMine();
         expect(await screen.findByRole('alert')).toHaveTextContent("That key wasn't accepted.");
         expect(screen.queryByText(/LEMONADE_API_KEY/)).toBeNull();
-        expect(screen.getByLabelText('Lemonade API key')).toBeInTheDocument();
+        expect(screen.getByLabelText('Model server API key')).toBeInTheDocument();
     });
 
     it("says it couldn't check a server that didn't answer in time, and checks again", async () => {
@@ -1617,9 +1645,9 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
             .mockResolvedValueOnce({ found: FOUND, unchecked: [] });
         renderSetup();
         await screen.findByRole('region', { name: 'What setup found' });
-        expect(await screen.findByText(/Couldn.t check whether your Lemonade Server at http:\/\/localhost:13305\/api\/v1 is running/)).toBeInTheDocument();
+        expect(await screen.findByText(/Couldn.t check whether your model server at http:\/\/localhost:13305\/api\/v1 is running/)).toBeInTheDocument();
         fireEvent.click(screen.getByRole('button', { name: /Check again/ }));
-        expect(await screen.findByRole('button', { name: 'Use the one I have' })).toBeInTheDocument();
+        expect(await screen.findByRole('radio', { name: /^Use the one I have/ })).toBeInTheDocument();
     });
 
     it('says plainly that a too-old server is left alone and GAIA installs its own, with nothing to do', async () => {
@@ -1628,7 +1656,7 @@ describe('SetupScreen: a Lemonade the user already runs', () => {
         expect(await screen.findByText(/older than GAIA needs, so GAIA installs its own\. Yours stays as it is\./)).toBeInTheDocument();
         // The backend's English sentence, with its upgrade instruction, never reaches the screen.
         expect(screen.queryByText(/Upgrade it/)).not.toBeInTheDocument();
-        expect(screen.queryByRole('button', { name: 'Use the one I have' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: /^Use the one I have/ })).not.toBeInTheDocument();
         await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toBeInTheDocument());
     });
 
