@@ -4,8 +4,9 @@
 """What cloud models cost, what this month's cloud chats spent, and the limit.
 
 Prices are list prices from the one rate card GAIA keeps
-(:mod:`gaia.eval.bench.metering`), so the price shown before a model is picked,
-the cost recorded after a turn, and the turn's own estimate all agree. A model
+(:mod:`gaia.eval.bench.metering`), cached input at its cached rate, so the price
+shown before a model is picked, the cost recorded after a turn, and the turn's
+own estimate all agree. A model
 with no card has an unknown price: it is shown as unknown and counted apart,
 never as $0. A priced turn whose usage never came back (a stopped answer) is
 counted apart the same way, as unreported rather than unpriced.
@@ -66,13 +67,15 @@ def price_card(model_id: str) -> Optional[Dict[str, Any]]:
     }
 
 
-def turn_cost(model_id: str, input_tokens: int, output_tokens: int) -> Optional[float]:
-    """List-price dollars for one turn, without cache discounts; None if unknown."""
+def turn_cost(
+    model_id: str, input_tokens: int, output_tokens: int, cached_tokens: int = 0
+) -> Optional[float]:
+    """List-price dollars for one turn, cached input at the cached rate; None if unknown."""
     if price_card(model_id) is None:
         return None
     from gaia.eval.bench.metering import price
 
-    return price(model_id, input_tokens, 0, output_tokens)
+    return price(model_id, input_tokens, cached_tokens, output_tokens)
 
 
 def record_turn(db, model_id: Optional[str], stats: Optional[Dict[str, Any]]) -> None:
@@ -84,7 +87,13 @@ def record_turn(db, model_id: Optional[str], stats: Optional[Dict[str, Any]]) ->
     inp, out = stats.get("input_tokens"), stats.get("output_tokens")
     usd = None
     if isinstance(inp, int) and isinstance(out, int):
-        usd = turn_cost(model_id, inp, out)
+        cached = stats.get("cached_tokens")
+        # A count that can't be part of this input is priced as uncached.
+        if isinstance(cached, bool) or not isinstance(cached, int):
+            cached = 0
+        cached = cached if 0 <= cached <= inp else 0
+        # Priced as each answer's own estimate is, so the month and "today" agree.
+        usd = turn_cost(model_id, inp, out, cached)
     else:
         # Counted as a turn of unknown cost, so the total never looks smaller.
         log.warning(

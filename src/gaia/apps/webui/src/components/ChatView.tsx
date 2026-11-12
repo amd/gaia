@@ -212,7 +212,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const stepIdRef = useRef(0);
     /** The agent's own step number for the live turn, from its `step` events. */
     const toolOccurredRef = useRef(false);
-    const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
+    const sendMessageRef = useRef<(text?: string, options?: SendOptions) => Promise<boolean>>(async () => false);
     const checkingModelRef = useRef(false);
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
     const queue = useChatStore((s) => s.messageQueues[sessionId] ?? NO_QUEUE);
@@ -348,14 +348,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const pending = pendingPrompt?.text;
         // Wait for the history load, or it would replace the message just sent;
         // and for GAIA to start, or the send would refuse a message already taken.
-        if (!pending || useChatStore.getState().isLoadingMessages || initializing) return;
-        useChatStore.getState().setPendingPrompt(null);
+        if (!pending || pendingPrompt.sending || useChatStore.getState().isLoadingMessages || initializing) return;
+        // Marked, not cleared, so New chat in the tick before the send can still take it back.
+        const handed = { ...pendingPrompt, sending: true };
+        useChatStore.getState().setPendingPrompt(handed);
         openingRef.current = true;
         // A timer, not rAF: rAF never fires while the window is hidden, and
-        // clearing the prompt re-runs this effect, so no cleanup may cancel it.
+        // marking the prompt re-runs this effect, so no cleanup may cancel it.
         setTimeout(() => {
             openingRef.current = false;
-            if (mountedRef.current) sendMessageRef.current(pending, { opening: true });
+            const store = useChatStore.getState();
+            if (store.pendingPrompt !== handed) return;
+            if (!mountedRef.current) {
+                // Left for another chat: it goes out when this one is opened again.
+                store.setPendingPrompt({ sessionId: handed.sessionId, text: handed.text });
+                return;
+            }
+            store.setPendingPrompt(null);
+            sendMessageRef.current(pending, { opening: true });
         }, 0);
     }, [pendingPrompt, isLoadingMessages, initializing]);
 
@@ -506,8 +516,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => window.removeEventListener('keydown', handler);
     }, [isStreaming, handleStop]);
 
-    /** With no text, sends the composer's draft and empties the box; given text is sent as is and the box is left alone. */
-    const sendMessage = useCallback(async (givenText?: string, options?: SendOptions) => {
+    /**
+     * With no text, sends the composer's draft and empties the box; given text is sent as is and the box is left alone.
+     * Resolves false when the message was neither sent nor queued.
+     */
+    const sendMessage = useCallback(async (givenText?: string, options?: SendOptions): Promise<boolean> => {
         // attach=true re-subscribes to a run already in flight server-side
         // (revisiting a backgrounded session, #1580). It reuses the entire
         // stream-event handling below but skips composing/sending a new turn:
@@ -534,37 +547,38 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
-        const isInitializing = isStarting(systemStatus);
+        // The store, not this render's copy: a resend re-reads the status just before it calls.
+        const isInitializing = isStarting(useChatStore.getState().systemStatus);
         const notTaken = (outcome: SendOutcome) => { if (fromQueue) options?.onQueuedOutcome?.(outcome); };
         if (!reattach && retiredAgent) {
             log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
             notTaken({ kind: 'failed', error: `This chat's "${retiredAgent}" agent was retired, so it cannot take new messages.` });
-            return;
+            return false;
         }
         // Waiting messages go first, so a new one joins the end of the line.
         const waiting = !options?.opening && (useChatStore.getState().messageQueues[sessionId] ?? NO_QUEUE).length > 0;
         if (reattach) {
             // Don't double-attach if a stream is already live in this view.
-            if (isStreaming && !reconnect) return;
+            if (isStreaming && !reconnect) return false;
         } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
             const queued = takeDraft();
             setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
-            return;
+            return true;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             notTaken({ kind: 'busy' });
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
             if (isInitializing) log.chat.debug('Send blocked: system initializing');
-            return;
+            return false;
         }
 
         // Asked here so a send that was going to be queued or refused asks nothing.
         if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!hasImage || modelKnownReady('vision')))) {
-            if (checkingModelRef.current) return;
+            if (checkingModelRef.current) return false;
             checkingModelRef.current = true;
             try {
-                if (!(await ensureModel('chat')) || (hasImage && !(await ensureModel('vision')))) return;
+                if (!(await ensureModel('chat')) || (hasImage && !(await ensureModel('vision')))) return false;
             } finally {
                 checkingModelRef.current = false;
             }
@@ -1217,6 +1231,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         streamController = controller;
         abortRef.current = controller;
+        return true;
     }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, removeMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
@@ -1298,7 +1313,32 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const text = message.content;
         log.chat.info(`Resending message ${message.id} from session=${sessionId}`, { preview: text.slice(0, 80) });
 
+        const notify = (detail: string) => addNotification({
+            id: `resend-failed-${sessionId}-${Date.now()}`,
+            type: 'error',
+            agentId: sessionId,
+            agentName: 'GAIA',
+            title: t('chatError.resendFailed'),
+            message: detail,
+            timestamp: Date.now(),
+            read: false,
+            dismissed: false,
+            priority: 'high',
+            sessionId,
+        });
+
         try {
+            // The old turn is deleted below, so first make sure the new one can start.
+            if (isStarting(useChatStore.getState().systemStatus)) {
+                // Read while a restarted backend booted, the status may be stale.
+                const status = await api.getSystemStatus();
+                useChatStore.getState().setSystemStatus(status);
+                if (isStarting(status)) {
+                    notify(t('chatError.resendStarting'));
+                    return;
+                }
+            }
+            if (!modelKnownReady('chat') && !(await ensureModel('chat'))) return;
             // The shown id may still be the temporary one; delete the server's own row.
             const data = await api.getMessages(sessionId);
             if (isStale()) return;
@@ -1325,27 +1365,22 @@ export function ChatView({ sessionId }: ChatViewProps) {
             log.chat.error(`Could not resend message ${message.id} in session=${sessionId}`, err);
             const cause = err instanceof Error ? classifyChatError(err) : null;
             const lost = cause?.kind === 'connection' || cause?.kind === 'timeout';
-            addNotification({
-                id: `resend-failed-${sessionId}-${Date.now()}`,
-                type: 'error',
-                agentId: sessionId,
-                agentName: 'GAIA',
-                title: t('chatError.resendFailed'),
-                message: lost ? cause.text : t('chatError.resendStale'),
-                timestamp: Date.now(),
-                read: false,
-                dismissed: false,
-                priority: 'high',
-                sessionId,
-            });
+            notify(lost ? cause.text : t('chatError.resendStale'));
             return;
         } finally {
             resendingRef.current = false;
         }
 
         removeMessagesFrom(message.id);
-        sendMessage(text);
-    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, setQueue, sendMessage, isStale, addNotification, t]);
+        // Its old turn is gone from the server: if it can't go now, it waits in line, never vanishes.
+        let sent = false;
+        try {
+            sent = await sendMessageRef.current(text);
+        } catch (err) {
+            log.chat.error(`Could not resend message ${message.id} in session=${sessionId}; queued it`, err);
+        }
+        if (!sent) setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, setQueue, isStale, addNotification, t]);
 
     // This view sends its chat's queue while open; the background dispatcher does it otherwise.
     useEffect(() => claimView(sessionId), [sessionId]);

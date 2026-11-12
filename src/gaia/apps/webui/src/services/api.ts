@@ -402,6 +402,11 @@ export async function connectProviderWaitingForOs(
     }
 }
 
+/** After the user closed the OS key store's unlock prompt: let GAIA ask once more. */
+export async function retryKeyStore(): Promise<{ retrying: boolean }> {
+    return apiFetch('POST', '/providers/key-store/retry');
+}
+
 export async function forgetProviderKey(provider: string): Promise<{ removed: boolean }> {
     return apiFetch('DELETE', `/providers/${encodeURIComponent(provider)}/key`);
 }

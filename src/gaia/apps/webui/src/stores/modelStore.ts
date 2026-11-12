@@ -303,7 +303,7 @@ export function inferencePlace(
     if (active?.remote && !(pickIsStale && location?.inference_remote !== undefined)) {
         return {
             remote: true,
-            label: active.provider === 'fireworks' ? 'Fireworks AI' : 'AMD LLM Gateway',
+            label: active.provider_name || 'a cloud provider',
             description: null,
         };
     }

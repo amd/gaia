@@ -683,12 +683,20 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
         stepTo('models');
     }, [stepTo, running, viewing]);
 
-    const useCloud = useCallback(() => {
+    const toCloud = useCallback((provider: 'fireworks' | 'amd') => {
         if (running && viewing != null) return;
         setCustomizing(false);
-        setChoice(readChoice() === 'amd' ? 'amd' : 'fireworks');
+        setChoice(provider);
         stepTo('key');
     }, [stepTo, running, viewing]);
+    const useCloud = useCallback(() => toCloud(readChoice() === 'amd' ? 'amd' : 'fireworks'), [toCloud]);
+
+    // Chat already runs in the cloud: carry on there rather than recommend a local download.
+    const inUseCloud = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.provider : null));
+    const continueFromChecks = useCallback(() => {
+        if (inUseCloud) toCloud(inUseCloud);
+        else stepTo('plan');
+    }, [inUseCloud, toCloud, stepTo]);
 
     const showGpu = !!gpu?.applies;
     const backOne = useCallback(() => {
@@ -1002,7 +1010,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             {checksDone && plan && <DetectedSummary plan={plan} hardware={hardware} onChangeMemory={showGpu && viewing == null ? () => openGpu('check') : undefined} />}
                             {checksDone && viewing == null && !(lemonadeFound && !lemonadeSettled) && (
                                 <SetupFooter>
-                                    <button type="button" className="btn-primary" onClick={() => stepTo('plan')}>{t('setup.continue')}</button>
+                                    <button type="button" className="btn-primary" onClick={continueFromChecks}>{t('setup.continue')}</button>
                                 </SetupFooter>
                             )}
                             {serverRun && runFailed && (
