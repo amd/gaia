@@ -210,6 +210,7 @@ from gaia.llm.retry import (
     describe_retry_state,
     model_retry_notices,
     retry_state_of,
+    stopped_by_user,
 )
 from gaia.llm.surface_hints import TUI_SERVER_RESTART_HINT as SERVER_RESTART_HINT
 from gaia.logger import get_logger
@@ -3214,6 +3215,8 @@ Do NOT wrap conversational replies in JSON.
         # Rebuilt by every process_query; None before the first turn.
         self._extraction_ledger: Optional[ExtractionLedger] = None
         self._completion_evidence: Optional[CompletionEvidence] = None
+        # Backups this session's edits made (keys, file names), across turns.
+        self._session_backups: Tuple[set, set] = (set(), set())
 
         # Declarative skills: compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -10981,8 +10984,10 @@ Do NOT wrap conversational replies in JSON.
             return user_input
         note = (
             f"[GAIA: the user's message is {len(raw):,} characters long. Its full "
-            f"text is saved at {path}. To count, search or process it, read that "
-            "file with a tool; never copy the message into a tool call.]"
+            f"text is saved at {path}, exactly as typed: the file holds the "
+            "request itself too, not only the text it is about. To count, search "
+            "or process it, read that file with a tool; never copy the message "
+            "into a tool call.]"
         )
         return f"{note}\n\n{user_input}"
 
@@ -11168,6 +11173,7 @@ Do NOT wrap conversational replies in JSON.
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
             validator=self._read_validator(),
+            backups=self._session_backups,
         )
         # Files edited this turn, so an empty response can name what it left
         # behind. Per-turn: an instance persists across queries.
@@ -11828,7 +11834,10 @@ Do NOT wrap conversational replies in JSON.
                         cancelled_by_console = True
                         break
                     except Exception as e:
-                        logger.error(f"Unexpected error during streaming: {e}")
+                        if stopped_by_user(e):
+                            logger.info("Streaming stopped by the user: %s", e)
+                        else:
+                            logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
                         # Same rule as the non-streaming branch: only the probe
@@ -12016,7 +12025,10 @@ Do NOT wrap conversational replies in JSON.
                         self.console.stop_progress()
                         if self.debug:
                             print(f"[DEBUG] Error calling LLM: {e}")
-                        logger.error(f"Unexpected error calling LLM: {e}")
+                        if stopped_by_user(e):
+                            logger.info("LLM call stopped by the user: %s", e)
+                        else:
+                            logger.error(f"Unexpected error calling LLM: {e}")
 
                         # Did we hit a context-overflow mid-loop? Classify by
                         # structure-then-text since typed exceptions get

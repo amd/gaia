@@ -2244,11 +2244,28 @@ class TestPrivilegedAdminWriters:
 class TestStreamInferenceModel:
     """Profile inference runs on the machine's default local chat model."""
 
-    def _stream(self, client, tmp_path, default_model, custom_model=None, reply="[]"):
+    def _stream(
+        self,
+        client,
+        tmp_path,
+        default_model,
+        custom_model=None,
+        reply="[]",
+        downloaded=True,
+    ):
+        """``downloaded=None`` leaves the download check to the patched catalog."""
         apps = [{"content": "Installed app: Blender"}]
         fake_llm = MagicMock()
         fake_llm.chat.return_value = reply
         with contextlib.ExitStack() as stack:
+            if downloaded is not None:
+                stack.enter_context(
+                    patch.object(
+                        memory_router_mod,
+                        "_downloaded_on_this_pc",
+                        return_value=downloaded,
+                    )
+                )
             stack.enter_context(patch("sys.platform", "darwin"))
             stack.enter_context(patch("pathlib.Path.home", return_value=tmp_path))
             stack.enter_context(patch("gaia.agents.base.discovery._MACOS_APP_DIRS", ()))
@@ -2365,7 +2382,7 @@ class TestStreamInferenceModel:
 
         create.assert_not_called()
         assert '"type": "error"' in resp.text
-        assert "couldn't confirm" in resp.text
+        assert "couldn't check" in resp.text
         assert "connection refused" not in resp.text
 
     def test_a_router_default_model_is_refused_not_called(self, client, tmp_path):
@@ -2390,7 +2407,7 @@ class TestStreamInferenceModel:
 
         create.assert_not_called()
         assert '"type": "error"' in resp.text
-        assert "couldn't confirm" in resp.text
+        assert "couldn't check" in resp.text
 
     @pytest.mark.parametrize("default_model", ["", "   "])
     def test_an_empty_default_model_fails_closed(self, client, tmp_path, default_model):
@@ -2413,6 +2430,123 @@ class TestStreamInferenceModel:
 
         create.assert_called_once_with(model=lc.DEFAULT_MODEL_NAME)
         assert '"type": "error"' not in resp.text
+
+    @pytest.mark.parametrize(
+        "entry",
+        [
+            {"id": "Gemma-4-E4B-it-GGUF", "downloaded": False},
+            None,
+        ],
+        ids=["listed-not-downloaded", "not-listed"],
+    )
+    def test_a_default_model_not_downloaded_is_refused_not_pulled(
+        self, client, tmp_path, entry
+    ):
+        # #7218: Lemonade pulls a missing model on first use, unasked (5.6 GB).
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"object": "list", "data": [entry] if entry else []}
+        with patch.object(
+            lc.LemonadeClient, "list_models", return_value=payload
+        ) as listing:
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME, downloaded=None
+            )
+
+        listing.assert_called_once_with(show_all=True)
+        create.assert_not_called()
+        assert '"type": "error"' in resp.text
+        assert "isn't downloaded on this PC" in resp.text
+        assert "Manage downloads and disk space" in resp.text
+        assert "Calling local LLM" not in resp.text
+
+    def test_a_downloaded_default_model_runs(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {
+            "object": "list",
+            "data": [{"id": lc.DEFAULT_MODEL_NAME, "downloaded": True}],
+        }
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME, downloaded=None
+            )
+
+        create.assert_called_once_with(model=lc.DEFAULT_MODEL_NAME)
+        assert '"type": "error"' not in resp.text
+
+    def test_a_registered_model_listed_under_its_stripped_id_runs(
+        self, client, tmp_path
+    ):
+        # Lemonade lists ``user.X`` as ``X``; a downloaded copy must not be refused.
+        from gaia.llm import lemonade_client as lc
+
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "Other-Model-GGUF", "downloaded": True},
+                {"id": "my-model-gguf", "downloaded": True},
+            ],
+        }
+        with (
+            patch("gaia.ui._chat_helpers._runs_on_this_pc", return_value=True),
+            patch.object(lc.LemonadeClient, "list_models", return_value=payload),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model="user.My-Model-GGUF", downloaded=None
+            )
+
+        create.assert_called_once_with(model="user.My-Model-GGUF")
+        assert '"type": "error"' not in resp.text
+
+    def test_another_downloaded_model_does_not_count(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        payload = {
+            "object": "list",
+            "data": [
+                {"id": "Qwen3-VL-4B-Instruct-GGUF", "downloaded": True},
+                {"id": lc.DEFAULT_MODEL_NAME, "downloaded": False},
+            ],
+        }
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME, downloaded=None
+            )
+
+        create.assert_not_called()
+        assert "isn't downloaded on this PC" in resp.text
+
+    def test_a_cloud_default_never_reads_the_download_catalog(self, client, tmp_path):
+        with patch.object(
+            memory_router_mod, "_downloaded_on_this_pc", side_effect=AssertionError
+        ) as check:
+            resp, create = self._stream(
+                client,
+                tmp_path,
+                default_model="fireworks.accounts/fireworks/models/x",
+                downloaded=None,
+            )
+
+        check.assert_not_called()
+        create.assert_not_called()
+        assert "choose a local chat model" in resp.text
+
+    def test_an_unreadable_download_check_refuses(self, client, tmp_path):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=lc.LemonadeClientError("connection refused"),
+        ):
+            resp, create = self._stream(
+                client, tmp_path, default_model=lc.DEFAULT_MODEL_NAME, downloaded=None
+            )
+
+        create.assert_not_called()
+        assert "couldn't check" in resp.text
+        assert "connection refused" not in resp.text
 
     def test_a_cut_off_reply_still_streams_its_complete_insights(
         self, client, tmp_path
