@@ -1986,8 +1986,15 @@ _NEGATED_OUTPUT = (
 _NEGATED_SUBJECT_PATTERN = re.compile(
     rf"(?:^|[^\w'-]){_NEGATED_OUTPUT}\s+$", re.IGNORECASE
 )
+# "No files besides notes.md": the exception is a save it claims.
+_SAVE_EXCEPTION = (
+    r"(?:except|besides|other\s+than|apart\s+from|aside\s+from|save\s+for)"
+)
+_SAVE_EXCEPTION_PATTERN = re.compile(rf"\b{_SAVE_EXCEPTION}\b", re.IGNORECASE)
 # "I wrote no file", "I saved nothing": so does its object.
-_NEGATED_OBJECT_PATTERN = re.compile(rf"\s+{_NEGATED_OUTPUT}\b", re.IGNORECASE)
+_NEGATED_OBJECT_PATTERN = re.compile(
+    rf"\s+{_NEGATED_OUTPUT}\b(?!\s+(?:but|{_SAVE_EXCEPTION})\b)", re.IGNORECASE
+)
 
 
 # "... stored as your bookshelf slot", "saved to memory": what was kept is a
@@ -2019,7 +2026,10 @@ def _is_write_claim(sentence: str, denials: bool) -> bool:
         and (
             denials
             or (
-                not _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
+                not (
+                    _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
+                    and not _SAVE_EXCEPTION_PATTERN.search(sentence, match.end())
+                )
                 and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
             )
         )

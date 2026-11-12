@@ -125,6 +125,23 @@ SAVE_CLAIMS = [
         "Your slot is stored in memory, and I saved the list to `slots.txt`.",
         id="memory-then-a-real-save",
     ),
+    # A denial with an exception still claims the exception was saved.
+    pytest.param(
+        "I created no other files besides `notes.md`.",
+        id="no-other-files-besides",
+    ),
+    pytest.param(
+        "I saved nothing but the report to `r.md`.", id="nothing-but-the-report"
+    ),
+    pytest.param("I wrote no files except `summary.md`.", id="no-files-except"),
+    pytest.param(
+        "No other file was written apart from `out/report.md`.",
+        id="negated-subject-apart-from",
+    ),
+    pytest.param(
+        "No files were saved other than results.csv.",
+        id="negated-subject-other-than",
+    ),
 ]
 
 NON_CLAIMS = [

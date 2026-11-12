@@ -452,6 +452,11 @@ FLASH_OPTION_MODEL_NAME = "user.Qwen3.8-Flash-Next-GGUF"
 # agent turn to ship.
 NPU_DEFAULT_MODEL_NAME = "gemma4-it-e4b-FLM"
 
+# Meta's agent-tuned 30B: dense, so it decodes slower than Qwen3.6's 3B-active
+# MoE on Strix Halo, but needs ~24 GB where Qwen needs ~27. A Lemonade built-in
+# (pulled by name). Opt-in only — choose it with `gaia config set default_model`.
+MUSE_GLIMMER_MODEL_NAME = "Muse-Glimmer-30B-GGUF"
+
 # gpt-oss always reasons; its template grades how much. "medium" is the
 # template's own default.
 GPT_OSS_REASONING_EFFORT = "medium"
@@ -482,7 +487,12 @@ def resolve_chat_model() -> str:
 
 #: Default chat models that also read images, so indexing a scan loads no second model.
 VISION_CHAT_MODELS = frozenset(
-    {DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME, FLASH_OPTION_MODEL_NAME}
+    {
+        DEFAULT_MODEL_NAME,
+        LARGE_DEFAULT_MODEL_NAME,
+        FLASH_OPTION_MODEL_NAME,
+        MUSE_GLIMMER_MODEL_NAME,
+    }
 )
 
 
@@ -603,6 +613,7 @@ def downloaded_vision_model(
             DEFAULT_MODEL_NAME,
             LARGE_DEFAULT_MODEL_NAME,
             FLASH_OPTION_MODEL_NAME,
+            MUSE_GLIMMER_MODEL_NAME,
         )
         if not _model_ids_match(name, configured)
         and any(
@@ -1915,6 +1926,9 @@ class ModelRequirement:
     # Sent as ``chat_template_kwargs.reasoning_effort`` (``low``/``medium``/
     # ``high``) for templates that grade reasoning instead of switching it.
     reasoning_effort: Optional[str] = None
+    # ``chat_template_kwargs`` for the least reasoning the template allows, for
+    # a model that cannot switch reasoning off and grades it under another name.
+    least_reasoning: Optional[Dict[str, str]] = None
     # Which agent features the model gets (``gaia.agents.base.model_features``).
     # A capability of the model, not the device: Gemma gets "compact" on the
     # GPU and the NPU alike.
@@ -2047,6 +2061,28 @@ MODELS = {
         # 20 KiB/token: 1.3 GB at 64K, 2.7 GB at 128K, 5.4 GB at 256K.
         max_ctx_size=262144,
         kv_bytes_per_token=20480,
+    ),
+    # --- Muse Glimmer 30B: opt-in, never a default ---
+    # Dense 30B with a vision encoder, a Lemonade built-in on llama.cpp
+    # (UD-Q4_K_XL + BF16 vision projector + DFlash draft), so it is
+    # pulled by name. Its template sets reasoning from ``reasoning_strength``
+    # (default "high"), not ``reasoning_effort``, so turns run at the default.
+    # It cannot be switched off: "low" reasons less than the default, not zero.
+    "muse-glimmer-30b": ModelRequirement(
+        model_type=ModelType.LLM,
+        model_id=MUSE_GLIMMER_MODEL_NAME,
+        display_name="Muse Glimmer 30B (Multimodal)",
+        min_ctx_size=GPU_CTX_SIZE,
+        tool_calling=True,
+        # Weights 15.88 + vision projector 3.85 + DFlash draft 1.63 GB: the
+        # 19.9 GiB Lemonade lists.
+        size_gb=21.36,
+        # Native window. 13 of its 52 layers are global attention; the rest
+        # slide over 2048 tokens: 2 KV heads x 128 dims x K+V x f16 =
+        # 13 KiB/token, 0.9 GB at 64K, 1.7 GB at 128K.
+        max_ctx_size=131072,
+        kv_bytes_per_token=13312,
+        least_reasoning={"reasoning_strength": "low"},
     ),
     # --- gpt-oss: Lemonade built-ins on llama.cpp, pulled by name ---
     # Alternate layers attend over a 128-token sliding window, so only the
@@ -2341,6 +2377,12 @@ MODEL_SAMPLING_PROFILES: Dict[str, CardSampling] = {
             "presence_penalty": 1.5,
         },
     ),
+    # https://huggingface.co/meta-models/Muse-Glimmer-30B generation_config.json:
+    # temperature 1.0, top_p 0.95, top_k 64. It always reasons.
+    MUSE_GLIMMER_MODEL_NAME: CardSampling(
+        thinks_by_default=True,
+        thinking={"temperature": 1.0, "top_p": 0.95, "top_k": 64, "min_p": 0.0},
+    ),
 }
 
 
@@ -2394,9 +2436,26 @@ def no_thinking_kwargs(model_id: Optional[str]) -> Dict[str, Any]:
     if mr is not None and mr.reasoning_effort:
         # Reasoning cannot be switched off here; "low" is the least there is.
         return {"chat_template_kwargs": {"reasoning_effort": "low"}}
+    if mr is not None and mr.least_reasoning:
+        return {"chat_template_kwargs": dict(mr.least_reasoning)}
     if requested_thinking(model_id) is None:
         return {}
     return {"chat_template_kwargs": {"enable_thinking": False}}
+
+
+def reasoning_headroom(model_id: Optional[str]) -> int:
+    """Tokens a short side call adds to ``max_tokens`` for a local model that
+    reasons even at its least, so the reasoning does not eat the answer.
+
+    gpt-oss at "low" reasons only briefly; Muse Glimmer at "low" still reasons
+    at length. 0 for every other model.
+    """
+    mr = find_model_requirement(model_id) if isinstance(model_id, str) else None
+    if mr is None or cloud_model_provider(model_id):
+        return 0
+    if mr.least_reasoning:
+        return 360
+    return 72 if mr.reasoning_effort else 0
 
 
 def requested_reasoning_effort(
@@ -2652,7 +2711,11 @@ NPU_TWINS = {DEFAULT_MODEL_NAME: NPU_DEFAULT_MODEL_NAME}
 
 #: Supported chat models the pickers offer for download beside the defaults,
 #: on machines they fit. Never picked as a default.
-OPTIONAL_CHAT_MODELS = (GPT_OSS_20B_MODEL_NAME, "gpt-oss-120b-mxfp-GGUF")
+OPTIONAL_CHAT_MODELS = (
+    GPT_OSS_20B_MODEL_NAME,
+    MUSE_GLIMMER_MODEL_NAME,
+    "gpt-oss-120b-mxfp-GGUF",
+)
 
 
 NPU_BACKEND_SPEC = "flm:npu"
