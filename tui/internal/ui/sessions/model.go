@@ -25,6 +25,10 @@ type SelectedMsg struct{ Session sessionstore.Session }
 // ClosedMsg reports the user left the panel without picking anything.
 type ClosedMsg struct{}
 
+// StopAndSwitchMsg is the user agreeing to stop the running turn to reopen
+// Session.
+type StopAndSwitchMsg struct{ Session sessionstore.Session }
+
 type loadedMsg struct {
 	gen     int
 	listing sessionstore.Listing
@@ -44,9 +48,21 @@ type Model struct {
 	loading  bool
 	gen      int
 	selected int
+	// stopFor is the session waiting on the stop-and-switch question.
+	stopFor *sessionstore.Session
 
 	width, height int
 }
+
+// AskStopTurn asks, in place of the list, whether to stop the turn still
+// running in the chat to reopen s.
+func (m Model) AskStopTurn(s sessionstore.Session) Model {
+	m.stopFor = &s
+	return m
+}
+
+// Asking reports whether the stop-and-switch question is on screen.
+func (m Model) Asking() bool { return m.stopFor != nil }
 
 // New lists the sessions in dir. current is the id of the session on screen
 // (marked, and never offered as somewhere to go); allKinds also lists eval
@@ -98,6 +114,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.selected = 0
 		}
 	case tea.KeyMsg:
+		if m.stopFor != nil {
+			return m.answerStop(v)
+		}
 		n := len(m.listing.Sessions)
 		switch v.String() {
 		case "ctrl+c":
@@ -125,6 +144,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			s := m.listing.Sessions[m.selected]
 			return m, func() tea.Msg { return SelectedMsg{Session: s} }
 		}
+	}
+	return m, nil
+}
+
+// answerStop takes the reply to the stop-and-switch question. Keeping the
+// turn goes back to the chat, where it is still running.
+func (m Model) answerStop(k tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch k.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "s", "y":
+		s := *m.stopFor
+		m.stopFor = nil
+		return m, func() tea.Msg { return StopAndSwitchMsg{Session: s} }
+	case "k", "n", "esc", "q":
+		m.stopFor = nil
+		return m, func() tea.Msg { return ClosedMsg{} }
 	}
 	return m, nil
 }
@@ -212,6 +248,10 @@ func (m Model) View() string {
 	}
 	lines = append(lines, "")
 
+	if m.stopFor != nil {
+		return m.stopView(w, accent, dim)
+	}
+
 	n := len(m.listing.Sessions)
 	switch {
 	case m.loading:
@@ -256,6 +296,28 @@ func (m Model) View() string {
 	for _, line := range lines {
 		wrapped = append(wrapped, strings.Split(ansi.Wrap(line, w, ""), "\n")...)
 	}
+	wrapped = append(wrapped, "", dim.Render(ansi.Truncate(hint, w, "…")))
+	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(wrapped, "\n"))
+}
+
+func (m Model) stopView(w int, accent, dim lipgloss.Style) string {
+	t := m.stopFor.Title
+	if t == "" {
+		t = "untitled session"
+	}
+	lines := []string{
+		accent.Render("A turn is still running"),
+		"",
+		fmt.Sprintf("A turn is still running. Stop it and switch to %q?", t),
+		"",
+		"s  stop the turn and switch",
+		"k  keep it running",
+	}
+	var wrapped []string
+	for _, line := range lines {
+		wrapped = append(wrapped, strings.Split(ansi.Wrap(line, w, ""), "\n")...)
+	}
+	hint := "s stop and switch · k or esc keep it running"
 	wrapped = append(wrapped, "", dim.Render(ansi.Truncate(hint, w, "…")))
 	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join(wrapped, "\n"))
 }

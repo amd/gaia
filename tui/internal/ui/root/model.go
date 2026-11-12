@@ -174,6 +174,9 @@ type clientBox struct {
 	// waits for them so quit cannot orphan one mid-shutdown.
 	retiring  sync.WaitGroup
 	retireErr error
+	// closing maps a retiring client's session id to a channel closed once
+	// its agent has exited and let go of the session.
+	closing map[string]chan struct{}
 }
 
 func (b *clientBox) set(c client.AgentClient) {
@@ -184,13 +187,22 @@ func (b *clientBox) set(c client.AgentClient) {
 
 // retire closes the current client in the background. A departing agent can
 // spend seconds saving memories before it exits, and an /agents switch must
-// not freeze the screen for that.
-func (b *clientBox) retire() {
+// not freeze the screen for that. sessionID, when set, is the session that
+// agent holds; closingDone reports it until the agent is gone.
+func (b *clientBox) retire(sessionID string) {
 	b.mu.Lock()
 	c := b.c
 	b.c = nil
+	var done chan struct{}
 	if c != nil {
 		b.retiring.Add(1)
+		if sessionID != "" {
+			if b.closing == nil {
+				b.closing = map[string]chan struct{}{}
+			}
+			done = make(chan struct{})
+			b.closing[sessionID] = done
+		}
 	}
 	b.mu.Unlock()
 	if c == nil {
@@ -198,12 +210,30 @@ func (b *clientBox) retire() {
 	}
 	go func() {
 		defer b.retiring.Done()
-		if err := c.Close(); err != nil {
-			b.mu.Lock()
+		err := c.Close()
+		b.mu.Lock()
+		if err != nil {
 			b.retireErr = errors.Join(b.retireErr, err)
-			b.mu.Unlock()
 		}
+		if done != nil {
+			if b.closing[sessionID] == done {
+				delete(b.closing, sessionID)
+			}
+			close(done)
+		}
+		b.mu.Unlock()
 	}()
+}
+
+// closingDone is closed once this window's agent for sessionID has exited;
+// nil when no agent of this window is still closing it.
+func (b *clientBox) closingDone(sessionID string) <-chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if ch, ok := b.closing[sessionID]; ok {
+		return ch
+	}
+	return nil
 }
 
 func (b *clientBox) close() error {
@@ -457,6 +487,12 @@ func (m FlagshipModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case sessions.SelectedMsg:
 		return m.resumeSession(msg.Session)
+
+	case sessions.StopAndSwitchMsg:
+		return m.reopen(msg.Session)
+
+	case sessionClosedMsg:
+		return m.reopenClosed(msg)
 
 	case gateway.CloseMsg:
 		m.gw = nil
@@ -714,7 +750,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	// b.c without closing it (see clientBox's own doc comment).
 	if m.chat != nil {
 		m.chat.Retire()
-		m.chatClient.retire()
+		m.chatClient.retire(m.sessionID)
 	}
 	m.chatClient.set(c)
 	m.sessionID = plan.id

@@ -195,16 +195,28 @@ func (m FlagshipModel) updateSessions(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // resumeSession replaces the chat on screen with session s: its transcript is
 // redrawn and the agent is restarted on its history file, so the model
-// remembers it too.
+// remembers it too. A turn still running is only stopped once the user says so.
 func (m FlagshipModel) resumeSession(s sessionstore.Session) (tea.Model, tea.Cmd) {
 	switch {
 	case m.chat != nil && s.ID == m.sessionID:
 		m.say("That is the session you are in.")
 		return m.leaveSessions()
+	case s.Live && m.chatClient.closingDone(s.ID) != nil:
+		return m.awaitClose(s)
 	case s.Live:
 		m.say(fmt.Sprintf("%q is open in another GAIA window. Close it there, then reopen it here.", title(s)))
 		return m.leaveSessions()
+	case m.chat != nil && m.chat.IsStreaming() && m.sessionsPanel != nil:
+		panel := m.sessionsPanel.AskStopTurn(s)
+		m.sessionsPanel = &panel
+		return m, nil
 	}
+	return m.reopen(s)
+}
+
+// reopen switches to s, stopping a running turn if one is left; the user has
+// already agreed to that. The new chat says which turn was stopped.
+func (m FlagshipModel) reopen(s sessionstore.Session) (tea.Model, tea.Cmd) {
 	dir, err := m.storeDir()
 	if err != nil {
 		m.say("Cannot reopen the session: " + err.Error())
@@ -215,12 +227,80 @@ func (m FlagshipModel) resumeSession(s sessionstore.Session) (tea.Model, tea.Cmd
 		m.say("Cannot reopen the session: " + err.Error())
 		return m.leaveSessions()
 	}
+	stopping := ""
+	if m.chat != nil && m.chat.IsStreaming() {
+		stopping = m.currentTitle(dir)
+	}
 	m.sessionsPanel = nil
 	m.resumeID = s.ID
 	m.pendingTranscript = resumedTranscript(s, turns)
 	// A chat on screen already passed the gate on this machine.
 	verified := m.chat != nil || m.launchVerified
-	return m.launchAgent(m.agent, verified)
+	updated, cmd := m.launchAgent(m.agent, verified)
+	got, ok := updated.(FlagshipModel)
+	if ok && stopping != "" && got.chat != nil && got.sessionID == s.ID {
+		got.chat.AppendStatus(fmt.Sprintf("Stopped the turn that was running in %q to reopen %q.", stopping, title(s)))
+		return got, cmd
+	}
+	return updated, cmd
+}
+
+// currentTitle names the session on screen for the stop notice.
+func (m FlagshipModel) currentTitle(dir string) string {
+	if m.sessionID != "" {
+		if cur, err := sessionstore.Get(dir, m.sessionID, filelock.Held); err == nil && cur.Title != "" {
+			return cur.Title
+		}
+	}
+	return "the previous session"
+}
+
+// sessionClosedMsg reports that this window's agent for Session has exited.
+// from is the session on screen when the reopen was asked for.
+type sessionClosedMsg struct {
+	Session sessionstore.Session
+	from    string
+}
+
+// awaitClose handles picking a session this window only just left: its agent
+// is still saving and holds the session, so it is reopened once that agent
+// exits rather than refused as open elsewhere.
+func (m FlagshipModel) awaitClose(s sessionstore.Session) (tea.Model, tea.Cmd) {
+	done := m.chatClient.closingDone(s.ID)
+	m.say(fmt.Sprintf("%q is still closing — GAIA is saving it. It reopens here as soon as that finishes.", title(s)))
+	from := m.sessionID
+	next, cmd := m.leaveSessions()
+	wait := func() tea.Msg {
+		<-done
+		return sessionClosedMsg{Session: s, from: from}
+	}
+	return next, tea.Batch(cmd, wait)
+}
+
+// reopenClosed finishes awaitClose. If the user moved on meanwhile (another
+// session, a new turn, another screen) it only says the session is free.
+func (m FlagshipModel) reopenClosed(msg sessionClosedMsg) (tea.Model, tea.Cmd) {
+	if m.chat == nil || m.sessionID != msg.from || m.chat.IsStreaming() || m.activeView != viewChat {
+		if m.chat != nil {
+			m.chat.AppendStatus(fmt.Sprintf("%q has finished closing. Reopen it from /sessions.", title(msg.Session)))
+		}
+		return m, nil
+	}
+	dir, err := m.storeDir()
+	if err != nil {
+		m.say("Cannot reopen the session: " + err.Error())
+		return m, nil
+	}
+	s, err := sessionstore.Get(dir, msg.Session.ID, filelock.Held)
+	if err != nil {
+		m.say("Cannot reopen the session: " + err.Error())
+		return m, nil
+	}
+	if s.Live {
+		m.say(fmt.Sprintf("%q is open in another GAIA window. Close it there, then reopen it here.", title(s)))
+		return m, nil
+	}
+	return m.reopen(s)
 }
 
 func title(s sessionstore.Session) string {

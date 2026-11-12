@@ -258,3 +258,37 @@ func TestAStaleLoadIsDropped(t *testing.T) {
 		t.Fatal("a superseded load replaced the list")
 	}
 }
+
+// Stopping a turn throws work away, so only an explicit s or y does it: an
+// enter pressed twice, or an arrow key, must leave the question up.
+func TestOnlyAnExplicitKeyStopsTheTurn(t *testing.T) {
+	s := sessionstore.Session{ID: "abcdef01", Title: "Plan the offsite"}
+	for _, k := range []tea.KeyMsg{
+		{Type: tea.KeyEnter}, {Type: tea.KeyDown}, {Type: tea.KeyRunes, Runes: []rune("a")},
+	} {
+		m := New(t.TempDir(), "", false, nil, 80, 24).AskStopTurn(s)
+		next, cmd := m.Update(k)
+		if cmd != nil || !next.(Model).Asking() {
+			t.Fatalf("%q answered the stop question", k.String())
+		}
+	}
+	for k, want := range map[string]bool{"s": true, "y": true, "k": false, "n": false, "esc": false} {
+		m := New(t.TempDir(), "", false, nil, 80, 24).AskStopTurn(s)
+		msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
+		if k == "esc" {
+			msg = tea.KeyMsg{Type: tea.KeyEsc}
+		}
+		next, cmd := m.Update(msg)
+		if cmd == nil || next.(Model).Asking() {
+			t.Fatalf("%q left the question unanswered", k)
+		}
+		_, stopped := cmd().(StopAndSwitchMsg)
+		if stopped != want {
+			t.Fatalf("%q: stop = %v, want %v", k, stopped, want)
+		}
+	}
+	view := New(t.TempDir(), "", false, nil, 80, 24).AskStopTurn(s).View()
+	if !strings.Contains(ansi.Strip(view), `A turn is still running. Stop it and switch to "Plan the offsite"?`) {
+		t.Fatalf("question not drawn:\n%s", view)
+	}
+}
