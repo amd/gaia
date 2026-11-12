@@ -16,6 +16,8 @@ import pytest
 from gaia.agents.base.agent import (
     _MAX_UNFINISHED_ANSWER_REPROMPTS,
     Agent,
+    _asks_for_a_plan_only,
+    _asks_for_no_action,
     _split_announced_step,
     _unfinished_answer_kind,
 )
@@ -680,3 +682,170 @@ def test_tool_plan_in_place_of_the_work_ends_honestly(agent):
     final = _final_text(result)
     assert final.startswith("I didn't finish:")
     assert "I will use the `run_python` tool" in final
+
+
+# rc18, DeepSeek: the user asked for a plan and said not to run anything; the
+# guard sent the plan back and the answer that replaced it had no plan in it.
+NO_ACTION_PLAN_REQUEST = (
+    "I want net revenue by region for a sales CSV I will attach later. Do NOT "
+    "run anything in this turn. Answer only with a five-step numbered plan in "
+    "the first person, each step of the form 'I will use the `run_python` tool "
+    "to ...', and close with the sentence: This should give you the exact "
+    "breakdown you asked for."
+)
+REQUESTED_PLAN = (
+    "1. I will use the `run_python` tool to load the CSV.\n"
+    "2. I will use the `run_python` tool to drop returned orders.\n"
+    "3. I will use the `run_python` tool to compute units times unit_price.\n"
+    "4. I will use the `run_python` tool to group by region.\n"
+    "5. I will use the `run_python` tool to print the totals.\n\n"
+    "This should give you the exact breakdown you asked for."
+)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        NO_ACTION_PLAN_REQUEST,
+        "Don't use any tools, just tell me how you'd do it.",
+        "Without using any tools, explain it.",
+        "do not call any tools to answer this",
+        "Don’t run any tools yet.",
+        "Don't open any files.",
+        "Don't do anything yet.",
+        "Just give me the plan for migrating the DB.",
+        "Answer only with a short plan.",
+        "Plan only, please.",
+        "Use no tools for this one.",
+        "Don't touch anything until I say so.",
+        "Don't do anything before I confirm.",
+        "Don't use any tools, but explain how you would do it.",
+        "Explain the bug without opening any files.",
+        "Give me only a plan, then wait for my go-ahead.",
+        "Just give me a plan. I'll decide later whether to run it.",
+        "Answer only with a short plan and close with a one-line summary.",
+        "I want only a plan.",
+        "Give me the plan only.",
+        "Show the sales trend, but don't use any tools yet.",
+    ],
+)
+def test_requests_not_to_act_are_recognised(request_text):
+    assert _asks_for_no_action(request_text)
+
+
+@pytest.mark.parametrize(
+    "request_text",
+    [
+        "What is the net revenue excluding returned orders, broken down by region?",
+        # Not running is not "do nothing": the files are still to be written.
+        "In ~/gaia-eval/resilience/ create totals.py and test_totals.py. "
+        "Don't run anything yet.",
+        "For orders.csv I want net revenue by region. Do NOT run anything in "
+        "this turn.",
+        "Without running anything, how would you clean this CSV?",
+        "Fix foo.py and don't do anything else.",
+        "Clean up the folder but don't touch anything else in it.",
+        "Don't run anything destructive.",
+        "Don't use pandas.",
+        "Write a script but don't run it.",
+        "Does config.yaml set debug? Answer only yes or no.",
+        "Run the tests and don't open any other files.",
+        "Don't read anything into it, just summarize report.md.",
+        # rc18 round 2: each of these wants the work done.
+        "Last time you answered without reading any files and got it wrong. "
+        "What is the total gross in C:/x/orders.csv?",
+        "Don't touch anything until you've read C:/x/orders.csv, then tell me "
+        "the total.",
+        "Don't do anything before you check the README.",
+        "What is in C:/x/notes.txt? Don't open any files but that one.",
+        "Don't open any files except config.yaml.",
+        "Don't touch anything other than todo.txt.",
+        "Give me only a plan for the migration, then do step 1.",
+        "Just give me a plan and then carry it out.",
+        "Plan only at first, and then run step 1 once it reads well.",
+        "Answer only with a short plan. After that, execute it.",
+        # "Plan only" inside a request to do work.
+        "My migration plan only covers Postgres; extend it to MySQL.",
+        "Write not only a plan but the code too.",
+        "Update the plan only for step 3 and save it to plan.md",
+        # A ban followed by, or following, the work to do.
+        "Don't touch anything — just read config.py and tell me what it sets",
+        "Don't touch anything, just read config.py and tell me what it sets",
+        "Don't touch anything - open config.py and tell me what it sets",
+        "Fix the bug in foo.py but don't touch anything.",
+        "",
+    ],
+)
+def test_requests_that_limit_the_work_are_not_requests_not_to_act(request_text):
+    assert not _asks_for_no_action(request_text)
+
+
+@pytest.mark.parametrize(
+    "request_text, plan_only",
+    [
+        (NO_ACTION_PLAN_REQUEST, True),
+        ("Answer only with a short plan.", True),
+        ("Plan only, please.", True),
+        ("Use no tools in this turn. Answer only with a three-step plan.", True),
+        # No tools, but a question to answer: an unread file keeps its note.
+        (
+            "Without using any tools, what does src/gaia/version.py set "
+            "`__version__` to?",
+            False,
+        ),
+        ("Don't use any tools. What's the timeout in config.py?", False),
+        ("Use no tools: what does README.md say about installing?", False),
+        ("Don't do anything yet.", False),
+        ("Give me only a plan for the migration, then do step 1.", False),
+        ("", False),
+    ],
+)
+def test_only_a_plan_request_is_a_plan_only_turn(request_text, plan_only):
+    assert _asks_for_a_plan_only(request_text) is plan_only
+
+
+def test_a_plan_the_user_asked_for_is_the_answer(agent):
+    assert _unfinished_answer_kind(REQUESTED_PLAN) == "narration"
+    sent = _script(agent, *[_answer(REQUESTED_PLAN)] * 3)
+
+    result = agent.process_query(NO_ACTION_PLAN_REQUEST, max_steps=20)
+
+    assert len(sent) == 1
+    assert _final_text(result) == REQUESTED_PLAN
+
+
+def test_an_announced_step_the_user_forbade_is_not_pushed(agent):
+    answer = "I'll run the trend analysis now."
+    sent = _script(agent, *[_answer(answer)] * 3)
+
+    result = agent.process_query(
+        "Show the sales trend, but don't use any tools yet.", max_steps=20
+    )
+
+    assert len(sent) == 1
+    assert _final_text(result) == answer
+
+
+def test_an_announced_write_is_still_pushed_when_only_running_is_forbidden(agent):
+    """gaia_resilience: "create totals.py ... Don't run anything yet" owes the write."""
+    sent = _script(agent, *[_answer("I'll create totals.py now.")] * 5)
+
+    result = agent.process_query(
+        "Create totals.py with a total_with_tax function. Don't run anything yet.",
+        max_steps=20,
+    )
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert _final_text(result).startswith("I didn't finish:")
+
+
+def test_a_plan_is_still_sent_back_when_only_extra_work_is_forbidden(agent):
+    sent = _script(agent, *[_answer(REQUESTED_PLAN)] * 5)
+
+    result = agent.process_query(
+        "Net revenue by region for orders.csv, and don't do anything else.",
+        max_steps=20,
+    )
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert _final_text(result).startswith("I didn't finish:")
