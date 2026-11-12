@@ -745,6 +745,7 @@ export function DocumentLibrary() {
                     </div>
 
                     {/* Path input for folder/file */}
+                    <p className="drop-hint path-hint">{t('docs.pathHint')}</p>
                     <form className="path-input-form" onSubmit={handleFolderSubmit}>
                         <FolderOpen size={16} className="path-icon" />
                         <input
@@ -752,7 +753,7 @@ export function DocumentLibrary() {
                             className="path-input"
                             value={folderPath}
                             onChange={(e) => setFolderPath(e.target.value)}
-                            placeholder={t('docs.pathPlaceholder', { example: examplePath() })}
+                            placeholder={examplePath()}
                             aria-label={t('docs.pathAria')}
                             dir="auto"
                         />

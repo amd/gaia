@@ -796,7 +796,7 @@ const messages: Messages = {
     'docs.hint': 'لا تبحث المحادثة إلا في المستندات المرفقة بها.',
     'docs.drop': 'أفلت الملفات هنا لإضافتها',
     'docs.dropHint': 'ملفات PDF وTXT وMD والشيفرة البرمجية، وأكثر من 50 صيغة أخرى',
-    'docs.pathPlaceholder': 'أو أدخل مسار ملف أو مجلد: {example}',
+    'docs.pathHint': 'أو أدخل مسار ملف أو مجلد',
     'docs.pathAria': 'مسار الملف المراد إضافته',
     'docs.index': 'إضافة',
     'docs.browse': 'تصفح الملفات',
