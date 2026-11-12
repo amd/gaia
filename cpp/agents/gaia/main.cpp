@@ -158,7 +158,7 @@ void printUsage() {
         "  --prompt-file FILE        Read the prompt from FILE\n"
         "  --output-format FMT       text (default) or json\n"
         "  --cwd DIR                 Work in DIR\n"
-        "  --max-steps N             Step budget (default 50)\n"
+        "  --max-steps N             Step budget (default 1000)\n"
         "  --mcp-config FILE         Connect the MCP servers in FILE (mcp.json)\n"
         "  --vision-model ID         Model analyze_image uses (default: the main model)\n"
         "  --transcribe-model ID     Whisper model for transcribe_audio (e.g. Whisper-Base on Lemonade)\n"
@@ -326,7 +326,8 @@ Settings buildSettings(const Cli& cli) {
                          {"temperature", 0.2},
                          {"modelId", "Gemma-4-E4B-it-GGUF"},
                          {"baseUrl", gaia::defaultBaseUrl()},
-                         {"responseMode", "conversational"}};
+                         {"responseMode", "conversational"},
+                         {"maxSteps", 1000}};
     std::string mcpConfig;
 
     const fs::path file = cli.configFile.empty() ? defaultConfigPath() : fs::path(cli.configFile);
@@ -361,7 +362,8 @@ Settings buildSettings(const Cli& cli) {
     if (!envModel.empty()) merged["modelId"] = envModel;
     const std::string envUrl = gaia::getEnvVar("GAIA_BASE_URL");
     if (!envUrl.empty()) merged["baseUrl"] = envUrl;
-    for (const auto& [var, field] : {std::pair<const char*, const char*>{"GAIA_MAX_STEPS", "maxSteps"},
+    for (const auto& [var, field] : {std::pair<const char*, const char*>{"GAIA_AGENT_MAX_STEPS", "maxSteps"},
+                                     {"GAIA_MAX_STEPS", "maxSteps"},
                                      {"GAIA_CONTEXT_SIZE", "contextSize"},
                                      {"GAIA_MAX_TOKENS", "maxTokens"}}) {
         const std::string v = gaia::getEnvVar(var);

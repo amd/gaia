@@ -7,6 +7,8 @@
 
 #include <gtest/gtest.h>
 
+#include <map>
+
 #include <gaia/agent.h>
 #include <gaia/tool_registry.h>
 #include <gaia/web_tools.h>
@@ -272,28 +274,110 @@ TEST(AgentResilience, StripReasoningHandlesStrayAndUnclosedTags) {
     EXPECT_EQ(stripReasoning("no tags"), "no tags");
 }
 
-TEST(AgentResilience, StepBudgetNoticeAndClosingAnswer) {
+namespace {
+
+// One distinct tool call per step until the limit, then a closing answer.
+std::vector<std::string> runToTheLimit(int limit, json* result = nullptr) {
     bench::MockLlmServer mock;
-    for (int i = 0; i < 6; ++i) {
-        mock.pushResponse(call("c" + std::to_string(i), "add",
-                               R"({"a":)" + std::to_string(i) + R"(,"b":1})"));
+    for (int i = 0; i < limit; ++i) {
+        mock.pushResponse(call("c" + std::to_string(i), "add", R"({"a":)" + std::to_string(i) + R"(,"b":1})"));
     }
-    mock.pushResponse(answer("Did 6 additions; the rest is unfinished."));
+    mock.pushResponse(answer("Did what fit; the rest is unfinished."));
     AgentConfig cfg = cfgFor(mock);
-    cfg.maxSteps = 6;
+    cfg.maxSteps = limit;
     ResilienceAgent agent(cfg);
     agent.initForTest();
     json r = agent.processQuery("go");
+    if (result) *result = r;
+    return mock.receivedBodies();
+}
 
-    EXPECT_EQ(r["result"], "Did 6 additions; the rest is unfinished.");
+// The notice each request ends with, by steps left when it was sent ("" = none).
+std::map<int, std::string> noticesBySteps(const std::vector<std::string>& bodies, int limit) {
+    std::map<int, std::string> out;
+    for (int i = 0; i < limit; ++i) {
+        const json last = json::parse(bodies[static_cast<size_t>(i)])["messages"].back();
+        const std::string text = last["content"].is_string() ? last["content"].get<std::string>() : "";
+        if (last.value("role", "") == "user" && text.rfind("Step budget:", 0) == 0) out[limit - i] = text;
+    }
+    return out;
+}
+
+}  // namespace
+
+TEST(AgentResilience, StepBudgetNoticesAndClosingAnswer) {
+    json r;
+    const auto bodies = runToTheLimit(10, &r);
+
+    EXPECT_EQ(r["result"], "Did what fit; the rest is unfinished.");
     EXPECT_EQ(r["status"], "error") << "running out of steps is not success";
-    const auto bodies = mock.receivedBodies();
-    ASSERT_EQ(bodies.size(), 7u);
-    EXPECT_NE(bodies[3].find("[Step budget] 3 steps remain"), std::string::npos);
+    ASSERT_EQ(bodies.size(), 11u);
+    const auto notices = noticesBySteps(bodies, 10);
+    ASSERT_EQ(notices.size(), 3u);
+    EXPECT_EQ(notices.at(5).rfind("Step budget: 5 of 10 used, 5 left. Stop gathering context.", 0), 0u)
+        << notices.at(5);
+    EXPECT_EQ(notices.at(2).rfind("Step budget: 2 of 10 steps left. Write the requested deliverables now", 0), 0u)
+        << notices.at(2);
+    EXPECT_EQ(notices.at(1).rfind("Step budget: 1 of 10 steps left. Do not research further.", 0), 0u)
+        << notices.at(1);
     const json closing = json::parse(bodies.back());
     EXPECT_EQ(closing["tool_choice"], "none") << "tools stay declared, but none may be called";
     EXPECT_NE(closing["messages"].back()["content"].get<std::string>().find("[Step limit reached]"),
               std::string::npos);
+}
+
+TEST(AgentResilience, ALargeBudgetIsToldAtTwentyTenAndFiveStepsLeft) {
+    const auto notices = noticesBySteps(runToTheLimit(200), 200);
+    ASSERT_EQ(notices.size(), 3u);
+    EXPECT_EQ(notices.count(100), 0u) << "half of a large budget is not 'few steps left'";
+    EXPECT_EQ(notices.at(20).rfind("Step budget: 180 of 200 used, 20 left.", 0), 0u) << notices.at(20);
+    EXPECT_EQ(notices.at(10).rfind("Step budget: 10 of 200 steps left.", 0), 0u) << notices.at(10);
+    EXPECT_EQ(notices.at(5).rfind("Step budget: 5 of 200 steps left.", 0), 0u) << notices.at(5);
+}
+
+TEST(AgentResilience, EachBudgetLevelFiresOnceAtTheAbsoluteFigure) {
+    const auto notices = noticesBySteps(runToTheLimit(60), 60);
+    std::vector<int> at;
+    for (const auto& [left, text] : notices) at.push_back(left);
+    EXPECT_EQ(at, (std::vector<int>{5, 10, 20}));
+}
+
+TEST(AgentResilience, ABudgetTooSmallToActOnGetsNoNotice) {
+    EXPECT_TRUE(noticesBySteps(runToTheLimit(7), 7).empty());
+    EXPECT_EQ(noticesBySteps(runToTheLimit(8), 8).size(), 3u);
+}
+
+TEST(AgentResilience, BudgetNoticesNeverReachALaterTurn) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 8; ++i) {
+        mock.pushResponse(call("c" + std::to_string(i), "add", R"({"a":)" + std::to_string(i) + R"(,"b":1})"));
+    }
+    mock.pushResponse(answer("ok"));
+    mock.pushResponse(answer("second answer"));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxSteps = 8;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("first");
+    EXPECT_NE(mock.receivedBodies()[7].find("Step budget:"), std::string::npos);
+    for (const auto& m : agent.history()) EXPECT_NE(m.content.rfind("Step budget:", 0), 0u) << m.content;
+
+    agent.processQuery("second");
+    EXPECT_EQ(mock.receivedBodies().back().find("Step budget:"), std::string::npos)
+        << "a stale '1 step left' must not open the next turn";
+}
+
+TEST(AgentResilience, BudgetNoticesCanBeTurnedOff) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 10; ++i) {
+        mock.pushResponse(call("c" + std::to_string(i), "add", R"({"a":)" + std::to_string(i) + R"(,"b":1})"));
+    }
+    AgentConfig cfg = cfgFor(mock);
+    cfg.stepBudgetNotices = false;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("go");
+    for (const auto& body : mock.receivedBodies()) EXPECT_EQ(body.find("Step budget:"), std::string::npos);
 }
 
 TEST(AgentResilience, StringNumbersAreCoerced) {

@@ -57,6 +57,27 @@ TEST(MemoryStoreTest, RefusesCredentialsAndBadInput) {
     EXPECT_NO_THROW(m.remember("The API key is in the team password manager"));
 }
 
+TEST(MemoryStoreTest, ARefusedSecretIsStillInThisChat) {
+    MemoryStore m(":memory:");
+    ToolRegistry reg;
+    m.registerTools(reg);
+    reg.setConfirmCallback([](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+    const json out = reg.executeTool("remember", json{{"fact", "The vault password is cobalt-heron-417"}});
+    EXPECT_EQ(out["status"], "error");
+    const std::string why = out.value("error", "");
+    EXPECT_NE(why.find("a new chat won't know it"), std::string::npos) << why;
+    EXPECT_NE(why.find("still in this chat"), std::string::npos) << why;
+    EXPECT_EQ(m.count(), 0u);
+
+    const std::string id = m.remember("The vault is in the study");
+    try {
+        m.update(id, "The vault password is cobalt-heron-417");
+        FAIL() << "a credential was stored by update";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find("still in this chat"), std::string::npos) << e.what();
+    }
+}
+
 TEST(MemoryStoreTest, SensitiveEntriesStayOutOfDefaultListings) {
     MemoryStore m(":memory:");
     m.remember("Has a dentist appointment on Friday", "reminder", "", "", true);

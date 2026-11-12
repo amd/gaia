@@ -1379,6 +1379,114 @@ TEST(LoopDetectionTest, LargeThresholdNeedsTheFullRun) {
     EXPECT_EQ(agent.executed.size(), 5u);
 }
 
+// A, B, A, B never repeats one call twice in a row; the cycle is still a loop.
+TEST(LoopDetectionTest, AlternatingBetweenTwoCallsIsALoop) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    mock.pushResponse(nativeEcho("x", ++id));
+    for (int i = 0; i < 4; ++i) {
+        mock.pushResponse(nativeEcho("find", ++id));
+        mock.pushResponse(nativeEcho("read", ++id));
+    }
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 30;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 30);
+
+    EXPECT_EQ(result["result"], "All done.");
+    // x, then three full rounds and the fourth round's first call; its closing call is refused.
+    EXPECT_EQ(agent.executed.size(), 8u);
+    const json last = json::parse(mock.receivedBodies().back());
+    const std::string nudge = last["messages"].back()["content"].get<std::string>();
+    EXPECT_NE(nudge.find("repeating cycle of 2 calls"), std::string::npos) << nudge;
+    EXPECT_NE(nudge.find("try a different approach, or give your final answer"), std::string::npos) << nudge;
+}
+
+TEST(LoopDetectionTest, ACycleOfThreeCallsIsALoop) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (int i = 0; i < 4; ++i) {
+        for (const char* msg : {"a", "b", "c"}) mock.pushResponse(nativeEcho(msg, ++id));
+    }
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 30;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 30);
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_EQ(agent.executed.size(), 11u);
+    EXPECT_NE(mock.receivedBodies().back().find("repeating cycle of 3 calls"), std::string::npos);
+}
+
+TEST(LoopDetectionTest, PromptJsonCycleIsALoop) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 4; ++i) {
+        mock.pushResponse(promptJsonEcho("find"));
+        mock.pushResponse(promptJsonEcho("read"));
+    }
+    mock.pushResponse(R"({"choices":[{"message":{"content":"{\"answer\":\"done differently\"}"}}]})");
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kNonToolCallingModel);
+    cfg.maxSteps = 30;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 30);
+
+    EXPECT_EQ(result["result"], "done differently");
+    EXPECT_EQ(agent.executed.size(), 7u);
+}
+
+// A cycle the model ignores the nudge for ends the turn like any other loop.
+TEST(LoopDetectionTest, ACycleAfterTheNudgeStopsWithClosingAnswer) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (int i = 0; i < 8; ++i) {
+        mock.pushResponse(nativeEcho("find", ++id));
+        mock.pushResponse(nativeEcho("read", ++id));
+    }
+    mock.pushResponse(R"({"choices":[{"message":{"role":"assistant","content":"Partial."}}]})");
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 40;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 40);
+
+    EXPECT_EQ(result["result"], "Partial.");
+    EXPECT_EQ(agent.executed.size(), 14u);
+    EXPECT_EQ(json::parse(mock.receivedBodies().back())["tool_choice"], "none");
+}
+
+// Steady work that revisits a call is not a loop: no cycle of up to three calls repeats.
+TEST(LoopDetectionTest, VariedCallsThatRevisitOneAreNotALoop) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (int i = 0; i < 5; ++i) {
+        for (const char* msg : {"a", "b", "a", "c"}) mock.pushResponse(nativeEcho(msg, ++id));
+    }
+    for (int i = 0; i < 6; ++i) {
+        mock.pushResponse(nativeEcho("status", ++id));
+        mock.pushResponse(nativeEcho("step" + std::to_string(i), ++id));
+    }
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 60;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 60);
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_EQ(agent.executed.size(), 32u);
+    EXPECT_EQ(mock.receivedBodies().back().find("Not run"), std::string::npos);
+}
+
 // ---------------------------------------------------------------------------
 // The model is checked before every request, and a failed load ends the turn
 // ---------------------------------------------------------------------------

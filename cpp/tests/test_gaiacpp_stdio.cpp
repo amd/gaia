@@ -556,6 +556,28 @@ TEST_F(GaiacppStdio, AToolTurnReportsCallThenResultThenFinal) {
     EXPECT_EQ(first["messages"].back()["content"], "what do my\nnotes say?");
 }
 
+TEST_F(GaiacppStdio, TheFinalUsageCountsToolCallsAndOmitsAZeroCount) {
+    const fs::path a = work_ / "a.txt", b = work_ / "b.txt";
+    std::ofstream(a) << "one";
+    std::ofstream(b) << "two";
+    mock_.pushResponse(toolCall("file_read", {{"path", a.string()}}));
+    mock_.pushResponse(toolCall("file_read", {{"path", b.string()}}));
+    mock_.pushResponse(answer("one and two"));
+    mock_.pushResponse(answer("Nothing to read."));
+    start();
+    ask("read both");
+    const json withTools = waitTerminal(1);
+    ASSERT_TRUE(withTools.is_object());
+    EXPECT_EQ(withTools["usage"]["steps"], 3);
+    EXPECT_EQ(withTools["usage"]["tools_used"], 2) << withTools.dump();
+
+    ask("and now nothing");
+    const json plain = waitTerminal(2);
+    ASSERT_TRUE(plain.is_object());
+    EXPECT_EQ(plain["answer"], "Nothing to read.");
+    EXPECT_FALSE(plain["usage"].contains("tools_used")) << plain.dump();
+}
+
 TEST_F(GaiacppStdio, AStreamedAnswerArrivesAsTokensWithReasoningLeftOut) {
     mock_.enableSseStreaming(true);
     mock_.pushSseStream(sse({"<thi", "nk>secret plan</th", "ink>Hi", " there"}));

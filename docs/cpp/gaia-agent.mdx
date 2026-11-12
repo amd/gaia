@@ -50,9 +50,9 @@ Headless runs deny tools that change things (shell, writes, web) unless you pass
 
 `gaiacpp` talks to any OpenAI-compatible endpoint. Settings apply in this order, each overriding the one before:
 
-1. Built-in defaults: Lemonade at `LEMONADE_BASE_URL`, else `http://localhost:13305/api/v1`, `Gemma-4-E4B-it-GGUF`, a 32768-token context window, 16384 output tokens and temperature 0.2
+1. Built-in defaults: Lemonade at `LEMONADE_BASE_URL`, else `http://localhost:13305/api/v1`, `Gemma-4-E4B-it-GGUF`, a 32768-token context window, 16384 output tokens, temperature 0.2 and a 1000-step limit
 2. The settings file: `--config FILE`, else `$GAIACPP_CONFIG`, else `$XDG_CONFIG_HOME/gaiacpp/config.json` or `~/.config/gaiacpp/config.json` (`%APPDATA%\gaiacpp\config.json` on Windows) when it exists
-3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`
+3. Environment: `GAIA_BASE_URL`, `GAIA_MODEL_ID`, `GAIA_MAX_STEPS`, `GAIA_CONTEXT_SIZE`, `GAIA_MAX_TOKENS`. `GAIA_AGENT_MAX_STEPS`, the name the Python agent reads, sets the step limit too; when both are set, `GAIA_MAX_STEPS` wins
 4. Flags: `--base-url`, `-m/--model`, `--provider`, `--api-key-env`, `--ctx-size`, `--max-tokens`, `--max-steps`, `--temperature`, `--native-tools`
 
 The key for the endpoint is sent as `Authorization: Bearer`. It comes from the variable named by `--api-key-env` (or `apiKeyEnv` in the settings file), else `GAIA_API_KEY`, else `LEMONADE_API_KEY`, which is only ever sent to a loopback address (the local Lemonade). A key is never read from or written to a settings file. A variable that is named but unset stops the agent with an error instead of sending an anonymous request.
@@ -112,7 +112,7 @@ With Lemonade, `gaiacpp models list` lists the server's models and `gaiacpp mode
 
 ### Memory
 
-`remember`, `recall`, `update_memory` and `forget` keep facts, preferences and notes across sessions in `$GAIA_HOME/memory-cpp.db` (`~/.gaia/memory-cpp.db` by default). Stored preferences are added to the prompt; other facts are found with `recall`, which searches by keyword. Text that looks like a credential is refused: API keys and tokens, a password or PIN stated outright, card numbers and security codes, and US social security numbers. The check is a backstop, not a guarantee. `forget` asks for confirmation. `--no-memory` turns memory off. The file is separate from the Python agent's memory database.
+`remember`, `recall`, `update_memory` and `forget` keep facts, preferences and notes across sessions in `$GAIA_HOME/memory-cpp.db` (`~/.gaia/memory-cpp.db` by default). Stored preferences are added to the prompt; other facts are found with `recall`, which searches by keyword. Text that looks like a credential is refused: API keys and tokens, a password or PIN stated outright, card numbers and security codes, and US social security numbers. The refusal tells the model that a new chat won't know the secret and that it is still in this chat. The check is a backstop, not a guarantee. `forget` asks for confirmation. `--no-memory` turns memory off. The file is separate from the Python agent's memory database.
 
 ### Skills
 
@@ -234,7 +234,7 @@ printf '%s\n' '{"gaia_query": "What is in this folder?"}' | gaiacpp --stdio -m Q
 {"type":"status","message":"Thinking"}
 {"type":"tool_call","tool":"bash_execute","args":{"command":"ls"},"narration":"Running ls"}
 {"type":"tool_result","tool":"bash_execute","data":{"…":"…"},"preview":"…"}
-{"type":"final","answer":"…","usage":{"steps":2,"input_tokens":2100,"cached_tokens":900,"tokens":60}}
+{"type":"final","answer":"…","usage":{"steps":2,"input_tokens":2100,"cached_tokens":900,"tokens":60,"tools_used":1}}
 ```
 
 **What it reads.** A line is a query: either `{"gaia_query": "text"}`, which keeps a multi-line question as one question, or any other text, taken as written. A JSON object with a `gaia_control` key is a control message instead. Controls are read on their own thread, so they take effect while a turn is running, and they never write anything to stdout.
@@ -254,6 +254,7 @@ A control with a field of the wrong type is rejected with a line on stderr and c
 - The first line, and the line before the `final` of a successful `/model <id>`, is a `status` naming the model: `model_id`, `model_display`, `model_backend` (`lemonade`, or `fireworks` / `amd` for a cloud model), `model_remote`, `lemonade_reachable`, `lemonade_base_url`, `lemonade_version` when the server reports one, `agent_version` and `gaia_version`. It is sent even when no model server answers, after waiting a few seconds at most.
 - `token` events carry the answer as it streams, when the model calls tools natively. Otherwise the answer arrives whole in `final`. Reasoning inside `<think>` tags is left out. A `delta` may hold several tokens: they are sent in batches about 30 ms apart.
 - `needs_confirmation` carries `run_id`, `action` (the tool), `summary`, `confirm_id`, `risk` (`read`, `write` or `execute`) and, for a shell command only, `always_scope` (what an `always` answer would cover). Without `always_scope`, "always" isn't on offer, and an `always` answer allows that one call.
+- `final` carries `usage`: `steps`, `input_tokens` with `cached_tokens`, `tokens` (output) and `tools_used`. A count of zero is left out.
 - A turn the model server could not answer ends in `error`. A cancelled turn ends in a `final` with an empty answer.
 
 **Queries it answers itself.** `/model` lists the models the server can run now, and `/model <id>` switches to one, or ends in `error` and keeps the current model. The `model_id` it reports is the server's own spelling, so `Foo` becomes `user.Foo` when that is how the server lists it. Three sentinel queries never reach the model:
@@ -301,9 +302,9 @@ The release build links OpenSSL statically on every platform and, on Linux, the 
 - **Full context window:** on an overflow error, older tool outputs are replaced with references and the request is sent once more.
 - **Large tool output:** output beyond `maxToolResultChars` (default 16000) keeps its head and tail in the conversation; the model reads the rest with `read_tool_output`.
 - **Malformed tool calls:** invalid arguments are returned to the model to resend, up to three times in a row. Whole-string numbers and `"true"`/`"false"` are converted to the declared parameter type.
-- **Loops:** the fourth identical call in a row is refused with a note asking the model to change course; a second loop ends the turn.
-- **Step budget:** the model is told when few steps remain (default budget 50). At the limit, one call without tools asks for an honest summary of what was done and what wasn't.
-- **Claims checked against what happened:** an answer is sent back once when it says it saved a file that doesn't exist, that tests or a command ran when no command ran, or that something is missing when the agent never looked. Agents built on the framework add their own checks by overriding `reviewFinalAnswer()`, using `turnToolCalls()`.
+- **Loops:** the fourth identical call in a row is refused with a note asking the model to change course, and so is the call that would close a cycle of two or three calls (search, read, search, read) for the fourth time; a second loop ends the turn.
+- **Step budget:** `gaiacpp` allows 1000 steps per request, a backstop for a runaway turn rather than a budget (the framework default for other agents is 50). The model is told at 20, 10 and 5 steps left, each once, and sooner on a small limit, where a notice waits until half, a quarter and a tenth of the steps remain; a limit under 8 gets none. The notices are not kept in the conversation. At the limit, one call without tools asks for an honest summary of what was done and what wasn't.
+- **Claims checked against what happened:** an answer is sent back once when it says it saved a file that doesn't exist, that tests or a command ran when no command ran, or that something is missing when the agent never looked. "Nothing was written to notes.md" and "I would have written totals.csv" are not claims of a save. A file named without a folder is also looked for beside a path the request named, when a command run in this request wrote it there. A request that says to use no tools, or asks for a plan only, is not sent back for not looking. Agents built on the framework add their own checks by overriding `reviewFinalAnswer()`, using `turnToolCalls()` and `turnRequest()`.
 - **"Always allow" is scoped:** in the interactive session, always allowing a shell command covers that program (`pytest`), or program and subcommand (`git status`), or the exact text of a chained or piped command, never every shell command.
 - **Reasoning text:** `<think>…</think>` blocks never reach the answer. A reply that is empty, for example reasoning cut off by `maxTokens`, is asked for once more.
 - **Cancel:** `requestCancel()` (Ctrl+C, or a server client disconnecting) stops the run at the next step, and mid-stream when the agent streams (`GAIA_STREAMING=1`). A second Ctrl+C exits at once, for a model call or tool that won't return.
