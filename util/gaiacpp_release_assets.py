@@ -54,7 +54,7 @@ def release_files() -> list[str]:
     return sorted(names)
 
 
-def _sha256(path: Path) -> str:
+def sha256_hex(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
         for block in iter(lambda: f.read(1 << 20), b""):
@@ -84,7 +84,7 @@ def _extract(archive: Path, member: str, dest: Path) -> None:
     dest.chmod(0o755)
 
 
-def _stamped(binary: Path, version: str) -> bool:
+def is_stamped(binary: Path, version: str) -> bool:
     """Whether the binary carries ``gaiacpp <version>`` as a whole string."""
     return f"{AGENT_ID} {version}\n".encode() in binary.read_bytes()
 
@@ -117,7 +117,7 @@ def collect(bundle: Path, tag: str, version: str, out: Path) -> list[str]:
                 f"the bundle has no {archive_name}; re-run the failed "
                 "'Package' leg of build_agents.yml, then this job"
             )
-        actual = "sha256:" + _sha256(archive)
+        actual = "sha256:" + sha256_hex(archive)
         if digests.get(archive_name) != actual:
             raise ReleaseAssetError(
                 f"{archive_name} is {actual}, but {PINS_NAME} pins "
@@ -126,7 +126,7 @@ def collect(bundle: Path, tag: str, version: str, out: Path) -> list[str]:
         shutil.copyfile(archive, out / archive_name)
         bare = out / bare_name
         _extract(archive, member, bare)
-        if not _stamped(bare, version):
+        if not is_stamped(bare, version):
             raise ReleaseAssetError(
                 f"{bare_name} is not stamped '{AGENT_ID} {version}'; it was "
                 "built for another version"
@@ -135,7 +135,7 @@ def collect(bundle: Path, tag: str, version: str, out: Path) -> list[str]:
 
     shutil.copyfile(pins_path, out / PINS_NAME)
     written.append(PINS_NAME)
-    lines = [f"{_sha256(out / name)}  {name}\n" for name in sorted(written)]
+    lines = [f"{sha256_hex(out / name)}  {name}\n" for name in sorted(written)]
     (out / SUMS_NAME).write_text("".join(lines), encoding="utf-8", newline="\n")
     written.append(SUMS_NAME)
     return sorted(written)
