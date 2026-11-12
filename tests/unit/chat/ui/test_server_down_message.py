@@ -15,18 +15,21 @@ from gaia.llm.providers.lemonade import (
     LemonadeServerUnreachableError,
 )
 from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT, APP_SERVER_DOWN_HINT
+from gaia.ui.database import ChatDatabase
 
-from .test_spending_failed_turns import (  # noqa: F401  (fixture)
-    FLASH,
-    _stream_turn,
-    _StreamAgent,
-    db,
-)
+from .test_spending_failed_turns import FLASH, _stream_turn, _StreamAgent
 
 _NOT_INSTALLED = (
     "Lemonade Server is not installed. Run `gaia init` to install it, or set "
     "LEMONADE_SERVER_PATH to an existing install."
 )
+
+
+@pytest.fixture
+def db():
+    database = ChatDatabase(":memory:")
+    yield database
+    database.close()
 
 
 @pytest.fixture
@@ -87,9 +90,7 @@ class _RelayedFailure(_StreamAgent):
 @pytest.mark.parametrize(
     "model, local", [(FLASH, False), ("Gemma-4-E4B-it-GGUF", True)]
 )
-async def test_a_cloud_chat_is_not_told_its_model_is_local(
-    db, model, local
-):  # noqa: F811
+async def test_a_cloud_chat_is_not_told_its_model_is_local(db, model, local):
     events = await _stream_turn(db, model, _RelayedFailure(model, fail=False))
 
     [error] = [e for e in events if e.get("type") == "agent_error"]
