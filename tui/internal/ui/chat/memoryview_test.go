@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -339,5 +340,22 @@ func TestDismissedMemoryFetchReportsNothingWhenItLandsLate(t *testing.T) {
 	if got := len(late.(ChatModel).messages); got != before {
 		t.Errorf("a dismissed fetch posted %d message(s) after Esc: %+v",
 			got-before, late.(ChatModel).messages[before:])
+	}
+}
+
+// A long entry is cut between characters, never inside one.
+func TestALongMemoryEntryIsCutOnACharacterBoundary(t *testing.T) {
+	// Four characters in seven bytes, so the old byte cut landed inside one.
+	word := "ééé "
+	item := client.MemoryItem{Content: strings.Repeat(word, memoryContentTruncateAt/4+20)}
+	out := ansi.Strip(strings.Join(renderMemoryEntry(item, 100), "\n"))
+	if !utf8.ValidString(out) || strings.ContainsRune(out, utf8.RuneError) {
+		t.Fatalf("the cut split a character:\n%s", out)
+	}
+	if got, want := strings.Count(out, "é"), memoryContentTruncateAt/4*3; got != want {
+		t.Errorf("kept %d characters, want %d", got, want)
+	}
+	if !strings.Contains(out, "(+80 more)") {
+		t.Errorf("the count of what was cut is wrong:\n%s", out)
 	}
 }

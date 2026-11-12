@@ -249,7 +249,7 @@ func (m Model) modelsView(w, h int) (body, foot []string) {
 
 // modelsLayout is what surrounds the list, and the lines left for it.
 func (m Model) modelsLayout(w, h int) (top, bottom, foot []string, budget int) {
-	if m.resume && m.opts.Mode == ModeFirstRun {
+	if m.resumable() {
 		top = append(top, components.Pad(warnStyle.Render("[!] "+resumeBanner+" ")+dimStyle.Render("enter resume")))
 	}
 	if m.sel.cloud {
@@ -297,7 +297,7 @@ func (m Model) modelsKeys() [][2]string {
 		if m.sel.shortfall(m.freeGB(), m.drive()) != "" {
 			label = "continue anyway"
 		}
-		if m.resume {
+		if m.resumable() {
 			label = "resume"
 		}
 		if !m.sel.blocked() {

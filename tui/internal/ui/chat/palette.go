@@ -267,6 +267,10 @@ func (m ChatModel) runPaletteRow(name string) (tea.Model, tea.Cmd) {
 	m.palette.open = false
 	m.input.Reset()
 	m.syncComposerHeight()
+	// Local, like the typed form: nothing to wait for.
+	if isCopyCommand(name) || isReadAloudCommand(name) || isVoiceCommand(name) {
+		return m.submit(name)
+	}
 	// Mirrors the plain Enter path in handleKey: a selection made mid-turn
 	// queues behind it rather than running immediately, and submit() is the
 	// same dispatcher a typed command goes through — this must never post as

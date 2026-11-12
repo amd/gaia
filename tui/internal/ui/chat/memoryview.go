@@ -292,9 +292,8 @@ func renderMemoryEntry(item client.MemoryItem, width int) []string {
 	wrapAt := memoryWrapWidth(width)
 	subject, body := splitMemorySubject(elideMemoryPaths(item.Content))
 
-	if len(body) > memoryContentTruncateAt {
-		cut := body[:memoryContentTruncateAt]
-		body = fmt.Sprintf("%s… (+%d more)", cut, len(body)-memoryContentTruncateAt)
+	if runes := []rune(body); len(runes) > memoryContentTruncateAt {
+		body = fmt.Sprintf("%s… (+%d more)", string(runes[:memoryContentTruncateAt]), len(runes)-memoryContentTruncateAt)
 	}
 
 	var lines []string

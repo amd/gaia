@@ -934,11 +934,33 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // updateChat is update for everything the setup screens did not take.
 func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, panelCmd, handled := m.updatePanel(msg)
+	if handled {
+		return next, panelCmd
+	}
+	out, cmd := next.updateChatMsg(msg)
+	return out, tea.Batch(panelCmd, cmd)
+}
+
+// panelOwns reports whether msg is input for an open panel rather than a
+// result the chat is waiting on.
+func panelOwns(msg tea.Msg) bool {
+	switch msg.(type) {
+	case tea.KeyMsg, tea.MouseMsg, tea.WindowSizeMsg:
+		return true
+	}
+	return false
+}
+
+// updatePanel gives msg to an open /provider or /agents panel. Only input
+// stops there: a result that arrives while a panel is up still reaches the
+// chat, or whatever was waiting on it would wait forever.
+func (m ChatModel) updatePanel(msg tea.Msg) (ChatModel, tea.Cmd, bool) {
 	if m.providerPanel != nil {
 		switch v := msg.(type) {
 		case providers.ClosedMsg:
 			m.providerPanel = nil
-			return m, nil
+			return m, nil, true
 		case providers.SelectedMsg:
 			m.providerPanel = nil
 			if c, ok := m.client.(interface{ SetModelBeforeStart(string) bool }); ok && c.SetModelBeforeStart(v.ID) {
@@ -946,7 +968,8 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelRemote = false
 				m = m.applyLaunchClaude()
 			}
-			return m.submit("/model " + v.ID)
+			next, cmd := m.submit("/model " + v.ID)
+			return next.(ChatModel), cmd, true
 		default:
 			if size, ok := msg.(tea.WindowSizeMsg); ok {
 				m.width = size.Width
@@ -956,7 +979,7 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			updated, cmd := m.providerPanel.Update(msg)
 			panel := updated.(providers.Model)
 			m.providerPanel = &panel
-			return m, cmd
+			return m, cmd, panelOwns(msg)
 		}
 	}
 
@@ -964,13 +987,12 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.(type) {
 		case agents.ClosedMsg:
 			m.agentsPanel = nil
-			return m, nil
+			return m, nil, true
 		default:
 			// agents.SelectedMsg is deliberately NOT a case here: the root
 			// model intercepts it before this Update ever runs again, because
 			// picking an agent replaces this whole ChatModel — there is
-			// nothing for the panel field to clean up. This default only
-			// forwards keys/resizes to the still-open panel.
+			// nothing for the panel field to clean up.
 			if size, ok := msg.(tea.WindowSizeMsg); ok {
 				m.width = size.Width
 				m.height = size.Height
@@ -979,10 +1001,14 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			updated, cmd := m.agentsPanel.Update(msg)
 			panel := updated.(agents.Model)
 			m.agentsPanel = &panel
-			return m, cmd
+			return m, cmd, panelOwns(msg)
 		}
 	}
+	return m, nil, false
+}
 
+// updateChatMsg is updateChat for everything an open panel did not take.
+func (m ChatModel) updateChatMsg(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -1431,6 +1457,11 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Slack setup's own questions have no turn to cancel: Esc ends the flow.
+	if msg.Type == tea.KeyEsc && m.question != nil && isSlackSetupQuestion(m.question.RequestID()) {
+		return m.cancelSlackSetup(), nil
+	}
+
 	// /copy's picker owns the arrows, Enter and Esc while it is open; any
 	// other key closes it and then does what it always does.
 	if m.pick.open {
@@ -1785,6 +1816,9 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	m.confirmation = nil
 	m.awaitingModelSwitch = false
 	m.switchTarget = ""
+	// Left set, the next real answer is dropped as the warm-up's sentinel.
+	m.warming = false
+	m.warmHidden = false
 	m.endStartupTurn("you stopped it")
 	m.commitWork()
 	abandoned := m.queued

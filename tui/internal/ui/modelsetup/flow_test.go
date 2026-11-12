@@ -1844,3 +1844,140 @@ func TestMemoryUnfitModelStillAsksAndCanBeConfirmed(t *testing.T) {
 		t.Fatalf("an acknowledged memory-unfit model must go ahead: %v", api.CallList())
 	}
 }
+
+// The recommended set runs with no plan read; skipping a model that failed in
+// it must still work.
+func TestSkippingAFailedModelWithoutAPlan(t *testing.T) {
+	api := &f.Fake{PlanErr: errDropped, G: discreteGPU()}
+	h := newHarness(t, ModeFirstRun, api)
+	h.key("u")
+	if !api.Called("run") {
+		t.Fatalf("u did not start setup: %v", api.CallList())
+	}
+	api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateFailed, ErrorKind: strp("network"), BytesTotal: total(qwen)})
+	api.SetRunState(setupapi.RunFailed)
+	api.SetRunError(true, "a download failed")
+	h.poll()
+	h.focusOnProgress(qwen)
+	h.key("s")
+	for _, r := range h.m.shownRows() {
+		if sameID(r.ID, qwen) {
+			t.Fatal("the skipped model is still listed")
+		}
+	}
+}
+
+// A run that never started is not a run in progress: a failed row can be
+// retried on its own.
+func TestARunThatFailedToStartDoesNotOwnRetry(t *testing.T) {
+	h := startedDownload(t)
+	h.api.Progress(setupapi.ModelProgress{ID: qwen, State: setupapi.StateFailed, ErrorKind: strp("network"), BytesTotal: total(qwen)})
+	h.api.SetRunState(setupapi.RunFailed)
+	h.api.SetRunError(true, "a download failed")
+	h.poll()
+	h.api.RunErr = errDropped
+	h.key("R")
+	h.expect("Could not start the download")
+	if h.m.dl.run {
+		t.Fatal("a run that did not start is still marked as running")
+	}
+	h.focusOnProgress(qwen)
+	h.key("r")
+	h.expectNot(runOwnsRetry)
+	if !h.api.Called("download " + qwen) {
+		t.Fatalf("r did not retry the failed model: %v", h.api.CallList())
+	}
+}
+
+// /models reopened while one model downloads keeps following it to the end.
+func TestReopeningFollowsASingleDownloadToTheEnd(t *testing.T) {
+	api := &f.Fake{P: warmPlan(), G: discreteGPU()}
+	api.S = setupapi.Status{State: setupapi.RunIdle, Models: []setupapi.ModelProgress{
+		{ID: oss, State: setupapi.StateDownloading, BytesDone: 2e9, BytesTotal: 12e9},
+	}}
+	h := newHarness(t, ModeModels, api)
+	if h.m.Screen() != "download" {
+		t.Fatalf("screen = %s, want download", h.m.Screen())
+	}
+	api.Progress(setupapi.ModelProgress{ID: oss, State: setupapi.StateDownloading, BytesDone: 3e9, BytesTotal: 12e9})
+	h.poll()
+	if busy, _ := h.m.Downloading(); !busy {
+		t.Fatal("stopped following a download that is still running")
+	}
+	n := countPrefix(api.CallList(), "status")
+	h.poll()
+	if countPrefix(api.CallList(), "status") == n {
+		t.Fatal("no longer reads the download's progress")
+	}
+	api.Progress(setupapi.ModelProgress{ID: oss, State: setupapi.StateReady, BytesDone: 12e9, BytesTotal: 12e9})
+	h.poll()
+	if busy, _ := h.m.Downloading(); busy {
+		t.Fatal("still following a download that finished")
+	}
+	if api.Called("download") {
+		t.Fatalf("reopening started a download of its own: %v", api.CallList())
+	}
+}
+
+// Retrying a stuck pull stops it first: the backend refuses a second download
+// of a model whose pull is still open.
+func TestRetryingAStuckPullStopsItFirst(t *testing.T) {
+	api := &f.Fake{P: warmPlan(), G: discreteGPU(), CancelLater: true}
+	h := newHarness(t, ModeModels, api)
+	h.focusID(oss)
+	h.key("space", "a")
+	api.Progress(setupapi.ModelProgress{ID: oss, State: setupapi.StateDownloading, BytesDone: 1e9, BytesTotal: 12e9})
+	h.poll()
+	api.Progress(setupapi.ModelProgress{ID: oss, State: setupapi.StateDownloading, BytesDone: 2e9, BytesTotal: 12e9})
+	h.poll()
+	h.tick(61 * time.Second)
+	h.focusOnProgress(oss)
+	h.expect("The download seems stuck.")
+
+	h.key("r")
+	if !api.Called("cancel " + oss) {
+		t.Fatalf("r did not stop the stuck pull: %v", api.CallList())
+	}
+	h.poll()
+	if n := countPrefix(api.CallList(), "download "+oss); n != 1 {
+		t.Fatalf("%d downloads sent while the old pull was still open", n)
+	}
+	if !h.m.dl.active {
+		t.Fatal("stopped following the pull before it stopped")
+	}
+	api.Progress(setupapi.ModelProgress{ID: oss, State: setupapi.StateCancelled, BytesDone: 2e9, BytesTotal: 12e9})
+	h.poll()
+	if n := countPrefix(api.CallList(), "download "+oss); n != 2 {
+		t.Fatalf("the pull was not started again once it stopped (%d downloads): %v", n, api.CallList())
+	}
+	if !h.m.dl.active {
+		t.Fatal("the restarted download is not followed")
+	}
+}
+
+// A model whose download never started is not a finished download.
+func TestAModelThatNeverStartedIsNotDone(t *testing.T) {
+	api := &f.Fake{P: warmPlan(), G: discreteGPU(), DownloadErr: errDropped}
+	h := newHarness(t, ModeModels, api)
+	h.focusID(oss)
+	h.key("space", "a")
+	if busy, _ := h.m.Downloading(); busy {
+		t.Fatal("still downloading after the only model refused to start")
+	}
+	if kind, detail := h.m.Outcome(); kind != "failed" || detail == "" {
+		t.Fatalf("Outcome() = %q, %q; want the model that never started named as failed", kind, detail)
+	}
+}
+
+// The Resume banner is about a partial download that is still wanted.
+func TestTheResumeBannerGoesWhenThePartialModelIsDropped(t *testing.T) {
+	p := coldPlan()
+	left := 1.2
+	p.Catalog[0].SizeGB, p.Catalog[0].Partial, p.Catalog[0].PartialGB = &left, true, 22.1
+	h := newHarness(t, ModeFirstRun, &f.Fake{P: p, G: discreteGPU()})
+	h.expect(resumeBanner)
+	h.focusJob(jobChat, oss)
+	h.key("space")
+	h.expectNot(resumeBanner)
+	h.expectNot("enter resume")
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -152,6 +153,54 @@ func TestLemonadeRowStillHaltsWhenTheStartFails(t *testing.T) {
 	}
 	if !strings.Contains(row.Raw, "permission denied") {
 		t.Fatalf("the failure must reach the details pane, got Raw=%q", row.Raw)
+	}
+}
+
+// A probe that was cancelled says nothing about the server, so nothing is
+// started on its word: the server may be up and merely unasked.
+func TestACancelledCheckStartsNoServer(t *testing.T) {
+	stubProbe(t, false)
+	restore := tryAutoStartLemonade
+	t.Cleanup(func() { tryAutoStartLemonade = restore })
+	tried := false
+	tryAutoStartLemonade = func(context.Context) (bool, string, string) {
+		tried = true
+		return true, "http://localhost:13305/api/v1", "auto-start: ran lemond"
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	row := localRunner{opts: LocalOptions{}}.checkLemonade(ctx, Config{})
+	if tried {
+		t.Fatal("a cancelled check started the server")
+	}
+	if row.State == StateOK {
+		t.Fatalf("a cancelled check reported the server up: %+v", row)
+	}
+}
+
+// A launcher that hands off and exits is collected, not left a zombie.
+func TestTheLauncherIsReapedOnceItExits(t *testing.T) {
+	spawnAllowedInTest = true
+	t.Cleanup(func() { spawnAllowedInTest = false })
+	restore := reapLauncher
+	t.Cleanup(func() { reapLauncher = restore })
+	exited := make(chan error, 1)
+	reapLauncher = func(cmd *exec.Cmd) {
+		go func() { exited <- cmd.Wait() }()
+	}
+
+	l := launcher{Found: true, Argv: []string{exitStub(t, 0)}}
+	if err := startLemonade(context.Background(), l, func(context.Context) bool { return true }); err != nil {
+		t.Fatalf("startLemonade: %v", err)
+	}
+	select {
+	case err := <-exited:
+		if err != nil {
+			t.Fatalf("the launcher stub failed: %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("the launcher was never waited on")
 	}
 }
 

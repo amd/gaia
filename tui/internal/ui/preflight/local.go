@@ -416,16 +416,21 @@ func (l localRunner) checkLemonade(ctx context.Context, _ Config) Row {
 	// case this screen can resolve by itself. Starting is not installing: an
 	// absent Lemonade still falls through to the `f` key below, because pulling
 	// gigabytes needs a human to agree.
-	if started, base, trace := tryAutoStartLemonade(ctx); started {
-		row.State = StateOK
-		row.Line = "started for you, running at " + base
-		row.Raw = probe + "\n" + trace
-		return row
-	} else if trace != "" {
-		// A failed attempt is reported, never swallowed: the row goes red as it
-		// always did, and `d details` now shows what was run and how it failed.
-		probe += "\n" + trace
-		row.Raw = probe
+	//
+	// A cancelled or timed-out probe proved nothing about the server, so it
+	// starts none.
+	if ctx.Err() == nil {
+		if started, base, trace := tryAutoStartLemonade(ctx); started {
+			row.State = StateOK
+			row.Line = "started for you, running at " + base
+			row.Raw = probe + "\n" + trace
+			return row
+		} else if trace != "" {
+			// A failed attempt is reported, never swallowed: the row goes red as it
+			// always did, and `d details` now shows what was run and how it failed.
+			probe += "\n" + trace
+			row.Raw = probe
+		}
 	}
 
 	row.State = StateFailed

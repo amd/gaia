@@ -571,8 +571,7 @@ func (m Model) retryFocused(rows []setupapi.ModelProgress) (Model, tea.Cmd) {
 	if row.State != setupapi.StateFailed && row.State != setupapi.StateCancelled {
 		if r := m.rates[row.ID]; r != nil && row.State == setupapi.StateDownloading &&
 			r.stalled(m.opts.Now()) >= stallStuck && !m.dl.run {
-			// Stuck: stop that one pull and start it again.
-			return m.restartOne(row.ID)
+			return m.restartStuck(row.ID)
 		}
 		return m, nil
 	}
@@ -587,6 +586,35 @@ func (m Model) retryFocused(rows []setupapi.ModelProgress) (Model, tea.Cmd) {
 		return m, nil
 	}
 	return m.restartOne(row.ID)
+}
+
+// restartStuck stops a stuck pull and queues it again. The backend refuses a
+// second download of a model whose pull is still open.
+func (m Model) restartStuck(id string) (Model, tea.Cmd) {
+	m.dl.active, m.dl.cancelled, m.polling = true, false, true
+	m.dl.current = id
+	m.dl.queue = append([]string{id}, without(m.dl.queue, id)...)
+	delete(m.rates, id)
+	m.note = ""
+	m.busy, m.busySince = "Stopping the stuck download…", m.opts.Now()
+	api := m.api
+	return m, tea.Batch(func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+		defer cancel()
+		_, err := api.Cancel(ctx, id)
+		return stoppedMsg{id: id, err: err}
+	}, m.tickCmd())
+}
+
+// without is ids with every spelling of id removed.
+func without(ids []string, id string) []string {
+	out := ids[:0:0]
+	for _, d := range ids {
+		if !sameID(d, id) {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // restartOne queues a single download of id ahead of anything still queued.
