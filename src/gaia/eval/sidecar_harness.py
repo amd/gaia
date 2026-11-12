@@ -348,7 +348,7 @@ class QuerySequenceScenario:
     """One ``/query`` eval scenario driven through the sidecar path.
 
     Attributes:
-        agent_id: The relay/sidecar agent id (e.g. ``"email"``) — selects the
+        agent_id: The relay/sidecar agent id (e.g. ``"gaia"``) — selects the
             ``/v1/<agent_id>/query`` route.
         query: The natural-language request driving the agent loop.
         baseline: The committed expected event-sequence shape.

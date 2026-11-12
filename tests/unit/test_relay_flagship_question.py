@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: MIT
 """Answering a relayed flagship's mid-run question from the Agent UI.
 
-The Agent UI relays the answer with the spec §5.1 body ``{request_id, value}``
-— the same one the email sidecar takes. The flagship only took ``response``,
+The Agent UI relays the answer with the spec §5.1 body ``{request_id, value}``.
+The flagship only took ``response``,
 so every answer 422'd and the run sat on the question until it timed out.
 These drive the real Agent UI relay and proxy against the real flagship app
 over HTTP, because a stubbed proxy cannot catch a field-name mismatch.
