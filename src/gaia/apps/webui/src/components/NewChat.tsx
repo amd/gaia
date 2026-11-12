@@ -283,9 +283,9 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
     });
 
     const fillPrompt = useCallback((prompt: string) => {
-        setText(prompt);
+        setText((draft) => (draft.trim() ? `${draft.trimEnd()}\n\n${prompt}` : prompt));
         inputRef.current?.focus();
-    }, []);
+    }, [setText]);
 
     const downloading = download?.state === 'starting' || download?.state === 'downloading';
     const activity = sending ? 'sending' : downloading ? 'download' : starting || warming !== null ? 'loading' : 'idle';

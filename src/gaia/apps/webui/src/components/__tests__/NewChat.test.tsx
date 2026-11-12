@@ -132,6 +132,16 @@ describe('NewChat try chips', () => {
         expect(screen.getByLabelText('Message')).toHaveFocus();
         expect(onSend).not.toHaveBeenCalled();
     });
+
+    it('keeps a question already typed and adds the example after it (#7594)', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'What should I cook this week?' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+
+        expect(screen.getByLabelText('Message')).toHaveValue('What should I cook this week?\n\nGive me a banana bread recipe');
+    });
 });
 
 describe('NewChat while the chat is being created (#5712)', () => {
