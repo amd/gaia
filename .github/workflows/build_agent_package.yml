@@ -13,9 +13,9 @@ on:
   workflow_dispatch:
     inputs:
       agent_id:
-        description: 'Agent id to build and share (e.g. email)'
+        description: 'Agent id to build and share (e.g. gaia)'
         required: true
-        default: 'email'
+        default: 'gaia'
       ref:
         description: 'git ref/sha/tag to build (blank = the branch this is dispatched from)'
         required: false

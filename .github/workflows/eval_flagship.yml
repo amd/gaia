@@ -243,8 +243,8 @@ on:
 # where `matrix.lane` is in scope.
 #
 # `lemonade-eval` is gone from this file on purpose and must not come back. It
-# serialises by NAME across machines, which is right for the persistent pool the
-# email eval still runs on and wrong for the ephemeral one these lanes use.
+# serialises by NAME across machines, which is right for a persistent pool and
+# wrong for the ephemeral one these lanes use.
 
 permissions:
   contents: read
@@ -765,7 +765,7 @@ jobs:
     #
     # `lemonade-eval` is deliberately NOT here. It is the lock label for the one
     # persistent Halo box, and holding it would put every lane back in a single
-    # queue. The email and publish workflows still use it; this one must not.
+    # queue. The publish workflows still use it; this one must not.
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:

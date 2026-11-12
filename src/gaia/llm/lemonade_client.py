@@ -2142,7 +2142,7 @@ MODELS = {
         max_ctx_size=131072,
         kv_bytes_per_token=36864,
     ),
-    # --- Gemma 4 E2B: primary on-device NPU model for email triage ---
+    # --- Gemma 4 E2B: the small on-device NPU model ---
     # Issue #1282. This is the NPU-native FastFlowLM build (checkpoint
     # ``gemma4-it:e2b``), NOT the llama.cpp GGUF variant — only the FLM build
     # runs on the Strix Halo NPU. Validated on hardware: device=npu,

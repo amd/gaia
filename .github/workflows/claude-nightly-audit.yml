@@ -424,8 +424,8 @@ jobs:
             touches a published hub agent, review it against this bar explicitly and bump any
             gap up one severity level** (a gap here is never 🟡; a user-facing break on the
             default path is 🔴).
-            - **Which agents are published:** currently the **email agent** and the **gaia
-              flagship agent** — code at `hub/agents/<id>/python/`, npm client at
+            - **Which agents are published:** currently the **gaia flagship agent**
+              only — code at `hub/agents/<id>/python/`, npm client at
               `hub/agents/<id>/npm/`. Detect
               any *other* published agent generally: it has a `.github/workflows/release_agent_<id>.yml`
               OR a shipped `hub/agents/**/SCORECARD.md` OR a released `version:` in its

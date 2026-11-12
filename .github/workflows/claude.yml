@@ -340,7 +340,7 @@ jobs:
             ## Review Checklist
 
             ### 1. Code Quality & Patterns
-            - **Architecture Consistency:** For new agents, compare with existing agents under `hub/agents/<id>/python/gaia_agent_<id>/agent.py` (email, gaia) and the reference package `tests/fixtures/agents/hello-world/`
+            - **Architecture Consistency:** For new agents, compare with the flagship at `hub/agents/gaia/python/gaia_agent/agent.py` and the reference package `tests/fixtures/agents/hello-world/`
               - Does it extend `src/gaia/agents/base/agent.py` (`class Agent`)?
               - Does it register tools via `@tool` (see `src/gaia/agents/base/tools.py`)?
               - Does error handling use `src/gaia/agents/base/errors.py` formatters?

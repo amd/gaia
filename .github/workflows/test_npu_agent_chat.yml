@@ -13,7 +13,7 @@
 # gaia-agent binary; the real Agent UI backend then relays one message to that
 # binary's sidecar, which the daemon starts. It fails unless the answer is real,
 # nothing said the model was unreachable, and Lemonade shows the model loaded
-# with the flm recipe. The E2B model, the email agent's NPU default, then gets
+# with the flm recipe. The smaller E2B NPU model then gets
 # one direct prompt as before.
 #
 # Not covered: the Electron shell, and the agent source in this checkout. The
