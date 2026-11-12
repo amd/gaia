@@ -44,6 +44,7 @@ import { StepResult } from './LongContent';
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
+import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -931,6 +932,15 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     </span>
                 </div>
             </button>
+
+            {step.needsModel === 'vision' && !step.active && (
+                <div className="flow-tool-offer">
+                    <span>{t('activity.visionNeeded')}</span>
+                    <button type="button" className="btn-secondary" onClick={() => { void ensureModel('vision'); }}>
+                        {t('activity.getVisionModel')}
+                    </button>
+                </div>
+            )}
 
             {isExpanded && (
                 <div className="flow-tool-detail">
