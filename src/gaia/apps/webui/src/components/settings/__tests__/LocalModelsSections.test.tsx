@@ -245,4 +245,12 @@ describe('Settings words an unticked model for Settings', () => {
         render(<LocalModelsSections />);
         expect(await screen.findByText('Without Gemma-4-E4B-it, GAIA can’t read images or screenshots. Tick it to download it.')).toBeInTheDocument();
     });
+
+    it('does not ask for a second image model when one on this PC already reads images', async () => {
+        const vl = { ...GEMMA, id: 'Qwen3-VL-4B-Instruct-GGUF', name: 'Qwen3 VL 4B', size_gb: 3.3, full_size_gb: 3.3, selected: false, planned: false, recommended: false };
+        mocked.getSetupPlan.mockResolvedValue(plan([on(GEMMA), vl, on(EMBED)]));
+        render(<LocalModelsSections />);
+        expect(await screen.findByRole('checkbox', { name: /Qwen3 VL 4B/ })).not.toBeChecked();
+        expect(screen.queryByText(/can’t read images/)).not.toBeInTheDocument();
+    });
 });
