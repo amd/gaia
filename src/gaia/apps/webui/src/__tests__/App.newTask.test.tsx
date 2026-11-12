@@ -387,9 +387,10 @@ describe('a private new chat', () => {
             id: 'sess-new-0001', title: 'New Task', message_count: 0, agent_type: 'gaia', private: !!data?.private,
         }));
         render(<App />);
-        const chip = await screen.findByRole('button', { name: 'Turn on private chat' });
+        const chip = await screen.findByRole('button', { name: 'Memory for this chat: Memory on' });
         await userEvent.click(chip);
-        expect(chip).toHaveAccessibleName('Turn off private chat');
+        await userEvent.click(screen.getByRole('button', { name: /Private chat/ }));
+        expect(chip).toHaveAccessibleName('Memory for this chat: Private');
         await sendFirstMessage('Please remember: my bank PIN hint is the dog');
 
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());

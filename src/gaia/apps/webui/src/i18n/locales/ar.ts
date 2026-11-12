@@ -246,10 +246,12 @@ const messages: Messages = {
     'composer.memoryUnknown': 'حالة الذاكرة غير معروفة',
     'composer.memoryOffTitle': 'الذاكرة متوقفة في الإعدادات، لذا لا تُحفظ أي محادثة في الذاكرة',
     'composer.memoryUnknownTitle': 'تعذّرت قراءة إعداد الذاكرة. فعّل المحادثة الخاصة لإبقاء هذه المحادثة خارج الذاكرة في كل الأحوال.',
-    'composer.privateOn': 'تفعيل المحادثة الخاصة',
-    'composer.privateOnTitle': 'تفعيل المحادثة الخاصة. لن تُحفظ في الذاكرة.',
-    'composer.privateOff': 'إيقاف المحادثة الخاصة',
-    'composer.privateOffTitle': 'إيقاف المحادثة الخاصة. لن تُحفظ هذه المحادثة في الذاكرة.',
+    'composer.memoryChipAria': 'الذاكرة لهذه المحادثة: {state}',
+    'composer.memoryMenu': 'الذاكرة لهذه المحادثة',
+    'composer.remember': 'تذكّر هذه المحادثة',
+    'composer.rememberNote': 'يمكن لـ GAIA أن يتعلم من هذه المحادثة ويستخدمها في محادثات لاحقة.',
+    'composer.privateChat': 'محادثة خاصة',
+    'composer.privateChatNote': 'لا تُحفظ في الذاكرة، ولا حتى رسالتها الأولى.',
 
     // Notice when the GAIA agent is missing
     'agentNotice.missing': 'وكيل GAIA غير مثبّت، لذا لا يمكن بدء محادثات جديدة بعد.',

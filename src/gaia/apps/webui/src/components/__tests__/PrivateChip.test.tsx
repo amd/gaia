@@ -23,17 +23,23 @@ beforeEach(() => {
 });
 
 describe('PrivateChip', () => {
-    it('shows "Memory on" when off and "Private" when on, and says what a click does', async () => {
+    it('opens a menu that says what each choice does, so one click never turns a chat private', async () => {
         render(<PrivateChip />);
-        const chip = await screen.findByRole('button', { name: 'Turn on private chat' });
+        const chip = await screen.findByRole('button', { name: 'Memory for this chat: Memory on' });
         expect(chip).toHaveTextContent('Memory on');
-        expect(chip).not.toHaveClass('is-on');
 
         await userEvent.click(chip);
-        expect(chip).toHaveAccessibleName('Turn off private chat');
+        expect(useChatStore.getState().draftPrivate).toBe(false);
+        const menu = screen.getByRole('dialog', { name: 'Memory for this chat' });
+        expect(menu).toHaveTextContent('Not saved to memory, not even its first message.');
+        expect(screen.getByRole('button', { name: /Remember this chat/ })).toHaveAttribute('aria-pressed', 'true');
+
+        await userEvent.click(screen.getByRole('button', { name: /Private chat/ }));
+        expect(useChatStore.getState().draftPrivate).toBe(true);
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+        expect(chip).toHaveAccessibleName('Memory for this chat: Private');
         expect(chip).toHaveTextContent('Private');
         expect(chip).toHaveClass('is-on');
-        expect(useChatStore.getState().draftPrivate).toBe(true);
     });
 
     it('shows "Memory off", disabled, when memory is turned off in Settings', async () => {
@@ -46,7 +52,7 @@ describe('PrivateChip', () => {
 
     it('picks up memory being switched off once Settings closes', async () => {
         render(<PrivateChip />);
-        await screen.findByRole('button', { name: 'Turn on private chat' });
+        await screen.findByRole('button', { name: 'Memory for this chat: Memory on' });
 
         getSettings.mockResolvedValue(memory(false));
         act(() => useChatStore.setState({ settingsSection: 'memory' }));
@@ -56,7 +62,8 @@ describe('PrivateChip', () => {
 
     it('drops a Private choice once memory is switched off, so the next chat is not silently private', async () => {
         render(<PrivateChip />);
-        await userEvent.click(await screen.findByRole('button', { name: 'Turn on private chat' }));
+        await userEvent.click(await screen.findByRole('button', { name: 'Memory for this chat: Memory on' }));
+        await userEvent.click(screen.getByRole('button', { name: /Private chat/ }));
         expect(useChatStore.getState().draftPrivate).toBe(true);
 
         getSettings.mockResolvedValue(memory(false));
@@ -69,7 +76,7 @@ describe('PrivateChip', () => {
         getSettings.mockResolvedValue(memory(true));
         act(() => useChatStore.setState({ settingsSection: 'memory' }));
         act(() => useChatStore.setState({ settingsSection: null }));
-        expect(await screen.findByRole('button', { name: 'Turn on private chat' })).toHaveTextContent('Memory on');
+        expect(await screen.findByRole('button', { name: 'Memory for this chat: Memory on' })).toHaveTextContent('Memory on');
         expect(useChatStore.getState().draftPrivate).toBe(false);
     });
 
@@ -84,7 +91,7 @@ describe('PrivateChip', () => {
     it('keeps a Private choice while memory is on', async () => {
         useChatStore.setState({ draftPrivate: true });
         render(<PrivateChip />);
-        const chip = await screen.findByRole('button', { name: 'Turn off private chat' });
+        const chip = await screen.findByRole('button', { name: 'Memory for this chat: Private' });
         await act(async () => { await Promise.resolve(); });
         expect(chip).toHaveTextContent('Private');
         expect(useChatStore.getState().draftPrivate).toBe(true);
@@ -103,8 +110,9 @@ describe('PrivateChip', () => {
         expect(raw).not.toHaveBeenCalledWith(expect.stringContaining('[PrivateChip]'), expect.anything());
 
         // Private still works, and reads as Private, when the setting is unknown.
-        await userEvent.click(screen.getByRole('button', { name: 'Turn on private chat' }));
-        expect(screen.getByRole('button', { name: 'Turn off private chat' })).toHaveTextContent('Private');
+        await userEvent.click(screen.getByRole('button', { name: 'Memory for this chat: Memory unknown' }));
+        await userEvent.click(screen.getByRole('button', { name: /Private chat/ }));
+        expect(screen.getByRole('button', { name: 'Memory for this chat: Private' })).toHaveTextContent('Private');
         expect(useChatStore.getState().draftPrivate).toBe(true);
         logged.mockRestore();
         raw.mockRestore();
