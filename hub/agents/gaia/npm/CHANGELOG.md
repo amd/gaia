@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The model is told when older turns are out of its view.** A long chat showed
+  "Older messages are now out of the model's view" while the model answered
+  that something from those turns was never mentioned. The oldest turn it still
+  reads now opens with a one-sentence note that earlier turns exist and are no
+  longer shown.
+
+- **`final.context` counts what the next turn really carries.** With `turns`,
+  the measurement split a text-tool model's recorded tool results into turns
+  of their own and counted this turn as its question and answer only, so a
+  large file read could push history past its budget while `turns_hidden`
+  stayed 0. It now measures whole turns, this turn's tool results included.
 - **Dropped MCP servers are shown as a warning, including ones that fail to
   start.** The notice that configured MCP servers were left out reached the
   Agent UI as a plain progress line, so it never appeared in the window, and a
