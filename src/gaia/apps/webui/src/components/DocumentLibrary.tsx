@@ -271,6 +271,7 @@ export function DocumentLibrary() {
     }, [setDocuments]);
 
     const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
+    const unreadableCount = documents.filter((d) => d.indexing_status === 'failed').length;
     const totalChunks = documents.reduce((sum, d) => sum + d.chunk_count, 0);
 
     /** Attach a document where the user chose, and say where it went. */
@@ -350,7 +351,11 @@ export function DocumentLibrary() {
         try {
             const doc = await uploader();
             log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, timer);
-            if (doc?.id) {
+            if (doc?.indexing_status === 'failed') {
+                // Its row carries the reason and Retry; attaching it would promise a chat a file it can't search.
+                log.doc.warn(`"${filename}" couldn't be read; not attaching it`);
+                setActionError(t('docs.notAdded', { name: doc.filename || filename }));
+            } else if (doc?.id) {
                 try {
                     await attachToTarget(doc.id, doc.filename || filename);
                 } catch (attachErr) {
@@ -762,7 +767,10 @@ export function DocumentLibrary() {
                     {/* Stats */}
                     {documents.length > 0 && (
                         <div className="doc-stats">
-                            <span>{t.plural('docs.count', documents.length)}</span>
+                            <span>{t.plural('docs.count', documents.length - unreadableCount)}</span>
+                            {unreadableCount > 0 && (
+                                <span className="doc-stats-failed">{t.plural('docs.unreadable', unreadableCount)}</span>
+                            )}
                             <span>&middot;</span>
                             <span>{t.plural('docs.chunks', totalChunks)}</span>
                             <span>&middot;</span>

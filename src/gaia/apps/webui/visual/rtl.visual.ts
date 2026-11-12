@@ -692,6 +692,25 @@ test('document being indexed', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['en', 'ar']) {
+    // A file GAIA couldn't read used to be counted with the readable ones.
+    test(`a document library with a file that could not be read (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: {
+                documents: [
+                    { id: 'd1', filename: 'broken.pdf', filepath: 'C:/broken.pdf', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'corrupt', last_error: 'Could not read PDF: broken.pdf', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 },
+                    { id: 'd2', filename: 'garden-notes.txt', filepath: 'C:/garden-notes.txt', file_size: 7270, chunk_count: 7, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1 },
+                ],
+                total: 2, total_size_bytes: 8294, total_chunks: 7,
+            } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-stats-failed')).toBeVisible();
+        await shot(page, `documents-${locale}-unreadable`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     // A library that couldn't be listed used to look empty, as if every document were gone.
     test(`a document library that could not be listed, then a remove that failed (${locale})`, async ({ page }) => {

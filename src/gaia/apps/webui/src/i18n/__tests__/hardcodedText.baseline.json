@@ -18,7 +18,7 @@
   "components/PrivateChatButton.tsx": 4,
   "components/QueuedMessages.tsx": 7,
   "components/RetryWithMenu.tsx": 3,
-  "components/SessionDocsBar.tsx": 6,
+  "components/SessionDocsBar.tsx": 4,
   "components/SetupScreen.tsx": 2,
   "components/SidebarResizer.tsx": 2,
   "components/TurnChanges.tsx": 17,

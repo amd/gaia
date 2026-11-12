@@ -204,6 +204,13 @@
     flex-shrink: 0;
     color: var(--accent-green);
 }
+.doc-context-icon-failed,
+.doc-pill-failed .doc-pill-icon {
+    color: var(--danger);
+}
+.doc-pill-failed {
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
 /* Remove button - hidden by default, shown on pill hover */
 .doc-pill-remove {
     display: none;

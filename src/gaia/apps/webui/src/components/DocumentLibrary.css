@@ -105,6 +105,14 @@
     margin-bottom: 12px;
     padding: 0 2px;
 }
+.doc-stats-failed {
+    color: var(--danger);
+}
+.doc-stats-failed::before {
+    content: '·';
+    margin-inline-end: 8px;
+    color: var(--text-muted);
+}
 
 /* Document list */
 .doc-list { display: flex; flex-direction: column; gap: 4px; }
