@@ -2191,7 +2191,9 @@ _NON_FILE_SUFFIXES = frozenset(
 _NEGATED_OUTPUT = (
     r"(?:nothing|none(?:\s+of\s+(?:them|(?:the|these|those|your|my)\s+[\w-]+))?"
     r"|no\s+(?:[\w-]+\s+)?(?:files?|outputs?|changes|data|cop(?:y|ies)"
-    r"|backups?|documents?|reports?))"
+    r"|backups?|documents?|reports?)"
+    # "no `x.html` was saved": a named file the sentence says does not exist.
+    r"|no\s+`[^`\n]+`)"
 )
 # "No file was written": the write verb's subject says nothing was saved.
 _NEGATED_SUBJECT_PATTERN = re.compile(
@@ -10991,6 +10993,7 @@ Do NOT wrap conversational replies in JSON.
         gaps = self._completion_evidence.gaps(
             answer or "",
             _write_claims_for(self._completion_evidence),
+            asserts_file_write=_claims_file_write,
             readback=not model_failed,
         )
         gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
@@ -14128,6 +14131,7 @@ Do NOT wrap conversational replies in JSON.
                         and not self._completion_evidence.gaps(
                             restored,
                             _write_claims_for(self._completion_evidence),
+                            asserts_file_write=_claims_file_write,
                             soft=restored_soft,
                         )
                         and not restored_soft
@@ -14141,6 +14145,7 @@ Do NOT wrap conversational replies in JSON.
                 artifact_gaps = self._completion_evidence.gaps(
                     answer_candidate,
                     _write_claims_for(self._completion_evidence),
+                    asserts_file_write=_claims_file_write,
                     soft=soft_gaps,
                 )
                 extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())

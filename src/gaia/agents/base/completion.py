@@ -212,10 +212,46 @@ _UNCONFIRMED = f"{_REFUSED} Nobody refused it, so it can be tried again."
 # The answer owns up that the write did not happen.
 _ADMITS_UNSAVED = re.compile(
     r"\b(?:can(?:no|')t|could(?:n't| not)|unable|did(?:n't| not)|was(?:n't| not)|"
-    r"not (?:saved|written|created|permitted|allowed)|nothing was|denied|declined|"
-    r"refused|permission)\b",
+    r"wo(?:n't| not)|not (?:saved|written|created|permitted|allowed)|nothing was|"
+    r"denied|declined|refus(?:e[sd]?|al)|permission|blocked|protected|"
+    r"fail(?:ed|s|ure)|no\s+\S+\s+(?:was|were|has been|got)\s+"
+    r"(?:saved|written|created|downloaded))\b",
     re.I,
 )
+# Text in quotation marks, which may be a sentence the answer only mentions.
+_QUOTED_SPEECH = re.compile(r"\"([^\"\n]+)\"|“([^”\n]+)”")
+# Words around a quoted sentence that say the answer is not making it.
+_DECLINES_TO_SAY = re.compile(
+    r"\b(?:can(?:no|')t|wo(?:n't| not)|would(?:n't| not)|should(?:n't| not)|"
+    r"did(?:n't| not)|not going to|refus\w+|declin\w+|instead of|rather than|"
+    r"false|untrue|not true|a lie|inaccurate|dishonest|nothing was|"
+    r"no\s+\w+\s+exists?)\b",
+    re.I,
+)
+
+
+def _drop_refused_quotes(text: str) -> str:
+    """Strip quoted save claims from a line that declines to make them.
+
+    'I can't end with "I saved a backup to x.bak"' mentions the sentence; it
+    does not say it. A quoted path, or a quote nothing declines, stays.
+    """
+    lines = []
+    for line in text.replace("’", "'").split("\n"):
+        outside = _QUOTED_SPEECH.sub(" ", line)
+        if outside != line and _DECLINES_TO_SAY.search(outside):
+            line = _QUOTED_SPEECH.sub(
+                lambda quote: (
+                    " "
+                    if _FIRST_PERSON.search(quote.group(1) or quote.group(2))
+                    else quote.group(0)
+                ),
+                line,
+            )
+        lines.append(line)
+    return "\n".join(lines)
+
+
 _DESTINATION = re.compile(r"\b(?:to|into|in|at|as)\s+|\s*(?:→|->|=>)\s*", re.I)
 # A path named as where content comes from: "the items from minutes.txt".
 _SOURCE = re.compile(r"\b(?:from|of|using|based on)\s+", re.I)
@@ -531,6 +567,26 @@ def _named_as_download(query: str, name: str, folder: str) -> bool:
     return re.search(pattern, query, re.I) is not None
 
 
+def _download_target(args: dict) -> tuple[str | None, str | None]:
+    """(where a download call saves, the URL's file name when no name was given).
+
+    The second value is ``None`` when the call names its file.
+    """
+    folder = args.get("save_to") or "~/Downloads"
+    if not isinstance(folder, str):
+        return None, None
+    name = args.get("filename")
+    if isinstance(name, str) and name:
+        # One separator style, the folder's own.
+        separator = "\\" if "\\" in folder else "/"
+        return folder.rstrip("/\\") + separator + name, None
+    url = args.get("url")
+    url_name = (
+        unquote(urlparse(url).path.rsplit("/", 1)[-1]) if isinstance(url, str) else ""
+    )
+    return folder, url_name
+
+
 class CompletionEvidence:
     """Evidence for this turn, with no reads outside the tool permission boundary."""
 
@@ -559,6 +615,9 @@ class CompletionEvidence:
         self.refused_folders: dict[str, str] = {}
         # Refused downloads; they never excuse a save the request gave no path for.
         self.refused_downloads: set[str] = set()
+        # Downloads that ran and failed: key -> the URL's file name when the
+        # call named only a folder, else None.
+        self.failed_downloads: dict[str, str | None] = {}
         self.query = query if isinstance(query, str) else ""
         # The subset of refused reasons that were prompts nobody answered.
         self.unconfirmed: set[str] = set()
@@ -703,6 +762,11 @@ class CompletionEvidence:
             return
         if tool in WRITE_TOOLS or tool in SIDE_EFFECT_PATHS or tool in _EXEC_TOOLS:
             self.disk_tool_ran = True
+        if tool == _DOWNLOAD_TOOL and not successful:
+            # The source said no: no other tool can save this file.
+            target, url_name = _download_target(args)
+            if target and "\x00" not in target:
+                self.failed_downloads[self.key(target)] = url_name
         if tool in _EXEC_TOOLS:
             self.exec_windows.append(
                 (self._exec_started, time.time_ns(), successful, self.sequence)
@@ -829,14 +893,9 @@ class CompletionEvidence:
         folder_only = False
         url_name = ""
         if tool == _DOWNLOAD_TOOL:
-            url = args.get("url")
-            if isinstance(url, str):
-                url_name = unquote(urlparse(url).path.rsplit("/", 1)[-1])
-            path = args.get("save_to") or "~/Downloads"
-            name = args.get("filename")
-            folder_only = not (isinstance(name, str) and name)
-            if isinstance(path, str) and not folder_only:
-                path = os.path.join(path, name)
+            path, named_by_url = _download_target(args)
+            folder_only = named_by_url is not None
+            url_name = named_by_url or ""
         elif tool in WRITE_TOOLS:
             path = args.get("file_path") or args.get("path")
         else:
@@ -1037,6 +1096,7 @@ class CompletionEvidence:
         claims_file_write: Callable[[str], bool],
         soft: list[str] | None = None,
         readback: bool = True,
+        asserts_file_write: Callable[[str], bool] | None = None,
     ) -> list[str]:
         """Missing work that makes the turn incomplete.
 
@@ -1045,7 +1105,11 @@ class CompletionEvidence:
         gap goes to *soft*, worth one correction but never an incomplete turn.
         ``readback=False`` drops the read-it-back check, for a turn the model
         call ended before the model could read anything back.
+        *asserts_file_write* is *claims_file_write* minus denials ("nothing
+        was saved"); it decides whether an answer owned up to a save that was
+        refused or failed, and defaults to *claims_file_write*.
         """
+        asserts_file_write = asserts_file_write or claims_file_write
         required = {self.key(path) for path in self.requested}
         # "Save it as notes.md in my Documents folder" names the file, not its
         # folder: a write of that file anywhere this turn fulfils it.
@@ -1060,11 +1124,12 @@ class CompletionEvidence:
             for path in self.requested
             if path and ntpath.basename(path) == path
         }
-        claimed: set[str] = set()
-        claim_without_path = False
-        admitted = bool(_ADMITS_UNSAVED.search(answer))
+        asserted: set[str] = set()
+        claim_without_path = asserted_without_path = False
+        admitted = bool(_ADMITS_UNSAVED.search(answer.replace("’", "'")))
         checkable = self.instructed or self.disk_tool_ran
-        for sentence in re.split(r"(?<=[.!?])\s+|\n", _FENCES.sub("", answer)):
+        prose = _drop_refused_quotes(_FENCES.sub("", answer))
+        for sentence in re.split(r"(?<=[.!?])\s+|\n", prose):
             if _EARLIER.search(sentence):
                 continue
             sentence = _CODE_BEHAVIOUR.sub(
@@ -1089,7 +1154,9 @@ class CompletionEvidence:
                         )
                 continue
             required.update(self.key(path) for path in paths)
-            claimed.update(self.key(path) for path in paths)
+            if asserts_file_write(sentence):
+                asserted.update(self.key(path) for path in paths)
+                asserted_without_path |= not paths
             bare.update(self.key(p) for p in paths if ntpath.basename(p) == p)
             shown.update((self.key(p), p) for p in paths if ntpath.basename(p) == p)
             claim_without_path |= not paths
@@ -1123,16 +1190,19 @@ class CompletionEvidence:
         ]
         written_names = {os.path.basename(key) for key in written}
 
+        def aimed_at(key: str, path: str) -> bool:
+            """Whether the write or download recorded under *key* was for *path*."""
+            return (
+                key == path
+                or _inside(key, path)
+                or (path in bare and os.path.basename(key) == os.path.basename(path))
+            )
+
         def refusal(path: str) -> str | None:
             """Why the user's side turned down the write this obligation names."""
             for key, reason in self.refused.items():
-                if (
-                    key == path
-                    or _inside(key, path)
-                    or (
-                        path in bare and os.path.basename(key) == os.path.basename(path)
-                    )
-                    or (key in self.refused_folders and folder_target(path, key))
+                if aimed_at(key, path) or (
+                    key in self.refused_folders and folder_target(path, key)
                 ):
                     return reason
             return None
@@ -1150,7 +1220,21 @@ class CompletionEvidence:
                 self.query, path, folder
             )
 
-        for path in sorted(required):
+        def download_failed(path: str) -> bool:
+            """Whether a download that ran and failed was the save *path* names."""
+            for key, url_name in self.failed_downloads.items():
+                if aimed_at(key, path):
+                    return True
+                if url_name is None or not (path in bare or _inside(path, key)):
+                    continue
+                same = os.path.normcase(os.path.basename(path)) == os.path.normcase(
+                    url_name
+                )
+                if same or _named_as_download(self.query, path, key):
+                    return True
+            return False
+
+        def unwritten(path: str) -> bool:
             if path in bare and (
                 os.path.basename(path) in written_names
                 # "Saved in `reports`": a bare folder name, wherever it is.
@@ -1158,19 +1242,31 @@ class CompletionEvidence:
                     _in_named_folder(key, {os.path.basename(path)}) for key in written
                 )
             ):
-                continue
-            written_inside = any(
-                item.written and _inside(key, path) for key, item in self.files.items()
+                return False
+            return not any(
+                item.written and (key == path or _inside(key, path))
+                for key, item in self.files.items()
             )
-            if not written_inside and (
-                path not in self.files or not self.files[path].written
-            ):
+
+        # A folder the request names only as where a bare file goes.
+        files_for = {
+            path: [name for name in bare if _named_as_download(self.query, name, path)]
+            for path in required - bare
+        }
+        download_folders = set(self.refused_folders) | {
+            key
+            for key, url_name in self.failed_downloads.items()
+            if url_name is not None
+        }
+
+        for path in sorted(required):
+            if unwritten(path):
                 refused = refusal(path)
                 if (
-                    refused
+                    (refused or download_failed(path))
                     and admitted
-                    and not claim_without_path
-                    and (path not in claimed)
+                    and not asserted_without_path
+                    and (path not in asserted)
                 ):
                     # "No" is a finished answer once the reply says so.
                     continue
@@ -1181,6 +1277,11 @@ class CompletionEvidence:
                         gaps.append(refused)
                 elif reason:
                     gaps.append(f"Could not inspect `{name}`: {reason}")
+                elif any(unwritten(name) for name in files_for.get(path, ())):
+                    # The folder's missing file is listed under its own name.
+                    continue
+                elif files_for.get(path) or path in download_folders:
+                    gaps.append(f"Nothing was saved in `{name}` this turn.")
                 else:
                     gaps.append(
                         f"No successful write to `{name}` is recorded for this turn."
