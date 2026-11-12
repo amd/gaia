@@ -513,11 +513,19 @@ def delete_knowledge(knowledge_id: str) -> Dict:
     item = store.get_item(knowledge_id)
     if item is None:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    remove = store.forget if is_about_user(item) else store.delete
-    success = remove(knowledge_id, allow_privileged=True)
-    if not success:
+    if is_about_user(item):
+        # Copies of the same fact go too, or the deleted fact is still recalled.
+        deleted = store.forget_with_copies(knowledge_id, allow_privileged=True)
+    elif store.delete(knowledge_id, allow_privileged=True):
+        deleted = [knowledge_id]
+    else:
+        deleted = []
+    if not deleted:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
-    return {"status": "deleted", "knowledge_id": knowledge_id}
+    result: Dict[str, Any] = {"status": "deleted", "knowledge_id": knowledge_id}
+    if len(deleted) > 1:
+        result["knowledge_ids"] = deleted
+    return result
 
 
 @router.get("/api/memory/knowledge/{knowledge_id}")
@@ -622,7 +630,7 @@ def admin_seed(body: AdminSeedRequest) -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# Entities & Contexts
+# Entities
 # ---------------------------------------------------------------------------
 
 
@@ -638,12 +646,6 @@ def get_entity(entity: str, limit: int = Query(20, ge=1, le=200)) -> List[Dict]:
     return _get_store().get_by_entity(entity, limit=limit)
 
 
-@router.get("/api/memory/contexts")
-def list_contexts(limit: int = Query(100, ge=1, le=500)) -> List[Dict]:
-    """List all contexts with their knowledge counts."""
-    return _get_store().get_contexts(limit=limit)
-
-
 # ---------------------------------------------------------------------------
 # Tool Performance
 # ---------------------------------------------------------------------------
@@ -653,23 +655,6 @@ def list_contexts(limit: int = Query(100, ge=1, le=500)) -> List[Dict]:
 def tool_summary() -> List[Dict]:
     """Per-tool performance stats."""
     return _get_store().get_tool_summary()
-
-
-@router.get("/api/memory/tools/{tool_name}/history")
-def tool_history(tool_name: str, limit: int = Query(50, ge=1, le=200)) -> List[Dict]:
-    """Recent call history for a specific tool."""
-    return _get_store().get_tool_history(tool_name, limit=limit)
-
-
-# ---------------------------------------------------------------------------
-# Errors
-# ---------------------------------------------------------------------------
-
-
-@router.get("/api/memory/errors")
-def recent_errors(limit: int = Query(20, ge=1, le=100)) -> List[Dict]:
-    """Recent tool errors across all tools."""
-    return _get_store().get_recent_errors(limit=limit)
 
 
 # ---------------------------------------------------------------------------

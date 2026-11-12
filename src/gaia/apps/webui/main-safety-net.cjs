@@ -201,7 +201,14 @@ function installSafetyNet({
   // Renderer and GPU-process crashes don't fire uncaughtException — route
   // them through fatal() so they get the same dialog + counter treatment.
   appModule.on("render-process-gone", (_event, _webContents, details) => {
-    fatal(new Error(`render-process-gone: reason=${details && details.reason}`));
+    const reason = details && details.reason;
+    // The renderer exits cleanly when the app is signalled to stop (logout, a
+    // stopped app unit); that is a shutdown, not a crash.
+    if (reason === "clean-exit") {
+      appendLog(logPath, `[${new Date().toISOString()}] RENDER_PROCESS_EXITED reason=${reason}`);
+      return;
+    }
+    fatal(new Error(`render-process-gone: reason=${reason}`));
   });
 
   appModule.on("child-process-gone", (_event, details) => {

@@ -60,6 +60,7 @@ import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
+import { requestErrorParam } from '../utils/requestErrors';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
@@ -147,6 +148,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const { policyToast, showPolicyToast, dismissPolicyToast } = usePolicyToast();
     const [pendingReceiptScroll, setPendingReceiptScroll] = useState<string | null>(null);
     const { exportChat, exportError, clearExportError } = useChatExport(sessionId, session?.title);
+    // Why the last rename, private toggle, drop or detach failed.
+    const [actionError, setActionError] = useState<string | null>(null);
+    useEffect(() => setActionError(null), [sessionId]);
+    const handleDetachFailed = useCallback((name: string, err: unknown) => {
+        setActionError(t('chat.detachFailed', { name, error: requestErrorParam(err) }));
+    }, [t]);
     // A chat made by a retired agent (chat/doc/file) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
@@ -1422,9 +1429,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const title = titleDraft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
         // Untouched draft: never cut an old over-long title the user didn't edit.
         if (title && titleDraft !== session?.title && title !== session?.title) {
-            // Explicit rename — pin against the auto-retitler (#2165).
-            await api.updateSession(sessionId, { title, title_is_custom: true });
-            updateSessionInList(sessionId, { title });
+            setActionError(null);
+            try {
+                // Explicit rename — pin against the auto-retitler (#2165).
+                await api.updateSession(sessionId, { title, title_is_custom: true });
+                updateSessionInList(sessionId, { title });
+            } catch (err) {
+                log.chat.error(`Could not rename chat ${sessionId}`, err);
+                setActionError(t('chat.renameFailed', { error: requestErrorParam(err) }));
+            }
         }
         setEditingTitle(false);
     };
@@ -1432,13 +1445,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Toggle private (incognito) mode
     const handleTogglePrivate = useCallback(async () => {
         if (!sessionId) return;
+        setActionError(null);
         try {
             const updated = await api.toggleSessionPrivacy(sessionId);
             updateSessionInList(sessionId, { private: updated.private });
         } catch (err) {
             log.ui.warn('Failed to toggle private mode', err);
+            setActionError(t('chat.privateFailed', { error: requestErrorParam(err) }));
         }
-    }, [sessionId, updateSessionInList]);
+    }, [sessionId, updateSessionInList, t]);
 
     // Drag & drop: see addDroppedFiles.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
@@ -1455,8 +1470,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (documents.length === 0) return;
 
         if (!(await ensureModel('embedding'))) return;
-        await addDroppedFiles(sessionId, documents);
-    }, [sessionId, attach]);
+        setActionError(null);
+        const failures = await addDroppedFiles(sessionId, documents);
+        if (failures.length > 0) {
+            setActionError(failures.map(({ name, stage, error }) => t(
+                stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
+                { name, error: requestErrorParam(error) },
+            )).join(' '));
+        }
+    }, [sessionId, attach, t]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1550,7 +1572,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             {showResources && <ResourceMonitor onClose={closeResources} />}
 
-            <SessionDocsBar sessionId={sessionId} />
+            <SessionDocsBar sessionId={sessionId} onDetachFailed={handleDetachFailed} />
 
             <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
@@ -1700,7 +1722,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             <div className="input-area">
                 <div className="input-column">
-                    <ExportErrorBar message={exportError} onDismiss={clearExportError} />
+                    <ExportErrorBar message={exportError} onDismiss={clearExportError} dismissLabel={t('chat.dismissExportError')} />
+                    <ExportErrorBar message={actionError} onDismiss={() => setActionError(null)} dismissLabel={t('chat.dismissError')} />
                     {lastIsConnectorError && lastMessage && (
                         <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
                     )}

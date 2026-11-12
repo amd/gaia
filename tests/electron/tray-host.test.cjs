@@ -120,6 +120,20 @@ describe("TrayManager without a tray host", () => {
     expect(cfg.host).toEqual({ available: false, reason: "no-host" });
   });
 
+  test.each([
+    [{ available: true, reason: null }, "Tray icon host available"],
+    [{ available: false, reason: "no-host", detail: "nothing owns it" }, "No tray icon host (no-host: nothing owns it)"],
+  ])("the main log records the host either way: %j", (host, line) => {
+    setPlatform("linux");
+    const log = jest.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      newTray().setHost(host);
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(line));
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   test("Windows has a host from the start, and Settings is told so", async () => {
     setPlatform("win32");
     const mgr = newTray();
@@ -136,13 +150,15 @@ describe("TrayManager without a tray host", () => {
     expect(mgr.closeAction).toBe("quit");
   });
 
-  test("the notice points at the dock, not a tray that isn't there", () => {
+  test("the notice points at the dock or overview, not a tray that isn't there", () => {
     setPlatform("linux");
     const mgr = newTray();
     mgr.config.tray = { ...ON };
     mgr.setHost({ available: false, reason: "no-host" });
     const { message, detail } = mgr.closeNoticeText();
-    expect(message).toBe("GAIA is still running in the dock.");
+    expect(message).toBe("GAIA is still running, minimized.");
+    // Fedora's GNOME shows no dock outside the overview.
+    expect(detail).toMatch(/dock or the Activities overview/);
     expect(detail).toMatch(/right-click GAIA there and choose Quit/);
     expect(`${message} ${detail}`).not.toMatch(/tray|AppIndicator/i);
   });

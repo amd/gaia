@@ -17,6 +17,7 @@ from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import (
     agent_import_error_message,
     gaia_extras_install_args,
+    missing_extra_hint,
     pip_install_hint,
 )
 from gaia.config import gaia_agents_dir
@@ -44,7 +45,12 @@ from gaia.mcp.ports import (
     TUI_MCP_PORT,
 )
 from gaia.perf_analysis import run_perf_visualization
-from gaia.ports import is_killable_process, listeners_on_port, terminate_pid
+from gaia.ports import (
+    is_killable_process,
+    is_lemonade_process,
+    listeners_on_port,
+    terminate_pid,
+)
 from gaia.print_mode import READ_STDIN
 from gaia.tls import use_os_trust_store
 from gaia.version import version
@@ -114,7 +120,6 @@ def initialize_lemonade_for_agent(
     quiet: bool = False,
     skip_if_external: bool = False,
     use_claude: bool = False,
-    use_chatgpt: bool = False,
     host: str | None = None,
     port: int | None = None,
     base_url: str | None = None,
@@ -131,7 +136,6 @@ def initialize_lemonade_for_agent(
         quiet: Suppress output (only errors)
         skip_if_external: If True, skip initialization when using Claude
         use_claude: Whether Claude API is being used
-        use_chatgpt: Removed option; True raises migration guidance
         host: Host address of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         port: Port number of the Lemonade server (defaults to LEMONADE_BASE_URL env var)
         base_url: Full base URL for the Lemonade server (e.g., https://abc.ngrok-free.app).
@@ -162,11 +166,6 @@ def initialize_lemonade_for_agent(
     if base_url is None:
         host = host if host is not None else env_host
         port = port if port is not None else env_port
-
-    if use_chatgpt:
-        from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
-
-        raise ValueError(REMOVED_PROVIDER_MESSAGE)
 
     # Skip initialization if using external API
     if skip_if_external and use_claude:
@@ -533,13 +532,11 @@ async def async_main(action, **kwargs):
     if action in action_to_agent and not kwargs.get("no_lemonade_check", False):
         agent_profile = action_to_agent[action]
         use_claude = kwargs.get("use_claude", False)
-        use_chatgpt = kwargs.get("use_chatgpt", False)
 
         success, detected_base_url = initialize_lemonade_for_agent(
             agent=agent_profile,
             skip_if_external=True,
             use_claude=use_claude,
-            use_chatgpt=use_chatgpt,
             base_url=lemonade_base_url,
             model=kwargs.get("model"),
         )
@@ -563,14 +560,16 @@ async def async_main(action, **kwargs):
             log.error("Message is required for prompt action.")
             print("❌ Error: Message is required for prompt action.")
             sys.exit(1)
-        response = ""
-        async for chunk in client.prompt(kwargs["message"]):
-            response += chunk
+        # The client prints the answer as it streams; returning it would print it again.
+        async for _chunk in client.prompt(kwargs["message"]):
+            pass
+        print()
         if kwargs.get("show_stats", False):
             stats = client.get_stats()
             if stats:
-                return {"response": response, "stats": stats}
-        return {"response": response}
+                for key, value in stats.items():
+                    print(f"{key}: {value}")
+        return None
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)
@@ -659,7 +658,6 @@ async def async_main(action, **kwargs):
             # Create configuration with CLI values
             config = GaiaAgentConfig(
                 use_claude=kwargs.get("use_claude", False),
-                use_chatgpt=kwargs.get("use_chatgpt", False),
                 claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
                 base_url=kwargs.get(
                     "base_url",
@@ -768,7 +766,6 @@ async def async_main(action, **kwargs):
             model=kwargs.get("model") or DEFAULT_MODEL_NAME,
             max_tokens=kwargs.get("max_tokens", 512),
             use_claude=kwargs.get("use_claude", False),
-            use_chatgpt=kwargs.get("use_chatgpt", False),
             claude_model=kwargs.get("claude_model", DEFAULT_CLAUDE_CHAT_MODEL),
             base_url=lemonade_base_url,
             # RAG configuration
@@ -2175,6 +2172,7 @@ Use `gaia download --agent talk` to download the local Kokoro TTS model.
     yt_parser.add_argument(
         "--download-transcript",
         metavar="URL",
+        required=True,
         help="Download transcript from a YouTube URL",
     )
     yt_parser.add_argument(
@@ -2192,7 +2190,7 @@ Use `gaia download --agent talk` to download the local Kokoro TTS model.
     kill_parser.add_argument(
         "--lemonade",
         action="store_true",
-        help="Kill Lemonade server (port 13305)",
+        help="Stop the Lemonade Server GAIA uses: its own, or the one you set",
     )
     kill_parser.add_argument(
         "--daemons",
@@ -2426,6 +2424,12 @@ Examples:
         "--require-complete",
         action="store_true",
         help="With --compare, fail when baseline scenarios are missing or unmeasured",
+    )
+    agent_eval_parser.add_argument(
+        "--require-same-fixtures",
+        action="store_true",
+        help="With --compare, refuse (exit 3) when the two runs used different "
+        "fixtures, scenarios or Lemonade builds instead of only warning",
     )
     agent_eval_parser.add_argument(
         "--save-baseline",
@@ -3130,45 +3134,6 @@ afterwards (or `swebench <run_dir>` does, later).
         "--out", default=None, help="Also write the controls and their verdicts here"
     )
 
-    # Add new subparser for generating summary reports from evaluation directories
-    report_parser = subparsers.add_parser(
-        "report",
-        help="Generate summary report from evaluation results directory",
-        parents=[parent_parser],
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Generate report from evaluation directory
-  gaia report -d ./output/eval
-
-  # Generate report with custom output filename
-  gaia report -d ./output/eval -o Model_Comparison_Report.md
-
-  # Generate report and display summary only
-  gaia report -d ./output/eval --summary-only
-        """,
-    )
-
-    report_parser.add_argument(
-        "-d",
-        "--eval-dir",
-        type=str,
-        default="./output/evaluations",
-        help="Directory containing .eval.json files to analyze (default: ./output/evaluations)",
-    )
-    report_parser.add_argument(
-        "-o",
-        "--output-file",
-        type=str,
-        default="LLM_Evaluation_Report.md",
-        help="Output filename for the markdown report (default: LLM_Evaluation_Report.md)",
-    )
-    report_parser.add_argument(
-        "--summary-only",
-        action="store_true",
-        help="Only display summary to console, don't save report file",
-    )
-
     perf_vis_parser = subparsers.add_parser(
         "perf-vis",
         help="Visualize llama.cpp performance metrics from log files",
@@ -3394,9 +3359,9 @@ Examples:
     )
 
     # MCP Client commands (connect to external MCP servers).
-    # `add` and `remove` moved to `gaia connectors mcp add/remove` (#977) so
-    # configuration goes through the connectors framework with keyring-backed
-    # secrets and per-agent grants.
+    # `add` and `remove` were removed (#976). Catalog servers go through
+    # `gaia connectors configure`; a custom server is an entry in
+    # mcp_servers.json until `gaia connectors mcp` exists (#977).
 
     mcp_list_parser = mcp_subparsers.add_parser(
         "list", help="List configured MCP servers"
@@ -3621,7 +3586,8 @@ Examples:
 
     # Cache command (for Context7 cache management)
     cache_parser = subparsers.add_parser(
-        "cache", help="Manage Context7 API cache and rate limiting"
+        "cache",
+        help="Show GAIA's caches and their sizes, or clear the Context7 cache",
     )
     cache_subparsers = cache_parser.add_subparsers(
         dest="cache_action", help="Cache action to perform"
@@ -4979,7 +4945,7 @@ def main():
     if getattr(args, "use_chatgpt", False):
         from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
 
-        parser.error(REMOVED_PROVIDER_MESSAGE)
+        parser.error(f"--use-chatgpt was removed. {REMOVED_PROVIDER_MESSAGE}")
 
     print_only = {
         "--model": args.print_model is not None,
@@ -5489,34 +5455,7 @@ Let me know your answer!
         if args.daemons:
             sys.exit(kill_stray_daemons())
         if args.lemonade:
-            # Use lemonade-server stop for graceful shutdown
-            try:
-                result = subprocess.run(
-                    ["lemonade-server", "stop"],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if result.returncode == 0:
-                    print("✅ Lemonade server stopped")
-                else:
-                    # Fallback to port kill if stop command fails
-                    log.warning(f"lemonade-server stop failed: {result.stderr}")
-                    port_result = kill_process_by_port(13305)
-                    if port_result["success"]:
-                        print(f"✅ {port_result['message']}")
-                    else:
-                        print(f"❌ {port_result['message']}")
-                        sys.exit(1)
-            except FileNotFoundError:
-                # lemonade-server not in PATH, fallback to port kill
-                log.warning("lemonade-server not found, falling back to port kill")
-                port_result = kill_process_by_port(13305)
-                if port_result["success"]:
-                    print(f"✅ {port_result['message']}")
-                else:
-                    print(f"❌ {port_result['message']}")
-                    sys.exit(1)
+            sys.exit(kill_lemonade())
         elif args.port:
             port = args.port
             log.info(f"Attempting to kill process on port {port}")
@@ -5530,7 +5469,7 @@ Let me know your answer!
             # A refusal must not report success — `gaia kill && next-step`
             # would otherwise run next-step having killed nothing.
             print("❌ gaia kill needs a target:")
-            print("     --lemonade        stop Lemonade Server (port 13305)")
+            print("     --lemonade        stop the Lemonade Server GAIA uses")
             print("     --port <number>   kill the GAIA/Lemonade process")
             print("                       listening on <number>")
             print("     --daemons         list GAIA daemons, stop orphaned ones")
@@ -5633,6 +5572,14 @@ Let me know your answer!
             # List mode: show required models without downloading
             if args.list_models:
                 agent_name = args.agent.lower()
+                if agent_name != "all" and not client.get_agent_profile(agent_name):
+                    print(f"❌ Unknown agent: {agent_name}")
+                    print(f"   Available: {', '.join(client.list_agents())}")
+                    sys.exit(1)
+                # Unreachable would show every model as not downloaded.
+                if not check_lemonade_health(args.host, port):
+                    LemonadeManager.print_server_error()
+                    sys.exit(1)
                 if agent_name == "all":
                     print("📦 Models required for all GAIA agents:\n")
                     all_models = set()
@@ -5650,10 +5597,6 @@ Let me know your answer!
                     print(f"  Total unique models: {len(all_models)}")
                 else:
                     profile = client.get_agent_profile(agent_name)
-                    if not profile:
-                        print(f"❌ Unknown agent: {agent_name}")
-                        print(f"   Available: {', '.join(client.list_agents())}")
-                        sys.exit(1)
                     print(f"📦 Models required for {profile.display_name}:\n")
                     for model_key in profile.models:
                         if model_key in MODELS:
@@ -5848,6 +5791,7 @@ Let me know your answer!
                     compare_scorecards,
                 )
 
+                same_setup = getattr(args, "require_same_fixtures", False)
                 try:
                     if len(compare_paths) == 1:
                         # Single path: compare against saved baseline
@@ -5860,12 +5804,16 @@ Let me know your answer!
                             sys.exit(1)
                         current_path = Path(compare_paths[0])
                         result = compare_scorecards(
-                            str(baseline_path), str(current_path)
+                            str(baseline_path),
+                            str(current_path),
+                            require_same_setup=same_setup,
                         )
                     elif len(compare_paths) == 2:
                         baseline_path, current_path = map(Path, compare_paths)
                         result = compare_scorecards(
-                            str(baseline_path), str(current_path)
+                            str(baseline_path),
+                            str(current_path),
+                            require_same_setup=same_setup,
                         )
                     else:
                         print("[ERROR] --compare accepts 1 or 2 paths")
@@ -6554,10 +6502,9 @@ Let me know your answer!
 
         sys.exit(_run_uninstall(args))
 
-    # Log error for unknown action
     log.error(f"Unknown action specified: {args.action}")
-    parser.print_help()
-    return
+    parser.print_help(sys.stderr)
+    sys.exit(1)
 
 
 def kill_stray_daemons() -> int:
@@ -6617,11 +6564,85 @@ def kill_stray_daemons() -> int:
     return 0
 
 
-def kill_process_by_port(port):
+def kill_lemonade() -> int:
+    """Stop the Lemonade Server GAIA uses, through whatever owns it.
+
+    GAIA's own server is stopped the way ``gaia lemonade embedded stop`` stops
+    it. Any other server is stopped by its port, when it runs on this machine.
+
+    Returns:
+        The exit code: 0 once nothing is left running, 1 when it can't be stopped.
+    """
+    from urllib.parse import urlparse
+
+    from gaia.llm.lemonade_client import configured_lemonade_url
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, EmbeddedLemonadeError
+
+    if configured_lemonade_url() is None:
+        manager = EmbeddedLemonade()
+        current = manager.status()
+        pid = current.pid or current.unresponsive_pid
+        if pid:
+            try:
+                stopped = manager.stop()
+            except EmbeddedLemonadeError as e:
+                print(f"❌ Could not stop GAIA's Lemonade Server (pid {pid}): {e}")
+                return 1
+            if stopped:
+                print(f"✅ Stopped GAIA's Lemonade Server (pid {pid})")
+            else:
+                print(f"✅ GAIA's Lemonade Server (pid {pid}) had already stopped")
+            return 0
+
+    url = resolve_lemonade_base_url()
+    target = urlparse(url)
+    if not _names_this_machine(target.hostname or ""):
+        print(
+            f"❌ GAIA uses the Lemonade Server at {url}, and {target.hostname} "
+            "isn't this machine, so `gaia kill` can't stop it. Stop it on the "
+            "machine that runs it."
+        )
+        return 1
+    result = kill_process_by_port(
+        target.port or (443 if target.scheme == "https" else 80),
+        lemonade_only=True,
+    )
+    print(f"{'✅' if result['success'] else '❌'} {result['message']}")
+    return 0 if result["success"] else 1
+
+
+def _names_this_machine(host: str) -> bool:
+    """Whether *host* in a server URL is this machine."""
+    import ipaddress
+    import socket
+
+    host = (host or "").strip().strip("[]").lower()
+    if host in ("", "localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+        if address.is_loopback or address.is_unspecified:
+            return True
+    except ValueError:
+        pass
+    own_names = {socket.gethostname().lower(), socket.getfqdn().lower()}
+    if host in own_names:
+        return True
+    try:
+        own_addresses = socket.gethostbyname_ex(socket.gethostname())[2]
+    except OSError as e:
+        get_logger(__name__).debug("Could not list this machine's addresses: %s", e)
+        return False
+    return host in own_addresses
+
+
+def kill_process_by_port(port, lemonade_only=False):
     """Kill the GAIA/Lemonade process listening on ``port``.
 
     Targeting rules live in :mod:`gaia.ports` so every "stop what's on this
-    port" path in GAIA shares one implementation.
+    port" path in GAIA shares one implementation. With *lemonade_only*, only a
+    process positively identified as a Lemonade Server is killed: the port came
+    from configuration, so a Python or Node listener there is the user's own.
     """
     try:
         port = int(port)
@@ -6649,8 +6670,9 @@ def kill_process_by_port(port):
     killed = []
     refused = []
     failed = []
+    may_kill = is_lemonade_process if lemonade_only else is_killable_process
     for pid, name in listeners:
-        if not is_killable_process(name):
+        if not may_kill(name):
             refused.append(f"{pid} ({name or 'unknown process'})")
             continue
         try:
@@ -6664,7 +6686,15 @@ def kill_process_by_port(port):
         messages.append(
             f"Killed process(es) {', '.join(killed)} listening on port {port}."
         )
-    if refused:
+    if refused and lemonade_only:
+        messages.append(
+            f"Refusing to kill {', '.join(refused)} on port {port}: it isn't a "
+            "Lemonade Server, so it may be your own program. If it is the "
+            "server GAIA uses, stop it with the tool that started it, or end "
+            "that PID yourself (Task Manager on Windows, `kill <pid>` "
+            "elsewhere)."
+        )
+    elif refused:
         messages.append(
             f"Refusing to kill {', '.join(refused)} on port {port}: not a "
             "GAIA or Lemonade process. Stop it with its own tooling, or "
@@ -6689,7 +6719,7 @@ def handle_email_command(args):
     and streams ``POST /v1/email/query`` through the daemon relay, presenting ONLY
     the daemon client token — the CLI never learns the sidecar's port or bearer
     (design §0.0 "one contract, many front-doors", #2152). Local-LLM only (AC3):
-    no ``--use-claude`` / ``--use-chatgpt`` — the sidecar rejects any non-local
+    no ``--use-claude`` — the sidecar rejects any non-local
     provider.
 
     ``--spec`` stays a fixed-function local operation (no daemon, no Lemonade).
@@ -6753,7 +6783,7 @@ def handle_email_command(args):
         success, _ = initialize_lemonade_for_agent(
             agent="email",
             skip_if_external=True,
-            # Deliberately omitted: use_claude / use_chatgpt — see AC3.
+            # Deliberately omitted: use_claude — see AC3.
         )
         if not success:
             sys.exit(1)
@@ -6817,7 +6847,6 @@ def _gaia_chat_relay(kwargs: dict) -> int:
             ("--index", "index"),
             ("--watch", "watch"),
             ("--use-claude", "use_claude"),
-            ("--use-chatgpt", "use_chatgpt"),
             ("--list-tools", "list_tools"),
         )
         if kwargs.get(key)
@@ -7105,6 +7134,13 @@ def handle_api_command(args):
     log = get_logger(__name__)
 
     if args.subcommand == "start":
+        from gaia.api.flagship import api_unavailable_reason
+
+        reason = api_unavailable_reason()
+        if reason:
+            print(f"❌ {reason}", file=sys.stderr)
+            sys.exit(1)
+
         # Initialize Lemonade with mcp profile (unless --no-lemonade-check)
         if not getattr(args, "no_lemonade_check", False):
             success, _ = initialize_lemonade_for_agent(
@@ -7126,6 +7162,9 @@ def handle_api_command(args):
                 os.environ["GAIA_API_SHOW_PROMPTS"] = "1"
             if getattr(args, "streaming", False):
                 os.environ["GAIA_API_STREAMING"] = "1"
+            # The app's agents and /health resolve the server from the environment.
+            if getattr(args, "base_url", None):
+                os.environ["LEMONADE_BASE_URL"] = args.base_url
 
             from gaia.api.local_http import (
                 UnauthenticatedBindError,
@@ -8009,6 +8048,80 @@ def handle_gateway_command(args):
         sys.exit(1)
 
 
+def _is_link(path) -> bool:
+    """True for a symlink or a Windows junction, which ``is_symlink`` misses."""
+    path = str(path)
+    if os.path.islink(path):
+        return True
+    isjunction = getattr(os.path, "isjunction", None)  # Python 3.12+
+    if isjunction is not None:
+        return isjunction(path)
+    import stat as stat_mod
+
+    try:
+        tag = getattr(os.lstat(path), "st_reparse_tag", 0)
+    except OSError:  # gone; the size walk reports it as unreadable
+        return False
+    # Only junctions: OneDrive placeholders are reparse points too, and hold real data.
+    return tag == getattr(stat_mod, "IO_REPARSE_TAG_MOUNT_POINT", -1)
+
+
+def _cache_folder_usage(folder: Path) -> tuple:
+    """Bytes, file count and unreadable entries under *folder*, without following links."""
+    size = files = 0
+    # Files and folders that couldn't be read, so the size never quietly comes up short.
+    unreadable: list = []
+    for dirpath, dirnames, filenames in os.walk(folder, onerror=unreadable.append):
+        dirnames[:] = [d for d in dirnames if not _is_link(os.path.join(dirpath, d))]
+        for name in filenames:
+            try:
+                stat = os.lstat(os.path.join(dirpath, name))
+            except OSError as e:
+                unreadable.append(e)
+                continue
+            size += stat.st_size
+            files += 1
+    return size, files, len(unreadable)
+
+
+def _print_cache_folders() -> None:
+    """Print each folder under GAIA's cache root, largest first, with its size."""
+    from gaia.home import gaia_home
+    from gaia.security import _format_size
+
+    root = gaia_home() / "cache"
+    print(f"\n=== GAIA caches ({root}) ===")
+    if not root.is_dir():
+        print("No caches yet.")
+        return
+    rows = []
+    for entry in root.iterdir():
+        if _is_link(entry):
+            continue
+        if entry.is_dir():
+            rows.append((entry.name, *_cache_folder_usage(entry)))
+        elif entry.is_file():
+            try:
+                rows.append((entry.name, entry.lstat().st_size, 1, 0))
+            except OSError:  # removed or locked while listing
+                rows.append((entry.name, 0, 0, 1))
+    if not rows:
+        print("No caches yet.")
+        return
+    rows.sort(key=lambda row: (-row[1], row[0]))
+    width = max(len(row[0]) for row in rows + [("Total",)])
+
+    def count(files: int) -> str:
+        return f"{files:>7,} {'file' if files == 1 else 'files'}"
+
+    for name, size, files, unreadable in rows:
+        note = f"  ({unreadable} unreadable)" if unreadable else ""
+        print(f"  {name:<{width}}  {_format_size(size):>10}  {count(files)}{note}")
+    total_size = sum(row[1] for row in rows)
+    total_files = sum(row[2] for row in rows)
+    print(f"  {'Total':<{width}}  {_format_size(total_size):>10}  {count(total_files)}")
+
+
 def handle_cache_command(args):
     """Handle the cache management command.
 
@@ -8026,7 +8139,8 @@ def handle_cache_command(args):
 
     try:
         if args.cache_action == "status":
-            # Check Context7 availability first
+            _print_cache_folders()
+
             is_available = Context7Service.check_availability()
 
             print("\n=== Context7 Service Status ===")
@@ -9139,6 +9253,30 @@ def _diag_log_files(gaia_dir):
     return files
 
 
+def _diag_lemonade_server_log():
+    """The user's own Lemonade's log, redacted, from its log stream.
+
+    None when GAIA runs its own Lemonade: its ``lemond.log`` is bundled as a file.
+    """
+    from gaia.config import GaiaConfigError
+    from gaia.llm import lemonade_choice as choice
+    from gaia.llm.lemonade_logs import MAX_LINES, read_lemonade_log
+
+    try:
+        if choice.describe()["mode"] == choice.MODE_GAIA:
+            return None
+        result = asyncio.run(read_lemonade_log(limit=MAX_LINES))
+    except (choice.LemonadeChoiceError, GaiaConfigError) as e:
+        return f"[could not tell which Lemonade GAIA uses: {e}]\n"
+    if not result.available:
+        detail = f" -- {result.detail}" if result.detail else ""
+        return (
+            f"[the log of the Lemonade at {result.base_url} could not be read: "
+            f"{result.reason}{detail}]\n"
+        )
+    return "".join(f"{line.text}\n" for line in result.lines)
+
+
 def _diag_os_info(system):
     """OS version sections, using the tools *system* (``sys.platform``) has."""
     import platform
@@ -9238,6 +9376,8 @@ def handle_diagnostics_command(args):
     - every log :func:`_diag_log_files` lists, with its rotated files
       (``gaia.log.1`` ...); a file over 50 MB contributes only its last 50 MB,
       as ``<name>.tail``
+    - when GAIA uses the user's own Lemonade, that server's recent log lines
+      (redacted), read from its log stream, as ``lemonade/server-log.txt``
     - ``~/.gaia/electron-install-state.json`` and ``setup-report.json``
     - the last few model-failure records (``failures/GF-*.json``), each
       written redacted at the moment a model call failed (omitted with
@@ -9337,28 +9477,40 @@ def handle_diagnostics_command(args):
             # Log files gated by --no-logs, and failure records with them since
             # each holds a log tail. Rotated backups (gaia.log.1, ...) ride
             # along; a log from before the size cap keeps only its tail.
+            # Every log is redacted: the bundle is made to be shared.
             if not args.no_logs:
+                from gaia.llm.lemonade_logs import known_secrets
+                from gaia.log_reader import redact_lines
+
+                secrets, _ = known_secrets()
                 for entry in failure_records:
-                    tar.add(str(entry), arcname=f"failures/{entry.name}")
+                    blob = redact_lines(entry.read_bytes(), secrets)
+                    info = tarfile.TarInfo(name=f"failures/{entry.name}")
+                    info.size = len(blob)
+                    info.mtime = int(entry.stat().st_mtime)
+                    tar.addfile(info, io.BytesIO(blob))
                 family = (
                     (arcdir, f) for base, arcdir in log_files for f in log_family(base)
                 )
                 for arcdir, entry in family:
                     size = entry.stat().st_size
-                    if size <= _DIAG_MAX_LOG_BYTES:
-                        tar.add(
-                            str(entry),
-                            arcname=arcdir + entry.name,
-                            filter=lambda ti: ti if ti.isfile() or ti.isdir() else None,
-                        )
-                        continue
+                    name = entry.name
                     with open(entry, "rb") as fh:
-                        fh.seek(size - _DIAG_MAX_LOG_BYTES)
-                        tail = fh.read(_DIAG_MAX_LOG_BYTES)
-                    info = tarfile.TarInfo(name=f"{arcdir}{entry.name}.tail")
-                    info.size = len(tail)
+                        if size > _DIAG_MAX_LOG_BYTES:
+                            fh.seek(size - _DIAG_MAX_LOG_BYTES)
+                            name += ".tail"
+                        blob = redact_lines(fh.read(_DIAG_MAX_LOG_BYTES), secrets)
+                    info = tarfile.TarInfo(name=f"{arcdir}{name}")
+                    info.size = len(blob)
                     info.mtime = int(entry.stat().st_mtime)
-                    tar.addfile(info, io.BytesIO(tail))
+                    tar.addfile(info, io.BytesIO(blob))
+                server_log = _diag_lemonade_server_log()
+                if server_log is not None:
+                    blob = server_log.encode("utf-8")
+                    info = tarfile.TarInfo(name="lemonade/server-log.txt")
+                    info.size = len(blob)
+                    info.mtime = int(datetime.datetime.now().timestamp())
+                    tar.addfile(info, io.BytesIO(blob))
             else:
                 note = b"Log files omitted (--no-logs was passed).\n"
                 info = tarfile.TarInfo(name="LOGS-OMITTED.txt")
@@ -10454,7 +10606,10 @@ def handle_mcp_command(args):
     elif args.mcp_action == "code-index":
         from gaia.mcp.servers.code_index_mcp import main as code_index_main
 
-        code_index_main([] if args.repo is None else ["--repo", str(args.repo)])
+        try:
+            code_index_main([] if args.repo is None else ["--repo", str(args.repo)])
+        except ImportError as e:
+            _exit_mcp_server_unavailable("the code index MCP server", e)
     elif args.mcp_action == "list":
         handle_mcp_list(args)
     elif args.mcp_action == "tools":
@@ -11356,6 +11511,16 @@ def handle_mcp_agent(args):
         sys.exit(1)
 
 
+def _exit_mcp_server_unavailable(what: str, error: ImportError) -> None:
+    """Exit 1 because *what* could not be imported, with a fix true for this install."""
+    get_logger(__name__).error(f"Failed to import {what}: {error}")
+    print(f"❌ Error: Could not load {what}")
+    print(f"   {error}")
+    if (error.name or "").split(".")[0] == "mcp":
+        print(f"   {missing_extra_hint('mcp')}")
+    sys.exit(1)
+
+
 def handle_mcp_serve(args):
     """Start the Agent UI MCP server (wraps the GAIA Agent UI REST API)."""
     log = get_logger(__name__)
@@ -11408,11 +11573,7 @@ def handle_mcp_serve(args):
     except KeyboardInterrupt:
         print("\n✅ Agent UI MCP server stopped")
     except ImportError as e:
-        log.error(f"Failed to import Agent UI MCP server: {e}")
-        print("❌ Error: Could not load Agent UI MCP server")
-        print(f"   {e}")
-        print("   Make sure the Agent UI backend is running: gaia chat --ui")
-        sys.exit(1)
+        _exit_mcp_server_unavailable("Agent UI MCP server", e)
     except Exception as e:
         log.error(f"Error starting Agent UI MCP server: {e}")
         print(f"❌ Error starting Agent UI MCP server: {e}")
@@ -11456,11 +11617,7 @@ def handle_mcp_tui(args):
     except KeyboardInterrupt:
         print("\n✅ TUI control MCP server stopped")
     except ImportError as e:
-        log.error(f"Failed to import TUI control MCP server: {e}")
-        print("❌ Error: Could not load the TUI control MCP server")
-        print(f"   {e}")
-        print('   Install the MCP extras: uv pip install -e ".[mcp]"')
-        sys.exit(1)
+        _exit_mcp_server_unavailable("the TUI control MCP server", e)
     except Exception as e:
         log.error(f"Error starting TUI control MCP server: {e}")
         print(f"❌ Error starting TUI control MCP server: {e}")
@@ -11483,7 +11640,7 @@ def handle_mcp_list(args):
         print(
             '   {"mcpServers": {"time": {"command": "uvx", "args": ["mcp-server-time"]}}}'
         )
-        print("See https://amd-gaia.ai/docs/guides/mcp/client for details.")
+        print("See https://amd-gaia.ai/docs/sdk/sdks/mcp for details.")
         return
 
     print(f"📋 Configured MCP Servers ({len(servers)}):")

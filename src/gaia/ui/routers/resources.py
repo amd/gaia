@@ -70,6 +70,10 @@ class ResourceUsage(BaseModel):
         default=None,
         description="Why network adapters can't be read, when CPU and memory still can.",
     )
+    npus_error: Optional[str] = Field(
+        default=None,
+        description="Why NPUs can't be read when they're read apart from GPUs (Linux).",
+    )
 
 
 # Reads this PC's hardware load, so a cross-site GET must not reach it.

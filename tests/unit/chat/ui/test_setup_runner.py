@@ -964,6 +964,40 @@ def test_an_unexpected_error_is_named_in_the_report_but_not_on_screen(monkeypatc
     assert "Setup failed: OSError: marker file is read-only" in every
 
 
+def test_a_report_asked_for_as_the_failure_record_starts_waits_for_it(monkeypatch):
+    # report() ran between the record thread being published and started, and
+    # joining an unstarted thread raises.
+    _popen(monkeypatch, _FakeProc(io.BytesIO(_OUTPUT)))
+
+    def check(*_a, **_k):
+        raise OSError("marker file is read-only")
+
+    monkeypatch.setattr(sr, "check", check)
+    runner = sr.SetupRunner()
+    errors = []
+    real_thread = threading.Thread
+
+    def ask_for_report():
+        try:
+            runner.report()
+        except RuntimeError as e:
+            errors.append(e)
+
+    class ReportFirst(real_thread):
+        def start(self):
+            if getattr(self, "_target", None) == runner._record_failure:
+                asker = real_thread(target=ask_for_report)
+                asker.start()
+                asker.join(timeout=0.5)  # it gets in first, if nothing stops it
+            super().start()
+
+    monkeypatch.setattr(sr.threading, "Thread", ReportFirst)
+    runner.start(False, chat_model_for=_local_chat)
+    _wait_done(runner)
+    runner.report()
+    assert errors == []
+
+
 def test_only_one_run_at_a_time_and_cancel(monkeypatch):
     proc = _FakeProc(_BlockingStdout())
     _popen(monkeypatch, proc)

@@ -10,7 +10,7 @@
 #
 # Each of these catches a class of real BUG, not a style preference — that is the
 # bar for being on this list. `go vet` alone (the previous `make lint`) catches
-# none of the other seven.
+# none of the others.
 version: "2"
 
 linters:
@@ -24,6 +24,7 @@ linters:
     - asasalint     # []any passed to a variadic ...any — nests instead of spreads
     - bidichk       # bidirectional-Unicode "Trojan Source" smuggling
     - misspell      # this TUI's strings are remedy text users read and retype
+    - unused        # dead code — hides what the live paths actually call
 
   # DEFERRED, with the count measured at 2.12.2 on this tree. These are not
   # judged worthless — they are held back because they land red, and the Go tree
@@ -31,9 +32,7 @@ linters:
   # clears the backlog:
   #
   #   errcheck    33  mostly `defer x.Close()`; needs an exclusion list first
-  #   staticcheck 10  7 style (QF/ST); 3 real: SA1019 deprecated viewport API x2,
-  #                   SA4006 a value assigned and never read in a test
-  #   unused       6  real dead code; re-measure, since tui/internal/ui/hub/ is gone
+  #   staticcheck 18  17 style (QF/S/ST); 1 real: SA6003 ranging over []rune in a test
   #   noctx        8  HTTP requests built without a context
   #   errorlint    4  %v on errors instead of %w
   #   bodyclose    3  all three in daemon_test.go, none in production code

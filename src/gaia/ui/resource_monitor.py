@@ -8,7 +8,8 @@ so the two agree: CPU is ``% Processor Utility`` (not psutil's ``% Processor
 Time``, which reads low on a boosting CPU), a GPU or NPU is its busiest engine,
 and adapters are told apart through D3DKMT (an NPU is a compute-only adapter),
 and network adapters are the connected hardware ones Task Manager lists.
-Elsewhere CPU, memory and network come from psutil and AMD GPUs from sysfs.
+Elsewhere CPU, memory and network come from psutil, AMD GPUs from sysfs, and
+on Linux an AMD NPU from its ``amdxdna`` driver's busiest column.
 
 One sampler thread runs while someone is watching and stops on its own once
 nobody has asked for a while, so a closed strip costs nothing.
@@ -17,7 +18,10 @@ nobody has asked for a while, so a closed strip costs nothing.
 from __future__ import annotations
 
 import ctypes
+import errno
+import os
 import re
+import struct
 import sys
 import threading
 import time
@@ -90,6 +94,8 @@ class Sample:
     # Why GPUs/NPUs or networks can't be read, when only that part failed.
     devices_error: Optional[str] = None
     networks_error: Optional[str] = None
+    # Linux reads NPUs on their own, so they can fail apart from the GPUs.
+    npus_error: Optional[str] = None
 
 
 T = TypeVar("T")
@@ -587,11 +593,15 @@ def _read_int(path: Path) -> Optional[int]:
         return None
 
 
-def _runtime_suspended(dev: Path) -> bool:
+def _runtime_status(dev: Path) -> Optional[str]:
     try:
-        return (dev / "power" / "runtime_status").read_text().strip() == "suspended"
+        return (dev / "power" / "runtime_status").read_text().strip()
     except OSError:
-        return False
+        return None
+
+
+def _runtime_suspended(dev: Path) -> bool:
+    return _runtime_status(dev) == "suspended"
 
 
 def sysfs_gpus(root: Path = _DRM) -> List[Tuple[Path, str]]:
@@ -661,9 +671,185 @@ def _read_sysfs_gpus(gpus: List[Tuple[Path, str]]) -> List[DeviceSample]:
     return devices
 
 
+# ── Linux: AMD NPUs through the amdxdna driver ───────────────────────────────
+
+# From the kernel's include/uapi/drm/amdxdna_accel.h.
+_DRM_COMMAND_BASE = 0x40
+_DRM_AMDXDNA_GET_INFO = 7
+_DRM_AMDXDNA_QUERY_SENSORS = 4
+_SENSOR_COLUMN_UTILIZATION = 1
+_GET_INFO = struct.Struct("<IIQ")  # param, buffer_size, buffer
+# label, input, max, average, highest, status, units, unitm, type, pad
+_SENSOR = struct.Struct("<64s4I64s16sbB6x")
+_MAX_SENSORS = 9  # total power, then at most 8 columns
+_AMDXDNA_AUTOSUSPEND_MS = 5000  # AMDXDNA_AUTOSUSPEND_DELAY in amdxdna_pm.c
+_IOCTL_GET_INFO = (
+    (3 << 30)  # read and write
+    | (_GET_INFO.size << 16)
+    | (ord("d") << 8)
+    | (_DRM_COMMAND_BASE + _DRM_AMDXDNA_GET_INFO)
+)
+_NO_USAGE = (
+    "its driver reports usage only on Linux 7.1 or later, with the AMD PMF "
+    "driver loaded"
+)
+
+
+def linux_npus(root: Path = Path("/")) -> List[Tuple[str, Path, Path]]:
+    """``(accel name, PCI device dir, /dev node)`` for each NPU on ``amdxdna``."""
+    from gaia.llm.npu_linux import bound_devices
+
+    return [
+        (name, dev, root / "dev" / "accel" / name) for name, dev in bound_devices(root)
+    ]
+
+
+def _open_npu(node: Path) -> int:
+    try:
+        return os.open(node, os.O_RDWR | getattr(os, "O_CLOEXEC", 0))
+    except PermissionError as e:
+        from gaia.llm.npu_linux import access_problem
+
+        problem = access_problem(node)
+        raise ResourceProbeError(f"{problem.title} {problem.fix}") from e
+    except OSError as e:
+        raise ResourceProbeError(f"Can't open {node}: {e.strerror or e}") from e
+
+
+def amdxdna_busy_percent(fd: int) -> float:
+    """The NPU's busiest column, from the driver's sensor query."""
+    import fcntl  # POSIX only; the module still imports on Windows
+
+    buf = ctypes.create_string_buffer(_SENSOR.size * _MAX_SENSORS)
+    arg = bytearray(
+        _GET_INFO.pack(_DRM_AMDXDNA_QUERY_SENSORS, len(buf), ctypes.addressof(buf))
+    )
+    try:
+        fcntl.ioctl(fd, _IOCTL_GET_INFO, arg, True)
+    except OSError as e:
+        # ENODEV is amd_pmf not running; the others are a kernel without the query.
+        if e.errno in (errno.EOPNOTSUPP, errno.EINVAL, errno.ENOTTY, errno.ENODEV):
+            raise ResourceProbeError(_NO_USAGE) from e
+        raise ResourceProbeError(
+            f"The NPU driver couldn't report usage: {e.strerror or e}"
+        ) from e
+    _, size, _ = _GET_INFO.unpack(arg)
+    columns = [
+        fields[1]
+        for off in range(0, min(size, len(buf)) - _SENSOR.size + 1, _SENSOR.size)
+        for fields in [_SENSOR.unpack_from(buf, off)]
+        if fields[8] == _SENSOR_COLUMN_UTILIZATION
+    ]
+    if not columns:
+        raise ResourceProbeError(_NO_USAGE)
+    return float(min(100, max(columns)))
+
+
+def _autosuspend_s(dev: Path) -> float:
+    # amdxdna's own default when sysfs doesn't say; negative means it never autosuspends.
+    ms = _read_int(dev / "power" / "autosuspend_delay_ms")
+    return max(0, _AMDXDNA_AUTOSUSPEND_MS if ms is None else ms) / 1000
+
+
+def _settle_s(dev: Path) -> float:
+    # The kernel may fire the timer up to a quarter late, and suspending takes a moment.
+    return _autosuspend_s(dev) * 1.5 + 1.0
+
+
+def _npu_asleep(dev: Path) -> bool:
+    return _runtime_status(dev) in ("suspended", "suspending")
+
+
+@dataclass
+class _Npu:
+    name: str
+    dev: Path
+    fd: int
+    # How long after a query the NPU may stay awake only because of it.
+    settle_s: float
+    last_query: Optional[float] = None
+    last_percent: float = 0.0
+
+
+class AmdxdnaNpus:
+    """Each NPU's busiest column, read through its /dev node.
+
+    Every query wakes the NPU and restarts its autosuspend timer, so a query
+    each second would keep an idle NPU awake. An idle one is asked again only
+    once that timer has surely run out: asleep by then, it reads 0 and stays
+    asleep; still awake, something else holds it and it is safe to ask. Work
+    that starts during that wait shows up to the wait late.
+    """
+
+    def __init__(
+        self,
+        found: List[Tuple[str, Path, Path]],
+        open_node: Callable[[Path], int] = _open_npu,
+        busy: Callable[[int], float] = amdxdna_busy_percent,
+        close_fd: Callable[[int], None] = os.close,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._busy = busy
+        self._close_fd = close_fd
+        self._clock = clock
+        self._npus: List[_Npu] = []
+        try:
+            for name, dev, node in found:
+                npu = _Npu(name, dev, open_node(node), _settle_s(dev))
+                self._npus.append(npu)
+                # Asked once even if asleep: one wake per strip opening, so the
+                # tile never shows a reading this driver can't give.
+                self._query(npu)
+        except BaseException:
+            self.close()
+            raise
+
+    def _query(self, npu: _Npu) -> float:
+        npu.last_percent = self._busy(npu.fd)
+        npu.last_query = self._clock()
+        return npu.last_percent
+
+    def _read(self, npu: _Npu) -> float:
+        if _npu_asleep(npu.dev):
+            return 0.0
+        idle = npu.last_query is not None and npu.last_percent == 0.0
+        if idle and self._clock() - npu.last_query < npu.settle_s:
+            return 0.0
+        return self._query(npu)
+
+    def sample(self) -> List[DeviceSample]:
+        return [
+            DeviceSample(f"npu_{n.name}", f"AMD NPU ({n.name})", "npu", self._read(n))
+            for n in self._npus
+        ]
+
+    def close(self) -> None:
+        npus, self._npus = self._npus, []
+        for npu in npus:
+            # Close them all; callers close from error paths, so log, don't raise.
+            try:
+                self._close_fd(npu.fd)
+            except OSError as e:
+                logger.warning(
+                    "Resource monitor: closing NPU %s failed: %s", npu.name, e
+                )
+
+
 class PosixProbe:
-    def __init__(self, drm_root: Path = _DRM, sys_net: Path = _SYS_NET) -> None:
+    def __init__(
+        self,
+        drm_root: Path = _DRM,
+        sys_net: Path = _SYS_NET,
+        npus: Optional[Callable[[], AmdxdnaNpus]] = None,
+    ) -> None:
         self._gpus: OptionalPart = OptionalPart("GPU", lambda: sysfs_gpus(drm_root))
+        if npus is None:
+            npus = (
+                (lambda: AmdxdnaNpus(linux_npus()))
+                if sys.platform.startswith("linux")
+                else (lambda: AmdxdnaNpus([]))
+            )
+        self._npus: OptionalPart = OptionalPart("NPU", npus, close=lambda n: n.close())
         self._net: OptionalPart = OptionalPart(
             "network", lambda: NetworkRates(lambda: posix_networks(sys_net))
         )
@@ -681,6 +867,7 @@ class PosixProbe:
                 logger.debug("CPU clock speed unavailable: %s", e)
         vm = psutil.virtual_memory()
         devices = self._gpus.read(_read_sysfs_gpus)
+        devices += self._npus.read(lambda npus: npus.sample())
         networks = self._net.read(lambda rates: rates.sample())
         return Sample(
             cpu_percent=psutil.cpu_percent(interval=None),
@@ -691,10 +878,11 @@ class PosixProbe:
             networks=networks,
             devices_error=self._gpus.error,
             networks_error=self._net.error,
+            npus_error=self._npus.error,
         )
 
     def close(self) -> None:
-        pass
+        self._npus.close()
 
 
 def default_probe():
@@ -808,7 +996,9 @@ def to_payload(history: List[Sample], interval_s: float) -> dict:
     latest = history[-1]
     total = latest.memory_total_bytes
     devices = []
-    for i, dev in enumerate(latest.devices):
+    for dev in latest.devices:
+        # By key: GPUs and NPUs fail apart, so a device's position can shift.
+        past = [{d.key: d for d in s.devices}.get(dev.key) for s in history]
         devices.append(
             {
                 "id": dev.key,
@@ -816,10 +1006,7 @@ def to_payload(history: List[Sample], interval_s: float) -> dict:
                 "kind": dev.kind,
                 "percent": round(dev.percent, 1),
                 "memory_used_bytes": dev.memory_used_bytes,
-                "history": [
-                    round(s.devices[i].percent, 1) if i < len(s.devices) else 0.0
-                    for s in history
-                ],
+                "history": [round(d.percent, 1) if d else 0.0 for d in past],
             }
         )
     networks = []
@@ -864,6 +1051,7 @@ def to_payload(history: List[Sample], interval_s: float) -> dict:
         "networks": networks,
         "devices_error": latest.devices_error,
         "networks_error": latest.networks_error,
+        "npus_error": latest.npus_error,
     }
 
 

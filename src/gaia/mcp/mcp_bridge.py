@@ -33,6 +33,7 @@ from gaia.api.local_http import (  # pylint: disable=wrong-import-position
 )
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
 from gaia.llm.lemonade_client import (  # pylint: disable=wrong-import-position
+    resolve_default_chat_model,
     resolve_lemonade_base_url,
 )
 from gaia.llm.reasoning import (  # pylint: disable=wrong-import-position
@@ -179,8 +180,8 @@ class GAIAMCPBridge:
             "capabilities": ["query", "stream", "model_selection"],
         }
         self.agents["chat"] = {
-            "module": "gaia.chat.app",
-            "function": "main",
+            "module": "gaia.chat.sdk",
+            "class": "AgentSDK",
             "description": "Interactive chat",
             "capabilities": ["conversation", "history", "context_management"],
         }
@@ -256,7 +257,7 @@ class GAIAMCPBridge:
             # Streamed so a hang-up can end the reply: closing it hangs up on Lemonade.
             reply = self.llm_client.generate(
                 prompt=args.get("query", ""),
-                model=args.get("model"),
+                model=args.get("model") or resolve_default_chat_model(),
                 max_tokens=args.get("max_tokens", 500),
                 stream=True,
             )
@@ -296,7 +297,9 @@ class GAIAMCPBridge:
             with _in_turn(self._chat_lock, "chat", client_gone):
                 if self.chat_sdk is None:
                     # AgentSDK uses the global LLM configuration, not a base_url
-                    self.chat_sdk = AgentSDK(config=AgentConfig())
+                    self.chat_sdk = AgentSDK(
+                        config=AgentConfig(model=resolve_default_chat_model())
+                    )
                 chat_response = self.chat_sdk.send(query)
 
             # Extract the text response

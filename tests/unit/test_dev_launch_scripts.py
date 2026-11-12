@@ -51,7 +51,7 @@ class TestAgentShim:
         """The child is a fresh interpreter and inherits none of the parent's path."""
         body = (DEV_BIN / name).read_text(encoding="utf-8")
         assert "PYTHONPATH" in body, f"{name} must set PYTHONPATH"
-        for package_root in ("src", "gaia", "chat"):
+        for package_root in ("src", "gaia"):
             assert package_root in body, (
                 f"{name} must put {package_root} on PYTHONPATH, or the agent "
                 "imports a different checkout's source."

@@ -214,7 +214,7 @@ so probe `/version` first. See
 
 **Internet switched off for the chat? Send `internet_off`** (contract ≥
 2.23) every turn: `true` refuses web search, page fetches, the browser,
-connector and Agent Hub tools, mailbox reads, and commands that contact another host;
+connector and Agent Hub tools, mailbox reads, drafts and sends, calendar access, and commands that contact another host;
 `false` allows them.
 Omit it and the agent keeps its own setting. Binaries older than 2.23 reject
 the field with `422`, so probe `/version` first, do not answer an
@@ -281,6 +281,12 @@ so the agent sees the tool calls it made and what they returned.
 Text-only `context` loses them, and the agent can't explain its own last turn.
 An empty `turns` list clears a retained session's history. Older binaries
 reject `turns` with `422`.
+
+An answer ends with one line such as `I haven't confirmed this works — the
+tests didn't pass.` when a check failed or was blocked, or a change went
+unchecked. It appears only then; a confirmed or purely conversational turn has
+no such line. It is part of `final.answer`, so show it to the user rather than
+trimming it. Details in [`SPEC.md` §5.1](./SPEC.md#51-endpoints).
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message

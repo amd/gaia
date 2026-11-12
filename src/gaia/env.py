@@ -152,16 +152,6 @@ def credential(name: str) -> Optional[str]:
     return os.environ.get(name) or _working_dir_credentials.get(name)
 
 
-def working_dir_credential_file(name: str) -> Optional[str]:
-    """The working-directory ``.env`` that supplied *name*, when it was one.
-
-    None when the environment holds *name*, since that value is the one used.
-    """
-    if os.environ.get(name):
-        return None
-    return _working_dir_credential_files.get(name)
-
-
 def working_dir_credential(name: str) -> Optional[str]:
     """*name* as a working-directory ``.env`` supplied it, else None."""
     return _working_dir_credentials.get(name)
@@ -207,24 +197,54 @@ def unfreeze_loader_paths(env: Dict[str, str]) -> Dict[str, str]:
     PyInstaller on Linux points ``LD_LIBRARY_PATH`` at the bundle and keeps the
     user's value in ``LD_LIBRARY_PATH_ORIG``; a child that inherits the bundle
     path (lemond, flm) loads its older libstdc++ and exits before it starts.
-    Changes and returns *env*; a no-op unless frozen on Linux.
+    Changes and returns *env*; a no-op unless frozen on Linux, and safe to
+    repeat: a path that no longer starts with the bundle is the user's.
     """
     if not (getattr(sys, "frozen", False) and sys.platform.startswith("linux")):
         return env
     original = env.pop("LD_LIBRARY_PATH_ORIG", None)
     if original is not None:
         env["LD_LIBRARY_PATH"] = original
-    else:
+    elif _starts_with_bundle(env.get("LD_LIBRARY_PATH", "")):
         env.pop("LD_LIBRARY_PATH", None)
-    # A `gaia` the child runs must set up its own bundle, not reuse ours.
+    # A PyInstaller binary the child runs must set up its own bundle: one that
+    # reuses ours expects our libraries on LD_LIBRARY_PATH.
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     return env
+
+
+def _reuse_this_bundle(env: Dict[str, str]) -> Dict[str, str]:
+    """*env* for a relaunch of this binary that reuses its unpacked bundle.
+
+    The relaunch skips setting up the bundle, so it finds its libraries only
+    through the path the bootloader gave this process: put the bundle back in
+    front of the user's path, as the bootloader does.
+    """
+    bundle = getattr(sys, "_MEIPASS", None)
+    if not (bundle and sys.platform.startswith("linux")):
+        return env
+    env.pop("PYINSTALLER_RESET_ENVIRONMENT", None)
+    user = env.pop("LD_LIBRARY_PATH_ORIG", None)
+    if user is None:
+        current = env.get("LD_LIBRARY_PATH", "")
+        user = None if _starts_with_bundle(current) else (current or None)
+    if user is None:
+        env["LD_LIBRARY_PATH"] = bundle
+    else:
+        env["LD_LIBRARY_PATH"] = f"{bundle}:{user}"
+        env["LD_LIBRARY_PATH_ORIG"] = user
+    return env
+
+
+def _starts_with_bundle(path: str) -> bool:
+    bundle = getattr(sys, "_MEIPASS", None)
+    return bool(bundle) and path.split(":")[0] == bundle
 
 
 def child_env(
     extra: Optional[Mapping[str, str]] = None,
     deny: Iterable[str] = (),
-    same_bundle: bool = False,
+    relaunch_self: bool = False,
 ) -> Dict[str, str]:
     """A fresh environment for a child process GAIA spawns.
 
@@ -234,8 +254,9 @@ def child_env(
     explicitly is always delivered. ``os.environ`` is never modified.
 
     A frozen build hands the user's library path, not its bundle's (see
-    :func:`unfreeze_loader_paths`), unless *same_bundle*: a relaunch of
-    ``sys.executable`` that reuses this process's unpacked bundle needs it.
+    :func:`unfreeze_loader_paths`). *relaunch_self* is for a child that runs
+    ``sys.executable``: it reuses this unpacked bundle, which a one-file build
+    would otherwise extract again (~25 s), so it gets the bundle's path.
     """
     blocked = _configured_deny() | {name.upper() for name in deny}
     env = {
@@ -243,7 +264,9 @@ def child_env(
         for name, value in os.environ.items()
         if not is_internal_secret(name) and name.upper() not in blocked
     }
-    if not same_bundle:
+    if relaunch_self and getattr(sys, "frozen", False):
+        _reuse_this_bundle(env)
+    else:
         unfreeze_loader_paths(env)
     if extra:
         env.update(extra)
