@@ -44,6 +44,6 @@ describe('ScheduleManager', () => {
         fireEvent.click(screen.getByRole('button', { name: /New schedule/ }));
         fireEvent.change(screen.getByPlaceholderText(/Describe your schedule/), { target: { value: 'whenever the moon is blue' } });
         expect(await screen.findByText(/didn.t understand that schedule/, {}, { timeout: 3000 })).toBeInTheDocument();
-        expect(screen.getByText(/every 30m/).closest('.schedule-parsed-hint')).not.toBeNull();
+        expect(screen.getByText(/Try "every 30m"/).closest('.schedule-parsed-hint')).not.toBeNull();
     });
 });
