@@ -9,6 +9,7 @@ again, and its path printed with both slash styles.
 """
 
 import json
+import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -144,12 +145,16 @@ def test_a_save_claim_beside_the_refusal_is_still_caught(tmp_path, answer):
     assert found and all("was not permitted" in gap for gap in found)
 
 
+# A drive-letter path is an absolute path only on Windows.
+_windows_only = pytest.mark.skipif(os.name != "nt", reason="Windows path shapes")
+
+
 @pytest.mark.parametrize(
     "save_to, shown",
     [
-        ("C:/h/.ssh", "C:/h/.ssh/page.html"),
-        ("C:/h/.ssh/", "C:/h/.ssh/page.html"),
-        ("C:\\h\\.ssh", "C:\\h\\.ssh\\page.html"),
+        pytest.param("C:/h/.ssh", "C:/h/.ssh/page.html", marks=_windows_only),
+        pytest.param("C:/h/.ssh/", "C:/h/.ssh/page.html", marks=_windows_only),
+        pytest.param("C:\\h\\.ssh", "C:\\h\\.ssh\\page.html", marks=_windows_only),
         ("~/.ssh", "~/.ssh/page.html"),
     ],
 )
