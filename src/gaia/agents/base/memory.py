@@ -551,8 +551,9 @@ EXTRACTION_EXIT_WAIT_S = 15.0
 EXTRACTION_IDLE_S = 3.0
 
 #: The stable memory section, shared by every session of this process that
-#: reads the same store, context and model: (monotonic render time, prompt,
-#: memory ids, lesson ids, {id: (row version, rendered line)}). A new chat
+#: reads the same store, memory context, project, model and local date:
+#: (monotonic render time, prompt, memory ids, lesson ids,
+#: {id: (row version, rendered line)}). A new chat
 #: would otherwise re-render it, and on Gemma-4 any change there makes the
 #: server re-read the whole ~19K-token prompt (~45 s).
 #: Reused only while every line of it is still current.
@@ -561,6 +562,11 @@ _OMITTED_COUNT_LINE = re.compile(r"^\(\d+ more stored .+ not listed here;")
 _SHARED_STABLE_GUARD = threading.Lock()
 #: Facts learned since reach new chats through per-turn recall meanwhile.
 SHARED_STABLE_TTL_S = 3600.0
+
+
+def _local_today():
+    """Today's local calendar day; due dates are compared against it."""
+    return datetime.now().astimezone().date()
 
 
 def _row_version(item: Dict, *, lesson: bool = False) -> tuple:
@@ -3754,11 +3760,15 @@ class MemoryMixin(ProceduralMemoryMixin):
         return missing <= pushed_out
 
     def _shared_stable_key(self) -> tuple:
+        """Every per-chat input that decides which rows the section renders."""
         store = self._memory_store
         return (
             str(getattr(store, "_db_path", id(store))),
             getattr(self, "_memory_context", "global"),
+            self._lesson_context(),
             getattr(self, "model_id", None),
+            # Reminders drop out once their day passes.
+            _local_today(),
         )
 
     def _replayable_now(self, item: Dict) -> bool:
@@ -3964,7 +3974,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         saying how many were left out so the model knows to ``recall`` them.
         """
         ctx = self._memory_context
-        today = datetime.now().astimezone().date()
+        today = _local_today()
         pools = {
             category: [
                 item

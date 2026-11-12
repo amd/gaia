@@ -345,3 +345,76 @@ def test_an_untracked_profile_line_hiding_behind_a_cap_drop_re_renders(tmp_path)
         assert "Elm Street" not in _new_chat(store).get_memory_system_prompt()
     finally:
         store.close()
+
+
+def _project_chat(store, root):
+    from types import SimpleNamespace
+
+    host = _Host(store)
+    host.config = SimpleNamespace(project_root=str(root))
+    host._refresh_stable_memory_prompt(share=True)
+    return host
+
+
+def _store_lesson(store, root, content):
+    from pathlib import Path
+
+    from gaia.agents.base.memory import LESSON_DOMAIN, LESSON_SOURCE
+
+    return store.store(
+        "note",
+        content,
+        domain=LESSON_DOMAIN,
+        source=LESSON_SOURCE,
+        context=f"workspace:{Path(root).resolve()}",
+    )
+
+
+@pytest.fixture
+def two_projects(tmp_path):
+    a, b = tmp_path / "project-a", tmp_path / "project-b"
+    a.mkdir()
+    b.mkdir()
+    return a, b
+
+
+def test_a_project_s_lessons_never_reach_another_project_s_chat(store, two_projects):
+    """Lessons are per project; the shared copy must not carry them across."""
+    a, b = two_projects
+    _store_lesson(store, a, "alpha build needs --no-sandbox")
+    _store_lesson(store, b, "bravo tests need PYTHONHASHSEED=0")
+    in_a = _project_chat(store, a).get_memory_system_prompt()
+    assert "--no-sandbox" in in_a and "PYTHONHASHSEED" not in in_a
+    in_b = _project_chat(store, b).get_memory_system_prompt()
+    assert "PYTHONHASHSEED" in in_b and "--no-sandbox" not in in_b
+
+
+def test_a_project_without_lessons_shows_none_of_another_s(store, two_projects):
+    a, b = two_projects
+    _store_lesson(store, a, "alpha build needs --no-sandbox")
+    _project_chat(store, a).get_memory_system_prompt()
+    assert "--no-sandbox" not in _project_chat(store, b).get_memory_system_prompt()
+
+
+def test_chats_in_one_project_still_share(store, two_projects):
+    a, _ = two_projects
+    _store_lesson(store, a, "alpha build needs --no-sandbox")
+    first = _project_chat(store, a).get_memory_system_prompt()
+    store.store("preference", "Prefers metric units in every answer.", source="user")
+    assert _project_chat(store, a).get_memory_system_prompt() == first
+
+
+def test_a_reminder_whose_day_passed_overnight_is_not_shown(store, monkeypatch):
+    """A due date that passes with no edit must still drop out the next day."""
+    from datetime import datetime, timedelta
+
+    today = datetime.now().astimezone()
+    store.store("note", "Water the plants on Fridays.", source="user")
+    store.store(
+        "note", "Renew the passport 4417.", source="user", due_at=today.isoformat()
+    )
+    assert "4417" in _new_chat(store).get_memory_system_prompt()
+    tomorrow = today.date() + timedelta(days=1)
+    monkeypatch.setattr(memory_mod, "_local_today", lambda: tomorrow)
+    later = _new_chat(store).get_memory_system_prompt()
+    assert "4417" not in later and "Water the plants" in later
