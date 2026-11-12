@@ -906,6 +906,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const catalog = catalogOf(plan);
     const pending = selection ? pendingDownloads(catalog, selection) : [];
     const short = plan && selection ? shortfall(plan, selection) : null;
+    const modelsOnPc = selection ? catalog.filter((e) => selection.ticked.has(e.id) && e.downloaded).length : 0;
+    const checkLede = !checksDone ? 'setup.check.lede'
+        : modelsOnPc === 0 ? 'setup.check.ledeDone'
+            : pending.length === 0 ? 'setup.check.ledeAllOnPc' : 'setup.check.ledeSomeOnPc';
     const chatEntry = catalog.find((e) => e.id === selection?.defaultChat);
 
     const blocked = !!hardware && !hardware.compatible && hardware.blockers.length > 0;
@@ -1060,7 +1064,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'check' && (
                         <>
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t(checksDone ? 'setup.check.headingDone' : 'setup.check.heading')}</h1>
-                            <p className="setup-lede">{t(checksDone ? 'setup.check.ledeDone' : 'setup.check.lede')}</p>
+                            <p className="setup-lede">{t(checkLede)}</p>
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
                             {serverRun?.state === 'running' && (
                                 <>

@@ -1284,6 +1284,8 @@ const messages: Messages = {
     'setup.check.headingDone': 'تم فحص هذا الجهاز',
     'setup.check.lede': 'يستغرق هذا بضع ثوانٍ. لن يُنزَّل أي نموذج بعد.',
     'setup.check.ledeDone': 'هذا ما وجده الإعداد. لم يُنزَّل أي نموذج بعد.',
+    'setup.check.ledeAllOnPc': 'هذا ما وجده الإعداد. نماذجك موجودة بالفعل على هذا الجهاز.',
+    'setup.check.ledeSomeOnPc': 'هذا ما وجده الإعداد. بعض نماذجك موجودة بالفعل على هذا الجهاز.',
     'setup.check.serverWorking': 'جارٍ تجهيز خادم النماذج الخاص بـ GAIA…',
     'setup.checks.count': 'الفحوصات المكتملة: {done} من {total}',
     'setup.checks.waitingChoice': 'بانتظار اختيارك أدناه',
