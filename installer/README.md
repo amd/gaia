@@ -57,7 +57,7 @@ README for the per-platform builders and payload-staging steps.
 | `build-ui-installer.ps1` / `.sh` | Build the Electron Agent UI installer locally |
 | `start-agent-ui.ps1` / `.sh` | Launch the Agent UI (backend + frontend) during development |
 | `fetch_lemonade_embeddable.py` | Download the pinned embeddable Lemonade archive for the desktop app's `extraResources`, verified against `EMBEDDABLE_SHA256`, so first-run setup can unpack it instead of downloading it |
-| `start-lemonade.ps1` | Launch a local Lemonade Server for development and CI (Windows). On Linux, build the argv with `gaia.llm.lemonade_launcher.build_start_command` — see `test_gaia_cli_linux.yml` |
+| `ensure-lemonade-running.ps1` | Launch Lemonade Server for development and CI (Windows): by default a persistent Scheduled Task that outlives the job; `-JobScoped` for a server owned by the calling step (use this on a dev box). On Linux, build the argv with `gaia.llm.lemonade_launcher.build_start_command` — see `test_gaia_cli_linux.yml` |
 
 ### What the one-line installers download
 
@@ -119,7 +119,7 @@ first; without it the app says it is missing its backend:
 ```bash
 (cd src/gaia/apps/webui && npm ci && npm run build)    # the core serves this UI
 uv venv .venv-freeze --python 3.12
-uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
+uv pip install --python .venv-freeze -e ".[ui,mcp,talk,notify]" pyinstaller
 .venv-freeze/Scripts/python installer/core/freeze.py      # bin/python off Windows
 .venv-freeze/Scripts/python installer/core/smoke_test.py installer/core/dist/gaia/gaia.exe
 rm -rf src/gaia/apps/webui/build/core && mkdir -p src/gaia/apps/webui/build/core
