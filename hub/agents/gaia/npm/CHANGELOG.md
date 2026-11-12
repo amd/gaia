@@ -8,6 +8,33 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **`/init` says a missing model once.** On a PC with no Lemonade client, the
+  `hint` read "The model X is not downloaded. X is not downloaded, and no
+  Lemonade client CLI was found …, then re-check." It is now the one sentence.
+
+- **Add skills from a pasted link (`/skills`).** On the stdio transport,
+  `/skills add <link>` lists the skills in a GitHub repository or folder, a
+  skills.sh page or an https `.zip`, with what each one is allowed to do (its
+  declared permissions, in plain words), its audit result, and a security
+  warning; `/skills add <link> confirm` adds exactly the version that was shown,
+  at the `experimental` tier. A `confirm` with no preview earlier in the session
+  shows the preview instead of adding anything, and a link that changed since
+  its preview is refused.
+  Skills that ship code need `--allow-code`. Bare `/skills` lists what is
+  installed.
+- **The terminal UI can reopen a past session.** Over stdio, `--session-kind`
+  (with `--history-file`) keeps a listing beside the session's transcript:
+  its title, whether it is running, waiting on a permission prompt, done or
+  failed, and each finished turn in readable form. `/sessions` and
+  `gaia-tui --resume` list and reopen sessions from it. Nothing changes for the
+  HTTP surface, or for a launch without the flag.
+- **One MCP server with a bad repeat-call declaration no longer takes the
+  others down.** An MCP server tool can name the arguments the repeat-call
+  guard compares, in its `_meta` under `ai.amd-gaia/dedup_key`. A server whose
+  declaration is invalid is refused on its own: it is disconnected, its tools
+  are neither registered nor counted toward `mcp_tool_limit`, the "MCP servers
+  that could not start" notice names it with the error, and the other servers
+  still load.
 - **The model is told when older turns are out of its view.** A long chat showed
   "Older messages are now out of the model's view" while the model answered
   that something from those turns was never mentioned. The oldest turn it still
@@ -183,6 +210,28 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   to the chat.** It is saved to the session as soon as it is searchable, and a
   background index that fails is now reported instead of dropping out of
   sight.
+
+### Fixed
+
+- **"Do not run anything, answer only with a plan" gets the plan.** The
+  announced-step check sent a requested tool plan back as unfinished work, and
+  the look-first check told the model to open the file the user had said not
+  to touch. The model read either nudge as the user's newest instruction, so
+  the plan was lost or a run was attempted. A request this turn not to act
+  (answer only with a plan, use no tools, don't do anything yet) now turns
+  both checks off. "Don't run anything yet" alone still lets the agent write
+  the files it was asked for, and "don't do anything else" keeps both checks.
+  A requested plan no longer ends with a note that a named file was not
+  read. An answer that states what an unread file says still gets that
+  note, even on a "use no tools" turn, since it is a guess.
+  A ban the request lifts itself ("don't touch anything until you've read X",
+  "only a plan, then do step 1") is not a request not to act, and neither is
+  a ban that comes with the work ("fix foo.py but don't touch anything",
+  "don't touch anything, just read config.py") or "plan only" inside a
+  request to do work ("my plan only covers Postgres; extend it"). "Don't
+  touch anything" right after a request to look into something ("why does
+  foo.py fail? Don't touch anything") bars edits only: the look-first check
+  stays on, and the agent is still not pushed to make an edit it announced.
 
 ## [0.3.5]
 

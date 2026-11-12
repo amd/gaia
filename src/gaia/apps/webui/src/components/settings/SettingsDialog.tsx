@@ -1,8 +1,8 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { lazy, Suspense, useRef } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { lazy, Suspense, useEffect, useRef } from 'react';
+import { ChevronLeft, Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
@@ -35,7 +35,9 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     const section = useChatStore((s) => s.settingsSection);
     const open = useChatStore((s) => s.openSettings);
     const close = useChatStore((s) => s.closeSettings);
+    const jump = useChatStore((s) => s.settingsJump);
     const panel = useRef<HTMLDivElement>(null);
+    const scroller = useRef<HTMLDivElement>(null);
 
     const isOpen = section !== null;
     useEscapeToClose(isOpen, close);
@@ -44,6 +46,33 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     useDialogFocus(panel, isOpen, () =>
         panel.current?.querySelector<HTMLElement>('.settings-nav-item.is-active'),
     );
+
+    // Panes load their data first, so wait for the setting to appear before landing on it.
+    useEffect(() => {
+        const root = scroller.current;
+        if (!jump || jump.section !== section || !root) return;
+        let unflash: ReturnType<typeof setTimeout> | undefined;
+        const land = (): boolean => {
+            const hit = root.querySelector<HTMLElement>(jump.target);
+            if (!hit) return false;
+            for (let d = hit.closest('details'); d; d = d.parentElement?.closest('details') ?? null) d.open = true;
+            const box = hit.closest<HTMLElement>('.model-in-use-field, .settings-field, details, .settings-card') ?? hit;
+            box.classList.add('settings-target-hit');
+            box.scrollIntoView({ block: 'start' });
+            const focusTo = hit instanceof HTMLDetailsElement ? hit.querySelector('summary') : hit;
+            if (focusTo) {
+                if (!focusTo.matches('summary, button, input, select, textarea, a[href], [tabindex]')) focusTo.tabIndex = -1;
+                focusTo.focus({ preventScroll: true });
+            }
+            unflash = setTimeout(() => box.classList.remove('settings-target-hit'), 1600);
+            return true;
+        };
+        if (land()) return () => clearTimeout(unflash);
+        const watch = new MutationObserver(() => { if (land()) watch.disconnect(); });
+        watch.observe(root, { childList: true, subtree: true });
+        const giveUp = setTimeout(() => watch.disconnect(), 5000);
+        return () => { watch.disconnect(); clearTimeout(giveUp); clearTimeout(unflash); };
+    }, [jump, section]);
 
     if (!section) return null;
 
@@ -86,7 +115,20 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                     <button type="button" className="settings-close" onClick={close} aria-label={t('settings.close')}>
                         <X size={18} />
                     </button>
-                    <div className="settings-scroll">
+                    <div ref={scroller} className="settings-scroll">
+                        {jump && jump.section === section && (
+                            <button
+                                type="button"
+                                className="settings-back"
+                                onClick={() => {
+                                    open(jump.from);
+                                    panel.current?.querySelector<HTMLElement>(`[data-section="${jump.from}"]`)?.focus();
+                                }}
+                            >
+                                <ChevronLeft size={14} aria-hidden="true" />
+                                {t.compose((say) => say('settings.backTo', { section: say(`settings.section.${jump.from}`) }))}
+                            </button>
+                        )}
                         {/* Keyed so a crashed section clears when another is picked. */}
                         <ErrorBoundary key={section} area={`settings.${section}`}>
                             <Suspense fallback={<p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}>
