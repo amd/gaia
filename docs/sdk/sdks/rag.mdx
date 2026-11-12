@@ -1037,6 +1037,36 @@ response = rag.query("What are the termination conditions?")
 
 ---
 
+## Optional Lemonade reranking
+
+Reranking is off by default, and retrieval is unchanged until you turn it on.
+`RAGConfig(enable_reranking=True)` fetches `max_chunks * reranking_candidate_multiplier`
+(default 3) vector candidates, has a Lemonade reranker score them through
+`/v1/rerank`, and keeps the best `max_chunks`. Each rerank call times out after
+`reranking_timeout` seconds (default 30).
+
+GAIA uses a reranker only when it is already downloaded in Lemonade and carries
+the `reranking` label, such as `bge-reranker-v2-m3-GGUF`. Set `reranking_model`
+to require a specific one, or leave it unset to use the first downloaded
+reranker. GAIA never downloads one for you: download it with `lemonade pull <model>`
+or the Lemonade Model Manager. On the first search with reranking on, GAIA loads
+the reranker with `--batch-size 4096 --ubatch-size 4096`, because llama.cpp's
+default (512 tokens) is too small for a query plus a chunk; only the first 1,024
+characters of the query are used to rerank. On a Lemonade Server you run
+yourself, GAIA saves none of those options, so if Lemonade later reloads the
+reranker without them, GAIA loads it again with them and retries once. With
+reranking on, a missing reranker, a failed load, or a failed rerank call raises
+an error naming the fix, instead of quietly returning vector results.
+
+```python
+config = RAGConfig(
+    enable_reranking=True,
+    reranking_model="jina-reranker-v1-tiny-en-GGUF",
+)
+```
+
+---
+
 ## Security: Restricting Document Access
 
 RAG can be restricted to specific directories for security:

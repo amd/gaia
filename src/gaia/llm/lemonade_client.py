@@ -656,6 +656,14 @@ EMBEDDER_MODELS = frozenset(
 #: than its ubatch (default 512), so every embedder load carries this one.
 EMBEDDER_UBATCH_TOKENS = 2048
 EMBEDDER_LLAMACPP_ARGS = f"--ubatch-size {EMBEDDER_UBATCH_TOKENS}"
+#: A reranker scores query + chunk as one input, which must fit one ubatch; the
+#: ubatch cannot exceed the batch (default 2048), so both are raised together.
+RERANKER_BATCH_TOKENS = 4096
+RERANKER_LLAMACPP_ARGS = (
+    f"--batch-size {RERANKER_BATCH_TOKENS} --ubatch-size {RERANKER_BATCH_TOKENS}"
+)
+#: Longest query sent to the reranker, so a full chunk plus it fits the ubatch.
+RERANK_QUERY_MAX_CHARS = 1024
 #: Headroom for the BOS/EOS tokens the server adds to every input.
 _EMBED_RESERVED_TOKENS = 48
 #: Worst realistic ratio: Gemma's tokenizer gives every digit its own token.
@@ -7586,6 +7594,33 @@ class LemonadeClient:
             self.load_model(model_name, prompt=False)
         finally:
             self.model = active_model
+
+    @guard_inference()
+    def rerank(
+        self,
+        query: str,
+        documents: List[str],
+        model: str,
+        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+    ) -> Dict[str, Any]:
+        """Score *documents* against *query* with a downloaded Lemonade reranker.
+
+        The caller chooses a model from the downloaded catalog. This method does
+        not pull models, so a retrieval feature can never start a surprise model
+        download.
+        """
+        if not query.strip():
+            raise ValueError("Reranking query must not be empty.")
+        if not documents:
+            raise ValueError("Reranking requires at least one document.")
+        if not model.strip():
+            raise ValueError("Reranking requires a model ID.")
+        return self._send_request(
+            "POST",
+            f"{self.base_url}/rerank",
+            data={"model": model, "query": query, "documents": documents},
+            timeout=timeout,
+        )
 
     @guard_inference()
     def generate_audio(
