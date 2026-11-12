@@ -15,9 +15,13 @@ import { TableCard } from './TableCard';
 import { KeyValueCard } from './KeyValueCard';
 import { ListCard } from './ListCard';
 import { ImageCard } from './ImageCard';
+import { AudioCard } from './AudioCard';
 import { DiffCard } from './DiffCard';
 import { ConfirmationCard } from './ConfirmationCard';
 import { NeedsInputCard } from './NeedsInputCard';
+import { ConnectAccountCard } from './ConnectAccountCard';
+import { GuideCard } from './guide/GuideCard';
+import { CalculatorCard } from './calculator/CalculatorCard';
 
 export type CardComponent = ComponentType<{ data: unknown }>;
 
@@ -55,7 +59,11 @@ export const CARD_REGISTRY: Record<string, CardComponent> = {
     key_value: KeyValueCard,
     list: ListCard,
     image: ImageCard,
+    audio: AudioCard,
     diff: DiffCard,
     needs_confirmation: ConfirmationCard,
     needs_input: NeedsInputCard,
+    connect_account: ConnectAccountCard,
+    guide: GuideCard,
+    calculator: CalculatorCard,
 };

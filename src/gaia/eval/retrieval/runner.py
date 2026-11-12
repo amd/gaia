@@ -20,7 +20,7 @@ from gaia.eval.retrieval import hard_cases, sources
 from gaia.eval.retrieval.corpus import (
     Dataset,
     Question,
-    load_financebench,
+    datasets_dir,
     load_labelled,
     load_xquad,
     wikipedia_distractors,
@@ -69,7 +69,7 @@ SUITES: Dict[str, Suite] = {
     # Everything, with downloads and answer generation: nightly.
     "full": Suite(
         "full",
-        ("repo_docs", "technical_docs", "financebench", "xquad"),
+        ("repo_docs", "technical_docs", "xquad"),
         answers=True,
         scale_tiers=(10, 100, 1000),
         hard_cases=hard_cases.FULL_CASES,
@@ -90,7 +90,6 @@ class RunOptions:
     run_hard_cases: bool = True
     xquad_languages: Optional[Sequence[str]] = None
     xquad_per_language: Optional[int] = None
-    financebench_docs: Optional[int] = None
     offline: bool = False
     keep_work: bool = False
     vlm: Optional[bool] = None
@@ -228,13 +227,26 @@ def _rag_defaults() -> dict:
 # ── datasets ────────────────────────────────────────────────────────────────
 
 
+def known_datasets() -> List[str]:
+    """What ``--datasets`` accepts: each labelled JSON file, plus ``xquad``."""
+    return sorted([p.stem for p in datasets_dir().glob("*.json")] + ["xquad"])
+
+
+def check_datasets(names: Sequence[str]) -> None:
+    known = known_datasets()
+    unknown = [n for n in names if n not in known]
+    if unknown:
+        raise ValueError(
+            f"Unknown retrieval dataset(s): {', '.join(unknown)}. "
+            f"Choose from: {', '.join(known)}."
+        )
+
+
 def _load_datasets(opts: RunOptions) -> List[Dataset]:
     names = opts.datasets or opts.suite.datasets
     out = []
     for name in names:
-        if name == "financebench":
-            out.append(load_financebench(opts.offline, max_docs=opts.financebench_docs))
-        elif name == "xquad":
+        if name == "xquad":
             langs = opts.xquad_languages or opts.suite.xquad_languages
             per = opts.xquad_per_language or opts.suite.xquad_per_language
             out.extend(load_xquad(lang, per, opts.offline) for lang in langs)
@@ -489,17 +501,14 @@ def _run_scale(work: Path, opts: RunOptions, tiers: Sequence[int]) -> dict:
     return out
 
 
-def _run_hard_cases(
-    work: Path, opts: RunOptions, answers: bool, fb: Optional[Dataset]
-) -> List[dict]:
+def _run_hard_cases(work: Path, opts: RunOptions, answers: bool) -> List[dict]:
     repo = load_labelled("repo_docs", opts.offline)
     ctx = hard_cases.CaseContext(
         work / "hard-cases",
         repo,
         opts.model,
         answers,
-        fb,
-        opts.log,
+        log=opts.log,
         rag_overrides=dict(opts.rag_overrides),
     )
     out = []
@@ -527,6 +536,7 @@ def _run_hard_cases(
 
 def run(opts: RunOptions) -> dict:
     suite = opts.suite
+    check_datasets(opts.datasets or suite.datasets)
     answers = suite.answers if opts.answers is None else opts.answers
     tiers = list(suite.scale_tiers if opts.scale_tiers is None else opts.scale_tiers)
     judge = _Judge(opts.judge_model) if (opts.judge and answers) else None
@@ -571,8 +581,7 @@ def run(opts: RunOptions) -> dict:
         if tiers:
             results["scale"] = _run_scale(work, opts, tiers)
         if opts.run_hard_cases and suite.hard_cases:
-            fb = next((d for d in datasets if d.id == "financebench"), None)
-            results["hard_cases"] = _run_hard_cases(work, opts, answers, fb)
+            results["hard_cases"] = _run_hard_cases(work, opts, answers)
     finally:
         results["meta"]["duration_s"] = round(time.time() - started, 1)
         results["meta"]["errors"] = opts.errors

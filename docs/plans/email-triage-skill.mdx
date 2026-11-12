@@ -275,11 +275,13 @@ governance is later adopted, email writes are the obvious first
 
 ## Acceptance bar
 
-**Blocker first:** [#2983](https://github.com/amd/gaia/issues/2983) — the flagship
-has no scorecard and no release eval gate. Committed baselines exist only for
-`rag_quality`, `tool_selection`, and `context_retention`
-(`tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/`). An email category for the
-flagship has to exist before "no regression" means anything.
+**Baseline:** the flagship baseline lives in
+`tests/fixtures/eval_baselines/gaia-flagship/`, one `scorecard_<category>.json` per
+category, `gaia_email` included; `gaia_git` and `gaia_resilience` have none yet.
+The former blocker, [#2983](https://github.com/amd/gaia/issues/2983), is closed.
+The baseline was captured in a single iteration, so a lone flip against it can be
+noise. The flagship-side checks below (the `tool_selection` re-run, and
+`gaia_email` once the skill lands) are measured against those files.
 
 To justify decommissioning, the flagship plus skill must:
 
@@ -313,12 +315,14 @@ against the committed baseline.
 
 **Phase 1** — organize + undo. Brings the action ledger and the batch threshold.
 
-**Phase 2** — draft, send, trash, behind confirmation.
+**Phase 2** — draft, send, trash, behind confirmation. Drafting, replying,
+forwarding and sending have shipped as the bundled `send-email` skill, which
+added `gmail.compose` to Google's consent; trash and organizing follow, and will need `gmail.modify`.
 
 **Phase 3** — briefing, tasks, scheduling. Needs daemon-managed jobs.
 
 **Phase 4** — Gmail / Google connector. The same five read tools, now backed by
-either mailbox. Google's consent declares `gmail.readonly` only, while the scope
+either mailbox. Google's consent declared `gmail.readonly` only at this phase, while the scope
 actually requested at token time resolves against what the connection already
 carries, so an existing `gmail.modify` user is never sent through a browser
 reconnect. When both mailboxes are usable, Gmail wins on registry order, and the

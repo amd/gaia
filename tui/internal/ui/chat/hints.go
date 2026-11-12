@@ -66,6 +66,9 @@ const (
 	// but it is the one mode nobody has to be warned about, so it yields to
 	// anything saying what is happening right now.
 	rankDefaultMode = 30
+	// The Connectors entry: the TUI's toolbar button, so it outlives the
+	// scroll and mouse hints but yields to anything about the current state.
+	rankToolbar = 50
 	// Numbers for whoever is tuning the machinery. First to go.
 	rankDiagnostic = 10
 )
@@ -78,6 +81,11 @@ func (m ChatModel) statusHints() []hint {
 	// the one row that is always drawn.
 	if m.fullAccess {
 		hints = append(hints, hint{text: "/full-access off", rank: rankFullAccess})
+	}
+	// A /models download running in the background, so the user can keep
+	// chatting and still see how far it is.
+	if dl := m.downloadHint(); dl != "" {
+		hints = append(hints, hint{text: dl, rank: rankMode + 1})
 	}
 	// A mode the user switched into outranks the scroll hints; the default one
 	// only takes a column nothing else wanted.
@@ -114,6 +122,9 @@ func (m ChatModel) statusHints() []hint {
 	// earlier turns; a user who does not know that concludes history is gone.
 	// The warm-up stage has no transcript to scroll or select — it replaces
 	// the transcript entirely.
+	if m.connectorsHintShown() {
+		hints = append(hints, hint{text: connectorsHint, rank: rankToolbar})
+	}
 	if !(m.warming && !m.warmHidden) {
 		hints = append(hints, hint{text: "↑↓/wheel scroll", rank: rankAffordance})
 		// The terminal's drag-select stops at the window's edge; Ctrl+T is the
@@ -133,6 +144,11 @@ func (m ChatModel) statusHints() []hint {
 				text = "Ctrl+O fold"
 			}
 			hints = append(hints, hint{text: text, rank: rankSecondary})
+		}
+		if _, ok := m.latestMediaCandidate(); ok {
+			hints = append(hints,
+				hint{text: "Ctrl+F open · Ctrl+G reveal", rank: rankSecondary},
+			)
 		}
 	}
 

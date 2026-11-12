@@ -9,13 +9,30 @@ backend re-resolution when a connection changes mid-session.
 
 from __future__ import annotations
 
+from typing import Iterable, Tuple
+
 
 class MailboxError(RuntimeError):
-    """A mailbox request failed in a way the caller should surface verbatim."""
+    """A mailbox request failed in a way the caller should surface verbatim.
+
+    ``connect`` names the connectors that signing in fixes, and ``reconnect``
+    those of them that are connected already.
+    """
+
+    def __init__(
+        self, *args, connect: Iterable[str] = (), reconnect: Iterable[str] = ()
+    ):
+        super().__init__(*args)
+        self.connect: Tuple[str, ...] = tuple(connect)
+        self.reconnect: Tuple[str, ...] = tuple(reconnect)
 
 
 class MailboxAuthError(MailboxError):
     """The mailbox rejected our credentials or refused the requested scope."""
 
 
-__all__ = ["MailboxAuthError", "MailboxError"]
+class MailboxOutcomeUnknown(MailboxError):
+    """A write went out and no clear answer came back, so it may have taken effect."""
+
+
+__all__ = ["MailboxAuthError", "MailboxError", "MailboxOutcomeUnknown"]

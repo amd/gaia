@@ -109,6 +109,8 @@ class TurnJournal:
             if kind == "tool_start" and isinstance(event.get("tool"), str):
                 self._tools.append(event["tool"])
                 continue
+            if kind in ("thinking", "status") and event.get("retracts_answer"):
+                self._text = ""
             content = event.get("content")
             if not isinstance(content, str):
                 continue
@@ -143,6 +145,9 @@ class TurnJournal:
             )
             self._saved = self._text
             self._saved_tools = len(self._tools)
+        else:
+            # Still running: a turn cut off later is dated from here.
+            self._db.touch_turn(self._question_id)
 
     def close(self) -> None:
         """End the turn normally. If it saved no reply, keep what it showed:
@@ -176,6 +181,8 @@ def recover_interrupted_work(db: ChatDatabase) -> Dict[str, int]:
             INTERRUPTED_TURN_NOTICE,
             owner=row["owner"],
             tools_notice=tools_ran_notice,
+            # Its process ended some unknown time before this ran.
+            dated_last_alive=True,
         )
         if closed is not None:
             # The chat list shows it failed and unread, as a turn that errors does.

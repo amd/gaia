@@ -385,6 +385,7 @@ describe('keyboard focus stays visible', () => {
         '.composer-input:focus-visible': { ring: '.composer:focus-within', why: 'rings the whole composer' },
         '.sb-search input': { ring: '.sb-search:focus-within', why: 'rings the search box' },
         '.sb-search input:focus-visible': { ring: '.sb-search:focus-within', why: 'rings the search box' },
+        '.msg-edit-input:focus-visible': { ring: '.msg-user:has(.msg-edit-input:focus-visible) .msg-inner', why: 'rings the message being edited' },
     };
 
     const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
@@ -597,12 +598,6 @@ describe('the Electron windows mirror the dark theme rather than inventing one',
      * through.
      */
     const MIRRORED: Array<{ path: string; literal: string; token: string; why: string }> = [
-        {
-            path: '/services/backend-installer-progress-dialog.cjs',
-            literal: '#1A1917',
-            token: '--bg-primary',
-            why: 'BrowserWindow backgroundColor is a main-process option, not CSS -- there is no cascade to read a custom property from',
-        },
         { path: '/services/window-frame.cjs', literal: '#1A1917', token: '--bg-primary', why: 'titleBarOverlay colors are main-process options drawn by the OS, not CSS -- the window controls use these until the renderer sends the live tokens' },
         { path: '/services/window-frame.cjs', literal: '#EFECE6', token: '--text-primary', why: 'titleBarOverlay colors are main-process options drawn by the OS, not CSS -- the window controls use these until the renderer sends the live tokens' },
     ];
@@ -912,9 +907,9 @@ describe('status hues stay on status', () => {
 
     /** A selector naming any of these is claiming a status, so it may paint one. */
     const STATUS_WORDS = [
-        'error', 'danger', 'fail', 'warn', 'deny', 'cancel',
+        'error', 'danger', 'fail', 'warn', 'deny',
         'delete', 'remove', 'clear', 'confirm', 'stop', 'invalid', 'overdue',
-        'urgent', 'missing', 'unsupported', 'bad',
+        'urgent', 'missing', 'bad',
     ];
 
     /** Status by meaning, not by name. Each entry says which status. */

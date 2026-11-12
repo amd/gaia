@@ -5,8 +5,10 @@
 
 A fresh embedded Lemonade has no cloud provider, so Fireworks is registered
 first (``POST /install``); Lemonade reads the key from
-``LEMONADE_FIREWORKS_API_KEY`` in its own environment. Then one tiny request
-goes through the embedded Lemonade. If that fails, the same request goes
+``LEMONADE_FIREWORKS_API_KEY`` in its own environment. Then one short
+non-streaming request, the kind the tasks make, goes through the embedded
+Lemonade. It allows enough tokens for a reasoning model to reach its answer:
+a reply cut off mid-thought has null content, which Lemonade can't relay. If that fails, the same request goes
 straight to Fireworks to tell the causes apart:
 
 - Fireworks itself does not serve the model (404), is rate limiting, is down or
@@ -34,6 +36,12 @@ FIREWORKS_CHAT_URL = f"{FIREWORKS_BASE_URL}/chat/completions"
 LEMONADE_PREFIX = "fireworks."
 WORKFLOW = ".github/workflows/eval_swebench.yml"
 RATE_CARD = "src/gaia/eval/bench/metering.py"
+#: Lemonade's chat route reads ``message.content`` as a string to log it and
+#: answers HTTP 500 with this text when a reply has none and no tool calls.
+NULL_CONTENT_CRASH = "type must be string, but is null"
+#: Room for a reasoning model to finish thinking and still write its answer;
+#: with too few tokens its reply has null content, which Lemonade can't relay.
+PROBE_MAX_TOKENS = 1024
 
 
 @dataclass(frozen=True)
@@ -57,7 +65,11 @@ def upstream_unavailable(direct: int) -> bool:
 
 
 def decide(
-    event: str, model: str, via_lemonade: int, direct: Optional[int]
+    event: str,
+    model: str,
+    via_lemonade: int,
+    direct: Optional[int],
+    lemonade_body: str = "",
 ) -> Decision:
     if via_lemonade == 200:
         return Decision(
@@ -80,6 +92,18 @@ def decide(
             f"{model}: {codes}. | WHAT TO DO: rotate FIREWORKS_API_KEY "
             f"(gh secret set FIREWORKS_API_KEY --repo amd/gaia). "
             f"| WHERE TO LOOK: {WORKFLOW}",
+        )
+    if direct == 200 and NULL_CONTENT_CRASH in lemonade_body:
+        return Decision(
+            False,
+            True,
+            "error",
+            "SWE-bench model reply has no content",
+            f"{model}: {codes}. The model answered with no text and no tool calls "
+            f"(a reasoning model that ran out of tokens before its answer), and "
+            f"Lemonade's chat route fails on a null message.content. | WHAT TO DO: "
+            f"raise PROBE_MAX_TOKENS in util/swebench_model_preflight.py, or update "
+            f"Lemonade once it relays null content. | WHERE TO LOOK: {WORKFLOW}",
         )
     if direct == 200:
         return Decision(
@@ -174,17 +198,21 @@ def register_fireworks(lemonade_url: str, key: str) -> Optional[str]:
     )
 
 
-def probe(url: str, key: str, model: str, timeout: float = 60) -> int:
-    """POST a one-token chat request; the HTTP status, or 0 if nothing answered."""
+def probe(url: str, key: str, model: str, timeout: float = 120) -> Tuple[int, str]:
+    """POST a short non-streaming chat request, as the tasks make; status and body.
+
+    The status is 0 when nothing answered. Non-streaming because the SWE-bench
+    run is, so the probe takes the same route through Lemonade.
+    """
     payload = {
         "model": model,
-        "messages": [{"role": "user", "content": "ok"}],
-        "max_tokens": 1,
+        "messages": [{"role": "user", "content": "Reply with the single word ok."}],
+        "max_tokens": PROBE_MAX_TOKENS,
     }
     status, body = _post(url, key, payload, timeout)
     if status != 200:
         print(f"{url} -> HTTP {status}: {body}")
-    return status
+    return status, body
 
 
 def _report(d: Decision) -> int:
@@ -210,16 +238,20 @@ def main() -> int:
         return _report(
             Decision(False, True, "error", "SWE-bench Fireworks not connected", refused)
         )
-    via_lemonade = probe(f"{lemonade_url}/chat/completions", lemonade_key, model)
+    via_lemonade, lemonade_body = probe(
+        f"{lemonade_url}/chat/completions", lemonade_key, model
+    )
     direct = None
     if via_lemonade != 200:
-        direct = probe(
+        direct, _ = probe(
             FIREWORKS_CHAT_URL,
             env["LEMONADE_FIREWORKS_API_KEY"],
             fireworks_model_id(model),
         )
     return _report(
-        decide(env.get("GITHUB_EVENT_NAME", ""), model, via_lemonade, direct)
+        decide(
+            env.get("GITHUB_EVENT_NAME", ""), model, via_lemonade, direct, lemonade_body
+        )
     )
 
 

@@ -26,6 +26,9 @@ an empty result on purpose (#3386).
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import sys
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -92,6 +95,10 @@ def agent():
         a = _DummyAgent(silent_mode=True, skip_lemonade=True)
         a.streaming = False
         return a
+
+
+#: A snippet that really runs pytest, so its summary line is evidence.
+RUNS_PYTEST = "import pytest\npytest.main(['-q'])"
 
 
 def _stub_chat(agent_, *responses):
@@ -510,6 +517,78 @@ def test_the_check_target_is_the_command_with_whitespace_collapsed():
     ) != verification_check_target(
         "run_shell_command", {"command": "pytest tests/test_cart.py"}
     )
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        # rc18: the fix's rerun trimmed its output differently.
+        ("python -m pytest -q 2>&1 | tail -40", "python -m pytest -q 2>&1 | tail -20"),
+        ("pytest -q", "pytest -q 2>&1 | head -50"),
+        ("pytest -q > out.txt 2>&1", "pytest -q"),
+        ("pytest -q | tee log.txt", "pytest -q 2>&1"),
+        ("pytest -q | Select-Object -Last 20", "pytest -q"),
+        ("pytest -q 2>/dev/null | tail -n 5", "pytest -q"),
+    ],
+)
+def test_trimming_a_checks_output_is_the_same_check(before, after):
+    assert verification_check_target(
+        "run_shell_command", {"command": before}
+    ) == verification_check_target("run_shell_command", {"command": after})
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ("pytest tests/ | tail -5", "pytest tests/test_cart.py | tail -5"),
+        # A filter that picks tests, or a later command, changes what ran.
+        ("pytest -q | tail -5", "pytest -q -k cart | tail -5"),
+        ("pytest -q && ruff check . | tail", "pytest -q"),
+        ("pytest -q | tail -5; pytest tests/e2e", "pytest -q"),
+        ("pytest -q | grep -v slow", "pytest -q 2>&1 | tail"),
+        # A ">" inside a quoted argument is not a redirect.
+        ('python -c "assert f()>0"', 'python -c "assert f()>5"'),
+        ('pytest -k "a>b"', 'pytest -k "a>c"'),
+    ],
+)
+def test_a_different_command_stays_a_different_check(first, second):
+    assert verification_check_target(
+        "run_shell_command", {"command": first}
+    ) != verification_check_target("run_shell_command", {"command": second})
+
+
+def test_loop_says_nothing_when_the_fixed_rerun_trims_differently(agent):
+    """rc18: "I haven't confirmed this works - 1 of 2 pytest runs didn't pass"."""
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "success", "return_code": 0, "stdout": "5 passed"},
+            "python -m pytest -q 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] == "verified"
+    _assert_no_note(result["result"])
+
+
+def test_a_trimmed_rerun_that_still_fails_is_not_verified(agent):
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] != "verified"
 
 
 def test_a_named_check_tool_is_targeted_by_its_arguments():
@@ -1558,10 +1637,7 @@ def test_an_exotic_separator_is_not_treated_as_a_line_break():
 def test_python_runner_results_identify_checks(stdout, stderr, code, label):
     result = {"stdout": stdout, "stderr": stderr, "return_code": code}
     assert (
-        verification_check_label(
-            "execute_python_file", {"file_path": "runner.py"}, result
-        )
-        == label
+        verification_check_label("run_python", {"code": RUNS_PYTEST}, result) == label
     )
     assert (
         verification_check_label("read_file", {"file_path": "output.txt"}, result)
@@ -1571,7 +1647,10 @@ def test_python_runner_results_identify_checks(stdout, stderr, code, label):
 
 def test_a_run_python_pytest_summary_is_a_check():
     result = {"stdout": "3 passed in 0.01s", "return_code": 0}
-    assert verification_check_label("run_python", {"code": "..."}, result) == ("pytest")
+    assert (
+        verification_check_label("run_python", {"code": RUNS_PYTEST}, result)
+        == "pytest"
+    )
 
 
 def test_refused_python_runner_is_not_a_check():
@@ -1587,8 +1666,8 @@ def test_python_check_after_shell_refusal_is_reported_as_executed(agent, code, c
         "run_shell_command", {"command": command}, {"status": "error", **NOT_EXECUTED}
     )
     agent._note_verification_signal(
-        "execute_python_file",
-        {"file_path": "runner.py"},
+        "run_python",
+        {"code": RUNS_PYTEST},
         {
             "status": "success",
             "stdout": (
@@ -1617,17 +1696,30 @@ def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
         "    def test_arithmetic(self): self.assertEqual(2 + 2, 4)\n",
         encoding="utf-8",
     )
-    # Pin pytest's rootdir here; otherwise it can land on the shared temp
-    # dir and list sibling dirs other parallel tests are deleting.
-    (tmp_path / "pytest.ini").write_text("[pytest]\n", encoding="utf-8")
+    # Keep the child inside this test's directory. Otherwise pytest can choose
+    # the shared temp root and collect sibling directories while xdist workers
+    # are deleting them.
     command = [sys.executable, "-m", runner]
     command.extend(
-        [str(test_file), "-q"]
+        [str(test_file), "-q", "-p", "no:cacheprovider", "--rootdir", str(tmp_path)]
         if runner == "pytest"
         else ["discover", "-s", str(tmp_path)]
     )
-    completed = subprocess.run(command, capture_output=True, text=True, timeout=30)
-    assert completed.returncode == 0, completed.stderr
+    child_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in {"PYTEST_ADDOPTS", "PYTEST_PLUGINS"}
+        and not key.startswith("PYTEST_XDIST_")
+    }
+    completed = subprocess.run(
+        command,
+        cwd=tmp_path,
+        env=child_env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     result = {
         "stdout": completed.stdout,
         "stderr": completed.stderr,
@@ -1635,13 +1727,15 @@ def test_real_python_test_runner_output_is_recognized(tmp_path, runner):
     }
     assert (
         verification_check_label(
-            "execute_python_file", {"file_path": "runner.py"}, result
+            "run_python",
+            {"code": f"import subprocess\nsubprocess.run({command!r})"},
+            result,
         )
         == runner
     )
 
 
-@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+@pytest.mark.parametrize("tool", ["run_python"])
 @pytest.mark.parametrize(
     "summary",
     [
@@ -1674,7 +1768,7 @@ def test_a_passing_summary_from_a_snippet_stays_passed(agent):
     agent._turn_tool_executions = []
     agent._note_verification_signal(
         "run_python",
-        {"code": "..."},
+        {"code": RUNS_PYTEST},
         {"status": "success", "stdout": "4 passed in 0.02s", "return_code": 0},
     )
     assert agent._turn_tool_executions[-1]["failed"] is False
@@ -1704,7 +1798,8 @@ class TestSubtestSummariesAreRecognised:
         result = {"status": "success", "stdout": f"....\n{summary}\n", "return_code": 0}
 
         assert (
-            verification_check_label("run_python", {"code": "pytest"}, result) == label
+            verification_check_label("run_python", {"code": RUNS_PYTEST}, result)
+            == label
         )
 
     def test_a_subtest_failure_is_reported_as_a_failure(self):
@@ -1736,3 +1831,79 @@ def test_a_new_turn_rechecks_whether_the_project_has_tests(agent, tmp_path):
     agent.process_query("hi")
 
     assert agent._project_has_tests(root)
+
+
+_PYTEST = "{py} -m pytest -q -p no:cacheprovider"
+_TRIMMED_RERUNS = [
+    (_PYTEST + " 2>&1", _PYTEST),
+    pytest.param(
+        _PYTEST + " 2>&1 | tail -40",
+        _PYTEST + " 2>&1 | tail -20",
+        marks=pytest.mark.skipif(not shutil.which("tail"), reason="needs tail"),
+    ),
+]
+
+
+@pytest.mark.skipif(" " in sys.executable, reason="the command names python unquoted")
+@pytest.mark.parametrize("before, after", _TRIMMED_RERUNS)
+def test_the_shell_tools_own_rerun_replaces_the_run_it_fixed(tmp_path, before, after):
+    """rc18 round 2: the shell tool declares its own check, so its target counts."""
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.base.verification import verification_record
+    from gaia.agents.tools import shell_tools
+    from gaia.security import PathValidator
+
+    test_file = tmp_path / "test_bill.py"
+    saved = dict(_TOOL_REGISTRY)
+    records = []
+    try:
+        mixin = shell_tools.ShellToolsMixin()
+        mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
+        mixin.register_shell_tools()
+        mixin._shell_session = shell_tools.ShellSession(start_cwd=str(tmp_path))
+        mixin._nothing_could_have_confirmed = lambda: False
+        run = _TOOL_REGISTRY["run_shell_command"]["function"]
+        # A different length each time, so a stale .pyc is never reused.
+        for template, total in ((before, 22), (after, 1)):
+            test_file.write_text(f"def test_bill():\n    assert 1 == {total}\n")
+            args = {"command": template.format(py=sys.executable)}
+            mixin.note_confirmed_call("run_shell_command", args)
+            result = run(args["command"])
+            records.append(
+                verification_record(
+                    "run_shell_command",
+                    args,
+                    result,
+                    errored=result.get("status") == "error",
+                )
+            )
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+    assert [r["check_label"] for r in records] == ["pytest", "pytest"]
+    assert [r["failed"] for r in records] == [True, False]
+    assert all(r["declared"] for r in records)
+    assert build_verification_scope(records) == ""
+    assert verification_summary(records)["state"] == "verified"
+
+
+def test_a_narrower_shell_rerun_does_not_replace_the_failed_suite():
+    from gaia.agents.base.checks import attach_check, check_from_command
+    from gaia.agents.base.verification import verification_record
+
+    def _record(command, code, out):
+        segments = [part.split() for part in command.split(" | ")]
+        result = attach_check(
+            {"status": "success" if code == 0 else "error", "return_code": code},
+            check_from_command(command, segments, code, out),
+        )
+        return verification_record(
+            "run_shell_command", {"command": command}, result, errored=code != 0
+        )
+
+    records = [
+        _record("pytest -q | tail -40", 1, "1 failed, 4 passed in 0.1s"),
+        _record("pytest -q tests/test_cart.py | tail -20", 0, "1 passed in 0.1s"),
+    ]
+    assert "didn't pass" in build_verification_scope(records)

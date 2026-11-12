@@ -12,13 +12,50 @@ This conftest auto-clears ``GAIA_MEMORY_DISABLED`` when collecting tests
 from any ``test_memory_*.py`` file so the per-test mocks take effect.
 """
 
+import importlib.util
 import os
 import socket
 import sys
 import tempfile
+import venv
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(scope="session")
+def python_with_pip(tmp_path_factory):
+    """A Python with ``-m pip``, which a ``uv venv`` dev environment does not have."""
+    if importlib.util.find_spec("pip") is not None:
+        return sys.executable
+    env_dir = tmp_path_factory.mktemp("pip-venv")
+    venv.create(env_dir, with_pip=True)
+    bin_dir = "Scripts" if sys.platform == "win32" else "bin"
+    return str(env_dir / bin_dir / Path(sys.executable).name)
+
+
+class _OsNamed:
+    """``os`` as one module sees it, with only ``name`` overridden."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def __getattr__(self, attr):
+        return getattr(os, attr)
+
+
+@pytest.fixture
+def fake_os_name(monkeypatch):
+    """Make one module see another ``os.name`` without touching the real one.
+
+    Patching the real os.name makes pathlib, pytest and coverage build the
+    wrong Path flavour, which crashes the xdist worker.
+    """
+
+    def _set(module, name):
+        monkeypatch.setattr(module, "os", _OsNamed(name))
+
+    return _set
 
 
 @pytest.fixture
@@ -34,6 +71,8 @@ def mock_home(tmp_path, monkeypatch):
     real_expanduser = os.path.expanduser
 
     def fake_expanduser(path):
+        # Like the real one, accept any path-like (matplotlib passes a Path).
+        path = os.fspath(path)
         if path == "~":
             return str(tmp_path)
         if path.startswith(("~/", "~\\")):
@@ -74,14 +113,77 @@ def _isolate_gaia_config(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "GAIA_CONFIG_FILE", tmp_path / "config.json")
 
 
+@pytest.fixture(autouse=True)
+def _stub_daemon_scheduler_notifications(request, monkeypatch):
+    """Keep unit tests from opening real desktop notifications."""
+    if request.node.get_closest_marker("real_sinks"):
+        yield
+        return
+
+    from gaia.schedule import sinks
+
+    monkeypatch.setattr(sinks, "dispatch", lambda *args, **kwargs: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_failure_records(request, monkeypatch):
+    """A real problem report probes Lemonade and scans every process (~2 s); only its own tests save one."""
+    if request.node.get_closest_marker("failure_records"):
+        return
+    from gaia.llm import failure_record
+
+    monkeypatch.setattr(failure_record, "record_failure", lambda *_a, **_k: None)
+    monkeypatch.setattr(failure_record, "record_local_failure", lambda *_a, **_k: None)
+
+
+@pytest.fixture(autouse=True)
+def _forget_crashed_loads(monkeypatch):
+    """A load one test crashed must not be refused, unsent, in the next."""
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "_CRASHED_LOADS", {})
+
+
+@pytest.fixture(autouse=True)
+def _isolate_learned_reasoning(tmp_path, monkeypatch):
+    """Start each test with nothing learned about cloud reasoning, and keep
+    probes off the developer's real ``~/.gaia/gateway.json``."""
+    from gaia.llm import gateway
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(gateway, "GATEWAY_STATE_FILE", tmp_path / "gateway.json")
+    monkeypatch.setattr(
+        lc,
+        "_CLOUD_REASONING",
+        lc._LearnedCapability(
+            "reasoning",
+            "reasoning_models",
+            "no_reasoning_models",
+            "reasoning_probe_failures",
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _forget_engine_start_failure(monkeypatch):
+    """A failed start one test staged must not fail the next test's model call."""
+    from gaia.llm import lemonade_client
+
+    monkeypatch.setattr(lemonade_client, "_ENGINE_START_FAILURE", None)
+
+
 #: The home this run started with; a test that moves it keeps ``<its home>/.gaia``.
 _RUN_HOME = Path.home()
 
 
 def _patch_default_gaia_home(mp, default_gaia_home) -> None:
     from gaia import config as config_mod
+    from gaia import home as home_mod
     from gaia.connectors import _refresh_lock
 
+    # gaia_home() lives in gaia.home; config re-exports it.
+    mp.setattr(home_mod, "default_gaia_home", default_gaia_home)
     mp.setattr(config_mod, "default_gaia_home", default_gaia_home)
     # Bound at import; the connector lock is the one writer among those names.
     mp.setattr(_refresh_lock, "default_gaia_home", default_gaia_home)
@@ -132,6 +234,24 @@ def _isolate_daemon_home(tmp_path_factory):
     """
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv("GAIA_DAEMON_HOME", str(tmp_path_factory.mktemp("daemon-home")))
+        yield
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_real_agent_turn():
+    """Stop setup's test turn starting a daemon and the assistant's program.
+
+    Session-wide because a setup run's thread can outlive its test, past any
+    per-test mock. Tests of the turn itself call ``.real``.
+    """
+    from gaia.ui import setup_runner
+
+    def no_agent_turn(model_id=None):
+        return None
+
+    no_agent_turn.real = setup_runner._agent_turn_problem
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(setup_runner, "_agent_turn_problem", no_agent_turn)
         yield
 
 
@@ -209,6 +329,17 @@ def _forbid_daemon_spawn(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _empty_hub_skill_catalog(monkeypatch):
+    """Capture consults the hub catalog; unit tests see an empty one.
+
+    Tests of that check patch ``published_skill_names`` back in themselves.
+    """
+    from gaia.skills import capture
+
+    monkeypatch.setattr(capture, "published_skill_names", lambda: frozenset())
+
+
+@pytest.fixture(autouse=True)
 def _no_automatic_lemonade_lease(monkeypatch):
     """Keep every LemonadeClient a test builds from leasing Lemonade.
 
@@ -229,6 +360,10 @@ def pytest_configure(config):
         "real_lemonade: keep the caller's LEMONADE_BASE_URL; with "
         "GAIA_TEST_ALLOW_REAL_LEMONADE=1 also let the test spawn or kill a "
         "real Lemonade server",
+    )
+    config.addinivalue_line(
+        "markers",
+        "failure_records: save real problem reports (see _no_failure_records)",
     )
 
 

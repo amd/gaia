@@ -438,7 +438,7 @@ class TestFTS5Search:
 
 
 class TestDeduplication:
-    """>80% word overlap in same category+context → updates existing."""
+    """A restatement in the same category+context updates the existing entry."""
 
     def test_dedup_high_overlap_same_category_context(self, store):
         """High overlap in same category+context deduplicates."""
@@ -454,22 +454,21 @@ class TestDeduplication:
         assert id2 == id1
 
     def test_dedup_replaces_with_newer_content(self, store):
-        """Dedup replaces content with the newer version (not longer)."""
+        """A refinement replaces content with the newer, fuller version."""
         id1 = store.store(
             category="fact",
             content="Project uses React 18 with webpack bundler",
         )
         id2 = store.store(
             category="fact",
-            content="Project uses React 19 with webpack bundler",
+            content="Project uses React 18 with webpack bundler and Babel",
         )
         assert id2 == id1
 
-        # Newer content should be stored
         results = store.search("React webpack bundler")
         match = next((r for r in results if r["id"] == id1), None)
         assert match is not None
-        assert "React 19" in match["content"]
+        assert match["content"].endswith("and Babel")
 
     def test_dedup_takes_max_confidence(self, store):
         """Dedup takes the maximum confidence of old and new."""
@@ -507,7 +506,7 @@ class TestDeduplication:
 
         id2 = store.store(
             category="fact",
-            content="GAIA supports NPU acceleration on AMD chips",
+            content="GAIA supports NPU acceleration on AMD hardware today",
         )
         assert id2 == id1
 
@@ -553,6 +552,27 @@ class TestDeduplication:
             context="personal",
         )
         assert id1 != id2
+
+    @pytest.mark.parametrize(
+        "left, right",
+        [
+            ("User's setting is -5", "User's setting is 5"),
+            ("User knows C", "User knows C++"),
+            ("User knows C", "User knows C#"),
+            ("User's setting is +1", "User's setting is 1"),
+        ],
+    )
+    def test_dedup_keeps_symbol_significant_values_separate(self, store, left, right):
+        """Signs and language suffixes identify distinct memory values."""
+        id1 = store.store(category="fact", content=left)
+        id2 = store.store(category="fact", content=right)
+        assert id2 != id1
+
+    def test_dedup_still_splits_hyphenated_prose(self, store):
+        """A normal word hyphen remains a separator for overlap matching."""
+        id1 = store.store(category="fact", content="User's mother-in-law lives nearby")
+        id2 = store.store(category="fact", content="User's mother in law lives nearby")
+        assert id2 == id1
 
     def test_dedup_never_downgrades_user_source(self, store):
         """A discovery re-run that merges into a user item keeps source='user'."""
@@ -871,6 +891,159 @@ class TestConversations:
         results = store.get_recent_conversations(days=7)
         assert results[0]["content"] == "First"
         assert results[-1]["content"] == "Third"
+
+
+# ===========================================================================
+# 5b. Deleting one session (#5931)
+# ===========================================================================
+
+
+def _fts_rowids(store, word):
+    return {
+        r[0]
+        for r in store._conn.execute(
+            "SELECT rowid FROM conversations_fts WHERE conversations_fts MATCH ?",
+            (word,),
+        )
+    }
+
+
+def _log_tool(store, session_id, query):
+    store.log_tool_call(
+        session_id=session_id,
+        tool_name="web_search",
+        args={"query": query},
+        result_summary=f"results for {query}",
+        success=True,
+    )
+
+
+class TestDeleteSession:
+    def test_removes_only_that_session(self, store):
+        """A deleted chat's turns and tool calls go; other chats and facts stay."""
+        store.store_turn("gone", "user", "pineapple question")
+        store.store_turn("gone", "assistant", "pineapple answer")
+        _log_tool(store, "gone", "pineapple recipes")
+        store.store_turn("kept", "user", "pineapple elsewhere")
+        _log_tool(store, "kept", "pineapple prices")
+        store.store(category="fact", content="User likes pineapple")
+
+        assert store.delete_session("gone") == {"conversations": 2, "tool_history": 1}
+
+        assert store.get_history(session_id="gone") == []
+        assert [s["session_id"] for s in store.get_sessions()] == ["kept"]
+        hits = store.search_conversations("pineapple")
+        assert [h["session_id"] for h in hits] == ["kept"]
+        tools = store._conn.execute(
+            "SELECT session_id, args FROM tool_history"
+        ).fetchall()
+        assert [t[0] for t in tools] == ["kept"]
+        assert "pineapple prices" in tools[0][1]
+        assert store.get_by_category("fact")[0]["content"] == "User likes pineapple"
+
+    def test_writes_after_the_delete_file_nothing(self, store):
+        """A turn still finishing under a deleted id leaves nothing behind."""
+        store.store_turn("gone", "user", "first")
+        store.delete_session("gone")
+
+        store.store_turn("gone", "assistant", "late answer")
+        _log_tool(store, "gone", "late search")
+        store.store_turn("kept", "user", "still here")
+
+        assert store.get_history(session_id="gone") == []
+        tools = store._conn.execute("SELECT session_id FROM tool_history").fetchall()
+        assert tools == []
+        assert [s["session_id"] for s in store.get_sessions()] == ["kept"]
+
+    def test_nothing_left_behind(self, store):
+        """No row, FTS entry or tool call of the deleted session survives."""
+        store.store_turn("gone", "user", "zanzibar question")
+        store.store_turn("gone", "assistant", "zanzibar answer")
+        _log_tool(store, "gone", "zanzibar")
+        store.store_turn("kept", "user", "unrelated")
+        assert len(_fts_rowids(store, "zanzibar")) == 2
+
+        store.delete_session("gone")
+
+        assert _fts_rowids(store, "zanzibar") == set()
+        for table in ("conversations", "tool_history"):
+            n = store._conn.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE session_id = 'gone'"
+            ).fetchone()[0]
+            assert n == 0, table
+        hits = store._conn.execute(
+            "SELECT COUNT(*) FROM tool_history WHERE args LIKE '%zanzibar%'"
+        ).fetchone()[0]
+        assert hits == 0
+        # The external-content FTS index still matches its table.
+        store._conn.execute(
+            "INSERT INTO conversations_fts(conversations_fts) VALUES('integrity-check')"
+        )
+        assert store.delete_session("gone") == {"conversations": 0, "tool_history": 0}
+
+    @pytest.mark.parametrize(
+        "neighbour", ["abc%", "abc_", "ABC", "abcd", "xabc", "abc ", "", "%", "_"]
+    )
+    def test_matches_the_id_exactly(self, store, neighbour):
+        """No prefix, case or wildcard match reaches a neighbouring session."""
+        store.store_turn("abc", "user", "mine")
+        store.store_turn(neighbour, "user", "theirs")
+        _log_tool(store, neighbour, "theirs")
+
+        store.delete_session("abc")
+
+        assert [t["content"] for t in store.get_history(session_id=neighbour)] == [
+            "theirs"
+        ]
+        assert (
+            store._conn.execute(
+                "SELECT COUNT(*) FROM tool_history WHERE session_id = ?", (neighbour,)
+            ).fetchone()[0]
+            == 1
+        )
+
+    def test_wildcard_id_deletes_only_itself(self, store):
+        store.store_turn("a", "user", "one")
+        store.store_turn("%", "user", "two")
+        store.delete_session("%")
+        assert [s["session_id"] for s in store.get_sessions()] == ["a"]
+
+    def test_legacy_random_id_turns_are_untouched_until_pruned(self, store):
+        """Pre-#5931 turns under a random id survive a chat delete; age pruning
+        or a full clear removes them."""
+        chat_id = str(uuid.uuid4())
+        legacy_id = str(uuid.uuid4())
+        store.store_turn(chat_id, "user", "new turn")
+        store.store_turn(legacy_id, "user", "legacy turn")
+
+        store.delete_session(chat_id)
+        assert [s["session_id"] for s in store.get_sessions()] == [legacy_id]
+
+        old = (datetime.now().astimezone() - timedelta(days=91)).isoformat()
+        store._conn.execute(
+            "UPDATE conversations SET timestamp = ? WHERE session_id = ?",
+            (old, legacy_id),
+        )
+        store._conn.commit()
+        assert store.prune(days=90)["conversations_deleted"] == 1
+        assert store.get_sessions() == []
+
+    def test_concurrent_deletes_and_writes_stay_separate(self, store):
+        """Deleting one chat while another writes never drops the other's turns."""
+        for i in range(50):
+            store.store_turn("gone", "user", f"gone {i}")
+
+        def writer():
+            for i in range(50):
+                store.store_turn("kept", "user", f"kept {i}")
+
+        t = threading.Thread(target=writer)
+        t.start()
+        store.delete_session("gone")
+        t.join()
+
+        assert store.get_history(session_id="gone") == []
+        assert len(store.get_history(session_id="kept", limit=100)) == 50
 
 
 # ===========================================================================
@@ -1256,7 +1429,7 @@ class TestSensitivity:
         # Store a highly overlapping entry WITHOUT sensitive=True (e.g., heuristic extraction)
         dedup_id = store.store(
             category="fact",
-            content="Sarah email is sarah@company.com company data",
+            content="Sarah email is sarah@company.com sensitive data!",
             sensitive=False,  # No sensitive flag — default
         )
 
@@ -1788,9 +1961,18 @@ class TestHelperFunctions:
         """Partial overlap returns correct Szymkiewicz-Simpson coefficient."""
         from gaia.agents.base.memory_store import _word_overlap
 
-        # intersection = {"the", "quick"} = 2, min(4, 4) = 4 → 0.5
-        result = _word_overlap("the quick brown fox", "the quick red cat")
+        # intersection = {"one", "quick"} = 2, min(4, 4) = 4 → 0.5
+        result = _word_overlap("one quick brown fox", "one quick red cat")
         assert result == pytest.approx(0.5)
+
+    def test_word_overlap_ignores_filler(self):
+        """ "I am" and "User is" say nothing, so they don't lower the overlap."""
+        from gaia.agents.base.memory_store import _word_overlap
+
+        assert (
+            _word_overlap("I am allergic to mango.", "User is allergic to mango.")
+            == 1.0
+        )
 
     def test_word_overlap_empty(self):
         """Empty strings return 0.0."""
@@ -3977,7 +4159,7 @@ class TestStoreEmbedding:
         # Store a high-overlap entry — should dedup and clear embedding
         store.store(
             category="fact",
-            content="The deployment pipeline uses Kubernetes containers",
+            content="The deployment pipeline uses Docker containers on Linux",
         )
 
         with store._lock:
@@ -5304,6 +5486,32 @@ class TestIterSessions:
         assert s["success_count"] == 3
         assert s["attempt_count"] == 3
         assert "write_file" not in s["tools"]
+        assert s["declined_count"] == 1
+
+    def test_a_session_with_no_denials_reports_none(self, store):
+        store.store_turn("sessClean", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessClean", f"good{i}", {}, "ok", True)
+        assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
+
+    def test_only_a_call_stopped_before_it_ran_counts_as_declined(self, store):
+        """A tool that ran and reported "denied", or a refusal that isn't a denial,
+        is not a decline."""
+        store.store_turn("sessMixed", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessMixed", f"good{i}", {}, "ok", True)
+        store.log_tool_call(
+            "sessMixed", "http_get", {}, "{'status': 'denied'}", True, executed=True
+        )
+        store.log_tool_call(
+            "sessMixed",
+            "run_shell",
+            {},
+            "{'status': 'error', 'error': 'not allowlisted'}",
+            False,
+            executed=False,
+        )
+        assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
 
     def test_since_watermark_excludes_older_rows(self, store):
         """since= counts only tool calls strictly newer than the watermark."""

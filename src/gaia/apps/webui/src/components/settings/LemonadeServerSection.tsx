@@ -4,12 +4,17 @@
 import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
+import { useT } from '../../i18n/useT';
 import { lemonadeKeyRejected } from '../../utils/lemonade';
+import { useChatStore } from '../../stores/chatStore';
 import type { LemonadeTarget, LemonadeTargetBody } from '../../types';
 import '../SettingsModal.css';
 
 /** Which Lemonade Server GAIA uses: its own, or one the user already runs. */
 export function LemonadeServerSection() {
+    const t = useT();
+    const runSetupAgain = useChatStore((s) => s.runSetupAgain);
+    const closeSettings = useChatStore((s) => s.closeSettings);
     const [target, setTarget] = useState<LemonadeTarget | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
     const [url, setUrl] = useState('');
@@ -35,24 +40,29 @@ export function LemonadeServerSection() {
             setTarget(next);
             setKey('');
             setKeyAsked(false);
+            // Saved, but GAIA's own isn't installed yet: setup installs it.
+            if (next.mode === 'gaia' && !next.gaia_installed) {
+                closeSettings();
+                runSetupAgain(true);
+            }
         } catch (err) {
             setKeyAsked(lemonadeKeyRejected(err));
             setError(err instanceof Error ? err.message : String(err));
         } finally {
             setBusy(false);
         }
-    }, []);
+    }, [closeSettings, runSetupAgain]);
 
     const connect = () => void save({ mode: 'external', base_url: url.trim(), api_key: key.trim() || undefined });
 
     if (loadError) {
         return (
             <section className="settings-section">
-                <h4>Model server</h4>
+                <h4>{t('settings.advanced.modelServer')}</h4>
                 <div className="model-warning" role="alert">
                     <AlertCircle size={14} />
                     <div className="model-warning-content">
-                        <strong>Could not read which model server GAIA uses</strong>
+                        <strong>{t('settings.server.readFailed')}</strong>
                         <p>{loadError}</p>
                     </div>
                 </div>
@@ -62,25 +72,27 @@ export function LemonadeServerSection() {
     if (!target) return null;
 
     const external = target.mode === 'external';
+    const fromEnv = target.source === 'env';
     return (
-        <section className="settings-section" aria-label="Model server">
-            <h4>Model server</h4>
+        <section className="settings-section" aria-label={t('settings.advanced.modelServer')}>
+            <h4>{t('settings.advanced.modelServer')}</h4>
             <p className="model-override-desc" role="status">
-                {target.source === 'env'
-                    ? <>GAIA uses the Lemonade Server at <code>{target.base_url}</code>, set by <code>LEMONADE_BASE_URL</code>.</>
+                {fromEnv
+                    ? t('settings.server.usesEnv', { url: target.base_url ?? '' })
                     : external
-                        ? <>GAIA uses your Lemonade Server at <code>{target.base_url}</code>.</>
-                        : <>GAIA uses its own Lemonade Server.</>}
+                        ? t('settings.server.usesYours', { url: target.base_url ?? '' })
+                        : t('settings.server.usesOwn')}
             </p>
-            {target.source === 'env' ? (
-                <p className="model-status-hint">
-                    Unset <code>LEMONADE_BASE_URL</code> and restart GAIA to change this here.
-                </p>
+            {!fromEnv && target.env_url_ignored && (
+                <p className="model-status-hint">{t('settings.server.envIgnored', { url: target.env_url_ignored })}</p>
+            )}
+            {fromEnv ? (
+                <p className="model-status-hint">{t('settings.server.envUseOwn')}</p>
             ) : (
                 <>
                     <p className="model-status-hint">
-                        Already run Lemonade? Use it, so this PC keeps one server and one copy of each model.
-                        {' '}{target.what_gaia_does}
+                        {t('settings.server.useYours')}
+                        {' '}<bdi>{target.what_gaia_does}</bdi>
                     </p>
                     <form className="model-input-row" onSubmit={(e) => { e.preventDefault(); connect(); }}>
                         <input
@@ -93,41 +105,41 @@ export function LemonadeServerSection() {
                             spellCheck={false}
                             autoCapitalize="off"
                             autoCorrect="off"
-                            aria-label="Lemonade Server address"
+                            aria-label={t('settings.server.address')}
                         />
                         <input
                             type="password"
                             className="model-input"
                             autoComplete="off"
-                            placeholder={target.api_key_stored ? 'API key (blank keeps the saved one)' : 'API key, if it needs one'}
+                            placeholder={target.api_key_stored ? t.bare('settings.server.keySaved') : t.bare('settings.server.keyOptional')}
                             value={key}
                             onChange={(e) => setKey(e.target.value)}
                             disabled={busy}
-                            aria-label="Lemonade API key"
+                            aria-label={t('settings.server.key')}
                         />
                         <div className="model-btn-group">
                             <button type="submit" className="btn-model-save" disabled={busy || !url.trim()}>
-                                {busy ? <><Loader2 size={13} className="btn-spinner" /> Checking…</> : 'Use this server'}
+                                {busy ? <><Loader2 size={13} className="btn-spinner" /> {t('settings.server.checking')}</> : t('settings.server.use')}
                             </button>
                         </div>
                     </form>
-                    {external && (
-                        <div className="setting-actions">
-                            <button type="button" className="btn-secondary" disabled={busy} onClick={() => void save({ mode: 'gaia' })}>
-                                Use GAIA&rsquo;s own
-                            </button>
-                        </div>
-                    )}
-                    {error && (
-                        <div className="model-warning" role="alert">
-                            <AlertCircle size={14} />
-                            <div className="model-warning-content">
-                                <strong>{keyAsked ? 'Needs the API key' : 'Not switched'}</strong>
-                                <p>{error}</p>
-                            </div>
-                        </div>
-                    )}
                 </>
+            )}
+            {external && (
+                <div className="setting-actions">
+                    <button type="button" className="btn-secondary" disabled={busy} onClick={() => void save({ mode: 'gaia' })}>
+                        {t('settings.server.useOwn')}
+                    </button>
+                </div>
+            )}
+            {error && (
+                <div className="model-warning" role="alert">
+                    <AlertCircle size={14} />
+                    <div className="model-warning-content">
+                        <strong>{keyAsked ? t('settings.server.needsKey') : t('settings.server.notSwitched')}</strong>
+                        <p>{error}</p>
+                    </div>
+                </div>
             )}
         </section>
     );

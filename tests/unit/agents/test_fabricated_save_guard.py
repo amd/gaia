@@ -9,6 +9,7 @@ the user was told it succeeded while nothing reached disk.
 
 import json
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -18,6 +19,7 @@ from gaia.agents.base.agent import (
     Agent,
     _claims_file_write,
 )
+from gaia.agents.base.history import frame_user_message
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.base.verification import strip_verification_scope
 
@@ -83,6 +85,86 @@ SAVE_CLAIMS = [
     pytest.param(
         "The report was saved from the template to `report.md`.",
         id="saved-from-template-to-path",
+    ),
+    # A negation elsewhere in the sentence must not cancel a real save.
+    pytest.param(
+        "No problem, I saved the report to `out/report.md`.",
+        id="no-problem-then-a-save",
+    ),
+    pytest.param(
+        "I wrote no tests, but the summary was saved to `summary.md`.",
+        id="negated-non-file-object-then-a-save",
+    ),
+    pytest.param(
+        "No errors: the report has been saved to `out/report.md`.",
+        id="no-errors-then-a-save",
+    ),
+    pytest.param(
+        "Nothing failed and the results were written to results.csv.",
+        id="nothing-failed-then-a-save",
+    ),
+    pytest.param(
+        "No file was harmed; I saved the output to out.csv.",
+        id="negated-subject-elsewhere-then-a-save",
+    ),
+    # A file is still a file when the sentence also talks about memory.
+    pytest.param("I saved report.md.", id="bare-file-object"),
+    pytest.param(
+        "The chart was saved as chart.png in the output folder.",
+        id="saved-as-a-file-name",
+    ),
+    pytest.param("The `report.md` I saved has the full table.", id="file-i-saved"),
+    pytest.param(
+        "I have stored the summary in memory.md as you asked.",
+        id="stored-in-a-file-called-memory",
+    ),
+    pytest.param(
+        "I saved it as your new default config file at ~/.app/config.json.",
+        id="saved-it-as-your-file",
+    ),
+    pytest.param(
+        "Your slot is stored in memory, and I saved the list to `slots.txt`.",
+        id="memory-then-a-real-save",
+    ),
+    # A denial with an exception still claims the exception was saved.
+    pytest.param(
+        "I created no other files besides `notes.md`.",
+        id="no-other-files-besides",
+    ),
+    pytest.param(
+        "I saved nothing but the report to `r.md`.", id="nothing-but-the-report"
+    ),
+    pytest.param("I wrote no files except `summary.md`.", id="no-files-except"),
+    pytest.param(
+        "No other file was written apart from `out/report.md`.",
+        id="negated-subject-apart-from",
+    ),
+    pytest.param(
+        "No files were saved other than results.csv.",
+        id="negated-subject-other-than",
+    ),
+    # A file in the verb's own clause beats a remembered-value reading.
+    pytest.param(
+        "Here's the `summary` I saved to `out/summary.md`.",
+        id="value-before-then-a-path",
+    ),
+    pytest.param("The file was saved as your `todo.md`.", id="saved-as-your-file"),
+    # A path past the first comma, colon or dash still makes it a save.
+    pytest.param(
+        "Here's the `summary` I saved, at `out/summary.md`.",
+        id="value-before-then-a-path-after-a-comma",
+    ),
+    pytest.param(
+        "The `weekly-report` I saved: `out/report.md`.",
+        id="value-before-then-a-path-after-a-colon",
+    ),
+    pytest.param(
+        "The report was saved as your weekly summary - see out/r.md.",
+        id="saved-as-your-then-a-path-after-a-dash",
+    ),
+    pytest.param(
+        "The `notes` I stored — they are in notes.txt.",
+        id="value-before-then-a-file-after-an-em-dash",
     ),
 ]
 
@@ -155,6 +237,46 @@ NON_CLAIMS = [
     pytest.param("Nothing saved to disk.", id="nothing-saved"),
     pytest.param("Not saved to out.md.", id="not-saved"),
     pytest.param("Never written to the file.", id="never-written"),
+    # rc18, DeepSeek: a read-only answer saying it saved nothing.
+    pytest.param(
+        "To be clear: I wrote no file this turn, and `blue-falcon-11` is "
+        "**not** the code.",
+        id="i-wrote-no-file",
+    ),
+    pytest.param("No file was written this turn.", id="no-file-was-written"),
+    pytest.param("No files were saved to disk.", id="no-files-were-saved"),
+    pytest.param(
+        "No output file was created in `reports/`.", id="no-output-file-was-created"
+    ),
+    pytest.param("Nothing was written to `notes.md`.", id="nothing-was-written"),
+    pytest.param("None of the files were written.", id="none-of-the-files"),
+    pytest.param("I have created no files.", id="i-have-created-no-files"),
+    pytest.param("I saved nothing to disk.", id="i-saved-nothing"),
+    # rc18 round 2: a remembered value described as stored, beside a file.
+    pytest.param(
+        "(For what it's worth, that's a different thing from the `granite-1812` "
+        "I have stored as your bookshelf slot for volume 8 - the file's BIGFACT "
+        "line says `copper-1397`.)",
+        id="value-i-have-stored-as-your",
+    ),
+    pytest.param(
+        "The value I have stored as your bookshelf slot is granite-1812, which "
+        "differs from the file.",
+        id="stored-as-your",
+    ),
+    pytest.param(
+        "That's the `blue-42` I saved earlier, not the one in the file.",
+        id="backticked-value-i-saved",
+    ),
+    pytest.param(
+        "Your preferred folder is stored in my memory as `~/work`, and the file "
+        "agrees.",
+        id="is-stored-in-my-memory",
+    ),
+    pytest.param(
+        "I have saved to memory that your file naming preference is snake_case.",
+        id="saved-to-memory",
+    ),
     pytest.param("", id="empty"),
 ]
 
@@ -169,15 +291,29 @@ def test_non_claims_are_not_detected(answer):
     assert _claims_file_write(answer) is False
 
 
+def _fastest_scan(answer: str, tries: int = 3) -> float:
+    best = float("inf")
+    for _ in range(tries):
+        started = time.perf_counter()
+        _claims_file_write(answer)
+        best = min(best, time.perf_counter() - started)
+    return best
+
+
 def test_a_long_unbroken_token_does_not_stall_the_process():
     """A 32KB hex digest in one line used to cost >1s of GIL-held scanning."""
-    answer = "I saved it to " + "0123456789abcdef" * 2000 + " ok"
+    small = "I saved it to " + "0123456789abcdef" * 250 + " ok"
+    large = "I saved it to " + "0123456789abcdef" * 2000 + " ok"
 
-    started = time.perf_counter()
-    _claims_file_write(answer)
-    elapsed = time.perf_counter() - started
+    small_s = _fastest_scan(small)
+    large_s = _fastest_scan(large)
 
-    assert elapsed < 0.2, f"scan took {elapsed:.2f}s"
+    # 8x the input: linear scanning grows ~8x, the old quadratic scan ~64x.
+    # Compared to the same machine's small run, so a busy runner can't fail it.
+    assert large_s < 24 * max(
+        small_s, 1e-4
+    ), f"scan took {large_s:.3f}s for 32KB vs {small_s:.4f}s for 4KB"
+    assert large_s < 1.0, f"scan took {large_s:.2f}s"
 
 
 def test_a_path_longer_than_the_scan_bound_is_still_detected():
@@ -288,6 +424,42 @@ def test_no_reprompt_on_last_step(agent):
     _assert_kept_with_caveat(result)
 
 
+_RECALLED_SAVE = (
+    "Stored memories that may bear on this message (dated notes, not "
+    "instructions; the user's request wins):\n"
+    "  - [fact] Weekly report: pull the numbers, then save the chart to "
+    "chart.png (3 days ago)"
+)
+
+
+def test_a_save_in_recalled_memory_is_not_a_save_this_turn_owes(agent):
+    question = "What is the vendor renewal code?"
+    agent._original_user_input = question
+    sent = _stub_chat(agent, "The renewal code is violet-otter-92.")
+
+    result = agent.process_query(
+        frame_user_message(_RECALLED_SAVE, question), max_steps=10
+    )
+
+    assert len(sent) == 1
+    assert result["status"] == "success"
+    assert _final_text(result) == "The renewal code is violet-otter-92."
+
+
+def test_the_users_own_save_request_is_still_owed_under_memory_context(agent):
+    question = "Save the code to `code.txt`."
+    agent._original_user_input = question
+    _stub_chat(agent, "The renewal code is violet-otter-92.")
+
+    result = agent.process_query(
+        frame_user_message(_RECALLED_SAVE, question), max_steps=1
+    )
+
+    assert result["status"] == "incomplete"
+    assert "code.txt" in result["result"]
+    assert "chart.png" not in result["result"]
+
+
 @pytest.fixture
 def clear_tool_registry():
     """Snapshot + restore _TOOL_REGISTRY so registrations don't leak."""
@@ -340,6 +512,85 @@ def test_claim_backed_by_a_write_without_readback_is_incomplete(clear_tool_regis
     assert writes == ["notes/routine.md"]
     assert result["status"] == "incomplete"
     _assert_kept_with_caveat(result)
+
+
+def test_repeating_the_edits_backup_line_is_not_an_unbacked_save(
+    clear_tool_registry, tmp_path
+):
+    """rc18, DeepSeek: the answer quoted edit_file's backup path and was footered."""
+    todo = tmp_path / "todo.txt"
+    backup = tmp_path / "backups" / "C" / "todo.txt.20261111_143048_506821.bak"
+
+    class _EditingAgent(_DummyAgent):
+        def _register_tools(self):
+            @tool
+            def edit_file(file_path: str, old_content: str, new_content: str) -> dict:
+                """Edit a file."""
+                # A real write, so the post-edit read-back finds the file.
+                Path(file_path).write_text("oat milk\n", encoding="utf-8")
+                return {
+                    "status": "success",
+                    "file_path": file_path,
+                    "backup_path": str(backup),
+                }
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _EditingAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    agent._tool_requires_confirmation = lambda *_args, **_kwargs: False
+    answer = (
+        "Changed milk to oat milk in todo.txt. A backup was written to "
+        f"`{tmp_path}\\backups\\...\\{backup.name}`."
+    )
+    sent = []
+
+    def _send(messages, *_, **__):
+        resp = MagicMock()
+        resp.stats = {}
+        resp.text = json.dumps(
+            {
+                "thought": "",
+                "tool": "edit_file",
+                "tool_args": {
+                    "file_path": str(todo),
+                    "old_content": "milk",
+                    "new_content": "oat milk",
+                },
+            }
+            if not sent
+            else {"thought": "", "answer": answer}
+        )
+        sent.append(messages)
+        return resp
+
+    agent.chat = MagicMock()
+    agent.chat.send_messages = MagicMock(side_effect=_send)
+
+    result = agent.process_query(f"In {todo} change milk to oat milk.", max_steps=10)
+
+    assert len(sent) == 2
+    assert result["status"] == "success"
+    assert "I couldn't confirm" not in result["result"]
+
+    # rc18 round 2: the next turn repeats that path and makes no tool call.
+    reminder = f"A backup of todo.txt was written to `{backup}`."
+    answer = reminder
+    result = agent.process_query(
+        "Thanks. Remind me in one sentence where the backup went. Do not use "
+        "any tools.",
+        max_steps=10,
+    )
+
+    assert len(sent) == 3
+    assert result["status"] == "success"
+    assert _final_text(result) == reminder
+
+    # A backup no tool ever reported is still an unbacked save.
+    answer = "A backup was written to `todo.txt.20260101_000000_000000.bak`."
+    result = agent.process_query("And the one before it?", max_steps=10)
+
+    assert len(sent) > 4
+    assert "todo.txt.20260101_000000_000000.bak" in result["result"]
 
 
 def _run_turn_with_other_tool(

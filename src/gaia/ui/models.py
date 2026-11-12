@@ -139,6 +139,7 @@ class LoadedModelInfo(BaseModel):
     """One model Lemonade has loaded, as the Model server panel shows it."""
 
     name: Optional[str] = None
+    model_type: Optional[str] = None
     recipe: Optional[str] = None
     device: Optional[str] = None
     # vulkan | rocm | metal | cpu | npu | remote; None when Lemonade did not say.
@@ -168,6 +169,8 @@ class ModelServerInfo(BaseModel):
     version: Optional[str] = None
     chat_model: Optional[LoadedModelInfo] = None
     embedding_model: Optional[LoadedModelInfo] = None
+    # Other loaded models, such as vision, speech, image, and reranking models.
+    loaded_models: List[LoadedModelInfo] = Field(default_factory=list)
     # One plain sentence when GAIA chose the embedder's backend for a reason.
     embedding_note: Optional[str] = None
     default_backend: Optional[str] = None
@@ -176,6 +179,57 @@ class ModelServerInfo(BaseModel):
     preferred_backend: Optional[str] = None
     # Set when /system-info could not be read; backends then show as unknown.
     system_info_error: Optional[str] = None
+
+
+class LogLineInfo(BaseModel):
+    """One redacted log line."""
+
+    text: str
+    # debug | info | warning | error; None for a line naming no level.
+    severity: Optional[str] = None
+    tag: Optional[str] = None
+
+
+class LogReadResponse(BaseModel):
+    """A log's recent lines for the viewer, or a reason code when it can't be read."""
+
+    # Model server only: gaia (GAIA's own) | user (another local one) | remote
+    owner: Optional[str] = None
+    base_url: Optional[str] = None
+    # file | stream; None when nothing was read.
+    source: Optional[str] = None
+    available: bool = False
+    lines: List[LogLineInfo] = Field(default_factory=list)
+    # Pass back as ``after`` for the lines written since.
+    cursor: Optional[str] = None
+    # The log started over since ``after``: replace the lines, don't append.
+    reset: bool = False
+    dropped: int = 0
+    log_path: Optional[str] = None
+    server_answering: Optional[bool] = None
+    # no_file | unreadable | not_running | remote | no_stream | stream_failed
+    reason: Optional[str] = None
+    detail: Optional[str] = None
+
+
+class LogFileInfo(BaseModel):
+    """One log file a source offers."""
+
+    name: str
+    path: str
+    size_bytes: Optional[int] = None
+    modified: Optional[float] = None
+
+
+class LogSourceInfo(BaseModel):
+    """A group of logs: model_server | gaia | service | agent | desktop | other."""
+
+    id: str
+    files: List[LogFileInfo] = Field(default_factory=list)
+
+
+class LogSourcesResponse(BaseModel):
+    sources: List[LogSourceInfo]
 
 
 class ModelServerBackendRequest(BaseModel):
@@ -218,6 +272,8 @@ class WorkInProgress(BaseModel):
 
     answers: List[RunningAnswer]
     indexing: List[RunningIndexJob]
+    #: Setup is downloading or checking models; quitting stops it part way.
+    setup: bool = False
 
 
 class UnloadModelResponse(BaseModel):
@@ -233,21 +289,6 @@ class InitTaskInfo(BaseModel):
     status: str  # pending | running | done | failed
 
 
-class TaskResponse(BaseModel):
-    """A single background task visible to the frontend."""
-
-    id: str
-    name: str
-    status: str  # pending | running | done | failed
-    error: Optional[str] = None
-
-
-class TaskListResponse(BaseModel):
-    """List of background tasks."""
-
-    tasks: List[TaskResponse]
-
-
 # ── Settings ────────────────────────────────────────────────────────────────
 
 
@@ -257,6 +298,17 @@ class ModelStatus(BaseModel):
     found: bool = False
     downloaded: bool = False
     loaded: bool = False
+    #: The model list was read, so ``found`` False means the id isn't in it.
+    checked: bool = False
+
+
+class PolicyNotice(BaseModel):
+    """Structured Local only notice translated by the Agent UI."""
+
+    code: str
+    severity: Literal["info", "warning"]
+    url: Optional[str] = None
+    reason: Optional[str] = None
 
 
 class SettingsResponse(BaseModel):
@@ -267,15 +319,22 @@ class SettingsResponse(BaseModel):
     context_size: Optional[int] = (
         None  # Persisted ctx_size override; None = use default
     )
-    # "manual" | "goal_driven". "autonomous" is unshipped (#2005) and rejected
-    # on write; legacy-stored values are reported as "goal_driven".
+    # "manual" | "goal_driven". "autonomous" is unshipped (#2005), rejected on
+    # write, and migrated to "goal_driven" when the database opens.
     agent_mode: str = "goal_driven"
-    # Beta dynamic tool loader (#1798). Effective value: env override
-    # (GAIA_DYNAMIC_TOOLS) wins when set, else the persisted setting.
+    # Dynamic tool loading. Effective value: env override
+    # (GAIA_DYNAMIC_TOOLS) wins when set, else ~/.gaia/config.json.
     dynamic_tools: bool = False
     # True when GAIA_DYNAMIC_TOOLS is set ⇒ the env wins ⇒ the UI toggle
     # reflects the effective value and disables (no silent no-op).
     dynamic_tools_locked: bool = False
+    # The shared policy file, not the Agent UI database. Local only clears
+    # saved cloud selections and removes runtime cloud keys when it is enabled.
+    network_policy: Literal["cloud_allowed", "local_ai_only"] = "cloud_allowed"
+    policy_warnings: List[str] = Field(default_factory=list)
+    # Structured informational or warning notices for the Agent UI; the UI
+    # translates these rather than rendering backend prose verbatim.
+    policy_notices: List[PolicyNotice] = Field(default_factory=list)
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -310,10 +369,19 @@ class SettingsUpdateRequest(BaseModel):
     dynamic_tools: Optional[bool] = Field(
         None,
         description=(
-            "Beta: enable the semantic dynamic tool loader (#1798), which trims "
-            "each turn's tool prompt to a matched subset to cut first-turn TTFT. "
-            "Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. "
-            "Omit the field to leave the persisted value unchanged."
+            "Dynamic tool loading: send the tool list in short form and full "
+            "docs only as needed, to cut first-turn TTFT without breaking the "
+            "prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides "
+            "this at runtime when set. Omit the field to leave the persisted "
+            "value unchanged."
+        ),
+    )
+    network_policy: Optional[Literal["cloud_allowed", "local_ai_only"]] = Field(
+        None,
+        description=(
+            "Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud "
+            "models, clears saved cloud model choices, and removes cloud keys from "
+            "GAIA's running Lemonade server. Omit to leave the policy unchanged."
         ),
     )
 
@@ -462,6 +530,32 @@ class SessionListResponse(BaseModel):
     total: int
 
 
+class SearchSnippet(BaseModel):
+    """Text around a search hit, split so the UI can highlight ``match``."""
+
+    before: str
+    match: str
+    after: str
+
+
+class SessionSearchResult(BaseModel):
+    """One chat that matches a search, with where the first hit was."""
+
+    session_id: str
+    title: str
+    field: Literal["title", "message"]
+    snippet: SearchSnippet
+
+
+class SessionSearchResponse(BaseModel):
+    """Chats matching a search query, newest first, at most ``limit``."""
+
+    query: str
+    results: List[SessionSearchResult]
+    #: More chats matched than ``limit``; only the newest are listed.
+    truncated: bool = False
+
+
 # ── Messages ────────────────────────────────────────────────────────────────
 
 
@@ -543,6 +637,8 @@ class AgentStepResponse(BaseModel):
     receiptId: Optional[str] = None
     result: Optional[str] = None
     success: Optional[bool] = None
+    # The user said no to this call; a reload must not show it as failed.
+    declined: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
     planNarrations: Optional[List[str]] = None
@@ -645,7 +741,7 @@ class TurnSummaryLiveData(BaseModel):
 class TurnSummaryCost(BaseModel):
     """What the turn cost."""
 
-    kind: str  # local | estimate | unknown
+    kind: str  # local | estimate | unknown | unreported (priced, no usage sent)
     usd: Optional[float] = None
 
 
@@ -677,6 +773,10 @@ class MessageResponse(BaseModel):
     agent_steps: Optional[List[AgentStepResponse]] = None
     stats: Optional[InferenceStatsResponse] = None
     turn_summary: Optional[TurnSummaryResponse] = None
+    # Notices from indexing files into the document library during this turn.
+    library_notices: Optional[List[str]] = None
+    # The user's Stop ended this reply before it finished.
+    stopped: bool = False
 
 
 class MessageListResponse(BaseModel):
@@ -784,19 +884,6 @@ class IndexFolderResponse(BaseModel):
 
 
 # ── File Search & Preview ─────────────────────────────────────────────
-
-
-class FileSearchRequest(BaseModel):
-    """Request to search for files across the filesystem."""
-
-    query: str = Field(..., description="Search pattern (file name or keywords)")
-    file_types: Optional[str] = Field(
-        None, description="Comma-separated extensions to filter (e.g., 'csv,xlsx,pdf')"
-    )
-    locations: Optional[List[str]] = Field(
-        None, description="Specific directories to search in"
-    )
-    max_results: int = Field(default=20, ge=1, le=100)
 
 
 class FileSearchResult(BaseModel):

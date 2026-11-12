@@ -12,7 +12,7 @@ Tests cover:
 - McpServerHandler.get_credential fails closed on missing keyring entry
 - McpServerHandler.disconnect removes entry from mcp_servers.json
 - McpServerHandler.disconnect deletes keyring entries
-- McpServerHandler.test returns ok=True when all keys present
+- McpServerHandler.test starts the server once and reports whether it started
 - McpServerHandler.test returns ok=False with detail on missing keys
 - mcp_servers.json has no plaintext secrets after configure
 - MCPClient._resolve_keyring_refs resolves references
@@ -24,9 +24,9 @@ Tests cover:
 from __future__ import annotations
 
 import json
-from typing import Dict
 from unittest.mock import patch
 
+import keyring
 import pytest
 
 from gaia.connectors.errors import ConnectorsError
@@ -82,29 +82,22 @@ class TestConfigure:
     async def test_stores_env_vars_in_keyring(self, tmp_path):
         spec = _make_spec()
         handler = McpServerHandler()
-        stored: Dict[str, str] = {}
 
-        def fake_set_password(service, username, value):
-            stored[(service, username)] = value
+        await handler.configure(spec, {"GITHUB_TOKEN": "ghp_secret"})
 
-        with (
-            patch(
-                "gaia.connectors.mcp_server.keyring.set_password",
-                side_effect=fake_set_password,
-            ),
-            patch("gaia.connectors.mcp_server.keyring.get_password", return_value=None),
-        ):
-            await handler.configure(spec, {"GITHUB_TOKEN": "ghp_secret"})
-
-        assert stored[(SERVICE_NAME, "mcp-github:GITHUB_TOKEN")] == "ghp_secret"
+        # The package conftest installs a real in-memory keyring backend, so
+        # this reads back what configure() actually stored.
+        assert (
+            keyring.get_password(SERVICE_NAME, "mcp-github:GITHUB_TOKEN")
+            == "ghp_secret"
+        )
 
     @pytest.mark.asyncio
     async def test_writes_keyring_refs_not_plaintext(self, tmp_path):
         spec = _make_spec()
         handler = McpServerHandler()
 
-        with patch("gaia.connectors.mcp_server.keyring.set_password"):
-            await handler.configure(spec, {"GITHUB_TOKEN": "ghp_secret"})
+        await handler.configure(spec, {"GITHUB_TOKEN": "ghp_secret"})
 
         path = tmp_path / ".gaia" / "mcp_servers.json"
         assert path.exists()
@@ -119,8 +112,7 @@ class TestConfigure:
         spec = _make_spec()
         handler = McpServerHandler()
 
-        with patch("gaia.connectors.mcp_server.keyring.set_password"):
-            await handler.configure(spec, {"GITHUB_TOKEN": "tok"})
+        await handler.configure(spec, {"GITHUB_TOKEN": "tok"})
 
         path = tmp_path / ".gaia" / "mcp_servers.json"
         data = json.loads(path.read_text())
@@ -135,8 +127,7 @@ class TestConfigure:
         reload_calls = []
         handler = McpServerHandler(reload_callback=lambda: reload_calls.append(1))
 
-        with patch("gaia.connectors.mcp_server.keyring.set_password"):
-            await handler.configure(spec, {"GITHUB_TOKEN": "tok"})
+        await handler.configure(spec, {"GITHUB_TOKEN": "tok"})
 
         assert len(reload_calls) == 1
 
@@ -265,19 +256,89 @@ class TestDisconnect:
 # ---------------------------------------------------------------------------
 
 
+_FAKE_SERVER = """
+import json, sys, time
+mode = sys.argv[1]
+if mode == "auth-fails":
+    sys.stderr.write("Authentication failed - check your tokens\\n")
+    sys.exit(1)
+if mode == "hangs":
+    time.sleep(60)
+for line in sys.stdin:
+    msg = json.loads(line)
+    if "id" not in msg:
+        continue
+    if msg["method"] == "initialize":
+        result = {"protocolVersion": msg["params"]["protocolVersion"],
+                  "capabilities": {"tools": {}},
+                  "serverInfo": {"name": "fake", "version": "0"}}
+    elif msg["method"] == "tools/list":
+        result = {"tools": [{"name": "ping", "description": "", "inputSchema": {"type": "object"}}]}
+    else:
+        result = {}
+    print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": result}), flush=True)
+"""
+
+
+def _configured_fake(fake_home, mode, **extra):
+    import sys
+
+    script = fake_home / "fake_server.py"
+    script.write_text(_FAKE_SERVER)
+    spec = _make_spec(id="mcp-fake", mcp_env_keys=())
+    _write_mcp_servers_json(
+        {spec.id: {"command": sys.executable, "args": [str(script), mode], **extra}}
+    )
+    return spec
+
+
 class TestHealthCheck:
     @pytest.mark.asyncio
-    async def test_ok_when_all_keys_present(self):
-        spec = _make_spec()
-        handler = McpServerHandler()
+    async def test_a_server_that_starts_passes(self, fake_home):
+        spec = _configured_fake(fake_home, "works")
 
-        with patch(
-            "gaia.connectors.mcp_server.keyring.get_password",
-            return_value="some-value",
-        ):
-            result = await handler.test(spec)
+        result = await McpServerHandler().test(spec)
 
-        assert result["ok"] is True
+        assert result == {"ok": True, "detail": "started, 1 tool"}
+
+    @pytest.mark.asyncio
+    async def test_a_server_that_rejects_its_token_fails_with_its_reason(
+        self, fake_home
+    ):
+        spec = _configured_fake(fake_home, "auth-fails")
+
+        result = await McpServerHandler().test(spec)
+
+        assert result["ok"] is False
+        assert "Authentication failed" in result["detail"]
+        assert "reason" not in result
+
+    @pytest.mark.asyncio
+    async def test_a_turned_off_server_is_not_started(self, fake_home):
+        spec = _configured_fake(fake_home, "works", disabled=True)
+
+        result = await McpServerHandler().test(spec)
+
+        assert result["ok"] is False
+        assert result["reason"] == "disabled"
+
+    @pytest.mark.asyncio
+    async def test_a_server_that_never_answers_fails_at_its_timeout(self, fake_home):
+        spec = _configured_fake(fake_home, "hangs", timeout=1)
+
+        result = await McpServerHandler().test(spec)
+
+        assert result == {
+            "ok": False,
+            "reason": "timeout",
+            "detail": "did not start within 1 seconds",
+        }
+
+    @pytest.mark.asyncio
+    async def test_an_unconfigured_server_fails(self):
+        result = await McpServerHandler().test(_make_spec(mcp_env_keys=()))
+
+        assert result == {"ok": False, "detail": "not configured"}
 
     @pytest.mark.asyncio
     async def test_fail_when_key_missing(self):
@@ -292,14 +353,6 @@ class TestHealthCheck:
 
         assert result["ok"] is False
         assert "GITHUB_TOKEN" in result["detail"]
-
-    @pytest.mark.asyncio
-    async def test_ok_when_no_keys_required(self):
-        spec = _make_spec(mcp_env_keys=())
-        handler = McpServerHandler()
-        result = await handler.test(spec)
-        assert result["ok"] is True
-        assert result["detail"] == "no_secrets_required"
 
 
 # ---------------------------------------------------------------------------
@@ -428,8 +481,7 @@ class TestSecretHygiene:
             "SLACK_TOKEN": "super_secret_slack",
         }
 
-        with patch("gaia.connectors.mcp_server.keyring.set_password"):
-            await handler.configure(spec, secrets)
+        await handler.configure(spec, secrets)
 
         path = tmp_path / ".gaia" / "mcp_servers.json"
         content = path.read_text()
@@ -476,6 +528,34 @@ class TestCatalog:
                 assert (
                     spec.config_schema
                 ), f"Spec '{spec.id}' has mcp_env_keys but no config_schema"
+
+
+class TestIsMcpServerEnabled:
+    """``gaia connectors list --json`` reports a switched-off server."""
+
+    def _write(self, tmp_path, servers):
+        import json
+
+        path = tmp_path / ".gaia" / "mcp_servers.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"mcpServers": servers}))
+
+    def test_disabled_entry_is_not_enabled(self, tmp_path):
+        from gaia.connectors.mcp_server import is_mcp_server_enabled
+
+        self._write(tmp_path, {"mcp-notion": {"command": "x", "disabled": True}})
+        assert is_mcp_server_enabled("mcp-notion") is False
+
+    def test_entry_without_flag_is_enabled(self, tmp_path):
+        from gaia.connectors.mcp_server import is_mcp_server_enabled
+
+        self._write(tmp_path, {"mcp-notion": {"command": "x"}})
+        assert is_mcp_server_enabled("mcp-notion") is True
+
+    def test_unconfigured_server_is_not_reported_disabled(self, tmp_path):
+        from gaia.connectors.mcp_server import is_mcp_server_enabled
+
+        assert is_mcp_server_enabled("mcp-notion") is True
 
 
 class TestIsMcpServerConfigured:

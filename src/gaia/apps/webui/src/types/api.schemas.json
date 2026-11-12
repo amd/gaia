@@ -312,6 +312,17 @@
         ],
         "title": "Decision"
       },
+      "declined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Declined"
+      },
       "detail": {
         "anyOf": [
           {
@@ -664,6 +675,23 @@
     "title": "BrowseResponse",
     "type": "object"
   },
+  "CancelRequest": {
+    "properties": {
+      "model_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Id"
+      }
+    },
+    "title": "CancelRequest",
+    "type": "object"
+  },
   "CancelStreamRequest": {
     "properties": {
       "session_id": {
@@ -678,8 +706,13 @@
     "type": "object"
   },
   "ChatModelRequest": {
-    "description": "One of setup's default chat models.",
+    "description": "A chat model GAIA knows, or one already downloaded in Lemonade.",
     "properties": {
+      "acknowledge_no_fit": {
+        "default": false,
+        "title": "Acknowledge No Fit",
+        "type": "boolean"
+      },
       "model_id": {
         "title": "Model Id",
         "type": "string"
@@ -908,6 +941,41 @@
     "title": "ContextRequest",
     "type": "object"
   },
+  "CpuUsage": {
+    "properties": {
+      "ghz": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Current clock speed, when the OS reports it.",
+        "title": "Ghz"
+      },
+      "history": {
+        "description": "Percent per sample, oldest first, one per interval_ms.",
+        "items": {
+          "type": "number"
+        },
+        "title": "History",
+        "type": "array"
+      },
+      "percent": {
+        "title": "Percent",
+        "type": "number"
+      }
+    },
+    "required": [
+      "percent",
+      "ghz",
+      "history"
+    ],
+    "title": "CpuUsage",
+    "type": "object"
+  },
   "CreateScheduleRequest": {
     "description": "Request to create a new scheduled task.",
     "properties": {
@@ -1041,6 +1109,86 @@
       }
     },
     "title": "CreateSessionRequest",
+    "type": "object"
+  },
+  "CustomModelRequest": {
+    "description": "``quant`` picks a quantization; None lets GAIA choose one that fits.",
+    "properties": {
+      "quant": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Quant"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "CustomModelRequest",
+    "type": "object"
+  },
+  "DeviceUsage": {
+    "properties": {
+      "history": {
+        "description": "Percent per sample, oldest first, one per interval_ms.",
+        "items": {
+          "type": "number"
+        },
+        "title": "History",
+        "type": "array"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "gpu",
+          "npu"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "memory_used_bytes": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Dedicated plus shared memory in use, when the OS reports it.",
+        "title": "Memory Used Bytes"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "percent": {
+        "description": "Load of the device's busiest engine.",
+        "title": "Percent",
+        "type": "number"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "kind",
+      "percent",
+      "memory_used_bytes",
+      "history"
+    ],
+    "title": "DeviceUsage",
     "type": "object"
   },
   "DiscoveryCommit": {
@@ -1252,24 +1400,6 @@
       "filepath"
     ],
     "title": "DocumentUploadRequest",
-    "type": "object"
-  },
-  "DownloadModelRequest": {
-    "properties": {
-      "force": {
-        "default": false,
-        "title": "Force",
-        "type": "boolean"
-      },
-      "model_name": {
-        "title": "Model Name",
-        "type": "string"
-      }
-    },
-    "required": [
-      "model_name"
-    ],
-    "title": "DownloadModelRequest",
     "type": "object"
   },
   "DownloadProgress": {
@@ -1845,6 +1975,50 @@
     "title": "GoalStatusUpdate",
     "type": "object"
   },
+  "GpuMemoryApplyRequest": {
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      },
+      "setting_gb": {
+        "description": "GPU memory to set, in decimal GB (10**9 bytes).",
+        "title": "Setting Gb",
+        "type": "number"
+      }
+    },
+    "required": [
+      "setting_gb"
+    ],
+    "title": "GpuMemoryApplyRequest",
+    "type": "object"
+  },
+  "GpuMemoryPendingRequest": {
+    "properties": {
+      "setting_gb": {
+        "description": "GPU memory to set, in decimal GB (10**9 bytes).",
+        "title": "Setting Gb",
+        "type": "number"
+      }
+    },
+    "required": [
+      "setting_gb"
+    ],
+    "title": "GpuMemoryPendingRequest",
+    "type": "object"
+  },
+  "GpuMemoryRevertRequest": {
+    "properties": {
+      "confirm": {
+        "default": false,
+        "title": "Confirm",
+        "type": "boolean"
+      }
+    },
+    "title": "GpuMemoryRevertRequest",
+    "type": "object"
+  },
   "GrantRequest": {
     "properties": {
       "scopes": {
@@ -2405,6 +2579,17 @@
         ],
         "title": "Device"
       },
+      "model_type": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Type"
+      },
       "name": {
         "anyOf": [
           {
@@ -2429,6 +2614,237 @@
       }
     },
     "title": "LoadedModelInfo",
+    "type": "object"
+  },
+  "LogFileInfo": {
+    "description": "One log file a source offers.",
+    "properties": {
+      "modified": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Modified"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "path": {
+        "title": "Path",
+        "type": "string"
+      },
+      "size_bytes": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size Bytes"
+      }
+    },
+    "required": [
+      "name",
+      "path"
+    ],
+    "title": "LogFileInfo",
+    "type": "object"
+  },
+  "LogLineInfo": {
+    "description": "One redacted log line.",
+    "properties": {
+      "severity": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Severity"
+      },
+      "tag": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Tag"
+      },
+      "text": {
+        "title": "Text",
+        "type": "string"
+      }
+    },
+    "required": [
+      "text"
+    ],
+    "title": "LogLineInfo",
+    "type": "object"
+  },
+  "LogReadResponse": {
+    "description": "A log's recent lines for the viewer, or a reason code when it can't be read.",
+    "properties": {
+      "available": {
+        "default": false,
+        "title": "Available",
+        "type": "boolean"
+      },
+      "base_url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Base Url"
+      },
+      "cursor": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Cursor"
+      },
+      "detail": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Detail"
+      },
+      "dropped": {
+        "default": 0,
+        "title": "Dropped",
+        "type": "integer"
+      },
+      "lines": {
+        "items": {
+          "$ref": "#/components/schemas/LogLineInfo"
+        },
+        "title": "Lines",
+        "type": "array"
+      },
+      "log_path": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Log Path"
+      },
+      "owner": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Owner"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      },
+      "reset": {
+        "default": false,
+        "title": "Reset",
+        "type": "boolean"
+      },
+      "server_answering": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Server Answering"
+      },
+      "source": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Source"
+      }
+    },
+    "title": "LogReadResponse",
+    "type": "object"
+  },
+  "LogSourceInfo": {
+    "description": "A group of logs: model_server | gaia | service | agent | desktop | other.",
+    "properties": {
+      "files": {
+        "items": {
+          "$ref": "#/components/schemas/LogFileInfo"
+        },
+        "title": "Files",
+        "type": "array"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "title": "LogSourceInfo",
+    "type": "object"
+  },
+  "LogSourcesResponse": {
+    "properties": {
+      "sources": {
+        "items": {
+          "$ref": "#/components/schemas/LogSourceInfo"
+        },
+        "title": "Sources",
+        "type": "array"
+      }
+    },
+    "required": [
+      "sources"
+    ],
+    "title": "LogSourcesResponse",
     "type": "object"
   },
   "McpOutputResponse": {
@@ -2488,6 +2904,38 @@
     "title": "MemorySettingsBody",
     "type": "object"
   },
+  "MemoryUsage": {
+    "properties": {
+      "history": {
+        "description": "Percent per sample, oldest first, one per interval_ms.",
+        "items": {
+          "type": "number"
+        },
+        "title": "History",
+        "type": "array"
+      },
+      "percent": {
+        "title": "Percent",
+        "type": "number"
+      },
+      "total_bytes": {
+        "title": "Total Bytes",
+        "type": "integer"
+      },
+      "used_bytes": {
+        "title": "Used Bytes",
+        "type": "integer"
+      }
+    },
+    "required": [
+      "used_bytes",
+      "total_bytes",
+      "percent",
+      "history"
+    ],
+    "title": "MemoryUsage",
+    "type": "object"
+  },
   "MessageListResponse": {
     "description": "List of messages for a session.",
     "properties": {
@@ -2539,6 +2987,20 @@
         "title": "Id",
         "type": "integer"
       },
+      "library_notices": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Library Notices"
+      },
       "rag_sources": {
         "anyOf": [
           {
@@ -2570,6 +3032,11 @@
             "type": "null"
           }
         ]
+      },
+      "stopped": {
+        "default": false,
+        "title": "Stopped",
+        "type": "boolean"
       },
       "turn_summary": {
         "anyOf": [
@@ -2673,6 +3140,13 @@
         ],
         "title": "Error"
       },
+      "loaded_models": {
+        "items": {
+          "$ref": "#/components/schemas/LoadedModelInfo"
+        },
+        "title": "Loaded Models",
+        "type": "array"
+      },
       "owner": {
         "title": "Owner",
         "type": "string"
@@ -2737,6 +3211,11 @@
   "ModelStatus": {
     "description": "Status of a custom model on the Lemonade server.",
     "properties": {
+      "checked": {
+        "default": false,
+        "title": "Checked",
+        "type": "boolean"
+      },
       "downloaded": {
         "default": false,
         "title": "Downloaded",
@@ -2754,6 +3233,71 @@
       }
     },
     "title": "ModelStatus",
+    "type": "object"
+  },
+  "NetworkUsage": {
+    "properties": {
+      "description": {
+        "description": "The adapter's hardware name.",
+        "title": "Description",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "ethernet",
+          "wifi",
+          "network"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "name": {
+        "description": "The connection's name, such as \"Ethernet 3\".",
+        "title": "Name",
+        "type": "string"
+      },
+      "recv_bps": {
+        "description": "Bits per second received.",
+        "title": "Recv Bps",
+        "type": "integer"
+      },
+      "recv_history": {
+        "description": "Bits per second, oldest first.",
+        "items": {
+          "type": "integer"
+        },
+        "title": "Recv History",
+        "type": "array"
+      },
+      "send_bps": {
+        "description": "Bits per second sent.",
+        "title": "Send Bps",
+        "type": "integer"
+      },
+      "send_history": {
+        "description": "Bits per second, oldest first.",
+        "items": {
+          "type": "integer"
+        },
+        "title": "Send History",
+        "type": "array"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "description",
+      "kind",
+      "send_bps",
+      "recv_bps",
+      "send_history",
+      "recv_history"
+    ],
+    "title": "NetworkUsage",
     "type": "object"
   },
   "OpenFileRequest": {
@@ -2827,6 +3371,16 @@
       "description": {
         "title": "Description",
         "type": "string"
+      },
+      "description_parts": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ScheduleDescription"
+          },
+          {
+            "type": "null"
+          }
+        ]
       },
       "end_hour": {
         "anyOf": [
@@ -2912,6 +3466,51 @@
       "mode"
     ],
     "title": "PermissionModeRequest",
+    "type": "object"
+  },
+  "PolicyNotice": {
+    "description": "Structured Local only notice translated by the Agent UI.",
+    "properties": {
+      "code": {
+        "title": "Code",
+        "type": "string"
+      },
+      "reason": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Reason"
+      },
+      "severity": {
+        "enum": [
+          "info",
+          "warning"
+        ],
+        "title": "Severity",
+        "type": "string"
+      },
+      "url": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Url"
+      }
+    },
+    "required": [
+      "code",
+      "severity"
+    ],
+    "title": "PolicyNotice",
     "type": "object"
   },
   "PreflightReport": {
@@ -3111,6 +3710,108 @@
     "title": "QuickLink",
     "type": "object"
   },
+  "RemoveModelRequest": {
+    "properties": {
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "RemoveModelRequest",
+    "type": "object"
+  },
+  "ResourceUsage": {
+    "properties": {
+      "cpu": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/CpuUsage"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "devices": {
+        "items": {
+          "$ref": "#/components/schemas/DeviceUsage"
+        },
+        "title": "Devices",
+        "type": "array"
+      },
+      "devices_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Why GPUs and NPUs can't be read, when CPU and memory still can.",
+        "title": "Devices Error"
+      },
+      "interval_ms": {
+        "title": "Interval Ms",
+        "type": "integer"
+      },
+      "memory": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/MemoryUsage"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "networks": {
+        "items": {
+          "$ref": "#/components/schemas/NetworkUsage"
+        },
+        "title": "Networks",
+        "type": "array"
+      },
+      "networks_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Why network adapters can't be read, when CPU and memory still can.",
+        "title": "Networks Error"
+      },
+      "npus_error": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Why NPUs can't be read when they're read apart from GPUs (Linux).",
+        "title": "Npus Error"
+      },
+      "ready": {
+        "description": "False until the first sample is in.",
+        "title": "Ready",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "interval_ms",
+      "ready"
+    ],
+    "title": "ResourceUsage",
+    "type": "object"
+  },
   "RestartRequest": {
     "description": "``confirm`` is required to reload a model on a server GAIA does not run.",
     "properties": {
@@ -3223,6 +3924,104 @@
     "title": "RunningIndexJob",
     "type": "object"
   },
+  "ScheduleDescription": {
+    "description": "When a schedule runs, as data the UI words in its own language.\n\n``every``: count + unit, optional days. ``window``: that plus start/end\nhour. ``days``: named days, optional time. ``daily``: a time each day.",
+    "properties": {
+      "count": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Count"
+      },
+      "days": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "0=Monday … 6=Sunday",
+        "title": "Days"
+      },
+      "end_hour": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "End Hour"
+      },
+      "kind": {
+        "enum": [
+          "every",
+          "window",
+          "days",
+          "daily"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "start_hour": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Start Hour"
+      },
+      "time": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "\"HH:MM\", 24-hour",
+        "title": "Time"
+      },
+      "unit": {
+        "anyOf": [
+          {
+            "enum": [
+              "second",
+              "minute",
+              "hour",
+              "day",
+              "week"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Unit"
+      }
+    },
+    "required": [
+      "kind"
+    ],
+    "title": "ScheduleDescription",
+    "type": "object"
+  },
   "ScheduleListResponse": {
     "description": "List of scheduled tasks.",
     "properties": {
@@ -3260,6 +4059,9 @@
       "description": {
         "title": "Description",
         "type": "string"
+      },
+      "description_parts": {
+        "$ref": "#/components/schemas/ScheduleDescription"
       },
       "error_count": {
         "default": 0,
@@ -3369,7 +4171,8 @@
       "interval_seconds",
       "prompt",
       "status",
-      "description"
+      "description",
+      "description_parts"
     ],
     "title": "ScheduleResponse",
     "type": "object"
@@ -3407,6 +4210,30 @@
       }
     },
     "title": "ScriptedUserRequest",
+    "type": "object"
+  },
+  "SearchSnippet": {
+    "description": "Text around a search hit, split so the UI can highlight ``match``.",
+    "properties": {
+      "after": {
+        "title": "After",
+        "type": "string"
+      },
+      "before": {
+        "title": "Before",
+        "type": "string"
+      },
+      "match": {
+        "title": "Match",
+        "type": "string"
+      }
+    },
+    "required": [
+      "before",
+      "match",
+      "after"
+    ],
+    "title": "SearchSnippet",
     "type": "object"
   },
   "SelectModelRequest": {
@@ -3627,6 +4454,65 @@
     "title": "SessionResponse",
     "type": "object"
   },
+  "SessionSearchResponse": {
+    "description": "Chats matching a search query, newest first, at most ``limit``.",
+    "properties": {
+      "query": {
+        "title": "Query",
+        "type": "string"
+      },
+      "results": {
+        "items": {
+          "$ref": "#/components/schemas/SessionSearchResult"
+        },
+        "title": "Results",
+        "type": "array"
+      },
+      "truncated": {
+        "default": false,
+        "title": "Truncated",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "query",
+      "results"
+    ],
+    "title": "SessionSearchResponse",
+    "type": "object"
+  },
+  "SessionSearchResult": {
+    "description": "One chat that matches a search, with where the first hit was.",
+    "properties": {
+      "field": {
+        "enum": [
+          "title",
+          "message"
+        ],
+        "title": "Field",
+        "type": "string"
+      },
+      "session_id": {
+        "title": "Session Id",
+        "type": "string"
+      },
+      "snippet": {
+        "$ref": "#/components/schemas/SearchSnippet"
+      },
+      "title": {
+        "title": "Title",
+        "type": "string"
+      }
+    },
+    "required": [
+      "session_id",
+      "title",
+      "field",
+      "snippet"
+    ],
+    "title": "SessionSearchResult",
+    "type": "object"
+  },
   "SettingsResponse": {
     "description": "Current user settings.",
     "properties": {
@@ -3676,6 +4562,29 @@
             "type": "null"
           }
         ]
+      },
+      "network_policy": {
+        "default": "cloud_allowed",
+        "enum": [
+          "cloud_allowed",
+          "local_ai_only"
+        ],
+        "title": "Network Policy",
+        "type": "string"
+      },
+      "policy_notices": {
+        "items": {
+          "$ref": "#/components/schemas/PolicyNotice"
+        },
+        "title": "Policy Notices",
+        "type": "array"
+      },
+      "policy_warnings": {
+        "items": {
+          "type": "string"
+        },
+        "title": "Policy Warnings",
+        "type": "array"
       }
     },
     "title": "SettingsResponse",
@@ -3730,28 +4639,145 @@
             "type": "null"
           }
         ],
-        "description": "Beta: enable the semantic dynamic tool loader (#1798), which trims each turn's tool prompt to a matched subset to cut first-turn TTFT. Default off. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.",
+        "description": "Dynamic tool loading: send the tool list in short form and full docs only as needed, to cut first-turn TTFT without breaking the prompt cache. Applies to new chats. GAIA_DYNAMIC_TOOLS overrides this at runtime when set. Omit the field to leave the persisted value unchanged.",
         "title": "Dynamic Tools"
+      },
+      "network_policy": {
+        "anyOf": [
+          {
+            "enum": [
+              "cloud_allowed",
+              "local_ai_only"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "Whether GAIA may use cloud AI models. Setting local_ai_only blocks cloud models, clears saved cloud model choices, and removes cloud keys from GAIA's running Lemonade server. Omit to leave the policy unchanged.",
+        "title": "Network Policy"
       }
     },
     "title": "SettingsUpdateRequest",
     "type": "object"
   },
   "SetupRunRequest": {
-    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's.",
+    "description": "``skip_chat_model`` when the chat runs on a cloud provider;\n``gaia_lemonade`` to set up GAIA's own server instead of the user's;\n``acknowledge_low_disk`` to download past a too-small model drive;\n``keep_trying`` to wait up to two minutes out a dropped connection;\n``extra_models`` to pull models beside the plan's (the user ticked them);\n``server_only`` to start the model server and stop, so the models can be\nchosen against it before anything downloads;\n``upgrade_embedded`` to replace an older embedded server artifact without\ndownloading the existing model cache again.",
     "properties": {
+      "acknowledge_low_disk": {
+        "default": false,
+        "title": "Acknowledge Low Disk",
+        "type": "boolean"
+      },
+      "extra_models": {
+        "default": [],
+        "items": {
+          "type": "string"
+        },
+        "title": "Extra Models",
+        "type": "array"
+      },
       "gaia_lemonade": {
         "default": false,
         "title": "Gaia Lemonade",
+        "type": "boolean"
+      },
+      "keep_trying": {
+        "default": false,
+        "title": "Keep Trying",
+        "type": "boolean"
+      },
+      "server_only": {
+        "default": false,
+        "title": "Server Only",
         "type": "boolean"
       },
       "skip_chat_model": {
         "default": false,
         "title": "Skip Chat Model",
         "type": "boolean"
+      },
+      "upgrade_embedded": {
+        "default": false,
+        "title": "Upgrade Embedded",
+        "type": "boolean"
       }
     },
     "title": "SetupRunRequest",
+    "type": "object"
+  },
+  "SkillLinkAddRequest": {
+    "properties": {
+      "allow_code": {
+        "default": false,
+        "title": "Allow Code",
+        "type": "boolean"
+      },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      },
+      "names": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Names"
+      },
+      "pin": {
+        "title": "Pin",
+        "type": "string"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "pin"
+    ],
+    "title": "SkillLinkAddRequest",
+    "type": "object"
+  },
+  "SkillLinkRequest": {
+    "properties": {
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "SkillLinkRequest",
+    "type": "object"
+  },
+  "SkipModelRequest": {
+    "properties": {
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      },
+      "skipped": {
+        "default": true,
+        "title": "Skipped",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "SkipModelRequest",
     "type": "object"
   },
   "SourceInfo": {
@@ -3794,22 +4820,146 @@
     "title": "SourceInfo",
     "type": "object"
   },
-  "StartAgentServerRequest": {
+  "SpeakRequest": {
     "properties": {
-      "backend_url": {
-        "default": "http://localhost:4200",
-        "title": "Backend Url",
+      "speed": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Speed"
+      },
+      "text": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "title": "Text",
         "type": "string"
       },
-      "port": {
-        "default": 8766,
-        "maximum": 65535.0,
-        "minimum": 1024.0,
-        "title": "Port",
-        "type": "integer"
+      "voice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Voice"
       }
     },
-    "title": "StartAgentServerRequest",
+    "required": [
+      "text"
+    ],
+    "title": "SpeakRequest",
+    "type": "object"
+  },
+  "SpeechModel": {
+    "description": "Whether the voice model is on this PC, so a first read can say it downloads.",
+    "properties": {
+      "downloaded": {
+        "title": "Downloaded",
+        "type": "boolean"
+      },
+      "size_gb": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Size Gb"
+      }
+    },
+    "required": [
+      "downloaded"
+    ],
+    "title": "SpeechModel",
+    "type": "object"
+  },
+  "SpeechSettings": {
+    "properties": {
+      "auto": {
+        "title": "Auto",
+        "type": "boolean"
+      },
+      "max_speed": {
+        "default": 200,
+        "title": "Max Speed",
+        "type": "integer"
+      },
+      "min_speed": {
+        "default": 50,
+        "title": "Min Speed",
+        "type": "integer"
+      },
+      "speed": {
+        "title": "Speed",
+        "type": "integer"
+      },
+      "voice": {
+        "title": "Voice",
+        "type": "string"
+      },
+      "voices": {
+        "items": {
+          "$ref": "#/components/schemas/Voice"
+        },
+        "title": "Voices",
+        "type": "array"
+      }
+    },
+    "required": [
+      "voice",
+      "speed",
+      "auto",
+      "voices"
+    ],
+    "title": "SpeechSettings",
+    "type": "object"
+  },
+  "SpeechSettingsUpdate": {
+    "properties": {
+      "auto": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Auto"
+      },
+      "speed": {
+        "anyOf": [
+          {
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Speed"
+      },
+      "voice": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Voice"
+      }
+    },
+    "title": "SpeechSettingsUpdate",
     "type": "object"
   },
   "SystemStatus": {
@@ -4224,58 +5374,6 @@
       "description"
     ],
     "title": "TaskCreate",
-    "type": "object"
-  },
-  "TaskListResponse": {
-    "description": "List of background tasks.",
-    "properties": {
-      "tasks": {
-        "items": {
-          "$ref": "#/components/schemas/TaskResponse"
-        },
-        "title": "Tasks",
-        "type": "array"
-      }
-    },
-    "required": [
-      "tasks"
-    ],
-    "title": "TaskListResponse",
-    "type": "object"
-  },
-  "TaskResponse": {
-    "description": "A single background task visible to the frontend.",
-    "properties": {
-      "error": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Error"
-      },
-      "id": {
-        "title": "Id",
-        "type": "string"
-      },
-      "name": {
-        "title": "Name",
-        "type": "string"
-      },
-      "status": {
-        "title": "Status",
-        "type": "string"
-      }
-    },
-    "required": [
-      "id",
-      "name",
-      "status"
-    ],
-    "title": "TaskResponse",
     "type": "object"
   },
   "TaskStatusUpdate": {
@@ -4875,6 +5973,57 @@
     "title": "ValidationError",
     "type": "object"
   },
+  "VisionModelRequest": {
+    "description": "A model that reads images, or null to go back to GAIA's choice.",
+    "properties": {
+      "model_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model Id"
+      }
+    },
+    "title": "VisionModelRequest",
+    "type": "object"
+  },
+  "Voice": {
+    "properties": {
+      "accent": {
+        "title": "Accent",
+        "type": "string"
+      },
+      "gender": {
+        "title": "Gender",
+        "type": "string"
+      },
+      "id": {
+        "title": "Id",
+        "type": "string"
+      },
+      "name": {
+        "title": "Name",
+        "type": "string"
+      },
+      "quality": {
+        "title": "Quality",
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "name",
+      "accent",
+      "gender",
+      "quality"
+    ],
+    "title": "Voice",
+    "type": "object"
+  },
   "WarmUpStatus": {
     "description": "Whether a new chat's first turn will find its prompt already read.",
     "properties": {
@@ -4971,6 +6120,11 @@
         },
         "title": "Indexing",
         "type": "array"
+      },
+      "setup": {
+        "default": false,
+        "title": "Setup",
+        "type": "boolean"
       }
     },
     "required": [
@@ -4978,6 +6132,52 @@
       "indexing"
     ],
     "title": "WorkInProgress",
+    "type": "object"
+  },
+  "gaia__ui__routers__setup__DownloadModelRequest": {
+    "properties": {
+      "acknowledge_low_disk": {
+        "default": false,
+        "title": "Acknowledge Low Disk",
+        "type": "boolean"
+      },
+      "keep_trying": {
+        "default": false,
+        "title": "Keep Trying",
+        "type": "boolean"
+      },
+      "model_id": {
+        "title": "Model Id",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_id"
+    ],
+    "title": "DownloadModelRequest",
+    "type": "object"
+  },
+  "gaia__ui__routers__system__DownloadModelRequest": {
+    "properties": {
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      },
+      "load_after": {
+        "default": false,
+        "title": "Load After",
+        "type": "boolean"
+      },
+      "model_name": {
+        "title": "Model Name",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model_name"
+    ],
+    "title": "DownloadModelRequest",
     "type": "object"
   }
 }

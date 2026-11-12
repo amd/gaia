@@ -13,10 +13,11 @@ import datetime
 import json
 import mimetypes
 import os
+import sqlite3
 import sys
 import threading
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from gaia.agents.install_hints import missing_package_hint
 from gaia.agents.tools.file_edit import file_read_record, stamp_of
@@ -43,6 +44,8 @@ from gaia.filesystem.name_match import (
     glob_matches_mid_word,
 )
 from gaia.logger import get_logger
+from gaia.security import _format_size
+from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
 
@@ -52,18 +55,6 @@ logger = get_logger(__name__)
 # enough for any reasonable document (PDFs, big CSVs) but small enough that
 # we can tolerate loading it into memory at once.
 MAX_READ_BYTES = 50 * 1024 * 1024
-
-
-def _format_size(size_bytes: int) -> str:
-    """Format bytes to human-readable string."""
-    if size_bytes < 1024:
-        return f"{size_bytes} B"
-    elif size_bytes < 1024 * 1024:
-        return f"{size_bytes / 1024:.1f} KB"
-    elif size_bytes < 1024 * 1024 * 1024:
-        return f"{size_bytes / (1024 * 1024):.1f} MB"
-    else:
-        return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
 
 
 def _format_date(timestamp: float) -> str:
@@ -198,6 +189,39 @@ def _index_unavailable_message(db_path: str, exc: BaseException) -> str:
     return head + "See the GAIA log for details." + tail
 
 
+def _index_search_failed_note(exc: BaseException) -> str:
+    """The find_files footnote saying the index failed and the disk was walked."""
+    head = (
+        f"\n\nNote: the file index failed ({exc}), so this searched the disk "
+        "instead, which is slower and may stop before covering every folder. "
+    )
+    kind = _sqlite_kind(exc)
+    if kind == "busy":
+        return head + (
+            "It is locked by another GAIA process; searching again later "
+            "should use it."
+        )
+    if kind == "corrupt":
+        return head + "The index file is damaged; tell the user it needs rebuilding."
+    if kind == "access":
+        return head + (
+            "GAIA can't read the index file; tell the user to check its permissions."
+        )
+    return head + (
+        "Tell the user the file index is failing; details are in the GAIA log."
+    )
+
+
+class PathAccessDenied(ValueError):
+    """The validator refused a path; ``refusal`` is the tool result to return."""
+
+    def __init__(self, denied: dict):
+        reason = str(denied["error"])
+        prefix = "Access denied: "
+        super().__init__(reason if reason.startswith(prefix) else prefix + reason)
+        self.refusal = {**denied, "error": str(self)}
+
+
 class FileSystemToolsMixin:
     """File system navigation, search, and management tools.
 
@@ -230,8 +254,6 @@ class FileSystemToolsMixin:
         db_path = getattr(config, "filesystem_index_path", None)
         if not db_path:
             return None
-        import sqlite3
-
         from gaia.filesystem.index import FileSystemIndexService
 
         with _open_lock_for(self):
@@ -246,11 +268,11 @@ class FileSystemToolsMixin:
         return self._fs_index
 
     def _validate_path(self, path: str) -> Path:
-        """Validate and resolve a path. Raises ValueError if blocked."""
+        """Validate and resolve a path. Raises PathAccessDenied if blocked."""
         resolved = _resolve_target(path, None, _workspace_default(self))
         denied = read_access_error(self, resolved)
         if denied:
-            raise ValueError(f"Access denied: {denied['error']}")
+            raise PathAccessDenied(denied)
         return resolved
 
     def workspace_roots(self) -> list:
@@ -307,14 +329,15 @@ class FileSystemToolsMixin:
 
         mixin = self  # Capture self for nested functions
 
-        @tool(atomic=True)
+        # Shares its name with FileSearchToolsMixin.browse_directory.
+        @tool(atomic=True, override=True)
         def browse_directory(
             path: str = ".",
             show_hidden: bool = False,
             sort_by: str = "name",
             filter_type: str = None,
             max_items: int = 50,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Browse a directory and list its contents with metadata.
 
             Returns files and subdirectories with size, modification date, and type info.
@@ -432,6 +455,8 @@ class FileSystemToolsMixin:
 
                 return "\n".join(lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -446,7 +471,7 @@ class FileSystemToolsMixin:
             include_pattern: str = None,
             exclude_pattern: str = None,
             dirs_only: bool = False,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Show a tree visualization of a directory structure.
 
             Useful for understanding project layouts and folder hierarchies.
@@ -570,6 +595,8 @@ class FileSystemToolsMixin:
 
                 return "\n".join(lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -577,7 +604,7 @@ class FileSystemToolsMixin:
                 return f"Error generating tree: {e}"
 
         @tool(atomic=True)
-        def file_info(path: str) -> str:
+        def file_info(path: str) -> Union[str, dict]:
             """Get comprehensive information about a file or directory.
 
             Returns size, dates, type, MIME type, encoding, and format-specific
@@ -710,10 +737,7 @@ class FileSystemToolsMixin:
 
                     elif ext == ".pdf":
                         try:
-                            try:
-                                import pypdf as _pdf
-                            except ImportError:
-                                import PyPDF2 as _pdf  # legacy fallback
+                            import pypdf as _pdf
 
                             with open(resolved, "rb") as f:
                                 reader = _pdf.PdfReader(f)
@@ -763,6 +787,8 @@ class FileSystemToolsMixin:
 
                 return "\n".join(lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -779,7 +805,7 @@ class FileSystemToolsMixin:
             date_range: str = None,
             max_results: int = 25,
             sort_by: str = "relevance",
-        ) -> str:
+        ) -> Union[str, dict]:
             """Search for files by name, content, or metadata.
 
             The primary file search tool: hits the file system index when one
@@ -865,6 +891,7 @@ class FileSystemToolsMixin:
                 # so a query with no words (``*.*``) or a glob that can match
                 # mid-word (``*port*`` finds ``report``) goes to the walk.
                 by_name = effective_type != "metadata"
+                index_note = ""
                 if (
                     mixin._fs_index
                     and effective_type in ("name", "auto", "metadata")
@@ -927,10 +954,14 @@ class FileSystemToolsMixin:
                                     f"  {i}. {r['path']} ({size_str}, {mod_str})"
                                 )
                             return "\n".join(lines)
-                    except Exception as e:
-                        logger.debug(
-                            f"Index search failed, falling back to filesystem: {e}"
+                    except sqlite3.Error as e:
+                        logger.warning(
+                            "find_files: index query for %r failed, searching "
+                            "the disk instead: %s",
+                            query,
+                            e,
                         )
+                        index_note = _index_search_failed_note(e)
 
                 # Filesystem search
                 # Determine search roots based on scope
@@ -1057,7 +1088,12 @@ class FileSystemToolsMixin:
                         )
                     else:
                         found_none = f"No files found matching '{query}'."
-                    return f"{found_none} {skipped_note}".rstrip() + skip_note + stopped
+                    return (
+                        f"{found_none} {skipped_note}".rstrip()
+                        + skip_note
+                        + stopped
+                        + index_note
+                    )
 
                 lines = [f"Found {len(results)} result(s):\n"]
                 for i, r in enumerate(results, 1):
@@ -1077,15 +1113,18 @@ class FileSystemToolsMixin:
 
                 if skipped_note:
                     lines.append(f"\n{skipped_note}")
-                return "\n".join(lines) + skip_note + stopped
+                return "\n".join(lines) + skip_note + stopped + index_note
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
                 logger.error(f"Error searching files: {e}")
                 return f"Error searching files: {e}"
 
-        @tool(atomic=True)
+        # Shares its name with the FileSearchToolsMixin and FileIOToolsMixin read_file.
+        @tool(atomic=True, override=True)
         def read_file(
             file_path: str,
             lines: int = 100,
@@ -1093,7 +1132,7 @@ class FileSystemToolsMixin:
             mode: str = "full",
             offset: int = 0,
             limit: Optional[int] = None,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Read and display a file's contents with intelligent type-based analysis.
 
             For text/code: shows content with line numbers.
@@ -1319,13 +1358,15 @@ class FileSystemToolsMixin:
                 reads.note(resolved, seen)
                 return "\n".join(output_lines)
 
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
                 logger.error(f"Error reading file: {e}")
                 return f"Error reading file: {e}"
 
-        def _bookmark_impl(action: str, path: str, label: str) -> str:
+        def _bookmark_impl(action: str, path: str, label: str) -> Union[str, dict]:
             try:
                 index = mixin._bookmark_index()
                 if action == "list":
@@ -1401,6 +1442,8 @@ class FileSystemToolsMixin:
 
             except FileIndexUnavailableError as e:
                 return str(e)
+            except PathAccessDenied as e:
+                return e.refusal
             except ValueError as e:
                 return str(e)
             except Exception as e:
@@ -1412,7 +1455,7 @@ class FileSystemToolsMixin:
             action: str = "list",
             path: str = None,
             label: str = None,
-        ) -> str:
+        ) -> Union[str, dict]:
             """Save, list, or remove bookmarks for frequently accessed files and directories.
 
             Bookmarks persist across sessions in the file system index.
@@ -1426,7 +1469,10 @@ class FileSystemToolsMixin:
                 label: Human-friendly name for the bookmark (optional, for add)
             """
             result = _bookmark_impl(action, path, label)
-            return _take_rebuild_notice(mixin, mixin._fs_index) + result
+            notice = _take_rebuild_notice(mixin, mixin._fs_index)
+            if isinstance(result, dict):
+                return {**result, "error": notice + result["error"]}
+            return notice + result
 
         # --- Helper functions (not tools, not decorated) ---
 
@@ -1510,15 +1556,19 @@ class FileSystemToolsMixin:
             elif scope == "smart":
                 roots = list(workspace)
                 common = [
-                    "Documents",
-                    "Downloads",
-                    "Desktop",
-                    "Projects",
-                    "Work",
-                    "OneDrive",
+                    documents_dir(Path(home)),
+                    *(
+                        Path(home) / folder
+                        for folder in (
+                            "Downloads",
+                            "Desktop",
+                            "Projects",
+                            "Work",
+                            "OneDrive",
+                        )
+                    ),
                 ]
-                for folder in common:
-                    p = Path(home) / folder
+                for p in common:
                     if p.exists() and str(p) not in roots:
                         roots.append(str(p))
                 return roots
@@ -1843,18 +1893,10 @@ class FileSystemToolsMixin:
 
         def _read_pdf(path, mode):
             """Read PDF file."""
-            # Prefer ``pypdf`` (the modern maintained fork). Fall back to
-            # ``PyPDF2`` (deprecated legacy name) for older installs. The
-            # two share an identical API on the surface we use.
             try:
                 import pypdf as _pdf
             except ImportError:
-                try:
-                    import PyPDF2 as _pdf
-                except ImportError:
-                    return (
-                        f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
-                    )
+                return f"PDF reading requires pypdf. {missing_package_hint('pypdf')}"
 
             try:
                 with open(path, "rb") as f:

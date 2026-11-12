@@ -8,6 +8,7 @@ Gaia Agent SDK - Unified text chat integration with conversation history
 
 import json
 import logging
+import os
 import threading
 import time
 from collections import deque
@@ -16,6 +17,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.chat.prompts import Prompts
+from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
@@ -25,12 +27,31 @@ from gaia.llm.lemonade_client import (
     resolve_ctx_size,
 )
 from gaia.llm.providers.claude import CLAUDE_CTX_SIZE
-from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.providers.lemonade import _NATIVE_TC_KEY, NATIVE_TOOL_CALLS_PREFIX
+from gaia.llm.retry import stopped_by_user
 from gaia.logger import get_logger
 from gaia.utils import perf_trace
 
 #: Threads inside ``AgentSDK.side_request``; their calls are not the turn's.
 _SIDE_CALLS = threading.local()
+
+
+def _is_tool_call_envelope(chunk: str, tools: Optional[List[Dict]]) -> bool:
+    """Whether *chunk* is the provider's native tool-call envelope, not prose.
+
+    A cloud model on the in-text tool format gets no ``tools`` yet can still
+    call one natively; then only a whole JSON envelope counts, so a model
+    merely quoting the prefix stays text.
+    """
+    if not chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+        return False
+    if tools:
+        return True
+    try:
+        envelope = json.loads(chunk)
+    except ValueError:
+        return False
+    return isinstance(envelope, dict) and isinstance(envelope.get(_NATIVE_TC_KEY), list)
 
 
 class LLMCallCancelled(Exception):
@@ -66,9 +87,8 @@ class AgentConfig:
     show_stats: bool = False
     logging_level: str = "INFO"
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Removed; True raises migration guidance
     use_local_llm: bool = (
-        True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
+        True  # Use local LLM (computed as not use_claude if not explicitly set)
     )
     claude_model: str = "claude-sonnet-5"  # Claude model when use_claude=True
     base_url: Optional[str] = (
@@ -139,7 +159,6 @@ class AgentSDK:
         # Initialize LLM client - factory auto-detects provider and validates
         self.llm_client = create_client(
             use_claude=self.config.use_claude,
-            use_openai=self.config.use_chatgpt,
             model=(
                 self.config.claude_model
                 if self.config.use_claude
@@ -505,8 +524,8 @@ class AgentSDK:
             messages: List of message dicts with 'role' and 'content' keys
             system_prompt: Optional system prompt to use (overrides config)
             cancel: When given, the reply is streamed and the call is abandoned
-                as soon as the event is set — the connection is closed so the
-                server stops generating, and ``LLMCallCancelled`` is raised.
+                as soon as the event is set, also while it waits for the model
+                slot, and ``LLMCallCancelled`` is raised.
             **kwargs: Additional arguments for LLM generation
 
         Returns:
@@ -593,7 +612,10 @@ class AgentSDK:
             self.log.error(f"LLM connection error in send_messages: {e}")
             raise ConnectionError(f"Failed to connect to LLM server: {e}") from e
         except Exception as e:
-            self.log.error(f"Error in send_messages: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages: {e}")
             raise
 
     def _send_messages_cancellable(
@@ -613,16 +635,20 @@ class AgentSDK:
             messages, system_prompt=system_prompt, tools=tools, **kwargs
         )
         try:
-            for chunk in stream:
-                if cancel.is_set():
-                    raise LLMCallCancelled("model call cancelled mid-reply")
-                if chunk.is_complete:
-                    final = chunk
-                else:
-                    parts.append(chunk.text)
+            # A call cancelled while queued for the model must never be sent:
+            # on the NPU, hanging up on it once it streams restarts the engine.
+            with lease_cancel_scope(cancel):
+                for chunk in stream:
+                    if cancel.is_set():
+                        raise LLMCallCancelled("model call cancelled mid-reply")
+                    if chunk.is_complete:
+                        final = chunk
+                    else:
+                        parts.append(chunk.text)
+        except LeaseWaitCancelled as e:
+            raise LLMCallCancelled(str(e)) from e
         finally:
-            # Closing the generator closes the HTTP stream, which is what
-            # makes the server stop generating and free the model.
+            # Ends the HTTP stream: cut off on a GPU, read to its end on the NPU.
             stream.close()
         if final is None:
             raise RuntimeError("model stream ended without a final chunk")
@@ -699,7 +725,7 @@ class AgentSDK:
                 # would print raw JSON at the user — so it terminates the stream
                 # as the complete response, which is the shape the agent loop's
                 # native tool_calls branch already parses.
-                if tools and chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+                if _is_tool_call_envelope(chunk, tools):
                     self._recorder_mark()
                     call_reported = True
                     self._report_llm_call(call_started, streamed=True, ok=True)
@@ -730,6 +756,8 @@ class AgentSDK:
                 reasoning=self.llm_client.get_last_reasoning(),
             )
 
+        except LeaseWaitCancelled:
+            raise  # the caller stopped waiting: not an error
         except ConnectionError as e:
             # Re-raise connection errors with additional context
             self.log.error(f"LLM connection error in send_messages_stream: {e}")
@@ -737,7 +765,10 @@ class AgentSDK:
                 f"Failed to connect to LLM server (streaming): {e}"
             ) from e
         except Exception as e:
-            self.log.error(f"Error in send_messages_stream: {e}")
+            if stopped_by_user(e):
+                self.log.info(f"send_messages_stream stopped by the user: {e}")
+            else:
+                self.log.error(f"Error in send_messages_stream: {e}")
             raise
         finally:
             # Cancelling closes this generator at the yield; without this the
@@ -1190,6 +1221,7 @@ class AgentSDK:
             )
 
         # Create RAG config matching chat config
+        rag_kwargs.setdefault("base_url", self.config.base_url)
         rag_config = RAGConfig(
             model=self.config.model,
             show_stats=self.config.show_stats,
@@ -1206,7 +1238,7 @@ class AgentSDK:
         if documents:
             for doc_path in documents:
                 self.log.info(f"Indexing document: {doc_path}")
-                result = self.rag.index_document(doc_path)
+                result = self._index_named_document(doc_path)
 
                 if isinstance(result, dict) and result.get("success") is True:
                     indexed_count += 1
@@ -1245,7 +1277,14 @@ class AgentSDK:
         if not self.rag_enabled or not self.rag:
             raise ValueError("RAG not enabled. Call enable_rag() first.")
 
-        return bool(self.rag.index_document(document_path).get("success"))
+        return bool(self._index_named_document(document_path).get("success"))
+
+    def _index_named_document(self, document_path: str) -> dict:
+        """Index a file the caller named, granting read access to that file only."""
+        # The RAG validator defaults to the working directory; naming the file is the grant.
+        if os.path.isfile(document_path):
+            self.rag.path_validator.add_allowed_path(document_path)
+        return self.rag.index_document(document_path)
 
     def _estimate_tokens(self, text: str) -> int:
         """
@@ -1261,82 +1300,6 @@ class AgentSDK:
         # Rough approximation: ~4 characters per token for English text
         # This is conservative to avoid overrunning context
         return len(text) // 4
-
-    def summarize_conversation_history(self, max_history_tokens: int) -> Optional[str]:
-        """
-        Summarize conversation history when it exceeds the token budget.
-
-        Args:
-            max_history_tokens: Maximum allowed tokens for stored history
-
-        Returns:
-            The generated summary (when summarization occurred) or None
-        """
-        if max_history_tokens <= 0:
-            raise ValueError("max_history_tokens must be positive")
-
-        history_entries = list(self.chat_history)
-        if not history_entries:
-            return None
-
-        history_text = "\n".join(history_entries)
-        history_tokens = self._estimate_tokens(history_text)
-
-        if history_tokens <= max_history_tokens:
-            print(
-                "History tokens are less than max history tokens, so no summarization is needed"
-            )
-            return None
-
-        print(
-            "History tokens are greater than max history tokens, so summarization is needed"
-        )
-
-        self.log.info(
-            "Conversation history (~%d tokens) exceeds budget (%d). Summarizing...",
-            history_tokens,
-            max_history_tokens,
-        )
-
-        summary_prompt = (
-            "Summarize the following conversation between a user and the GAIA web "
-            "development agent. Preserve:\n"
-            "- The app requirements and inferred schema/data models\n"
-            "- Key implementation details already completed\n"
-            "- Outstanding issues, validation failures, or TODOs (quote error/warning text verbatim)\n"
-            "- Any constraints or preferences the user emphasized\n\n"
-            "Write the summary in under 400 tokens, using concise paragraphs, and include the exact text of any warnings/errors so future fixes have full context.\n\n"
-            "You have full access to the prior conversation history above; summarize it directly without restating the entire transcript."
-        )
-
-        # Use AgentSDK's send() so history formatting/ordering is handled consistently
-        # by the same path used for normal chat turns.
-        original_history = list(self.chat_history)
-        try:
-            chat_response = self.send(
-                summary_prompt,
-                max_tokens=min(self.config.max_tokens, 2048),
-                timeout=1200,
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            self.log.error("Failed to summarize conversation history: %s", exc)
-            # Restore history to avoid dropping context on failure
-            self.chat_history.clear()
-            self.chat_history.extend(original_history)
-            return None
-
-        summary = chat_response.text.strip() if chat_response else ""
-        if not summary:
-            self.log.warning("Summarization returned empty content; keeping history.")
-            self.chat_history.clear()
-            self.chat_history.extend(original_history)
-            return None
-
-        self.chat_history.clear()
-        self.chat_history.append(
-            f"{self.config.assistant_name}: Conversation summary so far:\n{summary}"
-        )
-        return summary
 
     def _truncate_rag_context(self, context: str, max_tokens: int) -> str:
         """
@@ -1588,6 +1551,20 @@ class SimpleChat:
         return self._sdk.get_formatted_history()
 
 
+_SESSION_OVERRIDE_KEYS = frozenset(
+    {
+        "model",
+        "max_tokens",
+        "system_prompt",
+        "max_history_length",
+        "show_stats",
+        "logging_level",
+        "use_claude",
+        "assistant_name",
+    }
+)
+
+
 class AgentSession:
     """
     Session-based chat interface for managing multiple separate conversations.
@@ -1633,6 +1610,18 @@ class AgentSession:
         Returns:
             AgentSDK instance for the session
         """
+        unknown = sorted(set(config_kwargs) - _SESSION_OVERRIDE_KEYS)
+        if unknown:
+            raise TypeError(
+                f"create_session() got unexpected keyword argument(s): "
+                f"{', '.join(unknown)}. Allowed: "
+                f"{', '.join(sorted(_SESSION_OVERRIDE_KEYS))}."
+            )
+        if config is not None and config_kwargs:
+            raise TypeError(
+                "create_session() takes either config or keyword overrides, "
+                f"not both (got config and {', '.join(sorted(config_kwargs))})."
+            )
         if config is None:
             # Create config from defaults with overrides
             config = AgentConfig(
@@ -1654,9 +1643,6 @@ class AgentSession:
                 ),
                 use_claude=config_kwargs.get(
                     "use_claude", self.default_config.use_claude
-                ),
-                use_chatgpt=config_kwargs.get(
-                    "use_chatgpt", self.default_config.use_chatgpt
                 ),
                 assistant_name=config_kwargs.get(
                     "assistant_name", self.default_config.assistant_name

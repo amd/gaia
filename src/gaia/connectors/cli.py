@@ -266,7 +266,10 @@ def handle(args: argparse.Namespace) -> int:
 
 def _handle_list(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    from gaia.connectors.mcp_server import is_mcp_server_configured
+    from gaia.connectors.mcp_server import (
+        is_mcp_server_configured,
+        is_mcp_server_enabled,
+    )
     from gaia.connectors.registry import REGISTRY
     from gaia.connectors.store import peek_connection
 
@@ -289,6 +292,7 @@ def _handle_list(args: argparse.Namespace) -> int:
     rows = []
     for spec in specs:
         configured = False
+        enabled = True
         account_id = None
         scopes: list = []
         if spec.type == "oauth_pkce":
@@ -299,6 +303,7 @@ def _handle_list(args: argparse.Namespace) -> int:
                 scopes = list(blob.get("scopes", []))
         elif spec.type == "mcp_server":
             configured = is_mcp_server_configured(spec.id)
+            enabled = is_mcp_server_enabled(spec.id)
 
         rows.append(
             {
@@ -308,6 +313,7 @@ def _handle_list(args: argparse.Namespace) -> int:
                 "category": spec.category,
                 "tier": spec.tier,
                 "configured": configured,
+                "enabled": enabled,
                 "account_id": account_id,
                 "scopes": scopes,
             }
@@ -391,9 +397,8 @@ def _handle_connect(args: argparse.Namespace) -> int:
             for agent_scopes in resolved.values():
                 declared.update(agent_scopes)
             # The catalog spec's default_scopes (not the raw OAuthProvider's)
-            # — the same source connector_routes._build_scope_union and the
-            # TUI's connectScopes union against, so a bare connect matches
-            # what every other surface would request for the same account.
+            # — the same source the TUI's connectScopes unions against, so a
+            # bare connect matches what the TUI requests for the same account.
             catalog_defaults = REGISTRY.get(args.connector_id).default_scopes
             scopes = sorted(declared | set(catalog_defaults))
         else:
@@ -834,6 +839,9 @@ def _handle_activations(args: argparse.Namespace) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Standalone entry point — useful for ``python -m gaia.connectors.cli``."""
+    from gaia.logger import configure
+
+    configure()
     parser = argparse.ArgumentParser(prog="gaia-connectors")
     sub = parser.add_subparsers(dest="action")
     add_subparser(sub)

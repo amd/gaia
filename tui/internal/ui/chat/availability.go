@@ -84,11 +84,16 @@ func (m ChatModel) availableCommandSet() map[string]bool {
 			if supported, known := m.commandSupported(client.CapabilityMemory); known && !supported {
 				continue
 			}
-		case "/setup":
+		case "/setup", "/models":
 			if m.agentID != setupAgentID {
 				continue
 			}
-		case modelCommandPrefix, "/provider":
+		case "/gpu":
+			// Only a PC with an integrated GPU has a memory share to change.
+			if m.agentID != setupAgentID || !m.gpuApplies {
+				continue
+			}
+		case modelCommandPrefix, "/provider", skillsCommandPrefix:
 			if !m.supportsModelCommand() {
 				continue
 			}

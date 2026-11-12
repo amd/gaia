@@ -1,0 +1,216 @@
+---
+title: "Build and Publish a Skill"
+description: "Write a skill for GAIA with Claude Code, check it locally, and get it onto the GAIA hub by pull request."
+icon: "hammer"
+---
+
+<Info>
+  **Source Code:** [`hub/skills/`](https://github.com/amd/gaia/tree/main/hub/skills) ·
+  [`src/gaia/skills/cli.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/cli.py) ·
+  [`.github/workflows/skill_audit.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/skill_audit.yml)
+</Info>
+
+You can ship a new GAIA capability as a folder with one file in it. Open a pull
+request into `hub/skills/<name>/`; once it passes the audit and review, the next
+final GAIA release publishes it to the hub, signed by AMD. You never handle a
+signing key or a hub token.
+
+A **skill** is a `SKILL.md` (a short header plus a procedure written for the
+model to follow), optionally with a `tools.py` of Python tools. Reach for a skill
+when you are teaching the agent *how* to do something; write a
+[tool](/sdk/core/tools) when it needs a new ability, and a
+[custom agent](/guides/custom-agent) only when you need your own process. Format
+details: [Agent Skills](/spec/agent-skills).
+
+## 1. Write it with Claude Code
+
+<Steps>
+  <Step title="Fork and clone">
+    Fork [amd/gaia](https://github.com/amd/gaia), clone your fork, and open it in
+    Claude Code. It picks up `CLAUDE.md`, the working skills in `hub/skills/`,
+    and the format spec on its own.
+  </Step>
+  <Step title="Ask for the skill">
+    Describe the job, where it goes, and what to follow:
+
+    ```text
+    Create a GAIA skill in hub/skills/csv-quality-report that checks a CSV for
+    missing values, duplicate rows, and mixed-type columns, and reports each
+    problem with a row count. Follow the format of the existing skills in
+    hub/skills/ and the spec in docs/spec/agent-skills.mdx. Keep permissions
+    minimal, then run `gaia skill audit hub/skills/csv-quality-report/` and fix
+    anything it reports.
+    ```
+  </Step>
+  <Step title="Read what it wrote">
+    You are the author of record. Check that the description says *when* to use the
+    skill, that the steps are ones you would stand behind, and that any `tools.py`
+    does only what the skill says.
+  </Step>
+</Steps>
+
+### What a skill looks like
+
+```
+hub/skills/csv-quality-report/
+├── SKILL.md     # required
+├── tools.py     # optional: Python tools the skill ships
+└── scripts/     # optional: anything else it needs
+```
+
+The smallest useful `SKILL.md`:
+
+```yaml
+---
+name: csv-quality-report
+description: Check a CSV file for missing values, duplicate rows, and mixed-type columns. Use when the user shares a CSV and asks if the data is clean or what is wrong with it.
+license: MIT
+version: 1.0.0
+metadata:
+  gaia:
+    security_tier: community
+    tools_required:
+      - create_table
+      - insert_data
+      - query_data
+---
+
+# CSV Quality Report
+
+1. Load the file into a scratchpad table with `create_table` and `insert_data`.
+2. Use `query_data` to find empty cells, duplicate rows, and columns that mix
+   numbers and text.
+3. Report each problem with the column name and a row count. Say "no problems
+   found" only if every query came back empty.
+```
+
+- **`name`** must equal the folder name (lowercase, hyphens). The hub publishes under `name`, and `gaia skill import` installs under it even if the folder differs.
+- **`description`** is how the agent decides to use the skill. Say what it does and when.
+- **`version`** is required to publish, as `MAJOR.MINOR.PATCH`; `0.0.0` is refused.
+- **`license`**: use `MIT`, like every skill in the repo.
+- **`tools_required`** names tools the agent already has. **`tools`** declares
+  Python tools your own `tools.py` provides; each needs an entry that matches its
+  signature, or the skill will not load.
+  [`rss-digest`](https://github.com/amd/gaia/tree/main/hub/skills/rss-digest) is
+  the worked example with a `tools.py`.
+
+### Or write it by hand
+
+```bash
+gaia skill create csv-quality-report --dir hub/skills --with-tools
+```
+
+This only scaffolds a template: placeholder description and body, version
+`0.1.0`, MIT. `--with-tools` adds a `tools.py` stub. Without `--dir` it writes to
+`~/.gaia/skills`, which is not where a contribution goes. Replace every
+placeholder.
+
+## 2. Try it locally
+
+```bash
+gaia skill import hub/skills/csv-quality-report   # add --allow-experimental if it ships tools.py
+gaia skill list
+gaia skill info csv-quality-report --body
+```
+
+`import` audits the folder and copies it into `~/.gaia/skills/`. A local import
+is always **experimental**, whatever the file claims: the tier records what has
+been verified, not what the author said. That is fine for trying it. A skill that
+asks for more than the experimental ceiling (`network:read` and `scratch:write`)
+is refused at import, and one that ships code needs `--allow-experimental`,
+because that code runs in your agent's process.
+
+Then start `gaia chat` and ask the agent to load it ("load the csv-quality-report
+skill and check this file"). The agent's `list_skills` and `load_skill` tools
+find anything in `~/.gaia/skills/`. After you edit the folder, import again with
+`--force`.
+
+## 3. Declare only the permissions you use
+
+Permissions go under `metadata.gaia.permissions` as `<domain>:<level>[:scope]`,
+for example `network:read` or `shell:execute:gh`. Declare nothing for a skill
+that only uses tools the agent already has.
+
+- Keep the list as short as the skill allows. Each extra grant is something a
+  reviewer has to trust and a user has to approve. The audit notes permissions
+  your code never uses.
+- Three tiers cap what a skill may ask for: `experimental` (`network:read` and
+  `scratch:write`), `community` (adds `network:write`, `mcp:connect`,
+  `shell:execute:<binary>`, and `program:run`; dangerous grants prompt the user),
+  `verified` (everything, AMD-audited). Claim `community`, as every
+  skill in `hub/skills/` does.
+- `filesystem`, `database`, `desktop`, and `env` permissions are refused today:
+  there is no sandbox for them yet.
+- Shell access is scoped to one named program, `shell:execute:<binary>`, and
+  limited to that program's allowed subcommands.
+
+The full rules are in [Agent Skills](/spec/agent-skills) and the
+[tier table](/reference/cli#security-tiers-at-install).
+
+## 4. Check it before you open the PR
+
+```bash
+gaia skill audit hub/skills/csv-quality-report/
+python -m pytest tests/unit/test_starter_skills.py -q
+```
+
+`audit` is the same engine the PR check runs, and it never executes your code.
+
+| Exit code | Verdict | What it means |
+|-----------|---------|---------------|
+| `0` | `ALLOW` | Clean. |
+| `5` | `REVIEW` | Fails the check for a skill in `hub/skills/`. Fix the findings. |
+| `6` | `BLOCK` | Fails the check. Fix it. |
+| `4` | (none) | The skill could not be parsed. |
+
+Your skill must be `ALLOW` to merge. Publishing refuses anything else, so the
+PR check fails a `REVIEW` skill in `hub/skills/` and no maintainer label
+overrides it. To test a tier before you claim it, run
+`gaia skill audit <folder> --tier community`.
+
+## 5. Open the pull request
+
+1. Add only `hub/skills/<name>/` on a branch of your fork and open a PR into `main`.
+2. Fill in the [PR template](https://github.com/amd/gaia/blob/main/.github/pull_request_template.md);
+   see [CONTRIBUTING](https://github.com/amd/gaia/blob/main/CONTRIBUTING.md).
+3. The **Skill Audit (deterministic gate)** check runs on every PR that touches a
+   skill. For a skill in `hub/skills/`, anything other than `ALLOW` fails it.
+   The PR comment shows counts and rule ids only; the details stay in the
+   repository's private Security tab.
+4. A maintainer reviews it: what the instructions and any `tools.py` actually do,
+   whether the permissions match, and whether the skill is useful and safe to
+   ship under AMD's signature.
+
+By contributing you license the skill under the repo's MIT license. Merging is
+not a tier promotion: the audit verdict and AMD's signature decide the tier.
+
+## 6. After it merges
+
+The next final GAIA release runs
+[`release_skills.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/release_skills.yml),
+which publishes every skill whose `version` is not on the hub yet, signed with
+AMD's key. GAIA v0.25.4 and later trust that key out of the box. Release
+candidates do not publish.
+
+Once it is live, users find it with `gaia skill search`, by asking the agent, or
+at [amd-gaia.ai/hub](https://amd-gaia.ai/hub), then `gaia skill install <name>`.
+See [Starter Skills](/guides/starter-skills#find-and-install-skills-from-the-hub).
+Publishing makes it installable; it is not built into the `gaia` agent unless AMD
+adds it to the agent's bundle.
+
+## 7. Updating a published skill
+
+Hub versions are immutable. Change anything in a published skill, including a
+typo in `tools.py`, and **bump `version:` in `SKILL.md`** in the same PR. If you
+don't, the release fails for that skill ("already published with different
+contents") and the change never reaches users. The audit re-runs on every PR, so
+a new version earns its verdict again.
+
+<CardGroup cols={2}>
+  <Card title="Starter Skills" icon="puzzle-piece" href="/guides/starter-skills">
+    Install skills from the hub, and read the AMD examples
+  </Card>
+  <Card title="Agent Skills spec" icon="book" href="/spec/agent-skills">
+    Format, permissions, tiers, and signing
+  </Card>
+</CardGroup>

@@ -2,6 +2,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from gaia.agents.base import project_map
+from gaia.agents.tools.browser_tools import BrowserToolsMixin
+from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.agents.tools.file_monitor_tools import FileToolsMixin
 from gaia.agents.tools.file_tools import FileSearchToolsMixin
 from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
 from gaia.agents.tools.shell_session import ShellSession
@@ -321,3 +324,129 @@ def test_find_files_filters_indexed_scope_against_chat_workspace(tmp_path, monke
 
     assert "chathelper.py" in result
     assert "decoyhelper.py" not in result
+
+
+def test_shell_relative_working_directory_uses_chat_workspace(tmp_path, monkeypatch):
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    workspace.mkdir()
+    sidecar.mkdir()
+    monkeypatch.chdir(sidecar)
+
+    class Host(ShellToolsMixin):
+        pass
+
+    host = Host()
+    host.config = _Config(workspace)
+
+    assert host._call_cwd(".") == (str(workspace.resolve()), True)
+
+
+def test_watch_directory_relative_path_uses_chat_workspace(tmp_path, monkeypatch):
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    workspace.mkdir()
+    sidecar.mkdir()
+    (workspace / "report.pdf").write_bytes(b"%PDF")
+    (sidecar / "decoy.pdf").write_bytes(b"%PDF")
+    monkeypatch.chdir(sidecar)
+
+    class Validator:
+        def validate_read(self, path):
+            return True, ""
+
+    class Host(FileToolsMixin):
+        pass
+
+    host = Host()
+    host.config = _Config(workspace)
+    host.path_validator = Validator()
+    host.watch_directories = []
+    host.indexed_files = set()
+    host.rag = type(
+        "Rag", (), {"index_document": lambda _self, _path: {"success": True}}
+    )()
+    watched = []
+    host._watch_directory = watched.append
+    host._auto_save_session = lambda: None
+    registered = _register_tools(host, FileToolsMixin.register_file_tools)
+
+    result = registered["add_watch_directory"](".")
+
+    assert result["status"] == "success"
+    assert watched == [str(workspace.resolve())]
+    assert str(workspace / "report.pdf") in host.indexed_files
+    assert str(sidecar / "decoy.pdf") not in host.indexed_files
+
+
+def test_search_code_relative_directory_uses_chat_workspace(tmp_path, monkeypatch):
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    workspace.mkdir()
+    sidecar.mkdir()
+    (workspace / "answer.py").write_text("needle = 'chat'\n", encoding="utf-8")
+    (sidecar / "decoy.py").write_text("needle = 'sidecar'\n", encoding="utf-8")
+    monkeypatch.chdir(sidecar)
+
+    class Validator:
+        def validate_read(self, _path, **_kwargs):
+            return True, ""
+
+    class Host(FileIOToolsMixin):
+        pass
+
+    host = Host()
+    host.config = _Config(workspace)
+    host.path_validator = Validator()
+    registered = {}
+
+    def capture(function=None, **_kwargs):
+        if function is not None:
+            registered[function.__name__] = function
+            return function
+
+        def decorate(inner):
+            registered[inner.__name__] = inner
+            return inner
+
+        return decorate
+
+    with patch("gaia.agents.tools.file_io_tools.tool", capture):
+        host.register_file_io_tools()
+
+    result = registered["search_code"](pattern="needle")
+
+    assert "answer.py" in str(result)
+    assert "decoy.py" not in str(result)
+
+
+def test_download_relative_save_to_uses_chat_workspace(tmp_path, monkeypatch):
+    workspace = tmp_path / "chat"
+    sidecar = tmp_path / "sidecar"
+    workspace.mkdir()
+    sidecar.mkdir()
+    monkeypatch.chdir(sidecar)
+
+    class WebClient:
+        def download(self, **kwargs):
+            self.kwargs = kwargs
+            return {
+                "filename": "report.txt",
+                "path": str(Path(kwargs["save_dir"]) / "report.txt"),
+                "size": 1,
+                "content_type": "text/plain",
+            }
+
+    class Host(BrowserToolsMixin):
+        pass
+
+    host = Host()
+    host.config = _Config(workspace)
+    host._path_validator = None
+    host._web_client = WebClient()
+    registered = _register_tools(host, BrowserToolsMixin.register_browser_tools)
+
+    result = registered["download_file"]("https://example.test/report", save_to="out")
+
+    assert "Saved to" in result
+    assert host._web_client.kwargs["save_dir"] == str(workspace / "out")

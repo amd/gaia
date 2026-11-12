@@ -18,12 +18,12 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat import python_runner  # noqa: E402
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig  # noqa: E402
-from gaia_agent_chat.python_jobs import PythonJob  # noqa: E402
-from gaia_agent_chat.python_runner import (  # noqa: E402
+from gaia_agent import python_runner  # noqa: E402
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig  # noqa: E402
+from gaia_agent.python_jobs import PythonJob  # noqa: E402
+from gaia_agent.python_runner import (  # noqa: E402
     RUN_PYTHON_FILE_FLAG,
     python_command,
     requests_run_python_file,
@@ -61,8 +61,8 @@ def tools(project, monkeypatch):
     monkeypatch.chdir(project)
     saved = dict(_TOOL_REGISTRY)
     with (
-        patch("gaia_agent_chat.agent.RAGSDK"),
-        patch("gaia_agent_chat.agent.RAGConfig"),
+        patch("gaia_agent.chat_agent.RAGSDK"),
+        patch("gaia_agent.chat_agent.RAGConfig"),
     ):
         ChatAgent(ChatAgentConfig(silent_mode=True, allowed_paths=[str(project)]))
     try:
@@ -82,7 +82,7 @@ def _completed(argv, returncode=0, stdout="", stderr=""):
 def _spawn(**finished):
     """Stand in for the child: a job that ran to completion."""
     return patch(
-        "gaia_agent_chat.agent.run_python_job",
+        "gaia_agent.chat_agent.run_python_job",
         return_value=PythonJob(_completed([], **finished), None, []),
     )
 
@@ -113,6 +113,25 @@ def test_frozen_run_python_never_hands_the_script_to_the_agent_parser(
     assert argv[1] == RUN_PYTHON_FILE_FLAG
     assert argv[2].endswith(".py") and len(argv) == 3
     assert result["status"] == "success", result
+
+
+def test_frozen_linux_run_python_reuses_the_bundle_and_its_libraries(
+    frozen, tools, project, monkeypatch
+):
+    """The relaunch reuses this one-file bundle: no reset, which unpacks the
+    whole agent again on every call, and the bundle path it loads through."""
+    bundle = "/tmp/_MEIabc"
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "_MEIPASS", bundle, raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", f"{bundle}:/opt/rocm/lib")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+    monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
+    with _spawn(stdout="42\n") as spawn:
+        tools["run_python"](code="print(6 * 7)")
+
+    env = spawn.call_args.kwargs["env"]
+    assert env["LD_LIBRARY_PATH"] == f"{bundle}:/opt/rocm/lib"
+    assert "PYINSTALLER_RESET_ENVIRONMENT" not in env
 
 
 def test_frozen_execute_python_file_passes_its_args_after_the_script(
@@ -178,7 +197,7 @@ def test_a_start_failure_is_an_error_naming_the_program(tool, frozen, tools, pro
     script = project / "t.py"
     script.write_text("print(1)\n", encoding="utf-8")
     with patch(
-        "gaia_agent_chat.agent.run_python_job",
+        "gaia_agent.chat_agent.run_python_job",
         side_effect=FileNotFoundError(2, "not found"),
     ):
         if tool == "run_python":
@@ -214,7 +233,7 @@ def test_the_ui_event_reports_the_failure(tools):
 #: Stand-in for the frozen binary's entry point: the same dispatch call.
 _CHILD = (
     "import sys\n"
-    "from gaia_agent_chat.python_runner import requests_run_python_file, "
+    "from gaia_agent.python_runner import requests_run_python_file, "
     "run_python_file\n"
     "assert requests_run_python_file(sys.argv[1:])\n"
     "sys.exit(run_python_file(sys.argv[2:]))\n"
@@ -360,7 +379,7 @@ def test_frozen_output_is_utf8_whatever_the_console_codec(project, child_env):
 # A script that starts sys.executable itself reaches the binary too
 # ---------------------------------------------------------------------------
 
-from gaia_agent_chat.python_runner import (  # noqa: E402
+from gaia_agent.python_runner import (  # noqa: E402
     BUNDLED_LIBRARIES,
     interpreter_request,
 )
@@ -368,7 +387,7 @@ from gaia_agent_chat.python_runner import (  # noqa: E402
 #: Stand-in for the frozen entry point's ``dispatch`` call; 97 = "not Python".
 _DISPATCH = (
     "import sys\n"
-    "from gaia_agent_chat.python_runner import dispatch\n"
+    "from gaia_agent.python_runner import dispatch\n"
     "code = dispatch(sys.argv[1:])\n"
     "sys.exit(97 if code is None else code)\n"
 )
@@ -478,14 +497,136 @@ def test_an_agent_argv_falls_through_to_the_agent(project, child_env):
     assert _dispatch(["--json-events"], project, child_env).returncode == 97
 
 
-@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
-def test_the_description_names_the_bundled_libraries(tool, tools):
-    from gaia.agents.base.tools import MAX_TOOL_DESCRIPTION_CHARS
-
+def _libraries_named(tool):
     description = _TOOL_REGISTRY[tool]["description"]
     line = next(s for s in description.split("\n\n") if s.startswith("Has "))
-    named = line.removeprefix("Has ").split(";")[0].replace("\n", " ")
-
-    assert [n.strip() for n in named.split(",")] == list(BUNDLED_LIBRARIES.values())
     assert "no pip" in line
-    assert len(description) <= MAX_TOOL_DESCRIPTION_CHARS
+    named = line.removeprefix("Has ").split(";")[0].replace("\n", " ")
+    return [n.strip() for n in named.split(",")]
+
+
+@pytest.fixture
+def installed(monkeypatch):
+    """Which bundled libraries this interpreter has; all of them by default."""
+    from gaia_agent import chat_agent
+
+    have = set(BUNDLED_LIBRARIES.values())
+    real_find_spec = chat_agent.importlib.util.find_spec
+
+    def find_spec(name, *args):
+        if name in BUNDLED_LIBRARIES.values():
+            return real_find_spec("os") if name in have else None
+        return real_find_spec(name, *args)
+
+    monkeypatch.setattr(chat_agent.importlib.util, "find_spec", find_spec)
+    chat_agent.script_libraries.cache_clear()
+    yield have
+    chat_agent.script_libraries.cache_clear()
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+def test_the_description_names_the_bundled_libraries(tool, installed, tools):
+    from gaia.agents.base.tools import MAX_TOOL_DESCRIPTION_CHARS
+
+    assert _libraries_named(tool) == list(BUNDLED_LIBRARIES.values())
+    assert len(_TOOL_REGISTRY[tool]["description"]) <= MAX_TOOL_DESCRIPTION_CHARS
+
+
+@pytest.fixture
+def without_pandas(installed):
+    installed.discard("pandas")
+    return installed
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+def test_a_library_this_interpreter_lacks_is_not_advertised(
+    tool, without_pandas, tools
+):
+    named = _libraries_named(tool)
+
+    assert "pandas" not in named
+    assert named == [n for n in BUNDLED_LIBRARIES.values() if n != "pandas"]
+
+
+def test_a_frozen_build_names_every_bundled_library(without_pandas, frozen, tools):
+    assert _libraries_named("run_python") == list(BUNDLED_LIBRARIES.values())
+
+
+def test_a_failed_check_is_logged_and_the_library_left_out(installed, monkeypatch):
+    from gaia_agent import chat_agent
+
+    def broken(name, *args):
+        raise ValueError(f"{name}.__spec__ is None")
+
+    monkeypatch.setattr(chat_agent.importlib.util, "find_spec", broken)
+    chat_agent.script_libraries.cache_clear()
+    with patch.object(chat_agent.logger, "warning") as warning:
+        assert chat_agent.script_libraries() == ()
+
+    checked = [call.args[1] for call in warning.call_args_list]
+    assert checked == list(BUNDLED_LIBRARIES.values())
+
+
+def _missing(module):
+    from gaia_agent.chat_agent import _python_run_result
+
+    stderr = (
+        'Traceback (most recent call last):\n  File "snippet.py", line 1\n'
+        f"ModuleNotFoundError: No module named '{module}'\n"
+    )
+    return _python_run_result(_completed([], 1, "", stderr), "", stderr, 0.1)
+
+
+@pytest.mark.parametrize(
+    "module, route",
+    [("pandas", "using csv to read the file and statistics"), ("numpy", "math")],
+)
+def test_a_missing_bundled_library_names_the_standard_library_route(module, route):
+    error = _missing(module)["error"]
+
+    assert f"No module named '{module}'" in error
+    assert f"{module} is not installed in this Python" in error
+    assert "Retry now without it" in error
+    assert route in error
+
+
+def test_an_unbundled_missing_module_gets_no_route():
+    assert _missing("requests")["error"] == (
+        "Python exited with code 1: ModuleNotFoundError: No module named 'requests'"
+    )
+
+
+def test_the_hinted_failure_still_teaches_the_fix_once_a_retry_works(tmp_path):
+    from gaia.agents.base.memory import MemoryMixin
+    from gaia.agents.base.memory_store import MemoryStore
+    from gaia.security import PathValidator
+
+    class _Base:
+        def process_query(self, user_input, **kwargs):
+            return {"result": ""}
+
+        def _execute_tool(self, tool_name, tool_args):
+            return self.next_result
+
+    class Session(MemoryMixin, _Base):
+        def __init__(self):
+            self._memory_store = MemoryStore(db_path=tmp_path / "m.db")
+            self._memory_context = "global"
+            self._memory_session_id = "s"
+            self.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
+
+        def _embed_text(self, text):
+            raise RuntimeError("no embedder in unit tests")
+
+    s = Session()
+    try:
+        s.process_query("average unit_price per region")
+        s.next_result = _missing("pandas")
+        s._execute_tool("run_python", {"code": "import pandas as pd"})
+        s.next_result = {"status": "success", "return_code": 0}
+        s._execute_tool("run_python", {"code": "import csv, statistics"})
+        [lesson] = s._memory_store.get_by_category("note", domain="lesson")
+    finally:
+        s._memory_store.close()
+
+    assert "used `csv`, `statistics` instead" in lesson["content"]

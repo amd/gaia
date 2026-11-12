@@ -1,0 +1,117 @@
+# Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Licence gate — GAIA must not ship AGPL, GPL or LGPL code.
+#
+# dependency-review.yml only sees dependencies a PR changes and only matches
+# exact SPDX ids, so a copyleft package already in the tree, or one whose
+# metadata is free text (PyMuPDF: "GNU AFFERO GPL 3.0"), passes it. This job
+# installs everything GAIA ships and checks every component's licence.
+
+name: Licence Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    paths:
+      - '.github/workflows/license-check.yml'
+      - 'util/check_licenses.py'
+      - 'setup.py'
+      - '**/pyproject.toml'
+      - '**/package.json'
+      - '**/package-lock.json'
+      - '**/go.mod'
+      - '**/go.sum'
+      # Vendored code under tui/third_party carries its own licence.
+      - 'tui/**'
+      - 'hub/agents/*/python/packaging/**'
+  push:
+    branches: [main]
+  merge_group:
+  schedule:
+    # Weekly: a new upstream release can change a dependency's licence.
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python packages (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      # Platform markers pull different packages (pywin32 on Windows only).
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v7
+      - name: Install everything GAIA ships
+        shell: bash
+        # Every user-facing extra, the agents, and the flagship binary's script
+        # libraries (see build_flagship_sidecar.yml). Dev/lint/eval/publish
+        # extras are tooling and never ship.
+        run: |
+          uv venv .venv-licences --python 3.12
+          uv pip install --python .venv-licences \
+            -e ".[api,ui,rag,diarize,browser,mcp,image,telegram,slack,talk,youtube]" \
+            -e hub/agents/gaia/python \
+            -e hub/agents/email/python \
+            anthropic pandas matplotlib tiktoken
+      - name: Check licences
+        shell: bash
+        run: |
+          PY=.venv-licences/bin/python
+          [ -x .venv-licences/Scripts/python.exe ] && PY=.venv-licences/Scripts/python.exe
+          "$PY" util/check_licenses.py python
+
+  npm:
+    name: npm packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Check licences
+        # Every lockfile entry, dev included: the Agent UI's React stack is a
+        # devDependency that Vite bundles into the shipped JavaScript. The VS Code
+        # extension is not bundled, so only its runtime dependencies count.
+        run: |
+          python util/check_licenses.py npm \
+            src/gaia/apps/webui/package-lock.json \
+            hub/agents/gaia/npm/package-lock.json \
+            hub/agents/email/npm/package-lock.json \
+            --production-only src/vscode/gaia/package-lock.json
+
+  go:
+    name: Go modules
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Download modules
+        working-directory: tui
+        run: go mod download
+      - name: Check licences
+        run: python util/check_licenses.py go tui

@@ -110,6 +110,35 @@ var tracePath string
 // A file genuinely named "auto" is still reachable as `--trace=./auto`.
 const traceAutoPath = "auto"
 
+// resumeArg is --resume's raw value: "" (off), resumePick (bare --resume:
+// choose from the list), or a session id or id prefix.
+var resumeArg string
+
+const resumePick = "pick"
+
+// resumeFromFlag turns --resume into a request. An empty --resume= (a script's
+// unset variable) is refused rather than read as "start a new session".
+func resumeFromFlag(changed bool, arg string) (ui.Resume, error) {
+	switch {
+	case changed && arg == "":
+		return ui.Resume{}, fmt.Errorf("--resume= was given an empty session id: pass " +
+			"--resume=<id>, or --resume alone to choose from the list")
+	case arg == resumePick:
+		return ui.Resume{Pick: true}, nil
+	}
+	return ui.Resume{ID: arg}, nil
+}
+
+// resumeArgAdvice catches `--resume <id>` written with a space: pflag reads
+// that as a bare --resume plus a stray argument.
+func resumeArgAdvice(args []string) error {
+	if resumeArg != resumePick || len(args) == 0 {
+		return nil
+	}
+	return fmt.Errorf("--resume takes its session id attached: write --resume=%s, "+
+		"or --resume alone to choose from the list", args[0])
+}
+
 // traceArgAdvice explains a stray positional that is really a spaced --trace
 // path, and returns nil when --trace does not explain it.
 //
@@ -183,15 +212,23 @@ var rootCmd = &cobra.Command{
 		// The saved preference is the default; an explicit --full-access
 		// overrides it in either direction, which is what makes
 		// --full-access=false a one-launch opt-out.
-		saved := preflight.ReadFullAccess().Enabled
+		savedConfig := preflight.ReadFullAccess()
+		if savedConfig.Err != nil {
+			return fmt.Errorf("could not read the saved full-access setting: %w", savedConfig.Err)
+		}
+		saved := savedConfig.Enabled
 		fullAccess, fromSaved := saved, saved
 		if cmd.Flags().Changed("full-access") {
 			fullAccess, fromSaved = fullAccessFlag, false
 		}
+		resume, err := resumeFromFlag(cmd.Flags().Changed("resume"), resumeArg)
+		if err != nil {
+			return err
+		}
 		if err := update.RemoveLeftover(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
-		if err := ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace); err != nil {
+		if err := ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume); err != nil {
 			return err
 		}
 		// An install the user asked for in /update runs now, after the TUI
@@ -226,6 +263,10 @@ func init() {
 	// not a mistake. root_test.go pins this.
 	cobra.MousetrapHelpText = ""
 
+	rootCmd.Flags().StringVar(&resumeArg, "resume", "",
+		"reopen a past session: bare --resume lists recent sessions (ones waiting "+
+			"on you first) to pick from; --resume=<id> reopens that one directly")
+	rootCmd.Flags().Lookup("resume").NoOptDefVal = resumePick
 	rootCmd.Flags().BoolVar(&developerMode, "developer-mode", false,
 		"enable the developer skill and consent-based Claude Code/Codex handoff")
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
@@ -323,6 +364,9 @@ func init() {
 			if err := traceArgAdvice(args, 0); err != nil {
 				return err
 			}
+			if err := resumeArgAdvice(args); err != nil {
+				return err
+			}
 		}
 		msg := fmt.Sprintf("unknown command %q for %q", args[0], cmd.CommandPath())
 		if len(near) > 0 {
@@ -334,11 +378,11 @@ func init() {
 
 // Execute runs the CLI.
 //
-// A leading `tui` word is accepted and dropped. This binary is addressed as
-// `gaia tui …` everywhere it is documented, but its own root command is the
-// binary's own name, so without this `gaia tui run email` — the exact spelling
-// the docs use — would fail with "unknown command". Both spellings work; only
-// the first argument is considered, so an agent named "tui" is unaffected.
+// A leading `tui` word is accepted and dropped. The binary is `gaia-tui` (the
+// Python `gaia` CLI has no `tui` subcommand), but older docs and scripts spell
+// it `gaia tui …`, so `gaia-tui tui run email` would otherwise fail with
+// "unknown command". Both spellings work; only the first argument is
+// considered, so an agent named "tui" is unaffected.
 func Execute() error {
 	rootCmd.Use = binaryName(os.Args[0])
 	args := os.Args[1:]

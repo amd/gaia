@@ -43,10 +43,6 @@ MANIFEST_VERSION = 1
 #: The answer a turn belongs to, when another process recorded the turn.
 MESSAGE_LINK = "message.json"
 
-#: Default retention; the user changes both in Settings (``gaia config``).
-DEFAULT_RETENTION_DAYS = 7
-DEFAULT_MAX_MB = 500
-
 #: A review diff longer than this is cut, and says so.
 MAX_DIFF_CHARS = 200_000
 
@@ -359,10 +355,6 @@ def recording_turn(
                 "this turn may refuse; check free space under "
                 f"{recorder.dir.parent.parent}."
             ) from e
-
-
-def active_recorder() -> Optional[TurnRecorder]:
-    return _ACTIVE.get()
 
 
 def before_change(path: os.PathLike | str, tool: Optional[str] = None) -> None:

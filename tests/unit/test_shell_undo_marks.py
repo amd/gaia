@@ -77,10 +77,15 @@ def test_command_under_full_access_marks_undo_incomplete(shell_tool, tmp_path):
     run = shell_tool(bypass=True)
     root = tmp_path / "snapshots"
     with fs.recording_turn("s", root=root):
-        result = run("echo hi", working_directory=str(tmp_path))
+        result = run("echo hi > made.txt", working_directory=str(tmp_path))
     assert result["status"] == "success", result
     assert _untracked(root) == [
-        {"kind": "shell", "detail": "echo hi", "paths": [], "may_write": True}
+        {
+            "kind": "shell",
+            "detail": "echo hi > made.txt",
+            "paths": [],
+            "may_write": True,
+        }
     ]
 
 

@@ -210,6 +210,9 @@ class TestFullAccessMode:
             def session_grants(self):
                 return set()
 
+            def session_grant_scopes(self):
+                return {}
+
         state = PermissionState(full_access=enabled)
         handler = _Handler()
         state.attach(handler)
@@ -507,6 +510,9 @@ class TestTheHandoffIsAtomic:
         def session_grants(self):
             return set()
 
+        def session_grant_scopes(self):
+            return {}
+
         def resolve_tool_confirmation(self, **kwargs):
             self.calls.append(kwargs)
             return True
@@ -698,11 +704,11 @@ def test_a_home_relative_path_is_not_read_as_inside_the_workspace(
 
 
 def test_a_file_that_would_shadow_a_program_is_never_auto_accepted(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, fake_os_name
 ):
-    from gaia.agents.base import console
+    from gaia.agents.base import console, write_safety
 
-    monkeypatch.setattr(console.os, "name", "nt")
+    fake_os_name(write_safety, "nt")
     monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
     monkeypatch.setattr(
         console.shutil, "which", lambda name: "/bin/" + name if name == "git" else None

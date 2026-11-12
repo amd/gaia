@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 from typing import Dict, List
 
-from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.memory import STABLE_MEMORY_PROMPT_CHARS, MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
 
 # ---------------------------------------------------------------------------
@@ -349,7 +349,7 @@ TRUNCATION_MARKER = "\n... (memory truncated)"
 
 #: N values requested for the growth table, plus a few extra points (5, 15,
 #: 20) in the pre-saturation region so the elbow where per-category LIMITs
-#: (and then the 4000-char hard cap) take over is visible, not just implied
+#: (and then the STABLE_MEMORY_PROMPT_CHARS hard cap) take over is visible, not just implied
 #: by the jump from N=10 to N=25.
 N_VALUES: List[int] = [0, 5, 10, 15, 20, 25, 50, 100, 250, 500]
 
@@ -431,7 +431,7 @@ class TestMemoryPromptGrowth:
 
         This is the crux question from the audit: does the composed system
         prompt inject ALL stored memories, or a bounded subset? If this
-        assertion ever fails, the 4000-char hard cap in
+        assertion ever fails, the STABLE_MEMORY_PROMPT_CHARS hard cap in
         MemoryMixin._build_stable_memory_prompt() has regressed and memory
         growth really is unbounded -- treat that as a P0, not a nit.
         """
@@ -442,19 +442,19 @@ class TestMemoryPromptGrowth:
         assert large["memory_chars"] < small["memory_chars"] * 5
 
     def test_memory_block_never_exceeds_hard_cap(self, tmp_path):
-        """No N should ever push the memory block past the 4000-char cap."""
+        """No N should ever push the memory block past the STABLE_MEMORY_PROMPT_CHARS cap."""
         _MARKER = TRUNCATION_MARKER
         for n in N_VALUES:
             row = measure_memory_prompt(tmp_path, n)
-            assert row["memory_chars"] <= 4000 + len(_MARKER), (
+            assert row["memory_chars"] <= STABLE_MEMORY_PROMPT_CHARS + len(_MARKER), (
                 f"N={n} produced a {row['memory_chars']}-char memory block, "
-                "exceeding the documented 4000-char hard cap"
+                f"exceeding the documented {STABLE_MEMORY_PROMPT_CHARS}-char hard cap"
             )
 
     def test_growth_saturates_well_below_8k_token_window(self, tmp_path):
         """The memory block alone must stay far under an 8,192-token budget.
 
-        4000 chars ~= 1000 tokens, so even a fully-saturated memory block
+        ~4250 chars ~= 1060 tokens, so even a fully-saturated memory block
         should leave ~7k tokens of an 8k window for tools + conversation.
         """
         row = measure_memory_prompt(tmp_path, 500)
@@ -481,7 +481,7 @@ def format_growth_summary(rows: List[Dict]) -> str:
     The slope is fit by simple linear regression over every row up to and
     including the first one that got truncated (or all rows, if the cap was
     never hit) -- i.e. the region where adding entries still visibly grows
-    the prompt, before per-category LIMITs and the 4000-char hard cap take
+    the prompt, before per-category LIMITs and the STABLE_MEMORY_PROMPT_CHARS hard cap take
     over and flatten it.
     """
     lines = []
@@ -505,9 +505,13 @@ def format_growth_summary(rows: List[Dict]) -> str:
         )
     saturated_at = growth_region[-1]["n"] if first_capped is not None else None
     if saturated_at is not None:
-        lines.append(f"Saturates (hits the 4000-char hard cap) at N<={saturated_at}")
+        lines.append(
+            f"Saturates (hits the STABLE_MEMORY_PROMPT_CHARS hard cap) at N<={saturated_at}"
+        )
     else:
-        lines.append(f"Never hit the 4000-char hard cap up to N={rows[-1]['n']}")
+        lines.append(
+            f"Never hit the STABLE_MEMORY_PROMPT_CHARS hard cap up to N={rows[-1]['n']}"
+        )
 
     for threshold in _TOKEN_THRESHOLDS:
         crossing = next((r["n"] for r in rows if r["approx_tokens"] > threshold), None)

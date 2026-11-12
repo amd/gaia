@@ -64,3 +64,17 @@ class LemonadeNotAnsweringError(DaemonError):
     The daemon neither starts a second server nor stops this one, so the caller
     may wait and ask again.
     """
+
+
+class LemonadeStartFailedError(DaemonError):
+    """The daemon tried to start GAIA's Lemonade Server and could not.
+
+    Only the daemon's failure reply to ``/lemonade/ensure``: an unreachable,
+    busy or outdated daemon, or one with no server of its own to start, raises
+    plain :class:`DaemonError` (or a sibling) instead. ``reason`` is what the
+    daemon said went wrong.
+    """
+
+    def __init__(self, message: str, reason: str):
+        super().__init__(message)
+        self.reason = reason
