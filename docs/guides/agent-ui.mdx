@@ -522,11 +522,12 @@ system settings, the dots hold still.
 - **Once the answer is in**, the steps between two notes fold into one line
   ("Read web page, read file") you can open for the detail, and reasoning
   folds to "Thought for 8s".
-- **The line under an answer** says how long it took, where it ran, when
-  the first word came and how many steps GAIA took ("Answered in 40 s on your
-  GPU · first word in 1 s · 3 steps", or "via Fireworks AI" for a cloud model).
-  "Steps" is the agent's own count, the same figure the TUI and evals report. Click it for the exact numbers,
-  including the tokens the whole turn read and wrote across every model call.
+- **The line under an answer** says how long it took and where it ran
+  ("Answered in 40 s on your GPU", or "via Fireworks AI" for a cloud model).
+  Hover or click it for the rest: when the first word came, how many steps GAIA
+  took, and the exact numbers, including the tokens the whole turn read and
+  wrote across every model call. "Steps" is the agent's own count, the same
+  figure the TUI and evals report.
   Files the answer names by full path,
   such as a saved deliverable, open in your file explorer when clicked. So does
   a file the answer names only by file name, in code formatting, when it is one

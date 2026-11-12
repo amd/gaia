@@ -29,6 +29,10 @@ export function isLongUserMessage(text: string): boolean {
 
 /** Lines a collapsed user message keeps at each end. */
 export const USER_EXCERPT_LINES = 3;
+/** A kept line is cut past this, so one huge pasted line cannot fill the preview. */
+export const USER_EXCERPT_LINE_CHARS = 300;
+
+const clipLine = (line: string) => (line.length > USER_EXCERPT_LINE_CHARS ? `${line.slice(0, USER_EXCERPT_LINE_CHARS)}…` : line);
 
 /**
  * The start and end of a long message, so a question typed after a pasted
@@ -38,8 +42,8 @@ export function messageExcerpt(text: string): { head: string; tail: string; hidd
     const lines = text.split('\n');
     if (lines.length <= USER_COLLAPSE_LINES) return null;
     return {
-        head: lines.slice(0, USER_EXCERPT_LINES).join('\n'),
-        tail: lines.slice(-USER_EXCERPT_LINES).join('\n'),
+        head: lines.slice(0, USER_EXCERPT_LINES).map(clipLine).join('\n'),
+        tail: lines.slice(-USER_EXCERPT_LINES).map(clipLine).join('\n'),
         hidden: lines.length - 2 * USER_EXCERPT_LINES,
     };
 }

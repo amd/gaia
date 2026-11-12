@@ -89,6 +89,19 @@ describe('long user messages', () => {
         expect(shown).toContain('So which line is longest?');
     });
 
+    it('cuts a huge first or last line short, so the preview stays small', () => {
+        const content = `${'x'.repeat(20_000)}\n${numbered(200)}\n${'y'.repeat(20_000)}`;
+        const { container } = render(<MessageBubble message={{ ...base, content }} />);
+
+        const shown = container.querySelector('.msg-excerpt')!.textContent ?? '';
+        expect(shown.length).toBeLessThan(1000);
+        expect(shown).toContain(`${'x'.repeat(300)}…`);
+        expect(shown).toContain(`${'y'.repeat(300)}…`);
+
+        fireEvent.click(screen.getByRole('button', { name: /Show all/ }));
+        expect(container.querySelector('.msg-collapsible')!.textContent).toContain('x'.repeat(20_000));
+    });
+
     it('counts characters when the length is in one long line', () => {
         render(<MessageBubble message={{ ...base, content: 'x'.repeat(60_000) }} />);
 
