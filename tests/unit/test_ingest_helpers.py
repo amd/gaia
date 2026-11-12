@@ -32,18 +32,28 @@ def test_ingest_image_to_vlm_monkeypatch(monkeypatch):
         os.remove(path)
 
 
-def test_ingest_document_to_rag_monkeypatch(monkeypatch, tmp_path):
-    # Patch RAGSDK to avoid heavy dependencies
-    class DummyRAG:
-        def __init__(self, cfg):
-            pass
+class _Session:
+    def __init__(self, rag_enabled):
+        self.rag_enabled = rag_enabled
+        self.calls = []
 
-        def index_document(self, file_path):
-            return {"success": True, "file_name": os.path.basename(file_path)}
+    def enable_rag(self, documents):
+        self.calls.append(("enable_rag", documents))
+        self.rag_enabled = True
+        return True
 
-    monkeypatch.setattr("gaia.messaging.ingest.RAGSDK", DummyRAG)
+    def add_document(self, path):
+        self.calls.append(("add_document", path))
+        return True
 
-    p = tmp_path / "doc.txt"
-    p.write_text("hello world")
-    res = ingest_document_to_rag(str(p))
-    assert res.get("success") is True
+
+def test_first_document_enables_rag_on_the_session():
+    session = _Session(rag_enabled=False)
+    assert ingest_document_to_rag("doc.txt", session) is True
+    assert session.calls == [("enable_rag", ["doc.txt"])]
+
+
+def test_later_documents_are_added_to_the_same_index():
+    session = _Session(rag_enabled=True)
+    assert ingest_document_to_rag("doc2.txt", session) is True
+    assert session.calls == [("add_document", "doc2.txt")]

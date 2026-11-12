@@ -13,8 +13,8 @@ import logging
 import os
 from typing import Any, Dict
 
+from gaia.chat.sdk import AgentSDK
 from gaia.llm.vlm_client import VLMClient
-from gaia.rag.sdk import RAGSDK, RAGConfig
 
 log = logging.getLogger(__name__)
 
@@ -29,7 +29,8 @@ def ingest_image_to_vlm(image_path: str, vlm_model: str = None) -> Dict[str, Any
 
     try:
         client = VLMClient(vlm_model=vlm_model) if vlm_model else VLMClient()
-        image_bytes = open(image_path, "rb").read()
+        with open(image_path, "rb") as f:
+            image_bytes = f.read()
         text = client.extract_from_image(image_bytes)
         return {"status": "success", "text": text, "model": client.vlm_model}
     except Exception as e:  # pragma: no cover - integration depends on Lemonade
@@ -37,14 +38,11 @@ def ingest_image_to_vlm(image_path: str, vlm_model: str = None) -> Dict[str, Any
         return {"status": "error", "error": str(e), "path": image_path}
 
 
-def ingest_document_to_rag(
-    file_path: str, config: RAGConfig | None = None
-) -> Dict[str, Any]:
-    """Index a document into the RAG index via RAGSDK.index_document.
+def ingest_document_to_rag(file_path: str, session: AgentSDK) -> bool:
+    """Index a document into ``session`` so that chat's replies can draw on it.
 
-    Returns whatever `RAGSDK.index_document` returns (a dict of stats).
+    Returns True when the document was indexed.
     """
-    cfg = config or RAGConfig()
-    rag = RAGSDK(cfg)
-    result = rag.index_document(file_path)
-    return result
+    if session.rag_enabled:
+        return session.add_document(file_path)
+    return session.enable_rag(documents=[file_path])

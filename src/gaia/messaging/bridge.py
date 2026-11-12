@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Deque, Dict, List, Optional, Sequence, Set
 
 from gaia.logger import get_logger
-from gaia.stream_timeout import DEFAULT_STREAM_TIMEOUT_SECONDS, stream_timeout_from_env
+from gaia.stream_timeout import stream_timeout_from_env
 
 log = get_logger(__name__)
 
@@ -73,11 +73,6 @@ NEEDS_CONFIRMATION = "needs_confirmation"
 #: Console script installed by the ``gaia-agent-gaia`` wheel
 #: (``[project.scripts] gaia-agent = "gaia_agent.entry:main"``).
 DEFAULT_AGENT_BINARY = "gaia-agent"
-
-#: How long a turn may go without progress before it is stopped: the Agent
-#: UI's window, set by the same ``GAIA_STREAM_TIMEOUT``. A running tool or a
-#: pending approval is not idle; each has its own deadline.
-DEFAULT_TURN_IDLE_SECONDS = float(DEFAULT_STREAM_TIMEOUT_SECONDS)
 
 #: How many times one channel restarts a wedged agent within
 #: ``RESTART_WINDOW_SECONDS`` before it gives up.
