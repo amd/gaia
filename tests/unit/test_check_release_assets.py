@@ -480,7 +480,14 @@ def test_the_step_passes_the_skip_flag_only_for_an_rc_without_a_setup(
     subprocess.run([bash, "-c", step["run"]], env=env, check=True)
     args = (tmp_path / "args").read_text(encoding="utf-8").splitlines()
     assert ("--skip-windows-setup" in args) is skipped
-    assert args[:3] == ["util/check_release_assets.py", "--repo", "amd/gaia"]
+    # The check runs inside util/gh_retry.py, which waits out a spent API budget.
+    assert args[:4] == ["util/gh_retry.py", "--max-wait-seconds", "3600", "--"]
+    assert args[4:8] == [
+        "python3",
+        "util/check_release_assets.py",
+        "--repo",
+        "amd/gaia",
+    ]
 
 
 def test_the_binaries_match_the_ones_the_release_checksums(jobs):

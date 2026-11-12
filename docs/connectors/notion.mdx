@@ -1,0 +1,42 @@
+---
+title: "Notion"
+icon: "book"
+description: "Let GAIA search, read and edit your Notion pages."
+---
+
+<Info>
+  **Connector ID:** `mcp-notion` · **Type:** `mcp_server` · **Package:** `@notionhq/notion-mcp-server@2.5.2` (launched with `npx`; needs Node 18+)
+</Info>
+
+## Step 1 — Create an integration
+
+1. Open <a href="https://www.notion.so/profile/integrations" target="_blank">notion.so/profile/integrations</a> → **New integration** (type: Internal).
+2. Copy the **Internal Integration Secret** (starts with `ntn_`).
+3. On each page or database GAIA may use: **⋯** → **Connections** → add your integration. GAIA sees nothing you haven't shared.
+
+## Step 2 — Configure GAIA
+
+```bash
+gaia connectors configure mcp-notion --set NOTION_TOKEN=ntn_...
+```
+
+Or in the Agent UI: **Connectors** in the sidebar → **Notion** → paste the secret → **Save**.
+
+The secret is stored in your OS keyring; `~/.gaia/mcp_servers.json` holds only a `$keyring` reference.
+
+## Step 3 — Use it
+
+Grant and activate it for the agent (the tile's **Per-agent** toggle does both):
+
+```bash
+gaia connectors grants grant mcp-notion installed:gaia --scopes "*"
+gaia connectors activations activate mcp-notion installed:gaia
+```
+
+Then click **Personalize GAIA** on the tile, or type `/connectors personalize mcp-notion` in the TUI, if you want GAIA to learn from your recent activity. It's optional — see [Connectors](/connectors#personalize-gaia).
+
+<Note>Grant the integration read-only capabilities in Notion if GAIA should never edit pages.</Note>
+
+## Revoking access
+
+`gaia connectors disconnect mcp-notion`, or **Disconnect** on the tile. Revoke the token at the provider too if it may have leaked.

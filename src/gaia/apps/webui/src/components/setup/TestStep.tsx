@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { Check, Circle, Loader2, Minus, X } from 'lucide-react';
 import { useT, type Translate } from '../../i18n/useT';
+import { displayModelName } from '../../stores/modelStore';
 import type { SetupCatalogEntry, SetupRunStatus, SetupTest } from '../../types';
 import { ConfirmSheet } from './ConfirmSheet';
 import { formatSize } from './format';
@@ -76,6 +77,8 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
     const agentNotInstalled = stopped && run.components?.agent === 'failed';
     // Only a model's own failure is helped by choosing another model; a missing assistant isn't one.
     const modelAtFault = required.some((r) => r.subject && r.kind !== 'missing');
+    // Between two tests the run is still at work: the next one is starting, not waiting.
+    const startingJob = run.state === 'verifying' && !rows.some((r) => r.state === 'running') ? waiting[0] : undefined;
     return (
         <>
             <section className="setup-card" aria-label={t('setup.test.title')}>
@@ -90,7 +93,7 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                             <Icon state={r.state} />
                             <span className="setup-result-label">
                                 {jobLabel(r.job, t)}
-                                {r.subject && <bdi className="setup-result-model"> {names[r.subject] ?? r.subject}</bdi>}
+                                {r.subject && <bdi className="setup-result-model"> {names[r.subject] ?? displayModelName(r.subject)}</bdi>}
                             </span>
                             <span className="setup-result-value">{resultText(r, t)}</span>
                             {r.error && (
@@ -111,6 +114,12 @@ export function TestStep({ run, expected, names, catalog, onRetry, onChooseAnoth
                             <span className="setup-result-label">{jobLabel(job, t)}</span>
                             <span className="setup-result-value">{t('setup.test.failed')}</span>
                             <div className="setup-result-error"><p>{t('setup.test.why.hub')}</p></div>
+                        </li>
+                    ) : job === startingJob ? (
+                        <li key={job} className="setup-result is-running">
+                            <Icon state="running" />
+                            <span className="setup-result-label">{jobLabel(job, t)}</span>
+                            <span className="setup-result-value">{t('setup.test.starting')}</span>
                         </li>
                     ) : (
                         <li key={job} className="setup-result is-waiting">

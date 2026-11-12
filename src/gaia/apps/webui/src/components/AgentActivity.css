@@ -130,9 +130,8 @@
     color: var(--text-primary);
 }
 
+/* Opened reasoning grows with the chat; a nested scroll box inside a scrolling page is hard to read. */
 .flow-thought-hacker {
-    max-height: 200px;
-    overflow-y: auto;
     margin-top: 4px;
     padding: 6px 8px;
     font-size: 13px;
@@ -141,48 +140,24 @@
     line-height: 1.6;
     word-break: break-word;
     white-space: pre-wrap;
+    /* Each line of reasoning takes its own direction, whatever the app's language. */
+    unicode-bidi: plaintext;
+    text-align: start;
     border-radius: var(--radius-xs);
     background: var(--bg-recessed);
     border: 1px solid var(--border-recessed);
 }
 
-.flow-thought-hacker::-webkit-scrollbar {
-    width: 4px;
-}
-.flow-thought-hacker::-webkit-scrollbar-track {
-    background: transparent;
-}
-.flow-thought-hacker::-webkit-scrollbar-thumb {
-    background: color-mix(in srgb, var(--accent) 20%, transparent);
-    border-radius: 0;
-}
-
-.flow-thought-cursor {
-    display: inline-block;
-    width: 0.55em;
-    height: 1.1em;
-    background: var(--accent);
-    vertical-align: text-bottom;
-    margin-inline-start: 1px;
-    animation: cursorBlink var(--duration-blink) var(--ease-step) infinite;
-}
-
-/* Live reasoning shows its last lines, fading out at the top, until opened. */
-.flow-thought-hacker.peek {
-    max-height: 4.8em;
-    overflow: hidden;
-    margin-block: 2px 0;
-    margin-inline: 20px 0;
-    padding: 0;
-    font-size: 12.5px;
+/* A call the model reasoned before; the reasoning opens with the call's detail. */
+.flow-tool-thought-mark {
+    display: inline-flex;
+    margin-inline-end: 6px;
     color: var(--text-muted);
-    background: none;
-    border: none;
-    -webkit-mask-image: linear-gradient(to bottom, transparent, currentColor 45%);
-    mask-image: linear-gradient(to bottom, transparent, currentColor 45%);
 }
-
-/* @keyframes cursorBlink is defined globally in index.css */
+.flow-tool-thought {
+    display: flex;
+    flex-direction: column;
+}
 
 /* .thinking-dots styles are defined globally in index.css */
 
@@ -1040,11 +1015,6 @@
     .flow-steps.live .flow-error,
     .flow-steps.live .flow-policy-alert {
         animation: none;
-    }
-
-    .flow-thought-cursor {
-        animation: none;
-        opacity: 1;
     }
 
     .flow-tool-left > svg,
