@@ -2604,7 +2604,7 @@ export const enMessages = {
     'schedules.create': 'Create Schedule',
     'schedules.creating': 'Creating...',
     'schedules.createFailed': 'Failed to create schedule',
-    'schedules.list': 'Active schedules',
+    'schedules.list': 'Your schedules',
     'schedules.dismissError': 'Dismiss error',
     'schedules.loading': 'Loading schedules...',
     'schedules.loadFailed': 'Failed to load schedules',

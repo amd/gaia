@@ -93,6 +93,24 @@ describe('Scheduled tasks in Arabic', () => {
         expect(leftoverEnglish(container)).toEqual([]);
         for (const a of attrs(container)) expect(a, a).toMatch(/[؀-ۿ]/);
     });
+
+    it('says a paused task is paused, not that it never runs', () => {
+        useScheduleStore.setState({ schedules: [schedule] });
+        render(<ScheduleManager />);
+        expect(screen.getByText(readsAs('التشغيل التالي: متوقفة مؤقتًا (Next: paused)'))).toBeInTheDocument();
+    });
+});
+
+describe('Scheduled tasks in English', () => {
+    beforeEach(() => act(() => useChatStore.getState().setLocale('en')));
+
+    it('heads the list for every status and shows a paused task as paused', () => {
+        useScheduleStore.setState({ schedules: [schedule] });
+        render(<ScheduleManager />);
+        expect(screen.getByRole('heading', { name: 'Your schedules' })).toBeInTheDocument();
+        expect(screen.getByText('Next: paused')).toBeInTheDocument();
+        expect(screen.queryByText('Next: never')).not.toBeInTheDocument();
+    });
 });
 
 describe('formatNextRun', () => {
