@@ -33,8 +33,7 @@ gaia-tui
 </Note>
 
 <Warning>
-  This binary boots straight into the flagship, and it does not install, uninstall,
-  search, or vote on agents — that stays the Python CLI's job (`gaia hub install email` for the email agent).
+  This binary boots straight into the flagship, and it does not install, uninstall, search, or vote on agents.
   An earlier version of the TUI opened on an agent browser that did all of that,
   with the flagship listed as "Coming Soon." That screen, and the `list` / `install` /
   `uninstall` / `hub` subcommands that drove it, are gone for good.
@@ -48,8 +47,8 @@ gaia-tui
 
 Every release publishes a native installer per platform at
 [amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform). Each puts
-two binaries on disk and on your PATH — `gaia-tui` (this app) and `gaia-agent` (the flagship agent
-it runs) — so there is nothing to unzip and nothing to `chmod`.
+three programs on disk and on your PATH — `gaia-tui` (this app), `gaia-agent` (the flagship agent
+it runs) and `gaia` (the command line) — so there is nothing to unzip and nothing to `chmod`.
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
@@ -59,7 +58,7 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
 | Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo dnf install ./gaia-<version>.x86_64.rpm` | `/usr/bin` |
 
-On macOS and Linux the package carries only those two binaries. The first time you
+On macOS and Linux the package carries only those three programs. The first time you
 open GAIA, setup installs the rest of GAIA (its Python part, the `gaia` command) into
 `~/.gaia`. That takes about two minutes and needs internet. The one-line installer
 (`curl -fsSL https://amd-gaia.ai/install.sh | sh`) installs it up front instead.
@@ -114,14 +113,16 @@ A macOS `.pkg` ships no uninstaller — that is the platform convention, not an
 omission — so remove the files and then forget the receipt:
 
 ```bash
-sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
+sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/bin/gaia
+sudo rm -rf /usr/local/lib/gaia
 sudo rm -rf /usr/local/share/doc/gaia-tui
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
+sudo pkgutil --forget ai.amd.gaia.terminal-hub.core
 sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
 ```
 
-There are two receipts because the tools and the licence ship as separate
-components — forget both. `pkgutil --forget` drops only the installation receipt
+There are three receipts because the tools, the `gaia` command and the licence ship as separate
+components — forget all three. `pkgutil --forget` drops only the installation receipt
 and deletes nothing, which is why the `rm` comes first. `~/.gaia` is untouched either way.
 
 macOS packages are unsigned unless the release was built with Apple credentials
@@ -430,7 +431,7 @@ chat model, and the embedding model that document search and memory use — and
 only then says it is ready, naming the chat model and its size:
 
 ```
-  Setup finished and the models load. Chat runs on Gemma-4-E4B-it-GGUF (5.6 GB,
+  Setup finished and the models load. Chat runs on Gemma-4-E4B-it-GGUF (6.0 GB,
   on this machine). Press enter to start GAIA.
 ```
 
@@ -549,16 +550,16 @@ the same work.
 Once the gate clears, GAIA starts the agent and drops you into the conversation:
 
 ```
-GAIA │ agent gaia v0.2.0 │ Gemma-4-E4B-it-GGUF
+GAIA │ agent gaia v0.3.5 │ Gemma-4-E4B-it-GGUF
 ────────────────────────────────────────────────────────────────────────────────
 Welcome to GAIA
-Connected to: agent gaia v0.2.0 (GAIA core 0.25.0)
+Connected to: agent gaia v0.3.5 (GAIA core 0.26.0)
 
 Type a message and press Enter to start chatting.
 Type /help for available commands.
 ────────────────────────────────────────────────────────────────────────────────
 ┃ Ask anything... (Enter to send, Ctrl+C to quit)
-  ● agent gaia v0.2.0 connected                                     Ctrl+C quit
+  ● agent gaia v0.3.5 connected                                     Ctrl+C quit
 ```
 
 The `agent <id>` segment is always the stable id, lowercased — the same string
@@ -970,14 +971,6 @@ gaia-tui run email --query "triage my inbox"   # one-shot: answer on stdout
 gaia-tui chat --agent email                    # same thing, via `chat`
 ```
 
-Installing or removing it is the Python CLI's job:
-
-```bash
-gaia hub list
-gaia hub install email
-gaia hub uninstall email
-```
-
 ## Colours (light vs dark terminals)
 
 Colours adapt to your terminal automatically. Some terminals never answer that
@@ -1011,7 +1004,7 @@ what is installed.
 **Model server** line, and `/provider` shows the same under **Local**:
 
 ```text
-Model server:        Lemonade 2026.41.1 (GAIA's own) at localhost:51234 · Qwen3.6-35B-A3B-GGUF on Vulkan (default), 64K ctx
+Model server:        Lemonade 2026.44.1 (GAIA's own) at localhost:51234 · Qwen3.6-35B-A3B-GGUF on Vulkan (default), 64K ctx
 ```
 
 `(default)` means Lemonade picked the backend; `unknown` means this Lemonade

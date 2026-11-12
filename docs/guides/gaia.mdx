@@ -29,8 +29,8 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 | | |
 |---|---|
 | Local model server | Lemonade **2026.44.1** or newer, running |
-| Model | `Gemma-4-E4B-it-GGUF` (downloaded) |
-| RAM | 8 GB minimum |
+| Model | Follows your hardware: `Gemma-4-E4B-it-GGUF` on most PCs, `Qwen3.6-35B-A3B-GGUF` where it fits (downloaded) |
+| RAM | 16 GB minimum |
 | Platforms | Windows x64, Linux x64, macOS Apple Silicon |
 
 Install Lemonade, download the model, and start the server:
@@ -206,7 +206,7 @@ The browser's acting tools are gated by *situation* rather than by name: clickin
   declined, rather than running it.
 </Warning>
 
-In the Agent UI, a Hub-installed GAIA asks with **Allow once** or **Deny** above the message box, and the answer goes back to that same run. It doesn't offer **Always allow**: that grant would live in the agent's own process, where the chat could neither list nor revoke it. An unanswered prompt is denied when the agent's wait runs out. This needs an agent build with contract 2.14 or later. An older build can't wait for an answer, so it ends the turn and names the action it skipped.
+In the Agent UI, a GAIA agent that runs as its own process asks with **Allow once**, **Always allow** or **Deny** above the message box, and the answer goes back to that same run. **Always allow** needs agent contract 2.26 or later, so the chat can list and revoke the grant; on a build older than 2.26 only **Allow once** and **Deny** appear. An unanswered prompt is denied when the agent's wait runs out. This needs an agent build with contract 2.14 or later. An older build can't wait for an answer, so it ends the turn and names the action it skipped.
 
 ### The agent reads a file before it changes it
 
@@ -310,7 +310,7 @@ Only **`query`**, **`run_id`**, and **`context`** are required; everything else 
 - **`context` is pushed in the body**, never pulled, and must be present even when empty (`[]`) — omitting it is itself a 422. Pass `session_id` too — the agent persists its indexed-document set per session, and without it the agent forgets a document between the turn that indexed it and the next question.
 - **Set `can_answer_questions: false` for one-shot runs.** With nobody there to answer, the agent resolves ambiguity itself instead of parking on a question that reads as a hang.
 - **A failed model request names the endpoint it went through** (contract >= 2.20), and its advice points at the model server the GAIA host uses (`LEMONADE_BASE_URL`). A front-end with its own settings screen sends `surface` (`"tui"`, `"agent_ui"` or `"cli"`) to get its own wording; a headless caller omits it.
-- **`internet_off` takes a chat offline** (contract >= 2.23): `true` refuses web search, page fetches, the browser, connector and Agent Hub tools, mailbox and calendar access, and commands that contact another host. It is a filter on the tool calls GAIA recognises, not a firewall: scripts and skill tools whose destinations GAIA cannot inspect may still reach the network. The refusal tells the model the internet is off for this chat. Send it every turn, because a retained session keeps the last value. To change it during a running turn, `POST /v1/gaia/sessions/{session_id}/internet` with `{"internet_off": true}` (or `false`); the next tool call follows it. Post it only once `/query` has answered, because the turn's own `internet_off` replaces a switch sent earlier; re-read the switch then and post it if it changed.
+- **`internet_off` takes a chat offline** (contract >= 2.23): `true` refuses web search, page fetches, the browser, connector and skill-hub tools, mailbox and calendar access, and commands that contact another host. It is a filter on the tool calls GAIA recognises, not a firewall: scripts and skill tools whose destinations GAIA cannot inspect may still reach the network. The refusal tells the model the internet is off for this chat. Send it every turn, because a retained session keeps the last value. To change it during a running turn, `POST /v1/gaia/sessions/{session_id}/internet` with `{"internet_off": true}` (or `false`); the next tool call follows it. Post it only once `/query` has answered, because the turn's own `internet_off` replaces a switch sent earlier; re-read the switch then and post it if it changed.
 - **`final` reports how full the model's window is** (contract >= 2.21): its `context` field gives the window size, the tokens the next call will take and what takes them. A stopped or failed turn leaves it out.
 - **The model's reasoning can stream on its own** (contract >= 2.22): send `reasoning: true` and it arrives as `reasoning` events with a `delta`, apart from `status` lines and the answer. A model whose chat template opens the reasoning block streams it as `token`s until its `</think>`; the `reasoning` event that follows carries `retracts_answer: true`, so drop the `token` text since the last `tool_call` from the answer. Without the field it folds into `status` lines.
 - **A reply cut off by a model-server restart is taken back.** When GAIA's model server stops part-way through a reply, the step runs again once it is back, and a `status` with phase `answer_restart` and `retracts_answer: true` comes first: drop the `token` text since the last `tool_call` and show its `message` in its place. While the server restarts, `status` lines carry phase `model_restart`, also when it stopped under a tool's own model calls; a long document extraction reports each page with phase `reading` ("Reading page 4 of 12…").

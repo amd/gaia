@@ -136,9 +136,9 @@ eval/scenarios/
 
 ### Flagship gaia-agent categories
 
-The `gaia_`-prefixed categories target the flagship agent end-to-end (every
-scenario in them sets `agent_type: gaia`) and run via
-`gaia eval agent --agent-type gaia --category <name>`. Fixture values they
+The `gaia_`-prefixed categories target the flagship agent end-to-end (no scenario sets
+`agent_type`; they score the `--agent-type` default, the flagship `gaia`) and run via
+`gaia eval agent --category <name>`. Fixture values they
 assert are pinned in `eval/scenarios/GAIA_FIXTURE_VALUES.md`; fixtures live
 under `tests/fixtures/gaia/` and are staged to `~/gaia-eval/` at run time
 (the flagship sandboxes file access to the home directory — user messages
@@ -176,6 +176,8 @@ records `SKIPPED_NO_MODEL` with the reason instead of running it.
 | `gaia_voice` | How the agent talks: short plain answers to everyday questions, deeper answers on "why?" / "tell me more", stated style preferences kept across turns and sessions, latest preference wins, matching a technical vs non-technical user |
 | `gaia_media` | Committed fixtures only: transcribe a voice memo and quote it (`transcribe_media` / `refine_transcript`), read planted text off an image through the VLM |
 | `gaia_email` | Mailbox read/answer, find-by-recollection, whole-inbox triage and money-owed sweeps over an offline fixture mailbox; phishing lures never turned into advice, injected and exfiltration instructions ignored, ambiguous references asked about, and an honest connect step when no mailbox is connected. The backend needs `GAIA_EVAL_MAILBOX` pointing at `tests/fixtures/gaia/email/eval_inbox.mbox` — the mail tools then read it instead of any connected account |
+| `gaia_git` | 15 scenarios on a fixture repo: blame, status, branch compare, selective commits, merge conflicts, rebase, regression hunt, and refusals to rewrite published history, leak a remote token or run hostile hooks |
+| `gaia_mcp` | 3 scenarios: MCP tool use only when it fits better than a built-in, honest reporting when a server is down, and a planted tool answer not trusted |
 | `gaia_resilience` | What the agent does after a "no": a declined effect is never reached through another tool, and the reply says what is blocked and what would unblock it |
 
 ---

@@ -278,7 +278,7 @@ Pick the install path that fits you best:
   </Tab>
 
   <Tab title="npm">
-    The npm package handles everything — on first run it auto-installs Python, the GAIA backend, Lemonade Server, and a minimal model.
+    The npm package handles everything — on first run it installs Python and the GAIA backend into `~/.gaia/venv`. The model server and models are set up in the app's first-run setup, where you choose cloud or local.
 
     **Requires:** [Node.js 20+](https://nodejs.org) (`winget install OpenJS.NodeJS.LTS` on Windows, `brew install node@22` on macOS)
 
@@ -594,7 +594,7 @@ Open **Settings → Model** (or the model chip in the message box):
 
 | Provider | What it needs | Where your chat goes |
 |---|---|---|
-| **Local** | Nothing; pick CPU, GPU or NPU for new chats | Stays on this PC |
+| **Local** | Nothing; each model runs on the device it was built for (GPU or NPU) | Stays on this PC |
 | **Fireworks AI** | An API key | Sent to Fireworks AI (usage may be charged) |
 | **AMD LLM Gateway** | A gateway key (and URL, if not the default) | Sent to your gateway |
 
@@ -678,7 +678,7 @@ with `LEMONADE_BASE_URL`: GAIA never unloads its models or stops it.
 
 *llama.cpp backend for chat models* offers only the backends GAIA has tested:
 **Vulkan** for the GPU. A chat model on a Ryzen AI NPU runs on FastFlowLM
-instead; choose one with **Change model**, or under **Backend** when you
+instead; choose one with **Change model**, or under **Run on** when you
 Customize setup. A different backend saved earlier still loads and shows here,
 so you can switch it to Vulkan. The choice applies the next time the chat model
 loads; **Reload chat model now** applies it at once. The embedding model keeps
@@ -764,7 +764,7 @@ The next new chat follows it right away, unless you already picked a mode on
 the message box's shield for that chat. Chats already open keep their mode. It
 can only be changed on the PC running GAIA, not from a phone over mobile access.
 
-A Hub-installed GAIA, which runs as its own process, follows the chat's mode
+A GAIA agent that runs as its own process follows the chat's mode
 too, from agent contract 2.14. It stops asking, but its shell guardrails stay
 on, so those commands still reach you as a confirmation. If the mode can't be
 passed on when a turn starts, that turn stops with an error, so it never runs
@@ -816,7 +816,7 @@ reads nothing.
     you add it back. A document attached to the chat is removed from the
     document bar instead, which also takes it out of the chat's search.
   - **Internet:** this is a filter, not a firewall. Turn it off and GAIA
-    refuses recognised web, browser, connector, mailbox, Agent Hub and
+    refuses recognised web, browser, connector, mailbox, skill-hub and
     network-command tools (such as `git push`, `pip install` or `npx`).
     Commands that talk only to this PC, such as `curl http://localhost:3000`,
     still run. Skill tools, scripts and commands that hide their destination
@@ -832,7 +832,7 @@ reads nothing.
     the message box. It covers this chat only; new chats follow **Settings →
     Permissions**.
 
-  A Hub-installed GAIA, which runs as its own process, is held to the
+  A GAIA agent that runs as its own process is held to the
   internet setting. It can be given another folder, but a folder can't be
   taken away from it. Turning the internet off while it is working,
   or while your message is still starting, stops its next web search, not
@@ -945,7 +945,7 @@ The model chip in the composer opens the same list. While GAIA is answering,
 a model you pick there applies to your next message. On most PCs, a local
 model you pick starts loading right away, and a banner counts the seconds; you
 can type meanwhile, and a message waits for the load. On a PC with under 24 GB
-of RAM, or when the GAIA agent runs as a Hub install, it loads with your first
+of RAM, or when the GAIA agent runs as its own process, it loads with your first
 message instead. If the model can't load, for
 example because other apps hold the memory it needs, the banner says why and
 offers **Try again**. The model pill
@@ -1080,7 +1080,7 @@ The version list only shows releases that have an installer for your current pla
 
 ## Sessions and Shortcuts
 
-Sessions let you organize conversations by topic. They sync between the CLI (`gaia chat`) and the Agent UI — start in one, pick up in the other. Export any session as Markdown or JSON from the session menu.
+Sessions let you organize conversations by topic. Export any session as Markdown or JSON from the session menu.
 
 | Shortcut | Action |
 |----------|--------|
@@ -1359,7 +1359,7 @@ The agent supports the **Model Context Protocol** in both directions — connect
     You can also manage MCP servers through the Agent UI settings panel or with the CLI:
 
     ```bash
-    gaia mcp status
+    gaia mcp list
     ```
   </Accordion>
 </AccordionGroup>
@@ -1404,7 +1404,7 @@ For the REST API reference and backend classes, see the [Agent UI SDK Reference]
     REST endpoints, database schema, and Python backend API
   </Card>
 
-  <Card title="Document Q&A Agent" icon="file-lines" href="/guides/chat">
+  <Card title="Document Q&A" icon="file-lines" href="/guides/chat">
     CLI-based document agent with RAG, debug mode, and chunking strategies
   </Card>
 

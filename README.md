@@ -86,7 +86,7 @@ print(result)
 - **Agent UI** — Privacy-first desktop app with chat, file browser, document indexing, and tool execution
 - **RAG System** — Document indexing and semantic search for Q&A over 50+ file formats
 - **Voice Integration** — Whisper ASR + Kokoro TTS for speech interaction (P0 enabling technology)
-- **Vision Models** — Extract text from images with Qwen3-VL-4B
+- **Vision Models** — Extract text from images with Gemma 4 E4B (Qwen3-VL-4B also supported)
 - **MCP Integration** — Connect to any MCP server for external tool access
 - **Skills** — Extend the GAIA agent with a `SKILL.md`, no code required ([guide](https://amd-gaia.ai/docs/guides/starter-skills))
 
@@ -126,7 +126,7 @@ For complete setup instructions including Lemonade Server, see the **[Quickstart
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
 | **Processor** | AMD Ryzen AI 300-series | AMD Ryzen AI Max+ 395 |
-| **OS** | Windows 11, Linux | - |
+| **OS** | Windows 10/11, macOS 14+ (Apple Silicon), Linux (glibc 2.38+, e.g. Ubuntu 24.04+) | - |
 | **RAM** | 16GB | 64GB |
 
 ---

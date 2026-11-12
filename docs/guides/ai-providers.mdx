@@ -38,9 +38,10 @@ Fireworks deployment or silently substitute another model when a recommended one
 Fireworks chat sends conversation history to Fireworks and may incur usage charges.
 
 For **AMD LLM Gateway**, enter your organization's OpenAI-compatible HTTPS base
-URL. The default authentication header is `Authorization`, with the prefix
-`Bearer ` (including its trailing space). For gateways using a bare API key,
-enter the required header name and leave the prefix empty. Use **Tab** to move
+URL. The default authentication header is `Ocp-Apim-Subscription-Key`, with an
+empty prefix (the key is sent bare). For a gateway that wants a bearer token,
+enter `Authorization` as the header name and `Bearer ` (including its trailing
+space) as the prefix. Use **Tab** to move
 between fields, then paste the key and press **Enter**.
 
 Before you pick it, GAIA checks whether the gateway's host answers. Off your

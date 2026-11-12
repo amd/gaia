@@ -443,8 +443,8 @@ gaia skill info gpu-restock-watch
   Do not add a permission to look thorough — add it only if the skill needs it.
 - **`tools` and `tools_required` are different fields.** `tools` are `@tool`
   functions your skill *provides* (and must exist in its `tools.py`).
-  `tools_required` names registry tools it *consumes*. Only `rss-digest` uses
-  the former.
+  `tools_required` names registry tools it *consumes*. Five starter skills ship
+  a `tools.py`: `calculators`, `calendar`, `guides`, `rss-digest` and `send-email`.
 - **`pairs_with` names skills this one is usually combined with**, so the
   catalogue tells the model to load both. A name that is not installed is
   ignored, and no starter skill uses it today. See
@@ -518,7 +518,7 @@ cannot run, they are left out, with the specific blocker named:
 
 | Proposed | Blocker |
 |---|---|
-| `morning-brief` (scheduled voice digest to Telegram) | Three at once: the scheduler cannot run skills; there is no Gmail/Calendar/Weather connector in the catalog; the Telegram adapter has no voice-note path. `daily-brief` covers the composition half; the `text_to_speech` tool already covers the voice half. |
+| `morning-brief` (scheduled voice digest to Telegram) | Three at once: the scheduler cannot run skills; mail and calendar connectors exist, but there is no weather connector in the catalog; the Telegram adapter has no voice-note path. `daily-brief` covers the composition half; the `text_to_speech` tool already covers the voice half. |
 | `voice-research` (voice in, voice out) | The Telegram adapter handles photos and documents but not voice messages, so there is no way to get a spoken question in even though `text_to_speech` can speak the answer back out. |
 | `trading-alert` (RSI / unusual volume) | No finance connector in the catalog, and no historical price source to compute an indicator from. Alerting on a number the agent cannot actually obtain would be theatre. |
 | `email-triage` (Gmail triage over MCP) | There is no `gmail` connector id — Gmail is a *scope* of the `google` OAuth connector, not an MCP server with tools. The flagship reads mail through its own built-in tools instead, driven by the bundled `inbox-triage` skill: see the [Email guide](/guides/email). `github-triage` covers the same backlog-triage shape over a CLI grant. |

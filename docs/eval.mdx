@@ -16,9 +16,9 @@ icon: "microscope"
 
 ## Overview
 
-The Agent Eval Benchmark drives the live Agent UI through multi-turn conversations, then judges every response with an LLM (claude-sonnet-4-6 by default). Each scenario creates a real Agent UI session via MCP, sends user messages, captures the full transcript, and produces a scored evaluation.
+The Agent Eval Benchmark drives the live Agent UI through multi-turn conversations, then judges every response with an LLM (claude-opus-5 by default). Each scenario creates a real Agent UI session via MCP, sends user messages, captures the full transcript, and produces a scored evaluation.
 
-54 YAML scenario files span 10 categories covering RAG quality, context retention, tool selection, error recovery, hallucination resistance, adversarial inputs, personality compliance, vision capabilities, web/system tools, and real-world documents.
+366 YAML scenario files span 31 categories covering RAG quality, context retention, tool selection, error recovery, hallucination resistance, adversarial inputs, personality compliance, vision capabilities, web/system tools, and real-world documents.
 
 **Why this matters:** Unlike the general eval framework (which compares isolated model outputs), the Agent Eval Benchmark tests the **full system end-to-end** -- RAG indexing, tool dispatch, context window management, multi-turn state, and hallucination resistance -- through the same Agent UI that real users interact with.
 
@@ -45,13 +45,13 @@ flowchart TD
     MANIFEST(["eval/corpus/manifest.json"]) --> RUNNER
     PROMPTS(["eval/prompts/*.md\n(simulator · judge_turn · judge_scenario)"]) --> RUNNER
 
-    RUNNER -->|"claude -p subprocess\n--output-format json\n--json-schema\n--mcp-config eval/results/{run_id}/\nmcp-config.resolved.json\n--max-budget-usd"| EVAL(["Eval Agent\n(claude-sonnet-4-6)"])
+    RUNNER -->|"claude -p subprocess\n--output-format json\n--json-schema\n--mcp-config eval/results/{run_id}/\nmcp-config.resolved.json\n--max-budget-usd"| EVAL(["Eval Agent\n(claude-opus-5)"])
 
     EVAL -->|"MCP tool calls\n(create_session · send_message\nindex_document · get_messages\ndelete_session)"| MCPS(["gaia-agent-ui\nMCP Server"])
 
     MCPS --> API(["FastAPI Backend · port 4200"])
     API --> DB(["SQLite DB\ngaia_chat.db"])
-    API --> RAG(["FAISS Index\n~/.gaia/*.pkl"])
+    API --> RAG(["FAISS Index\n~/.gaia/cache/rag/"])
     API -->|"chat · embeddings"| LEM(["Lemonade Server · port 13305"])
 
     EVAL -->|"structured JSON\nto stdout"| SCORE(["Score Recompute\n& Status Derive\n(runner.py)"])
@@ -86,7 +86,7 @@ flowchart TD
 | `--output-format json --json-schema` | Forces the eval agent to emit a machine-parseable result dict. The runner never parses free-form text |
 | Prompts inlined into system prompt at runtime | The `claude -p` subprocess has no file-read tools. `simulator.md`, `judge_turn.md`, and `judge_scenario.md` are read by the runner and concatenated into the `-p` prompt string |
 | Score recomputed deterministically | The runner overwrites the eval agent's arithmetic using `_SCORE_WEIGHTS` — consistent results regardless of which model judges |
-| Progress tracking via `.progress.json` | Interrupted runs resume from the last completed scenario; corrupt or missing traces are re-run automatically |
+| Resumable runs | A run that stopped (for example, Claude ran out of quota) finishes with `gaia eval agent --resume RUN_DIR`, which runs only the scenarios that have no result |
 
 ---
 
@@ -238,8 +238,10 @@ The fixer subprocess (`claude -p fixer.md`) receives the `scorecard.json` path, 
     ```
   </Step>
 
-  <Step title="Set up the judge model API key">
-    The benchmark uses Claude as the judge model. Export your API key:
+  <Step title="Sign in to Claude">
+    The benchmark uses Claude as the driver and judge. Being signed in to Claude Code (or
+    having `CLAUDE_CODE_OAUTH_TOKEN` set) is enough. `ANTHROPIC_API_KEY`, from the environment or a
+    `.env`, is the fallback when there is no login. The eval prints which credential it uses:
 
     ```bash
     export ANTHROPIC_API_KEY=sk-ant-...
@@ -280,7 +282,7 @@ The fixer subprocess (`claude -p fixer.md`) receives the `scorecard.json` path, 
 ## Quick Start
 
 ```bash
-# Run the full benchmark (all 54 scenarios)
+# Run the full benchmark (all 366 scenarios)
 gaia eval agent
 
 # Run a single scenario by ID
@@ -301,16 +303,18 @@ Results are written to `eval/results/<run_id>/`.
 
 | Category | Scenarios | What It Tests |
 |----------|:---------:|---------------|
-| `rag_quality` | 7 | Factual extraction, hallucination resistance, negation handling, table/CSV data, cross-section synthesis, budget queries |
+| `rag_quality` | 16 | Factual extraction, hallucination resistance, negation handling, table/CSV data, cross-section synthesis, budget queries |
 | `context_retention` | 4 | Pronoun resolution, cross-turn file recall, multi-document context, conversation summary |
-| `tool_selection` | 4 | Choosing the right tool, smart discovery (no docs indexed -- find and index), multi-step planning, no-tool-needed detection |
+| `tool_selection` | 7 | Choosing the right tool, smart discovery (no docs indexed -- find and index), multi-step planning, no-tool-needed detection |
 | `error_recovery` | 3 | File-not-found graceful handling, empty search fallback, vague request clarification |
 | `adversarial` | 3 | Empty file, large document (>100k tokens), topic switching |
-| `personality` | 3 | Concise responses, no sycophancy, honest limitation acknowledgement |
+| `personality` | 4 | Concise responses, no sycophancy, honest limitation acknowledgement |
 | `vision` | 3 | Screenshot capture, VLM graceful degradation, SD graceful degradation |
-| `real_world` | 19 | Real PDFs, XLSX, specs (10-K filings, GDPR articles, RFC specs, technical datasheets, license texts, government data) |
+| `real_world` | 21 | Real PDFs, XLSX, specs (10-K filings, GDPR articles, RFC specs, technical datasheets, license texts, government data) |
 | `web_system` | 6 | Clipboard tools, desktop notifications, webpage fetching, window listing, system info, text-to-speech |
 | `captured` | 2 | Golden-path replays from real Agent UI sessions |
+
+The other 21 category directories (the `gaia_*` flagship categories, `memory` and `mcp_reliability`) hold the remaining scenarios. `eval/ci_lanes.json` maps each category to a CI lane.
 
 ---
 
@@ -385,12 +389,12 @@ The manifest also defines adversarial documents (`empty.txt`, `unicode_test.txt`
   <Tabs>
     <Tab title="Linux/macOS">
       ```bash
-      rm ~/.gaia/*.pkl
+      rm -rf ~/.gaia/cache/rag/*
       ```
     </Tab>
     <Tab title="Windows">
       ```powershell
-      Remove-Item "$env:USERPROFILE\.gaia\*.pkl"
+      Remove-Item "$env:USERPROFILE\.gaia\cache\rag\*" -Recurse
       ```
     </Tab>
   </Tabs>
@@ -488,7 +492,7 @@ Scenario YAML files live under `eval/scenarios/<category>/`. The runner discover
 ```yaml
 id: my_custom_scenario           # unique identifier (snake_case)
 name: "My Custom Scenario"        # human-readable name
-category: rag_quality             # one of the 10 categories
+category: rag_quality             # one of the category directories under `eval/scenarios/`
 severity: critical                # critical | standard
 description: |
   What this scenario tests and why.
@@ -578,7 +582,7 @@ After a run, results are written to `eval/results/<run_id>/`:
 ```markdown
 # GAIA Agent Eval — run_20250322_143000
 **Date:** 2026-03-22T14:30:00+00:00
-**Model:** claude-sonnet-4-6
+**Model:** claude-opus-5
 
 ## Summary
 - **Total:** 54 scenarios
@@ -634,7 +638,7 @@ The benchmark includes a GitHub Actions workflow at `.github/workflows/test_eval
 
 <CardGroup cols={2}>
   <Card title="Evaluation Framework" icon="flask-vial" href="/reference/eval">
-    Batch experiments, ground truth generation, and model comparison
+    Scorecards, baselines and CI lanes
   </Card>
 
   <Card title="Agent UI Guide" icon="desktop" href="/guides/agent-ui">

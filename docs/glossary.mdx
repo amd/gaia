@@ -77,7 +77,7 @@ A folder where processed documents, embeddings, or other computed data are store
 An OpenAI-compatible API endpoint (`/v1/chat/completions`) that processes conversation history as a list of messages.
 
 ### ChatAgent
-The base class GaiaAgent extends, providing conversation history, RAG for document Q&A, voice (Talk mode), and interactive commands like `/clear`, `/history`, and `/stats`. Retired as a selectable agent — its `chat`/`doc`/`file` ids stay resolvable for stored sessions but no longer appear in the picker. See also: GaiaAgent, AgentSDK, AgentSession.
+The base class GaiaAgent extends, providing conversation history, RAG for document Q&A, voice (Talk mode), and interactive commands like `/reset`, `/index`, and `/status`. Retired as a selectable agent — its `chat`/`doc`/`file` ids stay resolvable for stored sessions but no longer appear in the picker. See also: GaiaAgent, AgentSDK, AgentSession.
 
 ### AgentSDK
 High-level interface for building chat applications in GAIA, providing conversation management, history, and memory features.
@@ -116,7 +116,7 @@ Generating a unique identifier for document content to detect when files have ch
 Maintaining important information when splitting text across chunks, ensuring coherent answers.
 
 ### Context Size
-The number of tokens allocated for LLM processing. GAIA picks it per model when it loads one: 65,536 for Gemma and other GPU/CPU models, 32,768 for NPU (FLM) models, and for a model that opts in, the largest window its KV cache fits in this machine's memory, up to the model's native maximum. You don't set it yourself. Larger values allow processing more input but require more memory. Not the same as Context Window (the model's inherent limit). See also: Context Window, Max Tokens.
+The number of tokens allocated for LLM processing. GAIA picks it per model when it loads one: 65,536 for most models, 32,768 only for an FLM build with no memory figures, and for a model that opts in, the largest window its KV cache fits in this machine's memory, up to the model's native maximum. You don't set it yourself. Larger values allow processing more input but require more memory. Not the same as Context Window (the model's inherent limit). See also: Context Window, Max Tokens.
 
 ### Context Window
 The maximum number of tokens an LLM can process at once, including both input and output. Modern models range from 4K to 1M+ tokens.
@@ -191,7 +191,7 @@ A modern, high-performance Python web framework for building APIs. GAIA uses Fas
 Providing an LLM with a few example inputs and outputs to teach it how to perform a task.
 
 ### FileToolsMixin
-A GAIA mixin providing file operation tools (read, write, edit, search) that agents can use.
+A GAIA mixin that watches directories for new documents (`add_watch_directory`). Reading, writing and editing files is `FileIOToolsMixin`.
 
 ---
 
@@ -218,9 +218,6 @@ When an LLM generates plausible-sounding but factually incorrect or nonsensical 
 
 ### Hardware Acceleration
 Using specialized processors (NPU, GPU) instead of general-purpose CPUs for faster AI computations.
-
-### Hybrid Mode
-Using both NPU and iGPU together to maximize AI performance on AMD Ryzen AI processors. The NPU handles efficient matrix operations while the iGPU provides additional compute capacity. Enabled automatically by Lemonade Server with compatible models. See also: NPU, iGPU, Lemonade Server.
 
 ---
 
@@ -260,7 +257,7 @@ A lightweight, high-quality text-to-speech engine used by GAIA for voice output 
 ## L
 
 ### Lemonade Server
-AMD's optimized LLM serving platform providing hardware-accelerated inference on Ryzen AI processors. Supports NPU/iGPU hybrid mode, model management, and an OpenAI-compatible API. Required for most GAIA operations; `gaia daemon` starts and supervises it for you, so you rarely launch it yourself. Install it with `gaia init`. See also: NPU, Hybrid Mode, LEMONADE_BASE_URL.
+AMD's optimized LLM serving platform providing hardware-accelerated inference on Ryzen AI processors. Runs models on the GPU (llama.cpp on Vulkan) or the Ryzen AI NPU (FastFlowLM), with model management and an OpenAI-compatible API. Required for most GAIA operations; `gaia daemon` starts and supervises it for you, so you rarely launch it yourself. Install it with `gaia init`. See also: NPU, LEMONADE_BASE_URL.
 
 ### LEMONADE_BASE_URL
 Environment variable specifying the address of the Lemonade Server (default `http://localhost:13305/api/v1`). The GAIA OpenAI-compatible API server runs on port 8080 — don't confuse the two.
@@ -297,7 +294,7 @@ A service that exposes agent capabilities through the Model Context Protocol.
 Functions and capabilities exposed through an MCP server that agents can call.
 
 ### Mixin
-A reusable class that provides a set of related tools to agents, following Python's mixin pattern. Examples include FileToolsMixin (file operations), ShellToolsMixin (shell commands), and RAGToolsMixin (document Q&A). Agents inherit from multiple mixins to combine capabilities. See also: Tool, Tool Registry.
+A reusable class that provides a set of related tools to agents, following Python's mixin pattern. Examples include FileIOToolsMixin (read, write and edit files), ShellToolsMixin (shell commands), and RAGToolsMixin (document Q&A). Agents inherit from multiple mixins to combine capabilities. See also: Tool, Tool Registry.
 
 ### Model ID
 A unique identifier for a specific LLM, such as `Qwen3-0.6B-GGUF`.
@@ -477,7 +474,7 @@ Real-time token-by-token delivery of LLM responses as they're generated, rather 
 Artificially generated test data used for evaluation when real-world data is unavailable or insufficient.
 
 ### System Prompt
-Instructions that shape an LLM's behavior, persona, and response style. In GAIA, agents define system prompts via `_get_system_prompt()`. Typically includes role definition, capabilities, constraints, and output format. View with `/system` command in ChatAgent. See also: Prompt, Prompt Engineering.
+Instructions that shape an LLM's behavior, persona, and response style. In GAIA, agents define system prompts via `_get_system_prompt()`. Typically includes role definition, capabilities, constraints, and output format. See also: Prompt, Prompt Engineering.
 
 ---
 

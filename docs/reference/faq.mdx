@@ -53,11 +53,11 @@ icon: "circle-question"
 
     When a model call fails, GAIA saves a problem report in `~/.gaia/failures/` on your PC, with keys and your home folder taken out. It stays there unless you choose to share it; see [problem reports](/reference/troubleshooting#a-model-call-failed-the-problem-report-it-names).
 
-    **Caveat:** If you explicitly configure an external LLM provider (Claude API or OpenAI) via the provider settings, prompts and responses for those sessions are sent to the provider you selected. Local-first is the default; cloud is opt-in.
+    **Caveat:** If you explicitly configure an external LLM provider (Claude, or another model through the AMD LLM Gateway) via the provider settings, prompts and responses for those sessions are sent to the provider you selected. Local-first is the default; cloud is opt-in.
   </Accordion>
 
   <Accordion title="How do I install GAIA on a machine without internet?" icon="wifi">
-    The first-launch install requires internet to download Python and the GAIA backend. For offline installation, you would need to pre-download the Python wheels and models — this is not currently supported as a one-click flow.
+    The desktop app ships its own backend, but first-launch setup still downloads Lemonade Server, the GAIA agent and a model, so it needs internet. Offline installation is not currently supported as a one-click flow.
 
     [Open an issue](https://github.com/amd/gaia/issues/new) if you need this capability; we're tracking demand for an offline bundle.
   </Accordion>
@@ -109,6 +109,7 @@ icon: "circle-question"
   <Accordion title="What platforms does GAIA support?" icon="desktop">
     - **Windows 11:** ✅ Fully supported with complete UI and CLI functionality
     - **Linux (Ubuntu/Debian):** ✅ Fully supported with complete UI and CLI functionality
+    - **macOS (Apple Silicon, macOS 14+):** ✅ Supported; models run on the GPU, with no NPU. See [Install](/guides/install)
   </Accordion>
 
   <Accordion title="How do I install additional models?" icon="download">
@@ -157,14 +158,14 @@ Discover the capabilities of Ryzen AI with GAIA - an innovative generative AI ap
   </Accordion>
 
   <Accordion title="What LLMs are supported?" icon="list">
-    GAIA runs models locally through [Lemonade Server](https://lemonade-server.ai), so any model in the Lemonade catalog works — GGUF models via llama.cpp on GPU/CPU, and FLM models on the Ryzen AI NPU. The models GAIA agents use by default:
+    GAIA runs models locally through [Lemonade Server](https://lemonade-server.ai), and GAIA is tested with GGUF models via llama.cpp on the Vulkan GPU and FLM models on the Ryzen AI NPU. The models GAIA agents use by default:
 
     - **Gemma-4-E4B-it-GGUF** — default chat/coding/vision model (multimodal)
     - **Qwen3-VL-4B-Instruct-GGUF** — alternate vision model for RAG/document extraction when configured explicitly
     - **embeddinggemma-300m-GGUF** — embeddings for RAG/document Q&A
     - **NPU (FLM):** `gemma4-it-e4b-FLM` + `embed-gemma-300m-FLM` (via `gaia init --profile npu`)
 
-    Download them per use case with `gaia init --profile <profile>` (e.g. `minimal`, `chat`, `code`, `vlm`, `npu`).
+    Download them per use case with `gaia init --profile <profile>` (e.g. `minimal`, `chat`, `vlm`, `npu`).
 
     [→ Full Model List](/reference/features#supported-llms)
   </Accordion>
@@ -241,7 +242,7 @@ Powered by the Ryzen AI platform through Lemonade Server:
 - **NPU/iGPU Acceleration:** Leverages Ryzen AI hardware
 - **Multiple Models:** Supports various LLMs including Qwen3.6-35B-A3B-GGUF and Gemma-4-E4B-it-GGUF
 - **Agent System:** Specialized tasks and workflows
-- **WebSocket Streaming:** Real-time response delivery
+- **SSE Streaming:** Real-time response delivery
 - **Dual Interfaces:** Both CLI and GUI available
 
 **2. Agent Interface**
@@ -331,13 +332,13 @@ Works with the [Lemonade SDK](https://github.com/lemonade-sdk/lemonade):
 
     **Software:**
     - [Lemonade Server](https://lemonade-server.ai/) for managing LLMs
-    - GAIA framework (available on Windows and Linux)
+    - GAIA framework (available on Windows, Linux and macOS)
 
     **Interfaces:**
     - Command-line interface (CLI) for scripting and automation
     - Graphical user interface (GUI) for interactive use
 
-    Both Windows and Linux platforms are fully supported.
+    Windows, Linux and macOS (Apple Silicon) are supported.
   </Accordion>
 </AccordionGroup>
 

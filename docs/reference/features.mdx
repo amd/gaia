@@ -13,16 +13,17 @@ Currently, the following capabilities are available, more will be added in the n
 
 - **Windows 11**: Full GUI and CLI support with all features
 - **Linux (Ubuntu/Debian)**: Full GUI and CLI support with all features
+- **macOS (Apple Silicon)**: GPU only, no NPU
 
 | Use-Case Example   | Function                                 | Description                                                     | Platform Support |
 | ------------------ | ---------------------------------------- | --------------------------------------------------------------- | ---------------- |
-| LLM Direct         | Direct LLM queries via CLI               | Direct model interaction using the new `gaia llm` command      | Windows, Linux   |
-| Chat Agent         | Interactive conversations with history   | Interactive chat sessions with conversation context and commands | Windows, Linux   |
-| Flagship GAIA Agent | Conversation, documents, data, web, skills | Coding, data analysis, and other per-task capability lives here as skills | Windows, Linux   |
-| Summarization      | Document and transcript summarization    | AI-powered summarization via the flagship agent's `summarize` skill | Windows, Linux   |
-| Evaluation Suite   | Model evaluation and benchmarking       | Scenario-based agent eval, throughput benchmarking, and reporting | Windows, Linux   |
-| Voice Interaction  | Speech-to-speech conversation           | Voice-based AI interaction with TTS and ASR                    | Windows, Linux   |
-| Web Dashboards     | Browser-based interfaces for agents      | JavaScript apps with simple configuration                       | Windows, Linux   |
+| LLM Direct         | Direct LLM queries via CLI               | Direct model interaction using the new `gaia llm` command      | Windows, Linux, macOS |
+| Chat Agent         | Interactive conversations with history   | Interactive chat sessions with conversation context and commands | Windows, Linux, macOS |
+| Flagship GAIA Agent | Conversation, documents, data, web, skills | Coding, data analysis, and other per-task capability lives here as skills | Windows, Linux, macOS |
+| Summarization      | Document and transcript summarization    | AI-powered summarization via the flagship agent's `summarize` skill | Windows, Linux, macOS |
+| Evaluation Suite   | Model evaluation and benchmarking       | Scenario-based agent eval, throughput benchmarking, and reporting | Windows, Linux, macOS |
+| Voice Interaction  | Speech-to-speech conversation           | Voice-based AI interaction with TTS and ASR                    | Windows, Linux, macOS |
+| Web Dashboards     | Browser-based interfaces for agents      | JavaScript apps with simple configuration                       | Windows, Linux, macOS |
 
 ## LLM Direct Usage
 
@@ -41,7 +42,7 @@ gaia llm "Write a short poem" --no-stream
 
 **Requirements**: Run `gaia init` to install Lemonade Server and download models. GAIA starts and supervises the server when a command needs it.
 
-**Platform Availability**: Windows and Linux
+**Platform Availability**: Windows, Linux and macOS (Apple Silicon)
 
 ## Chat Agent
 
@@ -79,18 +80,15 @@ gaia chat --show-stats
 - **Single Message Mode**: Non-interactive mode for scripting and automation
 
 **Interactive Commands:**
-- `/clear` - Clear conversation history
-- `/history` - Show conversation history
-- `/system` - Show current system prompt configuration
-- `/model` - Show current model information
-- `/prompt` - Show complete formatted prompt sent to LLM
-- `/stats` - Show performance statistics (tokens/sec, latency, etc.)
-- `/help` - Show available commands
-- `quit`, `exit`, or `bye` - End the chat session
+- `/resume [id]`, `/save`, `/sessions`, `/reset` - Resume, save and list sessions, or start fresh
+- `/index <path>`, `/watch <dir>`, `/list`, `/status` - Index documents, watch a folder, list indexed documents, show status
+- `/chunks`, `/chunk`, `/test`, `/dump`, `/clear-cache`, `/search-debug` - Retrieval debugging
+- `/help` or `/?` - Show available commands
+- `/quit` - End the chat session (auto-saves)
 
 **Requirements:** `gaia init` sets up Lemonade Server and models; GAIA starts the server for you. The chat model is the `default_model` in `gaia config`: `Gemma-4-E4B-it-GGUF` on most PCs, `Qwen3.6-35B-A3B-GGUF` on PCs where it fits.
 
-**Platform Availability**: Windows and Linux
+**Platform Availability**: Windows, Linux and macOS (Apple Silicon)
 
 ## Summarization
 
@@ -129,7 +127,7 @@ gaia perf-vis ./logs/llama-server.log --show
 - **Report Generation**: Markdown/JSON/JUnit output for CI integration
 - **Performance Visualization**: Plot llama.cpp server metrics from log files
 
-**Platform Availability**: Windows and Linux
+**Platform Availability**: Windows, Linux and macOS (Apple Silicon)
 
 ## Voice Interaction (Talk)
 
@@ -160,7 +158,7 @@ gaia talk --audio-device-index 1 --whisper-model-size medium --index doc.pdf
 - **Device Selection**: Configure audio input devices
 - **Model Flexibility**: Choose ASR model sizes
 
-**Platform Availability**: Windows and Linux
+**Platform Availability**: Windows, Linux and macOS (Apple Silicon)
 
 ## Desktop Applications
 
@@ -168,17 +166,17 @@ GAIA provides desktop applications with graphical interfaces for interacting wit
 
 For available applications and setup instructions, see the [Desktop UI](/deployment/ui) documentation.
 
-**Platform Availability**: Windows and Linux
+**Platform Availability**: Windows, Linux and macOS (Apple Silicon)
 
 ## Supported LLMs
 
-GAIA runs models locally through [Lemonade Server](https://lemonade-server.ai), so **any model in the Lemonade catalog is supported** — GGUF models run via llama.cpp on GPU/CPU, and FLM models run on the Ryzen AI NPU (XDNA2). To request support for a new model, contact the [AMD GAIA team](mailto:gaia@amd.com).
+GAIA runs models locally through [Lemonade Server](https://lemonade-server.ai), and GAIA is tested with GGUF models via llama.cpp on the Vulkan GPU and FLM models on the Ryzen AI NPU (XDNA2). To request support for a new model, contact the [AMD GAIA team](mailto:gaia@amd.com).
 
 The models GAIA agents use by default (pulled by `gaia init --profile <profile>`):
 
 | Model | Format / Backend | Used by |
 | ----- | ---------------- | ------- |
-| `Gemma-4-E4B-it-GGUF` | GGUF (llama.cpp) | Default model for every agent — chat, flagship skills (coding, data, summarization), and vision (multimodal). Sharing one model id means switching agents never evicts and cold-reloads it. |
+| `Gemma-4-E4B-it-GGUF` | GGUF (llama.cpp) | Default chat model on most PCs (`Qwen3.6-35B-A3B-GGUF` where it fits) and the vision model — chat, flagship skills (coding, data, summarization), and vision (multimodal). Sharing one model id means switching agents never evicts and cold-reloads it. |
 | `Qwen3-VL-4B-Instruct-GGUF` | GGUF (llama.cpp) | Alternate vision model |
 | `embeddinggemma-300m-GGUF` | GGUF (llama.cpp) | Embeddings for RAG / document Q&A |
 | `gemma4-it-e4b-FLM` | FLM (NPU) | Chat on Ryzen AI NPU (`--profile npu`) |
@@ -189,7 +187,7 @@ The models GAIA agents use by default (pulled by `gaia init --profile <profile>`
 ## Installing Additional Models
 
 GAIA uses Lemonade Server for model management. Models can be installed through:
-- **GAIA CLI**: Run `gaia init --profile <profile>` to download models for a specific use case. Valid profiles: `minimal`, `sd`, `chat`, `code`, `rag`, `mcp`, `vlm`, `email`, `npu`, `all`.
+- **GAIA CLI**: Run `gaia init --profile <profile>` to download models for a specific use case. Valid profiles: `gaia` (default), `minimal`, `sd`, `chat`, `rag`, `mcp`, `vlm`, `email`, `npu`, `all`.
 - **System Tray Icon**: Access the Lemonade model manager from the system tray
 - **Web UI**: Manage models through the Lemonade web interface
 

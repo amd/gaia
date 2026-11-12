@@ -32,7 +32,7 @@ Before using Agent Memory, make sure you have the following in place:
 - **Example files** referenced in this guide are inside the cloned repo under `examples/`
 
 <Note>
-  Memory is currently integrated into the Chat Agent. Any agent built on the GAIA Agent base class can add memory via the `MemoryMixin` -- see the [Memory SDK Reference](/sdk/sdks/memory) for developer details.
+  Memory is built into the GAIA agent. Any agent built on the GAIA Agent base class can add memory via the `MemoryMixin` -- see the [Memory SDK Reference](/sdk/sdks/memory) for developer details.
 </Note>
 
 <Note>
@@ -96,7 +96,7 @@ You: "What do you know about Sarah?"
 Agent: "Sarah is presenting the API migration results at tomorrow's standup."
 ```
 
-The agent remembered across sessions -- no copy-paste, no notes app. Run `gaia chat --ui` and click the **Brain** icon to see every memory, filterable and editable.
+The agent remembered across sessions -- no copy-paste, no notes app. Run `gaia chat --ui` and click **Memory** in the sidebar to see every memory, filterable and editable.
 
 ---
 
@@ -539,7 +539,7 @@ Run `gaia memory status` to see how many procedures have been synthesized.
   </Card>
 
   <Card title="User Control" icon="user-shield">
-    You can view, edit, and delete any memory entry via the dashboard or CLI. The agent only knows what you approve.
+    You can view, edit, and delete any memory entry on the Memory page. The agent only knows what you approve.
   </Card>
 
   <Card title="Bootstrap Consent" icon="check-circle">

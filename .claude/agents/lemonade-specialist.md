@@ -40,25 +40,26 @@ From `src/gaia/llm/lemonade_client.py`:
 
 | Use | Model | Size |
 |-----|-------|------|
-| General/default (`DEFAULT_MODEL_NAME`) | `Gemma-4-E4B-it-GGUF` | ~3 GB |
-| Every `AGENT_PROFILES` entry (chat, bash, talk, rag, vlm, minimal, mcp, sd) | `gemma-4-e4b` | ~3 GB |
-| Vision / VLM | `Gemma-4-E4B-it-GGUF` (default; `Qwen3-VL-4B-Instruct-GGUF` also supported) | ~3 GB |
+| Default on PCs whose GPU can hold it (`LARGE_DEFAULT_MODEL_NAME`) | `Qwen3.6-35B-A3B-GGUF` | 23.3 GB |
+| Default on every other PC (`DEFAULT_MODEL_NAME`) | `Gemma-4-E4B-it-GGUF` | 5.97 GB |
+| NPU default (`NPU_DEFAULT_MODEL_NAME`) | `gemma4-it-e4b-FLM` | 9.1 GB |
+| Vision / VLM | `Gemma-4-E4B-it-GGUF` (default; `Qwen3-VL-4B-Instruct-GGUF` also supported) | 5.97 GB |
 | Prompt enhancement | `Qwen3-8B-GGUF` | ~5 GB |
-| Legacy pinned sessions only | `Qwen3.5-35B-A3B-GGUF` — still a selectable model, no longer any profile's default | ~17 GB Q4_K_M |
+| Legacy pinned sessions only | `Qwen3.5-35B-A3B-GGUF` — still a selectable model, not the default | ~17 GB Q4_K_M |
 
-Agents that omit `model_id` inherit `Gemma-4-E4B-it-GGUF` — the base `Agent` passes `model_id or DEFAULT_MODEL_NAME` to the client. One model id across every agent is deliberate: switching agents must never evict and cold-reload the resident model. Don't hardcode model IDs in new agents — let users override via the CLI `--model` flag or the agent's dataclass config.
+The default follows the hardware: `gaia init` records `Qwen3.6-35B-A3B-GGUF` as `default_model` where it fits (`gaia.llm.model_fit`), otherwise Gemma is used. Agents that omit `model_id` call `resolve_default_chat_model()` — `default_model`, else `DEFAULT_MODEL_NAME`. One model id across every agent is deliberate: switching agents must never evict and cold-reload the resident model. Don't hardcode model IDs in new agents — let users override via the CLI `--model` flag or the agent's dataclass config.
 
-Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536) and `NPU_CTX_SIZE` (32768, the FLM ceiling).
+Context window: a model that declares `max_ctx_size` and `kv_bytes_per_token` gets the largest window that fits memory; every other model gets its `min_ctx_size`, else `GPU_CTX_SIZE` (65536). `NPU_CTX_SIZE` (32768) is only the starting window for an FLM build with no memory figures, not a ceiling.
 
 ## Inference engines (Lemonade terminology)
 
 | Engine | Backend | AMD target |
 |--------|---------|------------|
 | OGA | ONNX GenAI | Ryzen AI 300-series NPU |
-| llamacpp | llama.cpp | Vulkan / ROCm / Metal / CPU |
-| FLM (FastFlowLM) | NPU-native LLM + embedder runtime | Ryzen AI NPU (`gemma4-it-e2b-FLM` chat, `embed-gemma-300m-FLM` embedder) |
+| llamacpp | llama.cpp | Vulkan GPU (the only GPU backend GAIA offers) |
+| FLM (FastFlowLM) | NPU-native LLM + embedder runtime | Ryzen AI NPU (`gemma4-it-e4b-FLM` chat, `embed-gemma-300m-FLM` embedder) |
 
-Hybrid mode (NPU + iGPU) is the sweet spot on Ryzen AI 300 series. FLM caps context at `NPU_CTX_SIZE` (32768) — hand it the GPU window and it fails to load. Keeping the embedder on FLM too lets chat model and embedder stay co-resident instead of evicting each other.
+Only Vulkan GPU and FastFlowLM NPU are proven (`GaiaConfig.TESTED_LLAMACPP_BACKENDS`); don't offer other backends. FLM models size their window against system RAM (`gemma4-it-e4b-FLM` reaches 128K); `NPU_CTX_SIZE` (32768) is only the starting window for a build with no memory figures. Keeping the embedder on FLM too lets chat model and embedder stay co-resident instead of evicting each other.
 
 ## Python integration via GAIA
 
@@ -112,17 +113,17 @@ context size at launch (no flag, no env var); GAIA sends its per-profile window 
 |---------|--------------|-----|
 | `Connection refused` on port 13305 | Server not running | Print `describe_start_hint().instruction` — it resolves the platform-correct command. `gaia init` if Lemonade isn't installed at all |
 | Model 404 | Not downloaded | `lemonade pull <model>` or `gaia download` |
-| NPU unavailable | Not Ryzen AI 300-series or Linux (NPU is Win11 only today) | Fall back to llamacpp |
-| OOM after overriding to a large model | <24 GB system/VRAM for `Qwen3.5-35B-A3B-GGUF` | Drop the override — the default `Gemma-4-E4B-it-GGUF` is ~3 GB |
+| NPU unavailable | No Ryzen AI NPU, or its driver/FLM backend isn't set up (see `docs/guides/npu.mdx`) | Chat keeps running on the GPU |
+| OOM after overriding to a large model | Not enough system/VRAM for the override | Drop the override — `Gemma-4-E4B-it-GGUF` is 5.97 GB |
 | Slow cold start | Model weights on cold disk | Warm cache; persist `~/.cache/lemonade` in Docker |
 
 ## Platform support
 
-| Platform | NPU | GPU | CPU |
-|----------|-----|-----|-----|
-| Windows 11 | Ryzen AI 300 | Vulkan / ROCm | All x86-64 |
-| Ubuntu 24.04+ | – | Vulkan / ROCm | All x86-64 |
-| macOS 14+ | – | Metal (Apple Silicon) | ARM64 |
+| Platform | NPU | GPU |
+|----------|-----|-----|
+| Windows 11 | Ryzen AI (FastFlowLM) | Vulkan |
+| Linux | Ryzen AI (FastFlowLM, needs the `amdxdna` driver) | Vulkan |
+| macOS 14+ | – | Metal (Apple Silicon) |
 
 ## External resources
 

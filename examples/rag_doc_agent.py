@@ -63,7 +63,7 @@ class DocAgent(Agent):
         # Initialize the shared RAG SDK with the same model so that both the
         # agent's reasoning and the RAG SDK's internal answer-synthesis call
         # use the same loaded Lemonade model.  Without this the RAG path
-        # silently tries to load the framework default (Qwen3.5-35B-A3B-GGUF).
+        # silently tries to load the framework default (Gemma-4-E4B-it-GGUF, or Qwen3.6-35B-A3B-GGUF where it fits).
         self.rag = RAGSDK(
             RAGConfig(
                 model=kwargs["model_id"],

@@ -57,7 +57,7 @@ Type `/gateway` in chat (or pick it from the `/` command palette).
     instead of showing up later as an empty model list.
   </Step>
   <Step title="Paste your token">
-    The field is masked. GAIA sends it to Lemonade and keeps no copy.
+    The field is masked. GAIA sends it to Lemonade and keeps a copy only in your OS credential store, so it survives a restart.
   </Step>
   <Step title="Done — a model is already selected">
     GAIA picks `DeepSeek-V4.1-Flash` for you and makes it the default. GAIA's
@@ -186,7 +186,7 @@ What that means in practice:
   through Lemonade, and a missing deployment is not recorded as `(unavailable)`.
 - **Streaming works.** Claude streams on this route, so the
   [Models that cannot stream](#models-that-cannot-stream) workaround never applies.
-- `gaia gateway test --model amd.Claude-Opus-5-5` tests this route too.
+- `gaia gateway test --model amd.Claude-Opus-5` tests this route too.
 
 Lemonade still has to be running with the gateway connected: agent startup checks it
 and probes tool calling through it. Every other gateway model,

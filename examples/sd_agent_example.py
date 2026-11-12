@@ -9,7 +9,7 @@ Prerequisites:
        uv pip install amd-gaia
        gaia init --profile sd
 
-    2. This downloads (~10GB):
+    2. This downloads (~12GB):
        - SDXL-Turbo (6.5GB) - Image generation
        - Gemma-4-E4B-it-GGUF (~6GB) - Reasoning and vision LLM
 

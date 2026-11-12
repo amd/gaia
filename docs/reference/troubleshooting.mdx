@@ -8,10 +8,8 @@ icon: "bug"
 
 <AccordionGroup>
   <Accordion title="Installer fails or hangs" icon="circle-exclamation">
-    **Generate detailed logs:**
-    ```powershell
-    gaia-windows-setup.exe /LOG=install_log.txt
-    ```
+    **Read the install log:** the desktop app's setup writes `~/.gaia/electron-install.log`.
+    Attach it when you report the problem.
 
     **Common causes:**
     - **Hardware Compatibility**: The installer detects available hardware capabilities
@@ -428,23 +426,22 @@ icon: "bug"
   </Accordion>
 
   <Accordion title="Model not found error" icon="circle-question">
-    `AGENT_MODELS` is empty by default, so `/v1/models` returns no models until
-    one is registered:
+    `/v1/models` lists one model, `gaia`. Any other `model` value returns a 404:
     ```bash
     curl http://localhost:8080/v1/models
     ```
-    See [Adding New Agents](/reference/api-spec#adding-new-agents).
+    To expose more, see [Adding New Agents](/reference/api-spec#adding-new-agents).
   </Accordion>
 
-  <Accordion title="Agent processing failed" icon="triangle-exclamation">
+  <Accordion title="API request fails with a 500 or an error chunk" icon="triangle-exclamation">
     Confirm the model server is up — the daemon starts it and reports it here:
     ```bash
     gaia daemon status
     ```
 
     You don't need to set a context size. GAIA picks the window for each model
-    when it loads it — 32,768 for NPU (FLM) models, 65,536 or more for GPU
-    models — so a mismatch means something else loaded the model. Run the
+    when it loads it — 65,536 or more on a GPU, and up to 131,072 for the
+    NPU build of Gemma-4-E4B, sized to your memory — so a mismatch means something else loaded the model. Run the
     command again and GAIA reloads it at the right size.
   </Accordion>
 
@@ -520,7 +517,7 @@ error. To run the chat model in the cloud instead, see
   </Accordion>
 
   <Accordion title="Model download stuck or failed" icon="cloud-arrow-down">
-    Check your network connection and retry. For large models, ensure sufficient disk space (~25GB for chat profile).
+    Check your network connection and retry. For large models, ensure sufficient disk space (about 6 GB for the default profile; the larger Qwen3.6 default needs roughly 27 GB).
 
     ```bash
     # Retry with verbose output
@@ -609,12 +606,8 @@ error. To run the chat model in the cloud instead, see
   </Accordion>
 
   <Accordion title="TTS not working" icon="volume-slash">
-    Verify Kokoro TTS is installed:
-    ```bash
-    uv pip install kokoro-onnx
-    ```
-
-    Check audio output device is configured correctly.
+    Kokoro runs inside Lemonade Server, so there is no Python package to install. Check that the
+    server is running (`gaia daemon status`) and that the audio output device is configured correctly.
   </Accordion>
 </AccordionGroup>
 
@@ -709,7 +702,7 @@ error. To run the chat model in the cloud instead, see
     `gaia eval agent --compare` only *diffs* scorecards — it does not run an eval.
     - **Fix**: Run the eval first (`gaia eval agent --category <cat>`); it prints the run dir and writes `<run-dir>/scorecard.json`.
     - **Then**: `gaia eval agent --compare <baseline>/scorecard.json <run-dir>/scorecard.json`.
-    - **Baseline**: flagship baselines live in `tests/fixtures/eval_baselines/gaia-flagship/`. None is committed yet, so until the first one lands there is no regression verdict to report, only the scores the run measured.
+    - **Baseline**: flagship baselines live in `tests/fixtures/eval_baselines/gaia-flagship/`. That directory holds one `scorecard_<category>.json` per category, measured with Gemma-4-E4B. The Qwen3.6-35B-A3B baseline (`gaia-flagship-qwen/`) has no scorecards yet, so runs on that model report "no baseline yet" instead of a verdict.
   </Accordion>
 
   <Accordion title="Eval runs fail with chaotic context/model errors" icon="clipboard-question">

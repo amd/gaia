@@ -440,13 +440,15 @@
               "plans/nightly-benchmarks",
               "plans/eval-hillclimbing",
               "plans/release-train",
-              "plans/release-eval-hardening"
+              "plans/release-eval-hardening",
+              "plans/typescript-sdk"
             ]
           },
           {
             "group": "Agents",
             "pages": [
-              "plans/vision-sdk"
+              "plans/vision-sdk",
+              "plans/github-agent"
             ]
           }
         ]

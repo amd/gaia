@@ -45,13 +45,15 @@ gaia mcp status
 gaia mcp list              # Configured servers
 gaia mcp tools             # List tools from running servers
 gaia mcp test              # Smoke tests
-gaia mcp test-client       # Interactive MCP client for poking servers
-gaia mcp agent             # Expose GAIA agents over MCP
-gaia mcp docker            # MCP servers in Docker
-gaia mcp serve             # Serve an MCP server
+gaia mcp test-client NAME  # Test a connection to one configured server
+gaia mcp agent             # Test the MCP orchestrator agent
+gaia mcp serve             # Start the Agent UI MCP server
+gaia mcp tui               # TUI control MCP server (drives `gaia-tui --control`)
+gaia mcp code-index        # Semantic code search over stdio
+gaia mcp engineering --backend {claude,codex}  # Developer-only coding-app context bridge
 ```
 
-Note: `gaia mcp add`/`remove` were removed in #977 — server configuration now goes through the connectors framework (`gaia connectors mcp add/remove`).
+Note: `gaia mcp add`/`remove` were removed in #977 — server configuration now goes through the connectors framework: set values with `gaia connectors configure <id> --set KEY=VALUE`, or edit `~/.gaia/mcp_servers.json`.
 
 See the `mcp_parser` block in `src/gaia/cli.py` for the full subcommand tree.
 

@@ -104,8 +104,9 @@ makes it the default from the start.
 
 `gemma4-it-e4b-FLM` is the same Gemma 4 E4B that GAIA runs on the GPU
 (`Gemma-4-E4B-it-GGUF`), built for the NPU by FastFlowLM. It is a 9.1 GB download, needs
-about 12 GB of system RAM (installed RAM less any GPU carve-out), sees images and calls
-tools natively. The GPU stays free.
+about 12 GB of system RAM (installed RAM less any GPU carve-out), and calls tools
+natively. It does not read images: GAIA turns image reading off while chat runs on the
+NPU rather than load a second model. The GPU stays free.
 
 GAIA sizes its context window to your PC: the smaller of the model's 128K maximum and what
 your free RAM holds, starting from 64K and dropping to 32K when memory is short. A larger
