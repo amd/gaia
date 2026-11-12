@@ -2847,6 +2847,30 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the context meter explains a fresh chat's fill and shows a dash before it is measured (${locale})`, async ({ page }) => {
+        const fresh = { ...MEASURED_CONTEXT, system: 7700, tools: 16000, documents: 0, history: 300, used: 24000, at_risk: [], at_risk_tokens: 0 };
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({ json: fresh })));
+        await page.locator('button.context-meter').click();
+        await expect(page.locator('.context-meter-note.is-setup')).toBeVisible();
+        await shot(page, `context-meter-setup-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a reopened chat's context meter shows a dash, not an empty bar (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) =>
+            p.route(`**/api/chat/context/${ANSWER_SESSION}`, (route) => route.fulfill({
+                json: { available: false, reason: "Measured again with your next message: GAIA restarted or switched models since this chat's last answer." },
+            })));
+        const meter = page.locator('.context-meter.is-empty');
+        await expect(meter).toBeVisible();
+        await expect(meter.locator('.context-meter-bar')).toHaveCount(0);
+        await shot(page, `context-meter-unmeasured-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('composer chips stay whole at phone width', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 780 });
     await open(page);
