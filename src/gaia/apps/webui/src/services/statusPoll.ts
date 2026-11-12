@@ -68,6 +68,15 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
     let slowStreak = 0;
     let downloading = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // Re-reads a "starting" status while the poll is stopped (a hidden window).
+    let bootTimer: ReturnType<typeof setTimeout> | null = null;
+    let running = false;
+    let booting = false;
+    // A boot ends within seconds; a status still saying so must not outlive it.
+    const followBoot = () => {
+        if (running || !booting || bootTimer) return;
+        bootTimer = setTimeout(() => { bootTimer = null; void check(); }, STATUS_POLL_MS);
+    };
     // A stopped poll's probe still in flight must not reschedule.
     let generation = 0;
     let current: { controller: AbortController; cancelled: boolean } | null = null;
@@ -104,6 +113,10 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
                 if (outcome === null) return;
                 slowStreak = isSlow(outcome) ? slowStreak + 1 : 0;
                 downloading = isDownloading(outcome);
+                // Unreachable clears the window's status, so nothing is left holding the composer.
+                if (outcome.kind === 'ok') booting = isStarting(outcome.status);
+                else if (outcome.kind === 'unreachable') booting = false;
+                followBoot();
                 try {
                     onOutcome(outcome);
                 } catch (err) {
@@ -130,10 +143,15 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
         check,
         start: () => {
             const gen = ++generation;
+            running = true;
+            if (bootTimer) clearTimeout(bootTimer);
+            bootTimer = null;
             tick(gen);
             return () => {
                 if (gen !== generation) return;
                 generation++;
+                running = false;
+                followBoot();
                 if (timer) clearTimeout(timer);
                 timer = null;
                 if (current) {
