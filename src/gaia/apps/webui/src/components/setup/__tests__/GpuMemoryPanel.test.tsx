@@ -53,6 +53,7 @@ describe('GPU memory: what a bigger share unlocks', () => {
     it('names at most two unlocked models, and moves between sizes with the arrow keys', () => {
         render(<Harness initial={gpuStatus()} />);
         const group = screen.getByRole('radiogroup', { name: 'GPU memory' });
+        screen.getByRole('radio', { name: 'GPU 64.0 GB Recommended' }).focus();
         fireEvent.keyDown(group, { key: 'ArrowRight' });
         expect(screen.getByRole('radio', { name: 'GPU 96.0 GB' })).toHaveAttribute('aria-checked', 'true');
         expect(screen.getByRole('radio', { name: 'GPU 96.0 GB' })).toHaveFocus();
@@ -110,6 +111,7 @@ describe('GPU memory: what a bigger share unlocks', () => {
         render(<Harness initial={gpuStatus({ recommended_setting_gb: 48 })} onSkip={vi.fn()} />);
         const group = screen.getByRole('radiogroup', { name: 'GPU memory' });
         const keep = screen.getByRole('radio', { name: 'Keep 32.0 GB (current)' });
+        screen.getByRole('radio', { name: 'GPU 48.0 GB Recommended' }).focus();
         fireEvent.keyDown(group, { key: 'ArrowLeft' });
         expect(keep).toHaveAttribute('aria-checked', 'true');
         expect(keep).toHaveFocus();

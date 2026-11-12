@@ -3962,6 +3962,22 @@ class CloudModelUnavailableError(LemonadeClientError):
         self.status = 404
 
 
+class CloudContextOverflowError(LemonadeClientError):
+    """A cloud provider refused the request as longer than the model's window.
+
+    The message is fixed (never the provider's body) and names "maximum context
+    length", so :func:`is_context_overflow_error` matches it after any wrapping.
+    """
+
+    def __init__(self, status: Optional[int]):
+        super().__init__(
+            f"The conversation is too long for the cloud model (HTTP {status}): "
+            "the prompt exceeds the model's maximum context length. Start a "
+            "fresh task, or ask about less at once."
+        )
+        self.status = status
+
+
 class CloudProviderDisconnectedError(LemonadeClientError):
     """GAIA's Lemonade lost a cloud provider (a restart) and could not get it back.
 
@@ -4120,6 +4136,70 @@ def _endpoint_label(base_url: Optional[str]) -> Optional[str]:
     return f"{host}:{port}" if port else host
 
 
+#: Provider error codes/types meaning the prompt outgrew the model's window
+#: (OpenAI-compatible gateways and vLLM; Anthropic's 413 type).
+_OVERFLOW_ERROR_CODES = frozenset({"context_length_exceeded", "request_too_large"})
+#: Most of an error body read for classification; a real one is under 1 KB.
+_MAX_ERROR_BODY_CHARS = 16384
+
+
+def _error_body_fields(node: Any, depth: int = 0) -> Iterator[Tuple[str, str]]:
+    """``("code", value)`` and ``("message", text)`` pairs from an error body.
+
+    Walks the shapes providers and Lemonade use: ``{"error": {...}}``,
+    Anthropic's ``{"type": "error", "error": {...}}`` and Lemonade's
+    ``details.response`` wrapping of the upstream body. Other fields (an echoed
+    request, ``param``) are never read.
+    """
+    if depth > 8:
+        return
+    if isinstance(node, str):
+        text = node[:_MAX_ERROR_BODY_CHARS]
+        if text.lstrip().startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict):
+                yield from _error_body_fields(parsed, depth + 1)
+                return
+        yield ("message", text)
+        return
+    if not isinstance(node, dict):
+        return
+    for key in ("code", "type"):
+        value = node.get(key)
+        if isinstance(value, str):
+            yield ("code", value)
+    if isinstance(node.get("message"), str):
+        yield from _error_body_fields(node["message"], depth + 1)
+    for key in ("error", "details", "response"):
+        if key in node:
+            yield from _error_body_fields(node[key], depth + 1)
+
+
+def is_provider_context_overflow(status: Optional[int], body: Any) -> bool:
+    """Whether a provider's HTTP *status* and error *body* say the prompt is too long.
+
+    Only a 400 or 413 counts, and only the error's code, type and message are
+    read (see :func:`_error_body_fields`); *body* may be the text, parsed JSON,
+    or an SDK exception's ``.body``. Any 413 is too large by definition.
+    """
+    if status == 413:
+        return True
+    if status != 400 or body is None:
+        return False
+    if isinstance(body, bytes):
+        body = body[:_MAX_ERROR_BODY_CHARS].decode("utf-8", errors="replace")
+    for kind, value in _error_body_fields(body):
+        lowered = value.lower()
+        if kind == "code" and lowered in _OVERFLOW_ERROR_CODES:
+            return True
+        if kind == "message" and any(p in lowered for p in CONTEXT_OVERFLOW_PHRASES):
+            return True
+    return False
+
+
 #: Said when the model server's own key check refuses GAIA, not a provider.
 OWN_KEY_REFUSED = (
     "GAIA's model server refused GAIA's access key (HTTP 401), so the request "
@@ -4146,13 +4226,17 @@ def _cloud_request_error(
     reason: Optional[str] = None,
     model: Optional[str] = None,
     endpoint: Optional[str] = None,
+    body: Any = None,
 ) -> LemonadeClientError:
     """Actionable cloud failures without reflecting provider response bodies.
 
     *reason* is the retry classifier's verdict (``gaia.llm.retry``); it tells a
     status-less hop failure apart from an unexplained one. *endpoint* is the
-    ``host:port`` the request went to (:func:`_endpoint_label`).
+    ``host:port`` the request went to (:func:`_endpoint_label`). *body* is the
+    provider's error body, read only to recognise a context overflow.
     """
+    if is_provider_context_overflow(status, body):
+        return CloudContextOverflowError(status)
     if status in {401, 403}:
         return LemonadeAuthError(
             f"Cloud authentication or access was denied (HTTP {status}). "
@@ -4228,6 +4312,10 @@ CONTEXT_OVERFLOW_PHRASES = (
     "exceeds the available context size",
     "got too long",
     "max length reached",
+    # Cloud providers: OpenAI-compatible gateways, vLLM and Fireworks; Anthropic.
+    "context_length_exceeded",
+    "maximum context length",
+    "prompt is too long",
 )
 
 #: llama.cpp's words when a decode step found no free cell in the KV cache. It
@@ -6774,6 +6862,7 @@ class LemonadeClient:
                             response.status_code,
                             model,
                             reasoning_effort=data.get("reasoning_effort"),
+                            body=body,
                         ),
                         response.status_code,
                         body,
@@ -7268,6 +7357,7 @@ class LemonadeClient:
                         model,
                         classify_exception(e),
                         reasoning_effort=extra_body.get("reasoning_effort"),
+                        body=getattr(e, "body", None),
                     ),
                     state,
                 ) from None
@@ -8055,11 +8145,13 @@ class LemonadeClient:
         model: str,
         reason: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
+        body: Any = None,
     ) -> LemonadeClientError:
         """The error for a failed cloud call; a 404 is also recorded per model.
 
         *reasoning_effort* is the effort the request sent, if any: a 400 then
         names it, since the provider body that would say why is not shown.
+        *body* is the provider's error body, read only to spot an overflow.
         """
         error = _cloud_request_error(
             status,
@@ -8067,8 +8159,13 @@ class LemonadeClient:
             reason,
             model,
             endpoint=_endpoint_label(self.base_url),
+            body=body,
         )
-        if status == 400 and reasoning_effort is not None:
+        if (
+            status == 400
+            and reasoning_effort is not None
+            and not isinstance(error, CloudContextOverflowError)
+        ):
             error = LemonadeClientError(
                 f"{error} The request asked {model} to reason "
                 f"(reasoning_effort={reasoning_effort}), which it may not accept "
