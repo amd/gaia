@@ -1025,6 +1025,33 @@ def test_a_key_fireworks_accepts_is_not_blamed_when_discovery_fails(
     assert "did not accept" not in detail
 
 
+@pytest.mark.parametrize("own_server", [True, False])
+def test_a_key_accepted_without_models_names_the_log_to_read(
+    client, lemonade, keys, model_list, monkeypatch, tmp_path, own_server
+):
+    from gaia.llm import lemonade_client
+    from gaia.llm.providers.fireworks import ModelListCheck, ModelListState
+
+    log = tmp_path / "lemonade" / "lemond.log"
+    monkeypatch.setattr(
+        lemonade_client,
+        "embedded_lemonade_log_path",
+        lambda base_url=None: log if own_server else None,
+    )
+    lemonade.answers[("POST", "cloud/auth")] = (200, {"models_discovered": False})
+    model_list["check"] = ModelListCheck(ModelListState.OK)
+
+    resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
+
+    assert resp.status_code == 502
+    detail = resp.json()["detail"]
+    assert "paste the key again" in detail
+    if own_server:
+        assert str(log) in detail
+    else:
+        assert "model server's log" in detail
+
+
 def test_a_missing_ca_file_is_named_instead_of_the_key(
     client, lemonade, keys, model_list
 ):

@@ -57,6 +57,13 @@ def test_remedies_name_no_command_line():
         assert "`" not in problem and "sudo" not in problem
 
 
+def test_the_text_fits_a_lemonade_the_user_installed_too():
+    # Download errors get this text whichever Lemonade is in use.
+    for files in (FEDORA_44, NONE):
+        problem = ca_store_problem(platform="linux", exists=_fs(files))
+        assert "GAIA's model server" not in problem
+
+
 def test_other_platforms_are_not_judged():
     for platform in ("win32", "darwin"):
         assert ca_store_problem(platform=platform, exists=_fs(NONE)) is None

@@ -62,19 +62,19 @@ def ca_store_problem(
     if exists(LEMOND_CA_FILE):
         return None
     effect = (
-        "Until that file exists, GAIA's model server cannot reach cloud models "
+        "Until that file exists, the model server cannot reach cloud models "
         "or download models."
     )
     bundle = find_system_ca_bundle(exists)
     if bundle:
         return (
             f"This PC's certificate store has no {LEMOND_CA_FILE}, the file "
-            "GAIA's model server reads to trust HTTPS sites (the store is at "
+            "the model server reads to trust HTTPS sites (the store is at "
             f"{bundle}). {effect} Install your system's latest updates (the "
             "updated ca-certificates package adds that file), then restart GAIA."
         )
     return (
-        "This PC has no system certificate store, so GAIA's model server cannot "
+        "This PC has no system certificate store, so the model server cannot "
         f"trust HTTPS sites (it reads {LEMOND_CA_FILE}). {effect} Install the "
         "ca-certificates package from your system's software manager, then "
         "restart GAIA."

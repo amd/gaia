@@ -1083,10 +1083,14 @@ def _use_known_models(provider: str, key: str, *, persist_key: bool = True) -> N
         raise ProviderError(ca_problem, 503)
     check = check_model_list(key) if provider == FIREWORKS else None
     if check is not None and check.state is ModelListState.OK:
+        from gaia.llm import lemonade_client
+
+        log = lemonade_client.embedded_lemonade_log_path(_base_url())
+        where = str(log) if log else "The model server's log"
         raise ProviderError(
-            f"{name} accepted that key, but GAIA's model server discovered no "
-            "models with it, so there is no need to replace the key. The model "
-            "server's log says why.",
+            f"{name} accepted that key, but the model server discovered no "
+            f"models with it, so the key is not the problem. {where} says why; "
+            "paste the key again once that is fixed.",
             502,
         )
     if check is None or check.state is not ModelListState.FAILING:
