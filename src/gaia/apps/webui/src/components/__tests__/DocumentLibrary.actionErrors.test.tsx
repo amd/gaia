@@ -100,7 +100,7 @@ describe('Document Library actions that fail say so', () => {
         render(<DocumentLibrary />);
 
         expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't load your documents: backend is starting");
-        expect(screen.queryByText('No documents indexed yet')).not.toBeInTheDocument();
+        expect(screen.queryByText('No documents yet')).not.toBeInTheDocument();
 
         fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
 

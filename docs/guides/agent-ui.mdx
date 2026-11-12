@@ -81,9 +81,10 @@ stored on your machine.
 The meter beside the model chip shows how much of the model's context window the
 next message carries. Click it for the breakdown: system prompt, tools,
 documents, conversation, and the room kept free for the reply. As the window
-fills, a note above the message box names the oldest turns by their question
-before they drop out of the model's view. They stay saved, and you can ask GAIA
-to recall them.
+fills, a one-line note above the message box says the oldest turns will soon
+drop out of the model's view; **Details** names them by their question, and you
+can dismiss the note until another turn reaches the edge. They stay saved, and
+you can ask GAIA to recall them.
 
 For more, choose **Details: context & performance** in the meter's breakdown.
 It opens the **Context & performance** section of the [session panel](#the-session-panel),
@@ -137,6 +138,9 @@ ends before reading it, it goes back in the queue. If the reply can't take it,
 the message says so and waits to go out when the reply ends. Press Stop and anything still
 queued goes back into the message box.
 
+A stopped answer keeps what it wrote so far. **Continue** asks GAIA to carry on
+from there, and **Try again** asks the question afresh.
+
 Each chat keeps its own queue. Switch to another chat and the queued messages
 still go out when their chat's reply ends, and the chat list shows how many are
 waiting. They survive a reload of the app too. A message that can't be sent
@@ -147,6 +151,14 @@ queued messages; the delete button says how many first.
 Deleting a chat, one at a time or with **Settings → Privacy → Delete all chats**,
 also removes its conversation and tool calls from Memory. What GAIA learned about
 you from it stays under **About you** in Memory; the delete confirmation says so.
+
+### Edit a Message or Try Again
+
+To fix a sent message, hover it and choose **Edit message**, or press the up
+arrow in an empty message box to open your last one. Change the text and press
+Enter: GAIA answers the edited message, and the turns after it are replaced.
+Escape leaves the message as it was. **Try again** on the latest answer asks
+the same question again with the same model.
 
 ### Compare Models on Your Question
 
@@ -341,13 +353,19 @@ Pick the install path that fits you best:
     GAIA checks the PC by itself: processor, GPU, NPU, memory, disk, its model
     server and the backends this PC supports. **Check this PC** shows what it
     found, with links to the models folder and GAIA's data and logs, and opens
-    each check and the full details on request. If a Lemonade Server already
-    runs on the PC, it asks whether to **Install GAIA's own** (the default)
-    or **Use the one I have**. It then recommends a setup, with the reasons, and **Download
-    and start** takes it. Each step's main action is at the bottom right, and
-    the language can be changed from the first screen.
+    each check and the full details on request. If a model server (Lemonade)
+    already runs on the PC, it asks which one GAIA should use: **Install
+    GAIA's own**, recommended because it is the version GAIA is tested with
+    and keeps its own copy of each model, or **Use the one I have**, which
+    keeps one copy of each model. **Your setup** then offers two cards of equal
+    weight: a model on this PC, recommended and picked, with its
+    download size and the reasons, and **Use a cloud model**, which downloads
+    no chat model, needs an API key and sends each message to the provider.
+    **Download and start** takes the local setup; with the cloud card picked,
+    **Continue** opens the provider's key. Each step's main action is at the
+    bottom right, and the language can be changed from the first screen.
 
-    **Customize** opens the model choices; the steps beside the screen stay
+    **Customize**, at the bottom left of Your setup, opens the model choices; the steps beside the screen stay
     the same. **Run on** comes first: **Graphics (GPU)**, which uses llama.cpp
     on Vulkan, or **Ryzen AI NPU**, which uses FastFlowLM, on a PC whose NPU has
     the memory for GAIA's NPU model or already has an NPU model. These are the
@@ -372,7 +390,10 @@ Pick the install path that fits you best:
     **Download** lists everything that comes to this PC, with its size and
     where it comes from: the model server, the model runtime, Python packages,
     the GAIA agent and each model. Models show per-model and overall progress
-    with speed and time left. Cancel keeps what finished, and **Retry** or
+    with speed and time left. Before the models start, the line under the list
+    names the part being set up and how far its download is. **Cancel** sits in
+    the bottom bar while setup works, including while GAIA's model server
+    starts on Check this PC. Cancel keeps what finished, and **Retry** or
     **Resume** continues from there. Tick **Keep trying if the connection
     drops** to wait out a dropped connection for up to two minutes. Optional
     extras can be added here too; they are fetched and tested after the rest.
@@ -390,8 +411,10 @@ Pick the install path that fits you best:
     test that doesn't finish in time stops with an error instead of hanging. Running `gaia init`
     yourself beforehand also works.
 
-    Each step keeps a log, collapsed under it until you open it. **Save a
-    troubleshooting report** on any step saves setup's logs, GAIA's logs and
+    Each step keeps a log. The logs and **Save a troubleshooting report** sit
+    under **Having trouble?** at the bottom of every step, which opens by
+    itself when a step fails. A redrawn progress bar shows only its last line.
+    **Save a troubleshooting report** saves setup's logs, GAIA's logs and
     this PC's details in one file. API keys and other secrets are removed from
     the logs, but a log can quote your chats, so look it over before you share
     it. A copy stays in `~/.gaia`.
@@ -455,9 +478,9 @@ Pick the install path that fits you best:
 The app opens straight to an empty chat: a greeting and a message box over a
 quiet field of dots laid out like the NPU's tile array. The dots say what GAIA
 is doing: they sweep while a model loads, fill from the bottom up while one
-downloads, and stir under the pointer and with each keystroke. Start typing and
-the message box drops to the bottom of the window; send, and the dots clear away
-so the chat starts on a clean page. With reduced motion turned on in your
+downloads, and stir under the pointer and with each keystroke. The message box
+stays put while you type; send, and it drops to the bottom of the window and the
+dots clear away so the chat starts on a clean page. With reduced motion turned on in your
 system settings, the dots hold still.
 
 - **Sidebar:** search, New chat, **Memory**, **Scheduled tasks**, **Documents**,
@@ -508,14 +531,15 @@ system settings, the dots hold still.
   such as a saved deliverable, open in your file explorer when clicked. So does
   a file the answer names only by file name, in code formatting, when it is one
   of the files that turn wrote; two written files with the same name stay plain.
-- **A new chat** greets you and shows the folder GAIA works in.
-  Click the folder under the message box to give the chat another folder it
-  may read and write from its first message, the same as **Add folder** in the
-  session panel. The chat's agent is told which folder the chat is working
+- **A new chat** greets you and, under the message box, names the project
+  folder GAIA works in when you started it from one. **Add a folder** gives the
+  chat another folder it may read and write from its first message, the same as
+  **Add folder** in the session panel; the picked folder shows as its own chip,
+  and its **×** drops it again. The chat's agent is told which folder the chat is working
   in, so "this folder" means the one you picked. This works when GAIA runs
   its agent as its own process too,
   as an installed GAIA does. Only an agent too old to be given folders shows
-  the folder as plain text; update GAIA to pick one. In the desktop app this
+  no **Add a folder** button; update GAIA to pick one. In the desktop app this
   opens your computer's own folder picker; in a browser GAIA shows its own,
   where hidden folders (names starting with a dot) stay out of the list until
   you tick **Show hidden**.
@@ -620,10 +644,12 @@ Open **Settings → Model** (or the model chip in the message box):
   which asks the OS once more.
   Connecting a provider, picking a cloud model, or connecting or testing a
   connector also asks again.
-- The AMD LLM Gateway is greyed out, here and on the first-run setup screen,
-  when its host can't be reached from this network. It reads "No network
+- In **Settings → Model**, the AMD LLM Gateway is greyed out when its host
+  can't be reached from this network. It reads "No network
   available — can't reach llm-api.amd.com (needs AMD's network or VPN)". Connect
-  to AMD's network or VPN, then press **Check again**. When Lemonade runs on
+  to AMD's network or VPN, then press **Check again**. First-run setup leaves
+  the gateway off its list instead, unless you chose it before; open setup
+  again once you are on AMD's network to see it. When Lemonade runs on
   another machine, or a proxy carries this PC's traffic, the check is skipped and
   the gateway stays choosable.
 - In **Settings → Model**, recommended Fireworks models appear by default. Choose
@@ -922,7 +948,7 @@ much they use now.
 
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
-Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one),
+Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one, and **Add skills** to add them from a link — see [Add skills from a link](/guides/starter-skills#add-skills-from-a-link)),
 Connectors, Memory, Notifications, Read aloud, Privacy and Advanced (model server and
 llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
 back).
@@ -1004,13 +1030,19 @@ right way round, and code always reads left to right.
 
 Before you pick a cloud model, setup and **Settings → Model** show what it
 costs per million tokens at the provider's list price; a model with no
-published price says "price unknown". **Settings → Model** also shows what
+published price says "price unknown". In setup the listed models are a
+choice: the provider's top pick is marked **Default** and picked, and the
+model you pick is the one chat uses. Once the key works, setup says so and
+names that model. The AMD LLM Gateway is listed only on a network that can
+reach it, unless you picked it before. **Settings → Model** also shows what
 this month's cloud chats have cost and lets you set a monthly limit. GAIA warns
 when you're close, and once you reach it, it stops before sending a chat to the
 cloud and tells you how to go on: raise the limit, allow more for this month,
 or use a model on this PC. The total is an estimate at list price, with cached
-input at its cached rate; it leaves out turns that fail or are stopped before a
-reply, so your provider's bill is the final word.
+input at its cached rate; it leaves out turns stopped before any reply, and
+turns that fail before any reply with no usage reported (an answer stopped
+partway still counts, since the provider may bill it), so your provider's bill
+is the final word.
 
 While a chat runs on a priced cloud model, the composer shows what it has cost
 so far and what all your chats have cost today, such as "$0.04 · today $0.31".
@@ -1095,6 +1127,8 @@ Sessions let you organize conversations by topic. They sync between the CLI (`ga
 | `Enter` | Send message |
 | `Shift+Enter` | New line |
 | `Escape` | Stop agent response |
+| `↑` (empty message box) | Edit your last message |
+| `Escape` (editing a message) | Put the message back as it was |
 | `Ctrl+K` | Search chats |
 | `Ctrl+Shift+O` | New chat |
 | `Ctrl+B` | Show or hide the sidebar |
