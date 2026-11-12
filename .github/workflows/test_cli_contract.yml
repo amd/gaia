@@ -23,6 +23,7 @@ on:
       - '!src/gaia/apps/webui/**'
       - 'conftest.py'
       - 'tests/conftest.py'
+      - 'tests/integration/conftest.py'
       - 'setup.py'
       - 'pyproject.toml'
   pull_request:
@@ -36,6 +37,7 @@ on:
       - '!src/gaia/apps/webui/**'
       - 'conftest.py'
       - 'tests/conftest.py'
+      - 'tests/integration/conftest.py'
       - 'setup.py'
       - 'pyproject.toml'
   merge_group:

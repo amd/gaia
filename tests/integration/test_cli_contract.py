@@ -66,7 +66,27 @@ BINDS_A_PORT = {"mcp start", "api start"}
 #: Rules broken today, each naming its issue. Strict: a fix has to delete its
 #: line. Keyed by (rule, command as typed); the rule is "traceback" or
 #: "model server".
-KNOWN_BUGS: dict = {}
+KNOWN_BUGS = {
+    ("traceback", "schedule show contract-walk"): "amd/gaia#7333",
+    ("traceback", "schedule remove contract-walk"): "amd/gaia#7333",
+    ("traceback", "schedule pause contract-walk"): "amd/gaia#7333",
+    ("traceback", "schedule resume contract-walk"): "amd/gaia#7333",
+    ("traceback", "schedule run contract-walk"): "amd/gaia#7333",
+    ("traceback", "connectors connect contract-walk"): "amd/gaia#7334",
+    ("traceback", "mcp engineering --backend claude"): "amd/gaia#7335",
+    ("traceback", "mcp code-index"): "amd/gaia#7335",
+    ("model server", "api start"): "amd/gaia#7344",
+    ("model server", "chat"): "amd/gaia#7345",
+    ("model server", "-p Reply with one word."): "amd/gaia#7345",
+}
+if sys.platform != "win32":
+    # Windows reads the token from the console and waits; elsewhere it crashes.
+    KNOWN_BUGS[("traceback", "gateway auth")] = "amd/gaia#7336"
+
+#: Commands whose --base-url is not the model server's address.
+OTHER_BASE_URL = {
+    "gateway install": "its --base-url is the gateway's address",
+}
 
 
 @dataclass
@@ -155,7 +175,11 @@ def commands() -> list:
 COMMANDS = commands()
 #: Commands held to the model-server rules: those that take --base-url, and
 #: the extra invocations above. Each costs two or three real runs.
-MODEL_COMMANDS = [c for c in COMMANDS if c.base_url or c.args in EXTRA_INVOCATIONS]
+MODEL_COMMANDS = [
+    c
+    for c in COMMANDS
+    if (c.base_url or c.args in EXTRA_INVOCATIONS) and c.name not in OTHER_BASE_URL
+]
 
 
 def _params(commands_: list, rule: str):
@@ -336,6 +360,7 @@ def test_the_tables_name_real_commands():
     assert {rule for rule, _name in KNOWN_BUGS} <= {"traceback", "model server"}
     assert REPORTS_SERVER_STATE <= names
     assert BINDS_A_PORT <= names
+    assert set(OTHER_BASE_URL) <= names
 
 
 def test_most_commands_are_started():
