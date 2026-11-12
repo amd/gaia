@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import os
 import threading
-import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
@@ -596,7 +595,3 @@ class SidecarRegistry:
         if include_token:
             entry["token"] = manager.auth_token
         return entry
-
-
-def _now() -> float:  # pragma: no cover - trivial seam
-    return time.time()

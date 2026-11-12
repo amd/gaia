@@ -423,7 +423,7 @@ class AgentSidecarManager:
             raise SidecarSpawnError(
                 f"dev mode needs the {self.spec.agent_id} source at {app_dir} but "
                 "it is missing. Run from a source checkout, or install it: "
-                "`uv pip install -e hub/agents/email/python`."
+                f"`uv pip install -e {self.spec.dev_src_dir}`."
             )
         # No ``--reload``: it makes uvicorn run its own multiprocessing-spawn
         # reload supervisor on top of a sidecar the daemon already supervises,

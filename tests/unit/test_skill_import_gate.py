@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -115,19 +114,52 @@ def test_plain_http_url_is_refused_before_any_fetch(run, monkeypatch, url):
     assert "only https URLs are accepted" in err
 
 
+class _FakeResponse:
+    def __init__(self, url, chunks):
+        self.url = url
+        self._chunks = chunks
+        self.closed = False
+
+    def raise_for_status(self):
+        return None
+
+    def iter_content(self, chunk_size):
+        for chunk in self._chunks:
+            if isinstance(chunk, Exception):
+                raise chunk
+            yield chunk
+
+    def close(self):
+        self.closed = True
+
+
 def test_https_redirect_to_http_is_refused(run, monkeypatch, manager):
     import requests
 
-    response = SimpleNamespace(
-        url="http://mirror.example.com/s.zip",
-        raise_for_status=lambda: None,
-        close=lambda: None,
-        iter_content=lambda chunk_size: iter([b"PK"]),
-    )
+    response = _FakeResponse("http://mirror.example.com/s.zip", [b"PK"])
     monkeypatch.setattr(requests, "get", lambda *_a, **_k: response)
     rc, _, err = run("https://example.com/s.zip")
     assert rc == skills_cli.EXIT_INVALID
     assert "not https" in err
+    assert not (manager.user_root / "notes").exists()
+    assert response.closed
+
+
+def test_a_download_that_fails_part_way_is_reported_and_closed(
+    run, monkeypatch, manager
+):
+    import requests
+
+    response = _FakeResponse(
+        "https://example.com/s.zip",
+        [b"PK", requests.exceptions.ChunkedEncodingError("connection reset")],
+    )
+    monkeypatch.setattr(requests, "get", lambda *_a, **_k: response)
+    rc, _, err = run("https://example.com/s.zip")
+    assert rc != skills_cli.EXIT_OK
+    assert "failed part-way" in err
+    assert "Traceback" not in err
+    assert response.closed
     assert not (manager.user_root / "notes").exists()
 
 
@@ -188,6 +220,21 @@ def test_import_without_consent_through_the_api_is_refused(tmp_path, manager):
     source = _skill_dir(tmp_path / "src", with_tools=True)
     with pytest.raises(SkillInstallError, match="--allow-experimental"):
         import_bundle(source, origin=str(source), manager=manager)
+
+
+def test_force_import_of_the_installed_dir_onto_itself_is_refused(
+    run, tmp_path, manager
+):
+    """`gaia skill import <installed-dir> --force` would rmtree its own source."""
+    installed = _skill_dir(manager.user_root)
+    (installed / "notes.txt").write_text("keep\n", encoding="utf-8")
+
+    rc, _, err = run(str(installed), "--force")
+
+    assert rc != skills_cli.EXIT_OK
+    assert "on top of itself" in err
+    assert (installed / "SKILL.md").is_file()
+    assert (installed / "notes.txt").read_text(encoding="utf-8") == "keep\n"
 
 
 def test_instruction_only_import_needs_no_opt_in(run, tmp_path, manager):

@@ -24,7 +24,7 @@ _T = TypeVar("_T")
 
 # A peer's token POST (10 s overall, tokens._TOKEN_POST_DEADLINE_SECONDS) plus
 # its keyring writes, leaving room for our own refresh inside
-# get_or_refresh_sync's 30 s bound (_loop.py).
+# run_sync's 30 s bound (_loop.py).
 LOCK_TIMEOUT_SECONDS = 15.0
 _POLL_SECONDS = 0.05
 

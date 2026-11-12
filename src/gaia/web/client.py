@@ -20,7 +20,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
-from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse, urlunparse
 
 import requests
 import urllib3
@@ -52,6 +52,39 @@ BLOCKED_PORTS = {22, 23, 25, 445, 3306, 5432, 6379, 27017}
 #: Carrier-grade NAT (RFC 6598). ``ipaddress`` does not call it private, but
 #: Tailscale addresses every machine on the user's mesh from it.
 CGNAT_NETWORK = ipaddress.ip_network("100.64.0.0/10")
+
+
+_CD_EXTENDED_FILENAME = re.compile(r"\bfilename\*\s*=\s*([^;]+)", re.IGNORECASE)
+_CD_FILENAME = re.compile(
+    r"""\bfilename\s*=\s*(?:"([^"]*)"|'([^']*)'|([^;]+))""", re.IGNORECASE
+)
+
+
+def _content_disposition_filename(header: str) -> Optional[str]:
+    """Return the filename a Content-Disposition header names, or ``None``.
+
+    ``filename*`` (RFC 5987: ``charset'lang'percent-encoded``) wins over
+    ``filename``, as RFC 6266 requires.
+    """
+    extended = _CD_EXTENDED_FILENAME.search(header)
+    if extended:
+        value = extended.group(1).strip().strip('"')
+        charset, sep, rest = value.partition("'")
+        _lang, sep2, encoded = rest.partition("'")
+        if sep and sep2:
+            try:
+                decoded = unquote(encoded, encoding=charset or "utf-8", errors="strict")
+            except (LookupError, UnicodeDecodeError) as e:
+                # RFC 6266: a filename* the client cannot decode is ignored.
+                log.debug("Ignoring undecodable filename* %r: %s", value, e)
+            else:
+                if decoded:
+                    return decoded
+    plain = _CD_FILENAME.search(header)
+    if plain:
+        name = next(g for g in plain.groups() if g is not None).strip()
+        return name or None
+    return None
 
 
 def _shutdown_socket(sock) -> None:
@@ -1276,7 +1309,16 @@ class WebClient:
     def _download_within(
         self, url, save_dir, filename, max_size, on_path_resolved, deadline
     ) -> dict:
-        # Stream the download
+        response, url = self._open_download(url, deadline)
+        try:
+            return self._save_download(
+                response, url, save_dir, filename, max_size, on_path_resolved, deadline
+            )
+        finally:
+            response.close()
+
+    def _open_download(self, url, deadline):
+        """Follow redirects by hand and return the final ``(response, url)``."""
         response = self._send_hop(
             deadline,
             lambda timeout: self._session.get(
@@ -1284,45 +1326,46 @@ class WebClient:
             ),
         )
 
-        # Handle redirects manually for downloads too
         redirect_count = 0
-        while response.status_code in (301, 302, 303, 307, 308):
-            redirect_count += 1
-            if redirect_count > self.MAX_REDIRECTS:
-                raise ValueError(f"Too many redirects (max {self.MAX_REDIRECTS})")
-            redirect_url = response.headers.get("Location")
-            if not redirect_url:
-                break
-            redirect_url = urljoin(url, redirect_url)
-            self.validate_url(redirect_url)
+        try:
+            while response.status_code in (301, 302, 303, 307, 308):
+                redirect_count += 1
+                if redirect_count > self.MAX_REDIRECTS:
+                    raise ValueError(f"Too many redirects (max {self.MAX_REDIRECTS})")
+                redirect_url = response.headers.get("Location")
+                if not redirect_url:
+                    break
+                redirect_url = urljoin(url, redirect_url)
+                self.validate_url(redirect_url)
+                response.close()
+                response = self._send_hop(
+                    deadline,
+                    lambda timeout, hop_url=redirect_url: self._session.get(
+                        hop_url, stream=True, timeout=timeout, allow_redirects=False
+                    ),
+                )
+                url = redirect_url
+        except BaseException:
             response.close()
-            response = self._send_hop(
-                deadline,
-                lambda timeout, hop_url=redirect_url: self._session.get(
-                    hop_url, stream=True, timeout=timeout, allow_redirects=False
-                ),
-            )
-            url = redirect_url
+            raise
+        return response, url
 
+    def _save_download(
+        self, response, url, save_dir, filename, max_size, on_path_resolved, deadline
+    ) -> dict:
+        """Stream ``response`` to disk; the caller closes ``response``."""
         response.raise_for_status()
 
-        # Check content length
         content_length = response.headers.get("Content-Length")
         if content_length and int(content_length) > max_size:
-            response.close()
             raise ValueError(
                 f"File too large: {int(content_length)} bytes (max: {max_size})"
             )
 
-        # Determine filename
         if not filename:
-            # Try Content-Disposition header
-            cd = response.headers.get("Content-Disposition", "")
-            if "filename=" in cd:
-                # Extract filename from header
-                match = re.search(r'filename[*]?=["\']?([^"\';]+)', cd)
-                if match:
-                    filename = match.group(1)
+            filename = _content_disposition_filename(
+                response.headers.get("Content-Disposition", "")
+            )
 
             if not filename:
                 # Fall back to URL path
@@ -1349,16 +1392,12 @@ class WebClient:
         ):
             raise ValueError(f"Path traversal detected: {filename}")
 
-        # Read content_type BEFORE response.close() — `requests.Response`
-        # caches headers but relying on a closed response for later attribute
-        # access is fragile (future requests versions may clear them).
         content_type = response.headers.get("Content-Type", "unknown")
 
         # Refuse to clobber an existing file. The name may come straight from
         # a remote Content-Disposition header, so `report.pdf` from a hostile
         # page must not be able to replace the user's own ~/Downloads/report.pdf.
         if save_path.exists():
-            response.close()
             raise ValueError(
                 f"Refusing to overwrite existing file: {save_path}. "
                 f"Pass an explicit filename= to download under a different name."
@@ -1367,11 +1406,7 @@ class WebClient:
         # Policy screening happens before the file is created, not after —
         # a blocked download must leave the filesystem untouched.
         if on_path_resolved is not None:
-            try:
-                on_path_resolved(save_path)
-            except BaseException:
-                response.close()
-                raise
+            on_path_resolved(save_path)
 
         # Created only after the screen, so a refused download leaves no folder.
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -1385,7 +1420,6 @@ class WebClient:
         try:
             part_file = open(part_path, "xb")
         except FileExistsError:
-            response.close()
             raise ValueError(
                 f"Cannot download to {save_path.name}: {part_path.name} already "
                 f"exists, so another download of this name is either in flight "
@@ -1414,8 +1448,6 @@ class WebClient:
         except BaseException:
             part_path.unlink(missing_ok=True)
             raise
-        finally:
-            response.close()
 
         return {
             "path": str(save_path),

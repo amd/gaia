@@ -96,6 +96,16 @@ def _cache_key(provider_id: str, account_email: str) -> Tuple[str, str]:
     return (provider_id, account_email)
 
 
+def invalidate_cached_tokens(provider_id: str) -> None:
+    """Drop every cached access token for ``provider_id``.
+
+    Called when the stored connection changes (connect, disconnect), so a new
+    account or scope set is never answered with the previous grant's token.
+    """
+    for key in [k for k in _cache if k[0] == provider_id]:
+        _cache.pop(key, None)
+
+
 def _is_expired(entry: _AccessTokenCache) -> bool:
     return entry.access_token is None or (
         entry.expires_at - time.monotonic() < _EXPIRY_BUFFER_SECONDS
@@ -232,7 +242,7 @@ async def get_or_refresh(
         return entry.access_token  # type: ignore[return-value]
 
     # One wait budget for the slot lock and the file lock together, so the
-    # wait plus the token POST stays inside get_or_refresh_sync's 30 s.
+    # wait plus the token POST stays inside run_sync's 30 s (_loop.py).
     deadline = time.monotonic() + _refresh_lock.LOCK_TIMEOUT_SECONDS
     try:
         await asyncio.wait_for(entry.lock.acquire(), _refresh_lock.LOCK_TIMEOUT_SECONDS)
@@ -518,42 +528,3 @@ def _replaced_error(provider_id: str) -> ConnectorsError:
         "or refreshed by another GAIA process) while this refresh was in "
         "flight; the stored connection was left as is. Retry the request."
     )
-
-
-def get_or_refresh_sync(
-    provider_id: str, *, account_email: str = DEFAULT_ACCOUNT
-) -> str:
-    """
-    Synchronous wrapper around ``get_or_refresh`` for sync agent contexts.
-
-    Must NOT be called from a thread that already has a running asyncio
-    event loop. Use ``await get_or_refresh(...)`` directly from async code
-    instead. This guard makes the failure surface as an actionable error
-    rather than a confusing crash deep inside the runtime.
-
-    Submits the coroutine to the persistent connector event loop (see
-    ``_loop.py``) and blocks with a bounded wait. The persistent loop avoids
-    two bugs that ``asyncio.run`` caused (#1579): the cross-loop Lock error
-    (Python ≤ 3.11) and the Windows ProactorEventLoop teardown hang on
-    repeated create/destroy cycles.
-
-    Contextvar propagation: the persistent-loop bridge captures
-    ``copy_context()`` at submit time, so the agent-id contextvar set by
-    the agent runtime is visible inside the async refresh code — the same
-    guarantee the previous ``asyncio.run`` path provided. See
-    ``tests/unit/connectors/test_agent_bridge.py``.
-    """
-    try:
-        running = asyncio.get_running_loop()
-    except RuntimeError:
-        running = None
-    if running is not None:
-        raise RuntimeError(
-            "get_or_refresh_sync was called from a thread with a running "
-            "asyncio event loop. Call `await get_or_refresh(...)` directly "
-            "from async code instead, or schedule this call on a worker "
-            "thread without a running loop."
-        )
-    from gaia.connectors._loop import run_sync
-
-    return run_sync(get_or_refresh(provider_id, account_email=account_email))

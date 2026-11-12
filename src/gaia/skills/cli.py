@@ -1333,9 +1333,17 @@ def _handle_trust(args: argparse.Namespace) -> int:
         candidate = Path(material).expanduser()
         if candidate.is_file():
             material = candidate.read_text(encoding="utf-8").strip()
-        identifier = store.add(
-            public_key_b64=material, publisher=args.publisher, role=args.role
-        )
+        try:
+            identifier = store.add(
+                public_key_b64=material, publisher=args.publisher, role=args.role
+            )
+        except ValueError as exc:
+            # The key-length check in the crypto library raises a bare ValueError.
+            raise SkillValidationError(
+                f"{args.public_key} is not a usable Ed25519 public key: {exc}. Pass "
+                "the base64 public key 'gaia skill keygen' generated, or the path "
+                "of its .pub file."
+            ) from exc
         store.save()
         attests = "verified" if args.role == ROLE_AMD else "community"
         print(f"✅ Trusting key {identifier} (role={args.role}, attests '{attests}')")
@@ -1419,38 +1427,51 @@ def _download(url: str, destination: Path) -> Path:
     import requests
 
     log.info("Downloading skill bundle from %s", url)
+    retry_hint = (
+        "Check the URL and your network, then retry — or download the .zip "
+        "yourself and pass the local path."
+    )
     try:
         response = requests.get(url, timeout=60, stream=True)
-        response.raise_for_status()
     except requests.RequestException as exc:
-        raise SkillError(
-            f"Could not download {url}: {exc}. Check the URL and your network, then "
-            "retry — or download the .zip yourself and pass the local path."
-        ) from exc
+        raise SkillError(f"Could not download {url}: {exc}. {retry_hint}") from exc
 
-    if not str(response.url).lower().startswith("https://"):
-        response.close()
-        raise SkillValidationError(
-            f"Refusing to import {url}: it redirected to {response.url}, which is "
-            "not https. Ask the publisher for an https download link, or download "
-            "the .zip yourself and pass its local path."
-        )
-
-    final_url = str(response.url)
-    if final_url != url:
-        from gaia.skills.capture import refuse_hub_url
-
-        # A redirect can land on the hub, same as capture's fetch.
+    try:
         try:
-            refuse_hub_url(final_url)
-        except SkillError:
-            response.close()
-            raise
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise SkillError(f"Could not download {url}: {exc}. {retry_hint}") from exc
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    with destination.open("wb") as handle:
-        for chunk in response.iter_content(chunk_size=65536):
-            handle.write(chunk)
+        if not str(response.url).lower().startswith("https://"):
+            raise SkillValidationError(
+                f"Refusing to import {url}: it redirected to {response.url}, which "
+                "is not https. Ask the publisher for an https download link, or "
+                "download the .zip yourself and pass its local path."
+            )
+
+        final_url = str(response.url)
+        if final_url != url:
+            from gaia.skills.capture import refuse_hub_url
+
+            # A redirect can land on the hub, same as capture's fetch.
+            refuse_hub_url(final_url)
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with destination.open("wb") as handle:
+                for chunk in response.iter_content(chunk_size=65536):
+                    handle.write(chunk)
+        except requests.RequestException as exc:
+            raise SkillError(
+                f"Download of {url} failed part-way: {exc}. {retry_hint}"
+            ) from exc
+        except OSError as exc:
+            raise SkillError(
+                f"Could not save the download of {url} to {destination}: {exc}. "
+                "Check free disk space and that the folder is writable, then retry."
+            ) from exc
+    finally:
+        response.close()
     return destination
 
 

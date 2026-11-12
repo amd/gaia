@@ -1489,6 +1489,12 @@ class TestAgentIdPathSafety:
         with pytest.raises(InstallError, match="Invalid agent id"):
             installer.agent_install_dir(bad_id, tmp_path)
 
+    def test_invalid_id_error_states_the_format_not_a_removed_command(self, tmp_path):
+        with pytest.raises(InstallError) as exc:
+            installer.agent_install_dir("../escape", tmp_path)
+        assert "letters, digits" in str(exc.value)
+        assert "gaia agent list" not in str(exc.value)
+
     def test_valid_ids_accepted(self, tmp_path):
         for good in ("email", "my-agent", "Agent_1.2", "a", "chat"):
             assert installer.agent_install_dir(good, tmp_path) == tmp_path / good

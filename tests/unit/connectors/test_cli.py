@@ -90,6 +90,17 @@ class TestConnectSelfDocuments:
         assert "amd-gaia.ai/docs/connectors/google" in err
 
 
+class TestConnectUnknownConnector:
+    @pytest.mark.parametrize("connector_id", ["does-not-exist", "mcp-github"])
+    def test_names_the_id_and_the_connectable_ones(self, connector_id):
+        rc, _out, err = _run("connectors", "connect", connector_id)
+
+        assert rc == 1
+        assert repr(connector_id) in err
+        assert "google" in err and "microsoft" in err
+        assert "Traceback" not in err
+
+
 class TestConnectGrantAgent:
     """`gaia connectors connect --grant-agent` folds connect + grant into one
     flow so the scopes can never drift (#2347 UX)."""

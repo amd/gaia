@@ -724,6 +724,14 @@ def import_bundle(
             f"Skill '{final_name}' is already installed at {target}. Pass "
             "--force to replace it."
         )
+    if target.exists() and target.resolve() == Path(source_dir).resolve():
+        # --force replaces the directory; over the source that is a delete.
+        raise SkillInstallError(
+            f"Refusing to import '{final_name}' on top of itself at {target}: "
+            "--force replaces the installed directory, which would delete the "
+            "skill you are importing. Import from a copy outside the skills "
+            "folder instead."
+        )
 
     destination_root.mkdir(parents=True, exist_ok=True)
     trusted = has_code and report.verdict == "ALLOW"

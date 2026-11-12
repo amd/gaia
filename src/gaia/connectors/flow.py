@@ -58,6 +58,7 @@ from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
 from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
 from gaia.connectors.providers import get as get_provider
 from gaia.connectors.store import DEFAULT_ACCOUNT, peek_connection, save_connection
+from gaia.connectors.tokens import invalidate_cached_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -807,6 +808,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         tenant=getattr(provider, "tenant", None),
         account_type=account_type,
     )
+    invalidate_cached_tokens(flow.provider_id)
 
     # No separate state-cache write needed — the keyring blob written
     # above is the source of truth for "configured / account / scopes",
@@ -1034,6 +1036,7 @@ async def poll_device_flow(
         tenant=getattr(provider, "tenant", None),
         account_type=account_type,
     )
+    invalidate_cached_tokens(provider_id)
 
     await _commit_grants_for_provider(provider_id, grant_agents, granted_scopes)
 

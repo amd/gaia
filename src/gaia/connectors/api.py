@@ -68,7 +68,11 @@ from gaia.connectors.store import list_connections as _store_list
 from gaia.connectors.store import (
     peek_connection,
 )
-from gaia.connectors.tokens import get_or_refresh, load_current_connection
+from gaia.connectors.tokens import (
+    get_or_refresh,
+    invalidate_cached_tokens,
+    load_current_connection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -510,6 +514,7 @@ async def revoke_connection_async(provider: str) -> Dict[str, Any]:
 
     result = await revoke_provider_token(provider)
     await locked_write(provider, delete_connection, provider)
+    invalidate_cached_tokens(provider)
     logger.info(
         "api: revoked connection provider=%s revoke_supported=%s "
         "revoked_remotely=%s",

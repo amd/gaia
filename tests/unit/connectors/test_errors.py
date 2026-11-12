@@ -297,3 +297,19 @@ class TestOAuthClientNotConfiguredError:
         assert "For the email agent" not in s
         assert "gaia connectors connect google --grant-agent <agent-id>" in s
         assert "<scope" not in s
+
+
+def test_every_docs_path_a_connector_error_cites_exists():
+    """A remedy pointing at a missing page leaves the user nowhere to look."""
+    import re
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[3]
+    cited = set()
+    for source in (repo / "src" / "gaia" / "connectors").rglob("*.py"):
+        cited.update(
+            re.findall(r"docs/[\w/.-]+\.mdx?", source.read_text(encoding="utf-8"))
+        )
+
+    assert "docs/sdk/infrastructure/connectors.mdx" in cited
+    assert sorted(p for p in cited if not (repo / p).is_file()) == []

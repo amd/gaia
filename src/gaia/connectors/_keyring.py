@@ -80,7 +80,7 @@ except ImportError as e:  # pragma: no cover - exercised via reload in tests
         "gaia connectors needs the 'keyring' package, which is not installed. "
         'Install it with `pip install keyring` (or `pip install "amd-gaia[ui]"` '
         "for the full Agent UI install). "
-        "See docs/sdk/infrastructure/connections.mdx."
+        "See docs/sdk/infrastructure/connectors.mdx."
     ) from e
 
 __all__ = [

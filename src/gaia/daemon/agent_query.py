@@ -34,7 +34,7 @@ from typing import Any, Dict, List, Optional
 from gaia.daemon import client, paths
 from gaia.daemon.constants import AUTH_SCHEME
 from gaia.daemon.errors import DaemonError
-from gaia.daemon.timeouts import agent_read_timeout
+from gaia.daemon.timeouts import agent_read_timeout, requests_read_timeout
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -373,6 +373,11 @@ def run_query(
 
     renderer = renderer or ConsoleRenderer(verbose=verbose)
 
+    try:
+        read_timeout = requests_read_timeout(agent_read_timeout())
+    except ValueError as e:
+        raise DaemonError(str(e)) from e
+
     # Ensure the daemon is up and the sidecar is running (loud on failure).
     inst = client.ensure_agent(agent_id)
 
@@ -420,7 +425,7 @@ def run_query(
             headers=headers,
             json=payload,
             stream=True,
-            timeout=(_CONNECT_TIMEOUT, agent_read_timeout()),
+            timeout=(_CONNECT_TIMEOUT, read_timeout),
         ) as response:
             if response.status_code != 200:
                 raise DaemonError(

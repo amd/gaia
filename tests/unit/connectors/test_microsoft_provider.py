@@ -212,6 +212,18 @@ class TestRegistryWorkConnector:
         # Must NOT silently point the user at the personal connector's id.
         assert "configure microsoft --client-id" not in msg
 
+    @pytest.mark.parametrize("pid", ["microsoft", "microsoft_work"])
+    def test_remedy_never_asks_a_public_client_for_a_secret(self, monkeypatch, pid):
+        from gaia.connectors.errors import OAuthClientNotConfiguredError
+
+        monkeypatch.delenv(f"GAIA_{pid.upper()}_CLIENT_ID", raising=False)
+        with pytest.raises(OAuthClientNotConfiguredError) as exc:
+            providers.get(pid)
+        msg = str(exc.value)
+        assert "--client-secret" not in msg
+        assert "CLIENT_SECRET" not in msg
+        assert f"GAIA_{pid.upper()}_CLIENT_ID" in msg
+
 
 class TestProtocol:
     def test_microsoft_satisfies_oauth_provider_protocol(self, _ms_env):

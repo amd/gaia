@@ -543,7 +543,8 @@ class TestImport:
         )
 
         assert rc == skills_cli.EXIT_OK
-        assert not state.closed
+        # Released after the body is read, success or not.
+        assert state.closed
         assert (manager.user_root / "meeting-notes" / "SKILL.md").is_file()
 
 

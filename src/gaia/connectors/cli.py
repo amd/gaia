@@ -164,7 +164,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_gg.add_argument("connector_id")
     p_gg.add_argument(
         "agent_id",
-        help="Namespaced agent id, e.g. 'builtin:chat' or 'custom:abc:inbox'",
+        help="Namespaced agent id, e.g. 'installed:gaia' or 'custom:abc:inbox'",
     )
     p_gg.add_argument(
         "--scopes",
@@ -210,7 +210,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_aa.add_argument("connector_id")
     p_aa.add_argument(
         "agent_id",
-        help="Namespaced agent id, e.g. 'builtin:chat' or 'custom:abc:inbox'",
+        help="Namespaced agent id, e.g. 'installed:gaia' or 'custom:abc:inbox'",
     )
     p_aa.add_argument(
         "--scopes",
@@ -337,6 +337,16 @@ def _handle_connect(args: argparse.Namespace) -> int:
         resolve_declared_scopes,
         start_authorization,
     )
+    from gaia.connectors.registry import REGISTRY
+
+    oauth_ids = sorted(s.id for s in REGISTRY.all() if s.type == "oauth_pkce")
+    if args.connector_id not in oauth_ids:
+        sys.stderr.write(
+            f"gaia connectors connect: unknown OAuth connector "
+            f"{args.connector_id!r}. Connect one of: {', '.join(oauth_ids)}. "
+            "Run 'gaia connectors list' to see every connector.\n"
+        )
+        return 1
 
     grant_agent = getattr(args, "grant_agent", None)
     explicit_scopes = args.scopes or []

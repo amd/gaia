@@ -556,7 +556,7 @@ class ScratchpadService(DatabaseMixin):
             # Skip table-level constraints that start with keywords like
             # ``CHECK(...)``, ``PRIMARY KEY(...)``, ``FOREIGN KEY(...)`` --
             # these are valid SQLite DDL but not per-column definitions.
-            first_token = part.split(None, 1)[0].upper()
+            first_token = re.split(r"[\s(]", part, maxsplit=1)[0].upper()
             if first_token in ("CHECK", "PRIMARY", "FOREIGN", "UNIQUE", "CONSTRAINT"):
                 continue
 
