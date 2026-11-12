@@ -15,7 +15,8 @@ import {
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import { isEscapeClaimed } from '../hooks/useEscapeToClose';
-import { CalendarApproval, CALENDAR_WRITE_TOOLS } from './CalendarApproval';
+import { CalendarApproval, CALENDAR_WRITE_TOOLS, unseen, visibleText } from './CalendarApproval';
+import { cmdReading, decodedPowerShell } from './shownText';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
@@ -150,7 +151,14 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
         ? splitCommandSummary(notification.summary ?? '')
         : null;
     const isPath = notification.tool === PATH_ACCESS_TOOL;
-    const { heading, question } = permissionPromptText(notification, t, markLtr);
+    // Characters that don't show are shown as [U+XXXX]: the card is approved as it reads.
+    const { heading, question } = permissionPromptText(notification, t, (s) => markLtr(visibleText(s, true)));
+    const shownDetail = visibleText(detail, true);
+    const command = typeof args.command === 'string' ? args.command : relayed?.command ?? '';
+    // What the command runs when its own text hides it: base64 PowerShell, cmd's ^ escapes.
+    const decoded = command ? decodedPowerShell(command) : '';
+    const reading = command.includes('^') ? cmdReading(command) : '';
+    const hidden = [detail, code, command, decoded, args.path].some(unseen);
 
     const calendar = CALENDAR_WRITE_TOOLS.has(notification.tool ?? '');
 
@@ -208,13 +216,18 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     <h2 id={`perm-${notification.id}`} className="perm-card-title">
                         <MarkedText text={heading} />
                     </h2>
-                    {detail && riskNote && <pre dir="ltr" className="perm-card-pre perm-card-exact">{detail}</pre>}
-                    {detail && !riskNote && <p className="perm-card-detail"><code dir="ltr">{detail}</code></p>}
+                    {detail && riskNote && <pre dir="ltr" className="perm-card-pre perm-card-exact">{shownDetail}</pre>}
+                    {detail && !riskNote && <p className="perm-card-detail"><code dir="ltr">{shownDetail}</code></p>}
                     {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{folder}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
-                    {code && <CodeBlock code={code} />}
+                    {code && <CodeBlock code={visibleText(code, true)} />}
                     {exactText && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-text">{exactText}</pre>}
-                    {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{relayed.command}</pre>}
+                    {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{visibleText(relayed.command, true)}</pre>}
+                    {decoded && <p className="perm-card-detail">{t('prompt.decodedCommand')}</p>}
+                    {decoded && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-decoded">{visibleText(decoded, true)}</pre>}
+                    {reading && reading !== command && <p className="perm-card-detail">{t('prompt.cmdReading')}</p>}
+                    {reading && reading !== command && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-cmd-reading">{visibleText(reading, true)}</pre>}
+                    {hidden && <p className="perm-card-risk" role="note" data-testid="perm-hidden-note"><bdi>{t('prompt.hiddenChars')}</bdi></p>}
                     {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{relayed.folder}</code></p>}
                     {relayed?.extras && <p className="perm-card-detail"><bdi>{relayed.extras}</bdi></p>}
                     {relayed?.note && <p className="perm-card-risk" role="note"><bdi>{relayed.note}</bdi></p>}

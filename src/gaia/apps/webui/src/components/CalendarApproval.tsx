@@ -129,7 +129,7 @@ function selectorFits(chars: string[], at: number): boolean {
 }
 
 /** `[U+202E]` in place of each, so what is approved reads as what is saved. */
-function visibleText(value: string, multiline: boolean): string {
+export function visibleText(value: string, multiline: boolean): string {
     const chars = [...value.replace(/\r\n/g, '\n')];
     const shown = chars.map((char, at) => {
         const isHidden = variationSelector(char) ? !selectorFits(chars, at) : hidden(char);
@@ -143,7 +143,7 @@ const UNSEEN_NOTE = "This text holds characters that don't show. Those that hide
     'appear as [U+XXXX]; ideograph variant marks are kept as written. They are saved as written.';
 
 /** Mirrors `has_unseen`: a code would show, or an ideograph variant mark is kept as written. */
-function unseen(value: unknown): boolean {
+export function unseen(value: unknown): boolean {
     if (typeof value !== 'string') return false;
     const chars = [...value.replace(/\r\n/g, '\n')];
     return chars.some((char, at) => {
