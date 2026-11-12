@@ -448,6 +448,22 @@
     /* The page-wide thumb matches the table border; a wide table needs a visible cue. */
     scrollbar-width: thin;
     scrollbar-color: var(--text-muted) transparent;
+    /* macOS hides scrollbars until you scroll, so fade the far edge while more columns remain. */
+    mask-image: linear-gradient(to right, #000 calc(100% - var(--table-fade)), transparent);
+    animation: md-table-fade linear both;
+    animation-timeline: scroll(self x);
+}
+[dir="rtl"] .md-table-wrap {
+    mask-image: linear-gradient(to left, #000 calc(100% - var(--table-fade)), transparent);
+}
+@property --table-fade {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
+}
+@keyframes md-table-fade {
+    0%, 90% { --table-fade: 40px; }
+    100% { --table-fade: 0px; }
 }
 .md-table {
     width: 100%;
