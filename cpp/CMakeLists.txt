@@ -444,6 +444,14 @@ if(GAIA_BUILD_GAIA_AGENT)
     endif()
     if(WIN32)
         target_link_libraries(gaiacpp PRIVATE psapi ws2_32)
+        # The manifest makes UTF-8 the process code page, so a path outside the
+        # PC's legacy code page survives every narrow string and file call.
+        if(MSVC)
+            target_sources(gaiacpp PRIVATE agents/gaia/gaiacpp.manifest)
+        else()
+            enable_language(RC)
+            target_sources(gaiacpp PRIVATE agents/gaia/gaiacpp.rc)
+        endif()
     endif()
     # Release archives must run on older distros than the build host (Lemonade
     # ships to Ubuntu 24.04, Debian 13, Fedora): carry the C++ runtime inside.

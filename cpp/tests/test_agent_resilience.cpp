@@ -7,7 +7,9 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <map>
+#include <set>
 
 #include <gaia/agent.h>
 #include <gaia/tool_registry.h>
@@ -310,7 +312,7 @@ TEST(AgentResilience, StepBudgetNoticesAndClosingAnswer) {
     const auto bodies = runToTheLimit(10, &r);
 
     EXPECT_EQ(r["result"], "Did what fit; the rest is unfinished.");
-    EXPECT_EQ(r["status"], "error") << "running out of steps is not success";
+    EXPECT_EQ(r["status"], "incomplete") << "running out of steps is not success, and not a failure either";
     ASSERT_EQ(bodies.size(), 11u);
     const auto notices = noticesBySteps(bodies, 10);
     ASSERT_EQ(notices.size(), 3u);
@@ -623,4 +625,255 @@ TEST(AgentTelemetry, UsageWithoutCacheDetailsReportsZeroCached) {
     EXPECT_EQ(r["usage"]["peak_context_tokens"], 55);
     EXPECT_EQ(r["tool_calls"], 0);
     EXPECT_TRUE(r["telemetry"]["tool_calls"].empty());
+}
+
+// ---- a stopped turn ----
+
+namespace {
+
+constexpr const char* kStopNote =
+    "(The user stopped this reply before it finished. Don't continue it unless they ask again.)";
+
+// ResilienceAgent plus a tool that stops the turn while it runs.
+class StoppableAgent : public ResilienceAgent {
+public:
+    using ResilienceAgent::ResilienceAgent;
+
+protected:
+    void registerTools() override {
+        ResilienceAgent::registerTools();
+        toolRegistry().registerTool(
+            "stop_here", "Stop the turn",
+            [this](const json&) -> json {
+                executed.push_back("stop_here");
+                requestCancel();
+                return json{{"ok", true}};
+            },
+            {});
+    }
+};
+
+std::vector<std::string> rolesOf(const json& messages) {
+    std::vector<std::string> roles;
+    for (const auto& m : messages) roles.push_back(m.value("role", ""));
+    return roles;
+}
+
+// Each assistant tool call is answered by the tool messages right after it, and no result stands alone.
+void expectToolCallsPaired(const json& messages) {
+    std::set<std::string> open;
+    for (const auto& m : messages) {
+        if (m.value("role", "") == "tool") {
+            EXPECT_EQ(open.erase(m.value("tool_call_id", "")), 1u) << "a result nobody asked for: " << m.dump();
+            continue;
+        }
+        EXPECT_TRUE(open.empty()) << "a tool call left without its result before " << m.dump();
+        if (m.value("role", "") == "assistant" && m.contains("tool_calls")) {
+            for (const auto& tc : m["tool_calls"]) open.insert(tc.value("id", ""));
+        }
+    }
+    EXPECT_TRUE(open.empty()) << "the last tool call has no result";
+}
+
+const char* const kCutOffTagCall = "<tool_call>\n<function=add>\n<parameter=a>\n2";
+const char* const kTagCall =
+    "<tool_call>\n<function=add>\n<parameter=a>\n2\n</parameter>\n<parameter=b>\n3\n</parameter>\n"
+    "</function>\n</tool_call>";
+
+}  // namespace
+
+TEST(AgentResilience, ARequestStoppedDuringTheModelCallIsNotPendingOnTheNextTurn) {
+    bench::MockLlmServer mock;
+    mock.enableSseStreaming(true);
+    AgentConfig cfg = cfgFor(mock);
+    cfg.streaming = true;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    // Stops the turn as its reply starts to stream.
+    std::atomic<bool> stop{true};
+    agent.setCancelCheck([&] { return stop.load() && mock.requestCount() >= 1; });
+
+    json first = agent.processQuery("Write a long essay about rivers.");
+    EXPECT_EQ(first["status"], "cancelled") << first.dump();
+    ASSERT_EQ(agent.history().size(), 2u);
+    EXPECT_EQ(agent.history()[1].role, MessageRole::ASSISTANT);
+    EXPECT_EQ(agent.history()[1].content, kStopNote) << "none of the stopped reply is kept as an answer";
+
+    stop = false;
+    json second = agent.processQuery("What is 2 + 2?");
+    EXPECT_EQ(second["result"], "Hello world");
+    ASSERT_EQ(mock.receivedBodies().size(), 2u);
+    const json messages = json::parse(mock.receivedBodies()[1])["messages"];
+    ASSERT_EQ(rolesOf(messages), (std::vector<std::string>{"system", "user", "assistant", "user"})) << messages.dump(2);
+    EXPECT_EQ(messages[1]["content"], "Write a long essay about rivers.");
+    EXPECT_EQ(messages[2]["content"], kStopNote);
+    EXPECT_FALSE(messages[2].contains("tool_calls"));
+    EXPECT_EQ(messages[3]["content"], "What is 2 + 2?");
+}
+
+TEST(AgentResilience, AReplyThatLandsAfterTheStopIsKeptButMarkedStopped) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("Rivers are long."));
+    mock.pushResponse(answer("4"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    std::atomic<bool> stop{true};
+    agent.setCancelCheck([&] { return stop.load() && mock.requestCount() >= 1; });
+
+    EXPECT_EQ(agent.processQuery("Write a long essay about rivers.")["status"], "cancelled");
+    stop = false;
+    agent.processQuery("What is 2 + 2?");
+
+    const json messages = json::parse(mock.receivedBodies().at(1))["messages"];
+    ASSERT_EQ(rolesOf(messages), (std::vector<std::string>{"system", "user", "assistant", "user"})) << messages.dump(2);
+    EXPECT_EQ(messages[2]["content"], std::string("Rivers are long.\n\n") + kStopNote);
+}
+
+TEST(AgentResilience, AStopDuringAToolStepKeepsTheCallAnsweredAndAddsTheNote) {
+    bench::MockLlmServer mock;
+    const json twoCalls = {
+        {{"id", "c1"}, {"type", "function"}, {"function", {{"name", "stop_here"}, {"arguments", "{}"}}}},
+        {{"id", "c2"}, {"type", "function"}, {"function", {{"name", "add"}, {"arguments", R"({"a":1})"}}}}};
+    mock.pushResponse(
+        json{{"choices",
+              json::array({{{"message", {{"role", "assistant"}, {"content", nullptr}, {"tool_calls", twoCalls}}}}})}}
+            .dump());
+    mock.pushResponse(answer("4"));
+    StoppableAgent agent(cfgFor(mock));
+    agent.initForTest();
+
+    EXPECT_EQ(agent.processQuery("Tidy the folder.")["status"], "cancelled");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"stop_here"}));
+    EXPECT_EQ(agent.processQuery("What is 2 + 2?")["result"], "4");
+
+    ASSERT_EQ(mock.receivedBodies().size(), 2u) << "the stopped turn made no further model call";
+    const json messages = json::parse(mock.receivedBodies()[1])["messages"];
+    ASSERT_EQ(rolesOf(messages),
+              (std::vector<std::string>{"system", "user", "assistant", "tool", "assistant", "user"}))
+        << messages.dump(2);
+    expectToolCallsPaired(messages);
+    ASSERT_EQ(messages[2]["tool_calls"].size(), 1u) << "the call that never ran is not replayed";
+    EXPECT_EQ(messages[2]["tool_calls"][0]["id"], "c1");
+    EXPECT_EQ(messages[3]["tool_call_id"], "c1");
+    EXPECT_EQ(messages[4]["content"], kStopNote);
+    EXPECT_FALSE(messages[4].contains("tool_calls"));
+}
+
+TEST(AgentResilience, AStopBeforeAnyToolRunsLeavesNoCallWithoutAResult) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(call("c1", "add", R"({"a":1,"b":2})"));
+    mock.pushResponse(answer("4"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    std::atomic<bool> stop{true};
+    agent.setCancelCheck([&] { return stop.load() && mock.requestCount() >= 1; });
+
+    EXPECT_EQ(agent.processQuery("Add them.")["status"], "cancelled");
+    EXPECT_TRUE(agent.executed.empty());
+    stop = false;
+    agent.processQuery("What is 2 + 2?");
+
+    const json messages = json::parse(mock.receivedBodies().at(1))["messages"];
+    ASSERT_EQ(rolesOf(messages), (std::vector<std::string>{"system", "user", "assistant", "user"})) << messages.dump(2);
+    expectToolCallsPaired(messages);
+    EXPECT_EQ(messages[2]["content"], kStopNote);
+    EXPECT_FALSE(messages[2].contains("tool_calls"));
+}
+
+// ---- how a turn that stopped short is reported ----
+
+TEST(AgentResilience, ALoopOfFailingCallsWithAClosingAnswerIsIncomplete) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 8; ++i) mock.pushResponse(call("c" + std::to_string(i), "soft_fail", "{}"));
+    mock.pushResponse(answer("The disk is full, so nothing was saved."));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxSteps = 20;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("save it");
+    EXPECT_EQ(r["result"], "The disk is full, so nothing was saved.");
+    EXPECT_EQ(r["status"], "incomplete") << r.dump();
+}
+
+TEST(AgentResilience, AStopWithNoUsableClosingAnswerIsAnError) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 8; ++i) mock.pushResponse(call("c" + std::to_string(i), "add", R"({"a":1})"));
+    mock.pushResponse(answer(kTagCall));
+    AgentConfig cfg = cfgFor(mock);
+    cfg.maxSteps = 20;
+    ResilienceAgent agent(cfg);
+    agent.initForTest();
+    json r = agent.processQuery("add");
+    EXPECT_EQ(r["result"], "Task stopped due to repeated tool call loop.");
+    EXPECT_EQ(r["status"], "error") << r.dump();
+}
+
+// ---- a tool call written as text ----
+
+TEST(AgentResilience, AClosingReplyThatIsAToolCallInTextIsNotTheAnswer) {
+    for (const char* closing : {kCutOffTagCall, kTagCall,
+                                "<tool_call>\n{\"name\": \"add\", \"arguments\": {\"a\": 2}}\n</tool_call>",
+                                "One more.\n{\"tool\": \"add\", \"tool_args\": {\"a\": 2}}"}) {
+        bench::MockLlmServer mock;
+        for (int i = 0; i < 3; ++i) {
+            mock.pushResponse(call("c" + std::to_string(i), "add", R"({"a":)" + std::to_string(i) + "}"));
+        }
+        mock.pushResponse(answer(closing));
+        AgentConfig cfg = cfgFor(mock);
+        cfg.maxSteps = 3;
+        ResilienceAgent agent(cfg);
+        agent.initForTest();
+        json r = agent.processQuery("go");
+        EXPECT_EQ(r["result"], "Reached maximum steps limit (3 steps).") << closing;
+        EXPECT_EQ(r["status"], "error");
+        EXPECT_EQ(agent.executed.size(), 3u) << "the closing call must not run: " << closing;
+        EXPECT_EQ(mock.requestCount(), 4);
+    }
+}
+
+TEST(AgentResilience, ACallWrittenAsTagsMidTurnIsRunNotShownAsTheAnswer) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer(std::string("I'll add them.\n") + kTagCall));
+    mock.pushResponse(answer("The sum is 5."));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    json r = agent.processQuery("add 2 and 3");
+    EXPECT_EQ(r["result"], "The sum is 5.");
+    EXPECT_EQ(r["status"], "success");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"add"}));
+    ASSERT_EQ(mock.receivedBodies().size(), 2u);
+    const json last = json::parse(mock.receivedBodies()[1])["messages"].back();
+    // The parameters arrived as text and reached the tool as the integers it declares.
+    EXPECT_NE(last["content"].get<std::string>().find("\"sum\":5"), std::string::npos) << last.dump();
+}
+
+TEST(AgentResilience, ACutOffTagCallMidTurnIsSentBackAndNeverTheAnswer) {
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(kCutOffTagCall));
+        mock.pushResponse(answer("Done."));
+        ResilienceAgent agent(cfgFor(mock));
+        agent.initForTest();
+        json r = agent.processQuery("add 2 and 3");
+        EXPECT_EQ(r["result"], "Done.");
+        EXPECT_TRUE(agent.executed.empty());
+        ASSERT_EQ(mock.receivedBodies().size(), 2u);
+        const json last = json::parse(mock.receivedBodies()[1])["messages"].back();
+        EXPECT_EQ(last["role"], "user");
+        const std::string text = last["content"];
+        EXPECT_EQ(text.rfind("[Your tool call was not run]", 0), 0u) << text;
+        EXPECT_NE(text.find("cut off before </parameter>"), std::string::npos) << text;
+    }
+    {
+        bench::MockLlmServer mock;
+        mock.pushResponses(answer(kCutOffTagCall), 3);
+        ResilienceAgent agent(cfgFor(mock));
+        agent.initForTest();
+        json r = agent.processQuery("add 2 and 3");
+        const std::string result = r["result"];
+        EXPECT_EQ(r["status"], "error");
+        EXPECT_EQ(result.rfind("Unable to complete task", 0), 0u) << result;
+        EXPECT_EQ(result.find("<tool_call>"), std::string::npos) << result;
+        EXPECT_EQ(mock.requestCount(), 3);
+    }
 }

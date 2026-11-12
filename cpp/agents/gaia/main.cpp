@@ -637,6 +637,7 @@ int runPrint(const Cli& cli) {
     const gaia::json usage = result.value("usage", gaia::json::object());
     // Same names as `gaia -p --output-format json`, so one reader takes both agents.
     gaia::json out = {{"status", status},
+                      {"is_error", status != "success"},
                       {"steps", result.value("steps_taken", 0)},
                       {"tool_errors", result.value("tool_errors", 0)},
                       {"model", cfg.modelId},

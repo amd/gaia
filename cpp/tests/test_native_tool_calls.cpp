@@ -1354,6 +1354,7 @@ TEST(LoopDetectionTest, LoopAfterNudgeStopsWithClosingAnswer) {
     json result = agent.processQuery("go", 20);
 
     EXPECT_EQ(result["result"], "Partial: echoed same.");
+    EXPECT_EQ(result["status"], "success") << "a loop the model then answered from is a finished turn";
     // 3 run, 4th nudged, window cleared: 3 more run, the next is the second loop.
     EXPECT_EQ(agent.executed.size(), 6u);
     const json closing = json::parse(mock.receivedBodies().back());

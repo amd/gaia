@@ -341,6 +341,13 @@ struct ParsedResponse {
     std::optional<std::string> toolName;      // Tool to call
     std::optional<json>        toolArgs;      // Arguments for tool
     std::optional<json>        plan;          // Multi-step plan (array)
+
+    // A call written as <function=name><parameter=key>: every value is text,
+    // to be typed against the tool's parameters.
+    bool toolArgsAreText = false;
+    // Tool-call tags that cannot be run as written (cut off, no name): neither
+    // a call nor an answer. Holds what is wrong, for the model.
+    std::optional<std::string> malformedToolCall;
 };
 
 // ---- Agent Configuration ----

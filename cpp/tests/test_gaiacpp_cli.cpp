@@ -203,6 +203,32 @@ TEST_F(GaiacppCli, TheDefaultStepLimitIsABackstopNotABudget) {
     }
 }
 
+TEST_F(GaiacppCli, ATurnThatRanOutOfStepsWithAnAnswerIsIncompleteAndExitsOne) {
+    bench::MockLlmServer mock;
+    pushReads(mock, dir_ / "work", 3);
+    const gaia::ProcessResult r = run(mock, "", " --max-steps 3");
+    EXPECT_EQ(r.exitCode, 1) << r.stderr_output;
+    const json out = json::parse(r.stdout_output);
+    EXPECT_EQ(out["status"], "incomplete") << out.dump();
+    EXPECT_EQ(out["is_error"], true);
+    EXPECT_EQ(out["result"], "all read");
+}
+
+TEST_F(GaiacppCli, ALoopTheModelThenAnswersFromIsASuccessAndExitsZero) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 8; ++i) {
+        mock.pushResponse(withUsage(toolCall("file_read", R"({"path":"note.txt"})"), 100, 0, 5));
+    }
+    mock.pushResponse(withUsage(finalAnswer("The note says hello."), 100, 0, 5));
+    const gaia::ProcessResult r = run(mock, "");
+    EXPECT_EQ(r.exitCode, 0) << r.stderr_output;
+    const json out = json::parse(r.stdout_output);
+    EXPECT_EQ(out["status"], "success") << out.dump();
+    EXPECT_EQ(out["is_error"], false);
+    EXPECT_EQ(out["result"], "The note says hello.");
+    EXPECT_EQ(out["num_llm_calls"], 9);
+}
+
 TEST_F(GaiacppCli, EitherStepLimitVariableIsHonouredAndTheFlagWins) {
     // The model wants one more read than the limit allows, so only the limit ends the turn there.
     const auto stopsAt = [this](int limit, const std::map<std::string, std::string>& env, const std::string& args) {
@@ -211,7 +237,7 @@ TEST_F(GaiacppCli, EitherStepLimitVariableIsHonouredAndTheFlagWins) {
         mock.pushResponse(withUsage(finalAnswer("never asked for"), 100, 0, 5));
         const gaia::ProcessResult r = run(mock, "", args, env);
         const json out = json::parse(r.stdout_output);
-        return out["num_steps"] == limit && out["status"] == "error" && out["result"] == "all read";
+        return out["num_steps"] == limit && out["status"] == "incomplete" && out["result"] == "all read";
     };
     EXPECT_TRUE(stopsAt(3, {{"GAIA_AGENT_MAX_STEPS", "3"}}, ""));
     EXPECT_TRUE(stopsAt(4, {{"GAIA_MAX_STEPS", "4"}}, ""));

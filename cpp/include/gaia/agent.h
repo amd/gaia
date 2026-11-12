@@ -321,6 +321,10 @@ protected:
         return std::nullopt;
     }
 
+    /// Called once as a query starts, before its first model call. Override to
+    /// capture what the system prompt should hold fixed for the whole query.
+    virtual void onTurnStart() {}
+
     /// One tool call made during the current query.
     struct ToolCallRecord {
         std::string name;
