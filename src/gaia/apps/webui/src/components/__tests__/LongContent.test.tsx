@@ -63,18 +63,24 @@ describe('long user messages', () => {
 
     it('scrolls the message back into view only after it collapses', () => {
         const scroll = vi.fn();
+        const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
         Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
             value(this: HTMLElement) { scroll(this.classList.contains('msg-excerpt')); },
             configurable: true,
         });
-        render(<MessageBubble message={{ ...base, content: numbered(700) }} />);
+        try {
+            render(<MessageBubble message={{ ...base, content: numbered(700) }} />);
 
-        fireEvent.click(screen.getByRole('button', { name: 'Show all (700 lines)' }));
-        expect(scroll).not.toHaveBeenCalled();
+            fireEvent.click(screen.getByRole('button', { name: 'Show all (700 lines)' }));
+            expect(scroll).not.toHaveBeenCalled();
 
-        fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
-        expect(scroll).toHaveBeenCalledTimes(1);
-        expect(scroll).toHaveBeenCalledWith(true);
+            fireEvent.click(screen.getByRole('button', { name: 'Show less' }));
+            expect(scroll).toHaveBeenCalledTimes(1);
+            expect(scroll).toHaveBeenCalledWith(true);
+        } finally {
+            if (original) Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', original);
+            else delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+        }
     });
 
     it('shows the start and the end of a long paste, so a question typed last is seen (#7379)', () => {
