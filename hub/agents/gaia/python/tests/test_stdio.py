@@ -773,10 +773,27 @@ def test_usage_from_result_tool_count_variants():
         == {}
     )
     assert stdio._usage_from_result({"tools_used": True}) == {}
-    assert stdio._usage_from_result(
-        {"model_messages": [{"role": "tool", "name": "read_file"}]}
-    ) == {"tools_used": 1}
     assert stdio._usage_from_result("raw string", tool_count=2) == {"tools_used": 2}
+    assert stdio._usage_from_result({"tools_used": -1}, tool_count=2) == {}
+    assert stdio._usage_from_result({"conversation": []}, tool_count=2) == {}
+    assert stdio._usage_from_result(
+        {"conversation": [None, "tool", {"role": "assistant"}, {"role": "tool"}]}
+    ) == {"tools_used": 1}
+
+
+def test_earlier_turns_tool_results_are_not_counted():
+    """model_messages replays the session's history, so its tool results span
+    earlier turns; the handler's count for this turn wins over it."""
+    history = [
+        {"role": "user", "content": "earlier"},
+        {"role": "tool", "name": "read_file", "content": "ok"},
+        {"role": "tool", "name": "run_shell", "content": "ok"},
+        {"role": "user", "content": "now"},
+    ]
+    assert stdio._usage_from_result({"model_messages": history}, tool_count=1) == {
+        "tools_used": 1
+    }
+    assert stdio._usage_from_result({"model_messages": history}) == {}
 
 
 def test_a_turn_that_ended_in_an_error_event_is_not_recorded():

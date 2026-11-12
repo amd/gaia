@@ -1445,9 +1445,8 @@ def _tool_count_from_result(value: Dict[str, Any], *, fallback: int = 0) -> int:
     explicit = value.get("tools_used")
     if isinstance(explicit, int) and not isinstance(explicit, bool):
         return max(explicit, 0)
+    # Not model_messages: it carries earlier turns' tool results too.
     messages = value.get("conversation")
-    if not isinstance(messages, list):
-        messages = value.get("model_messages")
     if isinstance(messages, list):
         return sum(
             1 for msg in messages if isinstance(msg, dict) and msg.get("role") == "tool"
