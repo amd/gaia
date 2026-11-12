@@ -19,6 +19,7 @@ from gaia.agents.base import file_snapshots
 
 from .database import ChatDatabase
 from .turn_summary import is_openable
+from .utils import managed_documents_dir
 
 _IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg"})
 #: Documents and data meant to leave GAIA: reports, tables, slides.
@@ -81,6 +82,21 @@ def _item(
     }
 
 
+def _file_size(path: str) -> Optional[int]:
+    """The file's size, or None when it is not there to ask."""
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
+def _is_library_copy(path: str) -> bool:
+    """Whether *path* is a copy the Document library made in its own folder."""
+    return Path(os.path.realpath(path)).parent == Path(
+        os.path.realpath(managed_documents_dir())
+    )
+
+
 def list_outputs(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     """Everything the chat produced, newest first."""
     times = db.get_message_times(session_id)
@@ -121,6 +137,8 @@ def list_outputs(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
             newest_file[_key(path)] = item
 
     seen_docs = set()
+    # (name, size) of each document a turn indexed, to know its library copy.
+    indexed_originals = set()
     for answer in db.get_turn_summaries(session_id):
         mid, at, summary = answer["id"], answer["created_at"], answer["summary"]
         for f in summary.get("files") or []:
@@ -128,6 +146,9 @@ def list_outputs(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
         for out in summary.get("outputs") or []:
             if out["kind"] == "document" and out.get("path"):
                 seen_docs.add(_key(out["path"]))
+                size = _file_size(out["path"])
+                if size is not None:
+                    indexed_originals.add((Path(out["path"]).name.lower(), size))
             if out["kind"] == "image" and out.get("path"):
                 changes.pop((mid, _key(out["path"])), None)
             items.append(
@@ -150,6 +171,10 @@ def list_outputs(db: ChatDatabase, session_id: str) -> Dict[str, Any]:
     for doc in db.get_session_documents(session_id):
         path = doc.get("filepath")
         if not path or _key(path) in seen_docs:
+            continue
+        name = (doc.get("filename") or "").lower()
+        if _is_library_copy(path) and (name, doc.get("file_size")) in indexed_originals:
+            # The copy the library made of a file a turn indexed: that turn's row.
             continue
         items.append(
             _item(

@@ -210,6 +210,54 @@ def test_documents_added_to_the_chat_are_listed(client, session_id, tmp_path):
     )
 
 
+def _index_outside_file(client, session_id, source, monkeypatch):
+    """A turn indexed *source*, a file outside the library, as the agent does."""
+    from gaia.ui import agent_documents
+    from gaia.ui.agent_documents import add_indexed_documents
+
+    # tmp_path sits under the user folder, which the library opens in place.
+    monkeypatch.setattr(agent_documents, "is_within_document_roots", lambda p: False)
+
+    db = client.app.state.db
+    indexed = {"kind": "document", "name": source.name, "path": str(source)}
+    mid = _answer(db, session_id, _summary(outputs=[indexed]))
+    added = add_indexed_documents(db, session_id, [(str(source), 3)])
+    return mid, added.documents[0]
+
+
+def test_a_file_indexed_from_outside_the_library_is_one_row(
+    client, session_id, tmp_path, monkeypatch
+):
+    """The turn names the original; the chat's attached copy is the same document."""
+    source = tmp_path / "elsewhere" / "outside.md"
+    source.parent.mkdir()
+    source.write_text("# Harbor notes", encoding="utf-8")
+    mid, copy = _index_outside_file(client, session_id, source, monkeypatch)
+    assert copy["filepath"] != str(source)  # the library holds its own copy
+
+    (item,) = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
+    assert (item["name"], item["message_id"]) == ("outside.md", mid)
+    assert item["path"] == str(source)
+
+
+def test_another_document_with_the_same_name_keeps_its_own_row(
+    client, session_id, tmp_path, monkeypatch
+):
+    source = tmp_path / "elsewhere" / "outside.md"
+    source.parent.mkdir()
+    source.write_text("# Harbor notes", encoding="utf-8")
+    _index_outside_file(client, session_id, source, monkeypatch)
+    other = tmp_path / "other" / "outside.md"
+    other.parent.mkdir()
+    other.write_text("# A different, longer document", encoding="utf-8")
+    db = client.app.state.db
+    record = db.add_document("outside.md", str(other), "hash-other", 30, 1)
+    db.attach_document(session_id, record["id"])
+
+    items = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
+    assert sorted(i["path"] for i in items) == sorted([str(source), str(other)])
+
+
 def test_survives_a_reload(home, tmp_path):
     db_path = tmp_path / "chat.db"
     target = tmp_path / "keep.md"
