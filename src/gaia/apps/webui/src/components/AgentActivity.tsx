@@ -182,6 +182,7 @@ function toolFallbackLabel(step: AgentStep, t: Translate): string {
     const unfinished = step.success == null && !step.result;
     return step.active
         ? say(t, meta.activeLabel)
+        : step.timedOut ? t('tool.timedOut', { label: meta.activeLabel })
         : step.declined ? t('tool.declined', { label: meta.activeLabel })
         : step.success === false ? t('tool.failed', { label: meta.activeLabel })
         : unfinished ? t('tool.unfinished', { label: meta.activeLabel }) : say(t, meta.label);
@@ -193,8 +194,8 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
     // GAIA writes this row itself, so it can say it in the UI's language.
     if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
-    // A present-tense narration would read as if the call you declined ran.
-    if (step.declined && !step.active) return toolFallbackLabel(step, t);
+    // A present-tense narration would read as if a call that never ran had run.
+    if ((step.declined || step.timedOut) && !step.active) return toolFallbackLabel(step, t);
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
 }
 
@@ -444,7 +445,8 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
     for (const row of rows) {
         let label: MessageRef;
         let failedLabel: MessageRef | undefined;
-        if (row.type === 'tool' && row.declined) label = ref('activity.youDeclined');
+        if (row.type === 'tool' && row.timedOut) label = ref('activity.timedOut');
+        else if (row.type === 'tool' && row.declined) label = ref('activity.youDeclined');
         else if (row.type === 'tool') {
             const meta = getToolMeta(row.tool, row);
             const skill = skillName(row);
@@ -882,8 +884,8 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
-    const declined = !!step.declined && !step.active;
-    const failure = step.success === false && step.result && !declined ? step.result : '';
+    const notRun = (!!step.declined || !!step.timedOut) && !step.active;
+    const failure = step.success === false && step.result && !notRun ? step.result : '';
     const timing = waiting
         ? ''
         : step.active
@@ -891,7 +893,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
         : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
     return (
-        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false && !declined ? 'error' : ''} ${declined ? 'declined' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
+        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false && !notRun ? 'error' : ''} ${notRun ? 'declined' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
             <button
                 className="flow-tool-header"
                 onClick={onToggle}
@@ -906,7 +908,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     {/* What the step did, not whether it worked: only a running or failed step says otherwise. */}
                     {step.active && !waiting ? (
                         <Loader2 size={13} className="flow-tool-spinner" />
-                    ) : declined ? (
+                    ) : notRun ? (
                         <Ban size={13} className="flow-tool-icon" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
