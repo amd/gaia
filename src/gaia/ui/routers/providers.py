@@ -29,7 +29,12 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from gaia.llm.local_only import cloud_blocked, local_only_key_message
+from gaia.llm.local_only import (
+    cloud_blocked,
+    local_only_key_message,
+    recipes_confirm_local,
+    recipes_in_catalog,
+)
 from gaia.llm.surface_hints import (
     AGENT_UI_LOCAL_ONLY_HINT,
     APP_RESTART_HINT,
@@ -1563,16 +1568,34 @@ def clear_restore_notice() -> None:
         _restore_result = {"status": "none", "message": None}
 
 
-def refuse_blocked_cloud_model(model_id: str) -> None:
-    """Refuse *model_id* when it is a cloud model and Local only is on.
+def _known_local_without_catalog(model_id: str) -> bool:
+    """True when *model_id* is local by shape or by declaration.
 
-    Raises 409 for a cloud model, and 503 when only the model server's list
-    could say and it can't be read.
+    A bare id names no namespaced model, and an id GAIA declares is local
+    by declaration. Saving one must work without asking the model server.
+    """
+    from gaia.llm.lemonade_client import find_model_requirement, may_be_cloud_model
+
+    return (
+        not may_be_cloud_model(model_id) or find_model_requirement(model_id) is not None
+    )
+
+
+def refuse_blocked_cloud_model(model_id: str) -> None:
+    """Refuse *model_id* when Local only can't vouch that it runs here.
+
+    Raises 409 for a cloud model or a router collection, and 503 when only
+    the model server's list could say and it can't be read.
     """
     if not cloud_blocked():
         return
     try:
         cloud = _is_cloud_model(model_id)
+        recipes = (
+            None
+            if cloud or _known_local_without_catalog(model_id)
+            else _catalog_recipes(model_id)
+        )
     except ProviderError as e:
         raise HTTPException(
             status_code=503,
@@ -1586,6 +1609,17 @@ def refuse_blocked_cloud_model(model_id: str) -> None:
             status_code=409,
             detail=(
                 f"Can't switch to {model_label(model_id)}: Local only is on. "
+                f"{AGENT_UI_LOCAL_ONLY_HINT}"
+            ),
+        )
+    # A router collection can forward to a cloud member, so the catalog must
+    # confirm every recipe it lists runs on this PC: the same allowlist the
+    # per-turn guard applies, so the two checks can't disagree.
+    if recipes is not None and not recipes_confirm_local(recipes):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_id}: Local only is on. "
                 f"{AGENT_UI_LOCAL_ONLY_HINT}"
             ),
         )
@@ -1780,6 +1814,17 @@ def _lemonade_catalog() -> List[Dict[str, Any]]:
     if status >= 400:
         raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
     return list(body.get("data") or [])
+
+
+def _catalog_recipes(model_id: str) -> List[Optional[str]]:
+    """Recipes Lemonade's catalog lists for *model_id*.
+
+    The same allowlist the per-turn guard applies, so a model the guard
+    would refuse can never be saved as the Custom model ID.
+    """
+    catalog = _lemonade_catalog()
+    entries = {e["id"]: e for e in catalog if isinstance(e, dict) and e.get("id")}
+    return recipes_in_catalog(model_id, entries, lambda: {"data": catalog})
 
 
 @router.post("/api/providers/local/custom/check")
