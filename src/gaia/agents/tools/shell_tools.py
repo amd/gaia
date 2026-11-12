@@ -2981,23 +2981,36 @@ _GIT_CONFIG_SECTION = re.compile(r'^\s*\[\s*([A-Za-z0-9.-]+)(?:\s+"([^"]*)")?\s*
 _GIT_CONFIG_KEY = re.compile(r"^\s*([A-Za-z][A-Za-z0-9-]*)\s*(?:=|$)")
 
 
+#: What git accepts in HEAD: a ref under refs/, or a SHA-1 or SHA-256 commit id.
+_GIT_HEAD = re.compile(r"ref:\s*refs/|[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\s*$")
+
+
+def _git_head_is_valid(head: Path) -> bool:
+    """Whether git would accept *head*, so it stops looking for a repository here."""
+    if head.is_symlink() or not head.is_file():
+        return False
+    return bool(_GIT_HEAD.match(head.read_text(encoding="utf-8", errors="replace")))
+
+
 def _git_dirs(start: str) -> Optional[List[Path]]:
     """The git dirs whose ``config`` a git run in *start* reads, or None if odd."""
     here = Path(start).resolve()
     for folder in (here, *here.parents):
         dot = folder / ".git"
         if dot.is_dir():
-            # git skips a .git that is not a repository and keeps looking up.
-            complete = (dot / "HEAD").is_file() and all(
-                (dot / part).is_dir() for part in ("objects", "refs")
-            )
-            if not complete:
+            # git skips a .git that is not a repository and keeps looking up,
+            # so anything short of one git would use asks.
+            if not _git_head_is_valid(dot / "HEAD"):
                 return None
             # git follows commondir inside a .git folder too.
             dirs = [dot]
             common = dot / "commondir"
             if common.is_file():
                 dirs.append((dot / common.read_text().strip()).resolve())
+            if not all(
+                (d / part).is_dir() for d in dirs for part in ("objects", "refs")
+            ):
+                return None
             return dirs
         if (folder / "HEAD").is_file() and (folder / "objects").is_dir():
             # A bare repository: git reads this folder's own config.
@@ -4034,6 +4047,9 @@ class ShellToolsMixin:
             return False
         bare = _DISCARDED_STDERR.sub("", command)
         if not _UNASKED_LINE.fullmatch(bare):
+            return False
+        if re.search(r"[\\/]{2}", bare):
+            # A network path; even checking where it leads would contact that host.
             return False
         if os.name != "nt" and "\\" in bare:
             # Off Windows a backslash is an escape, not a folder separator.

@@ -139,6 +139,107 @@ def test_a_bare_repository_still_asks(host, tmp_path):
     assert not _unasked(host, tmp_path, "git log -1")
 
 
+SIGNING_CONFIG = (
+    PLAIN_CONFIG + "[log]\n\tshowSignature = true\n[gpg]\n\tprogram = ./evil\n"
+)
+
+
+@pytest.mark.parametrize(
+    "head",
+    ["junk\n", "", "ref: heads/main\n", "0123abc\n", "refs/heads/main\n"],
+)
+def test_a_decoy_git_folder_git_would_skip_still_asks(host, tmp_path, head):
+    # git rejects a .git whose HEAD is not a ref or a commit id and keeps
+    # looking up, into the outer repo's config.
+    _repo(tmp_path, SIGNING_CONFIG)
+    sub = tmp_path / "sub"
+    (sub / ".git" / "objects").mkdir(parents=True)
+    (sub / ".git" / "refs").mkdir()
+    (sub / ".git" / "HEAD").write_text(head)
+    (sub / ".git" / "config").write_text(PLAIN_CONFIG)
+    assert not _unasked(host, sub, "git log --oneline -3")
+
+
+def test_a_decoy_whose_common_dir_is_not_a_repository_still_asks(host, tmp_path):
+    _repo(tmp_path, SIGNING_CONFIG)
+    sub = tmp_path / "sub"
+    _repo(sub)
+    (tmp_path / "empty").mkdir()
+    (sub / ".git" / "commondir").write_text("../../empty")
+    assert not _unasked(host, sub, "git log --oneline -3")
+
+
+def test_a_symlinked_head_still_asks(host, tmp_path):
+    _repo(tmp_path, SIGNING_CONFIG)
+    sub = tmp_path / "sub"
+    _repo(sub)
+    (sub / ".git" / "HEAD").unlink()
+    (sub / "head-target").write_text("0" * 40 + "\n")
+    try:
+        (sub / ".git" / "HEAD").symlink_to(sub / "head-target")
+    except OSError:
+        pytest.skip("symlinks need privileges on this machine")
+    assert not _unasked(host, sub, "git log --oneline -3")
+
+
+@pytest.mark.parametrize(
+    "head",
+    [
+        "ref: refs/heads/main",
+        "ref:refs/heads/main\n",
+        "0123456789abcdef0123456789abcdef01234567\n",
+        "0123456789ABCDEF0123456789abcdef01234567",
+        "0123456789abcdef" * 4 + "\n",
+    ],
+)
+def test_a_real_head_in_a_plain_repo_still_runs_unasked(host, tmp_path, head):
+    _repo(tmp_path)
+    (tmp_path / ".git" / "HEAD").write_text(head)
+    assert _unasked(host, tmp_path, "git log --oneline -3")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat //server/share/notes.txt",
+        "ls //server/share",
+        "git -C //server/share log -1",
+        "cd //server/share && ls",
+        "echo //server/share",
+        "ls a//b",
+    ]
+    + (
+        [
+            r"cat \\server\share\notes.txt",
+            r"dir \\server\share",
+            r"cat /\server\share\x",
+            r"cat \/server/share/x",
+            r"cat \\?\C:\x",
+            r"cd \\server\share && dir /b",
+        ]
+        if os.name == "nt"
+        else []
+    ),
+)
+def test_a_network_path_asks_without_being_looked_up(
+    host, tmp_path, monkeypatch, command
+):
+    # Even resolving \\host\share would contact that host from the check itself.
+    touched = []
+    for name in ("lexists", "exists", "realpath", "isdir", "isfile"):
+        real = getattr(os.path, name)
+
+        def spy(path, *args, _real=real, **kwargs):
+            text = os.fspath(path)
+            if "server" in text or "?" in text:
+                touched.append(text)
+            return _real(path, *args, **kwargs)
+
+        monkeypatch.setattr(os.path, name, spy)
+    assert not _unasked(host, tmp_path, command)
+    assert touched == []
+
+
 def test_git_remote_show_reaches_the_network_so_it_asks(host, tmp_path):
     _repo(tmp_path)
     assert _unasked(host, tmp_path, "git remote -v")
