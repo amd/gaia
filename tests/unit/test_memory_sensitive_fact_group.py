@@ -19,12 +19,15 @@ from datetime import datetime, timedelta
 import pytest
 
 from gaia.agents.base.memory_store import MemoryStore
-from tests.unit.test_memory_sensitive_copy import (  # noqa: F401
-    _Host,
-    _rows,
-    _tools,
-    store,
-)
+from tests.unit.test_memory_sensitive_copy import _Host, _rows, _tools
+
+
+@pytest.fixture
+def store(tmp_path):
+    db = MemoryStore(db_path=tmp_path / "memory.db")
+    yield db
+    db.close()
+
 
 LONG_MANGO = (
     "Allergic to mango — mango makes their throat swell, so no mango lassi "
