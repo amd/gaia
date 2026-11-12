@@ -245,6 +245,9 @@ export interface UnavailableConnectorRow {
     id: string;
     display_name: string;
     error: 'unavailable';
+    /** Set when the shared activations file can't be read; `path` names it. */
+    reason?: 'activations_unreadable';
+    path?: string;
 }
 
 /** One entry of GET /api/connectors. */
@@ -909,9 +912,11 @@ export interface ProviderInfo {
     /**
      * `waiting_for_os_permission` while the OS holds the saved-key read for the
      * user's permission (a macOS keychain dialog): `key_source` is then unknown,
-     * not absent, and `key_message` says what to do.
+     * not absent, and `key_message` says what to do. `store_locked` once the
+     * user closed the store's unlock prompt: GAIA holds off asking for five
+     * minutes, or until Try again.
      */
-    key_state?: 'read' | 'waiting_for_os_permission';
+    key_state?: 'read' | 'waiting_for_os_permission' | 'store_locked';
     key_message?: string | null;
     models_discovered?: boolean;
     /** The provider's model list is down, so GAIA offers models it already knows. */
@@ -942,6 +947,8 @@ export interface ActiveModel {
     display_name?: string | null;
     label: string | null;
     remote: boolean;
+    /** Who answers a cloud model, including one GAIA has no provider tab for; null when local. */
+    provider_name?: string | null;
     is_default: boolean;
     /** Local model on disk; null for a cloud model or while the server starts. */
     downloaded?: boolean | null;

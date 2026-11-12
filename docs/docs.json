@@ -406,6 +406,8 @@
             "group": "Agent UI",
             "pages": [
               "plans/gaia-ui-redesign",
+              "plans/voice",
+              "plans/phone-calls",
               "plans/security-model",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
@@ -434,6 +436,7 @@
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",
+              "plans/codebase-knowledge-index",
               "plans/desktop-installer",
               "plans/tool-loader",
               "plans/nightly-benchmarks",
