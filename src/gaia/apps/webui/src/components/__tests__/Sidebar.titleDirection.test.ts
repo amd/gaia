@@ -1,9 +1,9 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// A chat title orders its own text but takes its side, padding and fade from
-// the row. With dir="auto" a Latin title in an Arabic sidebar got the left-side
-// fade over its first letter ("eval q01" read "val q01"). jsdom does no layout,
+// A chat title orders its own text but takes its side from
+// the row. A fade drawn on one physical side was wrong for a Latin title in an
+// Arabic sidebar (#7628), so long titles end in an ellipsis. jsdom does no layout,
 // so this reads the shipped stylesheet and the row markup.
 
 import { describe, expect, it } from 'vitest';
@@ -28,9 +28,13 @@ describe('sidebar title direction', () => {
         expect(sidebarSource).not.toMatch(/className="sb-row-title"[^>]*\bdir=/);
     });
 
-    it('aligns every title to the right, and fades on the left, in a right-to-left row', () => {
-        const rtl = rule(sidebarCss, '.sb-row-title:dir(rtl)');
-        expect(rtl).toMatch(/text-align:\s*right/);
-        expect(rtl).toMatch(/mask-image:\s*linear-gradient\(to left/);
+    it('aligns every title to the right in a right-to-left row', () => {
+        expect(rule(sidebarCss, '.sb-row-title:dir(rtl)')).toMatch(/text-align:\s*right/);
+    });
+
+    it('cuts a long title with an ellipsis at its own end, not a fade fixed to one side', () => {
+        const base = rule(sidebarCss, '.sb-row-title');
+        expect(base).toMatch(/text-overflow:\s*ellipsis/);
+        expect(base + rule(sidebarCss, '.sb-row-title:dir(rtl)')).not.toMatch(/mask-image/);
     });
 });
