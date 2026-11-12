@@ -56,7 +56,7 @@ For **Local**, the list shows every chat model Lemonade offers, downloaded or no
 On a new machine, the list becomes available once the setup step that installs
 Lemonade is done; the panel names that step until then.
 **Recommended** models come first — Qwen3.6 35B A3B, Qwen3.8 Flash Next,
-Gemma 4 E4B, gpt-oss 20B and 120B, and the Qwen3 Coder models — marked with ★. The panel names how
+Gemma 4 E4B, Muse Glimmer 30B, gpt-oss 20B and 120B, and the Qwen3 Coder models — marked with ★. The panel names how
 much memory this PC has for models and how much disk is free, both read from
 Lemonade:
 
@@ -104,6 +104,27 @@ Gemma-4-E4B-it-GGUF` before setup. Pressing **p** at the flagship's setup screen
 picking Gemma does the same for that session only: setup then downloads just
 the embedding models, but the next launch asks for the default again unless
 `default_model` is set.
+
+### Muse Glimmer 30B
+
+Meta's open-weight model built for local agents, a supported local model that is
+never picked for you. It reads images itself, so an image question loads no second
+model, and calls tools natively. It always reasons before it answers, at the "high"
+strength Meta benchmarks it with; GAIA asks for "low" on side tasks (naming a chat,
+summarizing a document, memory upkeep) and on `gaia llm`. It needs ~24 GB
+for models at a 64K window (21 GB of weights, vision projector and draft model, plus
+a small context cache), so a 32 GB GPU or a 64 GB+ Strix Halo holds it at its full
+128K window; a 24 GB card does not. It is dense rather than a mixture of experts, so
+on a Strix Halo it reads prompts and writes text noticeably more slowly than Qwen3.6.
+The first reply after GAIA starts takes longest, while the model reads GAIA's
+instructions, and the app says so while it waits.
+On our agent tasks it did about as well as Qwen3.6 but somewhat more slowly, and it more
+often saved plain text under a `.docx` or `.xlsx` name instead of a real Office file.
+
+The TUI's model picker lists it and marks it **won't fit** on a PC that cannot hold
+it. The Agent UI offers it in Settings for download only on a PC that holds it.
+Or choose it with `gaia config set default_model Muse-Glimmer-30B-GGUF`, then run
+`gaia init` to download it.
 
 ### gpt-oss 20B and 120B
 
@@ -386,7 +407,8 @@ remembered local model is checked against what Lemonade has downloaded and then
 used from the first message; Claude is not available on that route.
 
 The choice is stored in `~/.gaia/config.json` as `last_provider` and `last_model`
-(`GAIA_CONFIG_DIR` relocates it). A one-shot `gaia-tui run gaia --query "…"` runs
+(`GAIA_CONFIG_DIR` relocates it). The Agent UI's model menu and **Settings >
+Advanced > Custom model ID** save there too. A one-shot `gaia-tui run gaia --query "…"` runs
 on it too. `--use-claude` overrides it for one launch;
 `gaia config set last_model ""` forgets it.
 

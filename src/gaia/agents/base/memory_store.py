@@ -256,7 +256,7 @@ MAX_EXTRACTION_TURN_LENGTH: int = 256000
 MAX_FTS_QUERY_LENGTH: int = 500
 
 #: Minimum word-overlap ratio (Szymkiewicz-Simpson) to treat two entries as
-#: duplicates in the same category+context+entity scope.
+#: duplicates in the same category+context+subject scope.
 DEDUP_OVERLAP_THRESHOLD: float = 0.8
 
 #: Categories the extractor files one statement under interchangeably, so the
@@ -453,6 +453,11 @@ def _dedup_tokens(text: str) -> List[str]:
     return [w for w in words if w not in _DEDUP_FILLER_WORDS]
 
 
+def fact_words(text: str) -> Tuple[str, ...]:
+    """The words two copies of one fact share: ``_dedup_tokens`` of *text*."""
+    return tuple(_dedup_tokens(text))
+
+
 def _merged_duplicate(new: str, existing: str) -> Optional[str]:
     """The content to keep if *new* repeats *existing*, else None.
 
@@ -470,6 +475,26 @@ def _merged_duplicate(new: str, existing: str) -> Optional[str]:
     if old_tokens[: len(new_tokens)] == new_tokens:
         return existing
     return None
+
+
+def _same_subject_sql(entity: Optional[str]) -> Tuple[str, tuple]:
+    """SQL condition on ``k.entity`` for rows about the same subject as *entity*.
+
+    No tag, a bare label ("user", "health") or a ``user:`` tag is the user,
+    so those are one subject: the remember tool tags, extraction often
+    doesn't. Any other ``type:name`` tag (``person:Sam``, ``app:slack``) is
+    its own subject and matches only itself.
+    """
+    if entity is not None and ":" in entity and not _is_user_tag(entity):
+        return "k.entity = ?", (entity,)
+    return (
+        "(k.entity IS NULL OR instr(k.entity, ':') = 0 "
+        "OR lower(k.entity) LIKE 'user:%')"
+    ), ()
+
+
+def _is_user_tag(entity: str) -> bool:
+    return ":" not in entity or entity.lower().startswith("user:")
 
 
 # ============================================================================
@@ -1423,7 +1448,7 @@ class MemoryStore:
     ) -> str:
         """Store a knowledge entry with deduplication.
 
-        Restating an entry in the same category+context+entity merges into it
+        Restating an entry in the same category+context+subject merges into it
         and keeps the fuller wording; a different fact that shares most of its
         words is stored as a new entry (see ``_merged_duplicate``).
         Validates due_at is a valid ISO 8601 string if provided.
@@ -1498,7 +1523,7 @@ class MemoryStore:
                     # Taught again on purpose, so it is no longer forgotten.
                     self._unforget_locked(content)
 
-                # Check for dedup match (scoped to category + context + entity)
+                # Check for dedup match (scoped to category + context + subject)
                 match = self._find_similar_locked(content, category, context, entity)
             except BaseException:
                 self._conn.rollback()
@@ -1619,35 +1644,22 @@ class MemoryStore:
         safe_query = _sanitize_fts5_query(content, use_and=False)
         if not safe_query:
             return None
+        same_subject, subject_params = _same_subject_sql(entity)
 
         try:
-            # Scope dedup by category + context + entity
-            if entity is not None:
-                cursor = self._conn.execute(
-                    """
-                    SELECT k.id, k.content
-                    FROM knowledge k
-                    JOIN knowledge_fts f ON k.rowid = f.rowid
-                    WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity = ? AND k.superseded_by IS NULL
-                    ORDER BY rank
-                    LIMIT 25
-                    """,
-                    (safe_query, category, context, entity),
-                )
-            else:
-                cursor = self._conn.execute(
-                    """
-                    SELECT k.id, k.content
-                    FROM knowledge k
-                    JOIN knowledge_fts f ON k.rowid = f.rowid
-                    WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity IS NULL AND k.superseded_by IS NULL
-                    ORDER BY rank
-                    LIMIT 25
-                    """,
-                    (safe_query, category, context),
-                )
+            # Scope dedup by category + context + subject
+            cursor = self._conn.execute(
+                f"""
+                SELECT k.id, k.content
+                FROM knowledge k
+                JOIN knowledge_fts f ON k.rowid = f.rowid
+                WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
+                      AND {same_subject} AND k.superseded_by IS NULL
+                ORDER BY rank
+                LIMIT 25
+                """,
+                (safe_query, category, context, *subject_params),
+            )
             for row in cursor.fetchall():
                 existing_id, existing_content = row[0], row[1]
                 overlap = _word_overlap(content, existing_content)
@@ -1675,12 +1687,12 @@ class MemoryStore:
                     FROM knowledge k
                     JOIN knowledge_fts f ON k.rowid = f.rowid
                     WHERE knowledge_fts MATCH ? AND k.context = ?
-                          AND k.entity IS ? AND k.superseded_by IS NULL
+                          AND {same_subject} AND k.superseded_by IS NULL
                           AND k.category IN ({",".join("?" * len(kinds))})
                     ORDER BY rank
                     LIMIT 25
                     """,
-                    (safe_query, context, entity, *kinds),
+                    (safe_query, context, *subject_params, *kinds),
                 )
                 words = _same_words(content)
                 for existing_id, existing_content in cursor.fetchall():
@@ -2271,48 +2283,145 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def forget(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool:
+    def forget(
+        self,
+        knowledge_id: str,
+        *,
+        allow_privileged: bool = False,
+        sensitive: bool = False,
+    ) -> bool:
         """Delete an entry the user asked to forget, and remember that they did.
 
         Unlike ``delete`` (used when newer information replaces a memory), the
         content is kept in ``forgotten`` in the same transaction, so a pass
         that re-reads conversations from before now can tell not to learn it
-        again (``is_forgotten``). A sensitive entry keeps only its word stems.
+        again (``is_forgotten``). A sensitive entry keeps only its word stems;
+        *sensitive* treats an unflagged entry as one (a copy of a sensitive fact).
+        Older versions it superseded, directly or through a chain, are
+        forgotten with it, and as sensitive if any version is.
 
         Returns False if not found. Same privileged-row rule as ``delete``.
         """
         with self._locked():
             try:
-                self._validate_existing_category_locked(
-                    knowledge_id, allow_privileged=allow_privileged, where="forget"
-                )
-                row = self._conn.execute(
-                    "SELECT content, category, sensitive FROM knowledge WHERE id = ?",
-                    (knowledge_id,),
-                ).fetchone()
-                if row is None:
+                if (
+                    self._conn.execute(
+                        "SELECT 1 FROM knowledge WHERE id = ?", (knowledge_id,)
+                    ).fetchone()
+                    is None
+                ):
                     return False
-                content, category, sensitive = row
-                if sensitive:
-                    content = " ".join(sorted(content_stems(content)))
-                self._conn.execute(
-                    "DELETE FROM knowledge_fts WHERE rowid = "
-                    "(SELECT rowid FROM knowledge WHERE id = ?)",
-                    (knowledge_id,),
-                )
-                self._conn.execute(
-                    "DELETE FROM knowledge WHERE id = ?", (knowledge_id,)
-                )
-                self._conn.execute(
-                    "INSERT INTO forgotten (content, category, sensitive, forgotten_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (content, category, int(bool(sensitive)), _now_iso()),
-                )
+                ids = [
+                    r[0]
+                    for r in self._conn.execute(
+                        """
+                        WITH RECURSIVE chain(id) AS (
+                            SELECT ?
+                            UNION
+                            SELECT k.id FROM knowledge k
+                            JOIN chain c ON k.superseded_by = c.id
+                        )
+                        SELECT id FROM chain
+                        """,
+                        (knowledge_id,),
+                    ).fetchall()
+                ]
+                rows = {}
+                for kid in ids:
+                    self._validate_existing_category_locked(
+                        kid, allow_privileged=allow_privileged, where="forget"
+                    )
+                    rows[kid] = self._conn.execute(
+                        "SELECT content, category, sensitive FROM knowledge "
+                        "WHERE id = ?",
+                        (kid,),
+                    ).fetchone()
+                sensitive = sensitive or any(r[2] for r in rows.values())
+                now = _now_iso()
+                for kid, (content, category, _flagged) in rows.items():
+                    if sensitive:
+                        content = " ".join(sorted(content_stems(content)))
+                    self._conn.execute(
+                        "DELETE FROM knowledge_fts WHERE rowid = "
+                        "(SELECT rowid FROM knowledge WHERE id = ?)",
+                        (kid,),
+                    )
+                    self._conn.execute("DELETE FROM knowledge WHERE id = ?", (kid,))
+                    self._conn.execute(
+                        "INSERT INTO forgotten "
+                        "(content, category, sensitive, forgotten_at) "
+                        "VALUES (?, ?, ?, ?)",
+                        (content, category, int(bool(sensitive)), now),
+                    )
                 self._conn.commit()
                 return True
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def copies_of(
+        self, knowledge_id: str, contexts: Optional[Tuple[str, ...]] = None
+    ) -> List[str]:
+        """Ids of other current rows that store the same fact as *knowledge_id*.
+
+        A copy has the same words bar filler ("User is allergic to mango" and
+        "Allergic to mango.") about the same subject (``_same_subject_sql``),
+        in a chat-writable category. *contexts* limits it to those contexts;
+        None searches all. Forgetting one memory must take these with it.
+        """
+        with self._locked():
+            row = self._conn.execute(
+                "SELECT content, entity FROM knowledge WHERE id = ?", (knowledge_id,)
+            ).fetchone()
+            if row is None:
+                return []
+            content, entity = row
+            same_subject, params = _same_subject_sql(entity)
+            kinds = sorted(EXTRACTABLE_CATEGORIES)
+            sql = (
+                "SELECT k.id, k.content FROM knowledge k WHERE k.id != ? "
+                f"AND {same_subject} AND k.superseded_by IS NULL "
+                f"AND k.category IN ({','.join('?' * len(kinds))})"
+            )
+            args: tuple = (knowledge_id, *params, *kinds)
+            if contexts is not None:
+                sql += f" AND k.context IN ({','.join('?' * len(contexts))})"
+                args += tuple(contexts)
+            rows = self._conn.execute(sql, args).fetchall()
+        words = fact_words(content)
+        return [kid for kid, other in rows if words and fact_words(other) == words]
+
+    def forget_with_copies(
+        self,
+        knowledge_id: str,
+        contexts: Optional[Tuple[str, ...]] = None,
+        *,
+        allow_privileged: bool = False,
+    ) -> List[str]:
+        """``forget`` *knowledge_id* and its ``copies_of``; the ids erased.
+
+        If any of them is sensitive, all are forgotten as sensitive, so an
+        unflagged copy can't leave the fact's words in ``forgotten``.
+        Returns [] when *knowledge_id* is not found.
+        """
+        copies = self.copies_of(knowledge_id, contexts)
+        group = (knowledge_id, *copies)
+        with self._locked():
+            sensitive = (
+                self._conn.execute(
+                    "SELECT 1 FROM knowledge WHERE sensitive AND id IN "
+                    f"({','.join('?' * len(group))})",
+                    group,
+                ).fetchone()
+                is not None
+            )
+        if not self.forget(
+            knowledge_id, allow_privileged=allow_privileged, sensitive=sensitive
+        ):
+            return []
+        return [knowledge_id] + [
+            kid for kid in copies if self.forget(kid, sensitive=sensitive)
+        ]
 
     def _forgotten_rows(self, said_before: Optional[str]) -> List[tuple]:
         """``(content, sensitive)`` of what was forgotten, newest first.

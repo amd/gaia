@@ -309,6 +309,10 @@
     background: var(--bg-tertiary);
     color: var(--text-primary);
     border: 1px solid var(--border-light);
+    /* `anywhere` (not break-word) shrinks min-content, so a long unbroken span can't widen the column. */
+    overflow-wrap: anywhere;
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
 }
 
 /* ── Links ────────────────────────────────────────────────────── */

@@ -76,7 +76,9 @@ _EXPECTED_TOOLS_TOTAL = 106
 # 26 with the ten next most-called tools in the eval baseline, which took core
 # from 41% to 77% of calls.
 # 27 with `forget_everything`, beside `forget` so "forget everything" always reaches it.
-_EXPECTED_CORE_COUNT = 27
+# 29 with `search_file_content` and `list_files`, which a model otherwise worked
+# around in about a fifth more steps.
+_EXPECTED_CORE_COUNT = 29
 # 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
 # reset_shell_session), plus `browser_nav` and `browser_use`.
 # 26 with `audio_generation`; 27 with `email_threads`.

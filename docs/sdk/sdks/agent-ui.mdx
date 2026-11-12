@@ -717,7 +717,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
   </Accordion>
 
   <Accordion title="PUT /api/settings">
-    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string / `null` to clear the override and revert to the default model.
+    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and revert to the default model; omitting it or sending `null` leaves it unchanged. The value is also saved as `last_model` in `~/.gaia/config.json` (cleared with it), so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on.
 
     **Request:**
     ```json
@@ -728,7 +728,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
 
     | Field | Type | Required | Description |
     |-------|------|----------|-------------|
-    | `custom_model` | string or null | No | HuggingFace model ID to use instead of the default. Empty string or `null` clears the override. |
+    | `custom_model` | string or null | No | Model ID to use instead of the default. An empty string clears the override; `null` leaves it unchanged. |
 
     **Response:** Same shape as `GET /api/settings`.
   </Accordion>
@@ -1041,6 +1041,36 @@ Deleting a chat deletes its copies.
     unreachable, **502** when Lemonade can't make the speech; each `detail`
     says why. The app splits a long reply into pieces and plays them back to
     back.
+  </Accordion>
+
+  <Accordion title="GET /api/voice/settings">
+    The dictation and voice-mode settings, shared with the TUI: `{"language",
+    "asr_model", "turn_taking", "silence_ms", "status_updates", "captions",
+    "wake_word", "volume", "chime"}`. `language` is `null` while voice follows
+    the app's language.
+  </Accordion>
+
+  <Accordion title="PUT /api/voice/settings">
+    Save any of the voice settings; the others keep their value. An empty
+    `language` goes back to following the app's language. Returns the saved
+    settings. **422** names a value that isn't allowed, and nothing is saved.
+  </Accordion>
+
+  <Accordion title="GET /api/voice/status">
+    Whether voice can start now, for the app language in `?lang=`. Returns
+    `ready`, the spoken `language`, the `asr_model` and `tts_model` it would
+    use, `speaks` (false where no voice exists for the language, so replies
+    stay on screen), the current settings, and `models`:
+    `[{"id", "purpose", "downloaded", "size_gb"}]`. When `ready` is false,
+    `error` says why and `error_code` is `model_missing`,
+    `lemonade_unreachable` or the voice error's own code.
+  </Accordion>
+
+  <Accordion title="POST /api/voice/models/download">
+    Download one speech model through Lemonade. Body: `{"model"}`. Returns
+    `{"model", "downloaded": true}`. **422** for a model that isn't a voice
+    model, **409** when voice can't run against the configured Lemonade,
+    **503** when Lemonade is unreachable, **502** when the download fails.
   </Accordion>
 </AccordionGroup>
 
@@ -1988,7 +2018,7 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
   </Accordion>
 
   <Accordion title="DELETE /api/memory/knowledge/{knowledge_id}">
-    Delete a knowledge entry.
+    Delete a knowledge entry. An entry about the user is recorded as forgotten, and current copies of it (the same words about the same subject, in any context) are forgotten with it; the response then lists every erased id as `knowledge_ids`.
   </Accordion>
 
   <Accordion title="GET /api/memory/upcoming">
@@ -2184,7 +2214,8 @@ The Memory endpoints expose the agent's persistent knowledge system. See the [Me
     — each `insight` event is a candidate fact awaiting approval. It runs on
     the machine's default local chat model (`default_model` in
     `~/.gaia/config.json`), never the chat's cloud model; a cloud
-    `default_model` ends the stream with an `error` event.
+    `default_model`, or a local one that isn't downloaded yet, ends the stream
+    with an `error` event rather than a download.
   </Accordion>
 
   <Accordion title="POST /api/memory/commit-discovery">
@@ -2364,6 +2395,13 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
 
   <Accordion title="GET /api/goals/stats">
     Aggregate counts by status, for the dashboard header cards.
+  </Accordion>
+
+  <Accordion title="GET /api/goals/health">
+    `{"error": string | null}`. `error` says why the background loop could
+    not read the goal store on its last tick, so approved goals are not
+    running; it is `null` once the store reads again. The UI shows it as a
+    notification and in Memory › Goals.
   </Accordion>
 
   <Accordion title="GET /api/goals/pending-approval">
@@ -2863,7 +2901,9 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
   <Accordion title="GET /api/providers/active">
     The model new turns run — the one a new chat starts on: the picked model,
     else `default_model` from `~/.gaia/config.json`, else Gemma. Carries
-    `display_name`, `downloaded` for a local model (`null` for a cloud
+    `display_name`, `remote` and `provider_name` (who answers a cloud model,
+    including a provider GAIA only learned from Lemonade's model list, whose
+    `provider` stays `local`), `downloaded` for a local model (`null` for a cloud
     model or while the server starts), and `inference_remote` /
     `inference_description`: where a new chat would be answered, by the rule
     session locations use (`null` when it can't tell). With an unreadable config, `model` is
@@ -2896,6 +2936,13 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     Clear the key from Lemonade and from the OS credential store. Returns
     `{"removed": bool}`. On the user's own Lemonade only GAIA's stored copy is
     removed; the server keeps its key.
+  </Accordion>
+
+  <Accordion title="POST /api/providers/key-store/retry">
+    Let the next key read ask the OS to unlock the credential store again. After
+    a dismissed or refused unlock prompt GAIA stops reading the store for five
+    minutes, and providers report `key_state: "store_locked"`; the Try again
+    button calls this. Returns `{"retrying": true}`.
   </Accordion>
 
   <Accordion title="GET /api/providers/{provider}/models">
@@ -3022,8 +3069,8 @@ model with no known price reads as unknown, never $0. Cloud models from
   </Accordion>
 
   <Accordion title="GET /api/spending">
-    This month's cloud chat turns in the Agent UI at list price, without cache
-    discounts. A turn that fails or is stopped before it answers isn't counted,
+    This month's cloud chat turns in the Agent UI at list price, cached input at
+    its cached rate (the basis each answer's own cost uses). A turn that fails or is stopped before it answers isn't counted,
     so the total can read lower than the bill as well as higher: `total_usd`, `turns`, `unpriced_turns` (turns on a model with no
     known price, counted apart), `unreported_turns` (turns on a priced model that
     sent no usage, such as a stopped answer, also counted apart), `by_model` (each

@@ -1539,22 +1539,29 @@ export interface VoiceModel {
 export interface VoiceSettings {
   asr_model?: string;
   captions?: boolean;
+  chime?: boolean;
   language?: string | null;
   silence_ms?: number;
   status_updates?: boolean;
   turn_taking?: string;
+  volume?: number;
+  wake_word?: boolean;
 }
 export interface VoiceSettingsUpdate {
   asr_model?: string | null;
   captions?: boolean | null;
+  chime?: boolean | null;
   language?: string | null;
   silence_ms?: number | null;
   status_updates?: boolean | null;
   turn_taking?: string | null;
+  volume?: number | null;
+  wake_word?: boolean | null;
 }
 export interface VoiceStatus {
   asr_model: string;
   captions: boolean;
+  chime?: boolean;
   error?: string | null;
   error_code?: string | null;
   language: string;
@@ -1565,6 +1572,8 @@ export interface VoiceStatus {
   status_updates: boolean;
   tts_model: string;
   turn_taking: string;
+  volume?: number;
+  wake_word?: boolean;
 }
 /**
  * Work that quitting or unloading the model would cut short.

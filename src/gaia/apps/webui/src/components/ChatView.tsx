@@ -60,6 +60,7 @@ import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
+import { requestErrorParam } from '../utils/requestErrors';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
 import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
@@ -154,6 +155,12 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const { policyToast, showPolicyToast, dismissPolicyToast } = usePolicyToast();
     const [pendingReceiptScroll, setPendingReceiptScroll] = useState<string | null>(null);
     const { exportChat, exportError, clearExportError } = useChatExport(sessionId, session?.title);
+    // Why the last rename, private toggle, drop or detach failed.
+    const [actionError, setActionError] = useState<string | null>(null);
+    useEffect(() => setActionError(null), [sessionId]);
+    const handleDetachFailed = useCallback((name: string, err: unknown) => {
+        setActionError(t('chat.detachFailed', { name, error: requestErrorParam(err) }));
+    }, [t]);
     // A chat made by a retired agent (chat/doc/file) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
@@ -212,7 +219,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const stepIdRef = useRef(0);
     /** The agent's own step number for the live turn, from its `step` events. */
     const toolOccurredRef = useRef(false);
-    const sendMessageRef = useRef<(text?: string, options?: SendOptions) => void>(() => {});
+    const sendMessageRef = useRef<(text?: string, options?: SendOptions) => Promise<boolean>>(async () => false);
     const checkingModelRef = useRef(false);
     // Messages typed while a reply runs, kept per chat in the store, and whether the user stopped that reply.
     const queue = useChatStore((s) => s.messageQueues[sessionId] ?? NO_QUEUE);
@@ -506,8 +513,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
         return () => window.removeEventListener('keydown', handler);
     }, [isStreaming, handleStop]);
 
-    /** With no text, sends the composer's draft and empties the box; given text is sent as is and the box is left alone. */
-    const sendMessage = useCallback(async (givenText?: string, options?: SendOptions) => {
+    /**
+     * With no text, sends the composer's draft and empties the box; given text is sent as is and the box is left alone.
+     * Resolves false when the message was neither sent nor queued.
+     */
+    const sendMessage = useCallback(async (givenText?: string, options?: SendOptions): Promise<boolean> => {
         // attach=true re-subscribes to a run already in flight server-side
         // (revisiting a backgrounded session, #1580). It reuses the entire
         // stream-event handling below but skips composing/sending a new turn:
@@ -536,7 +546,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
         // new message and streaming response are visible.
         isNearBottomRef.current = true;
 
-        const isInitializing = isStarting(systemStatus);
+        // The store, not this render's copy: a resend re-reads the status just before it calls.
+        const isInitializing = isStarting(useChatStore.getState().systemStatus);
         const notTaken = (outcome: SendOutcome) => {
             if (fromQueue) options?.onQueuedOutcome?.(outcome);
             voiceTap?.error();
@@ -544,34 +555,34 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (!reattach && retiredAgent) {
             log.chat.warn(`Send blocked: chat ${sessionId} belongs to the retired "${retiredAgent}" agent`);
             notTaken({ kind: 'failed', error: `This chat's "${retiredAgent}" agent was retired, so it cannot take new messages.` });
-            return;
+            return false;
         }
         // Waiting messages go first, so a new one joins the end of the line.
         const waiting = !options?.opening && (useChatStore.getState().messageQueues[sessionId] ?? NO_QUEUE).length > 0;
         if (reattach) {
             // Don't double-attach if a stream is already live in this view.
-            if (isStreaming && !reconnect) return;
+            if (isStreaming && !reconnect) return false;
         } else if (!fromQueue && !voiceTap && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
             const queued = takeDraft();
             setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
-            return;
+            return true;
         } else if ((!text && !hasAttachments) || isStreaming || isInitializing) {
             notTaken({ kind: 'busy' });
             if (!text && !hasAttachments) log.chat.debug('Send blocked: empty message');
             if (isStreaming) log.chat.debug('Send blocked: already streaming');
             if (isInitializing) log.chat.debug('Send blocked: system initializing');
-            return;
+            return false;
         }
 
         // Asked here so a send that was going to be queued or refused asks nothing.
         if (!reattach && !fromQueue && !(modelKnownReady('chat') && (!hasImage || modelKnownReady('vision')))) {
-            if (checkingModelRef.current) { voiceTap?.error(); return; }
+            if (checkingModelRef.current) { voiceTap?.error(); return false; }
             checkingModelRef.current = true;
             try {
                 if (!(await ensureModel('chat')) || (hasImage && !(await ensureModel('vision')))) {
                     voiceTap?.error();
-                    return;
+                    return false;
                 }
             } finally {
                 checkingModelRef.current = false;
@@ -1227,6 +1238,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         streamController = controller;
         abortRef.current = controller;
+        return true;
     }, [input, attach, isStreaming, sessionId, session, retiredAgent, addMessage, removeMessage, setMessages, setStreaming, flushStreamBuffer, clearStreamContent, updateSessionInList, addAgentStep, updateLastAgentStep, appendThinkingContent, updateLastToolStep, clearAgentSteps, appendCard, clearCards, addNotification, isStale]);
 
     // Keep ref in sync so event listeners always call the latest sendMessage
@@ -1331,7 +1343,32 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const text = message.content;
         log.chat.info(`Resending message ${message.id} from session=${sessionId}`, { preview: text.slice(0, 80) });
 
+        const notify = (detail: string) => addNotification({
+            id: `resend-failed-${sessionId}-${Date.now()}`,
+            type: 'error',
+            agentId: sessionId,
+            agentName: 'GAIA',
+            title: t('chatError.resendFailed'),
+            message: detail,
+            timestamp: Date.now(),
+            read: false,
+            dismissed: false,
+            priority: 'high',
+            sessionId,
+        });
+
         try {
+            // The old turn is deleted below, so first make sure the new one can start.
+            if (isStarting(useChatStore.getState().systemStatus)) {
+                // Read while a restarted backend booted, the status may be stale.
+                const status = await api.getSystemStatus();
+                useChatStore.getState().setSystemStatus(status);
+                if (isStarting(status)) {
+                    notify(t('chatError.resendStarting'));
+                    return;
+                }
+            }
+            if (!modelKnownReady('chat') && !(await ensureModel('chat'))) return;
             // The shown id may still be the temporary one; delete the server's own row.
             const data = await api.getMessages(sessionId);
             if (isStale()) return;
@@ -1358,27 +1395,22 @@ export function ChatView({ sessionId }: ChatViewProps) {
             log.chat.error(`Could not resend message ${message.id} in session=${sessionId}`, err);
             const cause = err instanceof Error ? classifyChatError(err) : null;
             const lost = cause?.kind === 'connection' || cause?.kind === 'timeout';
-            addNotification({
-                id: `resend-failed-${sessionId}-${Date.now()}`,
-                type: 'error',
-                agentId: sessionId,
-                agentName: 'GAIA',
-                title: t('chatError.resendFailed'),
-                message: lost ? cause.text : t('chatError.resendStale'),
-                timestamp: Date.now(),
-                read: false,
-                dismissed: false,
-                priority: 'high',
-                sessionId,
-            });
+            notify(lost ? cause.text : t('chatError.resendStale'));
             return;
         } finally {
             resendingRef.current = false;
         }
 
         removeMessagesFrom(message.id);
-        sendMessage(text);
-    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, setQueue, sendMessage, isStale, addNotification, t]);
+        // Its old turn is gone from the server: if it can't go now, it waits in line, never vanishes.
+        let sent = false;
+        try {
+            sent = await sendMessageRef.current(text);
+        } catch (err) {
+            log.chat.error(`Could not resend message ${message.id} in session=${sessionId}; queued it`, err);
+        }
+        if (!sent) setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+    }, [sessionId, isStreaming, removeMessagesFrom, setMessages, setQueue, isStale, addNotification, t]);
 
     // This view sends its chat's queue while open; the background dispatcher does it otherwise.
     useEffect(() => claimView(sessionId), [sessionId]);
@@ -1462,9 +1494,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const title = titleDraft.trim().slice(0, MAX_SESSION_TITLE_CHARS).trim();
         // Untouched draft: never cut an old over-long title the user didn't edit.
         if (title && titleDraft !== session?.title && title !== session?.title) {
-            // Explicit rename — pin against the auto-retitler (#2165).
-            await api.updateSession(sessionId, { title, title_is_custom: true });
-            updateSessionInList(sessionId, { title });
+            setActionError(null);
+            try {
+                // Explicit rename — pin against the auto-retitler (#2165).
+                await api.updateSession(sessionId, { title, title_is_custom: true });
+                updateSessionInList(sessionId, { title });
+            } catch (err) {
+                log.chat.error(`Could not rename chat ${sessionId}`, err);
+                setActionError(t('chat.renameFailed', { error: requestErrorParam(err) }));
+            }
         }
         setEditingTitle(false);
     };
@@ -1472,13 +1510,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // Toggle private (incognito) mode
     const handleTogglePrivate = useCallback(async () => {
         if (!sessionId) return;
+        setActionError(null);
         try {
             const updated = await api.toggleSessionPrivacy(sessionId);
             updateSessionInList(sessionId, { private: updated.private });
         } catch (err) {
             log.ui.warn('Failed to toggle private mode', err);
+            setActionError(t('chat.privateFailed', { error: requestErrorParam(err) }));
         }
-    }, [sessionId, updateSessionInList]);
+    }, [sessionId, updateSessionInList, t]);
 
     // Drag & drop: see addDroppedFiles.
     const handleDrop = useCallback(async (e: React.DragEvent) => {
@@ -1495,8 +1535,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
         if (documents.length === 0) return;
 
         if (!(await ensureModel('embedding'))) return;
-        await addDroppedFiles(sessionId, documents);
-    }, [sessionId, attach]);
+        setActionError(null);
+        const failures = await addDroppedFiles(sessionId, documents);
+        if (failures.length > 0) {
+            setActionError(failures.map(({ name, stage, error }) => t(
+                stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
+                { name, error: requestErrorParam(error) },
+            )).join(' '));
+        }
+    }, [sessionId, attach, t]);
 
     const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
@@ -1590,7 +1637,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             {showResources && <ResourceMonitor onClose={closeResources} />}
 
-            <SessionDocsBar sessionId={sessionId} />
+            <SessionDocsBar sessionId={sessionId} onDetachFailed={handleDetachFailed} />
 
             <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
@@ -1742,7 +1789,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
             <div className="input-area">
                 <div className="input-column">
-                    <ExportErrorBar message={exportError} onDismiss={clearExportError} />
+                    <ExportErrorBar message={exportError} onDismiss={clearExportError} dismissLabel={t('chat.dismissExportError')} />
+                    <ExportErrorBar message={actionError} onDismiss={() => setActionError(null)} dismissLabel={t('chat.dismissError')} />
                     {lastIsConnectorError && lastMessage && (
                         <ConnectorRetryBanner content={lastMessage.content} onRetry={handleRetryLast} />
                     )}

@@ -354,7 +354,9 @@ class RAGToolsMixin:
                 "already_indexed": bool,
                 "reindexed": bool,
                 "error_type": str,   # "embedding_unavailable" on an embedder
-                "next_step": str     # outage, with how to fix it
+                                     # outage; "vision_model_failed" when the
+                                     # vision model read none of the images
+                "next_step": str     # with how to fix an embedder outage
             }
         """
         pass

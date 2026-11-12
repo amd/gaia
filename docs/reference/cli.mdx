@@ -226,7 +226,7 @@ in either mode.
 
 ### Agent step limit
 
-Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA agent (`gaia chat`, the Agent UI, the TUI) defaults to **150**, enough for long desktop tasks such as reading a folder of datasheets and writing a costed BOM. Other agents default to **50**.
+Agents stop after a maximum number of reasoning/tool steps. The flagship GAIA agent (`gaia chat`, the Agent UI, the TUI) defaults to **1000**: a backstop for a turn that never finishes, set high enough that long, multi-part desktop tasks do not reach it. Other agents default to **50**.
 
 When 20, 10 and 5 steps remain, the agent is told so and asked to produce what the request asked for from what it already has, marking anything it couldn't verify, rather than keep researching. An agent that runs out of steps before finishing still answers: it gets one more model call in which it can't use tools, and reports what it found, what it couldn't finish and why, and what you can do next. That summary is kept even when a requested file was never written; the missing file is listed after it. If that last call fails, you get the step-limit notice with the agent's latest write-up and a line saying why the summary couldn't be written. Set `GAIA_AGENT_BUDGET_NOTICES=0` to turn the step-budget notices off.
 
@@ -558,6 +558,17 @@ terminal UI's model picker; Lemonade downloads it on first use. `gaia init` refu
 on a PC that cannot hold it and names the memory it needs. To measure both on your
 own PC, speed, tool calling and (with `--tasks core`) agent quality, run
 `python util/compare_local_models.py` from a GAIA checkout.
+</Note>
+
+<Note>
+`Muse-Glimmer-30B-GGUF`, Meta's open-weight agent model (a 21 GB Lemonade built-in
+with vision, ~24 GB for models), is supported and never
+auto-selected. It fits a 32 GB GPU or a 64 GB+ Strix Halo, not a 24 GB card. It is a
+dense 30B, so on a Strix Halo it reads prompts and writes text more slowly than
+Qwen3.6's 3B-active MoE.
+Choose it with `gaia config set default_model Muse-Glimmer-30B-GGUF`, then run
+`gaia init` to download it, or pick it in the terminal UI's model picker or the Agent
+UI's Settings. Details: [Muse Glimmer 30B](/guides/ai-providers#muse-glimmer-30b).
 </Note>
 
 <Note>
@@ -1234,7 +1245,7 @@ gaia talk [OPTIONS]
 | `--stats`, `--show-stats` | flag | false | Print performance statistics after each reply |
 | `--index, -i` | path | - | PDF document for voice Q&A |
 
-Speech recognition (Whisper) and voice output (Kokoro) run in the same Lemonade Server as the chat model, at `--base-url`; the first run downloads both models through it. The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop, the microphone or Lemonade's transcription fails.
+Speech recognition (Whisper), voice output (Kokoro) and `--index` document indexing run in the same Lemonade Server as the chat model, at `--base-url`; the first run downloads both models through it. The microphone is muted while GAIA speaks. Say "stop" or press Ctrl+C to end the session; `gaia talk` exits non-zero if the voice loop, the microphone or Lemonade's transcription fails.
 
 Document Q&A requires both extras: `uv pip install "amd-gaia[talk,rag]"`.
 With `--index`, the document must index successfully before voice chat starts.
@@ -1359,6 +1370,12 @@ gaia email autonomy status                           # autonomy level, trust sum
 <Card title="API Server" icon="server" href="/reference/api">
   OpenAI-compatible REST API for VSCode and IDE integrations
 </Card>
+
+<Note>
+`gaia api` needs a source install of GAIA. The `gaia` the GAIA installer ships
+runs the agent as a separate program, so `gaia api start` says so and exits;
+use `gaia -p` from scripts there.
+</Note>
 
 ### Quick Start
 
@@ -1533,7 +1550,7 @@ The MCP Bridge allows other applications to use GAIA agents as MCP servers.
 
 ### Quick Start
 
-Install MCP support:
+The GAIA installer includes MCP support. A pip or source install adds it with:
 ```bash
 uv pip install -e ".[mcp]"
 ```
@@ -1693,8 +1710,9 @@ running with `gaia-tui --control`; the server finds it through
 
 Serves GAIA's semantic code search for one repository over stdio, so an
 external code assistant can find code by meaning. Embeddings run on your local
-Lemonade Server, and the index is cached in `~/.gaia/code_index/`. It needs
-the `[mcp]` and `[rag]` extras.
+Lemonade Server, and the index is cached in `~/.gaia/code_index/`. The GAIA
+installer includes what it needs; a pip or source install needs the `[mcp]` and
+`[rag]` extras.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -1853,7 +1871,7 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 
 | Key | Default | Purpose |
 |-----|---------|---------|
-| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
+| `default_model` | _(unset)_ | Default model ID for `gaia chat` / `gaia llm` / `gaia prompt`, `gaia schedule` runs, `gaia telegram` sessions, the MCP bridge's `/chat` and `/llm`, new Agent UI sessions, and every agent started without a model (including the TUI's flagship). `gaia init` sets it to `Qwen3.6-35B-A3B-GGUF` on a PC with the memory for it and never overwrites a value you set. `user.Qwen3.8-Flash-Next-GGUF` is available on a 128 GB Strix Halo; choose it here, `gaia init` never does |
 | `default_device` | `gpu` | Default inference device (`cpu` / `gpu` / `npu`) for commands that load without naming a model. A model always runs on the device it was built for |
 | `context_sizes` | _(empty)_ | Context window per local model, set in the Agent UI under **Settings → Model** (`gaia config set` refuses it). A model not listed gets GAIA's automatic size; `GAIA_CTX_SIZE` overrides it |
 | `custom_models` | _(empty)_ | Local models you added from a Hugging Face link, managed with [`gaia model`](#model-command), the Agent UI or the TUI (`gaia config set` refuses it) |
@@ -1863,7 +1881,7 @@ gaia config set default_model Qwen3.6-35B-A3B-GGUF # persist a default model
 | `skipped_models` | _(empty)_ | Models you chose not to download; `gaia init` and first-run setup leave them out. Comma-separated with `gaia config set`; also set by `gaia init --skip-model` and the setup screens. See [Choosing models](#choosing-models) |
 | `full_access` | `false` | Launch `gaia-tui` with confirmation prompts off — see [Full access](#full-access) |
 | `llamacpp_backend` | _(unset = auto)_ | llama.cpp backend GAIA asks Lemonade for when it loads a local chat model: `vulkan`, the one GAIA has tested, or `auto` to let Lemonade choose. A value saved before this (`rocm`, `metal`, `cpu`) still loads but can't be set again. Applies on the next load; the embedding model keeps its own. See [Which server and which GPU backend](/guides/agent-ui#which-server-and-which-gpu-backend) |
-| `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui`, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
+| `last_provider`, `last_model` | _(unset)_ | The model last chosen in `gaia-tui` or the Agent UI, restored on its next launch — see [Your model is remembered](/guides/ai-providers#your-model-is-remembered). `gaia config set last_model ""` forgets it |
 | `lemonade_idle_timeout_minutes` | `15` | Stop GAIA's own Lemonade Server once no GAIA process has held it, and it has served no request, for this many minutes; `0` keeps it running until `gaia daemon stop` — see [GAIA's Lemonade Server](#gaias-lemonade-server) |
 | `lemonade_mode` | _(unset)_ | `gaia` runs GAIA's own Lemonade Server; `external` uses yours at `lemonade_base_url` and never starts one. Unset means not chosen yet, which runs GAIA's own. Setting `external` checks the server first; either change tells a running daemon. See [Use a Lemonade you already run](#use-a-lemonade-you-already-run) |
 | `lemonade_base_url` | _(unset)_ | Your Lemonade Server's address, for `lemonade_mode external` |
@@ -2066,6 +2084,8 @@ Without `--host` or `--port`, `gaia download` uses the same Lemonade Server as t
 rest of GAIA: `LEMONADE_BASE_URL` if set, otherwise GAIA's own Lemonade on whatever
 port it started on (`gaia lemonade embedded status` shows it).
 `--host` on its own targets Lemonade's standard port (13305) on that host.
+When that server can't be reached, `gaia download` (with or without `--list` or
+`--clear-cache`) says so and exits `1`.
 
 **Available Agents:**
 chat, bash, talk, rag, vlm, minimal, mcp, sd

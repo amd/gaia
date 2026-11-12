@@ -6,7 +6,7 @@ icon: "envelope"
 
 # Email
 
-The flagship [`gaia` agent](/guides/gaia) reads your mailbox, Gmail or Outlook, through **eight reading tools**, and drafts and sends mail through the bundled **`send-email` skill**. Every inference over an email body runs locally on your machine via Lemonade. Mail you read stays on your device, and mail you send leaves only after you approve it.
+The flagship [`gaia` agent](/guides/gaia) reads your mailbox, Gmail or Outlook, through **eight reading tools**, and drafts and sends mail through the bundled **`send-email` skill**. With a local model, every inference over an email body runs on your machine via Lemonade and mail you read stays on your device; with a cloud model, the mail the agent reads goes to that provider. Mail you send leaves only after you approve it.
 
 It lists your inbox, searches it, opens a message or a whole conversation, finds the threads waiting on your reply, and lists folders. Asked to send, reply, forward or draft, it loads the `send-email` skill, which saves drafts, replies, forwards and sends, and every send asks you first. It does not archive, label or delete messages yet. Triage itself — working out what actually needs you — is judgment the model does, driven by the bundled `inbox-triage` skill; the tools hand it facts, never verdicts. The plan for the remaining verbs is [Email triage as a skill](/plans/email-triage-skill).
 

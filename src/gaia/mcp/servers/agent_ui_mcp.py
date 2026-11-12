@@ -181,6 +181,8 @@ def _stream_chat(
     event_log = []
     current_tool = None
     inference_stats = None
+    turn_error = None
+    last_agent_error = None
 
     for line in r.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
@@ -251,6 +253,13 @@ def _stream_chat(
 
         elif etype == "agent_error":
             event_log.append(f"[error] {event.get('content', '')}")
+            last_agent_error = event.get("content") or last_agent_error
+            if event.get("fatal"):
+                turn_error = last_agent_error or "The agent turn failed."
+
+        elif etype == "error":
+            turn_error = event.get("content") or "The agent turn failed."
+            event_log.append(f"[error] {turn_error}")
 
         # A judge scoring what the agent did after a "no" has to see the no,
         # and any question the agent put to the user.
@@ -282,6 +291,13 @@ def _stream_chat(
             done_content = event.get("content", "")
             if done_content:
                 full_content = done_content
+            if event.get("failed") and not event.get("cancelled"):
+                turn_error = (
+                    turn_error
+                    or done_content
+                    or last_agent_error
+                    or "The agent turn failed."
+                )
 
         elif etype == "status":
             if event.get("retracts_answer"):
@@ -308,6 +324,8 @@ def _stream_chat(
         "agent_steps": agent_steps,
         "event_log": event_log,
     }
+    if turn_error:
+        result = {"status": "error", "detail": turn_error, **result}
     if inference_stats:
         result["stats"] = inference_stats
     return result
@@ -447,7 +465,8 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     ) -> Dict[str, Any]:
         """Send a message to the GAIA agent in a session and wait for the response.
         The conversation is stored and will be visible when the session is viewed.
-        Returns the agent's response, tool outputs, and an event log.
+        Returns the agent's response, tool outputs, and an event log. A turn
+        that failed also carries status "error" and the reason in "detail".
 
         Use list_sessions() first to get a session ID, or create_session() to make one.
         To make the session visible in the browser, call open_session_in_browser() first.

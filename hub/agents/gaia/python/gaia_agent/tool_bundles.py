@@ -199,7 +199,7 @@ DOC_BUNDLES = [
 # tools instead of 37, so the un-trimmed native ``tools=`` payload costs ~10.2K
 # tiktoken tokens on every LLM call of a 2-5 call ReAct turn.
 #
-# Always-on set (27 tools). Deliberately a smaller share of the registry than
+# Always-on set (29 tools). Deliberately a smaller share of the registry than
 # the doc CORE, because a general-purpose agent has no single reason to exist:
 # memory (recall is relevant to every turn), loop control (protocol-level turn
 # signalling, plus ``sleep``: a rate limit arrives mid-turn, when no selection
@@ -254,6 +254,10 @@ FULL_CORE_TOOLS = frozenset(
         "search_web",
         "fetch_page",
         "run_shell_command",
+        # without these a model read and browsed its way to the same answer,
+        # in about a fifth more steps
+        "search_file_content",
+        "list_files",
     }
 )
 

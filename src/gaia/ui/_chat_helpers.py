@@ -24,6 +24,7 @@ import re as _re
 import sqlite3
 import threading
 import time as _time
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -660,7 +661,8 @@ _CLASSIFIER_VERDICT_RE = _re.compile(
 )
 _TITLE_INSTRUCTION = (
     "Summarise the user's task in 3 to 6 plain words for a tab/window "
-    "title, in the language the user wrote in.  Reply with ONLY the "
+    "title, in the language the user wrote in.  Never translate it into "
+    "another language, whatever the reply or file names use.  Reply with ONLY the "
     "title, no quotes, no trailing "
     "punctuation, no leading verbs like 'Task:' or 'Title:'.  If the "
     "user has not asked for anything yet (only a greeting or small "
@@ -717,6 +719,35 @@ def _echoes_title_instruction(title: str) -> bool:
     words = _WORD_RE.findall(title.lower())
     echoed = sum(word in _TITLE_INSTRUCTION_WORDS for word in words)
     return echoed >= 4 and echoed >= 0.75 * len(words)
+
+
+#: Writing systems a title is checked against, by Unicode name's first word.
+_TITLE_SCRIPTS = frozenset(
+    {
+        "LATIN",
+        "CJK",
+        "HIRAGANA",
+        "KATAKANA",
+        "HANGUL",
+        "CYRILLIC",
+        "ARABIC",
+        "HEBREW",
+        "GREEK",
+        "THAI",
+        "DEVANAGARI",
+    }
+)
+
+
+def _scripts(text: str) -> set:
+    """The writing systems *text*'s letters are in."""
+    found = set()
+    for ch in text:
+        if ch.isalpha():
+            script = unicodedata.name(ch, "").split(" ", 1)[0]
+            if script in _TITLE_SCRIPTS:
+                found.add(script)
+    return found
 
 
 def _title_from_question(user_msg: str) -> Optional[str]:
@@ -800,8 +831,8 @@ async def _generate_session_title(
         LemonadeClient,
         LemonadeClientError,
         _model_ids_match,
-        find_model_requirement,
         no_thinking_kwargs,
+        reasoning_headroom,
     )
 
     # As the turn starts there is no answer yet: the question alone names it.
@@ -823,7 +854,6 @@ async def _generate_session_title(
         )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
-        mr = find_model_requirement(model_id)
         local = not _ui_cloud_provider(model_id)
         if local and not kwargs and model_id.upper().endswith("GGUF"):
             # Gemma 4 registers no switch, yet reasons on a short question ("hi");
@@ -831,11 +861,9 @@ async def _generate_session_title(
             kwargs = {"chat_template_kwargs": {"enable_thinking": False}}
         if not local:
             max_tokens = _CLOUD_TITLE_MAX_TOKENS
-        elif mr is not None and mr.reasoning_effort:
-            # It reasons even at "low"; leave room for the title after that.
-            max_tokens = 96
         else:
-            max_tokens = 24
+            # A model that reasons even at its least needs room for the title after it.
+            max_tokens = 24 + reasoning_headroom(model_id)
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()
@@ -902,6 +930,15 @@ async def _generate_session_title(
     # Exact match: a real title can start with "None" ("None values in pandas").
     if title.lower() == "none":
         raise _NoTopicYet
+    foreign = _scripts(title) - _scripts(f"{user_msg} {latest_msg}")
+    if foreign:
+        logger.info(
+            "Auto-title: %s titled the chat in %s, which the user did not write "
+            "in; titling from the first question",
+            model_id,
+            "/".join(sorted(foreign)).lower(),
+        )
+        return _title_from_question(user_msg)
     return title[:64]
 
 
@@ -1960,16 +1997,19 @@ def _with_attachments(allowed: list, attached: list) -> list:
 def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     """Documents a relayed sidecar should grant: its only way to grant a file.
 
-    Images are left out: the sidecar indexes what it is sent, and an image is
-    read by vision, not indexed.
+    Images and recordings are left out: the sidecar indexes what it is sent,
+    and an image is read by vision and a recording transcribed, not indexed.
+    Both still reach the sidecar through the chat's allowed paths.
     """
+    from gaia.audio.media import MEDIA_EXTENSIONS
+
     from .routers.files import PREVIEWABLE_IMAGE_EXTENSIONS
 
+    not_indexed = PREVIEWABLE_IMAGE_EXTENSIONS | MEDIA_EXTENSIONS
     extra = [
         p
         for p in attached
-        if p not in rag_file_paths
-        and Path(p).suffix.lower() not in PREVIEWABLE_IMAGE_EXTENSIONS
+        if p not in rag_file_paths and Path(p).suffix.lower() not in not_indexed
     ]
     return list(rag_file_paths) + extra
 
@@ -3322,6 +3362,9 @@ def _turn_inference_stats(
         input_tokens = answer_event.get("input_tokens")
         if isinstance(input_tokens, int) and input_tokens > 0:
             stats["input_tokens"] = input_tokens
+            cached = answer_event.get("cached_tokens")
+            if isinstance(cached, int) and cached >= 0:
+                stats["cached_tokens"] = cached
     steps = answer_event.get("steps")
     if isinstance(steps, int) and steps > 0:
         stats["steps"] = steps
@@ -4148,7 +4191,10 @@ async def _get_chat_response(
 
         # Without counts the turn is still recorded, as one of unknown cost.
         counts = (
-            {k: result.get(k) for k in ("input_tokens", "output_tokens")}
+            {
+                k: result.get(k)
+                for k in ("input_tokens", "output_tokens", "cached_tokens")
+            }
             if isinstance(result, dict)
             else {}
         )
