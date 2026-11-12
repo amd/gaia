@@ -38,6 +38,8 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
+      # test_flagship_tool_labels.py reads the UI's tool labels.
+      - 'src/gaia/apps/webui/src/i18n/locales/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
@@ -45,6 +47,11 @@ on:
       - 'tests/integration/conftest.py'
       - 'tests/integration/test_gaia_sidecar_relay_live.py'
       - 'tests/unit/agents/test_binary_install_dispatch.py'
+      - 'tests/unit/test_starting_state_matrix.py'
+      - 'tests/fixtures/fake_lemonade.py'
+      - 'installer/headless/fake_model_server.py'
+      - 'tests/unit/agents/test_answer_check_corpus.py'
+      - 'tests/fixtures/answer_check_corpus/**'
       - 'tests/unit/agents/test_model_history.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
       - 'tests/unit/chat/ui/test_sidecar_dispatch_coverage.py'
@@ -63,6 +70,7 @@ on:
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
       - 'tests/unit/test_warm_up.py'
+      - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
@@ -100,6 +108,8 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
+      # test_flagship_tool_labels.py reads the UI's tool labels.
+      - 'src/gaia/apps/webui/src/i18n/locales/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
@@ -107,6 +117,11 @@ on:
       - 'tests/integration/conftest.py'
       - 'tests/integration/test_gaia_sidecar_relay_live.py'
       - 'tests/unit/agents/test_binary_install_dispatch.py'
+      - 'tests/unit/test_starting_state_matrix.py'
+      - 'tests/fixtures/fake_lemonade.py'
+      - 'installer/headless/fake_model_server.py'
+      - 'tests/unit/agents/test_answer_check_corpus.py'
+      - 'tests/fixtures/answer_check_corpus/**'
       - 'tests/unit/agents/test_model_history.py'
       - 'tests/unit/agents/test_sidecar_card_drift.py'
       - 'tests/unit/chat/ui/test_sidecar_dispatch_coverage.py'
@@ -125,6 +140,7 @@ on:
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
       - 'tests/unit/test_warm_up.py'
+      - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
@@ -240,6 +256,7 @@ jobs:
             tests/unit/test_tool_loader_token_budget.py \
             tests/unit/test_tool_list_invariants.py \
             tests/unit/test_warm_up.py \
+            tests/unit/test_flagship_tool_labels.py \
             tests/unit/eval/test_harness_flagship_target.py \
             -v --tb=short
 
@@ -278,6 +295,8 @@ jobs:
             tests/unit/test_flagship_code_index_scope.py \
             tests/unit/test_stdio_permission_control.py \
             tests/unit/agents/test_engine_down_query_start.py \
+            tests/unit/test_starting_state_matrix.py \
+            tests/unit/agents/test_answer_check_corpus.py \
             -v --tb=short
 
       - name: Run Command-Injection Regression Tests

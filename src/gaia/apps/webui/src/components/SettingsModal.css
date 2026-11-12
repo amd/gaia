@@ -155,6 +155,9 @@
     color: var(--text-primary);
     cursor: pointer;
     transition: all var(--duration) var(--ease);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 .btn-model-save:hover:not(:disabled) {
     background: var(--accent-fill-hover);
@@ -201,6 +204,9 @@
     color: var(--text-secondary);
     font-family: var(--font-sans);
     margin-bottom: 10px;
+}
+.model-warning-content p:last-child {
+    margin-bottom: 0;
 }
 
 .model-status-hint {

@@ -271,6 +271,99 @@ def test_flash_is_never_picked_as_a_default(info):
     assert lc.FLASH_OPTION_MODEL_NAME not in lc.DEFAULT_MODEL_LADDER
 
 
+class TestMuseGlimmer:
+    """Meta's dense 30B agent model: a built-in, opt-in, sized by memory."""
+
+    GLIMMER = lc.find_model_requirement(lc.MUSE_GLIMMER_MODEL_NAME)
+
+    def test_builtin_pulls_by_name_only(self):
+        assert self.GLIMMER.pull_kwargs() == {}
+        assert self.GLIMMER.tool_calling
+        assert lc.is_tool_calling_model(lc.MUSE_GLIMMER_MODEL_NAME)
+
+    def test_size_counts_the_projector_and_draft_lemonade_downloads(self):
+        # Lemonade lists 19.9 GiB: UD-Q4_K_XL + BF16 mmproj + DFlash draft.
+        assert self.GLIMMER.size_gb == pytest.approx(19.9 * 2**30 / 1e9, abs=0.02)
+
+    def test_kv_cache_is_its_global_layers(self):
+        # 13 of 52 layers are global; the rest slide over a 2048-token window.
+        assert self.GLIMMER.kv_bytes_per_token == 13 * 2 * 128 * 2 * 2
+
+    def test_needs_about_24gb_at_64k(self):
+        kv = model_fit.kv_cache_gb(
+            self.GLIMMER.kv_bytes_per_token, self.GLIMMER.min_ctx_size
+        )
+        need = model_fit.required_memory_gb(self.GLIMMER.size_gb, kv)
+        assert need == pytest.approx(24.3, abs=0.05)
+
+    @pytest.mark.parametrize(
+        "info,window",
+        [
+            (STRIX_HALO_128, 131072),
+            (STRIX_HALO_64, 131072),
+            ({"devices": {"amd_dgpu": [{"available": True, "vram_gb": 32.0}]}}, 131072),
+        ],
+    )
+    def test_window_grows_to_its_native_maximum(self, info, window):
+        cap = capacity_from_system_info(info)
+        assert lc.context_for_capacity(self.GLIMMER, cap) == window
+
+    def test_a_24gb_gpu_is_too_small(self):
+        kv = model_fit.kv_cache_gb(
+            self.GLIMMER.kv_bytes_per_token, self.GLIMMER.min_ctx_size
+        )
+        verdict = check_fit(self.GLIMMER.size_gb, capacity_from_system_info(DGPU), kv)
+        assert not verdict.fits and "memory" in verdict.reason
+
+    @pytest.mark.parametrize("info", [STRIX_HALO_128, STRIX_HALO_64, DGPU_32])
+    def test_is_never_picked_as_a_default(self, info):
+        model_id, skipped = _recommend(info)
+        assert model_id != lc.MUSE_GLIMMER_MODEL_NAME
+        assert lc.MUSE_GLIMMER_MODEL_NAME not in skipped
+        assert lc.MUSE_GLIMMER_MODEL_NAME not in lc.DEFAULT_MODEL_LADDER
+
+    def test_samples_with_its_card_and_sends_no_reasoning_switch(self):
+        assert lc.local_sampling_defaults(lc.MUSE_GLIMMER_MODEL_NAME) == {
+            "temperature": 1.0,
+            "top_p": 0.95,
+            "top_k": 64,
+            "min_p": 0.0,
+        }
+        # Its template reads reasoning_strength, not either GAIA switch.
+        assert lc.requested_thinking(lc.MUSE_GLIMMER_MODEL_NAME) is None
+        assert lc.requested_reasoning_effort(lc.MUSE_GLIMMER_MODEL_NAME) is None
+
+    def test_side_calls_ask_for_its_least_reasoning(self):
+        """It cannot stop reasoning; "low" only shortens it."""
+        assert lc.no_thinking_kwargs(lc.MUSE_GLIMMER_MODEL_NAME) == {
+            "chat_template_kwargs": {"reasoning_strength": "low"}
+        }
+        assert lc.reasoning_headroom(lc.MUSE_GLIMMER_MODEL_NAME) >= 256
+        assert lc.reasoning_headroom(lc.LARGE_DEFAULT_MODEL_NAME) == 0
+        assert lc.reasoning_headroom(None) == 0
+
+    def test_reads_images_itself(self):
+        """Handing an image to Gemma would evict it and reload both; its own
+        encoder answers without a swap."""
+        from gaia.installer import model_choice
+
+        assert lc.MUSE_GLIMMER_MODEL_NAME in lc.VISION_CHAT_MODELS
+        assert model_choice.reads_images(lc.MUSE_GLIMMER_MODEL_NAME)
+
+    @pytest.mark.parametrize(
+        "info,offered",
+        [
+            (STRIX_HALO_128, True),
+            (STRIX_HALO_64, True),
+            (DGPU_32, True),
+            (DGPU, False),
+        ],
+    )
+    def test_offered_for_download_only_where_it_fits(self, info, offered):
+        fits = lc.optional_chat_models_that_fit(capacity_from_system_info(info))
+        assert (lc.MUSE_GLIMMER_MODEL_NAME in fits) is offered
+
+
 class TestDefaultFollowsTheGpu:
     """Qwen3.6 35B is the default on any PC whose GPU holds it; Gemma elsewhere."""
 

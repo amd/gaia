@@ -68,6 +68,9 @@ try {
     },
     // The install screen takes focus before anything has proved it can run.
     holdCrashCount: () => showingInstallScreen,
+    onRendererGone: (contents, details) => {
+      void handleRendererGone(contents, details);
+    },
   }));
 } catch (err) {
   try { process.stderr.write(`[main] safety-net load failed: ${err.message}\n`); } catch { }
@@ -104,6 +107,7 @@ const KeepAwake = require("./services/keep-awake.cjs");
 const PortManager = require("./services/port-manager.cjs");
 const { isGaiaBackendProcess } = require("./services/backend-orphan.cjs");
 const { showBackendCrashDialog } = require("./services/backend-crash-dialog.cjs");
+const { showRendererGoneDialog } = require("./services/renderer-gone-dialog.cjs");
 const { createBackendSupervisor } = require("./services/backend-supervisor.cjs");
 const { buildIndexQuery, INSTALL_SCREEN_QUERY } = require("./services/index-query.cjs");
 const backendInstaller = require("./services/backend-installer.cjs");
@@ -563,6 +567,34 @@ async function handleBackendCrash(code, signal) {
     console.log(`[main] Backend crash: user chose ${choice}`);
   } catch (err) {
     console.error("[main] handleBackendCrash failed:", err.message);
+  }
+}
+
+/**
+ * The window's page died (a crash, or the PC ran out of memory) while the
+ * backend and agents run on: offer to reload the window, or to quit.
+ */
+async function handleRendererGone(contents, { reason }) {
+  if (!mainWindow || mainWindow.isDestroyed() || contents !== mainWindow.webContents) {
+    _fatalHandler(new Error(`render-process-gone: reason=${reason} (not GAIA's window)`));
+    return;
+  }
+  try {
+    const choice = await showRendererGoneDialog({ dialog, parent: mainWindow, reason });
+    console.log(`[main] Window stopped working (${reason}): user chose ${choice}`);
+    if (choice === "reload") {
+      // Built afresh, so a backend restarted on a new port is the one it reaches.
+      try {
+        await loadApp();
+      } catch (err) {
+        // A page that dies again while loading fires render-process-gone, which asks again.
+        console.error(`[main] Reload after window crash failed: ${err.stack || err}`);
+      }
+    } else {
+      app.quit();
+    }
+  } catch (err) {
+    _fatalHandler(err);
   }
 }
 
@@ -1032,7 +1064,9 @@ app.whenReady().then(async () => {
   if (app.isPackaged) {
     try {
       const launcher = installAppImageLauncher();
-      if (launcher.status === "written") console.log(`[main] Wrote the AppImage launcher ${launcher.entry}`);
+      if (launcher.status !== "not-appimage") {
+        console.log(`[main] AppImage launcher ${launcher.status}: ${launcher.entry}`);
+      }
     } catch (err) {
       console.error(`[main] ${err.message}`);
     }
