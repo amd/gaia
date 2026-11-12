@@ -10,7 +10,7 @@ on:
     
 
 permissions:
-  actions: write  # Required to upload artifacts
+  actions: read  # The watchdog lists this run's jobs
 
 jobs:
   heartbeat:

@@ -219,6 +219,7 @@ jobs:
   # Integration tests on STX hardware: LLM + MCP + WiFi + Health
   integration-test:
     name: C++ Integration Tests (STX)
+    timeout-minutes: 60
     runs-on:
       - self-hosted
       - Windows

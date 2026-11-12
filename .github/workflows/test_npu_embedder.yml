@@ -117,6 +117,7 @@ jobs:
   test-npu-embedder:
     name: Test NPU FLM Embedder
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
+    timeout-minutes: 45
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
 
     steps:

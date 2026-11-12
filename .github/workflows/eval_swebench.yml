@@ -132,10 +132,12 @@ jobs:
         if: steps.model.outputs.ready == 'true'
         # One task at a time; each image is pulled before its run and removed
         # after, which keeps the hosted runner's disk under its limit.
+        env:
+          IDS: ${{ steps.pick.outputs.ids }}
         run: |
           . "$HOME/.gaia/lemonade/env.sh"
           gaia eval tasks run --suite swebench --model "$SWE_MODEL" \
-            --instances "${{ steps.pick.outputs.ids }}" \
+            --instances "$IDS" \
             --no-judge --run-timeout 2400 --out "$OUT"
 
       - name: Summarize
