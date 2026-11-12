@@ -70,13 +70,17 @@ def _skills_from_agent() -> Dict[str, Any]:
 
 class SkillLinkRequest(BaseModel):
     url: str
+
+
+class SkillLinkAddRequest(SkillLinkRequest):
+    #: The preview's pin, so the add installs exactly what was reviewed.
+    #: Required: an add that skipped the preview is refused.
+    pin: str
     #: Skill names to add; omitted adds every addable skill behind the link.
     names: Optional[List[str]] = None
     #: Add skills that ship code (tools.py or scripts/).
     allow_code: bool = False
     force: bool = False
-    #: The preview's pin, so the add installs exactly what was reviewed.
-    pin: Optional[str] = None
 
 
 @router.get("/api/skills/featured")
@@ -102,10 +106,13 @@ def preview_skill_link(body: SkillLinkRequest) -> Dict[str, Any]:
 
 
 @router.post("/api/skills/link/add")
-def add_skill_link(body: SkillLinkRequest) -> Dict[str, Any]:
-    """Add the chosen skills behind a pasted link to ``~/.gaia/skills``."""
+def add_skill_link(body: SkillLinkAddRequest) -> Dict[str, Any]:
+    """Add the chosen skills behind a pasted link to ``~/.gaia/skills``.
+
+    409 when the link no longer serves the version the preview pinned.
+    """
     from gaia.skills.errors import SkillError
-    from gaia.skills.link import SkillLinkError, add_from_link
+    from gaia.skills.link import SkillLinkChangedError, SkillLinkError, add_from_link
 
     try:
         return add_from_link(
@@ -115,6 +122,8 @@ def add_skill_link(body: SkillLinkRequest) -> Dict[str, Any]:
             force=body.force,
             pin=body.pin,
         ).to_dict()
+    except SkillLinkChangedError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except SkillLinkError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except SkillError as e:

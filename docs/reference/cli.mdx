@@ -2942,9 +2942,11 @@ Skills are discovered from these roots, highest precedence first:
 
     Adding the same link again updates the skills you added from it to the latest version.
 
+    Before adding, the command lists each skill with its description, its declared permissions in plain words, and its audit findings, then adds exactly that version. If the link changes between the listing and the add, nothing is added.
+
     | Option | Description |
     |--------|-------------|
-    | `--list` | Show the skills behind the link and their audit results; add nothing |
+    | `--list` | Show the skills behind the link, what each may do (its permissions), and their audit results; add nothing |
     | `--skill NAME` | Add only this skill (repeatable). Default: every skill behind the link |
     | `--allow-code` | Also add skills that ship code (`tools.py` or `scripts/`) |
     | `--force` | Replace a same-named skill that came from somewhere else |

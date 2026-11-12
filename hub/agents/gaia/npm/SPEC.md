@@ -755,8 +755,11 @@ loading. Model-state status events identify the provider and remote inference.
 `/skills` is answered by the stdio loop too, never by the model. Bare `/skills`
 lists the installed skills. `/skills add <link>` reads a GitHub repository or
 folder, an `owner/repo` shorthand, a skills.sh page, or an https `.zip`, and
-replies with every `SKILL.md` it holds, each skill's audit result, and a security
-warning; it adds nothing. `/skills add <link> confirm` adds them to
+replies with every `SKILL.md` it holds, each skill's declared permissions in
+plain words, its audit result, and a security warning; it adds nothing and
+remembers the version it read. `/skills add <link> confirm` adds that version —
+a `confirm` with no earlier preview of the link previews instead, a link that
+changed since its preview is refused, and each preview covers one add — to
 `~/.gaia/skills` at the `experimental` tier and recomposes the system prompt so
 the session can use them. Skills that ship code are refused unless the line
 carries `--allow-code`. Each command ends in exactly one `final` or `error` event.

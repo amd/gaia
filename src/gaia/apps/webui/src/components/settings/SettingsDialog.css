@@ -1013,3 +1013,19 @@
     width: auto;
     margin-right: auto;
 }
+
+.skill-link-perms {
+    display: block;
+    margin-top: 4px;
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.skill-link-perms ul {
+    margin: 2px 0 0;
+    padding-inline-start: 16px;
+}
+
+.skill-link-perms code {
+    font-size: 11px;
+}

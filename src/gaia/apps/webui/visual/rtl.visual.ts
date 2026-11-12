@@ -3339,3 +3339,85 @@ for (const locale of ['ar', 'en']) {
         });
     }
 }
+
+
+const SKILL_LINK = 'https://github.com/michael-denyer/pstack-claude';
+const SKILL_LINK_PIN = `commit:${'4f2a9c1e'.repeat(5)}`;
+const linkSkill = (name: string, description: string, over: Record<string, unknown> = {}) => ({
+    name, description, path: `skills/${name}`, has_code: false, permissions: [], verdict: 'ALLOW',
+    findings: [], installed: false, update: false, error: null, ...over,
+});
+const SKILL_LINK_PREVIEW = {
+    link: SKILL_LINK,
+    source: 'michael-denyer/pstack-claude',
+    pin: SKILL_LINK_PIN,
+    warning: 'Skills from a link are written by someone else. A skill\'s instructions steer what GAIA does with your files, shell, and accounts, and a skill that ships code (tools.py or scripts/) runs that code on this PC. GAIA audits each skill and refuses anything the audit blocks, but an audit is not a guarantee. Only add skills from people you trust, and read what they do first.',
+    skills: [
+        linkSkill('design-review', 'Review a design doc for gaps before any code is written.'),
+        linkSkill('docs-lookup', 'Look up library documentation and cite the page it came from.', {
+            permissions: [{ grant: 'network:read:*.readthedocs.io', text: 'Read pages and data from sites matching *.readthedocs.io' }],
+            verdict: 'REVIEW',
+            findings: ['[REVIEW] network: fetches remote content — check what it sends'],
+        }),
+        linkSkill('ملخص-الاجتماع', 'يلخص محضر الاجتماع ويستخرج المهام.', { permissions: [{ grant: 'scratch:write', text: 'Write files in a temporary folder that is emptied after each use' }] }),
+        linkSkill('ci-fix', 'Reproduce a red CI job locally and fix the cause.', {
+            has_code: true,
+            permissions: [{ grant: 'scratch:write', text: 'Write files in a temporary folder that is emptied after each use' }],
+        }),
+        linkSkill('pr-hygiene', 'Tidy a pull request before review.', { installed: true, update: true }),
+        linkSkill('release-notes', 'Draft release notes from merged pull requests.', { installed: true }),
+        linkSkill('gh-triage', 'Label and triage GitHub issues.', {
+            permissions: [{ grant: 'shell:execute:gh', text: 'Run the \'gh\' command: GitHub CLI — reads issues, pull requests, releases, and runs; comments, pull requests, and labels only with your per-command approval.' }],
+            error: 'Skill \'gh-triage\' declares permission(s) above the \'experimental\' ceiling: shell:execute. Install a copy signed at \'community\' or higher from the hub instead.',
+        }),
+    ],
+};
+const SKILL_LINK_RESULT = {
+    added: [
+        { name: 'design-review', updated: false, verdict: 'ALLOW', has_code: false, findings: [] },
+        { name: 'docs-lookup', updated: false, verdict: 'REVIEW', has_code: false, findings: [] },
+        { name: 'pr-hygiene', updated: true, verdict: 'ALLOW', has_code: false, findings: [] },
+    ],
+    failed: { 'ملخص-الاجتماع': 'A skill with this name is already installed from somewhere else. Remove it first, or pass --force to replace it.' },
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`add skills from a link: preview and result (${locale})`, async ({ page }) => {
+        const posted: Array<Record<string, unknown>> = [];
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/skills/link/*', async (route) => {
+                const body = route.request().postDataJSON() as Record<string, unknown>;
+                posted.push(body);
+                await route.fulfill({ json: route.request().url().endsWith('/preview') ? SKILL_LINK_PREVIEW : SKILL_LINK_RESULT });
+            });
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        const field = page.locator('.skill-link-form input');
+        await field.fill(SKILL_LINK);
+        await field.press('Enter');
+
+        const preview = page.locator('.skill-link-preview');
+        await expect(preview).toBeVisible();
+        await expect(preview.locator('.skill-link-perms')).toHaveCount(SKILL_LINK_PREVIEW.skills.length);
+        await expect(preview.locator('.skill-link-perms code', { hasText: 'network:read:*.readthedocs.io' })).toBeVisible();
+        await preview.locator('details:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await preview.scrollIntoViewIfNeeded();
+        await shot(page, `skills-link-preview-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.skill-link-preview')).toEqual([]);
+        await scrollPane(page, 'bottom');
+        await shot(page, `skills-link-preview-${locale}-bottom`);
+
+        await preview.locator('.skill-link-actions .btn-primary').click();
+        const result = page.locator('.skill-link-result');
+        await expect(result).toBeVisible();
+        expect(posted[posted.length - 1]).toMatchObject({ url: SKILL_LINK, pin: SKILL_LINK_PIN });
+        await result.locator('details:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await result.scrollIntoViewIfNeeded();
+        await shot(page, `skills-link-result-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
+    });
+}

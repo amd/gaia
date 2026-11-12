@@ -10,8 +10,12 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 - **Add skills from a pasted link (`/skills`).** On the stdio transport,
   `/skills add <link>` lists the skills in a GitHub repository or folder, a
-  skills.sh page or an https `.zip`, with each one's audit result and a security
-  warning; `/skills add <link> confirm` adds them at the `experimental` tier.
+  skills.sh page or an https `.zip`, with what each one is allowed to do (its
+  declared permissions, in plain words), its audit result, and a security
+  warning; `/skills add <link> confirm` adds exactly the version that was shown,
+  at the `experimental` tier. A `confirm` with no preview earlier in the session
+  shows the preview instead of adding anything, and a link that changed since
+  its preview is refused.
   Skills that ship code need `--allow-code`. Bare `/skills` lists what is
   installed.
 - **The model is told when older turns are out of its view.** A long chat showed

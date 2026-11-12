@@ -75,10 +75,20 @@ _UNPACKED = "unpacked"
 
 _SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv"}
 _REPO_PART = re.compile(r"^[A-Za-z0-9_.-]+$")
+#: A preview's pin, as :func:`_archive_pin` writes it.
+_PIN = re.compile(r"commit:[0-9a-f]{40}|sha256:[0-9a-f]{64}")
 
 
 class SkillLinkError(SkillError):
     """A link could not be read as a skill or skills library."""
+
+
+class SkillLinkNotFoundError(SkillLinkError):
+    """The download URL answered 404."""
+
+
+class SkillLinkChangedError(SkillLinkError):
+    """What the link serves now is not what the user previewed."""
 
 
 @dataclass
@@ -106,6 +116,9 @@ class LinkSkill:
     #: Folder of the skill, relative to the library root.
     path: str
     has_code: bool = False
+    #: What the skill declares it may do: ``{"grant": ..., "text": ...}`` with
+    #: the raw grant and a plain-language sentence, in declared order.
+    permissions: List[Dict[str, str]] = field(default_factory=list)
     verdict: str = ""
     findings: List[str] = field(default_factory=list)
     installed: bool = False
@@ -256,7 +269,7 @@ def _download(url: str, destination: Path) -> Path:
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else None
         if status == 404:
-            raise SkillLinkError(
+            raise SkillLinkNotFoundError(
                 f"Nothing found at {url}. Check the link — a private repository "
                 "can't be read without signing in, so add it from a local copy with "
                 "'gaia skill import <folder>'."
@@ -297,7 +310,16 @@ def _skip_links(archive: Path) -> Path:
 
 def fetch_library(source: LinkSource, workdir: Path) -> tuple:
     """Download and unpack *source*; return ``(directory to search, pin)``."""
-    archive = _download(source.download_url, workdir / "library.zip")
+    try:
+        archive = _download(source.download_url, workdir / "library.zip")
+    except SkillLinkNotFoundError as exc:
+        if source.repo and re.search(r"/(tree|blob)/", source.link):
+            raise SkillLinkNotFoundError(
+                f"{exc} If the branch name in {source.link} contains a '/', the "
+                "link can't tell it from the folder: paste the repository link "
+                "instead, or a link on a branch without a '/'."
+            ) from exc
+        raise
     try:
         pin = _archive_pin(archive)
     except zipfile.BadZipFile as exc:
@@ -392,7 +414,10 @@ def _scan(
     from gaia.skills.audit.engine import audit_skill_object
     from gaia.skills.capture import _render_findings, _ships_code
     from gaia.skills.lock import SkillLock
-    from gaia.skills.permissions import refuse_unbridged_permissions
+    from gaia.skills.permissions import (
+        describe_permissions,
+        refuse_unbridged_permissions,
+    )
     from gaia.skills.tiers import LOWEST_TIER, enforce_tier_ceiling
 
     dirs = find_skill_dirs(root)
@@ -433,6 +458,13 @@ def _scan(
             installed=skill.name in installed,
             update=bool(locked and locked.origin.startswith(from_here)),
         )
+        try:
+            permissions = skill.parsed_permissions()
+        except SkillError as exc:
+            permissions, permission_error = None, str(exc)
+        else:
+            permission_error = None
+            entry.permissions = describe_permissions(permissions)
         if skill.name in scanned:
             entry.error = (
                 f"Another skill in this library is also named '{skill.name}' "
@@ -446,8 +478,9 @@ def _scan(
         entry.findings = _render_findings(report)
         if report.verdict == "BLOCK":
             entry.error = f"Blocked by the security audit: {report.reason}"
+        elif permissions is None:
+            entry.error = permission_error
         else:
-            permissions = skill.parsed_permissions()
             try:
                 refuse_unbridged_permissions(permissions, skill_name=skill.name)
                 enforce_tier_ceiling(
@@ -493,7 +526,7 @@ def add_from_link(
     *,
     allow_code: bool = False,
     force: bool = False,
-    pin: Optional[str] = None,
+    pin: str,
     manager: Optional[SkillManager] = None,
 ) -> LinkAddResult:
     """Import the skills behind *link* — all of them, or just *names*.
@@ -508,22 +541,32 @@ def add_from_link(
         force: Replace a skill of the same name that came from somewhere else.
             One added earlier from this same source is always updated in place,
             which is how a library is brought up to its latest version.
-        pin: The preview's ``pin``. GitHub sources are downloaded at that exact
-            commit; any other source must still hash the same, or nothing is
-            added — so what lands is what the user reviewed.
+        pin: The preview's ``pin``, required. GitHub sources are downloaded at
+            that exact commit; any other source must still hash the same, or
+            nothing is added — so what lands is what the user reviewed.
+
+    Raises:
+        SkillLinkError: *pin* is missing or malformed — preview the link first.
+        SkillLinkChangedError: the link no longer serves what was previewed.
     """
     from gaia.skills.capture import import_bundle
 
+    if not _PIN.fullmatch(pin or ""):
+        raise SkillLinkError(
+            f"Refusing to add skills from {link} without a reviewed version. "
+            "Preview the link first (gaia skill add <link> --list, /skills add "
+            "<link> in the TUI, or Read in the Agent UI), then add what it showed."
+        )
     source = resolve_link(link)
-    if pin and pin.startswith("commit:") and source.repo:
+    if pin.startswith("commit:") and source.repo:
         owner, repo = source.repo.split("/")
         pinned = _github(source.link, owner, repo, ref=pin[len("commit:") :], rest=[])
         source.download_url = pinned.download_url
     result = LinkAddResult()
     with tempfile.TemporaryDirectory(prefix="gaia-skill-link-") as tmp:
         root, fetched = fetch_library(source, Path(tmp))
-        if pin and fetched != pin:
-            raise SkillLinkError(
+        if fetched != pin:
+            raise SkillLinkChangedError(
                 f"{source.link} changed since you previewed it, so nothing was "
                 "added. Read the link again to review the current version."
             )
@@ -591,7 +634,9 @@ __all__ = [
     "LinkPreview",
     "LinkSkill",
     "LinkSource",
+    "SkillLinkChangedError",
     "SkillLinkError",
+    "SkillLinkNotFoundError",
     "add_from_link",
     "fetch_library",
     "find_skill_dirs",

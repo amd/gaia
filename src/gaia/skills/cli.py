@@ -841,6 +841,16 @@ def _handle_add(args: argparse.Namespace) -> int:
                 state = "will update" if s.update else "installed from elsewhere"
                 note = (note + ", " if note else "") + state
             print(f"  {mark} {s.name}" + (f"  ({note})" if note else ""))
+            if s.description:
+                print(f"      {s.description}")
+            if s.permissions:
+                print("      permissions :")
+                for grant in s.permissions:
+                    print(f"        - {grant['text']} ({grant['grant']})")
+            else:
+                print("      permissions : none declared")
+            for finding in s.findings:
+                print(f"      audit       : {finding}")
         print(f"\n⚠️  {SECURITY_WARNING}")
     if args.list_only:
         return EXIT_OK

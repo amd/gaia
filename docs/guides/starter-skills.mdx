@@ -93,6 +93,14 @@ a popular MIT-licensed set of engineering workflows, the Skills panel has a one-
   <link> confirm` adds it.
 - **CLI** — `gaia skill add <link>` (see the [CLI reference](/reference/cli)).
 
+Before anything is added, every surface lists each skill with its description, what
+it is allowed to do (its declared permissions, in plain words, such as *Read pages and
+data from sites matching \*.readthedocs.io*), whether it ships code, and what the audit
+found. What gets added is exactly the version you reviewed: if the library changes
+between the preview and the add, nothing is added and you are asked to read the link
+again. In the terminal UI, a `confirm` with no preview earlier in the session shows the
+preview instead of adding.
+
 A link can be a repository (`https://github.com/owner/repo` or just `owner/repo`), a
 folder in one (`.../tree/main/skills`), a skills.sh page, or an https `.zip`.
 

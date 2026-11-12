@@ -3122,18 +3122,21 @@ model with no known price reads as unknown, never $0. Cloud models from
   <Accordion title="POST /api/skills/link/preview">
     List and audit the skills behind a pasted link without installing any.
     Body: `{"url"}`. Returns `{"link", "source", "pin", "warning", "skills":
-    [{"name", "description", "path", "has_code", "verdict", "findings",
-    "installed", "update", "error"}]}`. **400** when the link cannot be read
-    or holds no skill.
+    [{"name", "description", "path", "has_code", "permissions", "verdict",
+    "findings", "installed", "update", "error"}]}`. `permissions` lists what
+    the skill declares it may do as `[{"grant", "text"}]` — the raw grant
+    (`network:read:*.example.com`) and a plain-language sentence. **400** when
+    the link cannot be read or holds no skill.
   </Accordion>
 
   <Accordion title="POST /api/skills/link/add">
     Add skills behind a link to `~/.gaia/skills`. Body: `{"url", "names",
-    "allow_code", "force", "pin"}`; omit `names` to add every addable skill,
-    and send the preview's `pin` so what lands is what was reviewed. Skills
-    that ship code are refused unless `allow_code` is true. Returns
-    `{"added": [...], "failed": {name: reason}}`. **400** when the link cannot
-    be read or changed since the preview.
+    "allow_code", "force", "pin"}`; omit `names` to add every addable skill.
+    `pin` is required: send the preview's `pin` so what lands is what was
+    reviewed. Skills that ship code are refused unless `allow_code` is true.
+    Returns `{"added": [...], "failed": {name: reason}}`. **422** when `pin`
+    is missing, **400** when it is malformed or the link cannot be read,
+    **409** when the link changed since the preview.
   </Accordion>
 
   <Accordion title="DELETE /api/skills/{name}">

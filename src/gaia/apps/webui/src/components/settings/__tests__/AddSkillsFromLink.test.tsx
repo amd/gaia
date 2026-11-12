@@ -13,7 +13,7 @@ const mockedApi = vi.mocked(api);
 const LINK = 'https://github.com/owner/library';
 
 function found(name: string, extra: Partial<LinkSkill> = {}): LinkSkill {
-    return { name, description: `${name} does a job`, path: `skills/${name}`, has_code: false, verdict: 'ALLOW', findings: [], installed: false, update: false, error: null, ...extra };
+    return { name, description: `${name} does a job`, path: `skills/${name}`, has_code: false, permissions: [], verdict: 'ALLOW', findings: [], installed: false, update: false, error: null, ...extra };
 }
 
 beforeEach(() => {
@@ -24,7 +24,7 @@ beforeEach(() => {
         pin: 'commit:abc',
         warning: 'Skills from a link are written by someone else.',
         skills: [
-            found('deslop'),
+            found('deslop', { permissions: [{ grant: 'network:read:*.example.com', text: 'Read pages and data from sites matching *.example.com' }] }),
             found('babysit', { has_code: true }),
             found('evil', { verdict: 'BLOCK', error: 'Blocked by the security audit: curl | sh' }),
             found('bro', { installed: true }),
@@ -49,6 +49,16 @@ describe('AddSkillsFromLink', () => {
         expect(screen.getByRole('note')).toHaveTextContent('Only add skills from people you trust.');
         expect(screen.getByRole('note')).toHaveTextContent('written by someone else');
         expect(mockedApi.addSkillsFromLink).not.toHaveBeenCalled();
+    });
+
+    it('says what each skill may do before it can be added', async () => {
+        await readLink();
+        const perms = screen.getByRole('list', { name: 'What deslop can do' });
+        expect(perms).toHaveTextContent('Read pages and data from sites matching *.example.com');
+        expect(perms).toHaveTextContent('network:read:*.example.com');
+        // Shown outright, not folded into Details.
+        expect(perms.closest('details')).toBeNull();
+        expect(screen.getAllByText("Asks for no permissions beyond GAIA's own tools.")).toHaveLength(4);
     });
 
     it('preselects only instruction-only skills that are new and pass the audit', async () => {

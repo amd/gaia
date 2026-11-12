@@ -185,6 +185,20 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                                                 {s.verdict === 'REVIEW' && <span className="skill-link-tag">{t('settings.skills.link.tagReview')}</span>}
                                             </span>
                                             {s.description && <span className="skill-row-desc skill-link-desc" title={s.description}><bdi>{s.description}</bdi></span>}
+                                            {s.permissions.length > 0 ? (
+                                                <span className="skill-link-perms">
+                                                    <span className="skill-link-perms-label">{t('settings.skills.link.can')}</span>
+                                                    <ul aria-label={t('settings.skills.link.permsAria', { name: s.name })}>
+                                                        {s.permissions.map((p) => (
+                                                            <li key={p.grant}>
+                                                                <bdi>{p.text}</bdi> <bdi dir="ltr"><code>{p.grant}</code></bdi>
+                                                            </li>
+                                                        ))}
+                                                    </ul>
+                                                </span>
+                                            ) : (
+                                                <span className="skill-link-perms">{t('settings.skills.link.noPermissions')}</span>
+                                            )}
                                             {hasDetails && (
                                                 <details className="skill-link-findings">
                                                     <summary>{t('settings.skills.link.details')}</summary>
@@ -223,7 +237,7 @@ export function AddSkillsFromLink({ onAdded }: { onAdded: () => void }) {
                         <details>
                             <summary>{t('settings.skills.link.notAdded', { n: Object.keys(result.failed).length })}</summary>
                             <ul className="grant-list">
-                                {Object.entries(result.failed).map(([name, why]) => <li key={name}><bdi dir="ltr"><code>{name}</code></bdi> — <bdi>{why}</bdi></li>)}
+                                {Object.entries(result.failed).map(([name, why]) => <li key={name}><bdi><strong>{name}</strong></bdi> — <bdi>{why}</bdi></li>)}
                             </ul>
                         </details>
                     )}

@@ -11,6 +11,7 @@ import pytest
 
 from gaia.skills import link as skill_link
 from gaia.skills.link import (
+    SkillLinkChangedError,
     SkillLinkError,
     add_from_link,
     preview_link,
@@ -19,6 +20,12 @@ from gaia.skills.link import (
 from gaia.skills.manager import SkillManager
 
 CODELOAD = "https://codeload.github.com"
+
+
+def _add(link, names=None, *, manager, **kwargs):
+    """Add the way every surface does: preview first, then add at its pin."""
+    pin = preview_link(link, manager=manager).pin
+    return add_from_link(link, names, pin=pin, manager=manager, **kwargs)
 
 
 @pytest.mark.parametrize(
@@ -203,7 +210,7 @@ def test_preview_lists_and_audits_every_skill_without_writing(library):
 
 
 def test_add_imports_instruction_skills_and_refuses_code_without_opt_in(library):
-    result = add_from_link("acme/skills", manager=library)
+    result = _add("acme/skills", manager=library)
 
     added = {a["name"] for a in result.added}
     assert added == {"deslop", "bro", "pdf", "noticed"}
@@ -214,7 +221,7 @@ def test_add_imports_instruction_skills_and_refuses_code_without_opt_in(library)
 
 
 def test_add_with_code_opt_in_and_a_chosen_subset(library):
-    result = add_from_link("acme/skills", ["runner"], allow_code=True, manager=library)
+    result = _add("acme/skills", ["runner"], allow_code=True, manager=library)
 
     assert [a["name"] for a in result.added] == ["runner"]
     assert result.added[0]["has_code"]
@@ -222,14 +229,14 @@ def test_add_with_code_opt_in_and_a_chosen_subset(library):
 
 
 def test_an_unknown_chosen_name_is_reported_not_ignored(library):
-    result = add_from_link("acme/skills", ["nope"], manager=library)
+    result = _add("acme/skills", ["nope"], manager=library)
     assert result.added == []
     assert "nope" in result.failed
 
 
 def test_re_adding_from_the_same_source_updates_in_place(library):
-    add_from_link("acme/skills", ["deslop"], manager=library)
-    again = add_from_link("https://github.com/acme/skills", ["deslop"], manager=library)
+    _add("acme/skills", ["deslop"], manager=library)
+    again = _add("https://github.com/acme/skills", ["deslop"], manager=library)
     assert again.failed == {}
     assert again.added[0]["updated"] is True
 
@@ -265,13 +272,13 @@ def test_a_same_named_skill_from_elsewhere_is_not_replaced(library):
     entry = next(s for s in preview.skills if s.name == "deslop")
     assert entry.installed and not entry.update
 
-    result = add_from_link("acme/skills", ["deslop"], manager=library)
+    result = _add("acme/skills", ["deslop"], manager=library)
     assert "already installed from somewhere else" in result.failed["deslop"]
     assert "My own version." in (other / "SKILL.md").read_text()
 
 
 def test_each_installed_skill_keeps_the_librarys_licence(library):
-    add_from_link("acme/skills", ["deslop"], manager=library)
+    _add("acme/skills", ["deslop"], manager=library)
     installed = library.user_root / "deslop"
     assert "Copyright (c) 2026 Acme" in (installed / "LICENSE").read_text()
     assert (installed / "NOTICE.md").is_file()
@@ -310,7 +317,7 @@ def test_add_installs_exactly_what_the_preview_audited(monkeypatch, library):
     monkeypatch.setattr(
         skill_link, "_download", lambda url, dest: (dest.write_bytes(changed), dest)[1]
     )
-    with pytest.raises(SkillLinkError, match="changed since you previewed"):
+    with pytest.raises(SkillLinkChangedError, match="changed since you previewed"):
         add_from_link("acme/skills", ["deslop"], pin=preview.pin, manager=library)
     assert not (library.user_root / "deslop").exists()
 
@@ -335,17 +342,17 @@ def test_a_github_pin_downloads_that_exact_commit(monkeypatch, library):
 
 
 def test_a_skill_can_be_chosen_by_its_folder_name(library):
-    result = add_from_link("acme/skills", ["pdf-tools"], manager=library)
+    result = _add("acme/skills", ["pdf-tools"], manager=library)
     assert [a["name"] for a in result.added] == ["pdf"]
 
 
 def test_choosing_an_unreadable_skill_reports_why_not_that_it_is_missing(library):
-    result = add_from_link("acme/skills", ["broken"], manager=library)
+    result = _add("acme/skills", ["broken"], manager=library)
     assert "No skill named" not in result.failed["broken"]
 
 
 def test_a_skill_with_only_a_notice_still_gets_the_library_licence(library):
-    add_from_link("acme/skills", ["noticed"], manager=library)
+    _add("acme/skills", ["noticed"], manager=library)
     installed = library.user_root / "noticed"
     assert "Copyright (c) 2026 Acme" in (installed / "LICENSE").read_text()
     assert (installed / "NOTICE.md").read_text() == "# its own notice\n"
@@ -361,3 +368,177 @@ def test_preview_flags_a_skill_the_permission_gate_will_refuse(library):
 def test_dot_segments_are_not_a_repository(link):
     with pytest.raises(SkillLinkError):
         resolve_link(link)
+
+
+# --- The add needs the preview's pin -----------------------------------------
+
+
+@pytest.mark.parametrize(
+    "pin",
+    [
+        None,
+        "",
+        "HEAD",
+        "commit:abc",
+        "commit:" + "A" * 40,
+        "sha256:" + "0" * 63,
+        "sha256:" + "0" * 64 + "\n",
+        " commit:" + "a" * 40,
+        "md5:" + "0" * 32,
+    ],
+)
+def test_an_add_without_a_reviewed_pin_downloads_nothing(monkeypatch, library, pin):
+    monkeypatch.setattr(
+        skill_link,
+        "_download",
+        lambda *a: pytest.fail("downloaded for an add nobody previewed"),
+    )
+    with pytest.raises(SkillLinkError, match="without a reviewed version"):
+        add_from_link("acme/skills", pin=pin, manager=library)
+    assert not library.user_root.exists()
+
+
+def test_a_digest_pin_on_a_github_link_still_has_to_match(monkeypatch, library):
+    with pytest.raises(SkillLinkChangedError):
+        add_from_link("acme/skills", pin="sha256:" + "0" * 64, manager=library)
+    assert not library.user_root.exists()
+
+
+def test_a_commit_pin_is_refused_when_the_archive_is_not_that_commit(
+    monkeypatch, library
+):
+    # The library fixture's zip records no commit, so it hashes instead.
+    with pytest.raises(SkillLinkChangedError):
+        add_from_link("acme/skills", pin="commit:" + "c" * 40, manager=library)
+    assert not library.user_root.exists()
+
+
+# --- The preview says what each skill may do ---------------------------------
+
+
+def test_preview_lists_each_skills_permissions_in_plain_words(library):
+    by_name = {s.name: s for s in preview_link("acme/skills", manager=library).skills}
+
+    assert by_name["deslop"].permissions == []
+    assert by_name["disk"].permissions == [
+        {"grant": "filesystem:read:/tmp", "text": "Read your files under /tmp"}
+    ]
+
+
+def test_preview_survives_a_skill_with_malformed_permissions(monkeypatch, tmp_path):
+    payload = _library_zip(
+        {
+            "skills/ok/SKILL.md": _skill_md("ok"),
+            "skills/bad/SKILL.md": (
+                "---\nname: bad\ndescription: bad does a job\nmetadata:\n  gaia:\n"
+                "    permissions:\n      - teleport:everywhere\n---\n\nGo.\n"
+            ),
+        }
+    )
+    monkeypatch.setattr(
+        skill_link, "_download", lambda url, dest: (dest.write_bytes(payload), dest)[1]
+    )
+    manager = SkillManager(
+        agent_skill_dirs=[], user_skills_root=tmp_path / "u", include_claude_roots=False
+    )
+
+    preview = preview_link("acme/skills", manager=manager)
+
+    bad = next(s for s in preview.skills if s.path == "skills/bad")
+    assert bad.error and "teleport" in bad.error
+    assert bad.permissions == []
+    assert next(s for s in preview.skills if s.name == "ok").error is None
+
+
+def test_every_permission_the_grammar_allows_has_plain_words():
+    from gaia.skills.permissions import (
+        DOMAIN_LEVELS,
+        Permission,
+        describe_permission,
+    )
+
+    for domain, levels in DOMAIN_LEVELS.items():
+        for level in levels:
+            for scope in (None, "gh"):
+                text = describe_permission(Permission(domain, level, scope))
+                assert text and f"{domain}:{level}" not in text
+
+
+@pytest.mark.parametrize(
+    "grant, words",
+    [
+        ("network:read", "any website"),
+        ("network:write:api.acme.com", "Send your data to sites matching api.acme"),
+        ("shell:execute:gh", "GitHub CLI"),
+        ("shell:execute", "Run any command"),
+        ("mcp:connect:mcp-tavily", "'mcp-tavily' connector"),
+        ("scratch:write", "temporary folder"),
+        ("network:none", "uses nothing from the internet"),
+    ],
+)
+def test_permission_words_name_what_the_grant_reaches(grant, words):
+    from gaia.skills.permissions import Permission, describe_permission
+
+    assert words in describe_permission(Permission.parse(grant))
+
+
+def test_a_tree_link_that_404s_explains_slashed_branch_names(monkeypatch):
+    from gaia.skills.link import SkillLinkNotFoundError, fetch_library
+
+    def missing(url, destination):
+        raise SkillLinkNotFoundError(f"Nothing found at {url}.")
+
+    monkeypatch.setattr(skill_link, "_download", missing)
+    source = resolve_link("https://github.com/acme/skills/tree/feature/x/skills")
+    with pytest.raises(SkillLinkNotFoundError, match="branch name"):
+        fetch_library(source, Path(tempfile.mkdtemp()))
+
+    plain = resolve_link("acme/skills")
+    with pytest.raises(SkillLinkNotFoundError) as exc:
+        fetch_library(plain, Path(tempfile.mkdtemp()))
+    assert "branch name" not in str(exc.value)
+
+
+# --- gaia skill add ----------------------------------------------------------
+
+
+def _cli(argv, monkeypatch, manager):
+    import argparse
+
+    from gaia.skills import cli as skill_cli
+
+    monkeypatch.setattr(skill_cli, "_manager", lambda: manager)
+    parser = argparse.ArgumentParser()
+    skill_cli.add_subparser(parser.add_subparsers(dest="command"))
+    return skill_cli.handle(parser.parse_args(["skill", *argv]))
+
+
+def test_cli_list_shows_permissions_findings_and_description(
+    monkeypatch, library, capsys
+):
+    assert _cli(["add", "acme/skills", "--list"], monkeypatch, library) == 0
+    out = capsys.readouterr().out
+
+    assert "disk does a job" in out
+    assert "- Read your files under /tmp (filesystem:read:/tmp)" in out
+    assert "permissions : none declared" in out
+    assert "written by someone else" in out
+    assert not library.user_root.exists()
+
+
+def test_cli_add_installs_at_the_pin_it_just_showed(monkeypatch, library, capsys):
+    seen = []
+    real = skill_link.add_from_link
+
+    def spy(*a, **k):
+        seen.append(k["pin"])
+        return real(*a, **k)
+
+    monkeypatch.setattr(skill_link, "add_from_link", spy)
+    rc = _cli(
+        ["add", "acme/skills", "--skill", "deslop", "--yes"], monkeypatch, library
+    )
+
+    assert rc == 0
+    assert seen and seen[0].startswith("sha256:")
+    assert (library.user_root / "deslop" / "SKILL.md").is_file()

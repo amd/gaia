@@ -4691,7 +4691,7 @@
     "title": "SetupRunRequest",
     "type": "object"
   },
-  "SkillLinkRequest": {
+  "SkillLinkAddRequest": {
     "properties": {
       "allow_code": {
         "default": false,
@@ -4718,16 +4718,23 @@
         "title": "Names"
       },
       "pin": {
-        "anyOf": [
-          {
-            "type": "string"
-          },
-          {
-            "type": "null"
-          }
-        ],
-        "title": "Pin"
+        "title": "Pin",
+        "type": "string"
       },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "pin"
+    ],
+    "title": "SkillLinkAddRequest",
+    "type": "object"
+  },
+  "SkillLinkRequest": {
+    "properties": {
       "url": {
         "title": "Url",
         "type": "string"

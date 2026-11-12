@@ -350,3 +350,65 @@ def test_add_passes_the_chosen_names_and_code_opt_in(client, monkeypatch):
 def test_featured_libraries_include_pstack(client):
     body = client.get("/api/skills/featured").json()
     assert [lib["id"] for lib in body["libraries"]] == ["pstack"]
+
+
+def test_preview_carries_each_skills_permissions(client, monkeypatch):
+    from gaia.skills import link
+
+    grant = {"grant": "network:read", "text": "Read pages and data from any website"}
+    preview = link.LinkPreview(
+        link="acme/skills",
+        source="acme/skills",
+        skills=[
+            link.LinkSkill(
+                name="fetch", description="d", path="s/fetch", permissions=[grant]
+            )
+        ],
+    )
+    monkeypatch.setattr(link, "preview_link", lambda url: preview)
+
+    body = client.post("/api/skills/link/preview", json={"url": "acme/skills"}).json()
+
+    assert body["skills"][0]["permissions"] == [grant]
+
+
+@pytest.mark.parametrize("extra", [{}, {"pin": None}], ids=["pin-missing", "pin-null"])
+def test_add_without_the_previews_pin_is_refused(client, monkeypatch, extra):
+    from gaia.skills import link
+
+    monkeypatch.setattr(
+        link, "add_from_link", lambda *a, **k: pytest.fail("added without a pin")
+    )
+    r = client.post(
+        "/api/skills/link/add", json={"url": "acme/skills", "names": ["x"], **extra}
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.parametrize("pin", ["", "HEAD", "commit:short"])
+def test_add_with_a_malformed_pin_is_a_400_and_downloads_nothing(
+    client, monkeypatch, pin
+):
+    from gaia.skills import link
+
+    monkeypatch.setattr(
+        link, "_download", lambda *a: pytest.fail("downloaded for an unpinned add")
+    )
+    r = client.post("/api/skills/link/add", json={"url": "acme/skills", "pin": pin})
+    assert r.status_code == 400
+    assert "Preview the link first" in r.json()["detail"]
+
+
+def test_add_is_a_409_when_the_link_changed_since_the_preview(client, monkeypatch):
+    from gaia.skills import link
+
+    def changed(*a, **k):
+        raise link.SkillLinkChangedError("acme/skills changed since you previewed it")
+
+    monkeypatch.setattr(link, "add_from_link", changed)
+    r = client.post(
+        "/api/skills/link/add",
+        json={"url": "acme/skills", "pin": "sha256:" + "0" * 64},
+    )
+    assert r.status_code == 409
+    assert "changed since you previewed" in r.json()["detail"]
