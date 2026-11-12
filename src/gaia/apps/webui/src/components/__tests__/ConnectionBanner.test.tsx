@@ -120,18 +120,6 @@ describe('the model server is down', () => {
         expect(container).not.toHaveTextContent('stopped');
     });
 
-    it('never tells a set-up PC to run setup from a terminal', () => {
-        useChatStore.setState({ systemStatus: {
-            initialized: true, lemonade_running: false, start_command: 'gaia init',
-            start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
-        } as SystemStatus });
-        const { container } = render(<ConnectionBanner />);
-        expect(container).not.toHaveTextContent('gaia init');
-        expect(container.querySelector('code')).toBeNull();
-        expect(container).toHaveTextContent('cloud ones too');
-        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
-    });
-
     it('offers a way to set up local models when none are installed, and only then', () => {
         const opened = vi.fn();
         window.addEventListener('gaia:set-up-local', opened);

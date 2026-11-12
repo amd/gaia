@@ -181,10 +181,10 @@ describe('AdvancedSettings', () => {
         window.removeEventListener('gaia:set-up-local', opened);
     });
 
-    it('a set-up PC whose model server is not answering says so, and never that cloud chats still work', async () => {
+    it('a server the user chose that is not answering says so, and never that cloud chats still work', async () => {
         const down = status({
-            lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: 'gaia init',
-            start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
+            lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null,
+            start_instruction: "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
         });
         mockedApi.getSystemStatus.mockResolvedValue(down);
         useChatStore.getState().setSystemStatus(down);
@@ -193,7 +193,21 @@ describe('AdvancedSettings', () => {
         expect(await screen.findByText('Not answering')).toBeInTheDocument();
         expect(screen.queryByText('Not Installed')).not.toBeInTheDocument();
         expect(screen.queryByText(/Cloud providers still work/)).not.toBeInTheDocument();
-        expect(screen.getAllByText(/cloud ones too/).length).toBeGreaterThan(0);
+        expect(screen.getByText("GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+    });
+
+    it('a set-up PC whose server was removed still offers setup', async () => {
+        const removed = status({
+            initialized: true, lemonade_running: false, model_loaded: null, start_command: null,
+            start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
+        });
+        mockedApi.getSystemStatus.mockResolvedValue(removed);
+        useChatStore.getState().setSystemStatus(removed);
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Not Installed')).toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Set up local models' }).length).toBeGreaterThan(0);
     });
 
     it('keeps a stopped server that is installed on its own start hint, with no setup button', async () => {

@@ -2789,11 +2789,11 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
-    test(`a set-up PC whose server isn't answering says so in Advanced and Setup (${locale})`, async ({ page }) => {
+    test(`a chosen server that isn't answering says so in Advanced and Setup (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
             await withSettingsPanes(p);
             await p.route('**/api/system/status', (route) => route.fulfill({
-                json: { ...SYSTEM_STATUS, initialized: true, lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: 'gaia init', start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.' },
+                json: { ...SYSTEM_STATUS, initialized: true, lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null, start_instruction: "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do." },
             }));
         });
         await page.getByRole('button', { name: /Settings/ }).first().click();

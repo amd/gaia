@@ -357,6 +357,13 @@ def server_down_advice(base_url: Optional[str] = None) -> str:
     return describe_start_hint().instruction
 
 
+#: A server the user pointed GAIA at, that GAIA can't find installed here.
+OTHER_SERVER_START_HINT = (
+    "GAIA doesn't run this model server, so it can't start it. Start it the "
+    "way you usually do."
+)
+
+
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     """Describe how to start Lemonade Server on THIS machine.
 
@@ -425,6 +432,12 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
         return StartHint(
             instruction="Start the Lemonade app from Applications, then retry."
         )
+
+    from gaia.llm.lemonade_client import configured_lemonade_url
+
+    # Setup can't fix a server the user chose; installing GAIA's would not reach it.
+    if configured_lemonade_url():
+        return StartHint(instruction=OTHER_SERVER_START_HINT)
 
     return StartHint(
         instruction=(

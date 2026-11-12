@@ -16,10 +16,9 @@ export function namesSetupCommand(text: string | null | undefined): boolean {
     return /gaia init/i.test(text ?? '');
 }
 
-/** True when this PC has no model server yet, the one case setup, not waiting, fixes.
- *  A PC already set up has one; there it is not answering, not missing. */
+/** True when this PC has no model server yet, the one case setup, not waiting, fixes. */
 export function needsLocalSetup(status: SystemStatus | null | undefined): boolean {
-    return !!status && !status.lemonade_running && !status.initialized
+    return !!status && !status.lemonade_running
         && (namesSetupCommand(status.start_command) || namesSetupCommand(status.start_instruction));
 }
 

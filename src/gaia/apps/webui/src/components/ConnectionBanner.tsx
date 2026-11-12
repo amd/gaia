@@ -7,7 +7,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useBackendStore } from '../stores/backendStore';
 import type { BackendLifecycle } from '../types/agent';
 import { useT } from '../i18n/useT';
-import { namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
+import { needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import { isStarting, modelServerHealth } from '../services/statusPoll';
@@ -409,9 +409,6 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                         : t('banner.serverStopped')}{' '}
                     {setupNeeded ? (
                         <span className="connection-banner__hint">{t('banner.finishSetup')}</span>
-                    ) : namesSetupCommand(systemStatus.start_command) || namesSetupCommand(systemStatus.start_instruction) ? (
-                        // Set up already: GAIA restarts its own server, so no setup command.
-                        <span className="connection-banner__hint">{t('settings.advanced.notRunningHint')}</span>
                     ) : systemStatus.start_command ? (
                         <span className="connection-banner__hint">
                             {unresponsive ? 'If it stays this way, restart it: ' : 'To start it by hand, run '}
