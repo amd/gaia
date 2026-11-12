@@ -149,8 +149,10 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
 
     const showMore = useCallback(async () => {
         setLoadingMore(true);
+        // Set before loading, so a reload that lands mid-way fetches the new page too.
+        wanted.current = Math.max(wanted.current, items?.length ?? 0) + PAGE_SIZE;
         try {
-            await load(Math.max(wanted.current, items?.length ?? 0) + PAGE_SIZE);
+            await load();
         } finally {
             setLoadingMore(false);
         }

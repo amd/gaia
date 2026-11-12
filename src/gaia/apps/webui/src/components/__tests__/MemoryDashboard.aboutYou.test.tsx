@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryDashboard } from '../MemoryDashboard';
-import { dueLabel } from '../MemoryDashboardAboutYou';
+import { dueLabel, MemoryDashboardAboutYou } from '../MemoryDashboardAboutYou';
 import * as memoryApi from '../../services/memoryApi';
 
 vi.mock('../../services/memoryApi');
@@ -293,6 +293,36 @@ describe('What GAIA knows about you', () => {
 
         expect(screen.getByText('Memory number 249')).toBeInTheDocument();
         expect(screen.queryByText(/^Showing \d+ of/)).not.toBeInTheDocument();
+    });
+
+    it('still shows the next page when a reload lands during Show more', async () => {
+        const all = Array.from({ length: 250 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        let release: (() => void) | null = null;
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            if (offset === 200 && !release) {
+                // Hold the first read of page 2 until the parent's reload has started.
+                await new Promise<void>((resolve) => { release = resolve; });
+            }
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        const props = {
+            memoryEnabled: true,
+            onChanged: () => {},
+            onOpenAdvanced: () => {},
+            showToast: () => {},
+        };
+        const { rerender } = render(<MemoryDashboardAboutYou {...props} reloadKey={0} />);
+        await screen.findByText('Memory number 0');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await waitFor(() => expect(release).not.toBeNull());
+        rerender(<MemoryDashboardAboutYou {...props} reloadKey={1} />);
+        await act(async () => { release?.(); });
+
+        expect(await screen.findByText('Memory number 249')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
     });
 });
 
