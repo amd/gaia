@@ -84,7 +84,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: [], currentSessionId: null, messages: [], agents: [], pendingPrompt: null,
         draftPermissionMode: 'ask', defaultPermissionMode: 'ask', showMemoryDashboard: false, showSchedules: false, settingsSection: null,
-        draftDocumentIds: [],
+        draftDocumentIds: [], systemStatus: null,
     });
 });
 
@@ -230,6 +230,28 @@ describe('system status poll', () => {
         await advance(20_000);
         expect(document.body.textContent).toMatch(/model server isn't running/i);
         expect(document.body.textContent).toContain('lemond --start');
+    });
+
+    it('says the model server is not answering when it stops while the app is open, and clears once it is back', async () => {
+        fakeTimers();
+        const notice = "GAIA's model server isn't answering, so it can't reply yet. Your chats are still here.";
+        render(<App />);
+        await advance(6_000);
+        expect(useChatStore.getState().systemStatus?.lemonade_running).toBe(true);
+        expect(document.body.textContent).not.toContain(notice);
+
+        mocked.getSystemStatus.mockResolvedValue({ lemonade_running: false, lemonade_error: null, start_command: null } as never);
+        await advance(6_000);
+        // One missed health check is not an outage.
+        expect(document.body.textContent).not.toContain(notice);
+        await advance(60_000);
+        expect(document.body.textContent).toContain(notice);
+
+        const asked = mocked.checkSetup.mock.calls.length;
+        mocked.getSystemStatus.mockResolvedValue({ lemonade_running: true, model_loaded: 'Gemma-4-E4B-it-GGUF' } as never);
+        await advance(60_000);
+        expect(mocked.checkSetup.mock.calls.length).toBeGreaterThan(asked);
+        expect(document.body.textContent).not.toContain(notice);
     });
 
     it('asks the desktop app where the backend is when the status check cannot connect', async () => {

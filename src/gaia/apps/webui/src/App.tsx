@@ -237,6 +237,14 @@ function App() {
     useEffect(() => {
         if (setup.state === 'serverDown' && lemonadeRunning) void checkSetup(true);
     }, [setup.state, lemonadeRunning, checkSetup]);
+    // Seen running, then stopped while the app is open: the same notice as at launch.
+    const lemonadeUp = useChatStore((s) => s.systemStatus?.lemonade_running);
+    const lemonadeWasUp = useRef(lemonadeUp);
+    useEffect(() => {
+        const stopped = lemonadeWasUp.current === true && lemonadeUp === false;
+        lemonadeWasUp.current = lemonadeUp;
+        if (stopped && setupRef.current.state === 'ready') setSetup({ state: 'serverDown' });
+    }, [lemonadeUp]);
 
     // Only the latest read may set the list; an older one in flight predates whatever setup installed.
     const agentsReadSeq = useRef(0);
