@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import ctypes
 import errno
+import logging
 import os
 import sys
 import threading
@@ -252,6 +253,22 @@ def test_posix_probe_without_a_clock_reading_leaves_the_speed_blank(
     s = rm.PosixProbe(drm_root=tmp_path).sample()
     assert s.cpu_ghz is None
     assert 0 <= s.cpu_percent <= 100
+
+
+def test_posix_probe_shows_cpu_and_memory_when_the_clock_read_breaks(
+    tmp_path, monkeypatch, caplog
+):
+    def broken_cpu_freq():  # psutil 7.2 on Apple silicon
+        raise SystemError("<built-in function cpu_freq> returned a result")
+
+    monkeypatch.setattr(psutil, "cpu_freq", broken_cpu_freq)
+    probe = rm.PosixProbe(drm_root=tmp_path)
+    with caplog.at_level(logging.DEBUG, logger=rm.logger.name):
+        samples = [probe.sample() for _ in range(3)]
+    assert all(s.cpu_ghz is None for s in samples)
+    assert all(0 <= s.cpu_percent <= 100 for s in samples)
+    assert samples[-1].memory_total_bytes > 0
+    assert sum("clock speed" in r.getMessage() for r in caplog.records) == 1
 
 
 def test_posix_probe_reads_amd_gpus_from_sysfs(tmp_path):
