@@ -309,10 +309,25 @@ def pr_body(p: Prepared, run_url: str | None) -> str:
     )
 
 
+# A git or gh call that runs longer than this is hung, not slow.
+COMMAND_TIMEOUT_S = 300
+
+
 def _default_runner(cmd: Sequence[str]) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        list(cmd), cwd=REPO_ROOT, capture_output=True, text=True, check=False
-    )
+    try:
+        return subprocess.run(
+            list(cmd),
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMMAND_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise NextVersionError(
+            f"`{' '.join(list(cmd)[:3])}` did not finish within {COMMAND_TIMEOUT_S}s. "
+            "Re-run this job; it is idempotent."
+        ) from e
 
 
 def _fail(what: str, proc: subprocess.CompletedProcess, hint: str) -> NextVersionError:

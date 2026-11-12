@@ -385,3 +385,33 @@ def test_only_the_job_can_write(workflow):
     assert job["permissions"] == {"contents": "write", "pull-requests": "write"}
     assert "environment" not in job
     assert "success" in job["if"] and "push" in job["if"]
+
+
+def test_a_hung_command_is_bounded_and_raised(monkeypatch):
+    seen = []
+
+    def hang(cmd, **kwargs):
+        seen.append(kwargs)
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(nv.subprocess, "run", hang)
+    with pytest.raises(nv.NextVersionError, match="did not finish within"):
+        nv._default_runner(["git", "push", "origin", "HEAD:refs/heads/x"])
+    assert seen[0]["timeout"] == nv.COMMAND_TIMEOUT_S
+
+
+def test_a_hung_push_stops_before_a_pr_is_opened(at_release):
+    class HangingPush(FakeGit):
+        def __call__(self, cmd):
+            if list(cmd)[:2] == ["git", "push"]:
+                self.calls.append(list(cmd))
+                raise nv.NextVersionError("`git push --force` did not finish")
+            return super().__call__(cmd)
+
+    git = HangingPush(
+        {("git", "fetch", "--no-tags", "origin", "+next-version"): (1, "")}
+    )
+    with pytest.raises(nv.NextVersionError, match="did not finish"):
+        nv.open_main_pr(f"v{RELEASED}", "amd/gaia", run=git, workdir=at_release)
+    assert git.ran("git", "push")
+    assert not git.ran("gh", "pr", "create")
