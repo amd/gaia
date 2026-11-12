@@ -27,7 +27,6 @@
   "components/email/EmailPreScanCard.tsx": 24,
   "components/render/CardErrorBoundary.tsx": 1,
   "components/render/ConfirmationCard.tsx": 4,
-  "components/render/NeedsInputCard.tsx": 7,
   "components/render/UnsupportedCard.tsx": 3,
   "components/session-panel/ChangesSection.tsx": 23,
   "components/settings/AddCustomModel.tsx": 1,

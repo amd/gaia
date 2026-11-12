@@ -26,6 +26,7 @@ import { bugReportUrl } from './UnsupportedFeature';
 import { classifyChatError, isStreamInterrupted, mayStillFinish, MAX_STREAM_RECONNECTS, RECONNECT_DELAYS_MS, RUN_LOST_TEXT } from '../utils/streamErrors';
 import { isAuthRequiredMessage } from './email/EmailConnectCta';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
+import { answerQuestion, QuestionGoneError, resolveTypedAnswer, waitingQuestionId } from './render/NeedsInputCard';
 import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
 
 import './ChatView.css';
@@ -133,6 +134,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const awaitingUser = useChatStore((s) => s.awaitingUser);
     // Other events can arrive while a question waits; it still waits on the user.
     const hasLiveQuestion = useChatStore((s) => Object.values(s.liveQuestions).some((q) => q.sessionId === sessionId));
+    // While GAIA waits on a question, the message box answers it instead of queueing a new message.
+    const answeringId = useChatStore((s) => waitingQuestionId(s.liveQuestions, sessionId));
     // An unanswered prompt means GAIA is waiting on the user, whatever event arrived last.
     const hasOpenPrompt = useNotificationStore((s) => selectSessionPermissionPrompt(sessionId)(s) !== null);
 
@@ -850,6 +853,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         event.request_id,
                         sessionId,
                         typeof event.timeout_seconds === 'number' ? event.timeout_seconds : null,
+                        {
+                            options: Array.isArray(event.options) ? event.options : [],
+                            allowFreeText: event.allow_free_text !== false,
+                            sensitive: Boolean(event.sensitive),
+                        },
                     );
                     appendCard({
                         render: 'needs_input',
@@ -1429,6 +1437,31 @@ export function ChatView({ sessionId }: ChatViewProps) {
             });
     }, [queue, isStreaming, sessionId, setQueue]);
 
+    // Attachments can't ride on an answer, so a message with files still queues.
+    const answerFromComposer = useCallback(async () => {
+        const question = answeringId ? useChatStore.getState().liveQuestions[answeringId] : undefined;
+        const text = input.trim();
+        if (!answeringId || !question || !text || attach.hasUploaded) {
+            void sendMessage();
+            return;
+        }
+        const answer = resolveTypedAnswer(text, question);
+        if (!answer) {
+            setActionError(t('composer.pickAnOption'));
+            return;
+        }
+        setActionError(null);
+        setInput('');
+        try {
+            await answerQuestion(sessionId, answeringId, answer.value, answer.shown);
+        } catch (err) {
+            // Back in the box, so nothing typed is lost; an expired question says so in its card.
+            setInput(text);
+            if (!(err instanceof QuestionGoneError)) {
+                setActionError(t('composer.answerFailed', { error: requestErrorParam(err) }));
+            }
+        }
+    }, [answeringId, input, attach, sendMessage, setInput, sessionId, t]);
 
     // Retry the last question after a connector was connected (#2119). Resends
     // the last user message, which also drops the stale connector-error reply.
@@ -1791,7 +1824,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     <Composer
                         value={input}
                         onChange={setInput}
-                        onSubmit={() => sendMessage()}
+                        onSubmit={answeringId ? answerFromComposer : () => sendMessage()}
+                        answering={!!answeringId}
                         onStop={handleStop}
                         streaming={isStreaming}
                         stopping={stopping}
@@ -1799,7 +1833,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         disabledReason={composerBlocked}
                         attachments={attach}
                         inputRef={inputRef}
-                        placeholder={isStreaming
+                        placeholder={answeringId
+                            ? t('composer.answerQuestion')
+                            : isStreaming
                             ? t('composer.queueNext')
                             : messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}
                         leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}

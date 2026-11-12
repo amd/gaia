@@ -753,6 +753,51 @@ for (const [locale, reading] of [['ar', 'جارٍ قراءة طلبك'], ['en', 
     });
 }
 
+const QUESTION_EVENTS = [
+    {
+        type: 'needs_input', request_id: 'q-1', question: 'Which colour do you prefer?',
+        options: [
+            { value: 'red', label: 'Red', description: '' },
+            { value: 'green', label: 'Green', description: '' },
+            { value: 'blue', label: 'Blue', description: '' },
+        ],
+        allow_free_text: true, sensitive: false, timeout_seconds: 300,
+    },
+];
+
+for (const locale of ['en', 'ar']) {
+    test(`a waiting question is answered from the message box and kept as a record (${locale})`, async ({ page }) => {
+        await page.addInitScript((events) => {
+            const real = window.fetch;
+            window.fetch = (input, init) => {
+                if (!String(input).includes('/chat/send')) return real(input, init);
+                const body = new ReadableStream({
+                    start(controller) {
+                        for (const event of events) controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(event)}\n\n`));
+                    },
+                });
+                return Promise.resolve(new Response(body, { headers: { 'Content-Type': 'text/event-stream' } }));
+            };
+        }, QUESTION_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.route('**/api/chat/user-input', (route) => route.fulfill({ json: { status: 'ok', request_id: 'q-1' } }));
+        const box = page.getByRole('textbox').first();
+        await box.fill('Ask me a colour');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__option')).toHaveCount(3);
+        await expect(box).toBeFocused();
+        await expect(page.locator('.render-needs-input__hint').last(), 'the question is hidden under the message box').toBeInViewport({ ratio: 1 });
+        await shot(page, `question-waiting-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await box.fill('2');
+        await box.press('Enter');
+        await expect(page.locator('.render-needs-input__answered-note')).toBeVisible();
+        await expect(page.locator('.queued-message')).toHaveCount(0);
+        await shot(page, `question-answered-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** A multi-step turn that reasons before every call, then keeps thinking. */
 function holdOnThoughtfulSteps(): void {
     const realFetch = window.fetch.bind(window);
