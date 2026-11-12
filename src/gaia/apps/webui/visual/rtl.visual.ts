@@ -1288,6 +1288,31 @@ for (const locale of ['ar', 'en']) {
     }
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the model menu leads with the provider in use and asks before a download (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, null);
+            await p.route('**/api/providers/active', (route) => route.fulfill({
+                json: {
+                    provider: 'fireworks', model: 'fireworks.glm-5p3-flash', label: 'glm-5p3-flash', remote: true,
+                    provider_name: 'Fireworks AI', is_default: false, restore: { status: 'none', message: null },
+                },
+            }));
+        });
+        await page.locator('.composer-chip').filter({ hasText: 'glm-5p3-flash' }).click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-heading').first()).toHaveText('Fireworks AI');
+        await expect(menu.locator('.popover-subheading')).toBeVisible();
+        await shot(page, `model-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await menu.getByRole('option', { name: /gpt-oss 20B/ }).click();
+        await expect(menu.locator('.model-download-confirm')).toContainText('3 GB');
+        await shot(page, `model-menu-confirm-${locale}`);
+        // The question scrolls into view under its row, so the list is scrolled on purpose here.
+        expect((await audit(page)).filter((p) => !p.startsWith('popover opens scrolled'))).toEqual([]);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     test.describe(`settings connectors (${locale})`, () => {
         const openConnectors = async (page: Page, rows?: unknown[], extra?: Record<string, unknown>) => {
