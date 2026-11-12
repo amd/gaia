@@ -52,6 +52,7 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.completion import (
     _BINARY_SUFFIXES,
+    WRITE_TOOLS,
     CompletionEvidence,
     caveated_answer,
     incomplete_answer,
@@ -2028,6 +2029,22 @@ def _is_jsonc(path: Path) -> bool:
     return any(part.lower() == ".vscode" for part in path.parts[:-1])
 
 
+def _parse_problem(path: Path, text: str) -> Optional[str]:
+    """Why *text* does not parse as *path*'s type, or None (unchecked types pass)."""
+    suffix = path.suffix.lower()
+    if suffix in (".py", ".pyi"):
+        try:
+            ast.parse(text)
+        except (SyntaxError, ValueError) as e:
+            return f"`{path}` no longer parses as Python: {e}"
+    elif suffix == ".json" and not _is_jsonc(path):
+        try:
+            json.loads(text)
+        except ValueError as e:
+            return f"`{path}` is no longer valid JSON: {e}"
+    return None
+
+
 _EDIT_VERIFICATION_PROMPT = (
     "[check:edits] The files you changed this turn were read back off disk "
     "and these did not come out right:\n{problems}\n\nFix them now, then "
@@ -3175,6 +3192,8 @@ Do NOT wrap conversational replies in JSON.
         # Post-edit verification bookkeeping; reset per turn below.
         self._edit_verification_rounds = 0
         self._edit_verification_findings: List[str] = []
+        # Whether each file parsed before this turn's first write to it.
+        self._edit_parse_baseline: Dict[str, bool] = {}
         self._verify_edits_on = verify_edits_enabled()
         self.conversation_history = (
             []
@@ -7774,6 +7793,8 @@ Do NOT wrap conversational replies in JSON.
                 logger.info("Turn scope refused %s: %s", tool_name, refused["error"])
                 return refused
         evidence = getattr(self, "_completion_evidence", None)
+        if outermost:
+            self._note_edit_parse_baseline(tool_name, tool_args)
         before = (
             evidence.snapshot(
                 tool_name,
@@ -10837,18 +10858,62 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     problems.append(f"`{path}` is empty after this turn's edit.")
                 continue
-            suffix = path.suffix.lower()
-            if suffix in (".py", ".pyi"):
-                try:
-                    ast.parse(text)
-                except (SyntaxError, ValueError) as e:
-                    problems.append(f"`{path}` no longer parses as Python: {e}")
-            elif suffix == ".json" and not _is_jsonc(path):
-                try:
-                    json.loads(text)
-                except ValueError as e:
-                    problems.append(f"`{path}` is no longer valid JSON: {e}")
+            problem = _parse_problem(path, text)
+            # A file that already failed to parse before the turn touched it
+            # is not this turn's breakage to repair.
+            if problem and self._parsed_before(path) is not False:
+                problems.append(problem)
         return problems
+
+    def _baseline_key(self, path: str, root: Optional[str] = None) -> Optional[str]:
+        evidence = getattr(self, "_completion_evidence", None)
+        try:
+            key = evidence.key(path, root) if evidence is not None else path
+        except (OSError, ValueError):
+            return None
+        return os.path.normcase(str(key))
+
+    def _parsed_before(self, path: Path) -> Optional[bool]:
+        key = self._baseline_key(str(path))
+        baseline = getattr(self, "_edit_parse_baseline", None) or {}
+        return baseline.get(key) if key is not None else None
+
+    def _note_edit_parse_baseline(self, tool_name: str, tool_args: Any) -> None:
+        """Before a turn's first write to a file, note whether that file parsed."""
+        if tool_name not in WRITE_TOOLS or not isinstance(tool_args, dict):
+            return
+        if not getattr(self, "_verify_edits_on", False):
+            return
+        raw = tool_args.get("file_path") or tool_args.get("path")
+        if not isinstance(raw, str) or not raw or "\x00" in raw:
+            return
+        key = self._baseline_key(raw, tool_args.get("project_dir"))
+        baseline = getattr(self, "_edit_parse_baseline", None)
+        if key is None or baseline is None or key in baseline:
+            return
+        path = Path(key)
+        if path.suffix.lower() not in (".py", ".pyi", ".json"):
+            return
+        validator = self._read_validator()
+        try:
+            if validator is not None:
+                allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                if not allowed:
+                    return
+            if not path.is_file():
+                baseline[key] = True  # a new file
+                return
+            if path.stat().st_size > _VERIFY_MAX_BYTES:
+                return
+            data = path.read_bytes()
+        except (OSError, ValueError) as e:
+            logger.debug("No pre-edit parse baseline for %s: %s", path, e)
+            return
+        if b"\x00" in data:
+            return
+        text = data.decode("utf-8-sig", errors="replace")
+        # An empty file parses: emptiness is judged separately after the edit.
+        baseline[key] = not text.strip() or _parse_problem(path, text) is None
 
     def _gate_unsealed_answer(
         self, answer: Optional[str], model_failed: bool = False
@@ -11461,6 +11526,7 @@ Do NOT wrap conversational replies in JSON.
         # between turns.
         self._edit_verification_rounds = 0
         self._edit_verification_findings = []
+        self._edit_parse_baseline = {}
         self._verify_edits_on = verify_edits_enabled()
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.

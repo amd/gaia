@@ -681,3 +681,162 @@ def test_the_loop_does_not_verify_a_generated_image(tmp_path, monkeypatch):
     assert host._edit_verification_findings == []
     assert "[check:edits]" not in json.dumps(sent[-1])
     assert result["result"].startswith("Here is the image.")
+
+
+# ----------------------- only breakage this turn caused is reported
+
+
+def _baseline_then_edit(host, target, new_text):
+    host._verify_edits_on = True
+    host._note_edit_parse_baseline("write_file", {"file_path": str(target)})
+    target.write_text(new_text)
+    _edited(host, target)
+
+
+@pytest.mark.parametrize(
+    "name, before",
+    [
+        ("{{cookiecutter.slug}}.py", "def {{ name }}():\n    pass\n"),
+        ("legacy.py", "print 'hello'\n"),
+        ("tslint.json", '{\n  // rules\n  "rules": {}\n}\n'),
+    ],
+)
+def test_a_file_that_never_parsed_is_not_blamed_on_the_edit(
+    agent, tmp_path, name, before
+):
+    target = tmp_path / name
+    target.write_text(before)
+
+    _baseline_then_edit(agent, target, before + "# touched\n")
+
+    assert agent._verify_turn_edits() == []
+
+
+def test_a_file_that_parsed_before_and_not_after_is_reported(agent, tmp_path):
+    target = tmp_path / "mod.py"
+    target.write_text("x = 1\n")
+
+    _baseline_then_edit(agent, target, "x = (\n")
+
+    (problem,) = agent._verify_turn_edits()
+    assert "no longer parses as Python" in problem
+
+
+def test_a_new_file_that_does_not_parse_is_reported(agent, tmp_path):
+    target = tmp_path / "new.json"
+
+    _baseline_then_edit(agent, target, "{oops")
+
+    (problem,) = agent._verify_turn_edits()
+    assert "is no longer valid JSON" in problem
+
+
+def test_an_empty_file_counts_as_parsing_before(agent, tmp_path):
+    target = tmp_path / "mod.py"
+    target.write_text("")
+
+    _baseline_then_edit(agent, target, "def f(:\n")
+
+    assert len(agent._verify_turn_edits()) == 1
+
+
+def test_the_baseline_is_the_state_before_the_first_write_only(agent, tmp_path):
+    """A second write must not re-baseline against the turn's own breakage."""
+    target = tmp_path / "mod.py"
+    target.write_text("x = 1\n")
+    _baseline_then_edit(agent, target, "x = (\n")
+
+    agent._note_edit_parse_baseline("edit_file", {"file_path": str(target)})
+    target.write_text("x = ((\n")
+
+    assert len(agent._verify_turn_edits()) == 1
+
+
+def test_a_broken_file_that_is_also_emptied_is_still_reported(agent, tmp_path):
+    target = tmp_path / "legacy.py"
+    target.write_text("print 'hello'\n")
+
+    _baseline_then_edit(agent, target, "")
+
+    (problem,) = agent._verify_turn_edits()
+    assert "is empty" in problem
+
+
+def test_a_non_write_tool_takes_no_baseline(agent, tmp_path):
+    target = tmp_path / "legacy.py"
+    target.write_text("print 'hello'\n")
+    agent._verify_edits_on = True
+
+    agent._note_edit_parse_baseline("read_file", {"file_path": str(target)})
+
+    assert agent._edit_parse_baseline == {}
+
+
+def test_no_baseline_is_taken_when_the_check_is_off(agent, tmp_path):
+    target = tmp_path / "legacy.py"
+    target.write_text("print 'hello'\n")
+    agent._verify_edits_on = False
+
+    agent._note_edit_parse_baseline("write_file", {"file_path": str(target)})
+
+    assert agent._edit_parse_baseline == {}
+
+
+READ_LEGACY = {"tool": "read_file", "tool_args": {"file_path": "legacy.py"}}
+READ_MOD = {"tool": "read_file", "tool_args": {"file_path": "mod.py"}}
+
+
+def test_a_pre_broken_file_is_not_repaired_through_the_real_loop(real_agent, tmp_path):
+    """Through the real write tool: the loop never asks for a repair, and the
+    answer carries no 'still broken' note for a file broken before the turn."""
+    (tmp_path / "legacy.py").write_text("print 'hello'\n")
+    sent = _script(
+        real_agent,
+        READ_LEGACY,
+        {
+            "tool": "write_file",
+            "tool_args": {
+                "file_path": "legacy.py",
+                "content": "print 'hello'\nprint 'bye'\n",
+            },
+        },
+        {"answer": "Added the line."},
+    )
+
+    result = real_agent.process_query("add a bye line to legacy.py", max_steps=3)
+
+    assert "[check:edits]" not in json.dumps(sent)
+    assert real_agent._edit_verification_findings == []
+    assert "no longer parses" not in str(result.get("result"))
+
+
+def test_the_baseline_resets_between_turns(real_agent, tmp_path):
+    (tmp_path / "mod.py").write_text("print 'old'\n")
+    _script(
+        real_agent,
+        READ_MOD,
+        {
+            "tool": "write_file",
+            "tool_args": {"file_path": "mod.py", "content": "x = 1\n"},
+        },
+        {"answer": "Fixed."},
+    )
+    real_agent.process_query("fix mod.py", max_steps=3)
+
+    sent = _script(
+        real_agent,
+        READ_MOD,
+        {
+            "tool": "write_file",
+            "tool_args": {"file_path": "mod.py", "content": "x = (\n"},
+        },
+        {"answer": "Changed."},
+        {
+            "tool": "write_file",
+            "tool_args": {"file_path": "mod.py", "content": "x = 2\n"},
+        },
+        {"answer": "Repaired."},
+    )
+    real_agent.process_query("change mod.py", max_steps=3)
+
+    assert "no longer parses as Python" in json.dumps(sent)
