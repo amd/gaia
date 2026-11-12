@@ -188,7 +188,11 @@ list are resolved, and leaves out any further older turns they no longer leave
 room for (logged as a warning).
 Counts use GAIA's shared token estimator, not a guarantee against the model's
 exact tokenizer. On overflow, old turns are removed in a block toward half the
-history budget; the newest turn is retained if it fits. The full stored trace
+history budget; the newest turn is retained if it fits. The oldest turn still
+replayed then opens with `HIDDEN_TURNS_NOTE` (`gaia.agents.base.history`), one
+sentence telling the model that earlier turns exist and are no longer shown, so
+it does not deny what they said. The note is added to the copy sent to the
+model, never to the stored turn. The full stored trace
 remains in SQLite, and exclusions produce a warning in the backend log. When a
 streamed turn hides more turns than the session's last streamed turn did (a
 longer chat, or a smaller model's budget), the stream sends one `status` event
@@ -229,7 +233,7 @@ for msg in messages:
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `add_document` | `(filename, filepath, file_hash, file_size?, chunk_count?) -> Dict` | Add document to library (deduplicates by hash) |
+| `add_document` | `(filename, filepath, file_hash, file_size?, chunk_count?) -> Dict` | Add document to library (deduplicates by hash; a known path with new content updates its row) |
 | `get_document` | `(doc_id) -> Optional[Dict]` | Get document by ID |
 | `list_documents` | `() -> List[Dict]` | List all documents |
 | `delete_document` | `(doc_id) -> bool` | Delete a document |
@@ -1338,7 +1342,7 @@ Deleting a chat deletes its copies.
   </Accordion>
 
   <Accordion title="POST /api/documents/upload-path">
-    Index a document by file path. The file is hashed for deduplication -- if the same file was already indexed, the existing document is returned.
+    Index a document by file path. The file is hashed for deduplication -- if the same file was already indexed, the existing document is returned. A file already in the library at the same path but with new content keeps its row, updated to the new content.
 
     **Request:**
     ```json
@@ -1548,7 +1552,7 @@ agent at once, so they take effect on its next step.
     ```json
     {
       "session_id": "...",
-      "folders": [{"path": "C:\\work", "kind": "folder", "source": "added", "removable": true}],
+      "folders": [{"path": "C:\\work", "name": null, "kind": "folder", "source": "added", "removable": true}],
       "removed": ["C:\\work\\private"],
       "internet": true,
       "enforced": true,
@@ -1558,7 +1562,9 @@ agent at once, so they take effect on its next step.
 
     `folders` is every folder and file the agent may read and write;
     `source` is `added`, `gaia_documents`, `scratch`, `document`,
-    `working_folder` or `approved` (granted during the chat). `removable` is
+    `working_folder` or `approved` (granted during the chat). `name` is an
+    attached document's own name (its library copy's file name carries an id
+    prefix), else `null`. `removable` is
     false for an attached document, which leaves through the chat's document
     list. `enforced` covers the folders and is false for an agent that runs as
     its own process (a relayed sidecar); removing a folder then refuses with

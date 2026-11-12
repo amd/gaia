@@ -179,7 +179,7 @@ def _transaction(self):
 
 ### Document Deduplication
 
-Documents are deduplicated by SHA-256 file hash. If a document with the same hash already exists, the existing record is returned with an updated `last_accessed_at` timestamp.
+Documents are deduplicated by SHA-256 file hash. If a document with the same hash already exists, the existing record is returned with an updated `last_accessed_at` timestamp. A file already in the library at the same path but with new content keeps its row, which is updated to the new hash, size and chunk count.
 
 ### Document Upload Paths
 

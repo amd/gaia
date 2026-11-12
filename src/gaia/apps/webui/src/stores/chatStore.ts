@@ -122,6 +122,8 @@ function readQueues(): Record<string, QueuedMessage[]> {
 export interface PendingPrompt {
     sessionId: string;
     text: string;
+    /** Its chat has scheduled the send; New chat can still take it back until then. */
+    sending?: boolean;
 }
 
 /** A question the agent is blocked on; `expiresAt` is when the backend stops waiting (ms), or null. */
