@@ -138,7 +138,6 @@ def memories(tmp_path):
     store.close()
 
 
-@pytest.mark.xfail(reason="amd/gaia#7283, fixed by open PR amd/gaia#7308", strict=True)
 def test_a_search_over_500_memories_returns_something_json_can_carry(memories):
     store, ids = memories
 
