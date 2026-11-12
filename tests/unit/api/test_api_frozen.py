@@ -128,3 +128,49 @@ def test_the_freeze_smoke_test_checks_this_refusal():
     spec.loader.exec_module(smoke)
     assert smoke.API_REFUSAL in FROZEN_API_UNAVAILABLE
     assert "smoke.api_start()" in path.read_text(encoding="utf-8")
+
+
+def test_start_exits_nonzero_when_the_model_server_is_unreachable(monkeypatch):
+    import uvicorn
+
+    from gaia import cli
+
+    run = MagicMock()
+    monkeypatch.setattr(
+        cli, "initialize_lemonade_for_agent", MagicMock(return_value=(False, None))
+    )
+    monkeypatch.setattr(uvicorn, "run", run)
+    with pytest.raises(SystemExit) as exc:
+        cli.handle_api_command(_start_args(base_url="http://127.0.0.1:1/api/v1"))
+    assert exc.value.code == 1
+    run.assert_not_called()
+
+
+def test_start_still_runs_when_the_model_server_answers(monkeypatch):
+    import uvicorn
+
+    from gaia import cli
+
+    run = MagicMock()
+    monkeypatch.setattr(
+        cli,
+        "initialize_lemonade_for_agent",
+        MagicMock(return_value=(True, "http://127.0.0.1:13305/api/v1")),
+    )
+    monkeypatch.setattr(uvicorn, "run", run)
+    cli.handle_api_command(_start_args())
+    run.assert_called_once()
+
+
+def test_no_lemonade_check_skips_the_check_even_when_it_would_fail(monkeypatch):
+    import uvicorn
+
+    from gaia import cli
+
+    check = MagicMock(return_value=(False, None))
+    run = MagicMock()
+    monkeypatch.setattr(cli, "initialize_lemonade_for_agent", check)
+    monkeypatch.setattr(uvicorn, "run", run)
+    cli.handle_api_command(_start_args(no_lemonade_check=True))
+    check.assert_not_called()
+    run.assert_called_once()

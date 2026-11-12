@@ -529,6 +529,8 @@ export interface ModelStatus {
     found: boolean;
     downloaded: boolean;
     loaded: boolean;
+    /** The model list was read, so `found` false means the ID isn't in it. */
+    checked: boolean;
 }
 
 export interface Settings {
@@ -852,6 +854,8 @@ export interface AgentStep {
     result?: string;
     /** Whether this step completed successfully. */
     success?: boolean;
+    /** The user said no to this call, so it never ran (for type='tool'). */
+    declined?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */
@@ -1237,4 +1241,54 @@ export interface ResourceUsage {
     networks_error?: string | null;
     /** Why NPUs can't be read, where they're read apart from GPUs (Linux). */
     npus_error?: string | null;
+}
+
+/** A library the Skills panel offers as a one-click add. */
+export interface FeaturedLibrary {
+    id: string;
+    name: string;
+    url: string;
+    description: string;
+}
+
+/** One permission a skill from a link declares, e.g. `network:read` and what it lets the skill do. */
+export interface LinkPermission {
+    grant: string;
+    text: string;
+}
+
+/** One skill found behind a pasted link (POST /api/skills/link/preview). */
+export interface LinkSkill {
+    name: string;
+    description: string;
+    /** Folder of the skill inside the library. */
+    path: string;
+    /** Ships tools.py or scripts/ — code that would run on this PC. */
+    has_code: boolean;
+    /** What the skill declares it may do: the raw grant and a plain-language sentence. */
+    permissions: LinkPermission[];
+    /** The permissions could not be read, so an empty list does not mean none. */
+    permissions_unreadable: boolean;
+    /** Security-audit verdict: ALLOW, REVIEW, or BLOCK. */
+    verdict: string;
+    findings: string[];
+    installed: boolean;
+    /** Installed from this same link before; adding it again updates it to the latest version. */
+    update: boolean;
+    /** Why this skill can't be added. */
+    error: string | null;
+}
+
+export interface LinkPreview {
+    link: string;
+    source: string;
+    skills: LinkSkill[];
+    /** What was audited; sent back on add so exactly this version installs. */
+    pin: string;
+    warning: string;
+}
+
+export interface LinkAddResult {
+    added: Array<{ name: string; updated: boolean; verdict: string; has_code: boolean; findings: string[] }>;
+    failed: Record<string, string>;
 }

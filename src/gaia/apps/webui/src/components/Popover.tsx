@@ -55,7 +55,8 @@ export function Popover({ open, onClose, anchor, label, placement = 'above', ali
     useEffect(() => {
         if (!open) return;
         const first = ref.current?.querySelector<HTMLElement>('button:not(:disabled), input, [tabindex="0"]');
-        first?.focus();
+        // A tall popover opens at its top, even when its first button sits at the bottom.
+        first?.focus({ preventScroll: true });
         const onDown = (e: MouseEvent) => {
             const t = e.target as Node;
             if (ref.current?.contains(t) || anchor.current?.contains(t)) return;
