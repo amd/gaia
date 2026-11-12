@@ -1,6 +1,6 @@
 ---
 name: log-triage
-description: Find what actually went wrong in log files. Use when the user asks for a root cause, an incident summary, anomalies, errors, failures or "what happened" in system, application, server, cluster, device or audit logs. Covers each file's full time range, groups messages into templates, ranks by severity, rarity and number of hosts hit rather than by volume, finds bursts, and gives exact first and last timestamps.
+description: Find what actually went wrong in log files. Use when the user asks for a root cause, an incident summary, anomalies, errors, failures or "what happened" in system, application, server, device or audit logs. Covers each file's full time range, ranks message templates by severity, rarity and hosts hit rather than volume, and pins burst timestamps.
 license: MIT
 version: 1.0.0
 metadata:

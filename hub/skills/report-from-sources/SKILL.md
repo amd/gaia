@@ -1,6 +1,6 @@
 ---
 name: report-from-sources
-description: Build a report, deck, brief, memo, workbook or chart from the user's own files without missing what the sources stress. Use when the user asks to turn documents, spreadsheets or exports into a report, slides, a one-pager, a summary, charts or a dashboard. Pins the newest file per dataset, keeps a key-facts ledger per source, puts source and period on every figure, and checks every requested item before handing over.
+description: Build a report, deck, brief, workbook or chart from the user's own files without missing what the sources stress. Use when the user asks to turn documents, spreadsheets or exports into a report, slides, a one-pager, a summary or charts. Uses the newest file per dataset, cites source and period on every figure, and checks every requested item before handing over.
 license: MIT
 version: 1.0.0
 metadata:
