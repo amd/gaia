@@ -70,6 +70,21 @@ describe('Runs on', () => {
 });
 
 describe('Can read and write', () => {
+    it('shows a document the turn indexed once the reply ends, without a reload', async () => {
+        const { rerender } = render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByRole('list');
+        expect(screen.queryByText('outside.md')).toBeNull();
+
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [...ENV.folders, { path: 'C:\\Users\\me\\.gaia\\documents\\outside.md', kind: 'file', source: 'document', removable: false }],
+        } as never);
+        rerender(<EnvironmentSection sessionId={SID} busy />);
+        rerender(<EnvironmentSection sessionId={SID} busy={false} />);
+
+        expect(await screen.findByText('outside.md')).toBeInTheDocument();
+    });
+
     it('lists folders first, with where each came from', async () => {
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         const list = await screen.findByRole('list');
@@ -78,6 +93,18 @@ describe('Can read and write', () => {
         expect(rows[0]).toHaveTextContent('Added by you');
         expect(rows[1]).toHaveTextContent("GAIA's documents folder");
         expect(rows[2]).toHaveTextContent('Document in this chat');
+    });
+
+    it("lists a library copy under the document's own name (#7224)", async () => {
+        const copy = 'C:\\Users\\me\\.gaia\\documents\\6bebd6da81b2_outside.md';
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [{ path: copy, name: 'outside.md', kind: 'file', source: 'document', removable: false }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const row = (await screen.findAllByRole('listitem'))[0];
+        expect(within(row).getByText('outside.md')).toHaveAttribute('title', copy);
+        expect(within(row).queryByText('6bebd6da81b2_outside.md')).not.toBeInTheDocument();
     });
 
     it('removes a folder through the backend and shows what it answered', async () => {

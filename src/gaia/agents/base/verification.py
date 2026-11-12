@@ -38,6 +38,7 @@ from gaia.agents.base.checks import (
     CheckResult,
     check_kind,
     command_check_label,
+    command_check_target,
     declares_check,
     invokes_test_runner,
     runner_summary,
@@ -198,7 +199,7 @@ def verification_check_target(tool_name: str, tool_args: Any) -> str:
         for key in _COMMAND_KEYS:
             command = tool_args.get(key)
             if isinstance(command, str) and command.strip():
-                return " ".join(command.split())
+                return command_check_target(command)
         return f"{tool_name} {json.dumps(tool_args, sort_keys=True, default=str)}"
     return f"{tool_name} {tool_args!r}"
 

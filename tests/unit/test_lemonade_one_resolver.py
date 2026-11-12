@@ -130,12 +130,17 @@ def _run_download(monkeypatch, mocker, *flags):
     catalog = {
         "data": [{"id": m.model_id, "downloaded": True} for m in MODELS.values()]
     }
-    get = mocker.patch(
-        "gaia.llm.lemonade_client.requests.get", return_value=_Resp(200, catalog)
-    )
+
+    def answer(url, **_):
+        if url.endswith("/health"):
+            return _Resp(200, {"status": "ok"})
+        return _Resp(200, catalog)
+
+    get = mocker.patch("gaia.llm.lemonade_client.requests.get", side_effect=answer)
     monkeypatch.setattr(sys, "argv", ["gaia", "download", "--list", *flags])
     cli.main()
-    assert get.called
+    assert any(c.args[0].endswith("/health") for c in get.call_args_list)
+    assert any(not c.args[0].endswith("/health") for c in get.call_args_list)
     return get
 
 

@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryDashboard } from '../MemoryDashboard';
-import { dueLabel } from '../MemoryDashboardAboutYou';
+import { dueLabel, MemoryDashboardAboutYou } from '../MemoryDashboardAboutYou';
 import * as memoryApi from '../../services/memoryApi';
 
 vi.mock('../../services/memoryApi');
@@ -94,7 +94,7 @@ describe('What GAIA knows about you', () => {
 
         // Lessons and session summaries are filtered on the server, so paging covers user facts only.
         expect(mockedApi.getKnowledge).toHaveBeenCalledWith(expect.objectContaining({ about_user: true }));
-        expect(screen.queryByText('Success Rate')).not.toBeInTheDocument();
+        expect(screen.queryByText('Success rate')).not.toBeInTheDocument();
         expect(screen.queryByText(/llm_extract/)).not.toBeInTheDocument();
         expect(screen.queryByText(/confidence/i)).not.toBeInTheDocument();
     });
@@ -103,7 +103,7 @@ describe('What GAIA knows about you', () => {
         await renderAbout();
         fireEvent.click(screen.getByRole('tab', { name: /Advanced/ }));
 
-        expect(await screen.findByText('Success Rate')).toBeInTheDocument();
+        expect(await screen.findByText('Success rate')).toBeInTheDocument();
     });
 
     it('forgets an item in one click, and can undo it', async () => {
@@ -199,6 +199,131 @@ describe('What GAIA knows about you', () => {
 
         expect(await screen.findByText(/Couldn't load your memories/)).toBeInTheDocument();
     });
+
+    it('says how many there are past the first page and shows the rest on request', async () => {
+        // v0.26.0-rc18: 323 memories, 200 rows, no count and no way to the other 123.
+        const all = Array.from({ length: 323 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        render(<MemoryDashboard />);
+        await screen.findByText('Memory number 0');
+
+        expect(screen.getAllByRole('button', { name: /^Forget:/ })).toHaveLength(200);
+        expect(screen.getByText('Showing 200 of 323 memories')).toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+
+        expect(await screen.findByText('Memory number 322')).toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: /^Forget:/ })).toHaveLength(323);
+        expect(screen.queryByText(/^Showing \d+ of/)).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+        for (const call of mockedApi.getKnowledge.mock.calls) {
+            expect(call[0]?.limit ?? 0).toBeLessThanOrEqual(200);
+        }
+    });
+
+    it('keeps the extra rows in view after forgetting one of them', async () => {
+        let all = Array.from({ length: 250 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        mockedApi.deleteKnowledge.mockImplementation(async (id: string) => {
+            all = all.filter((i) => i.id !== id);
+            return { status: 'deleted' };
+        });
+        render(<MemoryDashboard />);
+        await screen.findByText('Memory number 0');
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await screen.findByText('Memory number 249');
+
+        fireEvent.click(within(itemRow('Memory number 240')).getByRole('button', { name: /^Forget:/ }));
+
+        await waitFor(() => expect(screen.queryByText('Memory number 240')).not.toBeInTheDocument());
+        expect(screen.getByText('Memory number 249')).toBeInTheDocument();
+    });
+
+    it('shows a row once when a memory is saved between two page loads', async () => {
+        let all = Array.from({ length: 250 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        let saved = false;
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            if (offset > 0 && !saved) {
+                // The agent saves a memory; it sorts to the top and shifts every row down one.
+                saved = true;
+                all = [row({ id: 'fresh', content: 'Just saved' }), ...all];
+            }
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        render(<MemoryDashboard />);
+        await screen.findByText('Memory number 0');
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await screen.findByText('Memory number 249');
+
+        expect(screen.getAllByText('Memory number 199')).toHaveLength(1);
+    });
+
+    it('keeps the extra rows in view when an add reloads the list', async () => {
+        const all = Array.from({ length: 250 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        render(<MemoryDashboard />);
+        await screen.findByText('Memory number 0');
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await screen.findByText('Memory number 249');
+
+        fireEvent.change(screen.getByRole('textbox', { name: /Something GAIA should know/ }), {
+            target: { value: 'I prefer short answers' },
+        });
+        fireEvent.click(screen.getByRole('button', { name: /Add/ }));
+        await waitFor(() => expect(mockedApi.createKnowledge).toHaveBeenCalled());
+        const pageReads = () => mockedApi.getKnowledge.mock.calls
+            .map(([p]) => p)
+            .filter((p) => p?.about_user && p?.offset === 200);
+        // Show more read the second page once; the reload after the add reads it again.
+        await waitFor(() => expect(pageReads()).toHaveLength(2));
+
+        expect(screen.getByText('Memory number 249')).toBeInTheDocument();
+        expect(screen.queryByText(/^Showing \d+ of/)).not.toBeInTheDocument();
+    });
+
+    it('still shows the next page when a reload lands during Show more', async () => {
+        const all = Array.from({ length: 250 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        let release: (() => void) | null = null;
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            if (offset === 200 && !release) {
+                // Hold the first read of page 2 until the parent's reload has started.
+                await new Promise<void>((resolve) => { release = resolve; });
+            }
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        const props = {
+            memoryEnabled: true,
+            onChanged: () => {},
+            onOpenAdvanced: () => {},
+            showToast: () => {},
+        };
+        const { rerender } = render(<MemoryDashboardAboutYou {...props} reloadKey={0} />);
+        await screen.findByText('Memory number 0');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await waitFor(() => expect(release).not.toBeNull());
+        rerender(<MemoryDashboardAboutYou {...props} reloadKey={1} />);
+        await act(async () => { release?.(); });
+
+        expect(await screen.findByText('Memory number 249')).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Show more' })).not.toBeInTheDocument();
+    });
 });
 
 describe('Profile saves refresh the other views (#4814)', () => {
@@ -208,7 +333,7 @@ describe('Profile saves refresh the other views (#4814)', () => {
         mockedApi.commitDiscovery.mockResolvedValue({ stored: 1 });
         await renderAbout();
         fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
-        fireEvent.click(screen.getByRole('button', { name: 'Run Discovery' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start scan' }));
         act(() => {
             es.onmessage!({ data: JSON.stringify({ type: 'finding', item: { content: 'Uses VS Code', category: 'fact', context: 'global', confidence: 0.9 } }) });
             es.onmessage!({ data: JSON.stringify({ type: 'done', total: 1 }) });
@@ -233,7 +358,7 @@ describe('Profile saves refresh the other views (#4814)', () => {
         mockedApi.openDiscoveryStream.mockImplementation(() => es as unknown as EventSource);
         await renderAbout();
         fireEvent.click(screen.getByRole('tab', { name: /Profile setup/ }));
-        fireEvent.click(screen.getByRole('button', { name: 'Run Discovery' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Start scan' }));
         act(() => {
             es.onmessage!({ data: JSON.stringify({ type: 'finding', item: { content: 'Uses VS Code', category: 'fact', context: 'global', confidence: 0.9 } }) });
             es.onmessage!({ data: JSON.stringify({ type: 'done', total: 1 }) });
@@ -241,7 +366,7 @@ describe('Profile saves refresh the other views (#4814)', () => {
 
         fireEvent.click(await screen.findByRole('button', { name: 'None' }));
         expect(screen.getByRole('checkbox', { name: /Uses VS Code/ })).not.toBeChecked();
-        fireEvent.click(screen.getByRole('button', { name: 'Select All' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Select all' }));
         expect(screen.getByRole('checkbox', { name: /Uses VS Code/ })).toBeChecked();
     });
 });
@@ -363,6 +488,40 @@ describe('Reminder due dates', () => {
             text: expect.stringMatching(/^Was due /), past: true,
         });
         expect(dueLabel('not a date', NOW)).toBeNull();
+    });
+
+    it('asks when to remind, and saves that time with a reminder added here', async () => {
+        await renderAbout();
+
+        fireEvent.change(screen.getByRole('textbox', { name: /Something GAIA should know/ }), {
+            target: { value: 'Water the plants' },
+        });
+        expect(screen.queryByLabelText('When to remind you')).not.toBeInTheDocument();
+        fireEvent.change(screen.getByRole('combobox', { name: 'Kind' }), { target: { value: 'reminder' } });
+        const add = screen.getByRole('button', { name: /Add/ });
+        expect(add).toBeDisabled();
+
+        fireEvent.change(screen.getByLabelText('When to remind you'), { target: { value: '2026-10-25T18:00' } });
+        expect(add).toBeEnabled();
+        fireEvent.click(add);
+
+        await waitFor(() => expect(mockedApi.createKnowledge).toHaveBeenCalledWith({
+            content: 'Water the plants', category: 'reminder', due_at: '2026-10-25T18:00',
+        }));
+    });
+
+    it('lets a reminder\'s time be changed when editing it', async () => {
+        const plants = row({ id: 'r3', category: 'reminder', content: 'Water the plants', due_at: new Date(2026, 9, 25, 18, 0).toISOString() });
+        mockedApi.getKnowledge.mockResolvedValue({ items: [CALGARY, plants], total: 2, offset: 0, limit: 200 });
+        await renderAbout();
+
+        fireEvent.click(within(itemRow('Water the plants')).getByRole('button', { name: /Edit/ }));
+        const when = screen.getByLabelText('When to remind you');
+        expect(when).toHaveValue('2026-10-25T18:00');
+        fireEvent.change(when, { target: { value: '2026-10-26T09:30' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+        await waitFor(() => expect(mockedApi.editKnowledge).toHaveBeenCalledWith('r3', { due_at: '2026-10-26T09:30' }));
     });
 
     it('keeps the due date when a forgotten reminder is undone', async () => {

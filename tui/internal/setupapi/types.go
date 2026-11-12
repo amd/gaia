@@ -130,6 +130,8 @@ type CatalogEntry struct {
 	NeedGB     *float64 `json:"need_gb"`
 	CapacityGB *float64 `json:"capacity_gb"`
 	FitReason  *string  `json:"fit_reason"`
+	// FitCode is why it doesn't fit: "memory", "npu" or "backend"; nil when it fits.
+	FitCode *string `json:"fit_code"`
 	// Role is set on Plan.Models only: "chat" or "embedding".
 	Role string `json:"role,omitempty"`
 }

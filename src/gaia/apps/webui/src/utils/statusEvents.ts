@@ -47,7 +47,8 @@ export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: numbe
     if (msg.toLowerCase().startsWith('executing ')) return;
     if (status !== 'working' && status !== 'warning' && status !== 'info') return;
     const lastStep = store.agentSteps[store.agentSteps.length - 1];
-    if (lastStep && lastStep.type === 'status' && lastStep.active) {
+    // A warning is its own row; written over a progress row, the next progress line erases it.
+    if (lastStep && lastStep.type === 'status' && lastStep.active && status !== 'warning') {
         store.updateLastAgentStep({ label: msg || 'Working', detail: msg });
         return;
     }

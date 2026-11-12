@@ -36,6 +36,7 @@ import re
 import string
 import zipfile
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import (
     Any,
     Dict,
@@ -1163,28 +1164,36 @@ def _string_names(tree: ast.AST) -> Dict[str, str]:
 
 
 def _computed(
-    record: Dict[str, Any], read_names: Set[str], written: Set[str] = frozenset()
+    record: Dict[str, Any],
+    read_names: Set[str],
+    written: Set[str] = frozenset(),
+    copied: FrozenSet[float] = frozenset(),
 ) -> bool:
     """*record* is a script whose output can only come from files read this turn.
 
-    Every file it opens other than one the turn wrote was read this turn.
+    Every file it opens other than one the turn wrote was read this turn, and
+    every figure it types is in *copied*: one a tool showed this turn.
     """
-    opened = _script_opens(record)
+    opened = _script_opens(record, copied)
     read = [name for name in opened or () if name not in written]
     return bool(read) and all(name in read_names for name in read)
 
 
-def _script_opens(record: Dict[str, Any]) -> Optional[List[str]]:
+def _script_opens(
+    record: Dict[str, Any], copied: FrozenSet[float] = frozenset()
+) -> Optional[List[str]]:
     """The files a ``run_python`` script opens, or ``None`` when its figures
     may not come from them."""
-    io = _script_io(record)
+    io = _script_io(record, copied)
     return None if io is None else io[0]
 
 
-def _script_wrote(record: Dict[str, Any]) -> Set[str]:
+def _script_wrote(
+    record: Dict[str, Any], copied: FrozenSet[float] = frozenset()
+) -> Set[str]:
     """The files a computing script created or overwrote, not just read or
     appended to."""
-    io = _script_io(record)
+    io = _script_io(record, copied)
     return set() if io is None else io[1]
 
 
@@ -1270,7 +1279,9 @@ def _reads(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
     return None
 
 
-def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
+def _script_io(
+    record: Dict[str, Any], copied: FrozenSet[float] = frozenset()
+) -> Optional[Tuple[List[str], Set[str]]]:
     """``(files opened, files replaced)`` by a ``run_python`` script, or
     ``None`` when its figures may not come from those files.
 
@@ -1280,7 +1291,8 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
     Each file it opens is named, as a literal or a name bound once to one; it
     reaches no other data; and it types no figure beyond a small count —
     ``v*40``, ``1500 - 90``, ``9*10+5`` or ``'CM5,95'.split(',')`` invents its
-    result rather than computing it.
+    result rather than computing it. A decimal in *copied* is exempt:
+    a rate a tool printed this turn, typed into the script, was copied.
     """
     if _name(record) != "run_python":
         return None
@@ -1288,7 +1300,9 @@ def _script_io(record: Dict[str, Any]) -> Optional[Tuple[List[str], Set[str]]]:
     if not isinstance(code, str):
         return None
     io = _analysed(code)
-    return None if io is None else (list(io[0]), set(io[1]))
+    if io is None or io[2] - copied:
+        return None
+    return list(io[0]), set(io[1])
 
 
 @functools.lru_cache(maxsize=16)
@@ -1313,7 +1327,10 @@ def _parsed(code: str) -> Optional[ast.AST]:
 
 
 @functools.lru_cache(maxsize=128)
-def _analysed(code: str) -> Optional[Tuple[Tuple[str, ...], FrozenSet[str]]]:
+def _analysed(
+    code: str,
+) -> Optional[Tuple[Tuple[str, ...], FrozenSet[str], FrozenSet[float]]]:
+    """``(files opened, files replaced, figures typed)`` for *code*."""
     tree = _parsed(code)
     if tree is None:
         return None
@@ -1324,6 +1341,7 @@ def _analysed(code: str) -> Optional[Tuple[Tuple[str, ...], FrozenSet[str]]]:
     bound = _bound_once(tree)
     untyped = _percent_scales(tree) | _selecting(tree, bound)
     typed_strings: Set[str] = set()
+    typed: Set[float] = set()
     paths: Set[str] = set()
     refs: Dict[str, int] = {}
     truncations: Dict[str, int] = {}
@@ -1340,8 +1358,17 @@ def _analysed(code: str) -> Optional[Tuple[Tuple[str, ...], FrozenSet[str]]]:
             if isinstance(value, (int, float, complex)) and not isinstance(value, bool):
                 if id(node) in untyped:
                     continue
-                if not isinstance(value, int) or abs(value) > _SMALL_INT:
+                if isinstance(value, complex):
                     return None
+                if isinstance(value, int) or value.is_integer():
+                    if abs(value) > _SMALL_INT:
+                        return None
+                    continue
+                # A whole number matches a date or count by chance; a rate
+                # like 1.0842 does not, so only that can be judged copied.
+                if not math.isfinite(value):
+                    return None
+                typed.add(value)
         elif (
             isinstance(node, (ast.BinOp, ast.UnaryOp, ast.JoinedStr, ast.Call))
             and id(node) not in untyped
@@ -1391,7 +1418,7 @@ def _analysed(code: str) -> Optional[Tuple[Tuple[str, ...], FrozenSet[str]]]:
     # A path handed to any call besides the overwrite, Path(p).read_text()
     # through a variable included, may have read the file first.
     read_from |= {name for name in replaced if refs.get(name, 0) > truncations[name]}
-    return tuple(opened), frozenset(replaced - read_from)
+    return tuple(opened), frozenset(replaced - read_from), frozenset(typed)
 
 
 def _script_written(
@@ -1399,6 +1426,7 @@ def _script_written(
     records: Sequence[Dict[str, Any]],
     read_names: Set[str],
     written: Set[str],
+    copied: Mapping[int, FrozenSet[float]] = MappingProxyType({}),
 ) -> List[str]:
     """What a computing script wrote straight into a file in *files*, minus
     its own literals — the file was its output, as stdout would have been.
@@ -1413,7 +1441,10 @@ def _script_written(
         for record in records:
             if not _ran(record) or record.get("failed"):
                 continue
-            if _computed(record, read_names, written) and name in _script_wrote(record):
+            numbers = copied.get(id(record), frozenset())
+            if _computed(record, read_names, written, numbers) and name in (
+                _script_wrote(record, numbers)
+            ):
                 last = record
             elif _may_change(record, name):
                 last = None
@@ -1521,16 +1552,13 @@ def _read_names(records: Sequence[Dict[str, Any]], written: Set[str]) -> Set[str
     return names - written
 
 
-def _evidence_texts(
-    records: Sequence[Dict[str, Any]], written: Set[str], read_names: Set[str]
-) -> List[Tuple[str, bool]]:
-    """``(text, computed)`` per tool result this turn that can source a figure
-    in *written*; *computed* marks a script that computed from *read_names*.
+def _source_records(
+    records: Sequence[Dict[str, Any]], written: Set[str]
+) -> List[Dict[str, Any]]:
+    """The tool results this turn that can source a figure in *written*.
 
     Not a write tool's reply, not a failed call, and not a read of a written
     file once it was written — a read-back shows the file, not its source.
-    The script that wrote it still counts for what it computed, minus its
-    own literals.
     """
     first_write: Dict[str, int] = {}
     for index, record in enumerate(records):
@@ -1543,7 +1571,7 @@ def _evidence_texts(
         (i for i, r in enumerate(records) if _has(_name(r), _EXEC_WORDS)),
         len(records),
     )
-    texts = []
+    sources = []
     for index, record in enumerate(records):
         name = _name(record)
         if not _ran(record) or record.get("failed"):
@@ -1556,13 +1584,53 @@ def _evidence_texts(
             for name_ in written
         ):
             continue
-        texts.append(
-            (
-                evidence_text(record, code_literals=True),
-                _computed(record, read_names, written),
+        sources.append(record)
+    return sources
+
+
+def _copied_numbers(
+    sources: Sequence[Dict[str, Any]], shown: Iterable[str]
+) -> Dict[int, FrozenSet[float]]:
+    """Per script in *sources* (by ``id``), the numbers it could have copied:
+    those another source or a *shown* text holds. Never its own output."""
+    own = {
+        id(record): frozenset(
+            _number(n)
+            for n in _ANY_NUMBER.findall(
+                _spelled_out(evidence_text(record, code_literals=True))
             )
         )
-    return texts
+        for record in sources
+    }
+    common = frozenset(_number(n) for text in shown for n in _ANY_NUMBER.findall(text))
+    return {
+        id(record): common.union(
+            *(numbers for key, numbers in own.items() if key != id(record))
+        )
+        for record in sources
+        if _name(record) == "run_python"
+    }
+
+
+def _evidence_texts(
+    records: Sequence[Dict[str, Any]],
+    written: Set[str],
+    read_names: Set[str],
+    copied: Mapping[int, FrozenSet[float]] = MappingProxyType({}),
+) -> List[Tuple[str, bool]]:
+    """``(text, computed)`` per tool result this turn that can source a figure
+    in *written*; *computed* marks a script that computed from *read_names*.
+
+    See :func:`_source_records` for which count. The script that wrote a
+    file still counts for what it computed, minus its own literals.
+    """
+    return [
+        (
+            evidence_text(record, code_literals=True),
+            _computed(record, read_names, written, copied.get(id(record), frozenset())),
+        )
+        for record in _source_records(records, written)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -1810,10 +1878,15 @@ def file_findings(
     read_names = _read_names(records, written) | (
         {_basename(n) for n in input_names} - written
     )
-    found = [
-        (_spelled_out(t), c) for t, c in _evidence_texts(records, written, read_names)
-    ]
     input_texts = [_spelled_out(t) for t in inputs]
+    copied = _copied_numbers(
+        _source_records(records, written),
+        [_spelled_out(query or "")] + input_texts,
+    )
+    found = [
+        (_spelled_out(t), c)
+        for t, c in _evidence_texts(records, written, read_names, copied)
+    ]
     texts = [t for t, _ in found] + input_texts
     query = _spelled_out(query or "")
     context = _spelled_out(context or "")
@@ -1832,7 +1905,7 @@ def file_findings(
             _UNIT.sub(" ", t),
         )
         for t in [t for t, c in found if c]
-        + _script_written(files, records, read_names, written)
+        + _script_written(files, records, read_names, written, copied)
     ]
     money = _Corpus(
         "\n".join([query] + [_money_evidence(t) for t in [context] + texts] + computed)

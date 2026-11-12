@@ -344,18 +344,28 @@ def test_another_session_cannot_evict_this_one_mid_setup(capped, monkeypatch):
     assert intruder["result"] == "refused"
 
 
-def _run_query_then_cancel(request_body, cancel_after_s):
-    """Drive the route coroutine directly and cancel it mid-setup."""
+def _run_query_then_cancel(request_body, cancel_when, after_cancel=None):
+    """Drive the route coroutine directly and cancel it mid-setup.
+
+    *cancel_when* is a delay in seconds, or a ``threading.Event`` to cancel
+    on once set. *after_cancel* runs once the cancel has landed.
+    """
     import asyncio
 
     async def go():
         task = asyncio.ensure_future(
             server_mod.query(server_mod.QueryRequest(**request_body))
         )
-        await asyncio.sleep(cancel_after_s)
+        if isinstance(cancel_when, threading.Event):
+            reached = await asyncio.to_thread(cancel_when.wait, 10)
+            assert reached, "the route never reached the point to cancel at"
+        else:
+            await asyncio.sleep(cancel_when)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+        if after_cancel is not None:
+            after_cancel()
         # Outlive the worker so its cleanup can run.
         await asyncio.sleep(_SLOW_SETUP_S + 0.5)
 
@@ -381,9 +391,13 @@ def test_a_cancelled_model_switch_releases_the_session(capped, monkeypatch):
 
 def test_a_cancelled_one_shot_build_closes_the_agent(capped, monkeypatch):
     built = []
+    building = threading.Event()
+    cancelled = threading.Event()
 
     def slow_build(**kw):
-        time.sleep(_SLOW_SETUP_S)
+        building.set()
+        # Finish only after the cancel, so it always lands mid-build.
+        assert cancelled.wait(10), "the request was never cancelled"
         agent = _Quiet(**kw)
         built.append(agent)
         return agent
@@ -392,9 +406,28 @@ def test_a_cancelled_one_shot_build_closes_the_agent(capped, monkeypatch):
     body = _body(None)
     del body["session_id"]
 
-    _run_query_then_cancel(body, 0.3)
+    _run_query_then_cancel(body, building, after_cancel=cancelled.set)
 
     assert built and built[0].closed == 1, "the abandoned one-shot agent leaked"
+
+
+class _WaitSignallingLock:
+    """A ``threading.Lock`` that flags when a caller blocks on it."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.waiting = threading.Event()
+
+    def acquire(self, blocking=True, timeout=-1):
+        if blocking and self._lock.locked():
+            self.waiting.set()
+        return self._lock.acquire(blocking, timeout)
+
+    def release(self):
+        self._lock.release()
+
+    def locked(self):
+        return self._lock.locked()
 
 
 def test_a_cancelled_wait_for_a_stopped_turn_releases_the_lock(capped):
@@ -403,9 +436,15 @@ def test_a_cancelled_wait_for_a_stopped_turn_releases_the_lock(capped):
     stopped = threading.Event()
     stopped.set()
     session.active_cancel = stopped
+    session.run_lock = _WaitSignallingLock()
     session.run_lock.acquire()  # the stopped turn, still winding down
-    threading.Timer(1.0, session.run_lock.release).start()
 
-    _run_query_then_cancel(_body("stopping"), 0.3)
+    # Cancel only once the route waits on the lock, and free it only after the
+    # cancel: on a timer, a slow loop let the route take the free lock first.
+    _run_query_then_cancel(
+        _body("stopping"),
+        session.run_lock.waiting,
+        after_cancel=session.run_lock.release,
+    )
 
     assert not session.run_lock.locked(), "the abandoned wait kept the turn"

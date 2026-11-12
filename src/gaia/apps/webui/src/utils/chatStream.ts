@@ -131,6 +131,24 @@ export function onlyFailureAfter(server: Message[], question: Message, reply: Me
         || (after.length === 1 && (after[0].id === reply.id || isSavedFailure(after[0], reply)));
 }
 
+/**
+ * Give each server row that replaces a shown message under a new id (a sent
+ * message's temporary id) that message's render key, so its bubble is kept
+ * instead of drawn again.
+ */
+export function carryMessageKeys(shown: Message[], server: Message[], keys: Map<number, number>): void {
+    const serverIds = new Set(server.map((m) => m.id));
+    const shownIds = new Set(shown.map((m) => m.id));
+    const replaced = shown.filter((m) => !serverIds.has(m.id));
+    for (const row of server) {
+        if (shownIds.has(row.id) || keys.has(row.id)) continue;
+        const at = replaced.findIndex((m) => m.role === row.role && m.content.trim() === row.content.trim());
+        if (at < 0) continue;
+        const [twin] = replaced.splice(at, 1);
+        keys.set(row.id, keys.get(twin.id) ?? twin.id);
+    }
+}
+
 /** The server's rows, keeping Try again only on the server's copy of a failed reply. */
 export function keepFailedReply(local: Message[], server: Message[]): Message[] {
     const last = local[local.length - 1];

@@ -60,6 +60,8 @@ export interface StreamEvent {
     message?: string;
     /** Model phase on a status event: reading, loading_tools, loading_model, reasoning, tool_call, … */
     phase?: string;
+    /** On a `model_queue` phase: where the turn stands in line for the model. */
+    queue?: { event?: string; scope?: string; position?: number; queue_length?: number; holder?: string | null; waited_s?: number };
     /** On a `recording` phase: which stage, and how it stands. */
     stage?: number;
     state?: number;
@@ -79,6 +81,8 @@ export interface StreamEvent {
     tool?: string;
     summary?: string;
     success?: boolean;
+    /** On a `tool_result`: no answer came in time, so a "denied" status is not the user's no. */
+    timed_out?: boolean;
     steps?: string[];
     /** One plain line per plan step, parallel to `steps` (for plan events). */
     step_narrations?: string[];
@@ -191,4 +195,6 @@ export interface StreamEvent {
     render?: string;
     /** Card payload for `render` (issue #2108, additive on `tool_result`). */
     data?: unknown;
+    /** On a `tool_result`: a model the call needed and didn't find, e.g. "vision". */
+    needs_model?: string;
 }

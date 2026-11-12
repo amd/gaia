@@ -35,6 +35,46 @@
     color: var(--text-secondary);
 }
 
+/* In setup the rows are a choice: each one a radio, the chosen one outlined. */
+.cloud-prices-legend {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.cloud-prices-list.is-pickable {
+    gap: 4px;
+}
+
+.cloud-prices-list.is-pickable li {
+    align-items: center;
+    padding: 6px 10px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+}
+
+.cloud-prices-list.is-pickable li.is-chosen {
+    border-color: var(--accent-light);
+    background: var(--accent-dim);
+}
+
+.cloud-prices-pick {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+}
+
+.cloud-prices-pick input[type="radio"] {
+    flex-shrink: 0;
+    accent-color: var(--accent);
+}
+
+.cloud-prices-default {
+    color: var(--accent);
+    font-weight: 600;
+}
+
 .model-row-meta.is-unknown-price {
     color: var(--accent-yellow);
 }

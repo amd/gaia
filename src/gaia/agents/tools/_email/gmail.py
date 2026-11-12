@@ -43,6 +43,7 @@ from gaia.agents.tools._email.outgoing import (
     Recipients,
     SourceMessage,
 )
+from gaia.agents.tools._email.scopes import GOOGLE_CONNECTOR_ID
 
 logger = logging.getLogger(__name__)
 
@@ -406,9 +407,10 @@ class GmailReadBackend:
         if code == 401:
             raise MailboxAuthError(
                 "Gmail rejected the access token (401). The Google connection "
-                "has expired or been revoked. Reconnect it with `gaia "
-                "connectors connect google` (or Settings -> Connectors in the "
-                f"Agent UI), then retry. (request: {where})"
+                "has expired or been revoked and needs reconnecting. "
+                f"(request: {where})",
+                connect=(GOOGLE_CONNECTOR_ID,),
+                reconnect=(GOOGLE_CONNECTOR_ID,),
             )
         if code == 403 and reason == "accessNotConfigured":
             raise MailboxAuthError(
@@ -420,11 +422,12 @@ class GmailReadBackend:
         if code == 403:
             raise MailboxAuthError(
                 "Gmail refused the request (403 — insufficient permissions). "
-                "The connected Google account has not granted this agent a "
-                "gmail read scope. Re-grant it with `gaia connectors grants "
-                "grant google installed:gaia --scopes <scope>`, or reconnect "
-                f"Google, then retry. (request: {where}; reason: "
-                f"{reason or 'forbidden'})"
+                "The connected Google account has not given GAIA permission "
+                "to read mail, so it needs reconnecting with mail access "
+                f"ticked. (request: {where}; reason: "
+                f"{reason or 'forbidden'})",
+                connect=(GOOGLE_CONNECTOR_ID,),
+                reconnect=(GOOGLE_CONNECTOR_ID,),
             )
         if code == 404:
             raise MailboxError(
@@ -477,7 +480,9 @@ class GmailReadBackend:
             raise MailboxError(
                 "Gmail returned no address for the connected account "
                 "(`emailAddress` was empty). The connection is in an unusable "
-                "state — reconnect Google with `gaia connectors connect google`."
+                "state and needs reconnecting.",
+                connect=(GOOGLE_CONNECTOR_ID,),
+                reconnect=(GOOGLE_CONNECTOR_ID,),
             )
         return address
 

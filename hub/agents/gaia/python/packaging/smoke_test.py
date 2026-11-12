@@ -48,9 +48,15 @@ Tokenizer -- token counts drive history trimming and context eviction:
      agent's tokenizer is still ``tiktoken:cl100k_base``: the encoding plugin
      and its data are in the binary, not fetched at runtime (#5066).
 
+Memory -- a frozen process must not reserve ~5 GB for OpenBLAS (#7291):
+
+ 11. A script started with no thread variables sees ``OPENBLAS_NUM_THREADS=2``
+     (the ``blas_threads`` runtime hook), and one started with
+     ``OMP_NUM_THREADS`` set keeps the user's choice.
+
 Linux only -- the binary carries its build distro's OpenSSL:
 
- 11. A ``run_python`` script's default SSL context holds CA certificates, so
+ 12. A ``run_python`` script's default SSL context holds CA certificates, so
      HTTPS from a script verifies on a distro other than the one it was
      built on (``rthook_linux_ca.py``).
 
@@ -484,6 +490,35 @@ def check_run_python(binary: Path) -> bool:
     return True
 
 
+#: The OpenBLAS thread variables, as a script inside the binary sees them.
+BLAS_SCRIPT = """import os
+names = ("OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "OMP_NUM_THREADS")
+print("BLAS", [os.environ.get(n) for n in names])
+"""
+_BLAS_VARS = ("OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "OMP_NUM_THREADS")
+
+
+def check_blas_threads(binary: Path) -> bool:
+    """The binary caps OpenBLAS at 2 threads unless the user chose a count."""
+    clean = {k: v for k, v in os.environ.items() if k.upper() not in _BLAS_VARS}
+    cases = [
+        (clean, "BLAS ['2', None, None]"),
+        ({**clean, "OMP_NUM_THREADS": "3"}, "BLAS [None, None, '3']"),
+    ]
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-blas-") as tmp:
+        for env, want in cases:
+            result = _run_script(binary, Path(tmp), BLAS_SCRIPT, env=env)
+            if result.returncode != 0 or want not in result.stdout:
+                log(
+                    f"FAIL: expected {want!r} from inside the binary, got "
+                    f"{result.stdout.strip()[-300:]!r}. "
+                    f"stderr: {result.stderr[-1500:]!r}"
+                )
+                return False
+    log("blas threads check PASS -- OpenBLAS is capped unless the user set it")
+    return True
+
+
 #: Prints the estimator the agent's token counts use, from inside the binary.
 TOKENIZER_SCRIPT = """import sys
 from gaia.agents.base.turn_metrics import _tokenizer
@@ -611,7 +646,9 @@ def main(argv=None) -> int:
     results["run_python"] = check_run_python(binary)
     log("checking the agent's tokenizer offline")
     results["tokenizer"] = check_tokenizer(binary)
-    expected = 8
+    log("checking the OpenBLAS thread cap")
+    results["blas_threads"] = check_blas_threads(binary)
+    expected = 9
     if sys.platform.startswith("linux"):
         log("checking a script's TLS trust store")
         results["tls_trust"] = check_tls_trust(binary)
