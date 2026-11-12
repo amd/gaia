@@ -593,8 +593,9 @@ TEST(NativeToolCallsTest, MalformedArgumentsJsonThrowsNamingTheTool) {
         const std::string msg = e.what();
         EXPECT_NE(msg.find("echo"), std::string::npos) << msg;
         EXPECT_NE(msg.find("call_9"), std::string::npos) << msg;
-        // Names the escape hatch so the error is actionable.
-        EXPECT_NE(msg.find("NativeToolCalls::Never"), std::string::npos) << msg;
+        // The model reads this, so it says what to send next.
+        EXPECT_NE(msg.find("one complete JSON object"), std::string::npos) << msg;
+        EXPECT_EQ(msg.find("AgentConfig"), std::string::npos) << msg;
     }
 }
 
@@ -1072,7 +1073,7 @@ TEST(NativeToolCallsTest, MalformedArgsInABatchRunNothingAndDoNotThrow) {
     for (const auto& m : second["messages"]) {
         if (m["role"] == "tool") {
             ++toolReplies;
-            EXPECT_NE(m["content"].get<std::string>().find("not valid JSON"), std::string::npos);
+            EXPECT_NE(m["content"].get<std::string>().find("Not run"), std::string::npos);
         }
     }
     EXPECT_EQ(toolReplies, 2) << "every advertised call needs a reply";

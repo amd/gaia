@@ -122,6 +122,25 @@ TEST_F(GaiacppCli, JsonOutputAndTurnLogCarryTheSameCounters) {
     EXPECT_EQ(turn["tool_calls"][0]["step"], 1);
 }
 
+TEST_F(GaiacppCli, StepLogHasALinePerCallEvenWhenTheTurnFails) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(withUsage(toolCall("file_read", R"({"path":"note.txt"})"), 1000, 0, 40));
+    mock.pushResponse(R"({"error":{"message":"bad request"}})", 400);
+    const fs::path steps = dir_ / "steps.jsonl";
+
+    const gaia::ProcessResult r = run(mock, "", "", {{"GAIA_STEP_LOG", steps.string()}});
+    EXPECT_EQ(r.exitCode, 1) << r.stderr_output;
+
+    std::ifstream in(steps);
+    std::vector<std::string> kinds;
+    for (std::string line; std::getline(in, line);) {
+        const json step = json::parse(line);
+        EXPECT_EQ(step["schema"], "gaiacpp.step/1");
+        kinds.push_back(step.value("kind", ""));
+    }
+    EXPECT_EQ(kinds, (std::vector<std::string>{"llm", "tool", "llm_error"}));
+}
+
 TEST_F(GaiacppCli, TurnLogAppendsAcrossRuns) {
     const fs::path log = dir_ / "turns.jsonl";
     for (int i = 0; i < 2; ++i) {

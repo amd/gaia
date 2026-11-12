@@ -122,13 +122,22 @@ std::string Workspace::checkPath(const std::string& path) const {
     return refusal(path);
 }
 
-std::string Workspace::checkCommand(const std::string& command) const {
+namespace {
+// /s, /b, /a:d, /-c, /? : a cmd.exe switch rather than a place.
+bool looksLikeCmdSwitch(const std::string& token) {
+    static const std::regex switchRe(R"(/-?[A-Za-z?](?::[^/\\]*)?)");
+    return std::regex_match(token, switchRe);
+}
+} // namespace
+
+std::string Workspace::checkCommand(const std::string& command, bool posixShell) const {
     // Absolute POSIX paths, ~/ paths and Windows drive paths, as standalone words.
     static const std::regex pathRe(
         R"((?:^|[\s'"=(:,`])((?:/|~/|[A-Za-z]:[\\/])[^\s'"`;|&()<>,]*))");
     for (auto it = std::sregex_iterator(command.begin(), command.end(), pathRe);
          it != std::sregex_iterator(); ++it) {
         std::string token = (*it)[1].str();
+        if (!posixShell && looksLikeCmdSwitch(token)) continue;
         if (token.rfind("//", 0) == 0) {
             // After a colon it is the tail of a URL (https://…); otherwise a network share.
             const size_t at = static_cast<size_t>((*it).position(1));
@@ -163,6 +172,11 @@ std::string Workspace::checkCommand(const std::string& command) const {
         if (contains(expanded)) continue;
         const std::string abs = normalized(fs::u8path(expanded));
         if (inSystemDir(abs) || looksLikePattern(abs)) continue;
+        if (looksLikeCmdSwitch(token)) {
+            return refusal(token) + " Commands here run in bash, where " + token +
+                   " is a path, not a switch: use bash commands such as ls -R or find "
+                   "instead of cmd.exe switches.";
+        }
         return refusal(token);
     }
     // \\host\share, which the path pattern above does not see.
@@ -234,11 +248,12 @@ ToolInfo Workspace::confine(ToolInfo tool, std::shared_ptr<const Workspace> ws,
 }
 
 ToolInfo Workspace::confineShell(ToolInfo tool, std::shared_ptr<const Workspace> ws,
-                                 std::string commandArg) {
+                                 std::string commandArg, bool posixShell) {
     ToolCallback inner = std::move(tool.callback);
-    tool.callback = [inner, ws, commandArg](const json& args) -> json {
+    tool.callback = [inner, ws, commandArg, posixShell](const json& args) -> json {
         if (args.contains(commandArg) && args[commandArg].is_string()) {
-            const std::string why = ws->checkCommand(args[commandArg].get<std::string>());
+            const std::string why =
+                ws->checkCommand(args[commandArg].get<std::string>(), posixShell);
             if (!why.empty()) return json{{"status", "error"}, {"error", why}};
         }
         return inner(args);

@@ -336,6 +336,18 @@ std::string ToolRegistry::validateArgsAgainstSchema(
         return "expected object, got " + std::string(effectiveArgs.type_name());
     }
 
+    if (effectiveArgs.empty()) {
+        std::string required;
+        for (const auto& param : params) {
+            if (param.required) required += (required.empty() ? "'" : ", '") + param.name + "'";
+        }
+        if (!required.empty()) {
+            return "missing required parameter: the call arrived with no arguments; it needs " + required +
+                   ". Send them in the call's arguments object. If an argument is very long, "
+                   "write it to a file in parts instead";
+        }
+    }
+
     // Check required parameters are present
     for (const auto& param : params) {
         if (param.required && !effectiveArgs.contains(param.name)) {
