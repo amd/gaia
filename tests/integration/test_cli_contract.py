@@ -73,7 +73,6 @@ KNOWN_BUGS = {
     ("traceback", "schedule pause contract-walk"): "amd/gaia#7333",
     ("traceback", "schedule resume contract-walk"): "amd/gaia#7333",
     ("traceback", "schedule run contract-walk"): "amd/gaia#7333",
-    ("traceback", "connectors connect contract-walk"): "amd/gaia#7334",
     ("traceback", "mcp engineering --backend claude"): "amd/gaia#7335",
     ("traceback", "mcp code-index"): "amd/gaia#7335",
     ("model server", "chat"): "amd/gaia#7345",

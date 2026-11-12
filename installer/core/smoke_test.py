@@ -154,7 +154,6 @@ KNOWN_BROKEN = {
     "schedule pause": "amd/gaia#7333",
     "schedule resume": "amd/gaia#7333",
     "schedule run": "amd/gaia#7333",
-    "connectors connect": "amd/gaia#7334",
     "mcp engineering": "amd/gaia#7335",
     "mcp code-index": "amd/gaia#7335",
     "slack setup": "amd/gaia#7336",
