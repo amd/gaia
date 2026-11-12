@@ -1305,7 +1305,7 @@ export function MemoryDashboard() {
                             )}
                             {/* ── 1. Header Stat Cards ─────────────── */}
                             <div className="mem-stat-cards">
-                                <div className="mem-stat-card" data-accent="purple">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">{stats?.knowledge?.total ?? 0}</div>
                                     <div className="mem-stat-label">{t('mem.stat.stored')}</div>
                                     <div className="mem-stat-sub">
@@ -1324,7 +1324,7 @@ export function MemoryDashboard() {
                                         })()}
                                     </div>
                                 </div>
-                                <div className="mem-stat-card" data-accent="gold">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">{stats?.knowledge?.total_retrievals ?? 0}</div>
                                     <div className="mem-stat-label">{t('mem.stat.retrieved')}</div>
                                     <div className="mem-stat-sub">
@@ -1333,7 +1333,7 @@ export function MemoryDashboard() {
                                             : t('mem.stat.noRecalls')}
                                     </div>
                                 </div>
-                                <div className="mem-stat-card" data-accent="blue">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">{stats?.conversations?.total_sessions ?? 0}</div>
                                     <div className="mem-stat-label">{t('mem.stat.sessions')}</div>
                                     <div className="mem-stat-sub">
@@ -1344,14 +1344,14 @@ export function MemoryDashboard() {
                                         ) || t('mem.stat.totalTurns', { n: stats?.conversations?.total_turns ?? 0 })}
                                     </div>
                                 </div>
-                                <div className="mem-stat-card" data-accent="green">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">{stats?.tools?.total_calls ?? 0}</div>
                                     <div className="mem-stat-label">{t('mem.stat.toolCalls')}</div>
                                     <div className="mem-stat-sub" title={t('mem.stat.toolsNotLogged')}>
                                         {t('mem.stat.toolsExclMemory', { n: stats?.tools?.unique_tools ?? 0 })}
                                     </div>
                                 </div>
-                                <div className="mem-stat-card" data-accent="red">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">
                                         {stats?.tools?.overall_success_rate != null && (stats.tools.total_calls ?? 0) > 0
                                             ? `${Math.round(stats.tools.overall_success_rate * 100)}%`
@@ -2107,7 +2107,7 @@ export function MemoryDashboard() {
                                         aria-pressed={memoryEnabled}
                                         aria-label={t(memoryEnabled ? 'mem.settings.memoryOn' : 'mem.settings.memoryOff')}
                                     >
-                                        {t.bare(memoryEnabled ? 'mem.on' : 'mem.off')}
+                                        <span className="mem-toggle-knob" aria-hidden="true" />
                                     </button>
                                 </div>
                                 {/* Floating beta confirmation modal */}
@@ -2261,7 +2261,7 @@ export function MemoryDashboard() {
                                         aria-label={t('mem.settings.mcpToggle')}
                                         aria-pressed={mcpMemoryEnabled}
                                     >
-                                        {t.bare(mcpMemoryEnabled ? 'mem.on' : 'mem.off')}
+                                        <span className="mem-toggle-knob" aria-hidden="true" />
                                     </button>
                                 </div>
                                 <div className="mem-setting-row">
@@ -2293,7 +2293,7 @@ export function MemoryDashboard() {
                                         aria-label={t('mem.settings.discoveryToggle')}
                                         aria-pressed={systemDiscoveryConsent}
                                     >
-                                        {t.bare(systemDiscoveryConsent ? 'mem.on' : 'mem.off')}
+                                        <span className="mem-toggle-knob" aria-hidden="true" />
                                     </button>
                                 </div>
                                 <div className="mem-setting-row mem-setting-row-danger">
@@ -2423,6 +2423,7 @@ export function MemoryDashboard() {
                     {/* ── Profile Setup Tab ──────────────────────────── */}
                     {activeTab === 'profile' && (
                         <div className="mem-profile-grid">
+                            <p className="mem-tab-intro">{t('mem.profile.intro')}</p>
                             {/* Card A: System Discovery */}
                             <div className="mem-profile-card">
                                 <div className="mem-profile-card-title">
@@ -2614,6 +2615,7 @@ export function MemoryDashboard() {
                     {/* ── Goals Tab ──────────────────────────────────────── */}
                     {activeTab === 'goals' && (
                         <div className="mem-goals-tab">
+                            <p className="mem-tab-intro">{t('mem.goals.intro')}</p>
                             {goalStoreError && (
                                 <div className="mem-advanced-error" role="alert">
                                     <AlertTriangle size={14} /> {t('mem.goals.storeError')}: <bdi>{goalStoreError}</bdi>

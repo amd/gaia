@@ -164,7 +164,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_gg.add_argument("connector_id")
     p_gg.add_argument(
         "agent_id",
-        help="Namespaced agent id, e.g. 'installed:gaia' or 'custom:abc:inbox'",
+        help="Namespaced agent id, e.g. 'builtin:chat' or 'custom:abc:inbox'",
     )
     p_gg.add_argument(
         "--scopes",
@@ -210,7 +210,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_aa.add_argument("connector_id")
     p_aa.add_argument(
         "agent_id",
-        help="Namespaced agent id, e.g. 'installed:gaia' or 'custom:abc:inbox'",
+        help="Namespaced agent id, e.g. 'builtin:chat' or 'custom:abc:inbox'",
     )
     p_aa.add_argument(
         "--scopes",
@@ -345,13 +345,21 @@ def _handle_connect(args: argparse.Namespace) -> int:
     )
     from gaia.connectors.registry import REGISTRY
 
+    # Say so up front, before any scope work, rather than let the provider
+    # lookup's KeyError escape as a traceback.
     oauth_ids = sorted(s.id for s in REGISTRY.all() if s.type == "oauth_pkce")
     if args.connector_id not in oauth_ids:
-        sys.stderr.write(
-            f"gaia connectors connect: unknown OAuth connector "
-            f"{args.connector_id!r}. Connect one of: {', '.join(oauth_ids)}. "
-            "Run 'gaia connectors list' to see every connector.\n"
-        )
+        if args.connector_id in REGISTRY:
+            sys.stderr.write(
+                f"{args.connector_id!r} is not an OAuth connector, so it cannot be "
+                f"connected with this command. OAuth connectors: "
+                f"{', '.join(oauth_ids)}.\n"
+            )
+        else:
+            sys.stderr.write(
+                f"Unknown connector {args.connector_id!r}. "
+                f"Known: {', '.join(oauth_ids)}.\n"
+            )
         return 1
 
     grant_agent = getattr(args, "grant_agent", None)
@@ -394,7 +402,6 @@ def _handle_connect(args: argparse.Namespace) -> int:
         granted_agent_ids = sorted(list_agent_grants(args.connector_id).keys())
         if granted_agent_ids:
             from gaia.agents.registry import AgentRegistry
-            from gaia.connectors.registry import REGISTRY
             from gaia.hub.installer import register_installed_sidecars
 
             registry = AgentRegistry()

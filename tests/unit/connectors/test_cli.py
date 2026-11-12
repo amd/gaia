@@ -63,6 +63,28 @@ def _run(*argv) -> tuple[int, str, str]:
     return rc, out.getvalue(), err.getvalue()
 
 
+class TestConnectUnknownConnector:
+    """A connector name `connect` can't use is a one-line refusal, not a traceback."""
+
+    @pytest.mark.parametrize("extra", [[], ["--device"], ["--grant-agent", "email"]])
+    def test_a_misspelt_connector_names_the_ones_that_exist(self, extra):
+        rc, out, err = _run("connectors", "connect", "gogle", *extra)
+
+        assert rc == 1
+        assert out == ""
+        assert err == (
+            "Unknown connector 'gogle'. Known: google, microsoft, microsoft_work.\n"
+        )
+
+    def test_a_connector_that_is_not_oauth_says_so(self):
+        rc, _out, err = _run("connectors", "connect", "mcp-git")
+
+        assert rc == 1
+        assert "'mcp-git' is not an OAuth connector" in err
+        assert "google, microsoft, microsoft_work" in err
+        assert "Traceback" not in err
+
+
 class TestConnectSelfDocuments:
     """`gaia connectors connect google` with no client credentials must be
     self-documenting for a headless user (#2347) — the console setup steps and
@@ -88,17 +110,6 @@ class TestConnectSelfDocuments:
         assert "--grant-agent installed:email" in err
         assert "gmail.modify" in err  # copy-paste example has real scopes
         assert "amd-gaia.ai/docs/connectors/google" in err
-
-
-class TestConnectUnknownConnector:
-    @pytest.mark.parametrize("connector_id", ["does-not-exist", "mcp-github"])
-    def test_names_the_id_and_the_connectable_ones(self, connector_id):
-        rc, _out, err = _run("connectors", "connect", connector_id)
-
-        assert rc == 1
-        assert repr(connector_id) in err
-        assert "google" in err and "microsoft" in err
-        assert "Traceback" not in err
 
 
 class TestConnectGrantAgent:

@@ -120,6 +120,8 @@ SUMMARY_VIEW_KEYS = (
     "success",
     # The tool's own outcome word, e.g. "skipped" when a private chat saves nothing.
     "status",
+    # A model the call needed and didn't find ("vision"), so the UI offers it.
+    "needs_model",
     # Set on a "denied" call nobody answered, so it isn't shown as the user's no.
     "timed_out",
     # False on a call refused before it ran, so a relayed refusal contacted nothing.
