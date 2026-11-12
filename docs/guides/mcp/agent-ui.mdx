@@ -57,7 +57,9 @@ Conversations initiated via MCP appear in the browser UI in real time, so you ca
 `get_messages` retrieves every page up to the message count reported at the
 start of the call. Messages added during retrieval are available on the next
 call. A failed or prematurely empty page returns an explicit error rather than
-a partial transcript. Existing content and tool-result excerpt limits still apply.
+a partial transcript. Message text is cut to 2,000 characters and tool results to
+300; pass `full_replies=True` to get assistant replies whole (the eval judge does,
+so a long answer isn't judged on a clipped copy).
 
 <Note>
   The `memory_*` tools are **conditional**. The read tools (`memory_stats`, `memory_list`,
@@ -296,7 +298,7 @@ uv run python -m gaia.mcp.servers.agent_ui_mcp --host 0.0.0.0 --allow-remote
                               └──────────┘ └──────────┘ └──────────┘
 ```
 
-The MCP server is a thin wrapper around the Agent UI REST API. When you call `send_message`, it streams the response via SSE (Server-Sent Events) from the backend, collects tool outputs and agent steps, and returns the complete result. The web UI receives the same SSE events simultaneously, so you see real-time activity in the browser.
+The MCP server is a thin wrapper around the Agent UI REST API. When you call `send_message`, it streams the response via SSE (Server-Sent Events) from the backend, collects tool outputs and agent steps, and returns the complete result. If the turn failed, the result also carries `"status": "error"` and the reason in `"detail"`. The web UI receives the same SSE events simultaneously, so you see real-time activity in the browser.
 
 ---
 

@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { isPathAccessFollowUp, pathAccessQuestion, pathAccessTitle } from '../notificationStore';
 import type { GaiaNotification } from '../../types/agent';
+import { translator } from '../../i18n/useT';
 
 describe('pathAccessQuestion', () => {
     it('asks about a file as a file', () => {
@@ -97,5 +98,18 @@ describe('isPathAccessFollowUp', () => {
         const older = prompt({ id: 'older' });
         const newer = prompt({ id: 'newer', toolArgs: { file_path: 'C:\\elsewhere.txt' } });
         expect(isPathAccessFollowUp([newer, older], 's', path)).toBe(false);
+    });
+});
+
+describe('path-access wording in Arabic', () => {
+    const ar = translator('ar');
+    it('asks the question in Arabic with the path set apart', () => {
+        const question = pathAccessQuestion({ path: 'C:\\h\\a.txt', kind: 'file' }, false, ar, (p) => `[${p}]`);
+        expect(question).toContain('يريد GAIA استخدام الملف');
+        expect(question).toContain('[C:\\h\\a.txt]');
+    });
+
+    it('titles a folder prompt in Arabic', () => {
+        expect(pathAccessTitle({ path: 'C:\\x', kind: 'folder' }, false, ar)).toContain('هل تسمح لـ GAIA باستخدام هذا المجلد؟');
     });
 });

@@ -109,6 +109,17 @@ def env_ctx_size(parsed: dict) -> int | None:
     return int(v)
 
 
+_GIT_TIMEOUT_S = 60
+
+
+def _git_hung(exc: subprocess.TimeoutExpired) -> str:
+    return (
+        f"`{' '.join(exc.cmd)}` did not finish within {exc.timeout:g}s. Check "
+        "for a stale .git/index.lock or a hung credential prompt, or use "
+        "--baseline-file instead."
+    )
+
+
 def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
     """Resolve ``<ref>:<scorecard-path>`` via ``git show`` and return the content.
 
@@ -129,7 +140,10 @@ def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
             capture_output=True,
             text=True,
             check=True,
+            timeout=_GIT_TIMEOUT_S,
         )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(_git_hung(exc)) from exc
     except (subprocess.CalledProcessError, FileNotFoundError) as exc:
         raise ValueError(
             f"Cannot determine git repository root: {exc}. "
@@ -158,9 +172,12 @@ def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            timeout=_GIT_TIMEOUT_S,
         )
     except FileNotFoundError as exc:
         raise ValueError(f"git not found: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(_git_hung(exc)) from exc
     if ref_check.returncode != 0:
         raise ValueError(
             f"baseline ref {ref!r} does not resolve to a commit. "
@@ -173,9 +190,12 @@ def _parse_baseline_ref(scorecard_path: Path, ref: str) -> str | None:
             capture_output=True,
             text=True,
             check=False,
+            timeout=_GIT_TIMEOUT_S,
         )
     except FileNotFoundError as exc:
         raise ValueError(f"git not found: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError(_git_hung(exc)) from exc
 
     if result.returncode != 0:
         # File absent at that ref → first adoption (presence-only pass).

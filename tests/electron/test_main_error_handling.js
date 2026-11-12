@@ -253,6 +253,34 @@ describe("installSafetyNet", () => {
     exitSpy.mockRestore();
   });
 
+  test("a focused install screen does not reset the crash-loop counter", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+    const app = mockApp(false);
+    const gaiaDir = path.join(tmpDir, ".gaia");
+    const counterPath = path.join(gaiaDir, "electron-startup-failures.json");
+    fs.mkdirSync(gaiaDir, { recursive: true });
+    fs.writeFileSync(counterPath, JSON.stringify({ count: 2 }));
+    let installing = true;
+
+    installSafetyNet({
+      logPath,
+      dialogModule: mockDialog(),
+      appModule: app,
+      homedirFn: () => tmpDir,
+      holdCrashCount: () => installing,
+    });
+
+    app.emit("browser-window-focus");
+    expect(JSON.parse(fs.readFileSync(counterPath, "utf8")).count).toBe(2);
+
+    installing = false;
+    app.emit("browser-window-focus");
+    expect(JSON.parse(fs.readFileSync(counterPath, "utf8")).count).toBe(0);
+
+    exitSpy.mockRestore();
+  });
+
   // ── Test 8: render-process-gone handler installed ─────────────────────────
   // Renderer crashes don't fire uncaughtException; they fire
   // app.on('render-process-gone'). Must be routed through fatal handler.
@@ -332,6 +360,100 @@ describe("installSafetyNet", () => {
     expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
 
     exitSpy.mockRestore();
+  });
+
+  // ── Test 9d: a renderer's clean exit is a shutdown, not a crash ────────────
+  // Stopping the app's unit (logout, `systemctl --user stop`) signals every
+  // process at once; the renderer exits cleanly before the main process quits.
+
+  test("render-process-gone with clean-exit logs it and shows no crash dialog", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+    app.emit("render-process-gone", {}, {}, { reason: "clean-exit", exitCode: 0 });
+
+    expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+    expect(dialog.showErrorBox).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(fs.readFileSync(logPath, "utf8")).toMatch(/RENDER_PROCESS_EXITED reason=clean-exit/);
+
+    exitSpy.mockRestore();
+  });
+
+  test.each([["crashed"], ["killed"], ["oom"], ["abnormal-exit"]])(
+    "render-process-gone with %s still shows the crash dialog",
+    (reason) => {
+      const { installSafetyNet } = require(SAFETY_NET_PATH);
+      const dialog = mockDialog();
+      const app = mockApp(true);
+      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+
+      installSafetyNet({ logPath, dialogModule: dialog, appModule: app });
+      app.emit("render-process-gone", {}, {}, { reason, exitCode: 1 });
+
+      expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
+
+      exitSpy.mockRestore();
+    }
+  );
+
+  // ── Test 9e: a crashed window is the window's handler's, not a crash of GAIA ─
+  // The backend and agents still run, so main.cjs offers to reload the window;
+  // the raw stack never reaches the user.
+
+  test.each([["crashed"], ["oom"], ["killed"], ["abnormal-exit"]])(
+    "render-process-gone with %s and a window handler hands it over, logged, with no crash dialog",
+    (reason) => {
+      const { installSafetyNet } = require(SAFETY_NET_PATH);
+      const dialog = mockDialog();
+      const app = mockApp(true);
+      app.quit = jest.fn();
+      const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+      const onRendererGone = jest.fn();
+      const contents = { id: 7 };
+
+      installSafetyNet({ logPath, dialogModule: dialog, appModule: app, onRendererGone });
+      app.emit("render-process-gone", {}, contents, { reason, exitCode: 1 });
+
+      expect(onRendererGone).toHaveBeenCalledWith(contents, { reason, exitCode: 1 });
+      expect(dialog.showMessageBoxSync).not.toHaveBeenCalled();
+      expect(dialog.showErrorBox).not.toHaveBeenCalled();
+      expect(app.quit).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(fs.readFileSync(logPath, "utf8")).toMatch(new RegExp(`RENDER_PROCESS_GONE reason=${reason} exitCode=1`));
+
+      exitSpy.mockRestore();
+    }
+  );
+
+  test("a window handler that throws falls back to the crash dialog", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const dialog = mockDialog();
+    const app = mockApp(true);
+    const exitSpy = jest.spyOn(process, "exit").mockImplementation(() => {});
+    const onRendererGone = jest.fn(() => { throw new Error("no window"); });
+
+    installSafetyNet({ logPath, dialogModule: dialog, appModule: app, onRendererGone });
+    app.emit("render-process-gone", {}, {}, { reason: "crashed", exitCode: 1 });
+
+    expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(1);
+    expect(fs.readFileSync(logPath, "utf8")).toMatch(/no window/);
+
+    exitSpy.mockRestore();
+  });
+
+  test("a clean exit never reaches the window handler", () => {
+    const { installSafetyNet } = require(SAFETY_NET_PATH);
+    const app = mockApp(true);
+    const onRendererGone = jest.fn();
+
+    installSafetyNet({ logPath, dialogModule: mockDialog(), appModule: app, onRendererGone });
+    app.emit("render-process-gone", {}, {}, { reason: "clean-exit", exitCode: 0 });
+
+    expect(onRendererGone).not.toHaveBeenCalled();
   });
 
   // ── Test 10: fatal handler writes to log before showing dialog ─────────────
@@ -419,5 +541,189 @@ describe("installSafetyNet", () => {
       appModule: mockApp(false),
     });
     expect(typeof result.fatal).toBe("function");
+  });
+});
+
+// ── Safe mode (issue #938) ───────────────────────────────────────────────────
+
+describe("crash-loop safe mode", () => {
+  let tmpDir;
+  let homedirFn;
+  let counter;
+
+  function seed(content) {
+    fs.mkdirSync(path.dirname(counter), { recursive: true });
+    fs.writeFileSync(counter, content);
+  }
+
+  function safeModeApp() {
+    return { relaunch: jest.fn(), exit: jest.fn() };
+  }
+
+  function dialogAnswering(...choices) {
+    const queue = [...choices];
+    return {
+      showErrorBox: jest.fn(),
+      showMessageBoxSync: jest.fn(() => {
+        if (queue.length === 0) throw new Error("dialog asked more times than the test expected");
+        return queue.shift();
+      }),
+    };
+  }
+
+  function run(overrides) {
+    const { runSafeModePrompt } = require(SAFETY_NET_PATH);
+    return runSafeModePrompt({
+      count: 3,
+      appModule: safeModeApp(),
+      shellModule: { openPath: jest.fn() },
+      homedirFn,
+      ...overrides,
+    });
+  }
+
+  beforeEach(() => {
+    jest.resetModules();
+    tmpDir = makeTmpDir();
+    homedirFn = () => tmpDir;
+    counter = path.join(tmpDir, ".gaia", "electron-startup-failures.json");
+    jest.spyOn(process.stderr, "write").mockImplementation(() => true);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  test("the threshold is 3", () => {
+    expect(require(SAFETY_NET_PATH).SAFE_MODE_THRESHOLD).toBe(3);
+  });
+
+  test("readCount is 0 on a cold start with no counter file, silently", () => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    expect(readCount(homedirFn)).toBe(0);
+    expect(process.stderr.write).not.toHaveBeenCalled();
+  });
+
+  test("readCount returns the written count", () => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    seed(JSON.stringify({ count: 3 }));
+    expect(readCount(homedirFn)).toBe(3);
+  });
+
+  test.each([
+    ["truncated JSON", '{"count": 4'],
+    ["empty file", ""],
+    ["string count", JSON.stringify({ count: "5" })],
+    ["negative count", JSON.stringify({ count: -2 })],
+    ["fractional count", JSON.stringify({ count: 3.5 })],
+    ["null count", JSON.stringify({ count: null })],
+  ])("readCount treats a %s as 0 and says why on stderr", (_label, content) => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    seed(content);
+    expect(readCount(homedirFn)).toBe(0);
+    expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining(counter));
+  });
+
+  test("Try again deletes the counter, then relaunches and exits 0", async () => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    seed(JSON.stringify({ count: 3 }));
+    const app = safeModeApp();
+    const shell = { openPath: jest.fn() };
+
+    const result = await run({ dialogModule: dialogAnswering(0), appModule: app, shellModule: shell });
+
+    expect(result).toBe("reset");
+    expect(fs.existsSync(counter)).toBe(false);
+    expect(readCount(homedirFn)).toBe(0);
+    expect(app.relaunch).toHaveBeenCalledTimes(1);
+    expect(app.exit).toHaveBeenCalledWith(0);
+    expect(app.relaunch.mock.invocationCallOrder[0]).toBeLessThan(app.exit.mock.invocationCallOrder[0]);
+    expect(shell.openPath).not.toHaveBeenCalled();
+  });
+
+  test("the dialog names the crash count and offers three choices, Quit on Esc", async () => {
+    const dialog = dialogAnswering(2);
+    await run({ count: 7, dialogModule: dialog });
+    const opts = dialog.showMessageBoxSync.mock.calls[0][0];
+    expect(opts.message).toContain("7 times");
+    expect(opts.buttons).toEqual(["Try again", "Open log folder", "Quit"]);
+    expect(opts.buttons[opts.cancelId]).toBe("Quit");
+    expect(opts.buttons[opts.defaultId]).toBe("Try again");
+  });
+
+  test("Quit exits 0 without touching the counter or relaunching", async () => {
+    const { readCount } = require(SAFETY_NET_PATH);
+    seed(JSON.stringify({ count: 4 }));
+    const app = safeModeApp();
+    const result = await run({ count: 4, dialogModule: dialogAnswering(2), appModule: app });
+    expect(result).toBe("quit");
+    expect(app.exit).toHaveBeenCalledWith(0);
+    expect(app.relaunch).not.toHaveBeenCalled();
+    expect(readCount(homedirFn)).toBe(4);
+  });
+
+  test("Open log folder opens ~/.gaia, waits for it, then asks again", async () => {
+    const app = safeModeApp();
+    const dialog = dialogAnswering(1, 2);
+    let opened = false;
+    const shell = {
+      openPath: jest.fn(async () => {
+        await new Promise((r) => setTimeout(r, 5));
+        opened = true;
+        return "";
+      }),
+    };
+    let openedAtExit;
+    app.exit.mockImplementation(() => { openedAtExit = opened; });
+
+    const result = await run({ dialogModule: dialog, appModule: app, shellModule: shell });
+
+    expect(result).toBe("quit");
+    expect(shell.openPath).toHaveBeenCalledWith(path.join(tmpDir, ".gaia"));
+    expect(dialog.showMessageBoxSync).toHaveBeenCalledTimes(2);
+    expect(openedAtExit).toBe(true);
+    expect(app.exit).toHaveBeenCalledWith(0);
+  });
+
+  test("a folder that will not open is reported in the next dialog", async () => {
+    const dialog = dialogAnswering(1, 2);
+    const shell = { openPath: jest.fn(async () => "Failed to open path") };
+    await run({ dialogModule: dialog, shellModule: shell });
+    expect(dialog.showMessageBoxSync.mock.calls[0][0].detail).not.toContain("Could not open");
+    expect(dialog.showMessageBoxSync.mock.calls[1][0].detail).toContain("Could not open");
+    expect(dialog.showMessageBoxSync.mock.calls[1][0].detail).toContain("Failed to open path");
+  });
+
+  test("a dialog that throws exits 1 instead of continuing start-up", async () => {
+    const app = safeModeApp();
+    const dialog = {
+      showErrorBox: jest.fn(),
+      showMessageBoxSync: jest.fn(() => { throw new Error("no display"); }),
+    };
+    const result = await run({ dialogModule: dialog, appModule: app });
+    expect(result).toBe("error");
+    expect(app.exit).toHaveBeenCalledWith(1);
+    expect(app.relaunch).not.toHaveBeenCalled();
+    expect(process.stderr.write).toHaveBeenCalledWith(expect.stringContaining("no display"));
+  });
+
+  test("an error box that also throws still exits 1", async () => {
+    const app = safeModeApp();
+    const dialog = {
+      showErrorBox: jest.fn(() => { throw new Error("still no display"); }),
+      showMessageBoxSync: jest.fn(() => { throw new Error("no display"); }),
+    };
+    await expect(run({ dialogModule: dialog, appModule: app })).resolves.toBe("error");
+    expect(app.exit).toHaveBeenCalledWith(1);
+  });
+
+  test("a counter that cannot be deleted exits 1 rather than relaunching into the loop", async () => {
+    const app = safeModeApp();
+    jest.spyOn(fs, "rmSync").mockImplementation(() => { throw new Error("EPERM"); });
+    const result = await run({ dialogModule: dialogAnswering(0), appModule: app });
+    expect(result).toBe("error");
+    expect(app.relaunch).not.toHaveBeenCalled();
+    expect(app.exit).toHaveBeenCalledWith(1);
   });
 });

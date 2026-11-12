@@ -20,8 +20,8 @@ def _registry(request: Request):
 
 def _reg_to_info(reg) -> AgentInfo:
     # required_connections may contain ConnectorRequirement objects (with
-    # .connector_id/.scopes/.reason) or plain strings (legacy shorthand
-    # used by connectors-demo). Normalise both into dicts for the API
+    # .connector_id/.scopes/.reason) or plain strings (legacy shorthand).
+    # Normalise both into dicts for the API
     # response, keyed as "connector_id" to match the TypeScript
     # ConnectorRequirement interface.
     connections = []

@@ -90,7 +90,7 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			return nil, fmt.Errorf(
 				"agent %q runs over the daemon transport, which cannot switch inference "+
 					"backends — --use-claude only works for an agent the TUI spawns itself. "+
-					"Drop the flag, or run the flagship (`gaia tui`), which is one",
+					"Drop the flag, or run the flagship (`gaia-tui`), which is one",
 				agent.ID)
 		}
 		return NewSSEClient(agent.ID, daemon.New(daemon.Options{Logf: opts.Logf}), SSEOptions{
@@ -137,9 +137,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 			args = append(append([]string{}, args...), "--model", opts.Model)
 		}
 		if agent.CanonicalEvents {
-			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
+			return NewCanonicalSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
 		}
-		return NewSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace), nil
+		return NewSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
 
 	default:
 		return nil, fmt.Errorf(

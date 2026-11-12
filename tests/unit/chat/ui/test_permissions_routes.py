@@ -215,7 +215,7 @@ def client(db):
     app.include_router(chat_router)
     app.state.db = db
     app.state.session_locks = {}
-    return TestClient(app)
+    return TestClient(app, client=("127.0.0.1", 50000))
 
 
 @pytest.fixture
@@ -445,6 +445,76 @@ class TestPermissionRoutes:
         assert (
             client.get("/api/chat/permissions").json()["default_mode"] == "full_access"
         )
+
+    def test_put_default_writes_the_config_key_the_tui_uses(self, client):
+        resp = client.put("/api/chat/permissions", json={"mode": "full_access"})
+        assert resp.status_code == 200
+        assert resp.json() == {"default_mode": "full_access"}
+        saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+        assert saved["full_access"] is True
+        assert permissions.default_mode() == permissions.MODE_FULL_ACCESS
+
+        resp = client.put("/api/chat/permissions", json={"mode": "ask"})
+        assert resp.json() == {"default_mode": "ask"}
+        saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+        assert saved["full_access"] is False
+
+    def test_put_default_keeps_other_config_keys(self, client):
+        _write_config({"default_model": "Some-Model", "future_key": 1})
+        client.put("/api/chat/permissions", json={"mode": "full_access"})
+        saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+        assert saved["default_model"] == "Some-Model"
+        assert saved["future_key"] == 1
+
+    def test_put_default_leaves_open_chats_alone(self, client, sid):
+        client.put("/api/chat/permissions", json={"mode": "full_access"})
+        assert permissions.get(sid) is None
+
+    @pytest.mark.parametrize(
+        "peer, headers",
+        [
+            (("127.0.0.1", 50000), {"X-Forwarded-For": "203.0.113.7"}),
+            (("127.0.0.1", 50000), {"X-Forwarded-Proto": "https"}),
+            (("127.0.0.1", 50000), {"X-Forwarded-Host": "abc.ngrok.app"}),
+            (("127.0.0.1", 50000), {"x-fOrWaRdEd-fOr": ""}),
+            (("::1", 50000), {"X-Forwarded-For": "203.0.113.7"}),
+            (("192.168.1.20", 50000), {}),
+            (("0.0.0.0", 50000), {}),
+            (("localhost.evil.example", 50000), {}),
+        ],
+        ids=[
+            "tunnel-for",
+            "tunnel-proto",
+            "tunnel-host",
+            "tunnel-empty-header-odd-case",
+            "tunnel-ipv6-loopback",
+            "lan-peer",
+            "unspecified-addr",
+            "loopback-lookalike-name",
+        ],
+    )
+    def test_put_default_is_refused_off_this_pc(self, client, peer, headers):
+        _write_config({"full_access": False})
+        remote = TestClient(client.app, client=peer)
+        resp = remote.put(
+            "/api/chat/permissions", json={"mode": "full_access"}, headers=headers
+        )
+        assert resp.status_code == 403
+        assert "on the PC running GAIA" in resp.json()["detail"]
+        saved = json.loads(config_mod.GAIA_CONFIG_FILE.read_text(encoding="utf-8"))
+        assert saved["full_access"] is False
+        assert permissions.default_mode() == permissions.MODE_ASK
+
+    def test_put_default_is_allowed_from_ipv6_loopback(self, client):
+        local = TestClient(client.app, client=("::1", 50000))
+        resp = local.put("/api/chat/permissions", json={"mode": "full_access"})
+        assert resp.status_code == 200
+        assert permissions.default_mode() == permissions.MODE_FULL_ACCESS
+
+    def test_put_default_refuses_an_unknown_mode(self, client):
+        resp = client.put("/api/chat/permissions", json={"mode": "yolo"})
+        assert resp.status_code == 422
+        assert permissions.default_mode() == permissions.MODE_ASK
 
     def test_delete_one_grant(self, client, sid):
         perms = permissions.for_session(sid)

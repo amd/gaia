@@ -11,7 +11,7 @@ on:
       - '.github/workflows/test_rag.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -53,7 +53,7 @@ on:
       # The integration job runs `python -m gaia.cli eval retrieval`.
       - 'src/gaia/cli.py'
       - 'src/gaia/eval/retrieval/**'
-      - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'eval/retrieval/**'
       - 'eval/corpus/**'
       - 'data/pdf/**'
@@ -68,12 +68,12 @@ on:
       - 'tests/fixtures/eval_baselines/rag-retrieval/**'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_rag.yml'
       - '.github/actions/setup-venv/**'
       - '.github/actions/install-lemonade/**'
-      # start-lemonade.ps1 calls cleanup-lemonade.ps1, so match the whole family.
+      # ensure-lemonade-running.ps1 calls cleanup-lemonade.ps1, so match the whole family.
       - 'installer/scripts/*lemonade*.ps1'
       - 'tests/ci_lemonade_check.py'
       - 'setup.py'
@@ -115,7 +115,7 @@ on:
       # The integration job runs `python -m gaia.cli eval retrieval`.
       - 'src/gaia/cli.py'
       - 'src/gaia/eval/retrieval/**'
-      - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'eval/retrieval/**'
       - 'eval/corpus/**'
       - 'data/pdf/**'
@@ -193,9 +193,9 @@ jobs:
       uses: ./.github/actions/setup-venv
       with:
         python-version: '3.12'
-        # The chat agent package provides query_documents' search-key expansion,
-        # which the retrieval gate scores as the agent pipeline.
-        install-package: '.[dev,rag] ./hub/agents/chat/python'
+        # The flagship package's ChatAgent provides query_documents' search-key
+        # expansion, which the retrieval gate scores as the agent pipeline.
+        install-package: '.[dev,rag] ./hub/agents/gaia/python'
 
     - name: Install additional test dependencies
       shell: powershell
@@ -225,7 +225,7 @@ jobs:
             # to logs, waits for health (dumping the logs on failure), and sets
             # LEMONADE_PROCESS_ID for cleanup. RAG loads its models via the
             # runtime API below, which pins ctx_size per-model on the load call.
-            .\installer\scripts\start-lemonade.ps1 -Port 13305 -NoModel
+            .\installer\scripts\ensure-lemonade-running.ps1 -JobScoped -Port 13305 -NoModel
             if ($LASTEXITCODE -ne 0) { throw "Lemonade server failed to start" }
 
             # Pre-pull the LLM + VLM via GAIA's LemonadeClient (the embedder is

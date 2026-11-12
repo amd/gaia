@@ -16,7 +16,7 @@ Architectural commitments (mapped to plan's Acceptance Criteria):
         with the generic base set by ``Agent.confirmation_required_tools()``).
 - AC3 — Local-LLM only: ``EmailAgentConfig`` has no field that can route
         to a cloud LLM; ``base_url`` is allowlisted at startup; this
-        class never passes ``use_claude=True`` / ``use_chatgpt=True`` to
+        class never passes ``use_claude=True`` to
         the parent ``Agent``.
 - AC4 — Eval seam: backends are injectable via config; the eval harness
         passes ``FakeGmailBackend(mbox_path)`` to bypass live Gmail.
@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import re
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
@@ -41,6 +42,7 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 from gaia_agent_email import (
     action_store,
     autonomy_kill,
+    autonomy_last_cycle,
     schedule_store,
     task_store,
     trust,
@@ -86,6 +88,8 @@ from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
 from gaia_agent_email.tools.voice_tools import VoiceToolsMixin
 from gaia_agent_email.tools.waiting_on_you_tools import WaitingOnYouToolsMixin
 from gaia_agent_email.voice_profile import render_style_guidance
+
+from gaia.utils.sqlite_wal import enable_wal
 
 if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
     from gaia.agents.base.goal_store import Proposal
@@ -925,12 +929,13 @@ class EmailTriageAgent(
         # WAL lets a reader proceed during a write. Scoped to the email agent's
         # connection — not a core-mixin change.
         self._db.execute("PRAGMA busy_timeout = 5000")
-        self._db.execute("PRAGMA journal_mode = WAL")
+        enable_wal(self._db)
         action_store.init_schema(self)
         schedule_store.init_schema(self)
         task_store.init_schema(self)
         trust.init_trust_schema(self)
         autonomy_kill.init_schema(self)
+        autonomy_last_cycle.init_schema(self)
         # Session preferences persist in state.db (like the trust ledger), so
         # they survive restarts independent of the embedding model / MemoryStore
         # (#2427). Must precede _load_persisted_preferences() below.
@@ -959,8 +964,8 @@ class EmailTriageAgent(
         # GGUF/Vulkan default makes Lemonade evict and reload the chat model
         # on every turn (NPU <-> Vulkan). When the resolved model is the NPU
         # candidate, thread the device-appropriate embedder into init_memory
-        # the same way ChatAgent does (hub/agents/chat/python/gaia_agent_chat/
-        # agent.py, get_embedding_model_for_device) so chat + embeddings stay
+        # the same way ChatAgent does (hub/agents/gaia/python/gaia_agent/
+        # chat_agent.py, get_embedding_model_for_device) so chat + embeddings stay
         # co-resident on the NPU backend. Any other resolved model keeps the
         # unchanged default (embedding_model=None -> the GGUF embedder
         # `gaia init` downloads).
@@ -1353,9 +1358,8 @@ class EmailTriageAgent(
         return result
 
     def _register_tools(self) -> None:
-        # Mirror ConnectorsDemoAgent: clear the
-        # module-level registry before registering this agent's tools so
-        # we don't carry tools over from a prior agent in the same
+        # Clear the module-level registry before registering this agent's
+        # tools so we don't carry tools over from a prior agent in the same
         # process.
         _TOOL_REGISTRY.clear()
         self._reset_organize_counter()
@@ -2269,6 +2273,7 @@ class EmailTriageAgent(
             "trust_threshold": self.config.autonomy_trust_threshold,
             "trusted_scope_count": sum(1 for s in scopes if s["trusted"]),
             "scopes": scopes,
+            "last_cycle": autonomy_last_cycle.read_last(self),
         }
 
     def run_autonomy_cycle(
@@ -2280,13 +2285,37 @@ class EmailTriageAgent(
         CLI invokes (mirroring ``run_briefing_job`` for the briefing feature).
         Returns a JSON-serializable report — the ``Proposal`` objects are
         replaced by their persisted dict form.
+
+        Every cycle, completed or failed, also records a counts-only summary
+        that ``autonomy_status`` returns as ``last_cycle`` (#2618), so its
+        outcome survives a caller that timed out or a scheduler with no caller.
         """
-        report = self._run_email_autonomy_cycle(context)
-        persisted = []
-        for proposal in report["proposals"]:
-            self.propose(proposal)
-            persisted.append(proposal.to_dict())
-        report["proposals"] = persisted
+        started_at = time.time()
+        try:
+            report = self._run_email_autonomy_cycle(context)
+            persisted = []
+            for proposal in report["proposals"]:
+                self.propose(proposal)
+                persisted.append(proposal.to_dict())
+            report["proposals"] = persisted
+        except Exception as exc:
+            failure = _sanitize_autonomy_error(None, exc)
+            autonomy_last_cycle.record(
+                self,
+                autonomy_last_cycle.summarize_failure(
+                    self.config.autonomy_level,
+                    f"{failure['error_type']}: {failure['error']}",
+                    started_at=started_at,
+                    finished_at=time.time(),
+                ),
+            )
+            raise
+        autonomy_last_cycle.record(
+            self,
+            autonomy_last_cycle.summarize_report(
+                report, started_at=started_at, finished_at=time.time()
+            ),
+        )
         return report
 
     # -- Phase I3 batch-organize counter -----------------------------------

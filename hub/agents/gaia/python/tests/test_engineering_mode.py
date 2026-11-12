@@ -168,17 +168,14 @@ def test_real_host_keeps_skill_resident_and_tools_out_of_normal_mode(monkeypatch
         _TOOL_REGISTRY.update(saved)
 
 
-def test_dynamic_tool_selection_keeps_handoff_tools_reachable(monkeypatch):
-    from gaia_agent_chat.agent import ChatAgent
-
+def test_developer_mode_keeps_the_handoff_tools_on_the_list(monkeypatch):
+    """They are in CORE, so reaching one is never a jump to the full list."""
+    monkeypatch.setattr(GaiaAgent, "_project_map_root", lambda self: None)
     agent = object.__new__(GaiaAgent)
     agent.config = GaiaAgentConfig(developer_mode=True)
-    monkeypatch.setattr(
-        ChatAgent, "_select_tools_for_turn", lambda self, query: ["search_web"]
-    )
-    assert set(ENGINEERING_TOOL_NAMES) <= set(agent._select_tools_for_turn("continue"))
+    assert agent._workspace_core_tools() == frozenset(ENGINEERING_TOOL_NAMES)
     agent.config.developer_mode = False
-    assert agent._select_tools_for_turn("continue") == ["search_web"]
+    assert agent._workspace_core_tools() == frozenset()
 
 
 def test_setup_failure_is_visible_without_breaking_daily_host(registered, monkeypatch):
@@ -221,7 +218,7 @@ def test_code_scope_approval_binds_the_displayed_revision(registered):
 
 
 def test_overlapping_chat_construction_never_sees_developer_tools(monkeypatch):
-    from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+    from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
     monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
     monkeypatch.setattr(GaiaAgent, "_start_engineering_setup", lambda self: None)

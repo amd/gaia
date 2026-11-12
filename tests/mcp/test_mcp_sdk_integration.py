@@ -13,6 +13,7 @@ import pytest
 
 from gaia.mcp import MCPClientManager
 from gaia.mcp.client.config import MCPConfig
+from gaia.mcp.protocol import SUPPORTED_PROTOCOL_VERSIONS
 
 FIXTURE_TOOLS = {"echo", "add", "read_env"}
 
@@ -42,6 +43,13 @@ class TestMCPClientManagerAgainstRealServer:
         assert tools["add"].description == "Add two integers."
         assert set(tools["add"].input_schema["properties"]) == {"a", "b"}
         assert tools["add"].input_schema["required"] == ["a", "b"]
+
+    def test_handshake_settles_on_a_supported_revision(
+        self, manager, fixture_server_config
+    ):
+        client = manager.add_server("fixture", fixture_server_config)
+
+        assert client.protocol_version in SUPPORTED_PROTOCOL_VERSIONS
 
     def test_call_tool_returns_server_result(self, manager, fixture_server_config):
         client = manager.add_server("fixture", fixture_server_config)

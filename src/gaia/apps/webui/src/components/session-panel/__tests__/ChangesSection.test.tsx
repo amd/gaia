@@ -81,6 +81,13 @@ describe('ChangesSection', () => {
         expect(container).toBeEmptyDOMElement();
     });
 
+    it('says GAIA cannot be reached instead of the raw "Failed to fetch" (#6588)', async () => {
+        mocked.getSessionChanges.mockRejectedValue(new TypeError('Failed to fetch'));
+        renderSection();
+        expect(await screen.findByText(/Couldn't total this chat's changes: GAIA can't be reached right now/)).toBeInTheDocument();
+        expect(screen.queryByText(/Failed to fetch/)).not.toBeInTheDocument();
+    });
+
     it('totals the chat and lists each file with its lines and turns', async () => {
         renderSection();
         expect(await screen.findByText('3 files changed, +13 −4')).toBeInTheDocument();

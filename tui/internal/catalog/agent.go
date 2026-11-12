@@ -26,9 +26,6 @@ func (s AgentStatus) String() string {
 	}
 }
 
-// IsLaunchable returns true if the agent is on disk.
-func (s AgentStatus) IsLaunchable() bool { return s == StatusInstalled }
-
 // Transport is how the TUI talks to an agent.
 //
 // The zero value is TransportSubprocess — the original stdin/stdout JSONL path,

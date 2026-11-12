@@ -16,14 +16,14 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat.agent import (  # noqa: E402
+from gaia_agent.chat_agent import (  # noqa: E402
     ChatAgent,
     ChatAgentConfig,
     _imports_gaia_tools,
 )
-from gaia_agent_chat.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
+from gaia_agent.tool_bundles import FULL_CORE_TOOLS  # noqa: E402
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION  # noqa: E402
 from gaia.agents.base.checks import CHECK_RESULT_KEY, CheckResult  # noqa: E402
@@ -56,8 +56,8 @@ def make_run_python():
 
     def build(allowed_path):
         with (
-            patch("gaia_agent_chat.agent.RAGSDK"),
-            patch("gaia_agent_chat.agent.RAGConfig"),
+            patch("gaia_agent.chat_agent.RAGSDK"),
+            patch("gaia_agent.chat_agent.RAGConfig"),
         ):
             agent = ChatAgent(
                 ChatAgentConfig(silent_mode=True, allowed_paths=[str(allowed_path)])
@@ -132,6 +132,22 @@ def test_the_snippet_never_lands_in_the_workspace(
     # session's scratch dir may live there too; the snippet may not.
     assert result["stdout"].strip().startswith(str(temp_dir))
     assert not list(temp_dir.rglob("gaia-run-*"))
+
+
+def test_a_stray_module_in_temp_does_not_shadow_the_snippets_imports(
+    make_run_python, project, tmp_path, monkeypatch
+):
+    temp_dir = tmp_path / "system-temp"
+    temp_dir.mkdir()
+    (temp_dir / "stray_module.py").write_text("print('hijacked')\n", encoding="utf-8")
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_dir))
+    monkeypatch.chdir(project)
+    _agent, run_python = make_run_python(project)
+
+    result = run_python(code="import stray_module")
+
+    assert "hijacked" not in result["stdout"]
+    assert "ModuleNotFoundError" in result["stderr"]
 
 
 def test_the_snippet_is_removed_even_when_it_times_out(

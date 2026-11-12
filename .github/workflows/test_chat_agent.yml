@@ -1,9 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# This workflow tests the GAIA Chat Agent, which ships as the standalone
-# gaia-agent-chat wheel (#1102). Tests include the wheel's own smoke tests
-# plus the framework-side session, RAG, and path-validation suites.
+# This workflow tests ChatAgent, which ships in the flagship gaia-agent-gaia
+# wheel (#6099), plus the framework-side session, RAG, and path-validation
+# suites.
 
 name: Chat Agent Tests
 
@@ -11,7 +11,7 @@ on:
   push:
     branches: [ main ]
     paths:
-      - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       # Only lane that installs the chat wheel, so the only lane where
@@ -57,6 +57,7 @@ on:
       - 'tests/unit/agents/test_console_tool_confirmation.py'
       - 'tests/unit/agents/tools/test_email_tools.py'
       - 'tests/unit/test_inference_location.py'
+      - 'tests/unit/test_skill_loads_with.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
       - 'tests/unit/chat/test_session_prompt_context.py'
@@ -95,9 +96,9 @@ on:
       - 'tests/unit/test_profilespec_characterization.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
-      - 'hub/agents/chat/python/**'
+      - 'hub/agents/gaia/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
       # Only lane that installs the chat wheel, so the only lane where
@@ -143,6 +144,7 @@ on:
       - 'tests/unit/agents/test_console_tool_confirmation.py'
       - 'tests/unit/agents/tools/test_email_tools.py'
       - 'tests/unit/test_inference_location.py'
+      - 'tests/unit/test_skill_loads_with.py'
       - 'tests/unit/test_skill_tools_same_turn.py'
       - 'tests/unit/test_tool_admission_order.py'
       - 'tests/unit/chat/test_session_prompt_context.py'
@@ -212,8 +214,9 @@ jobs:
           uv pip install --system -e .[dev,rag,ui,api]
           # Install pytest-mock for mocking tests
           uv pip install --system pytest-mock
-          # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102)
-          uv pip install --system -e hub/agents/chat/python
+          # ChatAgent ships in the flagship wheel (#6099), which the retrieval
+          # harness also binds.
+          uv pip install --system -e hub/agents/gaia/python
 
       - name: Check no test file skips wholesale
         run: python util/check_module_skips.py --workflow test_chat_agent.yml --job test-chat-agent
@@ -235,26 +238,16 @@ jobs:
             tests/unit/test_chat_tool_bundles.py tests/unit/test_chat_tool_failure_honesty.py \
             tests/unit/api/test_sse_confirmation_gate.py -v --tb=short
 
-      - name: Run Chat Agent Package Tests
-        env:
-          GAIA_MEMORY_DISABLED: "1"
-        run: |
-          echo "================================================================"
-          echo "                  CHAT AGENT PACKAGE TESTS"
-          echo "================================================================"
-          echo "Testing registration shapes, lazy re-exports, and discovery..."
-          echo ""
-          python -m pytest hub/agents/chat/python/tests/ -v --tb=short
-
       - name: Run Chat-Wheel Suites
         env:
           GAIA_MEMORY_DISABLED: "1"
         run: |
-          # Each of these importorskips gaia_agent_chat, at module level or per
+          # Each of these importorskips gaia_agent, at module level or per
           # test, so test_unit.yml collects them and runs none of it (#4206).
           python -m pytest \
             tests/unit/test_chat_agent_integration.py \
             tests/unit/test_chat_dynamic_tools.py \
+            tests/unit/test_chat_fetch_webpage_retry_after.py \
             tests/unit/test_chat_fix_contracts.py \
             tests/unit/test_chat_inline_web_ssrf.py \
             tests/unit/test_chat_system_prompt_budget.py \
@@ -280,6 +273,7 @@ jobs:
             tests/unit/agents/test_console_tool_confirmation.py \
             tests/unit/agents/tools/test_email_tools.py \
             tests/unit/test_inference_location.py \
+            tests/unit/test_skill_loads_with.py \
             tests/unit/test_skill_tools_same_turn.py \
             tests/unit/test_tool_admission_order.py \
             tests/unit/chat/test_session_prompt_context.py \
@@ -294,10 +288,10 @@ jobs:
           echo "           FRAMEWORK REGISTRY DISCOVERY TESTS"
           echo "================================================================"
           # tests/unit/agents/test_registry.py::TestBuiltinRegistration has
-          # chat-specific cases that importorskip("gaia_agent_chat") -- this
-          # is the only CI job that installs that wheel, so it's the only
-          # place these actually run instead of silently skipping (#2240).
-          echo "Verifying AgentRegistry actually resolves the installed gaia-agent-chat wheel..."
+          # flagship cases that importorskip("gaia_agent") -- this lane
+          # installs that wheel, so they actually run here instead of silently
+          # skipping (#2240).
+          echo "Verifying AgentRegistry resolves the flagship and its legacy chat ids..."
           echo ""
           python -m pytest tests/unit/agents/test_registry.py -v --tb=short
 
@@ -382,7 +376,7 @@ jobs:
           echo "================================================================"
           echo "         CHAT AGENT HOST-ATTRIBUTE CONTRACT TESTS"
           echo "================================================================"
-          echo "Testing ChatAgent/ChatAgentLite are unaffected by the"
+          echo "Testing ChatAgent is unaffected by the"
           echo "RAGToolsMixin/FileIOToolsMixin host-attribute contract fix..."
           echo ""
 

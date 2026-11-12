@@ -51,11 +51,29 @@ RAG searches your documents and answers using real information.
 
 <Note>
 **Supported document formats:** PDF, Word (`.docx`), PowerPoint (`.pptx`),
-Excel (`.xlsx`), EPUB e-books (`.epub`, DRM-free), plus plain text, Markdown,
+Excel (`.xlsx`), EPUB e-books (`.epub`, DRM-free), images (`.png`, `.jpg`,
+`.jpeg`, `.webp`, `.bmp`, `.gif`, `.tif`, `.tiff`), plus plain text, Markdown,
 CSV, JSON, HTML, and common source code files. Legacy binary Office formats
 (`.doc`, `.ppt`, `.xls`) and OpenDocument files (`.odt`, `.ods`, `.odp`) are not
 supported — re-save them as `.docx` / `.pptx` / `.xlsx` or PDF. Any other binary
 file is refused with an error rather than indexed as text.
+
+Images are indexed by the text the vision model (`RAGConfig.vlm_model`) reads
+from them. If that model isn't available on Lemonade, or `use_vlm=False`,
+indexing an image fails with an error that says how to fix it. It never
+indexes empty text. Photos are turned upright using their EXIF orientation, and
+transparent backgrounds are read as white. A multi-page TIFF is read page by
+page, up to 50 pages; a larger one fails, naming its page count. An animated GIF
+is read from its first frame only. In a PDF or PowerPoint, a vision model that
+fails twice in a row before reading any image stops indexing instead of
+storing the pages as blank: `index_document` returns `error_type:
+"vision_model_failed"` with an error naming the model and its last error. One that
+fails after reading some images still indexes, listing those pages in
+`degraded_pages`.
+`RAGConfig.vlm_model` is `None` while the chat model runs on the NPU: images in documents are then skipped with a note, and indexing an image file raises `ImageExtractionError` saying why. Otherwise the default vision model is `Gemma-4-E4B-it-GGUF`, which `gaia init` downloads
+unless you set your own `default_model`; then run
+`lemonade pull Gemma-4-E4B-it-GGUF` to get it. The Agent UI's folder
+indexing skips images, so add them one at a time.
 </Note>
 
 ---
@@ -173,12 +191,20 @@ response = rag.query("How do I contact support?")
 print(response.text)
 ```
 
-**Key advantage:** Documents are indexed once, then you can query as many times as you want without re-processing.
+**Key advantage:** Documents are indexed once, then you can query as many times as you want without re-processing. Each question is answered only from the passages retrieved for that question.
 
 Check the `success` field returned by `index_document()`. A failed cache write
 leaves the searchable index unchanged, so retrying does not duplicate chunks.
-Use `reindex_document(path)` after changing a document; if replacement fails,
-the previously indexed version remains available for queries.
+Calling `index_document()` again on a document that changed since it was
+indexed re-indexes it (the result has `reindexed: True`); an unchanged one
+returns `already_indexed: True` without re-embedding. `is_current(path)` tells
+you which without indexing, and `freshness(path)` does so cheaply enough to
+call before every query (it hashes only when the file's size or timestamps
+moved). If replacement fails, the call reports the error and the previously
+indexed version remains available for queries. The agent's document search
+tools run this check themselves, so they never answer from an edited file's
+old text. `reindex_document(path)`, which the file watcher calls, takes the same
+path: searches keep answering from the old version while the new one embeds.
 
 Embedding dominates indexing time, so a thousand-page PDF on a CPU embedder
 takes minutes. Pass `progress_callback=lambda done, total: ...` to
@@ -292,7 +318,7 @@ config = RAGConfig(
     max_chunks=5,              # How many chunks to retrieve per query
 
     # === Models ===
-    model="Qwen3.5-35B-A3B-GGUF",  # LLM for generation
+    model="Qwen3.6-35B-A3B-GGUF",  # LLM for generation
     embedding_model="user.embeddinggemma-300m-GGUF",  # Embedding model
 
     # === Storage ===
@@ -307,12 +333,44 @@ rag = RAGSDK(config)
 ```
 
 <Note>
-The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings.
+The default embedder is `user.embeddinggemma-300m-GGUF` (EmbeddingGemma 300M, 768-dim). The on-disk cache under `cache_dir` stores only extracted document text and chunks, never vectors: vectors are regenerated via Lemonade on every index, so changing `embedding_model` needs no cache clearing. A cache entry is keyed on the file's path and content plus `chunk_size`, `chunk_overlap`, `use_llm_chunking`, `json_loader` and the embedder's input limit, so changing any of those re-indexes the document instead of reusing chunks cut to the old settings. A PDF or PowerPoint indexed while the vision model was unavailable records how many pages had images it couldn't read, and the index result says so (`unread_image_pages`, `unread_images_note`). Once the vision model answers, the next index of that file re-extracts it, so those images are read without clearing the cache.
 </Note>
+
+### Indexing JSON records
+
+By default a `.json` file is flattened into one document. For an export that holds
+many records (Jira issues, Confluence pages), set `json_loader` so each object in the
+array is indexed on its own, and every chunk starts with that record's citation
+fields:
+
+```python
+from gaia.rag.sdk import JsonLoaderConfig, RAGConfig, RAGSDK
+
+rag = RAGSDK(RAGConfig(
+    json_loader=JsonLoaderConfig(
+        content_fields=["bodyText", "descriptionText", "summary"],
+        metadata_fields=["key", "title", "webUrl", "author"],
+        document_array_path="confluencePages",  # dotted path; "" if the file is the array
+    ),
+))
+rag.index_document("export.json")
+# A retrieved chunk reads:
+#   key: OAI-12
+#   title: OAI HWSD Bug Report
+#   webUrl: https://...
+#   The GPT-OSS 120B serving...
+```
+
+Content from two records never shares a chunk, and fields not listed in either
+list stay out of the index. Records with no text in `content_fields` are skipped
+with a warning. A path that doesn't resolve to an array of objects, or field names
+that match no record, fail the index with an error saying what to fix. The loader
+applies to every `.json` file this `RAGSDK` indexes, and it is part of the cache
+key, so changing it re-indexes the file.
 
 ### Tuning `max_chunks`
 
-`max_chunks` controls how many chunks are sent to the LLM:
+`max_chunks` controls how many chunks are sent to the LLM. Identical chunks count once, so a document indexed under two names doesn't take two places; its chunk lists both files.
 
 | max_chunks | Effect | Best for |
 |------------|--------|----------|
@@ -363,7 +421,9 @@ print(response.source_files)
 
 # Per-chunk metadata
 for meta in response.chunk_metadata:
-    print(f"File: {meta['source']}, Page: {meta.get('page', 'N/A')}")
+    print(f"File: {meta['source_file']}, score: {meta['relevance_score']:.2f}")
+    # Every file holding this exact text, when the same document was indexed twice
+    print(meta["source_files"])
 
 # Stats (if available)
 if response.stats:
@@ -492,7 +552,7 @@ Think of the difference like this:
 GAIA's agents use RAG as a **tool**, not just a pipeline. This is the key architectural difference:
 
 ```python
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 # Create an agent with RAG capability
 config = ChatAgentConfig(
@@ -1007,7 +1067,7 @@ except PermissionError as e:
 An agent that already has a `PathValidator` passes it in, `RAGSDK(config, path_validator=validator)`, so a path the user grants mid-session is readable to indexing too. Without it the SDK builds its own validator from `allowed_paths`.
 
 <Warning>
-**Security Consideration:** Without `allowed_paths`, RAG can index any file the process can read. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
+**Security Consideration:** Without `allowed_paths`, RAG reads only the working directory, and `index_document` refuses any other file with `file_unreadable`. A caller that names a file grants it first with `path_validator.add_allowed_path(path)`, as `quick_rag()` and the chat agent's `/index` do. In production, always set explicit allowed paths — and set them to the files you mean, not the directories they sit in, since a directory grant covers everything else in it.
 
 `allowed_paths` is a *scope*, not a safety guarantee: it says which paths are in bounds, not which are safe. The agent's file tools apply separate denylists on top (secrets on read, login-execution files on write), and the agent's `index_document` / `index_directory` tools apply them too. Calling `RAGSDK.index_document` directly checks the scope only.
 </Warning>

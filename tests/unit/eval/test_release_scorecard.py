@@ -794,6 +794,8 @@ class TestEmailAdapter:
         monkeypatch.chdir(tmp_path)
         monkeypatch.setenv("EMAIL_EVAL_MODEL", "test-model")
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        monkeypatch.setattr("gaia.eval.judge_client.shutil.which", lambda _name: None)
 
         rc = mod.main()
 

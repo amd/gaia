@@ -20,6 +20,9 @@ wrong one:
 Values are emitted as literal env strings, not booleans: a GitHub expression of
 the form ``flag and '0' or '1'`` reads '0' as falsy and falls through to '1'.
 
+``EVAL_ONE_CATEGORY_PER_LANE=1`` gives each selected category its own lane
+(eval_flagship_gemma_stx.yml, whose small pool runs lanes on separate machines).
+
 A dispatch can narrow the run with ``EVAL_SELECT_CATEGORIES`` and
 ``EVAL_SELECT_SCENARIOS`` (comma-separated; blank = all). The matrix then holds
 only the lanes that run something, each lane only its selected categories, and
@@ -212,7 +215,9 @@ def select(
         if category == OUTCOMES or category in lane_of:
             continue
         if category in excluded:
-            problems.append(f"category '{category}' never runs in CI: {excluded[category]}")
+            problems.append(
+                f"category '{category}' never runs in CI: {excluded[category]}"
+            )
         else:
             problems.append(f"'{category}' is not a category")
             bad_category = True
@@ -291,6 +296,33 @@ def select(
     }
 
 
+def one_category_per_lane(include: list[dict]) -> list[dict]:
+    """Split every lane into one lane per category, named after the category.
+
+    For a small pool where lanes run in parallel across machines: two slow
+    categories that share a lane in ``ci_lanes.json`` would otherwise run one
+    after the other on one machine. The environment is re-derived per category,
+    and a targeted lane's ``scenarios`` follow their category.
+    """
+    split = []
+    for lane in include:
+        picked = {}
+        for pair in (lane.get("scenarios") or "").split():
+            category, ids = pair.split("=", 1)
+            picked[category] = ids
+        for category in lane["categories"].split():
+            entry = {
+                **lane,
+                "lane": category,
+                "categories": category,
+                **lane_env([category]),
+            }
+            if "scenarios" in lane:
+                entry["scenarios"] = f"{category}={picked[category]}"
+            split.append(entry)
+    return split
+
+
 def main() -> int:
     lanes_file = os.environ.get("EVAL_LANES_FILE", "eval/ci_lanes.json")
     path = REPO_ROOT / lanes_file
@@ -318,6 +350,13 @@ def main() -> int:
     except LaneMapError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
+    if os.environ.get("EVAL_ONE_CATEGORY_PER_LANE") == "1":
+        before = ", ".join(lane["lane"] for lane in chosen["include"]) or "none"
+        chosen["include"] = one_category_per_lane(chosen["include"])
+        after = ", ".join(lane["lane"] for lane in chosen["include"]) or "none"
+        chosen["description"] = chosen["description"].replace(
+            f"lanes {before};", f"lanes {after} (one per category);"
+        )
     print(f"matrix={json.dumps({'include': chosen['include']})}")
     print(f"has_lanes={'true' if chosen['include'] else 'false'}")
     print(f"targeted={'true' if chosen['targeted'] else 'false'}")

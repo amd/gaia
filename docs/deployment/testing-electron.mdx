@@ -1,38 +1,27 @@
 ---
-title: "Testing Guide for GAIA Electron Apps"
+title: "Testing GAIA's Electron App"
 ---
 
 <Info>
-  **Source Code:** [`tests/electron/`](https://github.com/amd/gaia/blob/main/tests/electron/) | [`src/gaia/electron/`](https://github.com/amd/gaia/blob/main/src/gaia/electron/)
+  **Source Code:** [`tests/electron/`](https://github.com/amd/gaia/blob/main/tests/electron/) | [`src/gaia/apps/webui/`](https://github.com/amd/gaia/blob/main/src/gaia/apps/webui/)
 </Info>
 
 <Badge text="development" color="orange" />
 
-This guide explains how to test GAIA Electron applications and ensure they work correctly with dependency updates.
-
-## Overview
-
-GAIA uses automated testing to validate Electron framework and applications:
-- **Unit Tests**: Test individual components in isolation
-- **Integration Tests**: Verify app structure and configuration
-- **Build Tests**: Ensure apps can be packaged correctly
-- **Dependency Audits**: Check for security vulnerabilities
+This guide explains how to test the Agent UI's Electron shell (`src/gaia/apps/webui/`) and keep it working through dependency updates. The Agent UI is the only Electron app GAIA ships.
 
 ## Quick Start
-
-### Running Tests Locally
 
 ```bash
 # Install test dependencies
 cd tests/electron
 npm install
 
-# Run all tests
+# Run all Jest suites
 npm test
 
-# Run specific test suites
-npm run test:electron    # Framework tests only
-npm run test:apps        # App integration tests only
+# Run one suite
+npm test -- test_electron_chat_app.js
 
 # Watch mode for development
 npm run test:watch
@@ -41,224 +30,38 @@ npm run test:watch
 npm run test:coverage
 ```
 
+A few helpers don't fit Jest's CommonJS mocking and run under `node:test` instead:
+
+```bash
+node --test tests/electron/test_port_manager.mjs tests/electron/test_loadapp_query.mjs
+```
+
+The Agent UI's React components have their own Vitest suite: `cd src/gaia/apps/webui && npm test`.
+
 ## Test Structure
 
-All Electron-related tests live under `tests/electron/`. Unit tests for framework
-services sit alongside integration tests for individual apps:
+All Electron tests live under `tests/electron/`. Shared setup is in `tests/electron/setup.js`; the `electron` and `electron-updater` mocks are under `tests/electron/mocks/`.
 
-### Framework & service tests
-
+- `test_electron_chat_app.js` - Agent UI structure, configuration and frontend wiring
+- `test_electron_chat_installer.js` - Packaging and first-run installer readiness
 - `test_agent_process_manager.js` - Backend Python process lifecycle
-- `test_notification_service.js` - Auto-update and notification plumbing
-- `test_electron_framework_integration.js` - Cross-module framework wiring
-- `test_electron_functional.js` - End-to-end Electron smoke tests
-
-### App integration tests
-
-- `test_electron_chat_app.js` - Chat/Agent UI app
-- `test_electron_chat_installer.js` - First-run installer flow
-- `test_electron_emr_dashboard.js` - EMR dashboard
-- `test_electron_example_app.js` - Example app template verification
-- `test_electron_jira_app.js` - Jira app configuration and structure
-
-Shared setup lives in `tests/electron/setup.js`; mocks live under
-`tests/electron/mocks/`.
-
-## What Gets Tested
-
-### Electron Framework
-
-✅ **AppController**
-- Configuration loading
-- Service initialization
-- MCP connection setup
-- Error handling
-- Lifecycle management
-
-✅ **WindowManager**
-- Window creation with correct options
-- Preload script loading
-- Event handler setup
-- Window state management
-
-✅ **MCPClient**
-- WebSocket connection
-- Message sending/receiving
-- Reconnection logic
-- Error handling
-
-### Electron Apps
-
-✅ **Configuration**
-- Valid `app.config.json`
-- Valid `package.json`
-- Required dependencies present
-- Version compatibility
-
-✅ **Structure**
-- Main entry point exists
-- Preload scripts present
-- Required directories exist
-- Build configuration valid
-
-✅ **Dependencies**
-- Compatible Electron version
-- No high-severity vulnerabilities
-- Matching framework versions
-- Valid npm scripts
+- `test_notification_service.js` - Notification plumbing
+- `*.test.cjs` - Main-process services: tray, auto-updater, backend installer, deep links, quit handling and more
 
 ## GitHub Actions Integration
 
-### Automated Testing Workflow
+`.github/workflows/test_electron.yml` runs on pull requests and pushes to `main` that touch `src/gaia/apps/webui/` or `tests/electron/`, on merge-queue runs, and on manual dispatch. Its jobs:
 
-Tests run automatically on:
-- **Pull Requests**: Changes to Electron framework or apps
-- **Dependency Updates**: Dependabot PRs
-- **Main Branch**: After merges
-- **Manual Trigger**: Via GitHub Actions UI
-
-### Workflow Jobs
-
-1. **test-electron-framework**
-   - Runs unit tests for core modules
-   - Generates code coverage report
-   - Uploads coverage artifacts
-
-2. **test-apps-integration**
-   - Validates app configurations
-   - Checks file structure
-   - Verifies dependency versions
-
-3. **test-apps-build**
-   - Tests app packaging
-   - Validates npm scripts
-   - Checks build configuration
-
-4. **dependency-audit**
-   - Scans for vulnerabilities
-   - Generates audit reports
-   - Uploads results as artifacts
-
-## Testing New Apps
-
-When creating a new Electron app, follow these steps:
-
-### 1. Create App Structure
-
-```
-src/gaia/apps/my-app/webui/
-├── app.config.json       # App configuration
-├── package.json          # Dependencies and scripts
-├── src/
-│   ├── main.js          # Entry point
-│   ├── preload.js       # Preload script
-│   └── services/        # App-specific services
-└── public/              # Static assets
-```
-
-### 2. Add Dependabot Configuration
-
-Edit `.github/dependabot.yml`:
-
-```yaml
-  # JavaScript - My App (monitor only, no PRs)
-  - package-ecosystem: "npm"
-    directory: "/src/gaia/apps/my-app/webui"
-    schedule:
-      interval: "monthly"
-    labels:
-      - "dependencies"
-      - "javascript"
-      - "my-app"
-    open-pull-requests-limit: 0
-    groups:
-      my-app-dependencies:
-        patterns:
-          - "*"
-```
-
-### 3. Create Integration Tests
-
-Create `tests/electron/test_my_app.js` (all Electron tests live under `tests/electron/`):
-
-```javascript
-// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
-// SPDX-License-Identifier: MIT
-
-const { jest } = require('@jest/globals');
-const path = require('path');
-const fs = require('fs');
-
-describe('My App Integration', () => {
-  const appPath = path.join(__dirname, '../../src/gaia/apps/my-app/webui');
-  
-  describe('app configuration', () => {
-    it('should have valid app.config.json', () => {
-      const configPath = path.join(appPath, 'app.config.json');
-      expect(fs.existsSync(configPath)).toBe(true);
-      
-      const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      expect(config).toHaveProperty('name');
-      expect(config).toHaveProperty('displayName');
-      expect(config).toHaveProperty('version');
-    });
-
-    it('should have valid package.json', () => {
-      const packagePath = path.join(appPath, 'package.json');
-      expect(fs.existsSync(packagePath)).toBe(true);
-      
-      const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-      expect(pkg).toHaveProperty('name');
-      expect(pkg).toHaveProperty('scripts');
-      expect(pkg.scripts).toHaveProperty('start');
-    });
-  });
-
-  describe('app structure', () => {
-    it('should have required files', () => {
-      expect(fs.existsSync(path.join(appPath, 'src/main.js'))).toBe(true);
-      expect(fs.existsSync(path.join(appPath, 'src/preload.js'))).toBe(true);
-    });
-  });
-});
-```
-
-### 4. Update Test Workflow
-
-Add your app to `.github/workflows/test_electron.yml`:
-
-```yaml
-matrix:
-  app:
-    - name: jira
-      path: src/gaia/apps/jira/webui
-    - name: example
-      path: src/gaia/apps/example/webui
-    - name: my-app
-      path: src/gaia/apps/my-app/webui  # Add your app here
-```
-
-### 5. Verify Tests
-
-```bash
-# Run your new tests
-cd tests/electron
-npm test -- test_my_app.js
-
-# Check coverage
-npm run test:coverage
-```
+1. **test-electron-framework** - every Jest suite in `tests/electron/` plus the `node:test` helpers, with coverage uploaded as an artifact
+2. **test-webui-vitest** - type-check, Vitest component tests, the right-to-left layout check and the browser auto-scroll check
+3. **test-apps-integration** - the Agent UI process manager and notification service suites
+4. **test-sigterm-quit** - launches the real Electron on Linux and macOS and checks SIGTERM quits it
 
 ## Debugging Tests
 
-### Enable Debug Output
-
 ```bash
-# Show all console output
-DEBUG=true npm test
-
-# Run specific test with verbose output
-npm test -- test_app_controller.js --verbose
+# Run one suite with verbose output
+npm test -- test_electron_chat_app.js --verbose
 
 # Debug in Node.js
 node --inspect-brk node_modules/.bin/jest --runInBand
@@ -288,148 +91,50 @@ Add to `.vscode/launch.json`:
 }
 ```
 
-## Continuous Integration Best Practices
-
-### 1. Run Tests Before Committing
-
-```bash
-# Quick test before commit
-cd tests/electron
-npm test
-
-# Full test with coverage
-npm run test:coverage
-```
-
-### 2. Monitor Test Results
-
-- Check GitHub Actions tab for PR status
-- Review test artifacts for failures
-- Examine coverage reports
-
-### 3. Keep Tests Fast
-
-- Mock expensive operations
-- Use `--maxWorkers=2` for CI
-- Skip E2E tests in unit test runs
-
-### 4. Update Tests with Code Changes
-
-- Add tests for new features
-- Update tests when refactoring
-- Maintain coverage thresholds
-
 ## Common Issues
 
-### Issue: Cannot find module 'electron'
+### Cannot find module 'electron'
 
-**Cause**: Electron is mocked in tests but import path is incorrect
+**Cause**: Electron is mocked in tests, and the mock mapping is missing or wrong.
 
-**Solution**: Ensure `moduleNameMapper` is configured in `package.json`:
+**Solution**: Check `moduleNameMapper` in `tests/electron/package.json`:
+
 ```json
 "moduleNameMapper": {
-  "^electron$": "<rootDir>/tests/electron/mocks/electron.js"
+  "^electron$": "<rootDir>/mocks/electron.js",
+  "^electron-updater$": "<rootDir>/mocks/electron-updater.js"
 }
 ```
 
-### Issue: Tests timeout
+### Tests time out
 
-**Cause**: Async operations not completing or no timeout set
+**Cause**: An async operation never completes, or a timer outlives the test.
 
-**Solution**: 
+**Solution**:
+
 ```javascript
-// Increase timeout for slow tests
-jest.setTimeout(10000);
-
-// Or per-test
+// Increase the timeout for one test
 it('slow test', async () => {
   // test code
 }, 10000);
 ```
 
-### Issue: Coverage below threshold
+If a suite passes but Jest hangs on exit, a service interval is still running. Clear it in `afterEach`, or pass `--forceExit` as CI does for the process manager suite.
 
-**Cause**: Uncovered code paths
+### Coverage below threshold
 
-**Solution**: 
 1. Run `npm run test:coverage`
 2. Open `coverage/lcov-report/index.html`
-3. Add tests for red-highlighted code
-4. Or adjust thresholds in `package.json`
+3. Add tests for the uncovered paths
 
 ## Security Audits
 
-### Running Audits Manually
-
 ```bash
-# Audit Electron framework
-cd src/gaia/electron
+cd src/gaia/apps/webui
 npm audit
-
-# Audit specific app
-cd src/gaia/apps/jira/webui
-npm audit
-
-# Fix vulnerabilities automatically
-npm audit fix
 ```
 
-### Automated Audits
-
-Security audits run automatically in CI:
-- On every PR
-- Weekly scheduled scans
-- After dependency updates
-
-Results are uploaded as artifacts and visible in GitHub Security tab.
-
-## Advanced Testing
-
-### E2E Testing with Spectron
-
-For full end-to-end testing:
-
-```javascript
-const { Application } = require('spectron');
-const path = require('path');
-
-describe('App E2E', () => {
-  let app;
-
-  beforeEach(async () => {
-    app = new Application({
-      path: '/path/to/electron',
-      args: [path.join(__dirname, '../../src/gaia/apps/jira/webui')]
-    });
-    await app.start();
-  });
-
-  afterEach(async () => {
-    if (app && app.isRunning()) {
-      await app.stop();
-    }
-  });
-
-  it('should open window', async () => {
-    const count = await app.client.getWindowCount();
-    expect(count).toBe(1);
-  });
-});
-```
-
-### Performance Testing
-
-Monitor app startup time and memory usage:
-
-```javascript
-it('should start quickly', async () => {
-  const start = Date.now();
-  await appController.initialize();
-  const duration = Date.now() - start;
-  
-  expect(duration).toBeLessThan(5000); // 5 seconds
-});
-```
+Dependabot opens grouped update PRs for the Agent UI weekly; see [Dependency Management](/reference/dependency-management).
 
 ## Resources
 
@@ -437,14 +142,6 @@ it('should start quickly', async () => {
 - [Electron Testing Guide](https://www.electronjs.org/docs/latest/tutorial/automated-testing)
 - [GitHub Actions](https://docs.github.com/en/actions)
 - [Dependabot](https://docs.github.com/en/code-security/dependabot)
-
-## Getting Help
-
-If you encounter issues:
-1. Check this guide and README.md in tests/electron/
-2. Review existing test files for examples
-3. Check GitHub Actions logs for CI failures
-4. Ask in team discussions
 
 ---
 
