@@ -5868,7 +5868,7 @@ async def _index_document(
     ``display_name`` is the user's name for the file when *filepath* is a
     copy; every error message names it instead of the copy. Inside
     :func:`one_embedder_load` it reuses the embedder an earlier document of
-    the batch loaded, unless that one was read with the vision model.
+    the batch loaded, unless that one read images or left some unread.
 
     With ``progress_key``, ``INDEX_PROGRESS[progress_key]`` tracks pages read
     and then chunks embedded until the index ends.
@@ -5981,8 +5981,13 @@ async def _index_document(
 
         chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
         logger.info("Indexed %s (%s): %d chunks", name, filepath, chunks)
-        # A vision model loaded for this file may have pushed the embedder out.
-        read_with_vision = result.get("vlm_pages") or result.get("vlm_slides")
+        # A vision model loaded for this file may have pushed the embedder out,
+        # even when it then read none of the images.
+        read_with_vision = (
+            result.get("vlm_pages")
+            or result.get("vlm_slides")
+            or result.get("unread_image_pages")
+        )
         if batch is not None and rag.embedder is not None and not read_with_vision:
             batch["embedder"] = rag.embedder
         return chunks

@@ -26,6 +26,7 @@ class _FakeRAG:
 
     loads = 0
     vlm_pages = 0
+    unread_image_pages = 0
 
     def __init__(self, config=None):
         self.config = config
@@ -38,13 +39,17 @@ class _FakeRAG:
             type(self).loads += 1
             self.llm_client = self.embedder = object()
             self.use_lemonade_embeddings = True
-        return {"success": True, "num_chunks": 1, "vlm_pages": type(self).vlm_pages}
+        result = {"success": True, "num_chunks": 1, "vlm_pages": type(self).vlm_pages}
+        if type(self).unread_image_pages:
+            result["unread_image_pages"] = type(self).unread_image_pages
+        return result
 
 
 @pytest.fixture
 def fake_rag(monkeypatch):
     _FakeRAG.loads = 0
     _FakeRAG.vlm_pages = 0
+    _FakeRAG.unread_image_pages = 0
     monkeypatch.setattr(rag_sdk, "RAGSDK", _FakeRAG)
     return _FakeRAG
 
@@ -86,6 +91,18 @@ def test_a_file_read_with_the_vision_model_reloads_the_embedder_after_it(
 ):
     """A vision model may have pushed the embedder out; the next file reloads it."""
     fake_rag.vlm_pages = 2
+    paths = _files(tmp_path / "small", 3)
+
+    asyncio.run(_index_all(paths, batch=True))
+
+    assert fake_rag.loads == 3
+
+
+def test_a_file_whose_images_went_unread_reloads_the_embedder_after_it(
+    fake_rag, tmp_path
+):
+    """The vision model may have loaded and then read nothing."""
+    fake_rag.unread_image_pages = 2
     paths = _files(tmp_path / "small", 3)
 
     asyncio.run(_index_all(paths, batch=True))
