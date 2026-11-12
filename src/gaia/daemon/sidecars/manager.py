@@ -53,6 +53,7 @@ from gaia.daemon.constants import (
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
+    IntegrityError,
     SidecarInhibitedError,
     SidecarNotRunningError,
     SidecarSpawnError,
@@ -396,9 +397,22 @@ class AgentSidecarManager:
                 )
             except Exception as e:  # re-raise with the user-mode remedy
                 docs = f" Docs: {self.spec.docs_url}." if self.spec.docs_url else ""
+                unrecorded = ""
+                placed = (
+                    fetch.installer_placed_flagship()
+                    if self.spec.agent_id == fetch.FLAGSHIP_AGENT_ID
+                    and not isinstance(e, IntegrityError)
+                    else None
+                )
+                if placed is not None:
+                    unrecorded = (
+                        f"The copy at {placed} has no install record to "
+                        "verify it against, so it is not started.\n"
+                    )
                 raise SidecarSpawnError(
                     f"Cannot start the {self.spec.display_name} agent: no verified "
                     f"sidecar binary is available in user mode. {e}\n"
+                    f"{unrecorded}"
                     "Fix it one of these ways:\n"
                     f"  * Install '{self.spec.agent_id}' — run "
                     f"`{fetch.install_command(self.spec.agent_id)}` (or click "
