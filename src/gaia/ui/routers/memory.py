@@ -1258,24 +1258,14 @@ def _downloaded_on_this_pc(model_id: str) -> bool:
     Raises:
         LemonadeClientError: the catalog couldn't be read, or wasn't a model list.
     """
-    from gaia.llm.lemonade_client import (
-        LemonadeClient,
-        LemonadeClientError,
-        _model_ids_match,
-    )
+    from gaia.llm.lemonade_client import LemonadeClient, _model_ids_match
 
+    # list_models raises on anything but {"data": [{...}, ...]}.
     catalog = LemonadeClient(verbose=False).list_models(show_all=True)
-    data = catalog.get("data") if isinstance(catalog, dict) else None
-    if not isinstance(data, list):
-        raise LemonadeClientError(
-            "Lemonade's model list came back in an unexpected shape, so GAIA "
-            f"can't tell whether '{model_id}' is downloaded."
-        )
     return any(
-        isinstance(entry, dict)
-        and _model_ids_match(entry.get("id"), model_id)
+        _model_ids_match(entry.get("id"), model_id)
         and entry.get("downloaded") is True
-        for entry in data
+        for entry in catalog["data"]
     )
 
 
@@ -1557,7 +1547,7 @@ def stream_inference(include_browser: bool = Query(False)):
                         "type": "error",
                         "message": (
                             "Profile inference runs only on a local model, and "
-                            f"GAIA couldn't confirm that '{model}' is one: Lemonade's "
+                            f"GAIA couldn't check '{model}' on this PC: Lemonade's "
                             "model list didn't load. Check that Lemonade is running "
                             f"in Settings > Setup, then try again (id={cid})."
                         ),

@@ -2355,7 +2355,7 @@ class TestStreamInferenceModel:
 
         create.assert_not_called()
         assert '"type": "error"' in resp.text
-        assert "couldn't confirm" in resp.text
+        assert "couldn't check" in resp.text
         assert "connection refused" not in resp.text
 
     def test_a_router_default_model_is_refused_not_called(self, client, tmp_path):
@@ -2380,7 +2380,7 @@ class TestStreamInferenceModel:
 
         create.assert_not_called()
         assert '"type": "error"' in resp.text
-        assert "couldn't confirm" in resp.text
+        assert "couldn't check" in resp.text
 
     @pytest.mark.parametrize("default_model", ["", "   "])
     def test_an_empty_default_model_fails_closed(self, client, tmp_path, default_model):
@@ -2461,7 +2461,7 @@ class TestStreamInferenceModel:
             )
 
         create.assert_not_called()
-        assert "couldn't confirm" in resp.text
+        assert "couldn't check" in resp.text
         assert "connection refused" not in resp.text
 
     def test_a_cut_off_reply_still_streams_its_complete_insights(
