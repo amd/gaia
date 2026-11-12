@@ -33,7 +33,7 @@ GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 3
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| **OS** | Windows 11 Pro 24H2 / Ubuntu 22.04+ | - |
+| **OS** | Windows 11 Pro 24H2 / Ubuntu 24.04+ | - |
 | **RAM** | 16GB | 64GB |
 | **CPU** | Ryzen AI 300-series | Ryzen AI MAX+ 395 |
 | **Storage** | 20GB free | - |
@@ -122,7 +122,7 @@ uv pip install -e ".[dev,talk,rag,ui]"
 | `dev` | Test + lint tooling (pytest, black, isort, mypy, pylint, …) |
 | `ui` | Agent UI backend (FastAPI + uvicorn + SSE); **required for `gaia --ui`** |
 | `api` | OpenAI-compatible API server (`gaia api start`) |
-| `rag` | RAG document Q&A (FAISS, PyMuPDF, pypdf, Office formats; embeddings come from Lemonade) |
+| `rag` | RAG document Q&A (FAISS, pypdf, pypdfium2, Office formats; embeddings come from Lemonade) |
 | `talk` | Microphone and speaker I/O for `gaia talk` (sounddevice); Whisper and Kokoro run in Lemonade |
 | `mcp` | MCP client/server bridge (`gaia mcp start`) |
 | `image` | Terminal image rendering (`term-image`) |
@@ -289,12 +289,44 @@ files go in `test_unit.yml`'s `offline-integration` job), or list it in
 `util/test_lane_allowlist.yml` with the reason CI can't run it.
 
 Being named isn't the same as running. A file with a module-level
-`pytest.importorskip` (for a hub wheel like `gaia_agent_chat`, or an optional
+`pytest.importorskip` (for a hub wheel like `gaia_agent`, or an optional
 extra) skips wholesale in any lane that lacks the package. The unit lane and the
 lanes that install hub wheels run `util/check_module_skips.py` right after their
 install step. It fails on such a skip unless the file is listed
 under `module_skips:` in the same allowlist, with `runs_in` naming the lane that
 installs the package. That lane must name the file and run the check too.
+</Note>
+
+<Note>
+A pull request, and its group in the merge queue, can run part of the unit
+suite, but only when every file it changes is a unit test or modified Python
+code under `src/gaia` or a hub agent package that the nightly coverage map
+records. A queue group runs no unit tests when none of its files is in the
+workflow's `paths` filter (a docs-only group, say), the same as such a PR; if
+any one is, every file in the group counts. `CLAUDE.md`, `AGENTS.md`,
+`CONTRIBUTING.md`, `REVIEW.md`, `.claude/` and `scripts/` always run the full
+suite, since the doc-path tests read them. `util/select_tests.py` then picks
+the test files that change can reach, from that map plus imports and
+patch-target strings. Any other change runs the full suite: data files, `util/`
+scripts, test helpers and fixtures, `eval/`, configs, workflows, any
+`conftest.py`, a source file the map has no entry for (such as a new one), a
+deleted or renamed file, or a missing or stale map. Tests
+load those by path, and neither imports nor coverage can follow what such a
+script reads. Of the last 600 merges to main, about one in five (21%) would have
+had a narrowed run; the rest run everything. Linux runs the selection; Windows
+and macOS run the part of it that touches the OS (processes, paths, locks,
+permissions). Every push to main runs the full suite on Linux. The nightly run
+is the full suite on all three operating systems at the head of main, and a red
+one files an issue that the next green one closes. A final release needs a
+dispatched or nightly run on its commit, never a selected one. The check to
+require is **Unit Tests Result**, which passes only when every lane passed or was
+meant to be skipped. The coverage map has one known blind
+spot: code behind a cache or a shared fixture is credited only to the first test
+that ran it, so a test that only reaches it second can be left out until the
+nightly run.
+See what your branch will run with
+`python util/select_tests.py select --base origin/main --explain`, and dispatch
+`test_unit.yml` on the branch to run the full suite.
 </Note>
 
 <Note>
@@ -405,9 +437,8 @@ python util/release_versions.py --check   # what lint runs; changes nothing
 
 | Source | Fields that follow it |
 |---|---|
-| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/terminal-hub/gaia-agent.yaml`; the flagship agent's own version (`gaia_agent/__init__.py`, `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json` and lockfile, the `npm/binaries.lock.json` version and sidecar URL, and any version-pinned doc links); the flagship and chat agents' `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md`; the `LEMONADE_VERSION` in the `docs/docs.json` navbar label |
+| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/terminal-hub/gaia-agent.yaml`; the flagship agent's own version (`gaia_agent/__init__.py`, `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json` and lockfile, the `npm/binaries.lock.json` version and sidecar URL, and any version-pinned doc links); the flagship agent's `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md`; the `LEMONADE_VERSION` in the `docs/docs.json` navbar label |
 | The newest `releases/vX.Y.Z` page in `docs/docs.json`'s Releases tab | The GAIA version in the `docs/docs.json` navbar label |
-| `hub/agents/chat/python/pyproject.toml` | The chat agent's `gaia-agent.yaml` |
 
 The flagship agent ships at core's version, so the release after 0.25.2 is 0.26.0
 for both ([#5172](https://github.com/amd/gaia/issues/5172)). The navbar follows the
@@ -422,9 +453,6 @@ call them. `--stamp vX.Y.Z-rcN` writes a release candidate's versions at build
 time: the same bytes as `util/release_tag.py stamp` for `version.py` and the
 Agent UI, plus the flagship's Python and npm versions. Hub paths have no
 pre-release channel yet, so manifests and the lock keep `X.Y.Z`.
-
-The chat agent keeps its own version until it is removed, so its `__init__.py`
-prints as `HELD` and doesn't fail.
 
 After a final publishes, **Next Version PR** (`.github/workflows/next_version.yml`,
 `util/next_version.py`) opens one PR to `main`: it lists the release in the
@@ -469,6 +497,10 @@ approval, and keeps the result off every stable channel:
   and Windows setup use these, never the download server's `gaia`, which can be many
   commits older. A candidate whose flagship build fails is not published; an
   install that cannot reach the pre-release's agent fails with the reason.
+  `GAIA_RC_FLAGSHIP_URL` points a candidate core at another copy of those
+  assets (a `file://` directory works); the release pipeline uses it so the
+  frozen core's real-engine check installs the flagship from the same run,
+  before the pre-release exists.
 - **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
   or `amd-gaia==X.Y.ZrcN` gets it.
 - **npm** — `@amd-gaia/agent-ui@X.Y.Z-rc.N` under the `next` dist-tag; `latest`
@@ -478,6 +510,18 @@ approval, and keeps the result off every stable channel:
 - **Not published** — Download-server components (the catalog has no pre-release
   channel) and the terminal's `.pkg`/`.deb`/`.rpm` packages, which need a
   numeric-only version.
+
+Tests never hold a candidate: it publishes as soon as its own builds and the
+smoke tests of those artifacts pass. CI on its commit (lint, the unit tests on
+every OS, the integration lanes, the release dry run) is read once and shown on
+the run as passed, failed, still running, or not run, with a warning for each
+that isn't green. A final requires all of it except the Linux NPU agent-chat
+check, waits for it, and needs a passing dry run on its commit, so clear an RC's
+warnings before tagging the final. The Linux NPU check still runs and shows as a
+warning on the final, but doesn't hold it until its runners can lock enough
+memory for the NPU model ([#6764](https://github.com/amd/gaia/issues/6764)).
+`RC_REPORTED`, `FINAL_REQUIRED` and `FINAL_ADVISORY` in
+`util/check_release_ci.py` are the lists.
 
 The candidate reuses the final's release notes (`docs/releases/vX.Y.Z.mdx`), and
 the `-rcN` suffix is stamped from the tag at build time, so the final `vX.Y.Z`

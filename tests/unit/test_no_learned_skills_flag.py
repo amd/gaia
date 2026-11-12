@@ -56,14 +56,12 @@ def stub_chat_wheel(monkeypatch):
     agent_mod = types.ModuleType("gaia_agent.agent")
     agent_mod.GaiaAgent = _Agent
     agent_mod.GaiaAgentConfig = _Config
-    app_mod = types.ModuleType("gaia_agent_chat.app")
+    app_mod = types.ModuleType("gaia_agent.interactive")
     app_mod.interactive_mode = lambda agent: None
-    pkg = types.ModuleType("gaia_agent_chat")
 
     monkeypatch.setitem(sys.modules, "gaia_agent", types.ModuleType("gaia_agent"))
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", agent_mod)
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat", pkg)
-    monkeypatch.setitem(sys.modules, "gaia_agent_chat.app", app_mod)
+    monkeypatch.setitem(sys.modules, "gaia_agent.interactive", app_mod)
     return built
 
 

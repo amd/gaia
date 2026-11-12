@@ -2,27 +2,23 @@
 # SPDX-License-Identifier: MIT
 
 import logging
-import os
 import re
 import subprocess
+import sys
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as get_package_version_metadata
-from typing import Optional, Tuple
+from pathlib import Path
+from typing import Dict, Optional, Tuple
 
 __version__ = "0.26.0"
 
 # Lemonade version used across CI and installer
 LEMONADE_VERSION = "2026.44.1"
 
-# Oldest Lemonade Server GAIA runs against. LEMONADE_VERSION is what we install;
-# this is the floor below which we refuse. Profiles may require newer
-# (INIT_PROFILES[...]["min_lemonade_version"]).
-LEMONADE_MIN_VERSION = "10.2.0"
-
-# Cloud offload (`lemonade cloud install`, /api/v1/cloud/auth) landed in 11.8.0.
-# Only the LLM-gateway path requires it, so it is checked there rather than
-# raising LEMONADE_MIN_VERSION for every user.
-LEMONADE_GATEWAY_MIN_VERSION = "11.8.0"
+# Oldest Lemonade Server GAIA runs against. Anything older is refused, and
+# GAIA's own embedded server is upgraded on start. Raised by hand, never by a
+# LEMONADE_VERSION bump.
+LEMONADE_MIN_VERSION = "2026.44.1"
 
 
 def parse_version(version: Optional[str]) -> Optional[Tuple[int, ...]]:
@@ -60,76 +56,69 @@ def get_package_version() -> str:
         return __version__
 
 
-def get_git_hash(hash_length: int = 8) -> str:
+def get_git_hash(hash_length: int = 8, cwd: Optional[str] = None) -> str:
     """Get the current git hash.
-    Only used during build/installer process.
 
     Args:
         hash_length: Length of the hash to return
+        cwd: The checkout to ask; the current directory when None
 
     Returns:
-        str: The git hash or 'unknown' if git is not available
+        str: The git hash, or "" when this is not a git checkout or git is missing
     """
     try:
         git_hash = subprocess.check_output(
             ["git", "rev-parse", "--short", "HEAD"],
             stderr=subprocess.DEVNULL,
             text=True,
+            timeout=10,
+            cwd=cwd,
         ).strip()
         return git_hash[:hash_length]
-    except Exception:
-        logging.warning("Failed to get Git hash")
+    except (OSError, subprocess.SubprocessError) as e:
+        logging.warning("Failed to get Git hash: %s", e)
         return ""
 
 
-def get_version_with_hash() -> str:
-    """Get the full version string including git hash.
-    Only used during build/installer process.
+def build_info() -> Dict[str, Optional[str]]:
+    """Which GAIA is running: a published ``release`` or ``release_candidate``,
+    a ``local`` build installed from a wheel file, or ``source`` run from a
+    checkout (with its commit). Read from what pip recorded at install time."""
+    import json
+    from importlib.metadata import distribution
 
-    Returns:
-        str: Version string in format 'v{version}+{hash}'
-    """
-    git_hash = get_git_hash()
-    if git_hash:
-        return f"v{__version__}+{git_hash}"
-    else:
-        return f"v{__version__}"
-
-
-def write_version_files() -> None:
-    """Write version information to version.txt and installer/version.nsh files.
-    Only used during build/installer process."""
+    current = get_package_version()
+    rc = re.search(r"rc(\d+)$", current)
+    kind = "release_candidate" if rc else "release"
     try:
-        # Write version with hash to version.txt
-        with open("version.txt", "w", encoding="utf-8") as f:
-            f.write(get_version_with_hash())
-
-        # Write version with hash to installer/version.nsh
-        installer_dir = os.path.join("installer")
-        os.makedirs(installer_dir, exist_ok=True)
-        with open(
-            os.path.join(installer_dir, "version.nsh"), "w", encoding="utf-8"
-        ) as f:
-            f.write(f'!define GAIA_VERSION "{get_version_with_hash()}"\n')
-            f.write(f'!define LEMONADE_VERSION "{LEMONADE_VERSION}"\n')
-
-        print(
-            "Version files created successfully: version.txt and installer/version.nsh"
-        )
-    except Exception as e:
-        print(f"Failed to write version files: {str(e)}")
-        raise
+        recorded = distribution("amd-gaia").read_text("direct_url.json")
+    except PackageNotFoundError:
+        # No package metadata at all: running straight from a checkout.
+        recorded, kind = None, "source"
+    if recorded:
+        origin = json.loads(recorded)
+        if (origin.get("dir_info") or {}).get("editable"):
+            kind = "source"
+        elif str(origin.get("url", "")).startswith("file:"):
+            kind = "local"
+    # Code outside any site-packages runs from a checkout, whatever metadata says;
+    # a frozen binary is a published build.
+    here = {part.lower() for part in Path(__file__).resolve().parts}
+    if not getattr(sys, "frozen", False) and not here & {
+        "site-packages",
+        "dist-packages",
+    }:
+        kind = "source"
+    commit = None
+    if kind == "source":
+        commit = get_git_hash(cwd=str(Path(__file__).resolve().parent)) or None
+    return {
+        "version": current,
+        "kind": kind,
+        "rc": rc.group(1) if rc else None,
+        "commit": commit,
+    }
 
 
 # For regular package usage - just version number
 version = get_package_version()
-
-
-def main():
-    """Generate version files when the script is run directly.
-    Only used during build/installer process."""
-    write_version_files()
-
-
-if __name__ == "__main__":
-    main()

@@ -9,26 +9,26 @@
         "win32-x64": {
           "filename": "gaia-agent-win32-x64.exe",
           "executable": "gaia-agent.exe",
-          "sha256": "b107ed0740408b3ea50ab2556503549f173bcea13756e0cab0a5d0c98c867eab",
-          "size": 172894251
+          "sha256": "608edd72ca58431ed043095baab0e8fe2f796c89c556975427596a799a6e38ce",
+          "size": 157825349
         },
         "darwin-arm64": {
           "filename": "gaia-agent-darwin-arm64",
           "executable": "gaia-agent",
-          "sha256": "2a339e225396df8f1623ff32051dd92800bf2224c76ba482cd25ae7ba30ebe30",
-          "size": 162463472
+          "sha256": "1427b448b024cd3bc43fdf0046b95215d729a3741ba8f7b85f30268e9fd411ac",
+          "size": 142802096
         },
         "darwin-x64": {
           "filename": "gaia-agent-darwin-x64",
           "executable": "gaia-agent",
-          "sha256": "a796c734a72f43489062faa7d011399bcfdbd97280992e0ff8fea9734702aa28",
-          "size": 173074704
+          "sha256": "5c77559ab570610159ce6826a0b735558824edafec15071fc1c6561e288fdd62",
+          "size": 152486048
         },
         "linux-x64": {
           "filename": "gaia-agent-linux-x64",
           "executable": "gaia-agent",
-          "sha256": "815817da63df38ae08dc96df226b758f53c54e56b59588b79a5e605c27c2ab64",
-          "size": 211939056
+          "sha256": "f44f0969ec0c67d6b4d0e7c8d529d3bb228cf0ef61848b67b0c8604b110a8e06",
+          "size": 190760056
         }
       }
     },

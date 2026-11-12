@@ -153,22 +153,44 @@ def test_signoff_cannot_override_a_block(enforce_step):
     Asserted structurally: the BLOCK branch must set the failure flag without
     consulting SIGNED_OFF, so a later edit cannot conflate the two.
     """
-    block_branch = _shell_block(enforce_step["run"], 'BLOCK_COUNT:-0}" -gt 0 ')
+    block_branch = _shell_block(enforce_step["run"], 'BLOCK_COUNT}" -gt 0 ')
     assert "failed=1" in block_branch
     assert "SIGNED_OFF" not in block_branch
 
 
 def test_signoff_cannot_override_an_unparseable_skill(enforce_step):
-    invalid_branch = _shell_block(enforce_step["run"], 'INVALID_COUNT:-0}" -gt 0 ')
+    invalid_branch = _shell_block(enforce_step["run"], 'INVALID_COUNT}" -gt 0 ')
     assert "failed=1" in invalid_branch
     assert "SIGNED_OFF" not in invalid_branch
 
 
 def test_only_the_review_branch_consults_the_signoff_label(enforce_step):
-    review_branch = _shell_block(enforce_step["run"], 'REVIEW_COUNT:-0}" -gt 0 ')
+    review_branch = _shell_block(enforce_step["run"], '"${REVIEW_COUNT}" -gt 0 ')
     assert "SIGNED_OFF" in review_branch
     # Still fails when unsigned.
     assert "failed=1" in review_branch
+
+
+def _audit_step(gate: dict) -> dict:
+    return next(s for s in gate["steps"] if s.get("name") == "Audit each changed skill")
+
+
+def test_a_hub_skill_review_is_counted_apart_from_other_reviews(gate):
+    """Release publishing accepts only ALLOW, so a hub/skills/ REVIEW can't share
+    the label-releasable REVIEW counter."""
+    run = _audit_step(gate)["run"]
+    assert "hub/skills/*) hub_review=$((hub_review + 1))" in run
+    assert 'echo "hub_review_count=$hub_review"' in run
+    assert "hub_review_count" in gate["outputs"]
+
+
+def test_signoff_cannot_override_a_hub_skill_review(enforce_step):
+    """A merged hub/skills/ REVIEW skill would fail at release, not at review."""
+    env = enforce_step.get("env", {})
+    assert "hub_review_count" in str(env.get("HUB_REVIEW_COUNT", ""))
+    hub_branch = _shell_block(enforce_step["run"], 'HUB_REVIEW_COUNT}" -gt 0 ')
+    assert "failed=1" in hub_branch
+    assert "SIGNED_OFF" not in hub_branch
 
 
 def test_the_gate_runs_even_on_fork_pull_requests(gate):
@@ -178,6 +200,221 @@ def test_the_gate_runs_even_on_fork_pull_requests(gate):
         "the deterministic gate must not be restricted to same-repo PRs; only "
         "the secret-dependent jobs (SARIF upload, Claude, PR comment) may be"
     )
+
+
+# ----------------------------------------------------------------------
+# An audit that never ran must not read as an audit that passed
+# ----------------------------------------------------------------------
+#
+# A job that dies before `Audit each changed skill` completes (a rate-limited
+# `GITHUB_TOKEN`, a broken install) leaves every count output unset. The gate
+# used to read them as `${BLOCK_COUNT:-0}` and print "Skill audit passed." for a
+# run that audited nothing — the silent wrong answer in #4107. These tests run
+# the step's real shell body so the behaviour, not its spelling, is asserted.
+
+import os  # noqa: E402
+import subprocess  # noqa: E402
+
+#: Windows ships `C:\Windows\System32\bash.exe` as a WSL launcher that exists
+#: even when no distribution is installed, so a PATH lookup says yes and every
+#: invocation fails. Probe by running a trivial script instead.
+_BASH_PROBE = ["bash", "-c", "exit 0"]
+
+#: Every count `Audit each changed skill` publishes; the verdict refuses to read
+#: a partial set, so all of them are required for a meaningful check.
+REQUIRED_COUNTS = (
+    "BLOCK_COUNT",
+    "REVIEW_COUNT",
+    "HUB_REVIEW_COUNT",
+    "INVALID_COUNT",
+    "ALLOW_COUNT",
+)
+
+INFRA_MARKER = "Skill audit (infrastructure)"
+POLICY_MARKER = "::error title=Skill audit::"
+
+
+def _verdict(
+    enforce_step: dict,
+    *,
+    audit_outcome: str,
+    counts: dict[str, str],
+    seconds: int = 30,
+) -> subprocess.CompletedProcess:
+    """Run the verdict step with the `${{ steps.* }}` expressions resolved.
+
+    `AUDIT_OUTCOME` carries the `steps.audit.outcome` value the runner would
+    substitute; `counts` are the step outputs it would also substitute.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GITHUB")}
+    env.update(
+        {
+            "AUDIT_OUTCOME": audit_outcome,
+            "SIGNED_OFF": "false",
+            "GITHUB_STEP_SUMMARY": os.devnull,
+        }
+    )
+    for name, value in counts.items():
+        env[name] = value
+    return subprocess.run(
+        ["bash", "-c", enforce_step["run"]],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=seconds,
+        check=False,
+    )
+
+
+#: Fixed so the shell can run the body offline; the value never reaches a check.
+_RUNNER_SUBSTITUTIONS = {
+    "github.event.pull_request.labels.*.name": "['none']",
+}
+
+
+@pytest.fixture(scope="module")
+def runnable_enforce(enforce_step: dict) -> dict:
+    try:
+        probe = subprocess.run(
+            _BASH_PROBE, capture_output=True, text=True, timeout=60, check=False
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        pytest.skip(f"the verdict step is a bash script; bash cannot run: {exc}")
+    if probe.returncode != 0:
+        detail = (probe.stderr or probe.stdout).strip()
+        pytest.skip(f"the verdict step is a bash script; bash cannot run: {detail}")
+    run = enforce_step["run"]
+    for expression, value in _RUNNER_SUBSTITUTIONS.items():
+        run = run.replace("${{ " + expression + " }}", value)
+    assert "${{" not in run, "every expression in the verdict step must be resolved"
+    return {**enforce_step, "run": run}
+
+
+def test_a_clean_audit_passes(runnable_enforce):
+    """Control: the happy path still passes, so the failures below mean something."""
+    result = _verdict(
+        runnable_enforce,
+        audit_outcome="success",
+        counts=dict.fromkeys(REQUIRED_COUNTS, "0"),
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Skill audit passed." in result.stdout
+    assert INFRA_MARKER not in result.stdout
+
+
+def test_a_block_from_an_audit_that_ran_is_a_policy_failure(
+    enforce_step, runnable_enforce
+):
+    """A real violation keeps its own message: it is not an infrastructure fault."""
+    result = _verdict(
+        runnable_enforce,
+        audit_outcome="success",
+        counts={**dict.fromkeys(REQUIRED_COUNTS, "0"), "BLOCK_COUNT": "1"},
+    )
+    assert result.returncode != 0
+    assert POLICY_MARKER in result.stdout
+    assert "BLOCKED" in result.stdout
+    assert INFRA_MARKER not in result.stdout
+    assert "Skill audit passed." not in result.stdout
+
+
+def test_a_skipped_audit_fails_as_infrastructure(runnable_enforce):
+    """The #4107 case: the job died upstream, so the gate never ran."""
+    result = _verdict(
+        runnable_enforce,
+        audit_outcome="skipped",
+        counts=dict.fromkeys(REQUIRED_COUNTS, "0"),
+    )
+    assert result.returncode != 0, "an audit that never ran must not pass"
+    assert INFRA_MARKER in result.stdout
+    assert "Skill audit passed." not in result.stdout
+
+
+def test_a_failed_audit_fails_as_infrastructure(runnable_enforce):
+    result = _verdict(
+        runnable_enforce,
+        audit_outcome="failure",
+        counts=dict.fromkeys(REQUIRED_COUNTS, "0"),
+    )
+    assert result.returncode != 0
+    assert INFRA_MARKER in result.stdout
+    assert "Skill audit passed." not in result.stdout
+
+
+@pytest.mark.parametrize("missing", REQUIRED_COUNTS)
+def test_a_missing_count_is_infrastructure_not_zero(runnable_enforce, missing):
+    """Every required count is checked, not just the one that happens to be read first."""
+    counts = {name: "0" for name in REQUIRED_COUNTS if name != missing}
+    result = _verdict(runnable_enforce, audit_outcome="success", counts=counts)
+    assert result.returncode != 0, f"an unset {missing} must not read as 0"
+    assert INFRA_MARKER in result.stdout
+    assert "Skill audit passed." not in result.stdout
+
+
+@pytest.mark.parametrize("bad", ["", " ", "1.5", "one", "-1", "1 2"])
+def test_a_malformed_count_is_infrastructure_not_zero(runnable_enforce, bad):
+    """Each is a value `[ -gt 0 ]` either dies on or silently misreads."""
+    counts = {**dict.fromkeys(REQUIRED_COUNTS, "0"), "BLOCK_COUNT": bad}
+    result = _verdict(runnable_enforce, audit_outcome="success", counts=counts)
+    assert result.returncode != 0, f"BLOCK_COUNT={bad!r} must not read as 0"
+    assert INFRA_MARKER in result.stdout
+    assert "Skill audit passed." not in result.stdout
+
+
+def test_the_verdict_runs_after_an_upstream_failure(enforce_step):
+    """A status function is required, or the infrastructure verdict never fires.
+
+    Actions wraps a step `if:` that names no status function in an implicit
+    `success()`. A failed install or audit would then skip this step entirely,
+    which is the #4107 hole: the gate disappears instead of reporting that it
+    never ran. This asserts the condition, not just the shell body, because the
+    runner decides whether that body runs at all.
+    """
+    assert "always()" in str(enforce_step.get("if", "")), (
+        "Enforce verdict must run after an upstream failure to report it; "
+        "drop always() and the infrastructure branch becomes unreachable"
+    )
+
+
+def test_the_gate_does_not_read_the_downstream_skills_output(enforce_step):
+    """Keeping the downstream `skills` signal out of the verdict.
+
+    A future change may empty `skills` so the SARIF and Claude jobs skip an
+    incomplete run. If the verdict also consulted it, one place would decide
+    both, and a downstream skip could turn the required gate green. The verdict
+    keys on `AUDIT_OUTCOME` instead, so the two cannot be conflated.
+    """
+    assert "SKILLS" not in enforce_step.get("env", {})
+    assert "steps.detect" not in enforce_step["run"]
+    assert "AUDIT_OUTCOME" in enforce_step["run"]
+
+
+# ----------------------------------------------------------------------
+# Best-effort PR summary
+# ----------------------------------------------------------------------
+
+
+def _summary_comment_step(gate: dict) -> dict:
+    steps = [
+        step
+        for step in gate["steps"]
+        if step.get("name") == "Post summary-only PR comment"
+    ]
+    assert steps, "the workflow must retain its same-repo summary-comment step"
+    return steps[0]
+
+
+def test_rate_limited_summary_comment_cannot_fail_the_audit_gate(gate):
+    """The deterministic verdict, not a GitHub API call, decides this check."""
+    assert _summary_comment_step(gate).get("continue-on-error") is True
+
+
+def test_summary_comment_lookup_is_paginated_to_update_existing_marker(gate):
+    """A marker beyond GitHub's default page must not create a duplicate."""
+    script = _summary_comment_step(gate)["with"]["script"]
+    assert "github.paginate" in script
+    assert "github.rest.issues.listComments" in script
+    assert "per_page: 100" in script
 
 
 # ----------------------------------------------------------------------

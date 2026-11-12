@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from gaia.api.flagship import api_unavailable_reason
 from gaia.api.local_http import assert_bind_is_authenticated
 from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
@@ -31,7 +32,6 @@ def start_server(
     debug: bool = False,
     show_prompts: bool = False,
     streaming: bool = False,
-    step_through: bool = False,
 ) -> None:
     """
     Start the API server.
@@ -43,7 +43,6 @@ def start_server(
         debug: Enable debug logging
         show_prompts: Display prompts sent to LLM
         streaming: Enable real-time streaming of LLM responses
-        step_through: Enable step-through debugging mode
 
     Example:
         >>> start_server("localhost", 8080, background=True)
@@ -51,6 +50,9 @@ def start_server(
         >>> start_server("localhost", 8080, debug=True, show_prompts=True)
         ✅ GAIA API server started with debug mode enabled
     """
+    reason = api_unavailable_reason()
+    if reason:
+        raise RuntimeError(reason)
     warn_if_unconfirmed_tools_allowed()
     # A LAN-reachable bind with no caller auth puts the agent loop on the
     # network for anyone who can route to the port.
@@ -64,8 +66,6 @@ def start_server(
         os.environ["GAIA_API_SHOW_PROMPTS"] = "1"
     if streaming:
         os.environ["GAIA_API_STREAMING"] = "1"
-    if step_through:
-        os.environ["GAIA_API_STEP_THROUGH"] = "1"
 
     if background:
         # Start in background
@@ -88,7 +88,7 @@ def start_server(
         print(f"✅ GAIA API server started in background (PID: {proc.pid})")
         print(f"📝 Logs: {log_file}")
         print(f"🌐 URL: http://{host}:{port}")
-        if debug or show_prompts or streaming or step_through:
+        if debug or show_prompts or streaming:
             print("\n🐛 Debug features enabled:")
             if debug:
                 print("  • Debug logging")
@@ -96,8 +96,6 @@ def start_server(
                 print("  • Show prompts")
             if streaming:
                 print("  • LLM streaming")
-            if step_through:
-                print("  • Step-through mode")
         print("\nAvailable endpoints:")
         print(f"  • POST http://{host}:{port}/v1/chat/completions")
         print(f"  • GET  http://{host}:{port}/v1/models")
@@ -107,7 +105,7 @@ def start_server(
         import uvicorn
 
         print(f"🚀 Starting GAIA API server on http://{host}:{port}")
-        if debug or show_prompts or streaming or step_through:
+        if debug or show_prompts or streaming:
             print("\n🐛 Debug features enabled:")
             if debug:
                 print("  • Debug logging")
@@ -115,8 +113,6 @@ def start_server(
                 print("  • Show prompts")
             if streaming:
                 print("  • LLM streaming")
-            if step_through:
-                print("  • Step-through mode")
         print("\nAvailable endpoints:")
         print(f"  • POST http://{host}:{port}/v1/chat/completions")
         print(f"  • GET  http://{host}:{port}/v1/models")
@@ -291,11 +287,6 @@ def main() -> None:
         action="store_true",
         help="Enable real-time streaming of LLM responses",
     )
-    start_parser.add_argument(
-        "--step-through",
-        action="store_true",
-        help="Enable step-through debugging mode (pause at each agent step)",
-    )
 
     # Status command
     status_parser = subparsers.add_parser("status", help="Check server status")
@@ -314,6 +305,10 @@ def main() -> None:
 
     args = parser.parse_args()
 
+    from gaia.logger import configure
+
+    configure()
+
     if args.command == "start":
         start_server(
             args.host,
@@ -322,7 +317,6 @@ def main() -> None:
             getattr(args, "debug", False),
             getattr(args, "show_prompts", False),
             getattr(args, "streaming", False),
-            getattr(args, "step_through", False),
         )
     elif args.command == "status":
         check_status(args.host, args.port)

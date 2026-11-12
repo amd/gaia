@@ -36,7 +36,7 @@ from typing import IO, Any, Dict, List, Optional
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
-from gaia.logger import get_logger
+from gaia.logger import configure, get_logger
 
 logger = get_logger(__name__)
 
@@ -767,6 +767,7 @@ def run_agent_cli(
     Returns:
         Process exit code (0 on success, 1 on an interface/usage error).
     """
+    configure()
     parser = build_arg_parser(prog=prog)
     args = parser.parse_args(argv)
     server = AgentServer(agent, manifest=manifest)

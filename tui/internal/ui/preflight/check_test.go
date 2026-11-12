@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/amd/gaia/tui/internal/gaiainit"
 	"io"
 	"net/http"
 	"os"
@@ -384,13 +385,14 @@ func realCommands() []string {
 		"gaia connectors connect ",
 		"gaia connectors grants grant ",
 		"gaia connectors list",
-		// A host-API skew is fixed by upgrading the installed core, not by a
-		// restart — the version comes from the core, so a restart is a loop.
-		"pip install --upgrade amd-gaia",
 		// Reached only when the machine cannot name Lemonade's launcher
 		// (lemonadeRestartRemedy, !l.Found) — so it fires on a runner with no
 		// Lemonade installed and never on a developer box that has one.
 		"gaia kill",
+		// The published one-line installers, which install GAIA's binaries
+		// (no Python): the remedy for a core older than this app.
+		gaiainit.InstallCommand,
+		gaiainit.InstallPowerShellCommand,
 	}
 	l := resolveLemonade()
 	for _, cmd := range []string{l.Start, l.Restart} {
@@ -571,7 +573,7 @@ func TestCheck(t *testing.T) {
 			wantBlocker: KeyDaemon,
 			// Both halves of the skew, and a remedy that can actually clear it:
 			// the version comes from the installed core, so a restart loops.
-			wantIn: []string{"host API v1.0", "v1.1", "pip install --upgrade amd-gaia"},
+			wantIn: []string{"host API v1.0", "v1.1", "https://amd-gaia.ai/#install"},
 			// Restarting a machine-wide daemon other clients share is not ours to do.
 			wantFix: FixNone,
 		},
@@ -2393,10 +2395,10 @@ func TestTheShortfallRowShowsTheActualWindowAndTheExpectedOne(t *testing.T) {
 	}
 	assertRealCommand(t, row)
 	assertRunnable(t, row.Remedy.Command)
-	// The window in the command is the DERIVED one, never a literal.
-	if strings.Contains(row.Remedy.Command, ctxSizeEnv) &&
-		!strings.Contains(row.Remedy.Command, fmt.Sprint(profileCtxTarget())) {
-		t.Errorf("the remedy names a window other than the profile's: %q", row.Remedy.Command)
+	// Modern Lemonade reads no context-size variable (#3320), so naming one
+	// would promise a fix the restart cannot deliver.
+	if strings.Contains(row.Remedy.Command, "LEMONADE_CTX_SIZE") {
+		t.Errorf("the remedy names a variable Lemonade never reads: %q", row.Remedy.Command)
 	}
 	// It must not promise a cure it cannot deliver — the window is set at load
 	// time, so a restart is a good bet and not a guarantee.

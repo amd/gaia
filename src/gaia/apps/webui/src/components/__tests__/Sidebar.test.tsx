@@ -40,7 +40,7 @@ beforeEach(() => {
     useChatStore.setState({
         sessions: SESSIONS, currentSessionId: null, runningSessionIds: [], pendingDeleteIds: [],
         sidebarOpen: true, sidebarCollapsed: false, settingsSection: null,
-        showMemoryDashboard: false, showSchedules: false, messageQueues: {},
+        showMemoryDashboard: false, showSchedules: false, messageQueues: {}, locale: 'en',
     });
 });
 
@@ -140,6 +140,19 @@ describe('Sidebar', () => {
         await waitFor(() => expect(useChatStore.getState().messageQueues.c).toBeUndefined());
     });
 
+    it('reads the unsent-message delete confirmation in Arabic', () => {
+        useChatStore.setState({ locale: 'ar' });
+        useChatStore.getState().updateQueue('c', (q) => messageQueue.enqueue(messageQueue.enqueue(q, 'one', 'queued'), 'two', 'queued'));
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const plain = (s: string | null) => (s ?? '').replace(/[\u2066-\u2069]/g, '');
+        const button = (name: string) => screen.getAllByRole('button').find((b) => plain(b.getAttribute('aria-label')).startsWith(name))!;
+        fireEvent.click(button('حذف Tax questions'));
+        const confirm = button('تأكيد حذف Tax questions');
+        expect(plain(confirm.getAttribute('aria-label'))).toContain('تأكيد حذف Tax questions ورسائلها غير المُرسلة (2)');
+        expect(plain(confirm.getAttribute('title'))).toContain('انقر مرة أخرى لحذف هذه المحادثة ورسائلها غير المُرسلة (2)');
+        expect(plain(confirm.textContent)).toContain('حذف الرسائل غير المُرسلة (2)؟');
+    });
+
     it('keeps the unsent messages when the delete fails', async () => {
         mockedApi.deleteSession.mockRejectedValue(new Error('Database is locked'));
         vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -171,7 +184,7 @@ describe('Sidebar', () => {
 
     it('shows a cloud location for a cloud model', () => {
         useModelStore.setState({
-            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false },
+            active: { provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi-k2', label: 'Kimi', remote: true, is_default: false, provider_name: 'Fireworks AI' },
         });
         render(<Sidebar onNewChat={vi.fn()} />);
         expect(screen.getByRole('button', { name: 'Fireworks AI · kimi-k2' })).toBeInTheDocument();

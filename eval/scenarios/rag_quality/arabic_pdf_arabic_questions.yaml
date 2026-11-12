@@ -1,0 +1,37 @@
+id: arabic_pdf_arabic_questions
+name: "Arabic PDF, Arabic questions"
+category: rag_quality
+severity: high
+description: |
+  Agent answers Arabic questions over an Arabic PDF in Arabic, cites the page,
+  and says so when the document does not hold the answer.
+
+persona: casual_user
+
+setup:
+  index_documents:
+    - path: eval/corpus/documents/clinic_guide_ar_en.pdf
+
+turns:
+  - turn: 1
+    objective: "Ask, in Arabic and word for word: 'كم تبلغ رسوم الاستشارة العامة؟'"
+    ground_truth:
+      expected_phrases:
+        - "150"
+    success_criteria: "Agent answers in Arabic that the general consultation fee is 150 dinars, citing page 2"
+
+  - turn: 2
+    objective: "Ask, in Arabic and word for word: 'ومتى يجب إلغاء الموعد لتجنب الرسوم؟ وكم تبلغ الرسوم؟'"
+    ground_truth:
+      expected_phrases:
+        - "24"
+        - "40"
+    success_criteria: "Agent answers in Arabic that cancellation needs at least 24 hours' notice and the charge is 40 dinars, citing page 2"
+
+  - turn: 3
+    objective: "Ask, in Arabic and word for word: 'كم تبلغ رسوم موقف السيارات في العيادة؟'"
+    success_criteria: "Agent says in Arabic that the guide does not state a parking fee, and invents no amount"
+
+expected_outcome: |
+  Every answer is in Arabic, the figures match the document, the page numbers
+  are right, and the parking fee is reported as not stated.

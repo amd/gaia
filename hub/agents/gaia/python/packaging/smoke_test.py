@@ -48,9 +48,15 @@ Tokenizer -- token counts drive history trimming and context eviction:
      agent's tokenizer is still ``tiktoken:cl100k_base``: the encoding plugin
      and its data are in the binary, not fetched at runtime (#5066).
 
+Memory -- a frozen process must not reserve ~5 GB for OpenBLAS (#7291):
+
+ 11. A script started with no thread variables sees ``OPENBLAS_NUM_THREADS=2``
+     (the ``blas_threads`` runtime hook), and one started with
+     ``OMP_NUM_THREADS`` set keeps the user's choice.
+
 Linux only -- the binary carries its build distro's OpenSSL:
 
- 11. A ``run_python`` script's default SSL context holds CA certificates, so
+ 12. A ``run_python`` script's default SSL context holds CA certificates, so
      HTTPS from a script verifies on a distro other than the one it was
      built on (``rthook_linux_ca.py``).
 
@@ -99,7 +105,7 @@ STDIO_ARGV: list[str] = []
 #: runner must not read as a broken binary.
 STDIO_HANDSHAKE_DEADLINE_S = 300.0
 
-#: ``gaia_agent_chat.python_runner.RUN_PYTHON_FILE_FLAG``, copied because this
+#: ``gaia_agent.python_runner.RUN_PYTHON_FILE_FLAG``, copied because this
 #: harness imports nothing outside the stdlib (a unit test pins the two).
 RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 
@@ -107,10 +113,10 @@ RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 #: chart, and stdlib modules nothing in GAIA itself imports.
 RUN_PYTHON_SCRIPT = """\
 import sys, statistics, sqlite3, zipfile, xml.etree.ElementTree, csv, decimal
-import subprocess
+import shelve, subprocess
 from concurrent.futures import ProcessPoolExecutor
 
-import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf, pymupdf, xlsxwriter
+import openpyxl, docx, pptx, pandas, numpy, reportlab, pypdf, pypdfium2, xlsxwriter
 import matplotlib.pyplot as plt
 
 
@@ -127,6 +133,16 @@ def main():
     assert openpyxl.load_workbook("bom.xlsx").active["B2"].value == 4
     docx.Document().save("notes.docx")
     pptx.Presentation().save("deck.pptx")
+    from reportlab.pdfgen import canvas
+    page = canvas.Canvas("page.pdf", pagesize=(100, 50))
+    page.drawString(10, 20, "hi")
+    page.save()
+    # Rendering proves the native pdfium library is in the binary, not just the
+    # Python wrapper.
+    assert pypdfium2.PdfDocument("page.pdf")[0].render(scale=2).to_pil().size == (200, 100)
+    # GNU dbm is excluded; shelve must still work on dbm's other backends.
+    with shelve.open("kv") as db:
+        db["k"] = 1
     plt.plot([1, 2, 3])
     plt.savefig("chart.png")
     frame = pandas.DataFrame({"qty": [4, 6]})
@@ -134,7 +150,7 @@ def main():
     # file as __mp_main__, as CPython does, so the work sits under the guard.
     with ProcessPoolExecutor(2) as pool:
         assert list(pool.map(abs, [-1, -2])) == [1, 2]
-    nested = py("-c", "import pypdf, pymupdf, xlsxwriter; print('nested ok')")
+    nested = py("-c", "import pypdf, pypdfium2, xlsxwriter; print('nested ok')")
     assert nested.stdout.strip().endswith("nested ok"), (nested.stdout, nested.stderr)
     pip = py("-m", "pip", "install", "pypdf")
     assert pip.returncode == 1 and "can't be installed" in pip.stderr, pip.stderr
@@ -364,9 +380,13 @@ def check_stdio_handshake(
                 "the event wire -- the TUI reads a stray line as a malformed "
                 "event, so nothing may print to it before the handshake."
             )
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
             return False
         if not isinstance(event, dict) or not event.get("type"):
             log(f"FAIL: the opening event carries no 'type': {event!r}")
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
             return False
         if event["type"] != "status":
             # An 'error' here is the frozen binary failing to build its agent --
@@ -397,6 +417,8 @@ def check_stdio_handshake(
                 f"FAIL: expected model_backend={backend!r}, got "
                 f"{event.get('model_backend')!r}"
             )
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
             return False
 
         # stdin closing is how the TUI says goodbye; a child that ignores it
@@ -406,6 +428,8 @@ def check_stdio_handshake(
             proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             log("FAIL: the agent did not exit within 60s of stdin closing")
+            _kill_tree(proc)
+            _log_stderr_tail(proc)
             return False
         log(f"stdio handshake check PASS -- exited {proc.returncode} on stdin close")
         return True
@@ -463,6 +487,35 @@ def check_run_python(binary: Path) -> bool:
             )
             return False
     log("run_python check PASS -- scripts run on the bundled libraries")
+    return True
+
+
+#: The OpenBLAS thread variables, as a script inside the binary sees them.
+BLAS_SCRIPT = """import os
+names = ("OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "OMP_NUM_THREADS")
+print("BLAS", [os.environ.get(n) for n in names])
+"""
+_BLAS_VARS = ("OPENBLAS_NUM_THREADS", "GOTO_NUM_THREADS", "OMP_NUM_THREADS")
+
+
+def check_blas_threads(binary: Path) -> bool:
+    """The binary caps OpenBLAS at 2 threads unless the user chose a count."""
+    clean = {k: v for k, v in os.environ.items() if k.upper() not in _BLAS_VARS}
+    cases = [
+        (clean, "BLAS ['2', None, None]"),
+        ({**clean, "OMP_NUM_THREADS": "3"}, "BLAS [None, None, '3']"),
+    ]
+    with tempfile.TemporaryDirectory(prefix="gaia-smoke-blas-") as tmp:
+        for env, want in cases:
+            result = _run_script(binary, Path(tmp), BLAS_SCRIPT, env=env)
+            if result.returncode != 0 or want not in result.stdout:
+                log(
+                    f"FAIL: expected {want!r} from inside the binary, got "
+                    f"{result.stdout.strip()[-300:]!r}. "
+                    f"stderr: {result.stderr[-1500:]!r}"
+                )
+                return False
+    log("blas threads check PASS -- OpenBLAS is capped unless the user set it")
     return True
 
 
@@ -593,7 +646,9 @@ def main(argv=None) -> int:
     results["run_python"] = check_run_python(binary)
     log("checking the agent's tokenizer offline")
     results["tokenizer"] = check_tokenizer(binary)
-    expected = 8
+    log("checking the OpenBLAS thread cap")
+    results["blas_threads"] = check_blas_threads(binary)
+    expected = 9
     if sys.platform.startswith("linux"):
         log("checking a script's TLS trust store")
         results["tls_trust"] = check_tls_trust(binary)

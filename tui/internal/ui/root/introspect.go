@@ -29,6 +29,9 @@ func (m FlagshipModel) ControlSnapshot() control.Snapshot {
 			if m.preflight.Choosing() {
 				snap.Overlay = "choose-chat"
 			}
+			if screen := m.preflight.SetupScreen(); screen != "" {
+				snap.Overlay = "setup-" + screen
+			}
 		}
 		if m.connect != nil {
 			snap.Overlay = "connect-mailbox"

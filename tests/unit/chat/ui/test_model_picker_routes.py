@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from gaia import config as config_mod
+from gaia.llm.gpu_memory import GB_PER_GIB
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME
 from gaia.ui import warmup
 from gaia.ui.database import ChatDatabase
@@ -209,6 +210,8 @@ def test_local_list_reports_state_device_fit_and_speed(client, lemonade, db):
     assert by_id[LARGE_DEFAULT_MODEL_NAME]["state"] == "not_downloaded"
     assert by_id[LARGE_DEFAULT_MODEL_NAME]["available"] is True
     assert body["memory_source"] == "AMD iGPU"
+    # 96 + 16 GiB from Lemonade, in the decimal GB the GPU memory pane uses.
+    assert body["memory_gb"] == round(112 * GB_PER_GIB, 1)
 
 
 def test_cloud_list_is_unchanged(client, lemonade):
@@ -553,6 +556,26 @@ def test_restart_starts_a_stopped_server_with_the_active_model(client, lemonade,
     assert resp.status_code == 202
     _join_restart()
     assert jobs == [(DEFAULT_MODEL_NAME, False)]
+
+
+def test_restart_starts_a_stopped_server_for_a_cloud_model(client, db, lemonade, jobs):
+    """Cloud models go through the local server, so a stopped one needs starting."""
+    db.set_setting("custom_model", "fireworks.glm")
+    lemonade.down = True
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 202
+    assert resp.json()["starting_server"] is True
+    _join_restart()
+    assert jobs == [("fireworks.glm", False)]
+
+
+def test_restart_of_a_running_server_for_a_cloud_model_is_refused(
+    client, db, lemonade, jobs
+):
+    db.set_setting("custom_model", "fireworks.glm")
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 422
+    assert jobs == []
 
 
 def test_restart_refuses_while_the_model_answers(client, lemonade, jobs):

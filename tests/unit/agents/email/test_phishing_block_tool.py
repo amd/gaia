@@ -11,14 +11,16 @@ Covers:
 3. The tool refuses to act on a non-phishing-flagged message (safety gate).
 4. The tool is in ``TOOLS_REQUIRING_CONFIRMATION`` — it MUST NOT execute
    without explicit user confirmation.
-5. The agent system prompt does NOT follow links or instructions in the body
-   of a phishing message (prompt-injection guard).
+
+The prompt-injection guard is covered on the flagship path in
+``tests/unit/agents/tools/test_email_phishing_guard.py``.
 """
 
 from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -128,6 +130,16 @@ def fake_gmail():
     return _FakeGmail()
 
 
+def _age_action(db, action_id: str, *, seconds: int) -> None:
+    """Move an action into the past: Windows' clock can read the same twice."""
+    db.update(
+        "email_actions",
+        {"created_at": time.time() - seconds},
+        "action_id = :id",
+        {"id": action_id},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Quarantine tests
 # ---------------------------------------------------------------------------
@@ -225,8 +237,9 @@ class TestUnquarantineImpl:
             fake_gmail, db, message_id="msg6", is_phishing=True
         )
         action_id = result["action_id"]
+        _age_action(db, action_id, seconds=61)
         with pytest.raises(RuntimeError, match="undo window"):
-            unquarantine_impl(fake_gmail, db, action_id=action_id, window_seconds=0)
+            unquarantine_impl(fake_gmail, db, action_id=action_id, window_seconds=60)
 
 
 # ---------------------------------------------------------------------------
@@ -257,8 +270,7 @@ class TestUnquarantineWrapperErrorSurfacing:
     not a generic tool error."""
 
     def test_expired_window_returns_actionable_error_envelope(self, fake_gmail):
-        # window=0 → the action is immediately outside the undo window.
-        agent = _StubAgent(fake_gmail, undo_window_seconds=0)
+        agent = _StubAgent(fake_gmail, undo_window_seconds=60)
         agent._register_phishing_tools()
 
         # First quarantine a message (the impl is called directly so we have
@@ -268,6 +280,7 @@ class TestUnquarantineWrapperErrorSurfacing:
             fake_gmail, agent, message_id="msg_w", is_phishing=True
         )
         action_id = q["action_id"]
+        _age_action(agent, action_id, seconds=61)
 
         unquarantine = _TOOL_REGISTRY["unquarantine_message"]["function"]
         out = json.loads(unquarantine(action_id))
@@ -315,37 +328,3 @@ class TestConfirmationGating:
             "confirmation set. This tool mutates message state and must require "
             "explicit user confirmation."
         )
-
-
-# ---------------------------------------------------------------------------
-# Prompt-injection safety
-# ---------------------------------------------------------------------------
-
-
-class TestPhishingBodyPromptInjection:
-    """The agent MUST NOT follow instructions embedded in phishing email bodies.
-
-    The system prompt uses <<<UNTRUSTED_EMAIL_BODY_*>>> delimiters and
-    explicitly tells the LLM that body content is DATA, never instructions.
-    This test verifies the system prompt contains the safety language
-    and that the phishing flag propagates through the contract.
-    """
-
-    def test_system_prompt_contains_untrusted_input_warning(self):
-        from gaia_agent_email.agent import _SYSTEM_PROMPT
-
-        assert (
-            "UNTRUSTED" in _SYSTEM_PROMPT
-        ), "System prompt must contain the UNTRUSTED INPUT warning section."
-        assert (
-            "UNTRUSTED_EMAIL_BODY_START" in _SYSTEM_PROMPT
-        ), "System prompt must reference the <<<UNTRUSTED_EMAIL_BODY_START>>> delimiter."
-
-    def test_system_prompt_refuses_phishing_action_instructions(self):
-        from gaia_agent_email.agent import _SYSTEM_PROMPT
-
-        # The system prompt must tell the LLM to refuse acting on body instructions.
-        assert (
-            "refuse" in _SYSTEM_PROMPT.lower()
-            or "must refuse" in _SYSTEM_PROMPT.lower()
-        ), "System prompt must instruct the LLM to refuse acting on email body instructions."

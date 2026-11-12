@@ -2,41 +2,61 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Cloud, Cpu, HelpCircle, Loader2, RotateCw, Settings } from 'lucide-react';
+import { Cloud, Cpu, HelpCircle, Loader2, RotateCw, ScrollText, Settings } from 'lucide-react';
 import { Popover } from './Popover';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
-import { useModelStore, useInferencePlace, displayModelName, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
-import { ctxLabel, placementText } from './modelMeta';
+import { useLogsStore } from '../stores/logsStore';
+import { useModelStore, useInferencePlace, displayModelName, sameModelId, UNKNOWN_PLACE_TITLE } from '../stores/modelStore';
+import { ctxLabel } from './modelMeta';
+import { useT, type Translate } from '../i18n/useT';
+import { ref, type MessageKey } from '../i18n/registry';
 import './ModelPicker.css';
-import type { LocalModelStatus } from '../types';
+import type { LocalModelStatus, ModelPlacement } from '../types';
 
 const POLL_MS = 3000;
 
 type Dot = 'loaded' | 'warming' | 'stopped' | 'idle';
 
-const STATE_TEXT: Record<LocalModelStatus['state'], string> = {
-    loaded: 'Loaded',
-    warming: 'Warming up',
-    idle: 'Not loaded — it loads with your next message',
-    stopped: 'Model server stopped',
+const STATE_TEXT: Record<LocalModelStatus['state'], MessageKey> = {
+    loaded: 'modelStatus.state.loaded',
+    warming: 'modelStatus.state.warming',
+    idle: 'modelStatus.state.idle',
+    stopped: 'modelStatus.state.stopped',
 };
 
-function memoryText(s: LocalModelStatus): string | null {
+const PILL_ARIA: Record<Dot, MessageKey> = {
+    loaded: 'modelStatus.pillAria.loaded',
+    warming: 'modelStatus.pillAria.warming',
+    idle: 'modelStatus.pillAria.idle',
+    stopped: 'modelStatus.pillAria.stopped',
+};
+
+// Sizes go in as string params, so an rtl line keeps each one whole and left to right.
+function memoryText(s: LocalModelStatus, t: Translate): string | null {
     const m = s.memory;
     if (!m) return s.memory_error;
-    const used = m.model_gb ? `~${m.model_gb} GB used by the model` : null;
-    const free = m.free_gb != null ? `${m.free_gb} GB free` : null;
-    return [used, free].filter(Boolean).join(' · ') || `${m.total_gb} GB (${m.source})`;
+    if (!m.model_gb && m.free_gb == null) return t('modelStatus.memoryTotal', { size: `${m.total_gb} GB`, source: m.source });
+    return t.compose((say) => [
+        m.model_gb ? say('modelStatus.memoryUsed', { size: `~${m.model_gb} GB` }) : null,
+        m.free_gb != null ? say('modelStatus.memoryFree', { size: `${m.free_gb} GB` }) : null,
+    ].filter(Boolean).join(' · '));
+}
+
+function placementLabel(p: ModelPlacement, t: Translate): string | null {
+    if (!p.label) return null;
+    return p.source === 'expected' ? t('modelStatus.expected', { label: p.label }) : p.label;
 }
 
 /** The sidebar's "Local · model" pill: live state at a glance, details and Restart on click. */
 export function ModelStatusPill() {
+    const t = useT();
     const active = useModelStore((s) => s.active);
     useModelStore((s) => s.names);
     const place = useInferencePlace();
     const systemStatus = useChatStore((s) => s.systemStatus);
     const openSettings = useChatStore((s) => s.openSettings);
+    const showServerLog = useLogsStore((s) => s.show);
     const anchor = useRef<HTMLButtonElement>(null);
     const [open, setOpen] = useState(false);
     const [status, setStatus] = useState<LocalModelStatus | null>(null);
@@ -75,15 +95,18 @@ export function ModelStatusPill() {
     }, [load]);
 
     // At a glance, from the status the app already polls; the popover reads the full report.
+    // Green only for the model the pill names — another resident model means a load is due.
     const dot: Dot = !systemStatus
         ? 'idle'
-        : !systemStatus.lemonade_running ? 'stopped' : systemStatus.model_loaded ? 'loaded' : 'idle';
+        : !systemStatus.lemonade_running
+            ? 'stopped'
+            : sameModelId(systemStatus.model_loaded, active?.model) ? 'loaded' : 'idle';
     const Icon = place?.remote ? Cloud : place ? Cpu : HelpCircle;
     const name = active?.model ? displayModelName(active.model) : null;
-    const text = [place?.label, name].filter(Boolean).join(' · ') || 'Model';
+    const text = [place?.label, name].filter(Boolean).join(' · ') || t('modelStatus.fallbackName');
     const title = !place
         ? UNKNOWN_PLACE_TITLE
-        : place.description ?? (place.remote ? `Chat history is sent to ${place.label}` : 'Runs on this PC');
+        : place.description ?? (place.remote ? t('modelStatus.sentTo', { name: place.label }) : t('modelStatus.runsHere'));
 
     const s = status;
     const busy = restarting || !!s?.restarting;
@@ -99,42 +122,42 @@ export function ModelStatusPill() {
                 onClick={() => setOpen((v) => !v)}
                 aria-haspopup="dialog"
                 aria-expanded={open}
-                aria-label={place?.remote ? text : `${text}, model ${dot === 'idle' ? 'not loaded' : dot}`}
+                aria-label={place?.remote ? text : t(PILL_ARIA[dot], { text })}
                 title={name ? `${text}. ${title}` : title}
             >
                 <Icon size={13} aria-hidden="true" />
                 <span className="sb-location-text">
                     {place?.label && name && <span className="sb-location-place">{place.label}</span>}
-                    <span className="sb-location-name">{name ?? place?.label ?? 'Model'}</span>
+                    <span className="sb-location-name" dir="auto">{name ?? place?.label ?? t('modelStatus.fallbackName')}</span>
                 </span>
                 {!place?.remote && (
                     <span className={`sb-location-dot is-${dot}`} aria-hidden="true" />
                 )}
             </button>
-            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label="Model status" placement="above">
+            <Popover open={open} onClose={() => setOpen(false)} anchor={anchor} label={t('modelStatus.label')} placement="above">
                 <div className="model-status">
-                    {!s && !error && <span><Loader2 size={13} className="spin" /> Checking the model…</span>}
+                    {!s && !error && <span><Loader2 size={13} className="spin" /> {t('modelStatus.checking')}</span>}
                     {s && (
                         <>
                             <div className="model-status-head">
                                 <span className={`model-status-dot is-${s.state}`} aria-hidden="true" />
                                 <span role="status">
-                                    {STATE_TEXT[s.state]}{s.state === 'loaded' && s.busy_reason === 'request' ? ' · answering' : ''}
+                                    {s.state === 'loaded' && s.busy_reason === 'request' ? t('modelStatus.state.loadedAnswering') : t(STATE_TEXT[s.state])}
                                 </span>
                             </div>
                             {s.active_remote && (
                                 <span className="settings-hint">
-                                    New messages use {s.active_display_name} in the cloud. Local model below.
+                                    {t('modelStatus.cloudLine', { name: s.active_display_name ?? s.active_model ?? '—' })}
                                 </span>
                             )}
                             <dl className="model-status-grid">
-                                <dt>Model</dt>
+                                <dt>{t('modelStatus.model')}</dt>
                                 <dd title={s.model ?? s.active_model ?? undefined}>
-                                    {s.display_name ?? (s.active_remote ? '—' : s.active_display_name) ?? '—'}
+                                    <bdi>{s.display_name ?? (s.active_remote ? '—' : s.active_display_name) ?? '—'}</bdi>
                                 </dd>
-                                {s.placement && (<><dt>Runs on</dt><dd>{placementText(s.placement)}</dd></>)}
-                                {s.state !== 'stopped' && (<><dt>Memory</dt><dd>{memoryText(s) ?? 'unknown'}</dd></>)}
-                                {s.ctx_size != null && (<><dt>Context window</dt><dd>{ctxLabel(s.ctx_size)} tokens</dd></>)}
+                                {s.placement && (<><dt>{t('modelStatus.runsOn')}</dt><dd><bdi>{placementLabel(s.placement, t)}</bdi></dd></>)}
+                                {s.state !== 'stopped' && (<><dt>{t('modelStatus.memory')}</dt><dd>{memoryText(s, t) ?? t('modelStatus.unknown')}</dd></>)}
+                                {s.ctx_size != null && (<><dt>{t('modelStatus.context')}</dt><dd>{t('settings.ctx.tokens', { size: ctxLabel(s.ctx_size) })}</dd></>)}
                             </dl>
                             {s.placement?.warning && <span className="model-status-warning" role="alert">{s.placement.warning}</span>}
                             {s.error && (
@@ -147,12 +170,11 @@ export function ModelStatusPill() {
                     {confirming && s && (
                         <div className="model-status-confirm" role="alert">
                             <span>
-                                This reloads {s.display_name ?? 'the model'} on your Lemonade at {s.base_url}. Other apps
-                                using it are interrupted while it reloads.
+                                {t('modelStatus.confirm', { name: s.display_name ?? ref('modelStatus.theModel'), url: s.base_url ?? '—' })}
                             </span>
                             <div className="model-status-actions">
-                                <button type="button" className="btn-secondary" onClick={() => setConfirming(false)}>Cancel</button>
-                                <button type="button" className="btn-primary" onClick={() => void restart(true)}>Reload it</button>
+                                <button type="button" className="btn-secondary" onClick={() => setConfirming(false)}>{t('modelStatus.cancel')}</button>
+                                <button type="button" className="btn-primary" onClick={() => void restart(true)}>{t('modelStatus.reloadIt')}</button>
                             </div>
                         </div>
                     )}
@@ -162,8 +184,17 @@ export function ModelStatusPill() {
                             className="btn-secondary"
                             onClick={() => { setOpen(false); openSettings('model'); }}
                         >
-                            <Settings size={13} aria-hidden="true" /> Model settings
+                            <Settings size={13} aria-hidden="true" /> {t('modelStatus.settings')}
                         </button>
+                        {!s?.active_remote && (
+                            <button
+                                type="button"
+                                className="btn-secondary"
+                                onClick={() => { setOpen(false); showServerLog('model_server'); }}
+                            >
+                                <ScrollText size={13} aria-hidden="true" /> {t('logs.serverLog')}
+                            </button>
+                        )}
                         {canRestart && <button
                             type="button"
                             className="btn-secondary"
@@ -171,14 +202,14 @@ export function ModelStatusPill() {
                             disabled={busy || !s || s.busy || (s.active_remote && s.state !== 'loaded')}
                             title={s?.busy
                                 ? (s.busy_reason === 'warm_up'
-                                    ? 'GAIA is getting the model ready for a new chat. Restart it once that finishes.'
-                                    : 'The model is answering a request. Restart it once that finishes.')
+                                    ? t('modelStatus.busyWarmUp')
+                                    : t('modelStatus.busyRequest'))
                                 : s?.state === 'stopped'
-                                    ? 'Start the model server and load the model'
-                                    : 'Reload the model at its context size'}
+                                    ? t('modelStatus.startServer')
+                                    : t('modelStatus.reload')}
                         >
                             {busy ? <Loader2 size={13} className="spin" /> : <RotateCw size={13} aria-hidden="true" />}
-                            {busy ? 'Restarting…' : 'Restart'}
+                            {busy ? t('modelStatus.restarting') : t('modelStatus.restart')}
                         </button>}
                     </div>
                 </div>

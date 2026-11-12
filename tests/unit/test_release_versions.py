@@ -26,9 +26,8 @@ import release_tag  # noqa: E402
 import release_versions as rv  # noqa: E402
 
 CORE_TARGETS = [t for t in rv.TARGETS if t.path != rv.CORE_PY]
-ENFORCED = [t for t in CORE_TARGETS if not t.held and t.count is not None]
+ENFORCED = [t for t in CORE_TARGETS if t.count is not None]
 OPTIONAL = [t for t in rv.TARGETS if t.count is None]
-HELD = [t for t in rv.TARGETS if t.held]
 FLAGSHIP = rv.select("flagship")
 
 
@@ -92,27 +91,6 @@ def test_main_tree_passes():
     assert report.drift == []
 
 
-def test_only_the_declared_targets_are_held():
-    """Held drift is reported, never failed; the list must not quietly grow."""
-    assert {(t.path, t.what) for t in HELD} == {
-        ("hub/agents/chat/python/gaia_agent_chat/__init__.py", "__version__"),
-    }
-
-
-def test_held_drift_is_reported_and_left_alone(tree):
-    for t in HELD:
-        _set(tree, t, "0.0.9", count=t.count)
-    held_bytes = {t.path: (tree / t.path).read_bytes() for t in HELD}
-
-    report = rv.run(tree, stamp=True)
-
-    assert report.errors == [] and report.drift == []
-    assert len(report.held) == len(HELD)
-    assert all("0.0.9" in line for line in report.held)
-    for t in HELD:
-        assert (tree / t.path).read_bytes() == held_bytes[t.path]
-
-
 # -- Drift: every target, one at a time -------------------------------------
 
 
@@ -152,7 +130,7 @@ def test_one_of_two_lockfile_entries_drifting_fails(tree):
 @pytest.mark.parametrize("floor", ["0.25.0", "0.0.1", "99.0.0"])
 def test_a_floor_that_is_not_core_fails(tree, floor):
     core = rv.read_sources(tree).core_base
-    target = _target("hub/agents/chat/python/pyproject.toml", "amd-gaia floor")
+    target = _target("hub/agents/gaia/python/pyproject.toml", "amd-gaia floor")
     _set(tree, target, floor)
 
     report = rv.run(tree, stamp=False)
@@ -163,8 +141,11 @@ def test_a_floor_that_is_not_core_fails(tree, floor):
     assert rv.run(tree, stamp=False).drift == []
 
 
-def test_a_core_bump_moves_every_core_field_but_not_the_navbar_or_chat(tree):
-    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, "0.27.0")
+def test_a_core_bump_moves_every_core_field_but_not_the_navbar(tree):
+    # Bump past whatever this tree declares; a fixed target goes stale at release.
+    major, minor = rv.read_sources(tree).core_base.split(".")[:2]
+    bumped = f"{major}.{int(minor) + 1}.0"
+    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, bumped)
     report = rv.run(tree, stamp=False)
     drifted = {line.split(":")[0] for line in report.drift}
     core_fields = {
@@ -178,8 +159,9 @@ def test_a_core_bump_moves_every_core_field_but_not_the_navbar_or_chat(tree):
     assert rv.run(tree, stamp=False).drift == []
     src = rv.read_sources(tree)
     assert src.released == rv.read_sources(REPO_ROOT).released
-    assert src.chat == rv.read_sources(REPO_ROOT).chat
-    assert '"amd-gaia>=0.27.0"' in _raw(tree / "hub/agents/gaia/python/pyproject.toml")
+    assert f'"amd-gaia>={bumped}"' in _raw(
+        tree / "hub/agents/gaia/python/pyproject.toml"
+    )
 
 
 # -- The flagship follows core -------------------------------------------------
@@ -214,21 +196,13 @@ def test_a_drifted_flagship_field_fails_naming_the_file(tree, path, what):
 
 
 def test_a_core_bump_moves_the_lock_but_not_its_tui_lane(tree):
-    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, "0.27.0")
+    _set_source(tree, rv.CORE_PY, rv._PY_VERSION, "9.0.0")
     rv.run(tree, stamp=True)
     lock = _raw(tree / "hub/agents/gaia/npm/binaries.lock.json")
-    assert '"agentVersion": "0.27.0"' in lock
-    assert "/agents/gaia/0.27.0" in lock
+    assert '"agentVersion": "9.0.0"' in lock
+    assert "/agents/gaia/9.0.0" in lock
     # The terminal UI lane in the same lock follows terminal-hub's release.
-    assert "/agents/terminal-hub/0.27.0" not in lock
-
-
-def test_the_chat_manifest_follows_chat_not_core(tree):
-    _set_source(tree, rv.CHAT_PYPROJECT, rv._TOML_VERSION, "0.2.5")
-    report = rv.run(tree, stamp=False)
-    assert [line.split(":")[0] for line in report.drift] == [
-        "hub/agents/chat/python/gaia-agent.yaml (version)"
-    ]
+    assert "/agents/terminal-hub/9.0.0" not in lock
 
 
 # -- Optional doc URLs ---------------------------------------------------------
@@ -381,7 +355,7 @@ def test_cli_released_prints_the_newest_listed_release(tree, capsys):
     ],
 )
 def test_a_missing_target_file_is_an_error_and_stamp_writes_nothing(tree, rel):
-    floor = _target("hub/agents/chat/python/pyproject.toml", "amd-gaia floor")
+    floor = _target("hub/agents/gaia/python/pyproject.toml", "amd-gaia floor")
     _set(tree, floor, "0.1.0")
     drifted = (tree / floor.path).read_bytes()
     (tree / rel).unlink()
@@ -394,7 +368,7 @@ def test_a_missing_target_file_is_an_error_and_stamp_writes_nothing(tree, rel):
     assert rv.print_report(report, stamp=True) == 1
 
 
-@pytest.mark.parametrize("rel", [rv.CORE_PY, rv.DOCS_JSON, rv.CHAT_PYPROJECT])
+@pytest.mark.parametrize("rel", [rv.CORE_PY, rv.DOCS_JSON])
 def test_a_missing_source_is_an_error(tree, rel):
     (tree / rel).unlink()
     report = rv.run(tree, stamp=False)
@@ -410,13 +384,6 @@ def test_an_unparseable_core_version_is_an_error(tree, version):
     assert report.errors == [
         f"{rv.CORE_PY}: __version__ '{version}' is not X.Y.Z or X.Y.ZrcN (N >= 1)"
     ]
-
-
-@pytest.mark.parametrize("version", ["0.3", "0.3.1rc1", "latest"])
-def test_an_unparseable_chat_version_is_an_error(tree, version):
-    _set_source(tree, rv.CHAT_PYPROJECT, rv._TOML_VERSION, version)
-    report = rv.run(tree, stamp=False)
-    assert report.errors == [f"{rv.CHAT_PYPROJECT}: version '{version}' is not X.Y.Z"]
 
 
 def test_a_field_that_appears_twice_is_an_error_not_a_guess(tree):

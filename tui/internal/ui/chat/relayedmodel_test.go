@@ -122,7 +122,7 @@ func TestRelayedModelSwitchIsNeverSentAsAQuestion(t *testing.T) {
 	if len(*saves) != 0 {
 		t.Fatalf("the switch was saved before the agent ran a turn on it: %+v", *saves)
 	}
-	m = finishTurn(t, m)
+	finishTurn(t, m)
 	if len(*saves) != 1 || (*saves)[0] != (savedCall{"local", localModel}) {
 		t.Errorf("the switch was not remembered after a turn completed on it: %+v", *saves)
 	}
@@ -166,6 +166,16 @@ func TestASwitchUsesLemonadesSpellingOfTheID(t *testing.T) {
 	}
 }
 
+// A model added from a link is registered as user.X and listed by Lemonade as X;
+// the picker switches to it by its user. id once its first pull finishes.
+func TestASwitchToAnAddedModelFindsItUnderTheNameLemonadeLists(t *testing.T) {
+	m, c, _ := relayedChat(t)
+	submitRelayed(t, m, "/model user."+localModel)
+	if c.turnModel != localModel {
+		t.Fatalf("turn model = %q, want Lemonade's %q", c.turnModel, localModel)
+	}
+}
+
 func TestRelayedSwitchToACloudModelNamesTheProvider(t *testing.T) {
 	m, c, saves := relayedChat(t)
 	m = submitRelayed(t, m, "/model "+gatewayMdl)
@@ -175,7 +185,7 @@ func TestRelayedSwitchToACloudModelNamesTheProvider(t *testing.T) {
 	if h := ansi.Strip(m.renderModelChip()); !strings.Contains(h, "AMD LLM Gateway · DeepSeek-V4.1-Flash (remote)") {
 		t.Errorf("header = %q", h)
 	}
-	m = finishTurn(t, m)
+	finishTurn(t, m)
 	if len(*saves) != 1 || (*saves)[0] != (savedCall{"amd", gatewayMdl}) {
 		t.Errorf("saved %+v", *saves)
 	}

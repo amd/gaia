@@ -17,7 +17,6 @@ import {
     FolderOpen,
     BarChart3,
     Globe,
-    Code2,
     FileEdit,
     Copy,
     Check,
@@ -28,6 +27,10 @@ import {
     Circle,
     Sparkles,
     Link,
+    AudioLines,
+    Captions,
+    Image as ImageIcon,
+    Ban,
     type LucideIcon,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -38,75 +41,98 @@ import * as api from '../services/api';
 import { CodeBlock } from './PermissionPrompt';
 import { log } from '../utils/logger';
 import { StepResult } from './LongContent';
+import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
+import { tEn, useT, type Translate } from '../i18n/useT';
+import { localizeLiveStatus } from '../utils/liveStatus';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
 
 interface ToolMeta {
-    label: string;
-    activeLabel: string;
+    /** "Read file"; a message, so each language says it its own way. */
+    label: MessageRef;
+    /** "Reading file", also the stem of "Reading file failed". */
+    activeLabel: MessageRef;
     icon: LucideIcon;
 }
 
-const TOOL_META: Record<string, ToolMeta> = {
+/** Each known tool's icon; its labels are `tool.<name>.done` / `.active` in src/i18n/locales. */
+const TOOL_ICON: Record<string, LucideIcon> = {
     // File operations
-    search_file:           { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search },
-    search_files:          { label: 'Searched files',     activeLabel: 'Searching files',     icon: Search },
-    search_file_content:   { label: 'Searched content',   activeLabel: 'Searching content',   icon: Search },
-    search_directory:      { label: 'Searched directory', activeLabel: 'Searching directory', icon: Search },
-    read_file:             { label: 'Read file',          activeLabel: 'Reading file',        icon: FileText },
-    write_file:            { label: 'Wrote file',         activeLabel: 'Writing file',        icon: FileEdit },
-    get_file_info:         { label: 'Got file info',      activeLabel: 'Getting file info',   icon: FileText },
-    browse_directory:      { label: 'Browsed directory',  activeLabel: 'Browsing directory',  icon: FolderOpen },
-    list_directory:        { label: 'Listed directory',   activeLabel: 'Listing directory',   icon: FolderOpen },
-    list_recent_files:     { label: 'Listed recent files', activeLabel: 'Listing recent files', icon: FolderOpen },
-    analyze_data_file:     { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3 },
+    search_file: Search,
+    search_files: Search,
+    search_file_content: Search,
+    search_directory: Search,
+    read_file: FileText,
+    write_file: FileEdit,
+    get_file_info: FileText,
+    browse_directory: FolderOpen,
+    list_directory: FolderOpen,
+    list_recent_files: FolderOpen,
+    analyze_data_file: BarChart3,
     // Shell & code
-    run_shell_command:     { label: 'Ran command',        activeLabel: 'Running command',     icon: Terminal },
-    execute_code:          { label: 'Executed code',      activeLabel: 'Executing code',      icon: Code2 },
+    run_shell_command: Terminal,
+    run_python: Terminal,
+    execute_python_file: Terminal,
+    // Images
+    analyze_image: ImageIcon,
+    answer_question_about_image: ImageIcon,
+    generate_image: ImageIcon,
+    take_screenshot: ImageIcon,
     // RAG & documents
-    query_documents:       { label: 'Queried documents',  activeLabel: 'Querying documents',  icon: BookOpen },
-    query_specific_file:   { label: 'Queried file',       activeLabel: 'Querying file',       icon: BookOpen },
-    search_indexed_chunks: { label: 'Searched chunks',    activeLabel: 'Searching chunks',    icon: BookOpen },
-    semantic_search:       { label: 'Searched documents', activeLabel: 'Searching documents', icon: BookOpen },
-    evaluate_retrieval:    { label: 'Evaluated retrieval', activeLabel: 'Evaluating retrieval', icon: BookOpen },
-    index_document:        { label: 'Indexed document',   activeLabel: 'Indexing document',   icon: Database },
-    index_documents:       { label: 'Indexed documents',  activeLabel: 'Indexing documents',  icon: Database },
-    index_directory:       { label: 'Indexed directory',  activeLabel: 'Indexing directory',   icon: Database },
-    index_file:            { label: 'Indexed file',       activeLabel: 'Indexing file',       icon: Database },
-    list_indexed_documents: { label: 'Listed documents',  activeLabel: 'Listing documents',   icon: Database },
-    summarize_document:    { label: 'Summarized',         activeLabel: 'Summarizing',         icon: FileText },
-    dump_document:         { label: 'Extracted text',     activeLabel: 'Extracting text',     icon: FileText },
-    rag_status:            { label: 'Checked RAG status', activeLabel: 'Checking RAG',        icon: Database },
-    add_watch_directory:   { label: 'Added watch dir',    activeLabel: 'Adding watch dir',    icon: FolderOpen },
+    query_documents: BookOpen,
+    query_specific_file: BookOpen,
+    search_indexed_chunks: BookOpen,
+    evaluate_retrieval: BookOpen,
+    index_document: Database,
+    index_documents: Database,
+    index_directory: Database,
+    list_indexed_documents: Database,
+    summarize_document: FileText,
+    dump_document: FileText,
+    rag_status: Database,
+    add_watch_directory: FolderOpen,
+    // Recordings
+    transcribe_media: AudioLines,
+    refine_transcript: FileText,
+    analyze_transcript: ListChecks,
+    export_transcript: Captions,
     // Web
-    web_search:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
-    search_web:            { label: 'Searched web',       activeLabel: 'Searching web',       icon: Globe },
-    fetch_page:            { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Link },
-    fetch_webpage:         { label: 'Read web page',      activeLabel: 'Reading web page',    icon: Link },
-    analyze_data:          { label: 'Analyzed data',      activeLabel: 'Analyzing data',      icon: BarChart3 },
+    web_search: Globe,
+    search_web: Globe,
+    fetch_page: Link,
+    fetch_webpage: Link,
     // GAIA agent: files, memory, questions
-    find_files:            { label: 'Found files',        activeLabel: 'Finding files',       icon: Search },
-    edit_file:             { label: 'Edited file',        activeLabel: 'Editing file',        icon: FileEdit },
-    recall:                { label: 'Recalled memory',    activeLabel: 'Recalling memory',    icon: Brain },
-    remember:              { label: 'Saved to memory',    activeLabel: 'Saving to memory',    icon: Brain },
-    update_memory:         { label: 'Updated memory',     activeLabel: 'Updating memory',     icon: Brain },
-    forget:                { label: 'Deleted from memory', activeLabel: 'Deleting from memory', icon: Brain },
-    search_past_conversations: { label: 'Searched past chats', activeLabel: 'Searching past chats', icon: Brain },
-    request_user_input:    { label: 'Asked you',          activeLabel: 'Asking you',          icon: MessageCircleQuestionMark },
+    find_files: Search,
+    edit_file: FileEdit,
+    recall: Brain,
+    remember: Brain,
+    update_memory: Brain,
+    forget: Brain,
+    forget_everything: Brain,
+    search_past_conversations: Brain,
+    request_user_input: MessageCircleQuestionMark,
     // Skills
-    load_skill:            { label: 'Used skill',         activeLabel: 'Loading skill',       icon: Sparkles },
-    unload_skill:          { label: 'Put away skill',     activeLabel: 'Putting away skill',  icon: Sparkles },
-    list_skills:           { label: 'Checked skills',     activeLabel: 'Checking skills',     icon: Sparkles },
-    search_skill_hub:      { label: 'Searched skills',    activeLabel: 'Searching skills',    icon: Sparkles },
-    install_skill:         { label: 'Installed skill',    activeLabel: 'Installing skill',    icon: Sparkles },
-    capture_skill:         { label: 'Saved skill',        activeLabel: 'Saving skill',        icon: Sparkles },
-    remove_skill:          { label: 'Removed skill',      activeLabel: 'Removing skill',      icon: Sparkles },
-    skill_status:          { label: 'Checked skill',      activeLabel: 'Checking skill',      icon: Sparkles },
+    load_skill: Sparkles,
+    use_skill: Sparkles,
+    unload_skill: Sparkles,
+    list_skills: Sparkles,
+    search_skill_hub: Sparkles,
+    install_skill: Sparkles,
+    capture_skill: Sparkles,
+    remove_skill: Sparkles,
+    skill_status: Sparkles,
 };
 
-/** Tools whose row marks the agent picking up a skill. */
-const SKILL_USE_TOOLS = new Set(['load_skill']);
+// A tool added here without its labels would show a raw key; say so at load instead.
+for (const name of Object.keys(TOOL_ICON)) {
+    if (!isMessageKey(`tool.${name}.done`) || !isMessageKey(`tool.${name}.active`)) {
+        throw new Error(`AgentActivity: tool "${name}" has an icon but no tool.${name}.done/.active labels in src/i18n/locales/en.ts.`);
+    }
+}
+
+/** Rows that mark the agent picking up a skill; use_skill is one GAIA adds itself. */
+const SKILL_USE_TOOLS = new Set(['load_skill', 'use_skill']);
 
 // Memory works in the background: its steps show only when they fail.
 const BACKGROUND_TOOLS = new Set(['remember', 'recall', 'update_memory', 'forget']);
@@ -116,8 +142,14 @@ function isBackgroundStep(step: AgentStep): boolean {
 }
 
 const DEFAULT_TOOL_META: ToolMeta = {
-    label: 'Used tool', activeLabel: 'Using tool', icon: Wrench,
+    label: ref('tool.default.done'), activeLabel: ref('tool.default.active'), icon: Wrench,
 };
+
+const named = (what: string, icon: LucideIcon): ToolMeta => ({
+    label: ref('tool.named.done', { what }), activeLabel: ref('tool.named.active', { what }), icon,
+});
+
+const say = (t: Translate, m: MessageRef) => t(m.ref, m.params);
 
 /** Which connector an MCP call went to, as the server names it. */
 type McpIdentity = Pick<AgentStep, 'mcpServerLabel' | 'mcpTool'>;
@@ -126,37 +158,43 @@ function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
     if (!toolName) return DEFAULT_TOOL_META;
     if (toolName.startsWith('mcp_')) {
         const server = mcp?.mcpServerLabel;
-        if (server) {
-            const what = mcp?.mcpTool ? `${server}: ${mcp.mcpTool}` : server;
-            return { label: `Used ${what}`, activeLabel: `Using ${what}`, icon: Globe };
-        }
+        if (server) return named(mcp?.mcpTool ? `${server}: ${mcp.mcpTool}` : server, Globe);
         // Saved turns from before the server named the connector.
-        return { label: 'MCP tool', activeLabel: 'Running MCP tool', icon: Globe };
+        return { label: ref('tool.mcp.done'), activeLabel: ref('tool.mcp.active'), icon: Globe };
     }
-    if (TOOL_META[toolName]) return TOOL_META[toolName];
+    if (isMessageKey(`tool.${toolName}.done`) && isMessageKey(`tool.${toolName}.active`)) {
+        return {
+            label: ref(`tool.${toolName}.done` as MessageKey),
+            activeLabel: ref(`tool.${toolName}.active` as MessageKey),
+            icon: Object.prototype.hasOwnProperty.call(TOOL_ICON, toolName) ? TOOL_ICON[toolName] : Wrench,
+        };
+    }
     // A tool with no entry still says what it was, not a bare "Used tool".
     const words = toolName.replace(/[_-]+/g, ' ').trim();
-    return words
-        ? { ...DEFAULT_TOOL_META, label: `Used ${words}`, activeLabel: `Using ${words}` }
-        : DEFAULT_TOOL_META;
+    return words ? named(words, Wrench) : DEFAULT_TOOL_META;
 }
 
 /** The fallback line for a tool row that arrived without a narration (older saved turns). */
-function toolFallbackLabel(step: AgentStep): string {
+function toolFallbackLabel(step: AgentStep, t: Translate): string {
     const meta = getToolMeta(step.tool, step);
     // The done-label ("Wrote file") would claim a failed, denied or stopped call succeeded.
     const unfinished = step.success == null && !step.result;
     return step.active
-        ? meta.activeLabel
-        : step.success === false ? `${meta.activeLabel} failed`
-        : unfinished ? `${meta.activeLabel} didn't finish` : meta.label;
+        ? say(t, meta.activeLabel)
+        : step.declined ? t('tool.declined', { label: meta.activeLabel })
+        : step.success === false ? t('tool.failed', { label: meta.activeLabel })
+        : unfinished ? t('tool.unfinished', { label: meta.activeLabel }) : say(t, meta.label);
 }
 
 /** The one plain line a tool row shows by default, and the live line while it runs. */
-export function toolRowText(step: AgentStep): string {
+export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     // Narration can only humanize the prefixed tool id; the connector's own name says more.
-    if (step.mcpServerLabel) return toolFallbackLabel(step);
-    return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step);
+    if (step.mcpServerLabel) return toolFallbackLabel(step, t);
+    // GAIA writes this row itself, so it can say it in the UI's language.
+    if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
+    // A present-tense narration would read as if the call you declined ran.
+    if (step.declined && !step.active) return toolFallbackLabel(step, t);
+    return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
 }
 
 const COMPACT_DETAIL_CHARS = 48;
@@ -200,6 +238,35 @@ export interface ActivityRow extends AgentStep {
     count?: number;
     /** Per-plan-step status, parallel to planSteps (plan rows with a known current step). */
     planStatuses?: PlanItemStatus[];
+    /** The finished reasoning that led to this call, opened from the call's row. */
+    thought?: ActivityRow;
+}
+
+/**
+ * Fold each finished thought into the call it led to, so the list reads as steps
+ * instead of "Thought" between every one. A thought still streaming, or one that
+ * led to a note, a plan or the answer, keeps its own row.
+ */
+export function foldThoughts(rows: ActivityRow[]): ActivityRow[] {
+    const out: ActivityRow[] = [];
+    let pending: ActivityRow | undefined;
+    for (const row of rows) {
+        if (row.type === 'thinking' && !row.active && (row.detail || '').trim()) {
+            if (pending) out.push(pending);
+            pending = row;
+            continue;
+        }
+        if (pending && row.type === 'tool') {
+            out.push({ ...row, thought: pending });
+            pending = undefined;
+            continue;
+        }
+        if (pending) out.push(pending);
+        pending = undefined;
+        out.push(row);
+    }
+    if (pending) out.push(pending);
+    return out;
 }
 
 /** The agent's own bookkeeping lines while it walks a plan; the checklist already says this. */
@@ -289,8 +356,8 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
         }
-        // Merge consecutive status steps
-        if (step.type === 'status' && prev && prev.type === 'status' && step.active !== false) {
+        // Merge consecutive status steps, never over a warning
+        if (step.type === 'status' && prev && prev.type === 'status' && prev.success !== false && step.active !== false) {
             result[result.length - 1] = { ...step, label: step.label || prev.label };
             return;
         }
@@ -317,9 +384,6 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
     }
     return result;
 }
-
-/** What a turn blocked on the user says, in the message header and its held tool row. */
-export const WAITING_ON_USER_LABEL = 'Waiting for you';
 
 /** `8` -> "8s", `125` -> "2m 05s". */
 export function formatElapsed(seconds: number): string {
@@ -364,37 +428,55 @@ export function toTimeline(rows: ActivityRow[], answer = ''): TimelineItem[] {
     return items;
 }
 
-/** "Used meeting-notes skill" for a skill pickup whose narration names the skill. */
-function skillUsed(row: ActivityRow): string | undefined {
+/** The skill a skill pickup's narration names. */
+function skillName(row: ActivityRow): string | undefined {
     if (!SKILL_USE_TOOLS.has(row.tool ?? '')) return undefined;
-    const name = /:\s*(.+)$/.exec(row.narration ?? '')?.[1]?.trim();
-    return name ? `Used ${name} skill` : undefined;
+    return /:\s*(.+)$/.exec(row.narration ?? '')?.[1]?.trim() || undefined;
 }
 
 /** Most kinds of step named in a folded run before "and N more". */
 const SUMMARY_KINDS = 3;
 
 /** The one line a folded run of steps shows: what it did, in order. */
-export function stepsSummary(rows: ActivityRow[]): string {
-    const kinds: { label: string; count: number }[] = [];
+export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
+    const kinds: { label: MessageRef; failedLabel?: MessageRef; allFailed: boolean; id: string; count: number }[] = [];
     for (const row of rows) {
-        let label: string;
-        if (row.type === 'tool') label = skillUsed(row) ?? getToolMeta(row.tool, row).label;
-        else if (row.type === 'policy_alert') label = 'Blocked by policy';
-        else if (row.type === 'error') label = 'Hit an error';
-        else if (row.type === 'plan') label = 'Made a plan';
+        let label: MessageRef;
+        let failedLabel: MessageRef | undefined;
+        if (row.type === 'tool' && row.declined) label = ref('activity.youDeclined');
+        else if (row.type === 'tool') {
+            const meta = getToolMeta(row.tool, row);
+            const skill = skillName(row);
+            label = skill ? ref('activity.usedSkill', { name: skill }) : meta.label;
+            failedLabel = skill ? ref('activity.skillFailed', { name: skill }) : ref('tool.failed', { label: meta.activeLabel });
+        }
+        else if (row.type === 'policy_alert') label = ref('activity.blocked');
+        else if (row.type === 'error') label = ref('activity.hitError');
+        else if (row.type === 'plan') label = ref('activity.madePlan');
         else continue;
-        const seen = kinds.find((k) => k.label === label);
-        if (seen) seen.count += row.count ?? 1;
-        else kinds.push({ label, count: row.count ?? 1 });
+        const id = `${label.ref}:${JSON.stringify(label.params ?? {})}`;
+        const failed = row.type === 'tool' && row.success === false;
+        const seen = kinds.find((k) => k.id === id);
+        if (seen) {
+            seen.count += row.count ?? 1;
+            seen.allFailed &&= failed;
+        }
+        else kinds.push({ label, failedLabel, allFailed: failed, id, count: row.count ?? 1 });
     }
-    if (kinds.length === 0) return 'Thought it through';
-    const named = kinds.slice(0, SUMMARY_KINDS).map((k, i) => {
-        const text = i === 0 ? k.label : k.label.charAt(0).toLowerCase() + k.label.slice(1);
-        return k.count > 1 ? `${text} ×${k.count}` : text;
+    // Written once per language, so a bracketed locale brackets the whole line, not each piece.
+    return t.compose((sayIn) => {
+        if (kinds.length === 0) return sayIn('activity.thoughtThrough');
+        const parts = kinds.slice(0, SUMMARY_KINDS).map((k, i) => {
+            // "Saved to memory" over calls that all failed would claim they worked.
+            const shown = k.allFailed && k.failedLabel ? k.failedLabel : k.label;
+            const label = sayIn(shown.ref, shown.params);
+            const text = i === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1);
+            return k.count > 1 ? `${text} ×${k.count}` : text;
+        });
+        const list = parts.join(sayIn('activity.summarySep'));
+        const rest = kinds.length - parts.length;
+        return rest > 0 ? sayIn('activity.summaryMore', { list, n: rest }) : list;
     });
-    const rest = kinds.length - named.length;
-    return rest > 0 ? `${named.join(', ')} and ${rest} more` : named.join(', ');
 }
 
 /** A failed call the agent recovered from stays folded; a turn-level error never hides behind a click. */
@@ -402,7 +484,7 @@ function isTurnError(row: ActivityRow): boolean {
     return row.type === 'error' || row.type === 'policy_alert';
 }
 
-/** A warning the agent raised mid-turn ("Execution paused"); it carries no phase for the live line. */
+/** A warning the agent raised mid-turn ("Execution paused"); it carries no phase for the live line, and stays with the turn. */
 function isWarning(row: ActivityRow): boolean {
     return row.type === 'status' && row.success === false;
 }
@@ -448,12 +530,15 @@ interface AgentActivityProps {
     awaitingUser?: boolean;
     /** What the model is doing between steps; drawn at the end of the timeline while no row is live. */
     liveLine?: React.ReactNode;
+    /** What the running call's own model calls are doing (page progress, a server restart); shown on its row. */
+    toolStatus?: string | null;
     /** The turn's answer, so a note it repeats is not shown twice. */
     answer?: string;
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
-export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, answer }: AgentActivityProps) {
+export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, toolStatus = null, answer }: AgentActivityProps) {
+    const t = useT();
     const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
     const [expandedTools, setExpandedTools] = useState<Set<number>>(new Set());
     const [toolNameFilter, setToolNameFilter] = useState('');
@@ -467,6 +552,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     // While the turn runs, the latest plan stays in view as a live checklist.
     const livePlan = running ? [...displaySteps].reverse().find((s) => s.type === 'plan' && s.planSteps?.length) : undefined;
     const liveRow = running && displaySteps.some((s) => s.active && s.type !== 'status');
+    const statusRowId = running && toolStatus
+        ? [...displaySteps].reverse().find((s) => s.type === 'tool' && s.active)?.id
+        : undefined;
     const filtering = !!toolNameFilter || statusFilter !== 'all';
 
     const toggleTool = useCallback((id: number) => {
@@ -482,7 +570,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
         if (row.type !== 'tool' || !filtering) return true;
         const needle = toolNameFilter.toLowerCase();
         if (needle && !row.tool?.toLowerCase().includes(needle)
-            && !toolRowText(row).toLowerCase().includes(needle)) return false;
+            && !toolRowText(row, t).toLowerCase().includes(needle)) return false;
         if (statusFilter === 'success' && row.success !== true) return false;
         if (statusFilter === 'error' && row.success !== false) return false;
         return true;
@@ -490,7 +578,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const renderRow = (step: ActivityRow) => {
         if (step.type === 'thinking') {
-            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} />;
+            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} now={now} />;
         }
         if (step.type === 'tool') {
             return (
@@ -498,8 +586,10 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     key={step.id}
                     step={step}
                     isExpanded={expandedTools.has(step.id)}
+                    thoughtMs={step.thought ? durations.get(step.thought.id) : undefined}
                     now={now}
                     awaitingUser={running && awaitingUser}
+                    status={step.id === statusRowId ? toolStatus : null}
                     onToggle={() => toggleTool(step.id)}
                 />
             );
@@ -519,13 +609,13 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
     }
 
     const lastIndex = timeline.length - 1;
-    const visibleRows = (rows: ActivityRow[], live: boolean) =>
-        rows.filter((r) => (shownWhenDone(r) || (live && isWarning(r))) && !isPlanShownLive(r, livePlan));
+    const visibleRows = (rows: ActivityRow[]) =>
+        foldThoughts(rows.filter((r) => (shownWhenDone(r) || isWarning(r)) && !isPlanShownLive(r, livePlan)));
     // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
     const openCalls = timeline.reduce((n, item, i) => {
         if (item.kind !== 'steps') return n;
         const live = running && i === lastIndex;
-        const visible = visibleRows(item.rows, live);
+        const visible = visibleRows(item.rows);
         if (visible.length < 2 && !live) return n;
         const open = openGroups.get(item.id) ?? (live || visible.some(isTurnError));
         return open ? n + visible.filter((r) => r.type === 'tool').length : n;
@@ -539,7 +629,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                         return <FlowNote key={item.row.id} text={item.row.detail ?? ''} />;
                     }
                     const live = running && i === lastIndex;
-                    const visible = visibleRows(item.rows, live);
+                    const visible = visibleRows(item.rows);
                     if (visible.length === 0) return null;
                     const failed = visible.some(isTurnError);
                     // A lone row is already one line; folding it would only add a click.
@@ -561,11 +651,13 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                     {failed
                                         ? <AlertCircle size={13} className="agent-icon-error" />
                                         : <CheckCircle2 size={13} className="flow-steps-done" />}
-                                    <span className="flow-steps-text">{stepsSummary(visible)}</span>
+                                    <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
                                     <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
                                 </button>
                             )}
                             {open && <div className="flow-steps-rows">{shown.map(renderRow)}</div>}
+                            {/* A warning never hides behind the fold. */}
+                            {!open && visible.filter(isWarning).map(renderRow)}
                         </div>
                     );
                 })}
@@ -580,20 +672,20 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     <input
                         type="text"
                         className="activity-filter-input"
-                        placeholder="Filter steps…"
-                        aria-label="Filter by tool name"
+                        placeholder={t('activity.filterPlaceholder')}
+                        aria-label={t('activity.filterByTool')}
                         value={toolNameFilter}
                         onChange={(e) => setToolNameFilter(e.target.value)}
                     />
                     <select
                         className="activity-filter-select"
-                        aria-label="Filter by status"
+                        aria-label={t('activity.filterByStatus')}
                         value={statusFilter}
                         onChange={(e) => setStatusFilter(e.target.value as 'all' | 'success' | 'error')}
                     >
-                        <option value="all">All</option>
-                        <option value="success">Success</option>
-                        <option value="error">Error</option>
+                        <option value="all">{t.bare('activity.filter.all')}</option>
+                        <option value="success">{t.bare('activity.filter.success')}</option>
+                        <option value="error">{t.bare('activity.filter.error')}</option>
                     </select>
                 </div>
             )}
@@ -634,24 +726,25 @@ function FlowNote({ text }: { text: string }) {
 
 // ── Flow: Reasoning (collapsed unless it is streaming right now) ──────────
 
-/** "Thought for 8s" once reasoning is over and its length is known. */
-export function thoughtLabel(live: boolean, durationMs?: number): string {
-    if (live) return 'Thinking';
-    if (durationMs == null || durationMs < 1000) return 'Thought';
-    return `Thought for ${formatElapsed(durationMs / 1000)}`;
+/** Live reasoning shorter than this needs no clock. */
+const THINKING_ELAPSED_MIN_MS = 3000;
+
+/** "Thinking · 4s" while it runs, "Thought for 8s" once it is over and its length is known. */
+export function thoughtLabel(live: boolean, durationMs?: number, t: Translate = tEn): string {
+    if (live) {
+        return durationMs != null && durationMs >= THINKING_ELAPSED_MIN_MS
+            ? t('activity.thinkingFor', { time: formatElapsed(durationMs / 1000) })
+            : t('activity.thinking');
+    }
+    if (durationMs == null || durationMs < 1000) return t('activity.thought');
+    return t('activity.thoughtFor', { time: formatElapsed(durationMs / 1000) });
 }
 
-function FlowThought({ step, live, durationMs }: { step: AgentStep; live: boolean; durationMs?: number }) {
+/** Reasoning stays one line, live or done, until the user opens it. */
+function FlowThought({ step, live, durationMs, now }: { step: AgentStep; live: boolean; durationMs?: number; now: number }) {
+    const t = useT();
     const text = (step.detail || '').trim();
     const [open, setOpen] = useState(false);
-    const containerRef = useRef<HTMLDivElement>(null);
-
-    // Keep the newest reasoning in view as it streams.
-    useEffect(() => {
-        if (live && containerRef.current) {
-            containerRef.current.scrollTop = containerRef.current.scrollHeight;
-        }
-    }, [text, live]);
 
     if (!text) return null;
 
@@ -663,15 +756,10 @@ function FlowThought({ step, live, durationMs }: { step: AgentStep; live: boolea
                 aria-expanded={open}
             >
                 {live ? <Loader2 size={13} className="flow-tool-spinner" /> : <Brain size={13} className="flow-tool-icon" />}
-                <span>{thoughtLabel(live, durationMs)}</span>
+                <span>{thoughtLabel(live, live ? now - step.timestamp : durationMs, t)}</span>
                 <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
             </button>
-            {(open || live) && (
-                <div ref={containerRef} className={`flow-thought-hacker ${open ? '' : 'peek'}`}>
-                    <span>{text}</span>
-                    {live && <span className="flow-thought-cursor" />}
-                </div>
-            )}
+            {open && <div className="flow-thought-hacker">{text}</div>}
         </div>
     );
 }
@@ -679,7 +767,7 @@ function FlowThought({ step, live, durationMs }: { step: AgentStep; live: boolea
 // ── Path Linkification (for tool results) ────────────────────────────────
 
 /** Detect Windows absolute paths in text and make them clickable. */
-export function linkifyPaths(text: string): React.ReactNode {
+export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode {
     // A quoted path ('C:\My Docs\a.txt') runs to its closing quote, spaces
     // included, and the quotes stay outside the link. An unquoted one
     // (C:\...\file.ext, (C:\Users\...)) stops at whitespace or punctuation.
@@ -704,7 +792,7 @@ export function linkifyPaths(text: string): React.ReactNode {
                 key={match.index}
                 className="tool-result-path"
                 onClick={handleClick}
-                title={`Open: ${filePath}`}
+                title={t('activity.openPath', { path: filePath })}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleClick(); }}
@@ -728,6 +816,7 @@ export function linkifyPaths(text: string): React.ReactNode {
 // ── Flow: File list from file search tools ───────────────────────────────
 
 function FileListView({ fileList }: { fileList: { files: Array<Record<string, unknown>>; total: number } }) {
+    const t = useT();
     const [expanded, setExpanded] = useState(false);
     const PREVIEW_COUNT = 5;
     const displayFiles = expanded ? fileList.files : fileList.files.slice(0, PREVIEW_COUNT);
@@ -736,8 +825,8 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
     const getFileName = (f: Record<string, unknown>, i: number): string => {
         const name = f.name || f.filename || f.file_name;
         if (name) return String(name);
-        if (f.file_path) return String(f.file_path).replace(/\\/g, '/').split('/').pop() || `File ${i + 1}`;
-        return `File ${i + 1}`;
+        if (f.file_path) return String(f.file_path).replace(/\\/g, '/').split('/').pop() || t('activity.files.file', { n: i + 1 });
+        return t('activity.files.file', { n: i + 1 });
     };
 
     const getDirectory = (f: Record<string, unknown>): string => {
@@ -755,11 +844,11 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
             ))}
             {remaining > 0 && !expanded && (
                 <button className="file-list-more" onClick={() => setExpanded(true)}>
-                    +{remaining} more
+                    {t('activity.files.more', { n: remaining })}
                 </button>
             )}
             {expanded && fileList.files.length < fileList.total && (
-                <span className="file-list-truncated">Showing {fileList.files.length} of {fileList.total} files</span>
+                <span className="file-list-truncated">{t('activity.files.showing', { shown: fileList.files.length, total: fileList.total })}</span>
             )}
         </div>
     );
@@ -775,16 +864,23 @@ interface FlowToolCardProps {
     now: number;
     /** The turn is waiting on the user (an approval or a question). */
     awaitingUser?: boolean;
+    /** Live line from this running call's own model calls; replaces its label. */
+    status?: string | null;
+    /** How long the reasoning folded into this call ran. */
+    thoughtMs?: number;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }: FlowToolCardProps) {
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null, thoughtMs }: FlowToolCardProps) {
+    const t = useT();
     const Icon = getToolMeta(step.tool, step).icon;
     // A call held for the user's answer hasn't started, so it neither runs nor times.
     const waiting = !!step.active && awaitingUser;
-    const line = waiting ? WAITING_ON_USER_LABEL : toolRowText(step);
+    const live = !waiting && !!step.active && status ? localizeLiveStatus(t, status) : '';
+    const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
-    const failure = step.success === false && step.result ? step.result : '';
+    const declined = !!step.declined && !step.active;
+    const failure = step.success === false && step.result && !declined ? step.result : '';
     const timing = waiting
         ? ''
         : step.active
@@ -792,14 +888,14 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
         : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
     return (
-        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false ? 'error' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
+        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false && !declined ? 'error' : ''} ${declined ? 'declined' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
             <button
                 className="flow-tool-header"
                 onClick={onToggle}
                 aria-expanded={isExpanded}
                 title={
-                    waiting
-                        ? toolRowText(step)
+                    waiting || live
+                        ? toolRowText(step, t)
                         : step.narration && step.narration !== line ? step.narration : undefined
                 }
             >
@@ -807,18 +903,26 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
                     {/* What the step did, not whether it worked: only a running or failed step says otherwise. */}
                     {step.active && !waiting ? (
                         <Loader2 size={13} className="flow-tool-spinner" />
+                    ) : declined ? (
+                        <Ban size={13} className="flow-tool-icon" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
-                    <span className="flow-tool-label">{line}</span>
+                    {/* The model's narration is English in every UI language; it truncates at its own end. */}
+                    <span className="flow-tool-label" dir="auto">{line}</span>
                     {count > 1 && (
-                        <span className="flow-tool-count" aria-label={`${count} identical calls`}>{'×'}{count}</span>
+                        <span className="flow-tool-count" aria-label={t('activity.identicalCalls', { n: count })}>{'×'}{count}</span>
                     )}
-                    {failure && <span className="flow-tool-failure">{failure}</span>}
+                    {failure && <span className="flow-tool-failure" dir="auto">{failure}</span>}
                 </div>
                 <div className="flow-tool-right">
+                    {step.thought && (
+                        <span className="flow-tool-thought-mark" title={t('activity.thoughtFirst')} aria-hidden="true">
+                            <Brain size={11} />
+                        </span>
+                    )}
                     {timing && <span className="flow-tool-latency">{timing}</span>}
                     <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
                         <ChevronRight size={12} />
@@ -828,17 +932,23 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
 
             {isExpanded && (
                 <div className="flow-tool-detail">
+                    {step.thought?.detail && (
+                        <div className="flow-tool-thought">
+                            <span className="detail-section-label">{thoughtLabel(false, thoughtMs, t)}</span>
+                            <div className="flow-thought-hacker">{step.thought.detail.trim()}</div>
+                        </div>
+                    )}
                     <div className="flow-tool-raw">
-                        <span className="detail-section-label">Tool</span>
+                        <span className="detail-section-label">{t('activity.detail.tool')}</span>
                         <code className="flow-tool-badge">{step.tool || 'unknown'}</code>
                         {step.mcpServer && (
-                            <span className="flow-tool-mcp-server">via {step.mcpServer}</span>
+                            <span className="flow-tool-mcp-server">{t('activity.detail.via', { server: step.mcpServer })}</span>
                         )}
                     </div>
                     {/* Arguments (except for commands) */}
                     {step.detail && !step.commandOutput && (
                         <div className="step-detail-args">
-                            <span className="detail-section-label">Arguments</span>
+                            <span className="detail-section-label">{t('activity.detail.arguments')}</span>
                             <div className="detail-args-content">
                                 {formatArgsDisplay(step.detail)}
                             </div>
@@ -852,10 +962,10 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
 
                     {step.mcpOutput && (
                         <div className="step-detail-result result-success">
-                            <span className="detail-section-label">Output</span>
+                            <span className="detail-section-label">{t('activity.detail.output')}</span>
                             <CodeBlock code={step.mcpOutput.text} previewLines={MCP_OUTPUT_PREVIEW_LINES} testId="mcp-output" />
                             {step.mcpOutput.truncated && (
-                                <div className="cmd-truncated">Output was truncated (exceeded size limit)</div>
+                                <div className="cmd-truncated">{t('activity.truncated')}</div>
                             )}
                         </div>
                     )}
@@ -864,9 +974,9 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
                     {step.result && !step.commandOutput && !step.mcpOutput && (
                         <div className={`step-detail-result ${step.success === false ? 'result-error' : 'result-success'}`}>
                             <span className="detail-section-label">
-                                {step.success === false ? 'Error' : 'Result'}
+                                {step.success === false ? t('activity.detail.error') : t('activity.detail.result')}
                             </span>
-                            <StepResult text={step.result} renderShort={linkifyPaths} />
+                            <StepResult text={step.result} renderShort={(text) => linkifyPaths(text, t)} />
                         </div>
                     )}
                     {/* Retrieved document chunks */}
@@ -885,8 +995,12 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false }:
 
 // ── Flow: Plan ───────────────────────────────────────────────────────────
 
-const PLAN_STATUS_LABEL: Record<PlanItemStatus, string> = {
-    done: 'Done', running: 'Running', failed: 'Failed', stopped: 'Stopped', pending: 'Not started',
+const PLAN_STATUS_LABEL: Record<PlanItemStatus, MessageKey> = {
+    done: 'activity.planStatus.done',
+    running: 'activity.planStatus.running',
+    failed: 'activity.planStatus.failed',
+    stopped: 'activity.planStatus.stopped',
+    pending: 'activity.planStatus.pending',
 };
 
 function PlanStatusIcon({ status }: { status?: PlanItemStatus }) {
@@ -899,6 +1013,7 @@ function PlanStatusIcon({ status }: { status?: PlanItemStatus }) {
 
 /** The plan as a checklist: each step done, running, failed or not started. */
 export function PlanChecklist({ step }: { step: ActivityRow }) {
+    const t = useT();
     const items = step.planSteps ?? [];
     if (items.length === 0) return null;
     const statuses = step.planStatuses;
@@ -908,8 +1023,8 @@ export function PlanChecklist({ step }: { step: ActivityRow }) {
         <div className="flow-plan">
             <div className="flow-plan-header">
                 <ListChecks size={13} />
-                <span>Plan</span>
-                {statuses && <span className="flow-plan-count">{done} of {items.length} done</span>}
+                <span>{t('activity.plan')}</span>
+                {statuses && <span className="flow-plan-count">{t('activity.planDone', { done, total: items.length })}</span>}
             </div>
             <ol className="flow-plan-list">
                 {items.map((raw, i) => {
@@ -920,7 +1035,7 @@ export function PlanChecklist({ step }: { step: ActivityRow }) {
                             key={i}
                             className={`flow-plan-item ${status ?? ''}`}
                             title={raw}
-                            aria-label={status ? `${PLAN_STATUS_LABEL[status]}: ${text}` : undefined}
+                            aria-label={status ? t('activity.planItem', { status: ref(PLAN_STATUS_LABEL[status]), text }) : undefined}
                         >
                             <PlanStatusIcon status={status} />
                             <span className="flow-plan-text">{text}</span>
@@ -935,43 +1050,45 @@ export function PlanChecklist({ step }: { step: ActivityRow }) {
 // ── Flow: Error ──────────────────────────────────────────────────────────
 
 function FlowError({ step }: { step: AgentStep }) {
+    const t = useT();
     return (
         <div className="flow-error">
             <AlertCircle size={13} />
-            <span>{step.detail || step.label || 'An error occurred'}</span>
+            <span>{step.detail || step.label || t('activity.errorOccurred')}</span>
         </div>
     );
 }
 
 function FlowPolicyAlert({ step }: { step: AgentStep }) {
+    const t = useT();
     return (
         <div className="flow-policy-alert">
             <div className="flow-policy-alert-header">
                 <ShieldAlert size={14} />
-                <span className="flow-policy-alert-title">Policy Shield</span>
+                <span className="flow-policy-alert-title">{t('activity.policy.title')}</span>
                 <span className="flow-policy-alert-decision">{step.decision || 'BLOCK'}</span>
             </div>
             <div className="flow-policy-alert-body">
                 <div className="flow-policy-alert-line">
-                    <span>Tool</span>
+                    <span>{t('activity.policy.tool')}</span>
                     <code>{step.tool || 'unknown tool'}</code>
                 </div>
                 <div className="flow-policy-alert-reason">{step.reason || step.detail}</div>
                 {step.ruleIds && step.ruleIds.length > 0 && (
                     <div className="flow-policy-alert-line">
-                        <span>Rules</span>
+                        <span>{t('activity.policy.rules')}</span>
                         <code>{step.ruleIds.join(', ')}</code>
                     </div>
                 )}
                 {step.policyVersion && (
                     <div className="flow-policy-alert-line">
-                        <span>Policy</span>
+                        <span>{t('activity.policy.policy')}</span>
                         <code>{step.policyVersion}</code>
                     </div>
                 )}
                 <div className="flow-policy-alert-line">
-                    <span>Receipt</span>
-                    {step.receiptId ? <code>{step.receiptId}</code> : <em>Receipt unavailable</em>}
+                    <span>{t('activity.policy.receipt')}</span>
+                    {step.receiptId ? <code>{step.receiptId}</code> : <em>{t('activity.policy.receiptUnavailable')}</em>}
                 </div>
             </div>
         </div>
@@ -981,6 +1098,7 @@ function FlowPolicyAlert({ step }: { step: AgentStep }) {
 // ── Retrieval Chunks View ──────────────────────────────────────────────
 
 function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
+    const t = useT();
     const [expandedChunks, setExpandedChunks] = useState<Set<number>>(new Set());
 
     const toggleChunk = (id: number) => {
@@ -995,7 +1113,7 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
     return (
         <div className="chunks-view">
             <span className="detail-section-label">
-                Retrieved Chunks ({chunks.length})
+                {t('activity.chunks', { n: chunks.length })}
             </span>
             <div className="chunks-list">
                 {chunks.map((chunk) => {
@@ -1012,7 +1130,7 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
                                         <span className="chunk-source">{chunk.source}</span>
                                     )}
                                     {chunk.page != null && (
-                                        <span className="chunk-page">p.{chunk.page}</span>
+                                        <span className="chunk-page">{t('activity.chunkPage', { page: chunk.page })}</span>
                                     )}
                                     {chunk.score != null && chunk.score > 0 && (
                                         <span className="chunk-score">{chunk.score.toFixed(2)}</span>
@@ -1040,6 +1158,7 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
 // ── Command Output View (Terminal Style) ──────────────────────────────────
 
 function CommandOutputView({ output }: { output: CommandOutput }) {
+    const t = useT();
     const [copied, setCopied] = useState(false);
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -1065,7 +1184,7 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
             <div className="cmd-header">
                 <div className="cmd-header-left">
                     <Terminal size={12} className="cmd-header-icon" />
-                    <span className="cmd-header-title">Terminal</span>
+                    <span className="cmd-header-title">{t('activity.terminal')}</span>
                     {output.cwd && <span className="cmd-cwd">{output.cwd}</span>}
                 </div>
                 <div className="cmd-header-right">
@@ -1077,15 +1196,15 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
                             className={`cmd-exit-code${isError ? '' : ' cmd-exit-expected'}`}
                             title={output.expectedExit ?? undefined}
                         >
-                            exit {output.returnCode}
+                            {t('activity.exit', { code: output.returnCode })}
                         </span>
                     )}
                     {hasOutput && (
                         <button
                             className={`cmd-copy ${copied ? 'copied' : ''}`}
                             onClick={handleCopy}
-                            title={copied ? 'Copied!' : 'Copy output'}
-                            aria-label={copied ? 'Copied to clipboard' : 'Copy command output'}
+                            title={copied ? t('msg.copied') : t('activity.copyOutput')}
+                            aria-label={copied ? t('msg.copiedAria') : t('activity.copyOutputAria')}
                         >
                             {copied ? <Check size={11} /> : <Copy size={11} />}
                         </button>
@@ -1099,9 +1218,9 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
             {output.stdout && <pre className="cmd-stdout">{output.stdout}</pre>}
             {output.stderr && <pre className="cmd-stderr">{output.stderr}</pre>}
             {output.truncated && (
-                <div className="cmd-truncated">Output was truncated (exceeded size limit)</div>
+                <div className="cmd-truncated">{t('activity.truncated')}</div>
             )}
-            {!hasOutput && <div className="cmd-empty">No output</div>}
+            {!hasOutput && <div className="cmd-empty">{t('activity.noOutput')}</div>}
         </div>
     );
 }

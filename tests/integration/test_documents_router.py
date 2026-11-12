@@ -165,6 +165,38 @@ def test_upload_blob_dedup_returns_existing(
     assert files_on_disk[0] == Path(doc1["filepath"])
 
 
+def test_upload_blob_repoints_a_document_whose_file_is_gone(
+    client, mock_index_document, managed_docs_sandbox
+):
+    """Re-uploading a document whose stored file was deleted repairs it."""
+    content = b"Keep me readable.\n"
+
+    r1 = client.post(
+        "/api/documents/upload",
+        files={"file": ("notes.txt", content, "text/plain")},
+    )
+    assert r1.status_code == 200, r1.text
+    doc1 = r1.json()
+    Path(doc1["filepath"]).unlink()
+
+    r2 = client.post(
+        "/api/documents/upload",
+        files={"file": ("notes.txt", content, "text/plain")},
+    )
+    assert r2.status_code == 200, r2.text
+    doc2 = r2.json()
+
+    assert doc2["id"] == doc1["id"]
+    assert doc2["filepath"] != doc1["filepath"]
+    new_path = Path(doc2["filepath"])
+    assert new_path.read_bytes() == content
+    assert new_path.parent == managed_docs_sandbox
+    assert mock_index_document.await_count == 2
+    assert Path(mock_index_document.await_args.args[0]) == new_path
+    listed = client.get("/api/documents").json()["documents"]
+    assert [d["filepath"] for d in listed if d["id"] == doc1["id"]] == [str(new_path)]
+
+
 # ── Validation / error paths ─────────────────────────────────────────────────
 
 

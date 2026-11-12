@@ -7,7 +7,7 @@ Seeding happens at most once per machine — a marker at `~/.gaia/seeder/<agent-
 records it, so a user who deletes the agent is never re-seeded (delete the marker and
 relaunch to get it back).
 
-The `example-agent/` here is a working example. To ship your own agent, replace it
-with (or add alongside) a directory containing your `agent.py`. See the
+The stock GAIA installer bundles no agents, so this directory is empty apart from this
+file. To ship your own agent, add a directory containing your `agent.py`. See the
 [Custom Installer Playbook](https://amd-gaia.ai/docs/playbooks/custom-installer) for the
 full walkthrough.

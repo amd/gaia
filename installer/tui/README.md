@@ -14,11 +14,12 @@ why the sidecar is bundled rather than fetched on first run.
 desktop app (Agent UI), the terminal, or both — at least one — and installs the
 desktop app by running the unmodified electron-builder
 `gaia-agent-ui-<version>-x64-setup.exe` it embeds. That setup stays the app's
-owner (files, Installed-apps entry, shortcuts, autostart, uninstaller) because
+owner (files, Installed-apps entry, shortcuts, uninstaller) because
 electron-updater re-runs exactly that file. The terminal shows as
-`GAIA Terminal UI` but keeps the folder and registry ids of the terminal-only
-setup (`GAIA Terminal Hub`, `GAIATerminalHub`), so either earlier installer is
-upgraded in place and its old-named shortcuts are removed. Silent installs take `/S /COMPONENTS=ui,tui`; the
+`GAIA Terminal UI` and installs to `%LOCALAPPDATA%\Programs\gaia-tui` under
+`gaia-tui` registry ids. Upgrading an install an earlier setup made under the
+legacy `GAIA Terminal Hub` folder and `TerminalHub` ids moves it there and
+removes the old folder, keys, PATH entry and shortcuts. Silent installs take `/S /COMPONENTS=ui,tui`; the
 exit codes are listed in `gaia-setup.nsi` and [Install GAIA](../../docs/guides/install.mdx).
 
 | Platform | Builder | Artifact |
@@ -34,7 +35,10 @@ those platform keys rather than let a half-empty installer get built.
 ## Staging a payload
 
 All three builders take `--payload <dir>` holding `gaia-tui` and `gaia-agent`
-(with `.exe` suffixes on Windows). The Windows and macOS builders read
+(with `.exe` suffixes on Windows), and `core/`: the frozen `gaia` and its
+`_internal` folder, unpacked from a `gaia-core-<platform>` build of
+[`build_core.yml`](../../.github/workflows/build_core.yml). The terminal UI runs
+setup and starts the daemon with that `gaia`, so the PC needs no Python. The Windows and macOS builders read
 `LICENSE.md` from that directory too; the Linux one reads it from the repo root
 instead, because it already resolves the repo for its `.desktop` file and icon.
 Stage all three and every builder is satisfied. Build the first, fetch the
@@ -93,7 +97,7 @@ python util/check_pe_resources.py bin/gaia-win-x64.exe
 CI builds the macOS and Linux packages in `.github/workflows/tui_installers.yml`
 and the Windows setup in `.github/workflows/windows_setup.yml`; both smoke-test on
 a runner that did not build them, on PRs (via `build_tui.yml`) and on release
-(via `release_components.yml`). The Windows smoke test is
+(via `publish.yml`). The Windows smoke test is
 [`nsis/smoke-test.ps1`](nsis/smoke-test.ps1). It installs, writes HKCU/HKLM keys,
 fonts and shortcuts, and uninstalls — run it only on a throwaway machine. Locally, each
 builder is self-contained — see the per-platform READMEs for the toolchain each

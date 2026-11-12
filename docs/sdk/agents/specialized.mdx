@@ -3,11 +3,11 @@ title: "Specialized"
 ---
 
 <Info>
-  **Source Code:** [`hub/agents/chat/python/gaia_agent_chat/`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/gaia_agent_chat/)
+  **Source Code:** [`hub/agents/gaia/python/gaia_agent/`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/)
 </Info>
 
 <Note>
-**Import:** `from gaia_agent_chat.agent import ChatAgent`
+**Import:** `from gaia_agent.chat_agent import ChatAgent`
 </Note>
 ---
 
@@ -19,7 +19,7 @@ title: "Specialized"
 **Purpose:** General-purpose conversational agent with file operations, RAG, and shell command capabilities.
 
 ```python
-from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 
 # Configure the chat agent (use ChatAgentConfig; ChatAgent takes a single
 # `config` argument rather than loose kwargs)

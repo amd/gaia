@@ -25,8 +25,8 @@ class MCPClientMixin:
         mixin's ``__init__`` is unreachable through the MRO. Set
         ``self._mcp_manager`` before calling ``super().__init__(...)`` —
         ``Agent.__init__`` runs ``_register_tools()`` which loads MCP tools.
-        See ``ChatAgent.__init__`` (the gaia-agent-chat wheel,
-        ``gaia_agent_chat/agent.py``) for the canonical pattern.
+        See ``ChatAgent.__init__`` (the gaia-agent-gaia wheel,
+        ``gaia_agent/chat_agent.py``) for the canonical pattern.
 
             class MyAgent(Agent, MCPClientMixin):
                 def __init__(self, ...):

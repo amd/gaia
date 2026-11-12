@@ -259,6 +259,76 @@ def test_the_branch_is_never_under_release(version):
     assert branch.endswith(version)
 
 
+def test_real_git_push_succeeds_when_origin_has_release_branch(tmp_path):
+    """Exercise checkout/commit/push against a real bare repo, not FakeRepo.
+
+    The release repository has a top-level ``release`` branch. This catches
+    accidentally putting the lock branch below ``release/``: Git refuses such a
+    ref because ``release`` is already a file in the remote ref namespace.
+    GitHub is stubbed only at the PR-list/create boundary.
+    """
+    remote = tmp_path / "remote.git"
+    seed = tmp_path / "seed"
+    checkout = tmp_path / "checkout"
+
+    def git(cwd, *args):
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+        return proc
+
+    git(tmp_path, "init", "--bare", str(remote))
+    git(tmp_path, "init", "-b", "main", str(seed))
+    lock_path = seed / pin.LOCK
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text(_text(_lock(sha="0")), encoding="utf-8")
+    git(seed, "add", pin.LOCK)
+    git(
+        seed,
+        "-c",
+        "user.name=test",
+        "-c",
+        "user.email=test@example.com",
+        "commit",
+        "-m",
+        "base",
+    )
+    git(seed, "remote", "add", "origin", str(remote))
+    git(seed, "push", "origin", "main")
+    git(seed, "branch", "release")
+    git(seed, "push", "origin", "release")
+    git(tmp_path, "clone", str(remote), str(checkout))
+
+    def runner(cmd):
+        if cmd[:3] == ["gh", "pr", "list"]:
+            return subprocess.CompletedProcess(cmd, 0, "[]\n", "")
+        if cmd[:3] == ["gh", "pr", "create"]:
+            return subprocess.CompletedProcess(
+                cmd, 0, "https://github.com/amd/gaia/pull/5486-test\n", ""
+            )
+        return subprocess.run(
+            list(cmd), cwd=checkout, capture_output=True, text=True, check=False
+        )
+
+    outcome = pin.open_lock_pr(
+        _text(_lock()), VERSION, REPO, run=runner, workdir=checkout
+    )
+
+    assert "opened https://github.com/amd/gaia/pull/5486-test" == outcome
+    branch = pin.branch_name(VERSION)
+    git(checkout, "fetch", "origin", branch)
+    assert (
+        json.loads(git(checkout, "show", f"origin/{branch}:{pin.LOCK}").stdout)
+        == _lock()
+    )
+    git(checkout, "show-ref", "--verify", f"refs/remotes/origin/{branch}")
+
+
 # -- refusals ----------------------------------------------------------------
 
 
