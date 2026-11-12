@@ -57,6 +57,20 @@ describe('maths in an answer', () => {
         expect(formulas(container)).toHaveLength(1);
         expect(container.textContent).toContain('\\frac{1}{');
     });
+
+    it('draws two formulas written on one line as two', () => {
+        const { container } = renderAnswer('$$a^2$$ and $$b^2$$');
+        const shown = formulas(container);
+        expect(shown).toHaveLength(2);
+        expect(container.textContent).not.toContain('$$');
+    });
+
+    it('keeps a formula under a numbered step inside the list', () => {
+        const { container } = renderAnswer('1. Compute:\n   $$x^2$$\n2. Next');
+        expect(container.querySelectorAll('ol')).toHaveLength(1);
+        expect(container.querySelectorAll('ol > li')).toHaveLength(2);
+        expect(container.querySelector('ol > li .md-math')).not.toBeNull();
+    });
 });
 
 describe('normalizeMathDelimiters', () => {
@@ -65,6 +79,9 @@ describe('normalizeMathDelimiters', () => {
         ['so $a_1 + b$ holds', 'so $$a_1 + b$$ holds'],
         ['escaped \\$x^2$ stays', 'escaped \\$x^2$ stays'],
         ['\\[E = mc^2\\]', '$$\nE = mc^2\n$$'],
+        ['   $$x^2$$', '   $$\n   x^2\n   $$'],
+        ['   \\[', '   $$'],
+        ['$$a$$ and $$b$$', '$$a$$ and $$b$$'],
     ])('%s', (input, output) => {
         expect(normalizeMathDelimiters(input)).toBe(output);
     });

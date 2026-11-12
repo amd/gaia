@@ -23,9 +23,15 @@ function convertProse(text: string): string {
 }
 
 function convertLine(line: string): string {
-    const whole = /^\s*(?:\\\[(.+)\\\]|\$\$(.+)\$\$)\s*$/.exec(line);
-    if (whole) return `$$\n${(whole[1] ?? whole[2]).trim()}\n$$`;
-    if (/^\s*\\[[\]]\s*$/.test(line)) return '$$';
+    // One formula only: two on a line are inline spans. The indent is kept so a
+    // formula under a list item stays in it.
+    const whole = /^(\s*)(?:\\\[(.+)\\\]|\$\$((?:(?!\$\$).)+)\$\$)\s*$/.exec(line);
+    if (whole) {
+        const indent = whole[1];
+        return `${indent}$$\n${indent}${(whole[2] ?? whole[3]).trim()}\n${indent}$$`;
+    }
+    const bare = /^(\s*)\\[[\]]\s*$/.exec(line);
+    if (bare) return `${bare[1]}$$`;
     let out = '';
     let at = 0;
     for (const span of line.matchAll(CODE_SPAN_RE)) {
