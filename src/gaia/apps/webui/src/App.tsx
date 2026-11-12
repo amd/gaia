@@ -827,7 +827,8 @@ ${prompt}` : prompt);
             </ErrorBoundary>
 
             <div className="main-content">
-                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
+                {/* The setup check can wait a minute on a hung model server; the chat shows meanwhile, so the warning must too. */}
+                {(setup.state === 'ready' || setup.state === 'checking') && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
                 {setup.state === 'serverDown' && (
                     <div className="app-notice is-warning" role="status">
                         <span>{t('setup.serverDown.notice')}</span>
