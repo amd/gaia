@@ -31,6 +31,26 @@ function show(tests: SetupTest[], state: 'verifying' | 'failed' | 'cancelled' = 
 const rowOf = (name: RegExp) => screen.getByText(name).closest('li') as HTMLElement;
 
 describe('Test step', () => {
+    it('marks the next test as starting while the run is between tests, instead of all waiting', () => {
+        show([row('server', 'passed'), row('embedding', 'passed')], 'verifying', ['server', 'embedding', 'agent']);
+        const next = rowOf(/A real chat with GAIA/);
+        expect(next).toHaveClass('is-running');
+        expect(next).toHaveTextContent('Starting…');
+        expect(next.querySelector('.spin')).not.toBeNull();
+    });
+
+    it('keeps the next test waiting once the run has stopped', () => {
+        show([row('server', 'passed')], 'cancelled', ['server', 'agent']);
+        expect(rowOf(/A real chat with GAIA/)).toHaveTextContent('Waiting');
+    });
+
+    it('names a cloud model by its name, not its provider-prefixed id', () => {
+        show([row('agent', 'running', { subject: 'fireworks.deepseek-v4p1-flash' })], 'verifying', ['agent']);
+        const chat = rowOf(/A real chat with GAIA/);
+        expect(chat).toHaveTextContent('deepseek-v4p1-flash');
+        expect(chat).not.toHaveTextContent('fireworks.');
+    });
+
     it('shows one row per test with its model, state and time', () => {
         show([
             row('server', 'passed', { seconds: 0.4 }),
@@ -46,7 +66,7 @@ describe('Test step', () => {
 
     it('lists the tests still to come, and counts them in the total', () => {
         show([row('server', 'passed')], 'verifying', ['server', 'chat', 'agent']);
-        expect(rowOf(/Chat: loads and answers/)).toHaveTextContent('Waiting');
+        expect(rowOf(/Chat: loads and answers/)).toHaveTextContent('Starting…');
         expect(rowOf(/A real chat with GAIA/)).toHaveTextContent('Waiting');
         expect(screen.getByText('Tests done: 1 of 3')).toBeInTheDocument();
         expect(screen.getByRole('progressbar', { name: 'Testing everything' })).toHaveAttribute('value', '33');

@@ -7,6 +7,7 @@ import type { UseAttachments } from '../hooks/useAttachments';
 import { useT } from '../i18n/useT';
 import { middleTruncate } from '../utils/format';
 import { isVideoFile } from '../utils/mediaFiles';
+import { isEditLastKey } from '../utils/editLast';
 import type { Attachment } from '../types';
 import './Composer.css';
 
@@ -25,6 +26,8 @@ interface ComposerProps {
     stopping?: boolean;
     /** While streaming, Enter still submits: the message is queued for the next turn. */
     queueWhileStreaming?: boolean;
+    /** GAIA is waiting on a question, and Enter sends the text as its answer. */
+    answering?: boolean;
     /** Blocks typing and sending, with the reason shown as the placeholder. */
     disabledReason?: string | null;
     attachments: UseAttachments;
@@ -35,6 +38,8 @@ interface ComposerProps {
     leftControls?: ReactNode;
     /** Small inline controls before the send button (model). */
     rightControls?: ReactNode;
+    /** Up-arrow in an empty box: open the last sent message for editing. */
+    onEditLast?: () => void;
 }
 
 const MAX_INPUT_HEIGHT = 240;
@@ -43,8 +48,8 @@ const MAX_INPUT_HEIGHT = 240;
 export const MAX_MESSAGE_CHARS = 100_000;
 
 export function Composer({
-    value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, disabledReason, attachments,
-    placeholder, autoFocus, inputRef, leftControls, rightControls,
+    value, onChange, onSubmit, onStop, streaming = false, stopping = false, queueWhileStreaming = false, answering = false, disabledReason, attachments,
+    placeholder, autoFocus, inputRef, leftControls, rightControls, onEditLast,
 }: ComposerProps) {
     const t = useT();
     const ownRef = useRef<HTMLTextAreaElement | null>(null);
@@ -82,11 +87,16 @@ export function Composer({
     }, [value, shownPlaceholder, textareaRef]);
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (onEditLast && isEditLastKey(e, value)) {
+            e.preventDefault();
+            onEditLast();
+            return;
+        }
         if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             if (canSend) onSubmit();
         }
-    }, [canSend, onSubmit]);
+    }, [canSend, onSubmit, onEditLast, value]);
 
     const handleDrop = useCallback((e: React.DragEvent) => {
         if (!e.dataTransfer?.files?.length) return;
@@ -185,8 +195,8 @@ export function Composer({
                             className="composer-send"
                             onClick={onSubmit}
                             disabled={!canSend}
-                            aria-label={t('composer.queue')}
-                            title={t('composer.queueTitle')}
+                            aria-label={answering ? t('composer.sendAnswer') : t('composer.queue')}
+                            title={answering ? t('composer.sendAnswerTitle') : t('composer.queueTitle')}
                         >
                             <ArrowUp size={16} />
                         </button>

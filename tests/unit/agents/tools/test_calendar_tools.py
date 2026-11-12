@@ -13,6 +13,7 @@ inferred. No network, no real calendar, no keychain.
 import json
 import re
 import sys
+import types
 import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1094,6 +1095,69 @@ class TestConnectionErrors:
         error = _run(agent, "list_calendar_events")["error"]
         union = " ".join(sorted([mail, SCOPE_GRAPH_CALENDARS_READWRITE]))
         assert f"grants grant microsoft installed:gaia --scopes {union}" in error
+
+    @staticmethod
+    def _from(agent, surface):
+        config = getattr(agent, "config", None)
+        if config is None:
+            agent.config = types.SimpleNamespace(surface=surface)
+        else:
+            config.surface = surface
+
+    def test_in_the_agent_ui_not_connected_shows_the_connect_button(
+        self, monkeypatch, agent
+    ):
+        self._state(monkeypatch, {}, {})
+        self._from(agent, "agent_ui")
+        result = _run(agent, "list_calendar_events")
+        assert result["connect_card"] == {
+            "kind": "connect_account",
+            "providers": ["google", "microsoft"],
+            "agent_id": "installed:gaia",
+        }
+        assert "Connect button" in result["error"]
+        assert "never give or run a terminal command" in result["error"]
+        assert "gaia connectors" not in result["error"]
+
+    def test_in_the_agent_ui_a_missing_scope_is_a_reconnect(self, monkeypatch, agent):
+        self._state(
+            monkeypatch,
+            {"google": {"scopes": [GMAIL_READ, "openid"]}},
+            {"google": {"installed:gaia": [GMAIL_READ]}},
+        )
+        self._from(agent, "agent_ui")
+        result = _run(agent, "list_calendar_events")
+        assert "mail keeps working" in result["error"]
+        assert "gaia connectors" not in result["error"]
+        assert "--scopes" not in result["error"]
+        assert result["connect_card"]["providers"] == ["google", "microsoft"]
+
+    def test_in_the_agent_ui_a_missing_grant_is_a_setting_not_a_button(
+        self, monkeypatch, agent
+    ):
+        mail = "https://graph.microsoft.com/Mail.ReadWrite"
+        self._state(
+            monkeypatch,
+            {"microsoft": {"scopes": [mail, SCOPE_GRAPH_CALENDARS_READWRITE]}},
+            {"microsoft": {"installed:gaia": [mail]}},
+        )
+        self._from(agent, "agent_ui")
+        result = _run(agent, "list_calendar_events")
+        assert "Settings > Connectors" in result["error"]
+        assert "gaia connectors" not in result["error"]
+        # A button for Google would point away from the Microsoft fix.
+        assert "connect_card" not in result
+        assert "Connect button" not in result["error"]
+
+    def test_in_the_terminal_ui_there_is_no_button_and_no_command(
+        self, monkeypatch, agent
+    ):
+        self._state(monkeypatch, {}, {})
+        self._from(agent, "tui")
+        result = _run(agent, "list_calendar_events")
+        assert "GAIA desktop app, under Settings > Connectors" in result["error"]
+        assert "gaia connectors" not in result["error"]
+        assert "connect_card" not in result
 
     def test_a_busy_connection_says_busy_and_recovers(self, monkeypatch, agent):
         connections = {"google": {"scopes": [], "error": "busy"}}

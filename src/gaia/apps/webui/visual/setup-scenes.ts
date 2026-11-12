@@ -253,7 +253,10 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         'GET /gpu-memory': gpu,
         'GET /onboarding/preflight': hardware,
         'GET /onboarding/start': {
-            cards: [{ skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false }],
+            cards: [
+                { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research: ', needs_input: true },
+                { skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false },
+            ],
             working_folder: { path: '/home/you', name: 'you', gaia_folder: false, choosable: true },
         },
         'GET /lemonade/target': theirs ? THEIRS_TARGET : { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: null, saved_base_url: null, api_key_stored: false, offer: false, what_gaia_does: '' },
@@ -272,7 +275,7 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
     });
 }
 
-const hero = (page: Page) => page.locator('.setup-hero');
+const hero = (page: Page) => page.locator('.setup-hero').first();
 
 /** The checks stop on what they found; Continue goes on to the plan. */
 export async function toPlan(page: Page): Promise<void> {
@@ -283,7 +286,7 @@ export async function toPlan(page: Page): Promise<void> {
 
 export async function toModels(page: Page): Promise<void> {
     await toPlan(page);
-    await hero(page).locator('.link-btn').nth(0).click();
+    await page.locator('.setup-footer .btn-secondary').click();
     await expect(page.locator('.mc-list').first()).toBeVisible();
 }
 
@@ -296,7 +299,8 @@ async function toGpu(page: Page): Promise<void> {
 
 async function toKey(page: Page): Promise<void> {
     await toPlan(page);
-    await hero(page).locator('.link-btn').nth(1).click();
+    await page.locator('.setup-where-card').nth(1).click();
+    await page.locator('.setup-footer .btn-primary').click();
     await expect(page.locator('.setup-form')).toBeVisible();
 }
 
@@ -324,6 +328,29 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.found')).toBeVisible(),
     },
     {
+        // Logs open: the page grows past the window, and the scrollbar belongs at the window's edge.
+        name: 'check-help-open',
+        reach: async (page) => {
+            await expect(page.locator('.found')).toBeVisible();
+            await page.locator('.setup-help-toggle').click();
+            await expect(page.locator('#setup-help')).toBeVisible();
+            await page.locator('#setup-help .setup-log-toggle').first().click();
+            const edges = await page.evaluate(() => {
+                const pane = document.querySelector('.setup-pane')!.getBoundingClientRect();
+                const scroller = document.querySelector('.setup-scroll')!;
+                const inner = document.querySelector('.setup-inner')!;
+                return {
+                    gap: Math.abs(pane.right - scroller.getBoundingClientRect().right) + Math.abs(pane.left - scroller.getBoundingClientRect().left),
+                    innerScrolls: getComputedStyle(inner).overflowY !== 'visible',
+                    gutter: getComputedStyle(scroller).scrollbarGutter,
+                };
+            });
+            expect(edges.gap).toBeLessThan(1);
+            expect(edges.innerScrolls).toBe(false);
+            expect(edges.gutter).toContain('stable');
+        },
+    },
+    {
         name: 'check-failed',
         answers: { plan: PLAN_COLD, status: SERVER_FAILED },
         reach: (page) => expect(page.locator('.setup-result.is-failed')).toBeVisible(),
@@ -332,8 +359,33 @@ export const SETUP_SCENES: SetupScene[] = [
         name: 'plan',
         reach: async (page) => {
             await toPlan(page);
+            // This PC and the cloud are two cards of the same size, not a card and a link.
+            const [local, cloud] = await page.locator('.setup-where-card').evaluateAll((cards) => cards.map((c) => c.getBoundingClientRect().width));
+            expect(Math.abs(local - cloud)).toBeLessThan(1);
             await page.locator('.setup-disclosure summary').click();
             await expect(page.locator('.setup-contents')).toBeVisible();
+        },
+    },
+    {
+        // Moving on focuses the new step's title for screen readers, without drawing a box round it.
+        name: 'plan-title-focused',
+        reach: async (page) => {
+            await toPlan(page);
+            const title = page.locator('#setup-title');
+            await expect(title).toBeFocused();
+            expect(await title.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('none');
+            // Its focus mark spans the words, not the whole column.
+            const [titleWidth, columnWidth] = await title.evaluate((el) => [el.getBoundingClientRect().width, el.parentElement!.getBoundingClientRect().width]);
+            expect(titleWidth).toBeLessThan(columnWidth / 2);
+        },
+    },
+    {
+        name: 'plan-cloud-picked',
+        reach: async (page) => {
+            await toPlan(page);
+            await page.locator('.setup-where-card').nth(1).click();
+            await expect(page.locator('.setup-where-card.is-active')).toHaveCount(1);
+            await expect(page.locator('.setup-where-card').nth(1)).toHaveClass(/is-active/);
         },
     },
     {
@@ -341,7 +393,7 @@ export const SETUP_SCENES: SetupScene[] = [
         answers: { plan: PLAN_SHORT },
         reach: async (page) => {
             await toPlan(page);
-            await expect(hero(page).locator('.setup-error')).toBeVisible();
+            await expect(page.locator('.setup-stage .setup-error')).toBeVisible();
         },
     },
     {
@@ -499,13 +551,15 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
-        name: 'key-local-only',
+        // Local only is on: the cloud card stays in place, can't be picked, and says why.
+        name: 'plan-local-only',
         answers: { localOnly: true },
         reach: async (page) => {
-            await toKey(page);
-            await expect(page.locator('.setup-choice.is-disabled').first()).toBeVisible();
-            await expect(page.locator('.setup-choice.is-disabled').first()).toHaveText(/\S/);
-            await expect(page.locator('.setup-key-steps')).toHaveCount(0);
+            await toPlan(page);
+            const cloud = page.locator('.setup-where-card').nth(1);
+            await expect(cloud).toHaveClass(/is-disabled/);
+            await expect(cloud.locator('input[type="radio"]')).toBeDisabled();
+            await expect(cloud.locator('.setup-hint')).toHaveText(/\S/);
             await expect(page.locator('.setup-error')).toHaveCount(0);
         },
     },
@@ -579,12 +633,16 @@ export const SETUP_SCENES: SetupScene[] = [
     {
         name: 'ready',
         answers: { status: RUN_READY, plan: PLAN_DONE },
-        reach: (page) => expect(page.locator('.setup-done')).toBeVisible(),
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            // A first run has nothing to pick up: the other tasks show, Check in waits.
+            await expect(page.locator('.start-card')).toHaveCount(1);
+        },
     },
 ];
 
 /** The screens whose rows wrap: each must hold together in a narrow window too. */
-export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'key-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
+export const NARROW_SCENES = ['plan', 'check-details', 'models', 'models-npu-not-ready', 'models-long', 'key', 'plan-local-only', 'download-running', 'download-failed', 'download-agent-failed', 'test-long', 'ready'];
 
 export const scene = (name: string): SetupScene => {
     const found = SETUP_SCENES.find((s) => s.name === name);
