@@ -286,8 +286,8 @@ def cloudish_deploy(
 ) -> dict:
     """Create or update a Cloudish project and deploy it.
 
-    Passing an existing ``name`` updates that project instead of creating a
-    second one, so the same call works for a first deploy and a redeploy.
+    Passing an existing ``name`` updates that project, so the same call
+    works for a first deploy and a redeploy.
 
     Args:
         api_key: Cloudish API key from ``cloudish_create_key``.
