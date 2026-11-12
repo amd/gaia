@@ -138,7 +138,6 @@ export function ContextMeter({ usage, unavailable, sessionId, busy = false, onUs
     );
 }
 
-/** Says which turns leave the model's view next, before they go. */
 /** One line above the composer when older turns are about to leave the model's view; details on request. */
 export function ContextWarning({ usage }: { usage: ContextUsage | null }) {
     const t = useT();
