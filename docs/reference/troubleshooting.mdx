@@ -495,6 +495,16 @@ What GAIA does on a small PC:
   server you started yourself keeps its models loaded beside GAIA's. To have GAIA
   use that server instead, set `LEMONADE_BASE_URL` (see
   [`gaia init`](/reference/cli#init-command), "Another Lemonade Server").
+- **Each GAIA process gives its math library 2 threads.** The OpenBLAS that
+  numpy and FAISS bundle otherwise reserves memory for every CPU thread when it
+  loads: about 5 GB per process on a 32-thread PC, enough for a dozen GAIA
+  processes to run Windows out of memory. Document search and memory recall run
+  on FAISS's own threads, so they keep their speed. To choose another number, set
+  `OPENBLAS_NUM_THREADS` in the environment GAIA starts from; GAIA leaves it, and
+  `OMP_NUM_THREADS` or `GOTO_NUM_THREADS`, alone when you set them. A value in a
+  `.env` file is read too late to count. Programs GAIA runs for you inherit the
+  2 threads too, so a numpy script started from a chat does its matrix math on
+  2 threads unless you set the variable yourself.
 
 On a graphics card, GAIA reads free memory only for an AMD card on Linux.
 Elsewhere a model that does not fit the card fails in Lemonade with its own
