@@ -1094,10 +1094,13 @@ async def init() -> Dict[str, Any]:
         # `gaia download` takes no positional model — argparse exits 2 on it.
         from gaia.llm.lemonade_launcher import describe_client_hint
 
-        pull = describe_client_hint("pull", probe["model_id"]).instruction
+        pull = describe_client_hint("pull", probe["model_id"])
+        # With no client found, the instruction already says it is not downloaded.
         hint = (
             f"The model {probe['model_id']} is not downloaded. "
-            f"{pull.rstrip('.')}, then re-check."
+            f"{pull.instruction.rstrip('.')}, then re-check."
+            if pull.command
+            else pull.instruction
         )
 
     ready = bool(probe["reachable"] and probe["present"] and compatible is not False)
