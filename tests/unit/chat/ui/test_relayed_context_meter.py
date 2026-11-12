@@ -286,3 +286,29 @@ def test_the_tokenizer_count_stops_at_its_deadline(monkeypatch):
     with pytest.raises(TimeoutError):
         counter("some text")
     assert sent == []
+
+
+def test_turns_both_sides_left_out_add_up_once():
+    """The sidecar's own cuts and the relay's are different turns; both count."""
+    h = SSEOutputHandler()
+    h.relay_hidden_turns = 22
+    measured = {**_USAGE, "turns_in_view": 10, "turns_hidden": 3}
+
+    relay._dispatch_one(
+        h, {"type": "final", "answer": "Paris.", "context": measured}, GAIA_PROFILE
+    )
+
+    [meter] = [e for e in _events(h) if e["type"] == "context_usage"]
+    assert meter["turns_hidden"] == 25
+    assert measured["turns_hidden"] == 3  # the sidecar's event is not mutated
+
+
+def test_a_relay_that_left_nothing_out_passes_the_measurement_through():
+    h = SSEOutputHandler()
+    measured = {**_USAGE, "turns_in_view": 4, "turns_hidden": 1}
+
+    relay._dispatch_one(
+        h, {"type": "final", "answer": "Paris.", "context": measured}, GAIA_PROFILE
+    )
+
+    assert h.relay_context == measured
