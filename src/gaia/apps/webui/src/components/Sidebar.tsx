@@ -244,7 +244,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                     </Popover>
                 </>
             )) : (
-                <>
+                <span className="sb-row-actions">
                     {!editing && (
                         <button
                             type="button"
@@ -283,7 +283,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                             ? <span className="sb-row-delete-label">{unsent > 0 ? t.plural('row.deleteUnsent', unsent) : t('row.deleteConfirm')}</span>
                             : <Trash2 size={13} />}
                     </button>
-                </>
+                </span>
             )}
         </li>
     );

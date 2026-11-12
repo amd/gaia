@@ -434,6 +434,22 @@ test('new chat', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['en', 'ar']) {
+    test(`chat titles in the sidebar use the whole row (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const row = page.locator('.sb-row').filter({ hasText: 'Compare two lease PDFs' });
+        await expect(row).toBeVisible();
+        const rowBox = (await row.boundingBox())!;
+        const titleBox = (await row.locator('.sb-row-title').boundingBox())!;
+        // Rename, pin and delete appear over the row on hover, not in space kept beside the title.
+        expect(titleBox.width + 30, 'title cut short to leave room for hidden buttons').toBeGreaterThan(rowBox.width * 0.85);
+        await row.hover();
+        await expect(row.locator('.sb-row-delete')).toBeVisible();
+        await shot(page, `sidebar-row-hover-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
         test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
