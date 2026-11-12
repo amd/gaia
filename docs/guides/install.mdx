@@ -397,7 +397,7 @@ Setting `GAIA_HOME` moves Document Library uploads and chat file attachments to 
 
 ## Privacy
 
-GAIA runs entirely on your machine. **No data is sent externally** beyond the package downloads during install. There is no telemetry, no crash reporting, no usage analytics. See the [FAQ](/reference/faq) for more.
+GAIA runs on your machine by default. With a local model, your conversations stay on this PC. If you pick a cloud model (Fireworks AI, the AMD LLM Gateway or Claude), the conversation is sent to that provider, and the web search and page-fetch tools send their queries and URLs to the sites they reach. To refuse every cloud model, run `gaia config set network_policy local_ai_only` — see [Local only](/reference/cli#local-only). There is no telemetry, no crash reporting, no usage analytics. See the [FAQ](/reference/faq) for more.
 
 ## For developers
 

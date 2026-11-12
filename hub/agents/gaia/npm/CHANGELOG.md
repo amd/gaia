@@ -115,6 +115,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   before", so every later chat started with it in its prompt. It, and the new
   `search_tools` cap, are now marked as not run, like a permission refusal, and
   memory skips them.
+- **The integration guide says the web tools reach the internet.** Web search
+  and page fetch send their queries and URLs off the machine even with a local
+  model; the guide now says so next to the cloud-provider caveat.
 - **The package description and integration guide no longer say nothing leaves the
   machine.** Local inference is still the default; both now say a cloud provider
   receives the conversation when you pick one.
