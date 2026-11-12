@@ -18,7 +18,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 - Adding tools, resources, or prompts to an existing server
 - Wiring an external service as an MCP integration
 - Debugging MCP protocol compliance / JSON-RPC issues
-- Editing `src/gaia/mcp/mcp.json` or `n8n.json`
+- Editing the n8n workflow template (`src/gaia/mcp/n8n.json`)
 
 ## When NOT to use
 
@@ -30,7 +30,6 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 | File | Purpose |
 |------|---------|
 | `src/gaia/mcp/mcp_bridge.py` | HTTP bridge / entry point (also `gaia-mcp` console script) |
-| `src/gaia/mcp/mcp.json` | Bundled MCP server config |
 | `src/gaia/mcp/servers/` | GAIA-authored MCP servers (`agent_ui_mcp.py`, `tui_mcp.py`) |
 | `src/gaia/mcp/agent_mcp_server.py` | Exposes GAIA agents over MCP |
 | `src/gaia/mcp/external_services.py` | External service adapters |
@@ -94,7 +93,7 @@ CI: `.github/workflows/test_mcp.yml` and `test_agent_mcp_server.yml`.
 - **Non-compliant JSON-RPC responses** — missing `id`, wrong error shape
 - **Blocking the event loop** — long CPU work inside an async tool handler; offload via `asyncio.to_thread`
 - **Missing input schema** — agents can still *see* the tool but struggle to call it correctly
-- **Secrets in `mcp.json`** — leave placeholders; load real values from env
+- **Secrets in an MCP server config** (`~/.gaia/mcp_servers.json`) — leave placeholders; load real values from env
 - **Port collisions** — default is 8765; make it configurable via `--port`
 - **Registering an MCP tool that duplicates a `KNOWN_TOOLS` mixin** — prefer the mixin when the logic is local to GAIA
 - **Silent fallbacks** (per CLAUDE.md) — if an upstream service is unreachable, raise a specific error (`"Atlassian API returned 503; not retrying"`) rather than returning an empty list or a cached stale response as if it were fresh

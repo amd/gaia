@@ -1,7 +1,6 @@
 """
 SD Agent Example - Multi-modal agent that generates images and creates stories.
 
-This example matches the SD Agent Playbook (docs/playbooks/sd-agent/part-1-building-agent.mdx).
 Demonstrates how to create a custom tool (create_story_from_image) that composes
 SD and VLM capabilities.
 
@@ -10,10 +9,9 @@ Prerequisites:
        uv pip install amd-gaia
        gaia init --profile sd
 
-    2. This downloads (~15GB):
+    2. This downloads (~10GB):
        - SDXL-Turbo (6.5GB) - Image generation
-       - Qwen3-8B-GGUF (5GB) - Reasoning LLM
-       - Qwen3-VL-4B-Instruct-GGUF (3.2GB) - Vision LLM
+       - Gemma-4-E4B-it-GGUF (~6GB) - Reasoning and vision LLM
 
 Usage:
     python examples/sd_agent_example.py
@@ -33,9 +31,9 @@ class ImageStoryAgent(Agent, SDToolsMixin, VLMToolsMixin):
     """Agent that generates images and creates stories."""
 
     def __init__(self, output_dir="./generated_images"):
-        super().__init__(model_id="Qwen3-8B-GGUF")
+        super().__init__(model_id="Gemma-4-E4B-it-GGUF")
         self.init_sd(output_dir=output_dir, default_model="SDXL-Turbo")
-        self.init_vlm(model="Qwen3-VL-4B-Instruct-GGUF")
+        self.init_vlm(model="Gemma-4-E4B-it-GGUF")
 
     def _register_tools(self):
         from gaia.agents.base.tools import tool

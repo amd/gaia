@@ -375,6 +375,7 @@ gaia init [OPTIONS]
 | `--skip-models` | flag | false | Skip model downloads (only set up Lemonade Server) |
 | `--agent-only` | flag | false | Only install or update the GAIA agent, with no Lemonade or model steps. The desktop app runs this after an update. Exits `5` when the download server could not be reached and the installed agent was kept |
 | `--skip-webui-build` | flag | false | Skip building the Agent UI frontend (dev/source installs only; same effect as setting `GAIA_SKIP_WEBUI_BUILD`) |
+| `--skip-pip-extras` | flag | false | Install no Python packages (the desktop app ships its own) |
 | `--force-reinstall` | flag | false | Reinstall GAIA's own Lemonade Server |
 | `--force-models` | flag | false | Force re-download models (deletes then re-downloads each model) |
 | `--yes, -y` | flag | false | Skip confirmation prompts (non-interactive) |
@@ -2416,7 +2417,6 @@ gaia eval agent [OPTIONS]
 | `--model` | string | `claude-opus-5` | Driver **and** judge — it runs each scenario as well as scoring it, so it must match the baseline you compare against |
 | `--iterations` | integer | `1` | Run each scenario N times for reliability measurement |
 | `--keep-sessions` | flag | false | Don't delete Agent UI sessions after eval — leave them for manual inspection |
-| `--device` | `cpu`\|`gpu`\|`npu` | – | Inference device hint for the run |
 | `--budget` | string | `2.00` | Maximum USD spend per scenario |
 | `--timeout` | integer | `900` | Per-scenario timeout in seconds (auto-scaled for complex scenarios) |
 | `--audit-only` | flag | false | Run architecture audit without LLM calls (free) |

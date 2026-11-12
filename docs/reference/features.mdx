@@ -39,7 +39,7 @@ gaia llm "Explain quantum computing" --model Qwen3-0.6B-GGUF --max-tokens 200
 gaia llm "Write a short poem" --no-stream
 ```
 
-**Requirements**: Requires lemonade-server to be running. Run `gaia init` to automatically install Lemonade Server and download models, or install manually from [lemonade-server.ai](https://lemonade-server.ai/). The command will provide helpful error messages if the server is not accessible.
+**Requirements**: Run `gaia init` to install Lemonade Server and download models. GAIA starts and supervises the server when a command needs it.
 
 **Platform Availability**: Windows and Linux
 
@@ -88,7 +88,7 @@ gaia chat --show-stats
 - `/help` - Show available commands
 - `quit`, `exit`, or `bye` - End the chat session
 
-**Requirements:** Requires lemonade-server to be running. The chat agent defaults to the `Gemma-4-E4B-it-GGUF` model.
+**Requirements:** `gaia init` sets up Lemonade Server and models; GAIA starts the server for you. The chat model is the `default_model` in `gaia config`: `Gemma-4-E4B-it-GGUF` on most PCs, `Qwen3.6-35B-A3B-GGUF` on PCs where it fits.
 
 **Platform Availability**: Windows and Linux
 

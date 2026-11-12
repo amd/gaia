@@ -159,12 +159,18 @@ Compare agent quality across devices. Agent Eval runs from a source checkout of
 GAIA with the Agent UI backend on port 4200; see the
 [Agent Eval prerequisites](/guides/eval#prerequisites) first.
 
+The eval scores whichever model the backend runs, so set the model first and
+restart the backend between runs. `--agent-model` discards any scenario that ran
+a different model.
+
 ```bash
 # Run eval on GPU (baseline)
-gaia eval agent --device gpu
+gaia config set default_model Gemma-4-E4B-it-GGUF
+gaia eval agent --agent-model Gemma-4-E4B-it-GGUF
 
 # Run eval on NPU
-gaia eval agent --device npu
+gaia config set default_model gemma4-it-e4b-FLM
+gaia eval agent --agent-model gemma4-it-e4b-FLM
 
 # Compare results
 gaia eval agent --compare eval/results/run1/scorecard.json eval/results/run2/scorecard.json

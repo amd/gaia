@@ -1184,15 +1184,15 @@ Point GAIA at the Lemonade server that fronts your model:
 <Tabs>
   <Tab title="Environment Variable">
     ```bash Linux
-    export LEMONADE_BASE_URL="http://your-lemonade-server:8080"
+    export LEMONADE_BASE_URL="http://your-lemonade-server:13305"
     ```
 
     ```powershell Windows (PowerShell)
-    $env:LEMONADE_BASE_URL="http://your-lemonade-server:8080"
+    $env:LEMONADE_BASE_URL="http://your-lemonade-server:13305"
     ```
 
     ```cmd Windows (CMD)
-    set LEMONADE_BASE_URL=http://your-lemonade-server:8080
+    set LEMONADE_BASE_URL=http://your-lemonade-server:13305
     ```
   </Tab>
 
@@ -1200,7 +1200,7 @@ Point GAIA at the Lemonade server that fronts your model:
     ```python
     from gaia.llm import create_client
 
-    client = create_client(base_url="http://your-lemonade-server:8080")
+    client = create_client(base_url="http://your-lemonade-server:13305")
     response = client.generate("Hello world")
     ```
   </Tab>
@@ -1208,8 +1208,8 @@ Point GAIA at the Lemonade server that fronts your model:
 
 <Note>
 **URL Normalization:** LemonadeClient automatically appends `/api/v1` if not present:
-- `http://localhost:8080` → `http://localhost:8080/api/v1`
-- If your server uses `/v1` instead, provide the full path: `http://localhost:8080/v1`
+- `http://localhost:13305` → `http://localhost:13305/api/v1`
+- If your server uses `/v1` instead, provide the full path: `http://localhost:13305/v1`
 </Note>
 
 ---
@@ -1222,7 +1222,7 @@ from gaia.llm import create_client
 
 # Connect to the Lemonade server that fronts your model
 client = create_client(
-    base_url="http://your-lemonade-server:8080",
+    base_url="http://your-lemonade-server:13305",
     model="your-catalog-model-id",
 )
 
@@ -1235,7 +1235,7 @@ print(response)
 from gaia.llm import create_client
 
 client = create_client(
-    base_url="http://your-lemonade-server:8080",
+    base_url="http://your-lemonade-server:13305",
     model="your-catalog-model-id",
 )
 
@@ -1262,7 +1262,7 @@ for chunk in client.generate("Tell me a story", stream=True):
     3. Ensure correct base URL format
     4. Test with explicit base URL:
        ```python
-       client = create_client(base_url="http://localhost:8080/api/v1")
+       client = create_client(base_url="http://localhost:13305/api/v1")
        ```
   </Accordion>
 

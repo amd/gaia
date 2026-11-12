@@ -398,13 +398,19 @@ class AgentRegistry:
     def get_agent(self, model_id: str):
         """Load and instantiate the agent for `model_id`.
 
-        Raises `KeyError` if the model is not registered.
+        Raises `ValueError` if the model is not registered, or if the
+        agent class cannot be imported.
         A *fresh* agent is created per call — there is no singleton cache.
         """
+        if model_id not in AGENT_MODELS:
+            raise ValueError(f"Model '{model_id}' not found.")
         entry = AGENT_MODELS[model_id]
         module_path, _, class_name = entry["class_name"].rpartition(".")
         agent_class = getattr(import_module(module_path), class_name)
-        return agent_class(**entry["init_params"])
+        init_params = entry["init_params"].copy()
+        # Every API agent streams its progress through an SSEOutputHandler.
+        init_params["output_handler"] = SSEOutputHandler(debug_mode=debug_mode)
+        return agent_class(**init_params)
 
     def list_models(self):
         """Return the models block used by `/v1/models`."""
@@ -431,83 +437,26 @@ custom agents.
 ### SSE Streaming
 
 ```python
-from typing import AsyncGenerator
-import json
-import uuid
-import time
-
-async def stream_chat_completion(
-    agent: Agent,
-    user_message: str,
-    model_id: str,
-) -> AsyncGenerator[str, None]:
+async def create_sse_stream(agent, query: str, model: str) -> AsyncGenerator[str, None]:
     """
-    Stream chat completion using SSE format.
-
-    Args:
-        agent: Agent instance to use
-        user_message: User's message
-        model_id: Model identifier
+    Stream a chat completion as Server-Sent Events.
 
     Yields:
         SSE-formatted chunks (data: {...})
 
-    Example:
-        async for chunk in stream_chat_completion(agent, "Hello", "your-agent-id"):
-            print(chunk)
-        # Output:
-        # data: {"id":"chatcmpl-123","object":"chat.completion.chunk",...}
-        # data: {"id":"chatcmpl-123","object":"chat.completion.chunk",...}
-        # data: [DONE]
+    Example output:
+        data: {"id":"chatcmpl-123","object":"chat.completion.chunk",...}
+        data: {"id":"chatcmpl-123","object":"chat.completion.chunk",...}
+        data: [DONE]
     """
-    chunk_id = f"chatcmpl-{uuid.uuid4().hex[:8]}"
-    created = int(time.time())
+```
 
-    try:
-        # Stream response from agent
-        for delta_content in agent.stream_query(user_message):
-            chunk = {
-                "id": chunk_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model_id,
-                "choices": [
-                    {
-                        "index": 0,
-                        "delta": {"content": delta_content},
-                        "finish_reason": None,
-                    }
-                ],
-            }
-            yield f"data: {json.dumps(chunk)}\n\n"
-
-        # Final chunk with finish_reason
-        final_chunk = {
-            "id": chunk_id,
-            "object": "chat.completion.chunk",
-            "created": created,
-            "model": model_id,
-            "choices": [
-                {
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop",
-                }
-            ],
-        }
-        yield f"data: {json.dumps(final_chunk)}\n\n"
-        yield "data: [DONE]\n\n"
-
-    except Exception as e:
-        # Headers are already sent, so report the failure in-band.
-        error_chunk = {
-            "error": {
-                "message": str(e),
-                "type": "server_error",
-            }
-        }
-        yield f"data: {json.dumps(error_chunk)}\n\n"
-        yield "data: [DONE]\n\n"
+`create_sse_stream` runs `agent.process_query(query)` in a thread pool. The
+`SSEOutputHandler` that `AgentRegistry.get_agent` gives every agent queues the
+agent's progress events, and each one is sent as a `chat.completion.chunk` frame.
+The stream ends with `data: [DONE]`. If the client disconnects, the agent is told
+to stop. If the agent raises, an `{"error": ...}` chunk is sent before `[DONE]`,
+because the headers have already gone out.
 ```
 
 ---
@@ -544,7 +493,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     if request.stream:
         # Streaming response
         return StreamingResponse(
-            stream_chat_completion(agent, user_message, request.model),
+            create_sse_stream(agent, user_message, request.model),
             media_type="text/event-stream",
         )
     else:
