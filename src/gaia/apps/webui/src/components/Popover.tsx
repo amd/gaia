@@ -13,6 +13,7 @@ interface PopoverProps {
     label: string;
     placement?: 'above' | 'below';
     align?: 'start' | 'end';
+    className?: string;
     children: ReactNode;
 }
 
@@ -20,7 +21,7 @@ interface PopoverProps {
 const EDGE_GAP = 14;
 
 /** A small anchored panel that closes on Escape or an outside click, and returns focus. */
-export function Popover({ open, onClose, anchor, label, placement = 'above', align = 'start', children }: PopoverProps) {
+export function Popover({ open, onClose, anchor, label, placement = 'above', align = 'start', className, children }: PopoverProps) {
     const ref = useRef<HTMLDivElement>(null);
     const [side, setSide] = useState(placement);
     const [room, setRoom] = useState<number | null>(null);
@@ -81,7 +82,7 @@ export function Popover({ open, onClose, anchor, label, placement = 'above', ali
     return (
         <div
             ref={ref}
-            className={`popover popover-${side} popover-${align}`}
+            className={`popover popover-${side} popover-${align}${className ? ` ${className}` : ''}`}
             style={room === null ? undefined : ({ '--popover-room': `${room}px` } as CSSProperties)}
             role="dialog"
             aria-label={label}

@@ -86,4 +86,18 @@ describe('Popover placement', () => {
         render(<Harness placement="below" />);
         expect(screen.getByRole('dialog', { name: 'Menu' })).toHaveClass('popover-above');
     });
+
+    it('adds a caller class without dropping its placement classes', () => {
+        layout(700, 730, 300);
+        const anchorRef = { current: null as HTMLButtonElement | null };
+        render(
+            <div>
+                <button ref={anchorRef} type="button">Anchor</button>
+                <Popover open onClose={() => {}} anchor={anchorRef} label="Menu" align="end" className="model-menu">
+                    <button type="button">Item</button>
+                </Popover>
+            </div>,
+        );
+        expect(screen.getByRole('dialog', { name: 'Menu' })).toHaveClass('popover', 'popover-above', 'popover-end', 'model-menu');
+    });
 });
