@@ -76,6 +76,9 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 			}
 		}()
 	}
+	if err := update.Settle(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	}
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
@@ -447,10 +450,16 @@ func knownIDs(cat *catalog.Catalog) string {
 	for _, a := range cat.All() {
 		ids = append(ids, a.ID)
 	}
+	known := "Known ids: " + strings.Join(ids, ", ") + "."
 	if len(ids) == 0 {
-		return "The catalog is empty."
+		known = "The catalog is empty."
 	}
-	return "Known ids: " + strings.Join(ids, ", ") + "."
+	// An agent whose install record is unreadable is missing from the list
+	// above; say so, or it reads as never installed.
+	if warnings := cat.Warnings(); len(warnings) > 0 {
+		known += " " + strings.Join(warnings, " ")
+	}
+	return known
 }
 
 // orDefault names what will actually be used when a flag was left unset, so a

@@ -14,7 +14,7 @@ import (
 
 // Lemonade /system-info bodies for the two NPU target PCs, plus one without.
 const (
-	haloNPU    = `{"Physical Memory":"128 GB","devices":{"amd_gpu":[{"available":true,"integrated":true,"vram_gb":64.0,"virtual_mem_gb":32.0}],"amd_npu":{"available":true,"family":"XDNA2"}},"model_storage":{"free_bytes":900000000000}}`
+	haloNPU    = `{"OS Version":"Linux-7.0.0-31-generic","Physical Memory":"62.40 GB","devices":{"amd_gpu":[{"available":true,"integrated":true,"vram_gb":64.0,"virtual_mem_gb":32.0}],"amd_npu":{"available":true,"family":"XDNA2"}},"model_storage":{"free_bytes":900000000000}}`
 	laptopNPU  = `{"Physical Memory":"16 GB","devices":{"amd_gpu":[{"available":true,"integrated":true,"vram_gb":0.5,"virtual_mem_gb":7.7}],"amd_npu":{"available":true}},"model_storage":{"free_bytes":200000000000}}`
 	npuMissing = `{"Physical Memory":"64 GB","devices":{"amd_gpu":[{"available":true,"integrated":true,"vram_gb":32.0}],"amd_npu":{"available":false}},"model_storage":{"free_bytes":900000000000}}`
 )
@@ -35,14 +35,14 @@ func entriesByID(entries []Entry) map[string]Entry {
 	return out
 }
 
-// Mirrors tests/unit/test_npu_twin_models.py: the NPU's memory is RAM less the
-// GPU carve-out, and the GPU pool is left as it was.
-func TestNPUMemoryIsRAMLessTheCarveOut(t *testing.T) {
+// Mirrors tests/unit/test_npu_twin_models.py: the NPU's memory is the RAM Linux
+// sees, and the GPU pool is left as it was.
+func TestNPUMemoryIsTheRAMLinuxSees(t *testing.T) {
 	c := capacityOf(t, haloNPU)
-	if c.NPUMemoryGB != 64 || c.MemorySource != "AMD iGPU" {
+	if c.NPUMemoryGB != 62.4 || c.MemorySource != "AMD iGPU" {
 		t.Fatalf("got NPU %.1f GB, pool %q", c.NPUMemoryGB, c.MemorySource)
 	}
-	if npu, ok := c.NPU(); !ok || npu.MemoryGB != 64 || npu.MemorySource != "NPU, system RAM" {
+	if npu, ok := c.NPU(); !ok || npu.MemoryGB != 62.4 || npu.MemorySource != "NPU, system RAM" {
 		t.Fatalf("NPU view: %+v ok=%v", npu, ok)
 	}
 	if _, ok := capacityOf(t, npuMissing).NPU(); ok {
@@ -101,8 +101,8 @@ func TestDownloadedFLMModelStaysSelectable(t *testing.T) {
 	}
 }
 
-// Lemonade hides FLM models until its NPU backend is installed.
-func TestUnlistedNPUModelsAreHiddenWithoutAnNPUAndExplainedWithOne(t *testing.T) {
+// Lemonade hides FLM models until its NPU backend is installed; Pull installs it.
+func TestUnlistedNPUModelsAreHiddenWithoutAnNPUAndDownloadableWithOne(t *testing.T) {
 	for _, e := range BuildEntries("local", nil, capacityOf(t, npuMissing), nil) {
 		if e.Recommended != nil && e.Recommended.Device == "npu" {
 			t.Fatalf("a PC with no NPU was shown %s", e.Model.ID)
@@ -111,7 +111,7 @@ func TestUnlistedNPUModelsAreHiddenWithoutAnNPUAndExplainedWithOne(t *testing.T)
 	by := entriesByID(BuildEntries("local", nil, capacityOf(t, haloNPU), nil))
 	for _, id := range []string{"gemma4-it-e4b-FLM"} {
 		e, ok := by[id]
-		if !ok || e.Selectable() || e.Reason != "needs Lemonade's NPU backend; run `gaia init`" {
+		if !ok || !e.Selectable() || !e.NeedsDownload() || e.Reason != "" {
 			t.Fatalf("%s on an NPU PC without the backend: %+v", id, e)
 		}
 	}
@@ -178,6 +178,24 @@ func TestNPUModelPullsByNameOnly(t *testing.T) {
 		body := PullRequest(Entry{Model: Model{ID: r.ID, Recipe: "flm"}, Recommended: &r})
 		if len(body) != 2 || body["model_name"] != r.ID || body["stream"] != true {
 			t.Fatalf("%s: pull must go by name only, got %v", r.ID, body)
+		}
+	}
+}
+
+// Mirrors tests/unit/test_flm_models.py: a Windows Lemonade reports installed
+// RAM, so the carve-out comes off; Linux's MemTotal is already without it.
+func TestNPUMemoryTakesTheCarveOutOffOnlyOnWindows(t *testing.T) {
+	const apu = `{"OS Version":%q,"Physical Memory":"%s","devices":{"amd_igpu":{"available":true,"vram_gb":16.0},"amd_npu":{"available":true}}}`
+	for _, tc := range []struct {
+		os, physical string
+		want         float64
+	}{
+		{"Windows 11 Pro 24H2", "64.00 GB", 48},
+		{"Linux-6.14.0-ubuntu-24.04", "48.00 GB", 48},
+		{"Windows 11 Pro 24H2", "16.00 GB", 0},
+	} {
+		if got := capacityOf(t, fmt.Sprintf(apu, tc.os, tc.physical)).NPUMemoryGB; got != tc.want {
+			t.Errorf("%s, %s: NPU memory %.1f GB, want %.1f", tc.os, tc.physical, got, tc.want)
 		}
 	}
 }

@@ -11,7 +11,6 @@ import copy
 import hashlib
 import json
 import logging
-import os
 import re
 import time
 from collections import OrderedDict
@@ -27,6 +26,7 @@ except ImportError:
 
 from ..base_client import LLMClient
 from ..local_only import assert_provider_permitted
+from ..surface_hints import TUI_MODEL_SWITCH_HINT
 from .lemonade import _NATIVE_TC_KEY
 
 logger = logging.getLogger(__name__)
@@ -89,6 +89,37 @@ _FINISH_REASON_MAP = {
     "stop_sequence": "stop",
     "max_tokens": "length",
 }
+
+
+def _check_empty_reply(stop_reason: str, api_blocks: List[dict]) -> None:
+    """Explain a reply that has neither answer text nor a tool call.
+
+    A ``max_tokens`` stop is logged and left to the agent's cut-off recovery,
+    which reads ``finish_reason == "length"``. Any other empty reply raises,
+    because returning ``""`` would hide the API evidence needed to diagnose it.
+    """
+    block_types = [str(block.get("type") or "unknown") for block in api_blocks]
+    reported_stop_reason = stop_reason or "not reported"
+    logger.warning(
+        "Claude reply contained no text or tool call: stop_reason=%s block_types=%s",
+        reported_stop_reason,
+        ", ".join(block_types) or "none",
+    )
+    if stop_reason == "max_tokens":
+        return
+    thinking_only = bool(block_types) and all(
+        block_type in _THINKING_BLOCK_TYPES for block_type in block_types
+    )
+    if thinking_only:
+        raise RuntimeError(
+            "Claude returned only thinking blocks "
+            f"(stop_reason={reported_stop_reason}) and produced no answer text or "
+            "tool call. Retry the request."
+        )
+    raise RuntimeError(
+        "Claude returned no answer text or tool call "
+        f"(stop_reason={reported_stop_reason}; blocks={', '.join(block_types) or 'none'})."
+    )
 
 
 def _require_anthropic():
@@ -366,11 +397,12 @@ class ClaudeProvider(LLMClient):
         self, sdk: Any, api_key: Optional[str], max_retries: int, timeout: float
     ) -> Any:
         # The repo keeps ANTHROPIC_API_KEY in .env — same load as gaia.eval.claude.
-        from gaia.env import load_env  # pylint: disable=import-outside-toplevel
+        # pylint: disable-next=import-outside-toplevel
+        from gaia.env import credential, load_env
 
         load_env()
 
-        key = api_key or os.getenv("ANTHROPIC_API_KEY")
+        key = api_key or credential("ANTHROPIC_API_KEY")
         if not key:
             raise ValueError(
                 "ANTHROPIC_API_KEY not found in environment.\n\n"
@@ -963,7 +995,10 @@ class ClaudeProvider(LLMClient):
                     "content": "".join(text_parts) or None,
                 }
             )
-        return "".join(text_parts)
+        text = "".join(text_parts)
+        if not text:
+            _check_empty_reply(stop_reason, api_blocks)
+        return text
 
     def _stream_chat(
         self, params: dict, name_map: Dict[str, str], prefix_digest: str
@@ -980,11 +1015,13 @@ class ClaudeProvider(LLMClient):
         tool_slots: Dict[int, dict] = {}
         api_blocks: Dict[int, dict] = {}
         stop_reason = ""
+        saw_message_start = False
         usage_totals = _UsageTotals()
         try:
             for event in events:
                 etype = event.type
                 if etype == "message_start":
+                    saw_message_start = True
                     # The only event carrying the cache counters; message_delta
                     # then supersedes output_tokens with the final figure.
                     usage_totals.absorb(getattr(event.message, "usage", None))
@@ -1052,6 +1089,8 @@ class ClaudeProvider(LLMClient):
                     "content": "".join(text_parts) or None,
                 }
             )
+        elif not text_parts and saw_message_start:
+            _check_empty_reply(stop_reason, list(api_blocks.values()))
 
     def _capture_usage(self, usage: Any, elapsed: float) -> None:
         """Record one call's usage, cache counters included.
@@ -1153,12 +1192,14 @@ class GatewayClaudeProvider(ClaudeProvider):
 
         if gateway.gateway_claude_upstream_id(model) is None:
             raise ValueError(
-                f"{model!r} is not an AMD gateway Claude model. Pass an "
-                f"'{gateway.GATEWAY_PROVIDER}.Claude-*' id from `gaia gateway models`."
+                f"{model!r} is not an AMD gateway Claude model: its id must "
+                f"start with '{gateway.GATEWAY_PROVIDER}.Claude-'. "
+                f"{TUI_MODEL_SWITCH_HINT}"
             )
         # Before the base URL, so Local only is what a blocked user is told.
         assert_provider_permitted(self._DESTINATION)
         self._gateway_model = model
+        self._gateway_token_source = None
         self._timeout = timeout
         self._base_url = gateway.gateway_anthropic_base_url()
         super().__init__(
@@ -1181,7 +1222,8 @@ class GatewayClaudeProvider(ClaudeProvider):
     ) -> Any:
         from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
 
-        token = gateway.resolve_gateway_token()
+        token, self._gateway_token_source = gateway.resolve_gateway_token_with_source()
+        gateway.warn_if_claude_token_may_drift(self._gateway_token_source)
         return sdk.Anthropic(
             # Explicit, so the SDK reads no ANTHROPIC_* credential from the
             # environment. _build_params omits the header it would carry.
@@ -1228,7 +1270,7 @@ class GatewayClaudeProvider(ClaudeProvider):
             raise RuntimeError(
                 f"{where} did not answer within {self._timeout:g}s, so the request "
                 "timed out. The gateway was reached but is slow or overloaded; "
-                "retry in a minute, and check `gaia gateway status` if it persists."
+                "retry in a minute."
             ) from exc
         if isinstance(exc, sdk.APIConnectionError):
             raise RuntimeError(
@@ -1239,10 +1281,22 @@ class GatewayClaudeProvider(ClaudeProvider):
             raise exc
         status = exc.status_code
         if status in (401, 403):
+            from gaia.llm import gateway  # pylint: disable=import-outside-toplevel
+
+            try:
+                gateway_status = gateway.GatewayManager().status(
+                    timeout=gateway.STATUS_PROBE_TIMEOUT
+                )
+            except gateway.GatewayError as gateway_error:  # keep the original 401
+                logger.debug(
+                    "Could not inspect Lemonade gateway auth state: %s", gateway_error
+                )
+                gateway_status = None
             raise RuntimeError(
-                f"{where} rejected the token (HTTP {status}). Run `gaia gateway "
-                "auth` with a current token, or update LEMONADE_AMD_API_KEY / "
-                "GAIA_GATEWAY_TOKEN if you set one."
+                f"{where} rejected the token (HTTP {status}). "
+                + gateway.explain_rejected_token(
+                    self._gateway_token_source, gateway_status
+                )
             ) from exc
         if status == 429:
             raise RuntimeError(
@@ -1252,11 +1306,9 @@ class GatewayClaudeProvider(ClaudeProvider):
         if status in (400, 404) and "not found" in str(exc.message).lower():
             raise RuntimeError(
                 f"{where} has no deployment of {self._gateway_model} "
-                f"(HTTP {status}): {exc.message}. Run `gaia gateway models` and "
-                "pick a deployed Claude model."
+                f"(HTTP {status}): {exc.message}. {TUI_MODEL_SWITCH_HINT}"
             ) from exc
         raise RuntimeError(
-            f"{where} returned HTTP {status}: {exc.message}. Check "
-            "`gaia gateway status`; if it persists, see "
-            "https://amd-gaia.ai/docs/guides/llm-gateway."
+            f"{where} returned HTTP {status}: {exc.message}. Retry in a minute; "
+            "if it persists, see https://amd-gaia.ai/docs/guides/llm-gateway."
         ) from exc

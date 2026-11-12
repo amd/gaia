@@ -97,8 +97,13 @@ def loaded(name, device="gpu", recipe="llamacpp", backend_dir="vulkan", ctx=6553
     }
 
 
-def _cap(memory_gb, source="AMD iGPU", disk=None):
-    return MachineCapacity(memory_gb=memory_gb, memory_source=source, disk_free_gb=disk)
+def _cap(memory_gb, source="AMD iGPU", disk=None, npu=None):
+    return MachineCapacity(
+        memory_gb=memory_gb,
+        memory_source=source,
+        disk_free_gb=disk,
+        npu_memory_gb=npu,
+    )
 
 
 # ── #5214: the device each model runs on ──────────────────────────────────
@@ -219,6 +224,32 @@ def test_lists_offer_only_models_this_pc_runs(pc, capacity, available):
     assert {m["id"] for m in out if m["available"]} == available
     for m in out:
         assert m["available"] == (m["unavailable_reason"] is None)
+
+
+@pytest.mark.parametrize(
+    "state,offered",
+    [("installed", True), ("installable", True), ("unsupported", False)],
+)
+def test_npu_model_is_offered_only_where_its_backend_runs(state, offered):
+    # Linux without the amdxdna driver: Lemonade sees the NPU and its memory,
+    # but FastFlowLM cannot run, so the model must not read as "Fits this PC".
+    info = system_info()
+    info["recipes"]["flm"]["backends"] = _backends(
+        npu=(state, "amdxdna driver not loaded" if state == "unsupported" else "")
+    )
+    (flm,) = annotate_local_models(
+        _MODELS[2:],
+        health={"all_models_loaded": []},
+        system_info=info,
+        capacity=replace(_cap(64), npu_memory_gb=64.0),
+        preferred_backend=None,
+        speeds={},
+    )
+    # The Fits badge needs both (ModelRow.tsx): memory fits, and it can run.
+    assert flm["fits"] is True
+    assert flm["available"] is offered
+    if not offered:
+        assert "amdxdna driver not loaded" in flm["unavailable_reason"]
 
 
 def test_too_large_model_says_why():

@@ -82,6 +82,8 @@ beforeEach(() => {
         isLoadingMessages: false,
         pendingPrompt: null,
         systemStatus: null,
+        messageQueues: {},
+        pendingDeleteIds: [],
     });
 });
 
@@ -296,6 +298,32 @@ describe('Try again on a failed turn', () => {
     });
 });
 
+describe('Try again the reply asks for (#6588)', () => {
+    const INTERRUPTED = 'This answer was interrupted when GAIA closed. Send again to retry.';
+
+    it('is a labelled button on the failed reply, not only an icon shown on hover', async () => {
+        await sendAndFail(new Error('Failed to fetch'));
+        const retry = screen.getByRole('button', { name: 'Try again' });
+        expect(retry).toHaveTextContent('Try again');
+        expect(retry.closest('.msg-actions')).toBeNull();
+    });
+
+    it('is offered on an answer GAIA cut off when it closed, and replaces it', async () => {
+        server = [row('user', 'write an essay'), row('assistant', `Coral reefs are old.\n\n${INTERRUPTED}`)];
+        render(<ChatView sessionId={SESSION.id} />);
+        const retry = await screen.findByRole('button', { name: 'Try again' });
+        expect(retry).toHaveTextContent('Try again');
+        expect(screen.queryByText(/Send again to retry/)).toBeNull();
+
+        await act(async () => {
+            fireEvent.click(retry);
+        });
+        await waitFor(() => expect(sends).toHaveLength(1));
+        expect(sends[0].text).toBe('write an essay');
+        expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledWith(SESSION.id, 101);
+    });
+});
+
 describe('Try again never deletes an answer written since the failure', () => {
     const pollServer = async () => {
         await act(async () => {
@@ -315,7 +343,7 @@ describe('Try again never deletes an answer written since the failure', () => {
 
         await waitFor(() => expect(useChatStore.getState().messages.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']));
         expect(useChatStore.getState().messages.some((m) => m.failed)).toBe(false);
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(document.querySelector('.msg-try-again')).toBeNull();
         expect(document.querySelector('.msg-error')).toBeNull();
         expect(server.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']);
     });
@@ -344,7 +372,7 @@ describe('Try again never deletes an answer written since the failure', () => {
         await pollServer();
         await waitFor(() => expect(useChatStore.getState().messages[1]?.content).toBe('REAL ANSWER'));
         expect(useChatStore.getState().messages[1].failed).toBeFalsy();
-        expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull();
+        expect(document.querySelector('.msg-try-again')).toBeNull();
         expect(server.map((m) => m.content)).toEqual(['summarize the report', 'REAL ANSWER']);
     });
 
@@ -369,5 +397,30 @@ describe('Try again never deletes an answer written since the failure', () => {
 
         await waitFor(() => expect(useChatStore.getState().messageQueues[SESSION.id]?.map((m) => m.text)).toEqual(['summarize the report']));
         expect(server).toEqual([]);
+    });
+
+    it('does not queue the question again when the chat is deleted mid-delete', async () => {
+        await sendAndFail(new Error('Lemonade returned 500'));
+        let release!: () => void;
+        const gate = new Promise<void>((r) => { release = r; });
+        const realDelete = mockedApi.deleteMessagesFrom.getMockImplementation()!;
+        mockedApi.deleteMessagesFrom.mockImplementationOnce(async (sid, id) => {
+            await gate;
+            return realDelete(sid, id);
+        });
+
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        });
+        await waitFor(() => expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledTimes(1));
+        await act(async () => {
+            useChatStore.getState().removeSession(SESSION.id);
+            release();
+        });
+
+        await waitFor(() => expect(server).toEqual([]));
+        await act(async () => { await Promise.resolve(); });
+        expect(useChatStore.getState().messageQueues[SESSION.id]).toBeUndefined();
+        expect(sends).toHaveLength(1);
     });
 });

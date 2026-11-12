@@ -6,7 +6,9 @@ When the context window is below the floor, the warm path re-reads the server
 status. Before this, any failure there was logged at DEBUG and the caller was
 told everything was ready, so a server that started rejecting the API key passed
 the check and the user hit a vaguer error mid-chat. Auth and other client errors
-now propagate, as on the first-init path; anything unexpected is logged at WARNING.
+now propagate, as on the first-init path; anything unexpected is logged at WARNING
+and reported as not ready, so the next call re-initializes instead of trusting
+the cache.
 """
 
 import logging
@@ -48,13 +50,15 @@ def test_unreachable_server_keeps_cached_state():
     assert _ensure_ready_with(LemonadeClientError("refused")) is True
 
 
-def test_unexpected_error_on_recheck_is_logged_at_warning(caplog):
+def test_unexpected_error_on_recheck_reports_not_ready(caplog):
     with patch.object(LemonadeClient, "get_status", side_effect=RuntimeError("boom")):
         with caplog.at_level(logging.WARNING):
             assert (
-                LemonadeManager.ensure_ready(min_context_size=32768, quiet=True) is True
+                LemonadeManager.ensure_ready(min_context_size=32768, quiet=True)
+                is False
             )
     assert any(
         r.levelno == logging.WARNING and "boom" in r.getMessage()
         for r in caplog.records
     )
+    assert LemonadeManager.is_initialized() is False

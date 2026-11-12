@@ -15,7 +15,6 @@ from unittest.mock import patch
 import pytest
 
 import gaia.ui._chat_helpers as helpers
-import gaia.ui.agent_loop as agent_loop_mod
 from gaia.agents.base.goal_store import GoalStore
 from gaia.ui.agent_loop import AgentLoop, AgentTrigger
 from gaia.ui.database import ChatDatabase
@@ -52,20 +51,33 @@ def _run_followup(loop):
     asyncio.run(followup())
 
 
-def test_a_desktop_install_fails_the_goal_once_and_says_why(loop, monkeypatch):
-    goal = _queued_goal()
-    sidecar_flagship = SimpleNamespace(is_sidecar=True)
+def _sidecar_flagship(monkeypatch, relay):
     monkeypatch.setattr(
-        helpers, "_agent_registry", SimpleNamespace(get=lambda _id: sidecar_flagship)
+        helpers,
+        "_agent_registry",
+        SimpleNamespace(get=lambda _id: SimpleNamespace(is_sidecar=True)),
     )
+    monkeypatch.setattr(helpers, "relay_one_prompt", relay)
 
+
+def test_a_desktop_install_runs_the_tick_on_the_agent_binary(loop, monkeypatch):
+    """The apps ship the agent as its own binary; goals run on it (#5840)."""
+    goal = _queued_goal()
+    prompts = []
+
+    def relay(handler, prompt, **kwargs):
+        prompts.append((prompt, kwargs["agent_type"]))
+        # The agent called set_loop_state; the relay hands it to the loop.
+        handler.loop_state_directive = {"directive": "idle", "reason": "done"}
+        return "Sorted."
+
+    _sidecar_flagship(monkeypatch, relay)
     _run_followup(loop)
 
     assert loop._calls_this_hour == 1
-    failed = GoalStore().get_goal(goal.id)
-    assert failed.status == "failed"
-    assert agent_loop_mod.SIDECAR_TICKS_UNSUPPORTED in failed.progress_notes
-    assert "pip install" not in failed.progress_notes
+    [(prompt, agent_type)] = prompts
+    assert "Tidy notes" in prompt and agent_type == "gaia"
+    assert GoalStore().get_goal(goal.id).status != "failed"
 
 
 def test_a_failed_tick_does_not_rerun_on_the_next_message(loop, monkeypatch):
@@ -99,17 +111,18 @@ def test_a_failure_keeps_the_progress_an_earlier_run_recorded(loop, monkeypatch)
     GoalStore().update_goal_status(
         goal.id, "queued", progress_notes="Read 3 of 5 files."
     )
-    monkeypatch.setattr(
-        helpers,
-        "_agent_registry",
-        SimpleNamespace(get=lambda _id: SimpleNamespace(is_sidecar=True)),
-    )
 
+    def relay(handler, prompt, **kwargs):
+        raise RuntimeError("the GAIA agent could not be started")
+
+    _sidecar_flagship(monkeypatch, relay)
     _run_followup(loop)
 
-    notes = GoalStore().get_goal(goal.id).progress_notes
-    assert notes.startswith("Read 3 of 5 files.\n")
-    assert agent_loop_mod.SIDECAR_TICKS_UNSUPPORTED in notes
+    failed = GoalStore().get_goal(goal.id)
+    assert failed.status == "failed"
+    assert failed.progress_notes.startswith("Read 3 of 5 files.\n")
+    assert "the GAIA agent could not be started" in failed.progress_notes
+    assert "pip install" not in failed.progress_notes
 
 
 def test_cancelled_goal_and_queued_sibling_survive_a_stopped_tick(loop, monkeypatch):
@@ -136,3 +149,20 @@ def test_cancelled_goal_and_queued_sibling_survive_a_stopped_tick(loop, monkeypa
 
     assert GoalStore().get_goal(cancelled.id).status == "cancelled"
     assert GoalStore().get_goal(queued.id).status == "queued"
+
+
+@pytest.mark.parametrize(
+    "args, directive",
+    [
+        ({"state": "scheduled", "wake_in_seconds": 5}, ("scheduled", 30)),
+        ({"state": "paused", "reason": "need input"}, ("paused", 0)),
+        ({"state": "nonsense"}, ("idle", 0)),
+    ],
+)
+def test_a_relayed_set_loop_state_reaches_the_loop(args, directive):
+    """Relayed, set_loop_state runs on the sidecar's console, so the relay
+    hands its call to the tick's handler, checked as the tool checks it."""
+    from gaia.ui.email_sidecar.relay import _loop_state_directive
+
+    got = _loop_state_directive(args)
+    assert (got["directive"], got["wake_in_seconds"]) == directive

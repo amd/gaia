@@ -103,6 +103,10 @@ const FATAL_EXIT_GRACE_MS = 25000;
  * @param {Function} [opts.beforeQuit]  - Called before the fatal quit, e.g.
  *   so the quit guard does not ask the user to confirm it.
  * @param {number}   [opts.exitGraceMs] - Override for FATAL_EXIT_GRACE_MS.
+ * @param {Function} [opts.onRendererGone] - Called with (webContents, details)
+ *   when a window's page dies while GAIA runs on, e.g. to offer a reload.
+ *   Without it, or if it throws synchronously, the crash is fatal; an async
+ *   handler must handle its own failures.
  */
 function installSafetyNet({
   logPath,
@@ -111,6 +115,8 @@ function installSafetyNet({
   homedirFn,
   beforeQuit,
   exitGraceMs = FATAL_EXIT_GRACE_MS,
+  holdCrashCount = () => false,
+  onRendererGone,
 }) {
   const homedir = homedirFn || (() => os.homedir());
 
@@ -193,12 +199,36 @@ function installSafetyNet({
 
   // Reset counter on the first successful user interaction. Resetting at
   // loadApp() is too early — the user may crash before their first focus.
-  appModule.on("browser-window-focus", () => writeCount(0, homedir));
+  appModule.on("browser-window-focus", () => {
+    if (!holdCrashCount()) writeCount(0, homedir);
+  });
 
   // Renderer and GPU-process crashes don't fire uncaughtException — route
-  // them through fatal() so they get the same dialog + counter treatment.
-  appModule.on("render-process-gone", (_event, _webContents, details) => {
-    fatal(new Error(`render-process-gone: reason=${details && details.reason}`));
+  // them through fatal() so they get the same dialog + counter treatment,
+  // unless onRendererGone can bring the window back.
+  appModule.on("render-process-gone", (_event, webContents, details) => {
+    const reason = details && details.reason;
+    // The renderer exits cleanly when the app is signalled to stop (logout, a
+    // stopped app unit); that is a shutdown, not a crash.
+    if (reason === "clean-exit") {
+      appendLog(logPath, `[${new Date().toISOString()}] RENDER_PROCESS_EXITED reason=${reason}`);
+      return;
+    }
+    if (typeof onRendererGone === "function") {
+      // Only the page died: the backend and agents still run, so the window can come back.
+      appendLog(
+        logPath,
+        `[${new Date().toISOString()}] RENDER_PROCESS_GONE reason=${reason} exitCode=${details && details.exitCode}`
+      );
+      try {
+        onRendererGone(webContents, details);
+        writeCount(readCount(homedir) + 1, homedir);
+        return;
+      } catch (err) {
+        appendLog(logPath, `[${new Date().toISOString()}] RENDER_PROCESS_GONE handler failed: ${err.stack || err}`);
+      }
+    }
+    fatal(new Error(`render-process-gone: reason=${reason}`));
   });
 
   appModule.on("child-process-gone", (_event, details) => {

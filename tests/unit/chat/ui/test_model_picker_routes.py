@@ -558,6 +558,26 @@ def test_restart_starts_a_stopped_server_with_the_active_model(client, lemonade,
     assert jobs == [(DEFAULT_MODEL_NAME, False)]
 
 
+def test_restart_starts_a_stopped_server_for_a_cloud_model(client, db, lemonade, jobs):
+    """Cloud models go through the local server, so a stopped one needs starting."""
+    db.set_setting("custom_model", "fireworks.glm")
+    lemonade.down = True
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 202
+    assert resp.json()["starting_server"] is True
+    _join_restart()
+    assert jobs == [("fireworks.glm", False)]
+
+
+def test_restart_of_a_running_server_for_a_cloud_model_is_refused(
+    client, db, lemonade, jobs
+):
+    db.set_setting("custom_model", "fireworks.glm")
+    resp = client.post("/api/providers/local/restart")
+    assert resp.status_code == 422
+    assert jobs == []
+
+
 def test_restart_refuses_while_the_model_answers(client, lemonade, jobs):
     lemonade.loaded = [{**_entry(DEFAULT_MODEL_NAME), "is_busy": True}]
     resp = client.post("/api/providers/local/restart")

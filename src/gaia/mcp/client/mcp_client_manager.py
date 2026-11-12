@@ -157,6 +157,22 @@ class MCPClientManager:
 
         return [name for name in self._clients if is_agent_active(name, agent_id)]
 
+    def failed_servers_for_agent(self, agent_id: Optional[str]) -> Dict[str, str]:
+        """Return ``{name: error}`` for servers that failed to connect.
+
+        Filtered like :meth:`servers_for_agent`: a server not activated for
+        *agent_id* would not reach it even when connected.
+        """
+        if agent_id is None:
+            return dict(self._failed)
+        from gaia.connectors.activations import is_agent_active
+
+        return {
+            name: error
+            for name, error in self._failed.items()
+            if is_agent_active(name, agent_id)
+        }
+
     def tools_for_agent(self, agent_id: Optional[str]) -> Dict[str, List]:
         """Return ``{server_name: [MCPTool, ...]}`` filtered by activation.
 

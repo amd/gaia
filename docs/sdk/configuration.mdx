@@ -42,6 +42,31 @@ export GAIA_CHILD_ENV_DENY="MY_APP_TOKEN,MY_DB_PASSWORD"
 export ANTHROPIC_API_KEY="sk-ant-..."
 ```
 
+### `.env` files
+
+GAIA reads two kinds of `.env` file. A variable already set in your environment
+always wins over both, and `GAIA_NO_DOTENV` turns both off.
+
+- **The `.env` at or above GAIA's install** (the repo's `.env` in a source
+  checkout) loads in full, as an ordinary set of environment variables. The
+  packaged agent binaries have no install `.env`.
+- **The nearest `.env` at or above the working directory**, when it is a
+  different file, may belong to any project you run GAIA from. GAIA reads only
+  `ANTHROPIC_API_KEY` from it, uses that key for its own Claude calls, and does
+  not pass it to any program it starts. The eval judge prefers your Claude Code
+  login over that key. Every other name in that file is ignored, and GAIA logs
+  one warning naming them.
+
+If you launch GAIA or its terminal UI from a project folder and kept settings
+such as `TAVILY_API_KEY` or `LEMONADE_BASE_URL` in that project's `.env`,
+export them in your shell instead; GAIA no longer reads them from there.
+
+<Warning>
+A virtual environment created inside a project (`project/.venv`) puts GAIA's
+install under that project, so the project's `.env` counts as GAIA's own and
+loads in full. Install GAIA outside any repository you don't trust.
+</Warning>
+
 <Note>
 GAIA has no `GAIA_LOG_LEVEL` environment variable. Log levels are set
 programmatically through `gaia.logger` (`set_level(name, level)`); the default
@@ -70,6 +95,16 @@ variables tune the cap:
 
 Both must be whole numbers of at least 1; any other value stops GAIA at startup
 with an error naming the variable.
+
+### Math-library threads
+
+Importing `gaia` sets `OPENBLAS_NUM_THREADS=2` when none of
+`OPENBLAS_NUM_THREADS`, `GOTO_NUM_THREADS` or `OMP_NUM_THREADS` is set. The
+OpenBLAS that numpy and FAISS bundle otherwise reserves about 150 MB of memory
+per CPU thread when it loads, about 5 GB per process on a 32-thread PC. Processes
+GAIA starts inherit the value. Set one of those variables before the process
+starts to choose another number; an application that imports numpy before
+`gaia` keeps numpy's own default.
 
 ---
 

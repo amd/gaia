@@ -244,6 +244,68 @@ def test_a_hard_stop_at_the_limit_is_reported_incomplete(agent, clock):
     assert result["status"] == "incomplete"
 
 
+def _lookup_with_prose(n: int, prose: str) -> str:
+    return json.dumps(
+        {"thought": prose, "tool": _LOOKUP, "tool_args": {"path": f"src/{n}"}}
+    )
+
+
+def _stopped_after_first_call(agent, clock, replies, message, limit=None):
+    agent.time_limit_s = limit
+    cancel = TurnCancel()
+    agent._cancel_event = cancel
+    chat = _stub_chat(agent, clock, replies, 10)
+    chat_send = chat.send_messages.side_effect
+
+    def _stopped(*args, **kwargs):
+        reply = chat_send(*args, **kwargs)
+        if limit:
+            clock.now += limit
+        cancel.cancel(message)
+        return reply
+
+    chat.send_messages.side_effect = _stopped
+    return agent.process_query("Is the loader in src/ right?")
+
+
+def test_a_hard_stop_at_the_limit_keeps_what_was_found(agent, clock):
+    """No closing call fits past the deadline, so the latest prose is the answer."""
+    result = _stopped_after_first_call(
+        agent,
+        clock,
+        [_lookup_with_prose(1, "The loader skips src/ when it is a symlink.")],
+        "Stopped at the 100-second time limit.",
+        limit=100,
+    )
+
+    answer = result["result"]
+    assert answer.startswith("Stopped at the 100-second time limit.")
+    assert "What I had found so far:" in answer
+    assert "The loader skips src/ when it is a symlink." in answer
+    assert result["time_limit_reached"] is True
+
+
+def test_a_hard_stop_with_nothing_found_adds_no_empty_findings(agent, clock):
+    result = _stopped_after_first_call(
+        agent, clock, [_lookup(1)], "Stopped at the 100-second time limit.", limit=100
+    )
+
+    assert "What I had found so far" not in result["result"]
+
+
+def test_a_plain_stop_does_not_carry_findings(agent, clock):
+    """Stop or a disconnect is not a deadline: its wording stays as it was."""
+    result = _stopped_after_first_call(
+        agent,
+        clock,
+        [_lookup_with_prose(1, "The loader skips src/ when it is a symlink.")],
+        "The chat went idle.",
+    )
+
+    assert "What I had found so far" not in result["result"]
+    assert result["time_limit_reached"] is False
+
+
 def test_a_stop_with_a_message_and_no_limit_is_not_a_time_limit(agent, clock):
     cancel = TurnCancel()
     agent._cancel_event = cancel

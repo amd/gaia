@@ -256,6 +256,25 @@ def test_read_prompt_reads_and_strips_stdin(monkeypatch):
     assert print_mode.read_prompt(print_mode.READ_STDIN) == "line one\nline two"
 
 
+def test_read_prompt_decodes_raw_stdin_as_utf8_and_strips_bom(monkeypatch):
+    import io as _io
+
+    raw = _io.BytesIO("\ufeffcafé 日本 🎉\n".encode("utf-8"))
+    stdin = _io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    assert print_mode.read_prompt(print_mode.READ_STDIN) == "café 日本 🎉"
+
+
+def test_read_prompt_rejects_non_utf8_raw_stdin(monkeypatch):
+    import io as _io
+
+    raw = _io.BytesIO(b"\xff\xfehello")
+    stdin = _io.TextIOWrapper(raw, encoding="cp1252")
+    monkeypatch.setattr(sys, "stdin", stdin)
+    with pytest.raises(ValueError, match="UTF-8"):
+        print_mode.read_prompt(print_mode.READ_STDIN)
+
+
 @pytest.mark.parametrize("prompt", ["", "   "])
 def test_an_empty_prompt_is_refused_without_touching_stdin(monkeypatch, prompt):
     # A stdin that never closes: reading it is the hang this guards against.
@@ -652,12 +671,163 @@ def test_memory_is_drained_even_when_the_turn_raises(stub_env):
     assert _agent().drained
 
 
-def test_missing_flagship_wheel_is_an_actionable_runtime_error(
-    stub_env, monkeypatch, capsys
-):
+class _Outcome:
+    def __init__(
+        self,
+        terminal_type,
+        final_answer=None,
+        error_detail=None,
+        failed=False,
+        usage=None,
+        model_messages=None,
+    ):
+        self.terminal_type = terminal_type
+        self.final_answer = final_answer
+        self.error_detail = error_detail
+        self.failed = failed
+        self.usage = usage
+        self.model_messages = model_messages
+
+
+@pytest.fixture
+def relay(stub_env, monkeypatch):
+    """No importable agent, as in the frozen app: the turn goes to the sidecar."""
     monkeypatch.setitem(sys.modules, "gaia_agent.agent", None)
+
+    class Calls(list):
+        outcome = _Outcome("final", final_answer="pong from the binary")
+
+    calls = Calls()
+
+    def run_query(agent_id, query, **kwargs):
+        calls.append((agent_id, query, kwargs))
+        return calls.outcome
+
+    monkeypatch.setattr("gaia.daemon.agent_query.run_query", run_query)
+    return calls
+
+
+def test_without_the_agent_package_the_turn_runs_on_the_agent_binary(
+    relay, capsys, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    assert print_mode.run("q", model="m", output_format="json") == 0
+    record = json.loads(capsys.readouterr().out)
+    assert record["result"] == "pong from the binary" and not record["is_error"]
+    [(agent_id, query, kwargs)] = relay
+    assert (agent_id, query, kwargs["model"]) == ("gaia", "q", "m")
+    # The agent works in the caller's folder, as an in-process -p would.
+    assert kwargs["working_directory"] == str(tmp_path)
+    assert kwargs["allowed_paths"] == [str(tmp_path)]
+
+
+_RELAY_USAGE = {
+    "steps": 2,
+    "tools_used": 1,
+    "tokens": 12,
+    "input_tokens": 4000,
+    "cached_tokens": 3500,
+}
+_RELAY_MESSAGES = [
+    {"role": "assistant", "tool_calls": [{"function": {"name": "read_file"}}]},
+    {"role": "tool", "name": "read_file", "content": "amber-lynx-47"},
+    {"role": "assistant", "content": "The second code is amber-lynx-47."},
+]
+
+
+def test_a_relayed_json_record_counts_steps_tools_and_tokens(relay, capsys):
+    relay.outcome = _Outcome("final", final_answer="amber", usage=_RELAY_USAGE)
+
+    assert print_mode.run("q", model="m", output_format="json") == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["num_steps"] == 2
+    assert record["num_tool_calls"] == 1
+    assert record["input_tokens"] == 4000
+    assert record["cached_tokens"] == 3500
+    assert record["output_tokens"] == 12
+    assert "conversation" not in record
+    [(_, _, kwargs)] = relay
+    assert "turns" not in kwargs
+
+
+def test_a_relayed_verbose_record_carries_the_conversation(relay, capsys):
+    relay.outcome = _Outcome(
+        "final",
+        final_answer="amber",
+        usage=_RELAY_USAGE,
+        model_messages=_RELAY_MESSAGES,
+    )
+
+    assert print_mode.run("q", model="m", output_format="json", verbose=True) == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["conversation"] == _RELAY_MESSAGES
+    assert record["num_tool_calls"] == 1
+    # Sending turns, even empty, is how the agent is asked for model_messages.
+    [(_, _, kwargs)] = relay
+    assert kwargs["turns"] == []
+
+
+def test_a_relayed_final_without_a_tool_count_keeps_the_conversations(relay, capsys):
+    """An error-exit final carries steps and tokens but no ``tools_used``."""
+    usage = {"steps": 2, "tokens": 12, "input_tokens": 4000}
+    relay.outcome = _Outcome(
+        "final", final_answer="amber", usage=usage, model_messages=_RELAY_MESSAGES
+    )
+
+    assert print_mode.run("q", model="m", output_format="json", verbose=True) == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["num_tool_calls"] == 1
+    assert record["num_steps"] == 2
+
+
+def test_a_relayed_final_with_no_usage_reports_zeros_not_a_crash(relay, capsys):
+    relay.outcome = _Outcome("final", final_answer="amber")
+
+    assert print_mode.run("q", model="m", output_format="json") == 0
+
+    record = json.loads(capsys.readouterr().out)
+    assert record["num_tool_calls"] == 0
+    assert record["cached_tokens"] == 0
+
+
+def test_a_relayed_turn_leaves_the_model_server_to_the_daemon(relay, stub_env):
+    """The daemon brings up the model server for its agent, as it does for the
+    Agent UI; starting one here would race it."""
+    assert print_mode.run("q", model="m") == 0
+    stub_env.assert_not_called()
+
+
+def test_a_relayed_answer_reporting_a_failed_model_call_is_an_error(relay, capsys):
+    relay.outcome = _Outcome(
+        "final", final_answer="Couldn't reach the local LLM.", failed=True
+    )
     assert print_mode.run("q", model="m") == 1
-    assert "re-run `gaia -p`" in capsys.readouterr().err
+    assert "Couldn't reach the local LLM" in capsys.readouterr().err
+
+
+def test_a_relayed_turn_that_errors_exits_1_with_the_reason(relay, capsys):
+    relay.outcome = _Outcome("error", error_detail="model failed to load")
+    assert print_mode.run("q", model="m") == 1
+    assert "model failed to load" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "flags, named",
+    [
+        ({"skip_permissions": True}, "--dangerously-skip-permissions"),
+        ({"full_access": True}, "--full-access"),
+        ({"base_url": "http://h:1/api/v1"}, "--base-url"),
+        # The relay has no way to stop the binary's turn at a deadline.
+        ({"time_limit": 60}, "--time-limit"),
+    ],
+)
+def test_flags_the_agent_binary_cannot_honour_are_refused(relay, capsys, flags, named):
+    assert print_mode.run("q", model="m", **flags) == 1
+    assert named in capsys.readouterr().err
+    assert relay == []
 
 
 # ---------------------------------------------------------------------------

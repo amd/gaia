@@ -1,0 +1,41 @@
+{
+  "run_id": "eval-20261030-033209",
+  "config": {
+    "model": "claude-sonnet-4-6",
+    "agent_type": "gaia",
+    "agent_model": "Gemma-4-E4B-it-GGUF"
+  },
+  "summary": {
+    "total_scenarios": 2,
+    "passed": 1,
+    "failed": 1,
+    "blocked": 0,
+    "pass_rate": 0.5,
+    "judged_pass_rate": 0.5,
+    "avg_score": 6.17
+  },
+  "scenarios": [
+    {
+      "scenario_id": "shell_list_dir_basic",
+      "status": "FAIL",
+      "overall_score": 3.15,
+      "root_cause": "Agent's run_shell_command calls fail in two ways on Windows: `dir ~/...` errors because cmd.exe doesn't expand `~`, and the corrected PowerShell `Get-ChildItem` variant is auto-denied by the security policy (not queued for user approval). In both turns the agent then generates a '### First Tool Execution' heading but is truncated before actually invoking the planned fallback tools (browse_directory, find_files), leaving both responses incomplete with no usable output.",
+      "recommended_fix": {
+        "target": "architecture",
+        "file": "src/gaia/agents/tools/shell_tools.py",
+        "description": "Auto-approve basic read-only listing commands (dir, Get-ChildItem with no mutating flags) without requiring manual user permission, and/or expand ~ to %USERPROFILE% before passing the path to cmd.exe dir. Additionally, investigate why the agent consistently stops generating after a markdown heading — the response truncation pattern suggests a generation termination issue that prevents planned fallback tool calls from being executed."
+      },
+      "category": "gaia_shell",
+      "elapsed_s": 269.4887294769287
+    },
+    {
+      "scenario_id": "shell_pwd_basic",
+      "status": "PASS",
+      "overall_score": 9.18,
+      "root_cause": "null",
+      "recommended_fix": "null",
+      "category": "gaia_shell",
+      "elapsed_s": 144.57368803024292
+    }
+  ]
+}

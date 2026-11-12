@@ -6,6 +6,9 @@ package modelsetup
 import (
 	"fmt"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/setupapi"
+	"github.com/amd/gaia/tui/internal/textutil"
 )
 
 // Every sentence the setup screens show, in one file, so first-run setup,
@@ -21,10 +24,12 @@ const (
 	titleGPU        = "Give the GPU more memory"
 	titleGuide      = "Change the GPU memory yourself"
 	titleDownload   = "Downloading models"
+	titleContents   = "Everything being set up"
+	titleTest       = "Testing everything"
 	titleReady      = "GAIA is ready."
 	titleLoading    = "Reading the models"
 	titleNoServer   = "The local model server isn't running"
-	introModels     = "These are the models GAIA will use on this PC. Untick any you don't want; you can add them later in Settings."
+	introModels     = "These are the models GAIA will use on this PC, by job. Change any you like; you can add more later in Settings."
 	introSettings   = "Tick a model to download it, untick it to stop using it. Unticking never deletes a model."
 	cloudNoDownload = "Cloud models need no download."
 
@@ -71,6 +76,45 @@ const (
 	setupStoppedNote   = "Setup stopped before it finished. Press r to try again, or d for what went wrong."
 	checkingModels     = "Everything is downloaded. Checking that the models load…"
 
+	// The Agent UI's setup.label, setup.job and setup.get.
+	labelVerified    = "Verified"
+	labelUntested    = "Untested"
+	jobChatTitle     = "Chat"
+	jobVisionTitle   = "Reading images"
+	jobDocsTitle     = "Documents and memory"
+	jobExtrasTitle   = "Optional extras"
+	extrasOff        = "off by default"
+	extrasNote       = "Off by default. GAIA asks before downloading these the first time you need them."
+	untestedNote     = "Untested models are used at your own risk. They may run, but tools, documents or images might not work well."
+	untestedPicked   = "GAIA will use this model, but we haven't tested it. You can switch in Settings at any time."
+	nothingMore      = "Nothing more to download"
+	otherVision      = "Choose a different vision model"
+	hideVision       = "Hide other vision models"
+	useChatForVision = "Use the chat model"
+	skipVision       = "Skip for now"
+	skipVisionNote   = "Reading images needs a vision model. GAIA will ask before downloading one."
+	notWithThisChat  = "Not available with this chat model"
+
+	// The Agent UI's setup.contents, with the size kept in a sentence that fits a row.
+	contentsLede      = "Here's everything coming to this PC."
+	contentsSizeLater = "Size shown when it starts"
+	contentsWorking   = "In progress"
+	contentsReady     = "Ready"
+	contentsFailed    = "Failed"
+	contentsHere      = "Already here"
+	contentsWaiting   = "Waiting"
+	contentsFrom      = "From "
+
+	// The Agent UI's setup.test.
+	testLede       = "A download isn't proof it works, so GAIA runs each part for real."
+	testRunning    = "Running"
+	testWaiting    = "Waiting"
+	testPassed     = "Passed"
+	testFailed     = "Failed"
+	testSkipped    = "Not on this PC"
+	testFailedHelp = "Something didn't work, so GAIA isn't ready yet. Your downloads are safe."
+	testFailedMem  = "This PC doesn't have enough free memory right now. Close memory-heavy apps and try again, or choose a smaller model."
+
 	gpuKeepsFmt    = "GAIA keeps at least %s for %s and your apps."
 	gpuConsentKey  = "Changing it needs administrator permission and a restart."
 	gpuWaitingText = "Waiting for permission…"
@@ -84,6 +128,115 @@ const (
 	gpuRestartHow    = "GAIA never restarts it for you; save your work first."
 )
 
+// visionBuiltIn says the chat model reads images itself.
+func visionBuiltIn(name string) string { return "Handled by " + name + " · " + nothingMore }
+
+// visionNeeded says why a second model is ticked.
+func visionNeeded(name string) string {
+	return name + " can't read images, so we picked a model for that job."
+}
+
+// imagesBlockedLine says why image creation can't be ticked.
+func imagesBlockedLine(name string) string {
+	return name + " doesn't have this feature yet. Choose a larger chat model to use it."
+}
+
+// extraLabel is an optional extra by the job it does.
+func extraLabel(role string) string {
+	switch role {
+	case setupapi.RoleSpeech:
+		return "Speech to text"
+	case setupapi.RoleVoice:
+		return "Text to speech"
+	case setupapi.RoleImageCreation:
+		return "Creating images"
+	}
+	return role
+}
+
+func extraNote(role string) string {
+	switch role {
+	case setupapi.RoleSpeech:
+		return "For talking to GAIA and transcribing audio."
+	case setupapi.RoleVoice:
+		return "So GAIA can read answers aloud."
+	case setupapi.RoleImageCreation:
+		return "Makes pictures from a description."
+	}
+	return ""
+}
+
+// componentName is a setup component in the Agent UI's words; an id the TUI
+// doesn't know yet still shows, under its own name.
+func componentName(id string) string {
+	switch id {
+	case "server":
+		return "GAIA's model server"
+	case "backend":
+		return "Model runtime"
+	case "packages":
+		return "Python packages"
+	case "agent":
+		return "GAIA agent"
+	}
+	return id
+}
+
+// testJobLabel says what a test proves.
+func testJobLabel(job string) string {
+	switch job {
+	case setupapi.JobServer:
+		return "Model server answers"
+	case setupapi.RoleChat:
+		return "Chat: loads and answers"
+	case setupapi.RoleVision:
+		return "Reading images: names a test image's colour"
+	case setupapi.RoleEmbedding:
+		return "Documents and memory: makes an embedding"
+	case setupapi.RoleSpeech:
+		return "Speech to text: transcribes a test sound"
+	case setupapi.RoleVoice:
+		return "Text to speech: speaks a sentence"
+	case setupapi.RoleImageCreation:
+		return "Creating images: makes a test picture"
+	case setupapi.JobAgent:
+		return "A real chat with GAIA"
+	}
+	return job
+}
+
+// testResult is a row's outcome.
+func testResult(r setupapi.TestRow) string {
+	switch r.State {
+	case setupapi.TestRunning:
+		return testRunning
+	case setupapi.TestFailed:
+		return testFailed
+	case setupapi.TestSkipped:
+		return testSkipped
+	}
+	if r.Seconds != nil {
+		return fmt.Sprintf("%s, %.0f s", testPassed, *r.Seconds)
+	}
+	return testPassed
+}
+
+func testCount(done, total int) string {
+	return fmt.Sprintf("Tests done: %d of %d", done, total)
+}
+
+func downloadAgain(name string) string { return "Press x to download " + name + " again." }
+
+// extraFailed is an optional extra that failed its test: GAIA is ready without it.
+func extraFailed(label, why string) string {
+	return strings.TrimSuffix(label, ".") + " didn't pass its test: " + why
+}
+
+// alsoSetUp is the models screen's line for everything that isn't a model.
+func alsoSetUp(names []string) string {
+	return "Also downloads " + strings.Join(names, ", ") + ". Press v to see everything."
+}
+
 func introFor(settings bool) string {
 	if settings {
 		return introSettings
@@ -92,10 +245,10 @@ func introFor(settings bool) string {
 }
 
 // statusDownload is a row that still needs downloading.
-func statusDownload(gb float64) string { return formatGB(gb) }
+func statusDownload(gb float64) string { return textutil.FormatGB(gb) }
 
 // statusPartial is a row with some bytes already on disk.
-func statusPartial(left float64) string { return formatGB(left) + " left" }
+func statusPartial(left float64) string { return textutil.FormatGB(left) + " left" }
 
 // A model's need and the PC's memory for models both come from model_fit in
 // the same unit, so they carry the same label and compare directly. Whether a
@@ -119,15 +272,46 @@ func noFitAsk(need, have float64) string {
 	return fmt.Sprintf("Needs about %s; this PC has %s.", formatGBShort(need), formatGBShort(have))
 }
 
-// purposeLine says what a model is for, in a few words.
-func purposeLine(e rowEntry) string {
+// npuBlockedLine is the warning under a model the NPU can't run yet. The
+// server's sentence says which case it is (no NPU, or one not set up), and
+// both block. The reason is capitalised and its final full stop is removed,
+// including one inside a closing parenthesis, so it reads as its own clause
+// without doubling the stop when ours is appended.
+func npuBlockedLine(reason *string) string {
+	if reason == nil {
+		return "This model can't be used on this PC."
+	}
+	r := strings.TrimSpace(*reason)
+	r = strings.TrimRight(r, ".")
+	if strings.HasSuffix(r, ".)") {
+		r = strings.TrimSuffix(r, ".)") + ")"
+	}
+	if r == "" {
+		return "This model can't be used on this PC."
+	}
+	r = strings.ToUpper(r[:1]) + r[1:]
+	return "This model can't be used on this PC: " + r + "."
+}
+
+// npuBlockedPurpose is the job caption for a model the NPU can't run yet: it
+// must not read as a working chat option.
+const npuBlockedPurpose = "Requires a Ryzen AI NPU that is ready on this PC."
+
+// purposeLine says what a model is for in the job it is listed under.
+func purposeLine(e rowEntry, job string) string {
 	switch {
+	case e.optional != "":
+		return extraNote(e.optional)
 	case e.embedding:
 		return "Lets GAIA search your files and remember things."
-	case e.vision:
+	case job == jobVision:
 		return "Reads images and screenshots."
+	case e.npuBlocked():
+		return npuBlockedPurpose
 	case e.npu:
 		return "Answers your chats. Runs on the NPU."
+	case e.readsImages:
+		return "Answers your chats and reads images."
 	}
 	return "Answers your chats."
 }
@@ -147,15 +331,15 @@ func skippedCaveat(e rowEntry) string {
 // diskSummary is the live totals line.
 func diskSummary(download float64, free *float64, drive string) string {
 	if free == nil {
-		return fmt.Sprintf("Download %s · Free space unknown", formatGB(download))
+		return fmt.Sprintf("Download %s · Free space unknown", textutil.FormatGB(download))
 	}
 	after := *free - download
 	if after < 0 {
 		return fmt.Sprintf("Download %s · free on %s %s · %s short",
-			formatGB(download), drive, formatGB(*free), formatGB(-after))
+			textutil.FormatGB(download), drive, textutil.FormatGB(*free), textutil.FormatGB(-after))
 	}
 	return fmt.Sprintf("Download %s · free on %s %s · after %s",
-		formatGB(download), drive, formatGB(*free), formatGB(after))
+		textutil.FormatGB(download), drive, textutil.FormatGB(*free), textutil.FormatGB(after))
 }
 
 // diskShortfall names how much to free, and the one model to drop when
@@ -164,10 +348,10 @@ func diskShortfall(need, free float64, drive, drop string, dropGB float64) strin
 	short := need - free
 	if drop != "" {
 		return fmt.Sprintf("Needs %s; only %s free on %s. Free %s or untick %s (saves %s).",
-			formatGB(need), formatGB(free), drive, formatGB(short), drop, formatGB(dropGB))
+			textutil.FormatGB(need), textutil.FormatGB(free), drive, textutil.FormatGB(short), drop, textutil.FormatGB(dropGB))
 	}
 	return fmt.Sprintf("Needs %s; only %s free on %s. Free %s, or untick more models.",
-		formatGB(need), formatGB(free), drive, formatGB(short))
+		textutil.FormatGB(need), textutil.FormatGB(free), drive, textutil.FormatGB(short))
 }
 
 // failureLine is a failed row's reason, worded for its kind.
@@ -175,11 +359,21 @@ func failureLine(kind, name, drive string, doneGB, leftGB float64) string {
 	switch kind {
 	case "disk_full":
 		return fmt.Sprintf("Ran out of disk space on %s after %s of %s. Free %s and press r. Nothing was lost; the download continues from where it stopped.",
-			drive, formatGB(doneGB), name, formatGB(leftGB))
+			drive, textutil.FormatGB(doneGB), name, textutil.FormatGB(leftGB))
 	case "network":
 		return "The connection dropped while downloading " + name + ". Press r to continue from where it stopped."
 	case "verify":
 		return name + " downloaded but didn't load. Press r to delete it and download it again."
+	case "memory":
+		return name + " is downloaded, but this PC didn't have enough free memory to test it. Close some apps, then press r to test it again. Nothing is downloaded again."
+	case "stuck":
+		return name + " is downloaded, but the model server didn't answer before its test finished. Press r to test it again. Nothing is downloaded again."
+	case "answer":
+		return name + " loaded, but its test got nothing usable back. Press d for what it returned, r to test it again. Nothing is downloaded again."
+	case "window":
+		return name + " loaded with a smaller context window than GAIA needs. Press r to test it again. Nothing is downloaded again."
+	case "path_too_long":
+		return "Windows couldn't save " + name + ": the path to the models folder is too long. Turn on long file paths in Windows, or use a models folder with a shorter path, then press r."
 	}
 	return "Lemonade couldn't download " + name + ". Press d for its message, r to retry."
 }
@@ -206,7 +400,7 @@ func removeAsk(e rowEntry) string {
 	}
 	frees := ""
 	if e.fullGB > 0 {
-		frees = " This frees " + formatGB(e.fullGB) + lost + "."
+		frees = " This frees " + textutil.FormatGB(e.fullGB) + lost + "."
 	}
 	return "Remove " + e.name + "?" + frees + " You can download it again."
 }

@@ -482,6 +482,44 @@ class TestJourney:
         )
         assert out.returncode == 124
 
+    def test_a_phase_whose_output_the_console_cannot_encode_still_passes(
+        self, results, tmp_path
+    ):
+        # The phase writes UTF-8 bytes, as gaia-tui does; only the relay's own
+        # console is cp1252, as on a Windows runner.
+        script = tmp_path / "utf8_phase.py"
+        script.write_text(
+            "import sys\n" "sys.stdout.buffer.write('\\u274c failed\\n'.encode())\n",
+            encoding="utf-8",
+        )
+        env = {k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"}
+        env["PYTHONIOENCODING"] = "cp1252"
+        out = subprocess.run(
+            [
+                sys.executable,
+                str(HEADLESS / "journey.py"),
+                "run",
+                "--results",
+                str(results),
+                "--phases",
+                "health",
+                "--thresholds",
+                str(_thresholds(tmp_path, {})),
+                "--",
+                sys.executable,
+                str(script),
+                "{phase}",
+            ],
+            capture_output=True,
+            text=True,
+            encoding="cp1252",
+            errors="replace",
+            env=env,
+        )
+        assert "Traceback" not in out.stderr, out.stderr
+        assert out.returncode == 0, out.stdout + out.stderr
+        assert json.loads(results.read_text())["phases"]["health"]["status"] == "pass"
+
     def test_summarize_fails_when_any_row_failed(self, tmp_path):
         d = tmp_path / "res"
         d.mkdir()
@@ -526,6 +564,41 @@ class TestKnownFailuresFile:
                 assert (
                     e["phase"] in rows[row]["phases"].split()
                 ), f"{row} has no {e['phase']} phase"
+
+
+class TestKnownFailureSchedule:
+    ENTRY = {"issue": 5527}
+
+    @staticmethod
+    def _issue(state="OPEN", reason=None, milestone="v0.25.5 — Critical bugs"):
+        return {
+            "state": state,
+            "stateReason": reason,
+            "milestone": {"title": milestone} if milestone else None,
+        }
+
+    def test_an_open_issue_on_an_unshipped_milestone_may_stay(self):
+        assert journey.unscheduled_known(self.ENTRY, self._issue(), False) is None
+
+    def test_a_fixed_issue_stays_until_its_release_ships(self):
+        issue = self._issue("CLOSED", "COMPLETED")
+        assert journey.unscheduled_known(self.ENTRY, issue, False) is None
+
+    def test_an_entry_past_its_shipped_milestone_fails(self):
+        # #5527 at v0.25.2: still milestoned v0.25.2, released, journeys still green.
+        issue = self._issue(milestone="v0.25.2 — Polish & security")
+        assert "has shipped" in journey.unscheduled_known(self.ENTRY, issue, True)
+
+    @pytest.mark.parametrize("milestone", [None, "Backlog"])
+    def test_an_entry_without_a_release_milestone_fails(self, milestone):
+        issue = self._issue(milestone=milestone)
+        assert "no release milestone" in journey.unscheduled_known(
+            self.ENTRY, issue, False
+        )
+
+    def test_an_issue_closed_unfixed_fails(self):
+        issue = self._issue("CLOSED", "NOT_PLANNED")
+        assert "without a fix" in journey.unscheduled_known(self.ENTRY, issue, False)
 
 
 # ── the fake model server ────────────────────────────────────────────────────
@@ -664,6 +737,22 @@ class TestWorkflow:
                 entry["kind"] in script
             ), f"{row}: kind {entry['kind']} unknown to its script"
 
+    def test_windows_uninstall_waits_for_the_deferred_venv_delete(self):
+        # gaia uninstall hands the venv to a helper that runs after it exits;
+        # checking leftovers straight away races it.
+        windows = (HEADLESS / "windows-journey.ps1").read_text(encoding="utf-8")
+        step = windows[windows.index("'uninstall' {") : windows.index("'leftovers' {")]
+        run = step.index('gaia.exe" uninstall --purge')
+        wait = step.index(
+            'while (((Test-Path "$gaiaHome\\venv") -or (Test-Path "$gaiaHome\\bin"))'
+        )
+        assert run < wait < step.index("} else {", wait)
+        assert "gaia-uninstall-*-*.log" in step
+        uninstall_src = (
+            REPO / "src" / "gaia" / "installer" / "uninstall_command.py"
+        ).read_text(encoding="utf-8")
+        assert 'f"gaia-uninstall-{venv.name}-{os.getpid()}.log"' in uninstall_src
+
     def test_pull_request_trigger_has_no_base_branch_filter(self):
         wf = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         assert "branches" not in wf[True]["pull_request"]
@@ -699,3 +788,52 @@ class TestScriptsRefuseOutsideCi:
             "New-Item"
         )
         assert "RUNNER_TEMP" in posix and "RUNNER_TEMP" in windows
+
+
+def _posix_function(name: str) -> str:
+    script = (HEADLESS / "posix-journey.sh").read_text(encoding="utf-8")
+    start = script.index(f"\n{name}() {{\n") + 1
+    return script[start : script.index("\n}\n", start) + 3]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="bash script")
+class TestLaunchWaitsForTheMainLog:
+    """A cold AppImage can open electron-main.log just past the 10s check."""
+
+    def _wait(self, tmp_path, app: str, writer: str, seconds: int):
+        log = tmp_path / "electron-main.log"
+        body = (
+            "set -u\n"
+            f"LOGS={str(tmp_path)!r}\n"
+            f"LOG={str(log)!r}\n"
+            ': > "$LOGS/app.err"\n'
+            'die() { echo "DIE: $*" >&2; exit 1; }\n'
+            + _posix_function("wait_for_main_log")
+            + f"{app}\n"
+            "trap 'kill $pid 2>/dev/null' EXIT\n"
+            f"{writer}\n"
+            f'wait_for_main_log "$pid" "$LOG" {seconds}\n'
+        )
+        return subprocess.run(
+            ["bash", "-c", body], capture_output=True, text=True, timeout=60
+        )
+
+    def test_a_log_written_after_the_check_starts_passes(self, tmp_path):
+        out = self._wait(tmp_path, "sleep 30 & pid=$!", '(sleep 2; : > "$LOG") &', 10)
+        assert out.returncode == 0, out.stderr
+
+    def test_a_running_app_that_never_writes_the_log_fails(self, tmp_path):
+        out = self._wait(tmp_path, "sleep 30 & pid=$!", ":", 2)
+        assert out.returncode == 1
+        assert "is running but wrote no" in out.stderr
+        assert "within 12s of launch" in out.stderr
+
+    def test_an_app_that_exits_first_fails_at_once(self, tmp_path):
+        out = self._wait(tmp_path, "true & pid=$!; wait $pid", ":", 30)
+        assert out.returncode == 1
+        assert "the app exited without writing" in out.stderr
+
+    def test_launch_uses_the_wait_not_a_one_shot_check(self):
+        launch = _posix_function("launch_agent_ui")
+        assert "wait_for_main_log" in launch
+        assert '[ -f "${GAIA_HOME}/electron-main.log" ] ||' not in launch

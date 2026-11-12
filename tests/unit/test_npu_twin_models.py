@@ -26,9 +26,11 @@ from gaia.llm.model_fit import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 NPU = {"available": True, "family": "XDNA2"}
 
-# Strix Halo, 128 GB with a 64 GB GPU carve-out (Linux reports it as vram_gb).
+# Strix Halo, 128 GB with a 64 GB GPU carve-out, as its Linux Lemonade reports
+# it: vram_gb is the carve-out, and Physical Memory is MemTotal, without it.
 STRIX_HALO_128 = {
-    "Physical Memory": "128 GB",
+    "OS Version": "Linux-7.0.0-31-generic",
+    "Physical Memory": "62.40 GB",
     "devices": {
         "amd_gpu": [
             {
@@ -117,6 +119,13 @@ class TestFreshPullRequestShape:
         client = lc.LemonadeClient(host="localhost", port=13305)
         with responses.RequestsMock() as rsps:
             rsps.add(
+                responses.GET,
+                f"{client.base_url}/system-info",
+                json={
+                    "recipes": {"flm": {"backends": {"npu": {"state": "installed"}}}}
+                },
+            )
+            rsps.add(
                 responses.POST,
                 f"{client.base_url}/pull",
                 body=b"event: complete\ndata: {}\n\n",
@@ -124,7 +133,7 @@ class TestFreshPullRequestShape:
                 stream=True,
             )
             list(client.pull_model_stream(model_id))
-            body = json.loads(rsps.calls[0].request.body)
+            body = json.loads(rsps.calls[-1].request.body)
         assert body == {"model_name": model_id, "stream": True}
 
     def test_an_flm_model_never_carries_registration(self):
@@ -135,11 +144,11 @@ class TestFreshPullRequestShape:
 
 
 class TestNpuCapacity:
-    def test_npu_memory_is_ram_less_the_carve_out(self):
+    def test_npu_memory_is_the_ram_linux_sees(self):
         cap = capacity_from_system_info(STRIX_HALO_128)
-        assert cap.npu_memory_gb == pytest.approx(64.0)
+        assert cap.npu_memory_gb == pytest.approx(62.4)
         npu = npu_capacity(cap)
-        assert (npu.memory_gb, npu.memory_source) == (pytest.approx(64.0), NPU_RAM)
+        assert (npu.memory_gb, npu.memory_source) == (pytest.approx(62.4), NPU_RAM)
         # The NPU view never counts as a GPU for the GPU-only product rule.
         assert not npu.on_gpu
         # And the GPU view is untouched.
@@ -252,19 +261,19 @@ class TestTuiAgrees:
             assert entry["size_gb"] == mr.size_gb
             assert entry.get("vision", False) == mr.vision
             # The TUI's server-start window must be the one Python loads with.
-            assert entry["min_ctx_size"] == lc.npu_ctx_ceiling(model_id)
+            assert entry["min_ctx_size"] == lc.npu_default_ctx(model_id)
 
 
 class TestNpuWindow:
     def test_twins_get_a_64k_window_and_e2b_keeps_the_flm_ceiling(self):
-        assert lc.npu_ctx_ceiling(lc.NPU_DEFAULT_MODEL_NAME) == lc.GPU_CTX_SIZE
-        assert lc.npu_ctx_ceiling("gemma4-it-e2b-FLM") == lc.NPU_CTX_SIZE
-        assert lc.npu_ctx_ceiling("some-unknown-FLM") == lc.NPU_CTX_SIZE
+        assert lc.npu_default_ctx(lc.NPU_DEFAULT_MODEL_NAME) == lc.GPU_CTX_SIZE
+        assert lc.npu_default_ctx("gemma4-it-e2b-FLM") == lc.NPU_CTX_SIZE
+        assert lc.npu_default_ctx("some-unknown-FLM") == lc.NPU_CTX_SIZE
 
-    def test_an_override_above_the_ceiling_is_clamped(self, monkeypatch):
+    def test_an_override_wins_on_the_npu(self, monkeypatch):
         monkeypatch.setenv("GAIA_CTX_SIZE", "131072")
-        assert lc.resolve_ctx_size(lc.NPU_DEFAULT_MODEL_NAME) == lc.GPU_CTX_SIZE
-        assert lc.resolve_ctx_size("gemma4-it-e2b-FLM") == lc.NPU_CTX_SIZE
+        assert lc.resolve_ctx_size(lc.NPU_DEFAULT_MODEL_NAME) == 131072
+        assert lc.resolve_ctx_size("gemma4-it-e2b-FLM") == 131072
 
 
 class TestGpuStaysTheDefault:

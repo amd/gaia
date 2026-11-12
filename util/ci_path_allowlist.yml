@@ -31,6 +31,20 @@ dependencies:
     docs/guides/index.mdx: >-
       Same file, same reason: a path inside synthetic audit-key markers.
 
+  test_scale.yml:
+    src/gaia/**: >-
+      The scale run takes minutes, so it runs on every release tag instead of
+      on every PR that touches src/gaia. The same code is tested at small size
+      per PR by test_unit.yml (folder indexing, memory store, memory search).
+
+  build_tui.yml:
+    setup.py: >-
+      The installer jobs freeze the gaia core from the package build_core.yml
+      installs. A dependency change is frozen and smoke-tested by
+      build-installers.yml, which triggers on setup.py and pyproject.toml.
+    pyproject.toml: >-
+      Same reason as setup.py.
+
   build-installers.yml:
     src/gaia/apps/webui/**: >-
       The installer build compiles the Agent UI, but its source is already

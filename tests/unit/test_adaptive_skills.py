@@ -1556,6 +1556,7 @@ class _TaintProbeAgent:
     internet_off = Agent.internet_off
     _execute_tool = Agent._execute_tool
     _resolve_tool_name = Agent._resolve_tool_name
+    _execution_tool_registry = Agent._execution_tool_registry
     _policy_refusal = Agent._policy_refusal
     _tool_requires_confirmation = Agent._tool_requires_confirmation
     _write_target_outside_scope = Agent._write_target_outside_scope
@@ -1564,7 +1565,6 @@ class _TaintProbeAgent:
     # staying bound to Agent.
     confirmation_hooks = Agent.__dict__["confirmation_hooks"]
     _call_is_pre_authorized = Agent._call_is_pre_authorized
-    _on_tool_invoked = Agent._on_tool_invoked
     _coerce_tool_args = Agent._coerce_tool_args
     _call_tool_bounded = Agent._call_tool_bounded
     _fold_tool_usage = Agent._fold_tool_usage
@@ -1875,3 +1875,78 @@ def test_the_tool_refuses_to_write_while_the_off_switch_is_on(store, monkeypatch
     assert "switched off" in result["message"]
     assert "GAIA_NO_LEARNED_SKILLS" in result["message"]
     assert store.search_deltas(base_name="github-triage", scope=SCOPE) == []
+
+
+# --------------------------------------------------------------------------
+# What the tool tells the model is true and runnable
+# --------------------------------------------------------------------------
+
+
+def _parse_gaia_skill(command: str):
+    """Parse *command* with the real ``gaia skill`` argparse tree."""
+    import argparse
+    import shlex
+
+    from gaia.skills import cli as skills_cli
+
+    parser = argparse.ArgumentParser(prog="gaia")
+    sub = parser.add_subparsers(dest="action")
+    skills_cli.add_subparser(sub)
+    argv = shlex.split(command)
+    assert argv[0] == "gaia", command
+    return parser.parse_args(argv[1:])
+
+
+def test_the_drop_section_command_the_refusal_names_carries_its_scope(store):
+    """``--drop-section`` without ``--scope`` exits 2, so the hint must carry it."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    result = agent.call(skill="github-triage", section="rules", corrected_text=" ")
+
+    command = result["message"].split("`")[1]
+    parsed = _parse_gaia_skill(command.replace("<section>", "rules"))
+
+    assert (parsed.skill_action, parsed.name) == ("deltas", "github-triage")
+    assert parsed.scope == SCOPE
+    assert parsed.drop_section == "rules"
+
+
+def test_an_unloaded_skill_refusal_says_when_the_lesson_can_be_saved(store):
+    """Loading the skill taints the turn, so "load it first" alone is untrue."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    result = agent.call(skill="not-loaded", section="procedure", corrected_text="x")
+
+    assert "load_skill" in result["message"]
+    assert "next message" in result["message"]
+
+
+def test_a_tainted_turn_refusal_says_a_tool_already_ran(store):
+    """The taint fires after harmless reads too, so it must not blame a web page."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    agent._turn_saw_external_content = True
+
+    result = agent.call(
+        skill="github-triage", section="procedure", corrected_text=INBOX_PROCEDURE
+    )
+
+    assert "A tool already ran this turn" in result["message"]
+    assert "arrived from a tool" not in result["message"]
+
+
+def test_a_refusal_without_provenance_does_not_claim_a_tool_ran():
+    delta = _delta(
+        KIND_REPLACE_SECTION, "procedure", {"body": INBOX_PROCEDURE}, provenance={}
+    )
+    with pytest.raises(DeltaRefused) as excinfo:
+        validate_delta(BASE_SKILL, delta)
+    assert "already ran" not in str(excinfo.value)
+
+
+def test_the_undo_notice_says_it_applies_on_the_next_start(store):
+    """A CLI revert never reaches a running agent's cached resolution."""
+    agent = _LearningAgent(store, _FakeSkill("github-triage", BASE_SKILL))
+    result = agent.call(
+        skill="github-triage", section="procedure", corrected_text=INBOX_PROCEDURE
+    )
+
+    assert "takes effect when GAIA next starts" in result["message"]
+    assert result["undo_command"] in result["message"]

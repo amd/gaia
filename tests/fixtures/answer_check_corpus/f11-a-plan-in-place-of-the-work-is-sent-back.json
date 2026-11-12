@@ -1,0 +1,16 @@
+{
+  "kind": "turn",
+  "finding": "F11 (amd/gaia#7180)",
+  "why": "The guard F11 misfired: asked to do the work, a plan with no tool call is sent back, and says so if it never runs.",
+  "request": "Work out net revenue by region from last month's sales.",
+  "model": [
+    {
+      "answer": "1. I will use the `run_python` tool to load the CSV.\n2. I will use the `run_python` tool to drop returned orders.\n3. I will use the `run_python` tool to compute units times unit_price.\n4. I will use the `run_python` tool to group by region.\n5. I will use the `run_python` tool to print the totals.\n\nThis should give you the exact breakdown you asked for."
+    }
+  ],
+  "expect": {
+    "answer_has": [
+      "I didn't finish"
+    ]
+  }
+}

@@ -155,7 +155,9 @@ driving a browser at a service that offers an API is strictly worse.
 ## Troubleshooting
 
 **"Browser automation is not installed"** — run the two install commands above.
-The second one is easy to miss; the Python package alone has no browser.
+The second one is easy to miss; the Python package alone has no browser. The
+installed desktop app can't add it: the error says so instead of naming `pip`, and
+browser automation needs a source install of GAIA.
 
 **"Element 'e7' is not on the page any more"** — the page changed. The agent
 should call `browser_snapshot()` for fresh refs. Expected on a busy page.

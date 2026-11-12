@@ -11,7 +11,6 @@
       "label": "Qwen3.6 35B A3B",
       "note": "default where a GPU holds it (~27 GB for models); faster than Flash, with vision",
       "size_gb": 23.3,
-      "min_lemonade_version": "11.7.0",
       "min_ctx_size": 65536,
       "kv_bytes_per_token": 20480
     },
@@ -27,7 +26,6 @@
       "mmproj": "mmproj-F16.gguf",
       "vision": true,
       "reasoning": true,
-      "min_lemonade_version": "2026.39.1",
       "min_ctx_size": 65536,
       "kv_bytes_per_token": 24576
     },
@@ -49,7 +47,17 @@
       "option": true,
       "size_gb": 9.1,
       "vision": true,
-      "min_ctx_size": 65536
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 22528
+    },
+    {
+      "id": "Muse-Glimmer-30B-GGUF",
+      "provider": "local",
+      "label": "Muse Glimmer 30B",
+      "note": "optional: Meta's agent model, with vision; dense, so slower than Qwen3.6 on Strix Halo; needs ~24 GB for models",
+      "size_gb": 21.36,
+      "min_ctx_size": 65536,
+      "kv_bytes_per_token": 13312
     },
     {
       "id": "ggml-gpt-oss-20b-MXFP4-GGUF",

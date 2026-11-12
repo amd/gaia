@@ -3,9 +3,7 @@
 
 /**
  * Source-level contracts for main.cjs, which cannot be required without
- * launching Electron. The deep-link queue's behaviour is tested in
- * deep-link-queue.test.cjs; these pin that main.cjs actually uses it, and
- * uses it in the right order.
+ * launching Electron.
  */
 
 const fs = require("fs");
@@ -29,41 +27,6 @@ function functionBody(name) {
     .filter((i) => i > -1);
   return MAIN.slice(start, ends.length ? Math.min(...ends) : undefined);
 }
-
-describe("main.cjs routes gaia:// links through the startup queue", () => {
-  test("startup releases the queue only after waitForBackend resolves", () => {
-    const body = whenReadyBody();
-    const wait = body.indexOf("backendReady = await waitForBackend(");
-    const drain = body.indexOf("processStartupDeepLinks(backendReady)");
-    expect(wait).toBeGreaterThan(-1);
-    expect(drain).toBeGreaterThan(wait);
-  });
-
-  test("the startup release delegates to the queue drain", () => {
-    expect(functionBody("processStartupDeepLinks")).toContain("startupDeepLinks.drain(");
-  });
-
-  test("every inbound link goes through the queue, never straight to dispatch", () => {
-    const body = functionBody("handleDeepLink");
-    expect(body).toContain("startupDeepLinks.accept(rawUrl)");
-    expect(body).not.toContain("runDeepLink(");
-    // The old gate released links as soon as services existed — before the backend listened.
-    expect(body).not.toMatch(/agentProcessManager/);
-  });
-
-  test("the queue dispatches through the confirm-gated install path", () => {
-    const start = MAIN.indexOf("createStartupDeepLinkQueue({");
-    const block = MAIN.slice(start, MAIN.indexOf("});", start));
-    expect(block).toContain("runDeepLink(parseDeepLink(rawUrl))");
-    expect(block).toContain("reportNotReady: reportDeepLinksNotReady");
-  });
-
-  test("a backend that never came up is reported loudly", () => {
-    expect(functionBody("reportDeepLinksNotReady")).toMatch(
-      /dialog\.showErrorBox\("GAIA is not ready yet"/
-    );
-  });
-});
 
 describe("external links go through the scheme allow-list", () => {
   test("setWindowOpenHandler checks the resolved URL before openExternal", () => {
@@ -139,5 +102,81 @@ describe("crash-loop safe mode (issue #938)", () => {
     expect(body.slice(guard, ret)).toContain("await runSafeModePrompt({");
     expect(ret).toBeLessThan(seed);
     expect(ret).toBeLessThan(body.indexOf("cleanupOrphanedBackend()"));
+  });
+});
+
+describe("the window opens before anything slow", () => {
+  const position = (needle) => {
+    const at = whenReadyBody().indexOf(needle);
+    expect(at).toBeGreaterThan(-1);
+    return at;
+  };
+
+  test("the window and tray exist before seeding, orphan cleanup, install or backend", () => {
+    const window = position("createWindow();");
+    expect(window).toBeLessThan(position("initializeServices();"));
+    for (const later of [
+      "agentSeeder.seedBundledAgents()",
+      "await cleanupOrphanedBackend()",
+      "engineInstall.run()",
+      "backendStarting = startBackend();",
+    ]) {
+      expect(position("initializeServices();")).toBeLessThan(position(later));
+    }
+  });
+
+  test("an install puts its screen up before the slow steps, and only then runs", () => {
+    const decided = position("showingInstallScreen = !backendInstaller.isBackendCurrent();");
+    const screen = position("if (showingInstallScreen) await loadApp();");
+    expect(decided).toBeLessThan(screen);
+    expect(screen).toBeLessThan(position("agentSeeder.seedBundledAgents()"));
+    expect(position("await cleanupOrphanedBackend()")).toBeLessThan(position("engineInstall.run()"));
+  });
+
+  test("a current backend loads the app once, with no install page first", () => {
+    expect(position("if (!showingInstallScreen) await loadApp();")).toBeGreaterThan(
+      position("backendProcess = await backendStarting;")
+    );
+  });
+
+  test("the install screen waits for the backend to answer, then loads the app", () => {
+    const answered = position("backendReady = await waitForBackend(");
+    const app = position("showingInstallScreen = false;");
+    expect(answered).toBeLessThan(app);
+    expect(app).toBeLessThan(whenReadyBody().indexOf("await loadApp();", app));
+  });
+
+  test("the app page carries the real port once the backend has one", () => {
+    const body = functionBody("loadApp");
+    expect(body).toContain(
+      "showingInstallScreen ? INSTALL_SCREEN_QUERY : buildIndexQuery(backendPort)"
+    );
+    expect(position("trayManager.setBackendPort(backendPort)")).toBeGreaterThan(
+      position("backendProcess = await backendStarting;")
+    );
+  });
+
+  test("a reopened window on the macOS dock is wired before a long install can need it", () => {
+    expect(position('app.on("activate"')).toBeLessThan(position("engineInstall.run()"));
+  });
+
+  test("the separate progress window and its native failure boxes are gone", () => {
+    expect(MAIN).not.toMatch(/createProgressWindow|showFailureDialog|isBootstrapping/);
+  });
+
+  test("a quit stops the install, or releases one waiting on Try again, and waits for it", () => {
+    const body = functionBody("cleanup");
+    expect(body).toContain("const installStopped = engineInstall ? engineInstall.stop() : null;");
+    expect(body).toContain("await Promise.all([installStopped, ");
+  });
+
+  test("SIGTERM is wired to quit past the work-in-progress question", () => {
+    expect(MAIN).toContain("quitOnTermSignal({ proc: process, app, guard: quitGuard });");
+  });
+
+  test("a failed install is shown even after a start in the tray", () => {
+    const body = functionBody("showInstallFailure");
+    expect(body).toContain("win.show()");
+    expect(body).toContain("_fatalHandler(err)");
   });
 });

@@ -79,7 +79,7 @@ class VLMToolsMixin:
 
     def init_vlm(
         self,
-        model: str = DEFAULT_VLM_MODEL,
+        model: Optional[str] = DEFAULT_VLM_MODEL,
         base_url: Optional[str] = None,
     ) -> None:
         """
@@ -89,7 +89,8 @@ class VLMToolsMixin:
         No need to call register_vlm_tools() separately.
 
         Args:
-            model: VLM model to use for image analysis
+            model: VLM model to use for image analysis; None when reading
+                images is off (chat on the NPU), so the tools say so
             base_url: Lemonade Server base URL (default: LEMONADE_BASE_URL,
                 else GAIA's own Lemonade)
 
@@ -99,7 +100,10 @@ class VLMToolsMixin:
         from gaia.llm.vlm_client import VLMClient
 
         self.vlm_model = model
-        self.vlm_client = VLMClient(vlm_model=model, base_url=base_url)
+        self.vlm_base_url = base_url
+        self.vlm_client = (
+            None if model is None else VLMClient(vlm_model=model, base_url=base_url)
+        )
 
         logger.debug(f"VLM tools initialized: model={model}")
 
@@ -138,6 +142,19 @@ class VLMToolsMixin:
         # Tools are automatically registered by the @tool decorator above
         # No need to call register_tool() - it doesn't exist anyway
 
+    def _vision_off(self, image_path: str) -> Optional[Dict[str, Any]]:
+        """The tools' answer while reading images is off; None when it is on."""
+        # init_vlm(model=None) turned reading off; a host that never ran it isn't off.
+        if "vlm_model" not in vars(self) or self.vlm_model is not None:
+            return None
+        from gaia.llm.lemonade_client import vision_off_reason
+
+        return {
+            "status": "error",
+            "error": vision_off_reason(getattr(self, "vlm_base_url", None)),
+            "image_path": image_path,
+        }
+
     def _analyze_image(self, image_path: str, focus: str = "all") -> Dict[str, Any]:
         """
         Analyze an image with VLM and provide detailed description.
@@ -162,6 +179,9 @@ class VLMToolsMixin:
                 ),
             }
 
+        off = self._vision_off(image_path)
+        if off:
+            return off
         path = Path(image_path)
         denied = read_access_error(self, path)
         if denied:
@@ -184,7 +204,7 @@ class VLMToolsMixin:
                 "image_path": str(path),
                 "focus": focus,
                 "description": description,
-                "model": self.vlm_model,
+                "model": self.vlm_client.vlm_model,
             }
 
         except Exception as e:
@@ -208,6 +228,9 @@ class VLMToolsMixin:
         Returns:
             Dict with status, question, answer, and metadata
         """
+        off = self._vision_off(image_path)
+        if off:
+            return off
         path = Path(image_path)
         denied = read_access_error(self, path)
         if denied:
@@ -228,7 +251,7 @@ class VLMToolsMixin:
                 "image_path": str(path),
                 "question": question,
                 "answer": answer,
-                "model": self.vlm_model,
+                "model": self.vlm_client.vlm_model,
             }
 
         except Exception as e:
@@ -275,17 +298,3 @@ on user needs."""
                 return self.get_vlm_system_prompt()
         """
         return self.get_base_vlm_guidelines()
-
-    def cleanup_vlm(self) -> None:
-        """
-        Cleanup VLM resources.
-
-        Call this when done with VLM operations to free resources.
-        """
-        if hasattr(self, "vlm_client") and self.vlm_client:
-            try:
-                if hasattr(self.vlm_client, "cleanup"):
-                    self.vlm_client.cleanup()
-                logger.debug("VLM client cleaned up")
-            except Exception as e:
-                logger.warning(f"VLM cleanup warning: {e}")
