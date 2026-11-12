@@ -132,6 +132,19 @@ describe('NewChat try chips', () => {
         expect(screen.getByLabelText('Message')).toHaveFocus();
         expect(onSend).not.toHaveBeenCalled();
     });
+
+    it('hides the examples once a draft is typed, so a pick cannot erase it', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn()} />);
+        const box = screen.getByLabelText('Message');
+
+        fireEvent.change(box, { target: { value: 'How do I fix my bike chain?' } });
+        expect(screen.queryByRole('button', { name: /^Recipe:/ })).toBeNull();
+        expect(box).toHaveValue('How do I fix my bike chain?');
+
+        fireEvent.change(box, { target: { value: '' } });
+        expect(screen.getByRole('button', { name: /^Recipe:/ })).toBeInTheDocument();
+    });
 });
 
 describe('NewChat while the chat is being created (#5712)', () => {

@@ -325,7 +325,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
-                <TryChips onPick={fillPrompt} disabled={starting || sending} />
+                {/* A pick replaces the box, so offer examples only before a draft exists. */}
+                {text.trim() === '' && <TryChips onPick={fillPrompt} disabled={starting || sending} />}
                 {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>
