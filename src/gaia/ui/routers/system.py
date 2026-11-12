@@ -1214,8 +1214,6 @@ async def update_settings(
                 status_code=500,
                 detail=f"The custom model was not saved: {e} Then save it again.",
             ) from e
-        from gaia.llm.lemonade_client import _model_ids_match
-
         previous = (db.get_setting("custom_model") or "").strip() or None
         changed = (value is None) != (previous is None) or (
             value is not None and not _model_ids_match(value, previous)

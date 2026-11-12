@@ -109,3 +109,24 @@ def test_a_switch_that_fails_leaves_the_old_models_settings(npu_chat, monkeypatc
     assert npu_chat._rag_config_kwargs["model"] == NPU
     assert npu_chat._rag_config.model == NPU
     assert npu_chat._rag_config.vlm_model is None
+
+
+def test_a_vision_model_chosen_in_settings_reaches_an_open_chat(server, tmp_path):
+    """It was read once, when the chat's agent was built."""
+    from gaia_agent.session_registry import build_session_agent, close_agent
+
+    from gaia.config import GaiaConfig
+
+    GaiaConfig.save_keys({"last_model": GPU})
+    agent = build_session_agent(model_id=GPU, allowed_paths=[str(tmp_path / "work")])
+    try:
+        assert agent.vlm_model == GPU
+        GaiaConfig.save_keys({"vision_model": "Qwen3-VL-4B-Instruct-GGUF"})
+
+        agent.follow_model_switch()
+
+        assert agent.vlm_model == "Qwen3-VL-4B-Instruct-GGUF"
+        assert agent.vlm_client.vlm_model == "Qwen3-VL-4B-Instruct-GGUF"
+        assert agent._rag_config.vlm_model == "Qwen3-VL-4B-Instruct-GGUF"
+    finally:
+        close_agent(agent)

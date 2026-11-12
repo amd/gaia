@@ -1577,6 +1577,10 @@ async def query(request: QueryRequest):
                     display,
                 )
             agent = session.agent
+            # A vision model chosen in Settings since the last turn applies now.
+            follow = getattr(agent, "follow_model_switch", None)
+            if callable(follow):
+                follow()
             if request.working_directory is not None:
                 config = getattr(agent, "config", None)
                 if config is not None:

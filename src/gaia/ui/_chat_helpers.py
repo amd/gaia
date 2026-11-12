@@ -1537,6 +1537,13 @@ def _canonical_agent_type(agent_type: str) -> str:
     return registry.canonical_id(agent_type)
 
 
+def _follow_model_settings(agent) -> None:
+    """Apply a vision model chosen in Settings since this cached agent last ran."""
+    follow = getattr(agent, "follow_model_switch", None)
+    if callable(follow):
+        follow()
+
+
 def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
     """Return the cached agent for *session_id* if model and agent_type match, else None.
 
@@ -4023,6 +4030,7 @@ async def _get_chat_response(
             from gaia.agents.base.console import SilentConsole
 
             agent = cached_agent
+            _follow_model_settings(agent)
             # A prior streaming turn leaves its dead SSE console behind.
             agent.console = SilentConsole()
             with writing_tool_registry():
@@ -4506,6 +4514,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 if cached_agent is not None:
                     # -- Cache hit --
                     agent = cached_agent
+                    _follow_model_settings(agent)
                     if hasattr(agent, "config"):
                         agent.config.working_directory = working_directory
                     agent.console = sse_handler
