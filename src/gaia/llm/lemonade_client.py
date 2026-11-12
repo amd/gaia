@@ -42,15 +42,12 @@ from typing import (
     Union,
 )
 
-import openai  # For exception types
 import requests
-
-# Import OpenAI client for internal use
-from openai import OpenAI
 
 from gaia.env import child_env, load_env
 from gaia.llm import call_ledger, stream_watchdog
 from gaia.llm.degenerate_output import DegenerateOutput, DegenerateOutputGuard
+from gaia.llm.lazy_openai import OpenAI, loaded_openai_errors, openai
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -4194,7 +4191,7 @@ class UsersServerUnchangedError(LemonadeClientError):
     """
 
 
-def _cloud_error_status(error: openai.APIError) -> Optional[int]:
+def _cloud_error_status(error: "openai.APIError") -> Optional[int]:
     """Read numeric status fields; never interpret or display upstream text."""
     status = getattr(error, "status_code", None)
     if (
@@ -5382,7 +5379,7 @@ class LemonadeClient:
         except (
             LemonadeClientError,
             requests.exceptions.RequestException,
-            openai.APIError,
+            *loaded_openai_errors("APIError"),
         ) as e:
             if not self._recover_stopped_gaia_lemonade(e, model):
                 raise
@@ -5402,7 +5399,7 @@ class LemonadeClient:
         except (
             LemonadeClientError,
             requests.exceptions.RequestException,
-            openai.APIError,
+            *loaded_openai_errors("APIError"),
         ) as e:
             if yielded or not self._recover_stopped_gaia_lemonade(e, model):
                 raise
