@@ -712,6 +712,12 @@ textarea:focus-visible {
     font-size: var(--fs-ui);
 }
 
+/* The way back after a failed engine update, under its notice. */
+.app-go-back {
+    margin: 8px 12px 0;
+    font-size: var(--fs-ui);
+}
+
 /* Warning amber sits next to brass in hue, so a warning always carries its
  * icon as well as its words. Drawn here so the markup stays as it is. */
 .app-notice.is-warning {

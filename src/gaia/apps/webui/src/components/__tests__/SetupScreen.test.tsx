@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useChatStore } from '../../stores/chatStore';
+import { INITIAL_STATE as INITIAL_UPDATE_STATE } from '../../hooks/useUpdateStatus';
 import { SetupScreen } from '../SetupScreen';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
@@ -320,6 +321,47 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
         await waitFor(() => expect(mockedApi.startSetup).toHaveBeenCalledTimes(2));
         expect(mockedApi.startSetup).toHaveBeenLastCalledWith(false, false, { serverOnly: true });
+    });
+
+    describe("when GAIA's own engine won't start (a broken build)", () => {
+        const ENGINE_FAILED: SetupRunStatus = {
+            state: 'failed', server_only: true, steps: [], components: { server: 'failed' },
+            error: 'lemond: /tmp/_MEI/libstdc++.so.6: version `GLIBCXX_3.4.32` not found',
+        };
+        const updater = (lastWorking: { version: string; at: string } | null) => {
+            const state = { ...INITIAL_UPDATE_STATE, currentVersion: '0.26.0-rc.13', lastWorking };
+            return {
+                getStatus: vi.fn(async () => state),
+                onStatusChange: vi.fn(() => () => {}),
+                revertToLastWorking: vi.fn(async () => state),
+            };
+        };
+        afterEach(() => { vi.unstubAllGlobals(); });
+
+        it('offers the version setup last finished on, beside Try again', async () => {
+            const bridge = updater({ version: '0.26.0-rc.12', at: '2026-11-02T09:30:00.000Z' });
+            vi.stubGlobal('gaiaUpdater', bridge);
+            mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+            mockedApi.startSetup.mockResolvedValue(ENGINE_FAILED);
+            renderSetup();
+            expect(await screen.findByText("GAIA couldn't download or start its AI engine. Check your internet connection, then try again.")).toBeInTheDocument();
+            expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+            const goBack = await screen.findByRole('button', { name: 'Go back to GAIA 0.26.0-rc.12' });
+            expect(bridge.revertToLastWorking).not.toHaveBeenCalled();
+            fireEvent.click(goBack);
+            await waitFor(() => expect(bridge.revertToLastWorking).toHaveBeenCalledTimes(1));
+        });
+
+        it('offers only Try again when no older version finished setup here', async () => {
+            const bridge = updater(null);
+            vi.stubGlobal('gaiaUpdater', bridge);
+            mockedApi.getSetupPlan.mockResolvedValue(COLD_SERVER);
+            mockedApi.startSetup.mockResolvedValue(ENGINE_FAILED);
+            renderSetup();
+            await screen.findByRole('button', { name: 'Try again' });
+            await waitFor(() => expect(bridge.getStatus).toHaveBeenCalled());
+            expect(screen.queryByRole('button', { name: /Go back/ })).toBeNull();
+        });
     });
 
     it("gives the user's server its own remedy, and can switch to GAIA's own", async () => {

@@ -13,7 +13,7 @@
 import { expect, test, type Page } from '@playwright/test';
 
 import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
-import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
+import { ENGINE_FAILED, NARROW_SCENES, PLAN_COLD, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
 
@@ -254,6 +254,19 @@ const audit = (page: Page): Promise<string[]> =>
             if (button.textContent?.trim() && rgb(getComputedStyle(button).backgroundColor)[3] > 0) {
                 const text = visibleTextBox(button);
                 if (text && Math.min(text.left - r.left, r.right - text.right) < 3) problems.push(`label touches its button's edge: ${label(button)}`);
+            }
+        }
+
+        // The floating update chip must never cover a button, such as setup's Try again.
+        for (const chip of document.querySelectorAll('.update-chip')) {
+            if (!shown(chip)) continue;
+            const c = chip.getBoundingClientRect();
+            for (const button of document.querySelectorAll('button')) {
+                if (chip.contains(button) || !shown(button)) continue;
+                const b = button.getBoundingClientRect();
+                if (b.left < c.right && b.right > c.left && b.top < c.bottom && b.bottom > c.top) {
+                    problems.push(`update chip covers a button: ${label(button)}`);
+                }
             }
         }
 
@@ -3393,6 +3406,13 @@ function withUpdater(update: Record<string, unknown>) {
                 value: {
                     getStatus: resolved, check: resolved, listReleases: async () => [],
                     restart: refuse, onStatusChange: () => () => undefined,
+                    markSetupWorked: resolved,
+                    revertToLastWorking: async () => {
+                        throw new Error(
+                            "Error invoking remote method 'gaia:update:revert-to-working': Error: gaia-update-error:" +
+                                JSON.stringify({ code: 'downloadFailed', params: { version: '0.26.0-rc.12', reason: 'net::ERR_INTERNET_DISCONNECTED' }, message: 'x' }),
+                        );
+                    },
                 },
             });
         }, update);
@@ -3408,6 +3428,83 @@ const UPDATE_STATES: Record<string, Record<string, unknown>> = {
     'did not start': { startFailed: true, previousVersion: '0.25.3' },
     'check failed': { status: 'error', error: 'net::ERR_INTERNET_DISCONNECTED' },
 };
+
+const LAST_WORKED = { currentVersion: '0.26.0-rc.13', lastWorking: { version: '0.26.0-rc.12', at: '2026-11-02T09:30:00.000Z' } };
+
+/** Setup stopped on a broken engine, with an older version that finished setup here. */
+const brokenBuild = (update: Record<string, unknown> = {}) => async (page: Page) => {
+    await withSetup(page, { plan: PLAN_COLD, status: ENGINE_FAILED });
+    await withUpdater({ ...LAST_WORKED, ...update })(page);
+};
+
+for (const locale of ['ar', 'en']) {
+    test.describe(`setup failed, with a version that worked (${locale})`, () => {
+        for (const theme of ['light', 'dark'] as const) {
+            test(`the way back is offered (${theme})`, async ({ page }, info) => {
+                await open(page, '', locale, brokenBuild(), theme);
+                const offer = page.locator('.setup-card').filter({ has: page.locator('.btn-secondary') }).last();
+                await expect(offer.getByRole('button')).toBeVisible();
+                await expect(page.locator('.setup-result.is-failed')).toBeVisible();
+                expect(await audit(page)).toEqual([]);
+                await shot(page, `setup-${locale}-go-back-${theme}`);
+                await page.screenshot({ path: info.outputPath('go-back.png'), fullPage: true });
+            });
+        }
+
+        test('downloading the version that worked', async ({ page }, info) => {
+            await open(page, '', locale, brokenBuild({ status: 'downloading', version: '0.26.0-rc.12', progress: 42 }));
+            await expect(page.locator('.setup-card [role="status"]')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `setup-${locale}-go-back-downloading`);
+            await page.screenshot({ path: info.outputPath('go-back-downloading.png'), fullPage: true });
+        });
+
+        test('downloaded, waiting for a restart', async ({ page }, info) => {
+            await open(page, '', locale, brokenBuild({ status: 'downloaded', version: '0.26.0-rc.12', progress: 100, pinnedVersion: 'v0.26.0-rc12' }));
+            await expect(page.locator('.setup-card .go-back-action')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `setup-${locale}-go-back-waiting`);
+            await page.screenshot({ path: info.outputPath('go-back-waiting.png'), fullPage: true });
+        });
+
+        test('going back failed', async ({ page }, info) => {
+            await open(page, '', locale, brokenBuild());
+            await page.locator('.setup-card .btn-secondary').last().click();
+            await expect(page.locator('.setup-card .setup-error')).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `setup-${locale}-go-back-failed`);
+            await page.screenshot({ path: info.outputPath('go-back-failed.png'), fullPage: true });
+        });
+
+        test('at phone width', async ({ page }) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await open(page, '', locale, brokenBuild());
+            await expect(page.locator('.setup-card .btn-secondary').last()).toBeVisible();
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `setup-${locale}-go-back-phone`);
+        });
+
+        test('an engine update that failed offers it too', async ({ page }, info) => {
+            await open(page, '', locale, async (p) => {
+                await withSetup(p);
+                await withUpdater(LAST_WORKED)(p);
+                const failed = { state: 'failed', upgrade_embedded: true, steps: [], error: 'Lemonade Server 10.8.1 did not start: exit code 127.' };
+                const at = (path: string) => (url: URL) => url.pathname === `/api/setup/${path}`;
+                await p.route(at('check'), (route) => route.fulfill({ json: { ready: false, stage: 'upgrade', reasons: [], steps: [] } }));
+                await p.route(at('status'), (route) => route.fulfill({ json: failed }));
+                await p.route(at('run'), (route) => route.fulfill({ json: failed }));
+            });
+            await expect(page.locator('.app-go-back button')).toBeVisible();
+            // Inset like the notice above it, not edge to edge across the pane.
+            const [card, notice] = [await page.locator('.app-go-back').boundingBox(), await page.locator('.app-notice').first().boundingBox()];
+            expect(Math.abs(card!.x - notice!.x)).toBeLessThan(1);
+            expect(Math.abs(card!.width - notice!.width)).toBeLessThan(1);
+            expect(await audit(page)).toEqual([]);
+            await shot(page, `upgrade-${locale}-go-back`);
+            await page.screenshot({ path: info.outputPath('upgrade-go-back.png') });
+        });
+    });
+}
 
 for (const locale of ['ar', 'en']) {
     test.describe(`updates (${locale})`, () => {

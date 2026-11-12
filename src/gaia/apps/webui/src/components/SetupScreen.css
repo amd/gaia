@@ -169,6 +169,16 @@ button.setup-rail-step:hover {
     border-radius: var(--radius-lg);
 }
 
+/* The version name and its English hint can outgrow a phone's width. */
+.setup-card .go-back-action {
+    block-size: auto;
+    min-block-size: 32px;
+    max-inline-size: 100%;
+    padding-block: 6px;
+    white-space: normal;
+    text-align: start;
+}
+
 .setup-hero {
     display: flex;
     flex-direction: column;

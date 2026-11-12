@@ -63,7 +63,7 @@ const PLAN = {
     },
 };
 
-const PLAN_COLD = { ...PLAN, lemonade: { mode: 'gaia', url: null, reachable: false }, decided_after_server: true, catalog: [] };
+export const PLAN_COLD = { ...PLAN, lemonade: { mode: 'gaia', url: null, reachable: false }, decided_after_server: true, catalog: [] };
 const PLAN_SHORT = { ...PLAN, disk: { ...PLAN.disk, free_gb: 2.1 } };
 // #6632: Linux with an NPU Lemonade reports, but memlock at 8 MB and no access to the device.
 const PLAN_NPU_NOT_READY = {
@@ -193,6 +193,11 @@ const RUN_AGENT_FAILED = {
 const RUN_READY = { ...RUN, state: 'ready', text: 'GAIA is ready', models: DONE_ROWS.map((m) => ({ ...m, state: 'ready' })) };
 
 const SERVER_RUNNING = { state: 'running', server_only: true, text: 'Starting the local model server', steps: [], log_tail: [] };
+/** GAIA's own engine won't start: a build that broke it (#7007). */
+export const ENGINE_FAILED = {
+    state: 'failed', server_only: true, steps: [], log_tail: [], components: { server: 'failed' },
+    error: "lemond: /tmp/_MEIq1f0/libstdc++.so.6: version `GLIBCXX_3.4.32' not found (required by /usr/lib/lemonade/lemond)",
+};
 const SERVER_FAILED = {
     state: 'failed', server_only: true, steps: [], log_tail: [],
     error: "Your Lemonade Server at 127.0.0.1:9 isn't answering.",
@@ -326,6 +331,11 @@ export const SETUP_SCENES: SetupScene[] = [
     {
         name: 'check-found',
         reach: (page) => expect(page.locator('.found')).toBeVisible(),
+    },
+    {
+        name: 'check-engine-failed',
+        answers: { plan: PLAN_COLD, status: ENGINE_FAILED },
+        reach: (page) => expect(page.locator('.setup-result.is-failed')).toBeVisible(),
     },
     {
         // Logs open: the page grows past the window, and the scrollbar belongs at the window's edge.
