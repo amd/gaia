@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, Iterator, List, Optional
 
 import requests
 
-from gaia.audio.lemonade_service import LemonadeAudioService
+from gaia.audio.lemonade_service import MODEL_PULL_TIMEOUT, LemonadeAudioService
 from gaia.logger import get_logger
 from gaia.tool_cancellation import run_cancellable
 
@@ -485,6 +485,23 @@ def _merge_chunks(
     )
 
 
+#: Sizes of the NPU files Lemonade fetches on a Whisper model's first NPU
+#: load; its catalog names the file but not its size.
+NPU_PART_SIZES_GB = {
+    "amd/whisper-large-turbo-onnx-npu:ggml-large-v3-turbo-encoder-vitisai.rai": 0.74,
+}
+
+#: Lemonade's states for a backend this PC can run.
+_RUNNABLE_BACKEND_STATES = frozenset({"installed", "installable", "update_required"})
+
+
+@dataclass(frozen=True)
+class NpuPart:
+    """The file a Whisper model downloads on its first load on the NPU."""
+
+    size_gb: Optional[float] = None
+
+
 class LemonadeASRClient(LemonadeAudioService):
     """Speech-to-text against a running Lemonade Server."""
 
@@ -556,6 +573,54 @@ class LemonadeASRClient(LemonadeAudioService):
                 pull failed.
         """
         self.ensure_model_pulled("transcription", say=say, on_percent=on_percent)
+
+    def npu_part(self) -> Optional[NpuPart]:
+        """The NPU file this model fetches when it first loads, or None.
+
+        None when the model has no NPU file or this PC cannot run Whisper on
+        the NPU. Lemonade fetches the file inside the load, with no progress.
+
+        Raises:
+            ConnectionError: Lemonade Server is not reachable.
+            LemonadeASRError: Lemonade answered with an error.
+        """
+        entry = next((m for m in self.catalog() if m.get("id") == self.model), None)
+        checkpoint = ((entry or {}).get("checkpoints") or {}).get("npu_cache")
+        if not checkpoint:
+            return None
+        info = self._get_json(f"{self.base_url}/system-info", what="system info")
+        recipe = (info.get("recipes") or {}).get("whispercpp") or {}
+        npu = (recipe.get("backends") or {}).get("npu") or {}
+        if npu.get("state") not in _RUNNABLE_BACKEND_STATES:
+            return None
+        return NpuPart(size_gb=NPU_PART_SIZES_GB.get(checkpoint))
+
+    def is_loaded(self) -> bool:
+        """Whether Lemonade has this model loaded now.
+
+        Raises:
+            ConnectionError: Lemonade Server is not reachable.
+            LemonadeASRError: Lemonade answered with an error.
+        """
+        health = self._get_json(f"{self.base_url}/health", what="health check")
+        return any(
+            isinstance(m, dict) and m.get("model_name") == self.model
+            for m in health.get("all_models_loaded") or []
+        )
+
+    def load(self) -> None:
+        """Load the model, waiting out any file Lemonade fetches to do it.
+
+        Raises:
+            ConnectionError: Lemonade Server is not reachable.
+            LemonadeASRError: The load failed.
+        """
+        self._post_json(
+            f"{self.base_url}/load",
+            {"model_name": self.model},
+            what=f"load of {self.model}",
+            timeout=MODEL_PULL_TIMEOUT,
+        )
 
     def transcribe(
         self,

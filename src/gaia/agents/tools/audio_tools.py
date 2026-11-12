@@ -1638,11 +1638,16 @@ class AudioToolsMixin:
         """Download a missing speech model as its own visible step.
 
         Lemonade would otherwise pull it inside the first transcription
-        request, behind a "Transcribing" line that knows nothing of it.
+        request, behind a "Transcribing" line that knows nothing of it. On the
+        NPU the first load fetches a second file, with no progress, so the
+        model is loaded here too, as a step that says so.
         """
         from gaia.agents.base.tools import raise_if_cancelled
 
+        npu = client.npu_part()
+        npu_gb = npu.size_gb if npu else None
         size = [""]
+        main_gb = [""]
         pulled = []
 
         def report(phase: str, message: str) -> None:
@@ -1654,7 +1659,10 @@ class AudioToolsMixin:
         def say(message: str) -> None:
             pulled.append(True)
             found = re.search(r"\(~([\d.]+) GB\)", message)
-            size[0] = f"{float(found.group(1)):.1f} GB" if found else ""
+            if found:
+                main = float(found.group(1))
+                main_gb[0] = f"{main:.1f} GB"
+                size[0] = f"{main + (npu_gb or 0):.1f} GB"
             report(
                 SPEECH_MODEL_DOWNLOAD_PHASE,
                 SPEECH_MODEL_DOWNLOADING + (f" ({size[0]})" if size[0] else ""),
@@ -1662,13 +1670,28 @@ class AudioToolsMixin:
 
         def on_percent(percent: int) -> None:
             raise_if_cancelled()
+            then = f", then {npu_gb:.1f} GB for the NPU" if npu_gb else ""
             report(
                 SPEECH_MODEL_DOWNLOAD_PHASE,
                 f"{SPEECH_MODEL_DOWNLOADING} — {percent}%"
-                + (f" of {size[0]}" if size[0] else ""),
+                + (f" of {main_gb[0]}{then}" if main_gb[0] else ""),
             )
 
         client.ensure_model(say=say, on_percent=on_percent)
+        if npu and not client.is_loaded():
+            raise_if_cancelled()
+            report(
+                SPEECH_MODEL_DOWNLOAD_PHASE,
+                (
+                    (
+                        "Downloading the speech model's NPU part, one time"
+                        + (f" ({npu_gb:.1f} GB)" if npu_gb else "")
+                    )
+                    if pulled
+                    else "Loading the speech model"
+                ),
+            )
+            client.load()
         if pulled:
             report(
                 SPEECH_MODEL_DOWNLOADED_PHASE,

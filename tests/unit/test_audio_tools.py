@@ -202,6 +202,7 @@ class TestTranscribeMedia:
         ):
             client.return_value.model = "Whisper-Large-v3-Turbo"
             client.return_value.ensure_model.side_effect = ensure_model
+            client.return_value.npu_part.return_value = None
             client.return_value.transcribe.return_value = _transcript()
             result = host._transcribe_media(
                 str(source), output_path=str(tmp_path / "standup.txt")
@@ -237,6 +238,89 @@ class TestTranscribeMedia:
             i for i, (_, msg) in enumerate(shown) if "speech model" in msg
         )
         assert last_download < first_transcribe
+
+    def _run_with(self, tmp_path, ensure_model, npu_part, loaded=False):
+        """Transcribe a 14 s file and return what the window was shown, in order."""
+        from gaia.audio.lemonade_asr import NpuPart
+
+        source = tmp_path / "standup.wav"
+        source.write_bytes(b"stub")
+        shown = []
+        host = Host()
+        host.console = type(
+            "Console",
+            (),
+            {
+                "start_progress": lambda self, msg: shown.append(("status", msg)),
+                "report_phase": lambda self, phase, msg, **f: shown.append(
+                    (RECORDING_STAGES[f["stage"]] if "stage" in f else phase, msg)
+                ),
+            },
+        )()
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=14.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=source),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            asr = client.return_value
+            asr.model = "Whisper-Large-v3-Turbo"
+            asr.ensure_model.side_effect = ensure_model
+            asr.npu_part.return_value = NpuPart(size_gb=npu_part) if npu_part else None
+            asr.is_loaded.return_value = loaded
+            asr.load.side_effect = lambda: shown.append(("load", ""))
+            asr.transcribe.side_effect = lambda *a, **k: (
+                shown.append(("transcribed", "")) or _transcript()
+            )
+            result = host._transcribe_media(
+                str(source), output_path=str(tmp_path / "standup.txt")
+            )
+        assert result["status"] == "success", result
+        return shown
+
+    def test_the_npu_part_of_the_speech_model_is_its_own_download(self, tmp_path):
+        """On an NPU PC the first load fetches 0.7 GB more; it is not "Transcribing"."""
+
+        def ensure_model(say=None, on_percent=None):
+            say("Downloading Whisper-Large-v3-Turbo through Lemonade (~1.62 GB)")
+            on_percent(40)
+
+        shown = self._run_with(tmp_path, ensure_model, npu_part=0.74)
+
+        downloading = [(k, m) for k, m in shown if "speech model" in m or k == "load"]
+        assert downloading == [
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time (2.4 GB)",
+            ),
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time — 40% of 1.6 GB, "
+                "then 0.7 GB for the NPU",
+            ),
+            (
+                "speech_model_download",
+                "Downloading the speech model's NPU part, one time (0.7 GB)",
+            ),
+            ("load", ""),
+            ("speech_model_downloaded", "Downloaded the speech model (2.4 GB)"),
+        ]
+        kinds = [k for k, _ in shown]
+        assert kinds.index("load") < kinds.index("transcribe")
+
+    def test_a_downloaded_model_on_the_npu_loads_before_transcribing(self, tmp_path):
+        shown = self._run_with(tmp_path, lambda **k: None, npu_part=0.74)
+
+        assert ("speech_model_download", "Loading the speech model") in shown
+        kinds = [k for k, _ in shown]
+        assert kinds.index("load") < kinds.index("transcribe")
+        assert "speech_model_downloaded" not in kinds
+
+    def test_a_loaded_model_is_not_loaded_again(self, tmp_path):
+        shown = self._run_with(tmp_path, lambda **k: None, npu_part=0.74, loaded=True)
+
+        assert "load" not in [k for k, _ in shown]
+        assert not [m for _, m in shown if "speech model" in m]
 
     def test_a_failed_speech_model_download_is_the_tools_error(self, tmp_path):
         source = tmp_path / "standup.wav"
