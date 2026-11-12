@@ -107,6 +107,9 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         const count = want ?? wanted.current;
         try {
             const rows: AboutYouItem[] = [];
+            const seen = new Set<string>();
+            // Rows read from the server, duplicates included, so the next page starts after them.
+            let offset = 0;
             let found = 0;
             for (;;) {
                 const limit = Math.min(PAGE_SIZE, count - rows.length);
@@ -116,11 +119,17 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                     include_sensitive: true,
                     sort_by: 'updated_at',
                     order: 'desc',
-                    offset: rows.length,
+                    offset,
                     limit,
                 });
                 if (mine !== generation.current) return;
-                rows.push(...(data.items as AboutYouItem[]));
+                offset += data.items.length;
+                // A memory saved between two pages shifts the rows, repeating one at the page edge.
+                for (const item of data.items as AboutYouItem[]) {
+                    if (seen.has(item.id)) continue;
+                    seen.add(item.id);
+                    rows.push(item);
+                }
                 found = typeof data.total === 'number' ? data.total : rows.length;
                 // A short page is the end of what the store holds right now.
                 if (data.items.length < limit || rows.length >= Math.min(count, found)) break;

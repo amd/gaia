@@ -246,6 +246,27 @@ describe('What GAIA knows about you', () => {
         await waitFor(() => expect(screen.queryByText('Memory number 240')).not.toBeInTheDocument());
         expect(screen.getByText('Memory number 249')).toBeInTheDocument();
     });
+
+    it('shows a row once when a memory is saved between two page loads', async () => {
+        let all = Array.from({ length: 250 }, (_, i) => row({ id: `m${i}`, content: `Memory number ${i}` }));
+        let saved = false;
+        mockedApi.getKnowledge.mockImplementation(async (params = {}) => {
+            const offset = params.offset ?? 0;
+            const limit = params.limit ?? 50;
+            if (offset > 0 && !saved) {
+                // The agent saves a memory; it sorts to the top and shifts every row down one.
+                saved = true;
+                all = [row({ id: 'fresh', content: 'Just saved' }), ...all];
+            }
+            return { items: all.slice(offset, offset + limit), total: all.length, offset, limit };
+        });
+        render(<MemoryDashboard />);
+        await screen.findByText('Memory number 0');
+        fireEvent.click(screen.getByRole('button', { name: 'Show more' }));
+        await screen.findByText('Memory number 249');
+
+        expect(screen.getAllByText('Memory number 199')).toHaveLength(1);
+    });
 });
 
 describe('Profile saves refresh the other views (#4814)', () => {
