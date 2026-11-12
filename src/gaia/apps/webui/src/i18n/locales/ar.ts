@@ -3218,6 +3218,11 @@ const messages: Messages = {
     'mem.goals.cancelFailed': 'تعذّر إلغاء الهدف',
     'mem.goals.deleteFailed': 'تعذّر حذف الهدف',
     'mem.goals.storeError': 'الأهداف المعتمدة لا تعمل',
+    'mem.goals.storeDamaged': 'قائمة أهداف GAIA تالفة، لذا لا يمكن عرض الأهداف أو حفظها أو تشغيلها.',
+    'mem.goals.startNewList': 'بدء قائمة أهداف جديدة',
+    'mem.goals.startNewListFailed': 'تعذّر بدء قائمة أهداف جديدة',
+    'mem.goals.newListStarted': 'بدأت قائمة أهداف جديدة. احتُفظ بالقائمة التالفة باسم {file}.',
+    'mem.goals.loadFailed': 'تعذّر تحميل أهدافك:',
     // The resource usage strip at the top of a chat
     'resources.region': 'استخدام الموارد على هذا الجهاز',
     'resources.toggle': 'استخدام الموارد',

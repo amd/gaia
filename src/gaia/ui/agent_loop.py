@@ -129,6 +129,8 @@ class AgentLoop:
         self._active_goal_ticks_lock = threading.Lock()
         # Why the last tick could not read the goal store; None once it opens.
         self.goal_store_error: Optional[str] = None
+        # The goal store file is damaged, so only a new goal list fixes it.
+        self.goal_store_damaged = False
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -411,19 +413,29 @@ class AgentLoop:
         Raises:
             RuntimeError: The goal store could not be read; the tick reports it.
         """
-        from gaia.agents.base.goal_store import GoalStore
+        from gaia.agents.base.goal_store import GoalStore, is_damaged_store_error
         from gaia.config import gaia_home
 
         try:
             goals = GoalStore().get_actionable_goals()[:5]
         except (sqlite3.Error, OSError) as exc:
-            self.goal_store_error = (
-                f"Could not read approved goals from {gaia_home() / 'goals.db'}: "
-                f"{exc}. Approved goals will not run until it opens; close other "
-                "GAIA windows using it and restart GAIA."
-            )
+            path = gaia_home() / "goals.db"
+            self.goal_store_damaged = is_damaged_store_error(exc)
+            if self.goal_store_damaged:
+                self.goal_store_error = (
+                    f"GAIA's goal list at {path} is damaged ({exc}), so approved "
+                    "goals can't run. Start a new goal list on Memory > Goals; "
+                    "the damaged file is kept beside it."
+                )
+            else:
+                self.goal_store_error = (
+                    f"Could not read approved goals from {path}: {exc}. Approved "
+                    "goals will not run until it opens; close other GAIA windows "
+                    "using it and restart GAIA."
+                )
             raise RuntimeError(self.goal_store_error) from exc
         self.goal_store_error = None
+        self.goal_store_damaged = False
         return goals
 
     # ── Tick execution ────────────────────────────────────────────────────────

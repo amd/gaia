@@ -12,6 +12,8 @@ import { useNotificationStore } from './notificationStore';
 interface GoalHealthState {
     /** Why approved goals can't run, as the backend reported it; null when they can. */
     error: string | null;
+    /** The goal list file is damaged, so only a new goal list fixes it. */
+    damaged: boolean;
     check: () => Promise<void>;
 }
 
@@ -19,11 +21,13 @@ let failures = 0;
 
 export const useGoalHealthStore = create<GoalHealthState>((set, get) => ({
     error: null,
+    damaged: false,
 
     check: async () => {
         let error: string | null;
+        let damaged: boolean;
         try {
-            error = (await memoryApi.getGoalStoreHealth()).error;
+            ({ error, damaged } = await memoryApi.getGoalStoreHealth());
         } catch (err) {
             // An unreachable backend is reported by the connection banner.
             log.api.error('Could not check the goal store', err);
@@ -45,6 +49,6 @@ export const useGoalHealthStore = create<GoalHealthState>((set, get) => ({
                 priority: 'high',
             });
         }
-        set({ error });
+        set({ error, damaged: !!damaged });
     },
 }));

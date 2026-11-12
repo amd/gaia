@@ -3218,6 +3218,11 @@ export const enMessages = {
     'mem.goals.cancelFailed': "Couldn't cancel the goal",
     'mem.goals.deleteFailed': "Couldn't delete the goal",
     'mem.goals.storeError': "Approved goals aren't running",
+    'mem.goals.storeDamaged': "GAIA's goal list is damaged, so goals can't be shown, saved or run.",
+    'mem.goals.startNewList': 'Start a new goal list',
+    'mem.goals.startNewListFailed': "Couldn't start a new goal list",
+    'mem.goals.newListStarted': 'Started a new goal list. The damaged one is kept as {file}.',
+    'mem.goals.loadFailed': "Couldn't load your goals:",
     // The resource usage strip at the top of a chat
     'resources.region': 'Resource usage on this PC',
     'resources.toggle': 'Resource usage',

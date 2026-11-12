@@ -95,6 +95,16 @@ _GOAL_STATUSES = frozenset(get_args(GoalStatus))
 _TASK_STATUSES = frozenset(get_args(TaskStatus))
 
 
+def is_damaged_store_error(exc: BaseException) -> bool:
+    """Whether SQLite could not read the goal store file as a database at all.
+
+    "file is not a database" and "database disk image is malformed" are plain
+    ``DatabaseError``; a locked file is an ``OperationalError`` and clears once
+    the other user lets go, so it is not damage.
+    """
+    return type(exc) is sqlite3.DatabaseError  # pylint: disable=unidiomatic-typecheck
+
+
 def _require_status(status: str, allowed: frozenset, kind: str) -> None:
     """Raise when ``status`` is not one the store's state machine knows."""
     if status not in allowed:

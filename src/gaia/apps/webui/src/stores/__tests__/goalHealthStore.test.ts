@@ -11,7 +11,7 @@ vi.mock('../../services/memoryApi');
 const BROKEN = 'Could not read approved goals from goals.db: file is not a database.';
 
 function serve(error: string | null) {
-    vi.mocked(memoryApi.getGoalStoreHealth).mockResolvedValueOnce({ error });
+    vi.mocked(memoryApi.getGoalStoreHealth).mockResolvedValueOnce({ error, damaged: false });
 }
 
 const errors = () => useNotificationStore.getState().notifications.filter((n) => n.type === 'error');

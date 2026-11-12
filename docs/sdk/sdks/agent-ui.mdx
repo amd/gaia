@@ -2401,6 +2401,8 @@ computer gets a 403. Mutating routes also require the `X-Gaia-UI: 1` header.
 ### Goals
 
 Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
+When the goal store can't be read or written, every route below answers `503`
+with a `detail` that says why and what the user can do.
 
 <AccordionGroup>
   <Accordion title="GET /api/goals">
@@ -2418,10 +2420,19 @@ Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
   </Accordion>
 
   <Accordion title="GET /api/goals/health">
-    `{"error": string | null}`. `error` says why the background loop could
-    not read the goal store on its last tick, so approved goals are not
-    running; it is `null` once the store reads again. The UI shows it as a
-    notification and in Memory › Goals.
+    `{"error": string | null, "damaged": bool}`. `error` says why the
+    background loop could not read the goal store on its last tick, so
+    approved goals are not running; it is `null` once the store reads again.
+    `damaged` is true when `goals.db` is not a readable database at all, which
+    only a new goal list fixes. The UI shows it as a notification and in
+    Memory › Goals.
+  </Accordion>
+
+  <Accordion title="POST /api/goals/store/reset">
+    Start a new, empty goal list when `goals.db` is damaged. The damaged file
+    is renamed to `goals.db.damaged-<timestamp>` beside it, never deleted;
+    the response is `{"kept": "<that name>"}`. Answers `409` when the goal
+    list opens fine.
   </Accordion>
 
   <Accordion title="GET /api/goals/pending-approval">
