@@ -107,3 +107,20 @@ def test_polling_the_saved_key_reports_locked_not_no_key(dismissed):
         with pytest.raises(CredentialStoreLocked):
             poll()
     assert dismissed.reads == 1
+
+
+def test_the_locked_message_says_where_to_try_again(dismissed):
+    with pytest.raises(store.KeyringRefused) as e:
+        store.peek_connection("google")
+    assert "Try again under Settings → Model" in str(e.value)
+
+
+def test_a_read_that_returned_a_key_is_not_reported_locked():
+    def read_while_another_slot_is_refused():
+        store._refuse(RuntimeError("Prompt dismissed"))
+        return "fw_saved_key_123456"
+
+    assert (
+        read_within("cloud-key:fireworks", read_while_another_slot_is_refused, "key")
+        == "fw_saved_key_123456"
+    )

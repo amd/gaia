@@ -488,7 +488,7 @@ describe('ModelChip', () => {
         const dialog = await openPicker();
 
         const retry = await within(dialog).findByRole('option', { name: /Try again/ });
-        expect(within(dialog).getByText(/credential store is locked/)).toBeInTheDocument();
+        expect(within(dialog).getByText(/key store is locked/)).toBeInTheDocument();
         expect(within(dialog).queryByText('Add your key')).not.toBeInTheDocument();
         const reads = mockedApi.listProviders.mock.calls.length;
         await new Promise((resolve) => setTimeout(resolve, 2500));

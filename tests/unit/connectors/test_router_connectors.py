@@ -813,6 +813,52 @@ class TestTestEndpoint:
         assert resp.json()["ok"] is True
 
 
+class TestConnectorActionsLiftTheKeyringHold:
+    """A connectors-screen action may ask the OS to unlock the store again."""
+
+    @pytest.fixture(autouse=True)
+    def held(self):
+        from gaia.connectors import store
+
+        store._refuse(RuntimeError("Prompt dismissed"))
+        yield store
+        store.retry_keyring()
+
+    def test_test_lifts_the_hold(self, ui_api_client, monkeypatch, held):
+        seen = []
+
+        async def check(connector_id):
+            seen.append(held.keyring_refusal())
+            return {"ok": True, "detail": "token_valid"}
+
+        monkeypatch.setattr("gaia.ui.routers.connectors.health_check", check)
+        resp = ui_api_client.post("/api/connectors/google/test", headers=UI_HEADER)
+        assert resp.status_code == 200
+        assert seen == [None]
+
+    def test_authorize_lifts_the_hold(self, ui_api_client, monkeypatch, held):
+        seen = []
+
+        async def start(connector_id, scopes=None, grant_agents=None):
+            seen.append(held.keyring_refusal())
+            return {"flow_id": "f", "authorization_url": "https://x"}
+
+        monkeypatch.setattr(
+            "gaia.ui.routers.connectors.connections.start_authorization", start
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": []},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        assert seen == [None]
+
+    def test_listing_does_not_lift_the_hold(self, ui_api_client, held):
+        ui_api_client.get("/api/connectors")
+        assert held.keyring_refusal() is not None
+
+
 # ---------------------------------------------------------------------------
 # DELETE /api/connectors/{connector_id}
 # ---------------------------------------------------------------------------

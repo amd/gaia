@@ -379,7 +379,7 @@ export function ModelSettings() {
                             </div>
                             {!provider.key_source && provider.key_state === 'store_locked' && (
                                 <span className="settings-hint" role="status">
-                                    {provider.key_message ?? t('settings.key.storeLocked')}{' '}
+                                    {t('settings.key.storeLocked')}{' '}
                                     <button type="button" className="link-btn" onClick={() => void retryKeyStore()}>
                                         {t('settings.key.unlockAgain')}
                                     </button>

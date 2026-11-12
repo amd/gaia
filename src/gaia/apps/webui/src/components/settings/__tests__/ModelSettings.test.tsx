@@ -223,7 +223,7 @@ describe('ModelSettings provider keys', () => {
         mockedApi.listProviders.mockResolvedValue(locked);
         mockedApi.retryKeyStore.mockResolvedValue({ retrying: true });
         const card = await openFireworks();
-        expect(within(card).getByText(/credential store is locked/)).toBeInTheDocument();
+        expect(within(card).getByText(/key store is locked/)).toBeInTheDocument();
         expect(within(card).queryByText('No key yet.')).not.toBeInTheDocument();
         const reads = mockedApi.listProviders.mock.calls.length;
         // A locked store is not polled: polling would reopen the prompt the user closed.

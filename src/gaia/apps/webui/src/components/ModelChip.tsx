@@ -428,7 +428,7 @@ export function ModelChip() {
                                 <span className="popover-item-check"><KeyRound size={13} aria-hidden="true" /></span>
                                 <span className="popover-item-body">
                                     <span className="popover-item-title">{t('settings.key.unlockAgain')}</span>
-                                    <span className="popover-item-note">{provider.key_message ?? t('settings.key.storeLocked')}</span>
+                                    <span className="popover-item-note">{t('settings.key.storeLocked')}</span>
                                 </span>
                             </button>
                         ) : provider.remote && !provider.models_discovered && (

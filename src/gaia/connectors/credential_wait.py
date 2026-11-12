@@ -125,7 +125,7 @@ def read_within(
                 if _in_flight.get(slot) is future:
                     del _in_flight[slot]
     # Callers such as recall_key read a refused store as "no key"; it is not.
-    refusal = _refusal()
+    refusal = _refusal() if result is None else None
     if refusal:
         raise CredentialStoreLocked(refusal)
     return result  # type: ignore[return-value]
