@@ -10,7 +10,7 @@ icon: "sparkles"
 
 `gaiacpp` is the general-purpose GAIA agent as one native binary: it reads and writes files, works through documents and data with the programs on the PC, runs shell commands, edits code and fetches web pages. It needs no Python runtime, starts instantly, and stays around 15 MB of memory through a multi-step task.
 
-It runs four ways:
+It runs five ways:
 
 | Mode | Command | For |
 |---|---|---|
@@ -18,6 +18,7 @@ It runs four ways:
 | Headless | `gaiacpp -p "prompt"` | Scripts, CI, eval harnesses: answer on stdout, exit code 0 or 1 |
 | Server | `gaiacpp serve` | Apps and [Lemonade](#lemonade-integration): OpenAI-compatible `/v1/chat/completions` |
 | MCP server | `gaiacpp --mcp` | Another program's agent: the tools over MCP, with no model of its own |
+| Stdio agent | `gaiacpp --stdio` | The [GAIA terminal UI](#running-as-the-agent-of-the-gaia-terminal-ui): queries in, JSON Lines events out |
 
 ## Quick start
 
@@ -237,6 +238,8 @@ The release build links OpenSSL statically on every platform and, on Linux, the 
 
 ## What the agent loop handles
 
+- **Tool protocol:** native tool calls for every model GAIA lists and for any model Lemonade labels `tool-calling` (cloud models included); other models are asked for the call as JSON in text. `--native-tools always` or `never` overrides this.
+- **A model already loaded:** before each request the agent checks that its model is loaded at its context size and loads it if not. Speech, transcription and embedding models loaded beside it don't trigger a reload, and a cloud model is never reloaded.
 - **Transient failures:** connection errors and HTTP 408, 409, 425, 429 and 5xx are retried with exponential backoff (`llmRetries`, default 3). Other errors fail the turn with the server's message.
 - **Full context window:** on an overflow error, older tool outputs are replaced with references and the request is sent once more.
 - **Large tool output:** output beyond `maxToolResultChars` (default 16000) keeps its head and tail in the conversation; the model reads the rest with `read_tool_output`.

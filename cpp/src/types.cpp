@@ -161,6 +161,13 @@ ToolCall ToolCall::fromJson(const json& j) {
 
 json Message::toJson() const {
     json j;
+    // A tool result with no call id answers a tool call the model wrote as
+    // text. Strict servers reject role=tool without tool_call_id.
+    if (role == MessageRole::TOOL && !toolCallId.has_value()) {
+        j["role"] = "user";
+        j["content"] = "[Result from " + name.value_or("tool") + "]: " + content;
+        return j;
+    }
     j["role"] = roleToString(role);
     if (parts.has_value()) {
         json arr = json::array();

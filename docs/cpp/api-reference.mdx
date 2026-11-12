@@ -77,12 +77,23 @@ cfg.nativeToolCalls = gaia::NativeToolCalls::Never;   // force prompt-JSON
 cfg.toolChoice = "auto";  // or "required"
 ```
 
-`Auto` consults `gaia::isToolCallingModel(modelId)`, a mirror of the `MODELS`
-table in `src/gaia/llm/lemonade_client.py`. **An unrecognised model id resolves to
-`false`** — the C++ framework targets any OpenAI-compatible server, where an
-unknown id says nothing about tool-calling support, so it keeps the fallback that
-works everywhere. Running a tool-calling model this build does not know? Set
-`NativeToolCalls::Always`.
+`Auto` settles the protocol once per turn, in two steps:
+
+1. The built-in table (`gaia::knownToolCalling(modelId)`), a mirror of the `MODELS`
+   table in `src/gaia/llm/lemonade_client.py`, decides for every model it lists.
+2. For a model it does not list, the agent reads the server's catalog
+   (`GET /models`) and uses native tool calls when the model carries the
+   `tool-calling` label. This covers cloud models served through Lemonade and
+   models added after this build.
+
+A model that is in neither, or a server with no catalog, keeps the prompt-JSON
+path: an unknown id on an arbitrary OpenAI-compatible server says nothing about
+tool-calling support, and that path works everywhere. Running such a model that
+does take tool calls? Set `NativeToolCalls::Always`.
+
+On the prompt-JSON path a reply may say what it is about to do and then end with
+the call (`I'll read the file. {"tool": ...}`); the call runs. An object in the
+middle of an answer, or one holding other keys, is left as text.
 
 ### Response modes
 

@@ -339,6 +339,10 @@ private:
     /// history write (text-only; image parts stripped).
     json processQueryInternal(const std::vector<Message>& userMessages, int maxSteps);
 
+    /// Whether to send native ``tools`` for cfg's model under the Auto policy:
+    /// the built-in table, else the ``tool-calling`` label in the server's catalog.
+    bool autoNativeToolCalls(const AgentConfig& cfg);
+
     // ---- LLM Communication ----
 
     struct LlmResult {
@@ -432,6 +436,7 @@ private:
 
     std::vector<std::string> errorHistory_;
     std::vector<ToolCallRecord> turnToolCalls_;
+    std::map<std::string, bool> serverToolCalling_;  // base URL + model id -> label seen
     int turnStep_ = 0;
     std::vector<Message> conversationHistory_;
 

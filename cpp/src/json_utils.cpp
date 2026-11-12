@@ -207,6 +207,48 @@ json validateJsonResponse(const std::string& responseText) {
     return result;
 }
 
+namespace {
+// A tool call that ends the reply, and the prose before it. Only an object that
+// is the last thing in the reply and holds nothing but tool-call keys counts,
+// so an answer that merely quotes one as an example stays an answer.
+std::optional<std::pair<json, std::string>> trailingToolCall(const std::string& reply) {
+    static const char* const kSpace = " \t\r\n";
+    std::string body = reply;
+    auto rtrim = [&body] {
+        const auto last = body.find_last_not_of(kSpace);
+        body.erase(last == std::string::npos ? 0 : last + 1);
+    };
+    if (body.size() >= 3 && body.compare(body.size() - 3, 3, "```") == 0) {
+        body.erase(body.size() - 3);
+        rtrim();
+    }
+    if (body.empty() || body.back() != '}') return std::nullopt;
+
+    for (size_t at = body.find('{'); at != std::string::npos; at = body.find('{', at + 1)) {
+        const std::string candidate = extractFirstJsonObject(body.substr(at));
+        if (candidate.empty() || at + candidate.size() != body.size()) continue;
+        json call = json::parse(candidate, nullptr, false);
+        if (!call.is_object() || !call.contains("tool") || !call["tool"].is_string()) return std::nullopt;
+        if (call.contains("tool_args") && !call["tool_args"].is_object()) return std::nullopt;
+        for (const auto& [key, value] : call.items()) {
+            if (key != "tool" && key != "tool_args" && key != "thought" && key != "goal") return std::nullopt;
+        }
+        std::string prose = body.substr(0, at);
+        const auto fence = prose.rfind("```");
+        if (fence != std::string::npos && prose.find_first_not_of(kSpace, fence + 3) == std::string::npos) {
+            prose.erase(fence);
+        } else if (fence != std::string::npos && prose.compare(fence, 7, "```json") == 0 &&
+                   prose.find_first_not_of(kSpace, fence + 7) == std::string::npos) {
+            prose.erase(fence);
+        }
+        const auto last = prose.find_last_not_of(kSpace);
+        prose.erase(last == std::string::npos ? 0 : last + 1);
+        return std::make_pair(std::move(call), std::move(prose));
+    }
+    return std::nullopt;
+}
+}  // namespace
+
 ParsedResponse parseLlmResponse(const std::string& response) {
     ParsedResponse parsed;
 
@@ -228,6 +270,13 @@ ParsedResponse parseLlmResponse(const std::string& response) {
 
     // Fast path: plain text (doesn't start with '{')
     if (trimmed.empty() || trimmed[0] != '{') {
+        // Models often say what they are about to do, then emit the call.
+        if (auto call = trailingToolCall(trimmed)) {
+            parsed.thought = call->second;
+            parsed.toolName = call->first.at("tool").get<std::string>();
+            parsed.toolArgs = call->first.value("tool_args", json::object());
+            return parsed;
+        }
         parsed.thought = "";
         parsed.goal = "";
         parsed.answer = trimmed;

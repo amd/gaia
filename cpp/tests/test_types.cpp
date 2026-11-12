@@ -404,3 +404,18 @@ TEST(TypesTest, ParsedResponseDefaults) {
     EXPECT_FALSE(parsed.toolArgs.has_value());
     EXPECT_FALSE(parsed.plan.has_value());
 }
+
+TEST(TypesTest, AToolResultWithNoCallIdIsSentAsAUserMessage) {
+    Message msg;
+    msg.role = MessageRole::TOOL;
+    msg.content = "{\"ok\":true}";
+    msg.name = "read_file";
+    json j = msg.toJson();
+    EXPECT_EQ(j["role"], "user");
+    EXPECT_EQ(j["content"], "[Result from read_file]: {\"ok\":true}");
+    EXPECT_FALSE(j.contains("tool_call_id"));
+    EXPECT_FALSE(j.contains("name"));
+
+    msg.name.reset();
+    EXPECT_EQ(msg.toJson()["content"], "[Result from tool]: {\"ok\":true}");
+}
