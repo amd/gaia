@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: MIT
 """util/machine_turn.py: queue on the machine's eval lock instead of failing."""
 
+import _thread
 import importlib.util
+import os
+import signal
 import subprocess
 import sys
 import threading
@@ -88,7 +91,7 @@ def test_gives_up_after_the_timeout_naming_the_holder(turn, capsys):
     finally:
         unlock(fd)
         os.close(fd)
-    assert code == 2
+    assert code == turn.TIMED_OUT == 124
     assert "PID 4242" in capsys.readouterr().err
 
 
@@ -114,3 +117,92 @@ def test_runs_as_a_script():
     )
     assert result.returncode == 0
     assert "Wait for this machine's model slot" in result.stdout
+
+
+def test_a_commands_own_exit_code_2_is_not_read_as_a_timeout(turn):
+    code = turn.main(["--", sys.executable, "-c", "import sys; sys.exit(2)"])
+    assert code == 2 != turn.TIMED_OUT
+
+
+_SLEEPER = (
+    "import os, sys, time; "
+    "open(sys.argv[1], 'w').write(str(os.getpid())); "
+    "time.sleep(60)"
+)
+
+
+def _wait_for_pid(pid_file, timeout_s=10.0):
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if pid_file.exists() and pid_file.read_text():
+            return int(pid_file.read_text())
+        time.sleep(0.05)
+    raise AssertionError("the queued command never started")
+
+
+def _alive(pid):
+    import psutil
+
+    try:
+        return psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+
+
+def _lock_is_free(turn):
+    from gaia.daemon.lock import try_lock, unlock
+
+    fd = os.open(str(turn.LOCK_FILE), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        if try_lock(fd):
+            unlock(fd)
+            return True
+        return False
+    finally:
+        os.close(fd)
+
+
+def _interrupt_once_started(pid_file, interrupt):
+    def run():
+        _wait_for_pid(pid_file)
+        interrupt()
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def test_ctrl_c_stops_the_command_before_releasing_the_lock(turn, tmp_path):
+    pid_file = tmp_path / "child.pid"
+    _interrupt_once_started(pid_file, _thread.interrupt_main)
+    with pytest.raises(KeyboardInterrupt):
+        turn.main(["--", sys.executable, "-c", _SLEEPER, str(pid_file)])
+    assert not _alive(int(pid_file.read_text()))
+    assert _lock_is_free(turn)
+    assert not turn.HOLDER_FILE.exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="SIGTERM is a hard kill on Windows")
+def test_sigterm_stops_the_command_before_releasing_the_lock(turn, tmp_path):
+    pid_file = tmp_path / "child.pid"
+    _interrupt_once_started(pid_file, lambda: os.kill(os.getpid(), signal.SIGTERM))
+    with pytest.raises(SystemExit) as stopped:
+        turn.main(["--", sys.executable, "-c", _SLEEPER, str(pid_file)])
+    assert stopped.value.code == 128 + signal.SIGTERM
+    assert not _alive(int(pid_file.read_text()))
+    assert _lock_is_free(turn)
+    assert signal.getsignal(signal.SIGTERM) is not turn._raise_on_sigterm
+
+
+@pytest.mark.skipif(
+    sys.platform == "win32", reason="terminate() is already a kill on Windows"
+)
+def test_a_command_that_ignores_sigterm_is_killed(turn, tmp_path, monkeypatch):
+    monkeypatch.setattr(turn, "_STOP_GRACE_S", 0.5)
+    pid_file = tmp_path / "child.pid"
+    stubborn = (
+        "import signal; signal.signal(signal.SIGTERM, signal.SIG_IGN); " + _SLEEPER
+    )
+    _interrupt_once_started(pid_file, _thread.interrupt_main)
+    with pytest.raises(KeyboardInterrupt):
+        turn.main(["--", sys.executable, "-c", stubborn, str(pid_file)])
+    assert not _alive(int(pid_file.read_text()))
+    assert _lock_is_free(turn)
