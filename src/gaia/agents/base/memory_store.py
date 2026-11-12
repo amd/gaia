@@ -2278,36 +2278,59 @@ class MemoryStore:
         content is kept in ``forgotten`` in the same transaction, so a pass
         that re-reads conversations from before now can tell not to learn it
         again (``is_forgotten``). A sensitive entry keeps only its word stems.
+        Older versions it superseded, directly or through a chain, are
+        forgotten with it.
 
         Returns False if not found. Same privileged-row rule as ``delete``.
         """
         with self._locked():
             try:
-                self._validate_existing_category_locked(
-                    knowledge_id, allow_privileged=allow_privileged, where="forget"
-                )
-                row = self._conn.execute(
-                    "SELECT content, category, sensitive FROM knowledge WHERE id = ?",
-                    (knowledge_id,),
-                ).fetchone()
-                if row is None:
+                if (
+                    self._conn.execute(
+                        "SELECT 1 FROM knowledge WHERE id = ?", (knowledge_id,)
+                    ).fetchone()
+                    is None
+                ):
                     return False
-                content, category, sensitive = row
-                if sensitive:
-                    content = " ".join(sorted(content_stems(content)))
-                self._conn.execute(
-                    "DELETE FROM knowledge_fts WHERE rowid = "
-                    "(SELECT rowid FROM knowledge WHERE id = ?)",
-                    (knowledge_id,),
-                )
-                self._conn.execute(
-                    "DELETE FROM knowledge WHERE id = ?", (knowledge_id,)
-                )
-                self._conn.execute(
-                    "INSERT INTO forgotten (content, category, sensitive, forgotten_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (content, category, int(bool(sensitive)), _now_iso()),
-                )
+                ids = [
+                    r[0]
+                    for r in self._conn.execute(
+                        """
+                        WITH RECURSIVE chain(id) AS (
+                            SELECT ?
+                            UNION
+                            SELECT k.id FROM knowledge k
+                            JOIN chain c ON k.superseded_by = c.id
+                        )
+                        SELECT id FROM chain
+                        """,
+                        (knowledge_id,),
+                    ).fetchall()
+                ]
+                now = _now_iso()
+                for kid in ids:
+                    self._validate_existing_category_locked(
+                        kid, allow_privileged=allow_privileged, where="forget"
+                    )
+                    content, category, sensitive = self._conn.execute(
+                        "SELECT content, category, sensitive FROM knowledge "
+                        "WHERE id = ?",
+                        (kid,),
+                    ).fetchone()
+                    if sensitive:
+                        content = " ".join(sorted(content_stems(content)))
+                    self._conn.execute(
+                        "DELETE FROM knowledge_fts WHERE rowid = "
+                        "(SELECT rowid FROM knowledge WHERE id = ?)",
+                        (kid,),
+                    )
+                    self._conn.execute("DELETE FROM knowledge WHERE id = ?", (kid,))
+                    self._conn.execute(
+                        "INSERT INTO forgotten "
+                        "(content, category, sensitive, forgotten_at) "
+                        "VALUES (?, ?, ?, ?)",
+                        (content, category, int(bool(sensitive)), now),
+                    )
                 self._conn.commit()
                 return True
             except Exception:
