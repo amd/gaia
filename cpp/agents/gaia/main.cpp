@@ -166,7 +166,9 @@ void printUsage() {
         "  --embedding-model ID      Embedding model for document search (default with\n"
         "                            --provider fireworks; otherwise keyword search)\n"
         "  --config FILE             Settings file (default $GAIACPP_CONFIG, else\n"
-        "                            ~/.config/gaiacpp/config.json when present)\n"
+        "                            $XDG_CONFIG_HOME/gaiacpp/config.json or\n"
+        "                            ~/.config/gaiacpp/config.json when present;\n"
+        "                            %APPDATA%\\gaiacpp\\config.json on Windows)\n"
         "  --no-web                  Leave out web_fetch\n"
         "  --no-skills               Leave out installed SKILL.md skills\n"
         "  --no-memory               Don't remember or recall facts across sessions\n"
@@ -417,11 +419,20 @@ void connectMcp(gaia::Agent& agent, const std::string& path) {
                                  " has no \"mcpServers\" object naming the servers to connect");
     }
     for (auto& [name, server] : doc[key].items()) {
-        if (server.value("disabled", false)) continue;
-        if (!agent.connectMcpServer(name, server)) {
+        if (!server.is_object() || server.value("disabled", false)) continue;
+        // "optional" is this file's own word for "start without it"; the server never sees it.
+        const bool optional = server.value("optional", false);
+        gaia::json spec = server;
+        spec.erase("optional");
+        if (agent.connectMcpServer(name, spec)) continue;
+        if (!optional) {
             throw std::runtime_error("Could not connect MCP server '" + name + "' from " + path +
-                                     " (details above). Fix or disable it, then retry.");
+                                     " (details above). Fix or disable it, or mark it "
+                                     "\"optional\": true to start without it, then retry.");
         }
+        std::cerr << "gaiacpp: MCP server '" << name << "' (" << path
+                  << ") could not be reached and is marked optional, so its tools are not "
+                     "available in this session.\n";
     }
 }
 

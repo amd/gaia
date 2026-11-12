@@ -60,12 +60,13 @@ protected:
         fs::remove_all(dir_, ec);
     }
 
-    gaia::ProcessResult run(const bench::MockLlmServer& mock, const std::string& turnLog) {
+    gaia::ProcessResult run(const bench::MockLlmServer& mock, const std::string& turnLog,
+                            const std::string& extraArgs = "") {
         std::string bin = GAIACPP_BIN;
         if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
         const std::string cmd = bin + " -p hi -m mock-model --base-url " + mock.baseUrl() +
                                 " --native-tools always --output-format json"
-                                " --no-memory --no-skills --no-web";
+                                " --no-memory --no-skills --no-web" + extraArgs;
         // A config path that does not exist keeps the user's own settings out.
         std::map<std::string, std::string> env = {
             {"GAIA_TURN_LOG", turnLog},
@@ -146,6 +147,35 @@ TEST_F(GaiacppCli, CountersAreZeroWhenTheServerReportsNoUsage) {
     EXPECT_EQ(out["cached_tokens"], 0);
     EXPECT_EQ(out["peak_context_tokens"], 0);
     EXPECT_FALSE(out.contains("usage"));
+}
+
+TEST_F(GaiacppCli, AnUnreachableMcpServerStopsTheRunUnlessMarkedOptional) {
+    // Port 9 (discard) refuses connections, so the server is certainly unreachable.
+    const auto config = [this](bool optional) {
+        const fs::path file = dir_ / (optional ? "optional.json" : "required.json");
+        json server = {{"url", "http://127.0.0.1:9/mcp"}};
+        if (optional) server["optional"] = true;
+        std::ofstream(file) << json{{"mcpServers", {{"tools-that-are-down", server}}}}.dump();
+        return " --mcp-config \"" + file.string() + "\"";
+    };
+
+    bench::MockLlmServer strict;
+    strict.pushResponse(json{{"choices", json::array({{{"message", finalAnswer("ok")}}})}}.dump());
+    const gaia::ProcessResult refused = run(strict, "", config(false));
+    EXPECT_NE(refused.exitCode, 0);
+    EXPECT_NE(refused.stderr_output.find("tools-that-are-down"), std::string::npos) << refused.stderr_output;
+    EXPECT_NE(refused.stderr_output.find("\"optional\": true"), std::string::npos) << refused.stderr_output;
+    EXPECT_EQ(strict.requestCount(), 0);
+
+    bench::MockLlmServer lenient;
+    lenient.pushResponse(json{{"choices", json::array({{{"message", finalAnswer("ok")}}})}}.dump());
+    const gaia::ProcessResult started = run(lenient, "", config(true));
+    ASSERT_EQ(started.exitCode, 0) << started.stderr_output;
+    EXPECT_EQ(json::parse(started.stdout_output)["result"], "ok");
+    // Starting without it is said out loud, with the server named.
+    EXPECT_NE(started.stderr_output.find("'tools-that-are-down'"), std::string::npos) << started.stderr_output;
+    EXPECT_NE(started.stderr_output.find("marked optional"), std::string::npos) << started.stderr_output;
+    EXPECT_EQ(lenient.requestCount(), 1);
 }
 
 TEST_F(GaiacppCli, UnwritableTurnLogStopsBeforeAnyModelRequest) {
