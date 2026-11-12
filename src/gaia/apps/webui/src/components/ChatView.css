@@ -357,6 +357,8 @@
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
 }
+/* A finished answer takes the live bubble's place as it stands: no second entrance. */
+.msg-settled > .msg { animation: none; }
 /* Message delete animation -- fade + shrink before removal */
 .msg-deleting {
     animation: msgDelete var(--duration) var(--ease) forwards;
