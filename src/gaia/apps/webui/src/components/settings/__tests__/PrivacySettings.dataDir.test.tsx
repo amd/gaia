@@ -24,10 +24,10 @@ describe('PrivacySettings data folder', () => {
     });
 
     it('opens the folder from its row', () => {
-        useChatStore.setState({ systemStatus: { data_dir: 'D:\gaia-home\chat' } as SystemStatus });
+        useChatStore.setState({ systemStatus: { data_dir: 'D:\\gaia-home\\chat' } as SystemStatus });
         render(<PrivacySettings />);
         fireEvent.click(screen.getByRole('button', { name: 'Open folder' }));
-        expect(api.openFileOrFolder).toHaveBeenCalledWith('D:\gaia-home\chat', false);
+        expect(api.openFileOrFolder).toHaveBeenCalledWith('D:\\gaia-home\\chat', false);
     });
 
     it('titles every card, not only for screen readers', () => {
