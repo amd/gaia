@@ -69,7 +69,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
             {failedCount > 0
                 ? <AlertCircle size={12} className="doc-context-icon doc-context-icon-failed" aria-hidden="true" />
                 : <CheckCircle2 size={12} className="doc-context-icon" aria-hidden="true" />}
-            <button type="button" className="doc-context-label" onClick={() => setShowDocLibrary(true)} title="Manage documents">
+            <button type="button" className="doc-context-label" onClick={() => setShowDocLibrary(true)} title={t('docsBar.manage')}>
                 {label}
             </button>
             <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
@@ -88,7 +88,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
                         <button
                             className="doc-pill-remove"
                             onClick={(e) => handleRemoveDocument(e, d.id)}
-                            aria-label={`Remove ${d.filename} from this chat`}
+                            aria-label={t('docsBar.remove', { name: d.filename })}
                         >
                             <X size={10} />
                         </button>
@@ -97,13 +97,13 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
                 })}
                 {!docsExpanded && hiddenCount > 0 && (
                     <button className="doc-pill-more" onClick={(e) => { e.stopPropagation(); setDocsExpanded(true); }}>
-                        +{hiddenCount} more
+                        {t('docsBar.more', { n: hiddenCount })}
                     </button>
                 )}
             </div>
             {docsExpanded && hiddenCount > 0 && (
                 <button className="doc-pill-collapse" onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}>
-                    show less
+                    {t('docsBar.less')}
                 </button>
             )}
         </div>
