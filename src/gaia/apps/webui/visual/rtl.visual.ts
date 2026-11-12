@@ -434,6 +434,23 @@ test('new chat', async ({ page }) => {
     expect(await audit(page)).toEqual([]);
 });
 
+for (const locale of ['ar', 'en']) {
+    for (const width of [1440, 390]) {
+        test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
+            await page.setViewportSize({ width, height: 900 });
+            await open(page, '', locale);
+            const chips = page.locator('.try-chip');
+            await expect(chips).toHaveCount(7);
+            await expect(chips.first()).toBeVisible();
+            if (locale === 'ar') await expect(chips.first()).toContainText('وصفة');
+            await shot(page, `try-chips-${locale}-${width}`);
+            // The closed sidebar drawer waits off screen at phone width; judge the chips.
+            const problems = (await audit(page)).filter((p) => p.includes('try-chip') || p.includes('scrolls sideways'));
+            expect(problems).toEqual([]);
+        });
+    }
+}
+
 test('finished answer', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`);
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
