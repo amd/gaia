@@ -60,6 +60,9 @@ interface MessageBubbleProps {
     onEditStart?: (message: Message) => void;
     /** Whether this message is open for editing. */
     editing?: boolean;
+    /** Text typed into the editor before it last closed; null starts from the message. */
+    editDraft?: string | null;
+    onEditDraft?: (text: string) => void;
     /** Sends the edited text in place of this message and everything after it. */
     onEdit?: (message: Message, text: string) => void;
     onEditCancel?: () => void;
@@ -521,11 +524,17 @@ export function turnEnding(content: string, stopState: Message['stopState']): Tu
 const EDITOR_MAX_HEIGHT = 320;
 
 /** A sent message opened for editing: Enter sends it again, Escape puts it back. */
-function MessageEditor({ initial, onSend, onCancel }: { initial: string; onSend: (text: string) => void; onCancel: () => void }) {
+function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
+    original: string;
+    draft?: string | null;
+    onDraft?: (text: string) => void;
+    onSend: (text: string) => void;
+    onCancel: () => void;
+}) {
     const t = useT();
-    const [text, setText] = useState(initial);
+    const [text, setText] = useState(draft ?? original);
     const ref = useRef<HTMLTextAreaElement>(null);
-    const changed = text.trim() !== '' && text !== initial;
+    const changed = text.trim() !== '' && text !== original;
 
     useLayoutEffect(() => {
         const el = ref.current;
@@ -557,7 +566,7 @@ function MessageEditor({ initial, onSend, onCancel }: { initial: string; onSend:
                 ref={ref}
                 className="msg-edit-input"
                 value={text}
-                onChange={(e) => setText(e.target.value)}
+                onChange={(e) => { setText(e.target.value); onDraft?.(e.target.value); }}
                 onKeyDown={handleKeyDown}
                 aria-label={t('msg.editLabel')}
                 rows={1}
@@ -574,7 +583,7 @@ function MessageEditor({ initial, onSend, onCancel }: { initial: string; onSend:
     );
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onRegenerate, onEditStart, editing = false, onEdit, onEditCancel, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(
@@ -776,7 +785,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
                     {editing && onEdit ? (
                         <MessageEditor
-                            initial={message.content}
+                            original={message.content}
+                            draft={editDraft}
+                            onDraft={onEditDraft}
                             onSend={(text) => onEdit(message, text)}
                             onCancel={() => onEditCancel?.()}
                         />

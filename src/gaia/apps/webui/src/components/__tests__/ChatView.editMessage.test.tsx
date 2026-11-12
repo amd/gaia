@@ -120,6 +120,55 @@ describe('editing a sent message', () => {
     });
 });
 
+describe('an edit is never lost', () => {
+    async function editAndSend(text: string) {
+        fireEvent.click(screen.getAllByRole('button', { name: 'Edit message' })[1]);
+        fireEvent.change(editor(), { target: { value: text } });
+        await act(async () => {
+            fireEvent.keyDown(editor(), { key: 'Enter' });
+        });
+    }
+
+    it('keeps the editor and its text when the backend is still starting', async () => {
+        await show();
+        const starting = { ...READY, init_state: 'initializing', init_tasks: [{ name: 'model', status: 'running' }] } as unknown as SystemStatus;
+        mockedApi.getSystemStatus.mockResolvedValue(starting);
+        fireEvent.click(screen.getAllByRole('button', { name: 'Edit message' })[1]);
+        fireEvent.change(editor(), { target: { value: 'How long is the Panama canal?' } });
+        act(() => useChatStore.setState({ systemStatus: starting }));
+        await act(async () => {
+            fireEvent.keyDown(editor(), { key: 'Enter' });
+        });
+
+        await waitFor(() => expect(mockedApi.getSystemStatus).toHaveBeenCalled());
+        expect(sends).toEqual([]);
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+        expect(editor().value).toBe('How long is the Panama canal?');
+    });
+
+    it('keeps the editor and its text when the chat could not be read', async () => {
+        await show();
+        mockedApi.getMessages.mockRejectedValueOnce(new Error('connection reset'));
+        await editAndSend('How long is the Panama canal?');
+
+        await waitFor(() => expect(mockedApi.getMessages).toHaveBeenCalledTimes(2));
+        expect(sends).toEqual([]);
+        expect(editor().value).toBe('How long is the Panama canal?');
+        fireEvent.keyDown(editor(), { key: 'Enter' });
+        await waitFor(() => expect(sends).toEqual(['How long is the Panama canal?']));
+    });
+
+    it('brings the typed text back when a running turn closed the editor', async () => {
+        await show();
+        fireEvent.click(screen.getAllByRole('button', { name: 'Edit message' })[1]);
+        fireEvent.change(editor(), { target: { value: 'half typed' } });
+        act(() => useChatStore.setState({ isStreaming: true }));
+        expect(screen.queryByRole('textbox', { name: 'Edit your message' })).toBeNull();
+        act(() => useChatStore.setState({ isStreaming: false }));
+        expect(editor().value).toBe('half typed');
+    });
+});
+
 describe('Try again on an answer', () => {
     it('asks the last question again', async () => {
         await show();
@@ -127,6 +176,18 @@ describe('Try again on an answer', () => {
         expect(buttons).toHaveLength(1);
         await act(async () => {
             fireEvent.click(buttons[0]);
+        });
+
+        await waitFor(() => expect(sends).toEqual(['How long is the Panama canl?']));
+        expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledWith(SESSION.id, 3);
+    });
+
+    it('asks again even while the answer still has its temporary id', async () => {
+        await show();
+        // As a turn leaves it when its done event carried no message id, before the refetch.
+        act(() => useChatStore.setState({ messages: [...server.slice(0, 3), row(Date.now() + 1, 'assistant', 'About 82 km.')] }));
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
         });
 
         await waitFor(() => expect(sends).toEqual(['How long is the Panama canl?']));
