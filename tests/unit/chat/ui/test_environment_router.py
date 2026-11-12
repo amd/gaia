@@ -120,6 +120,34 @@ def test_files_are_listed_in_the_order_of_the_names_shown(client, session_id, tm
     assert names == ["apple.md", "zebra.md"]
 
 
+def test_a_document_name_survives_another_path_spelling_and_a_blank_name_is_null(
+    client, session_id, tmp_path
+):
+    (tmp_path / "sub").mkdir()
+    named = tmp_path / "1111_report.md"
+    blank = tmp_path / "2222_blank.md"
+    for path, name, stored in (
+        (named, "report.md", str(tmp_path / "sub" / ".." / named.name)),
+        (blank, "", str(blank)),
+    ):
+        path.write_text(name or "x", encoding="utf-8")
+        doc = client.app.state.db.add_document(
+            filename=name,
+            filepath=stored,
+            file_hash=f"h-{path.name}",
+            file_size=1,
+            chunk_count=1,
+            file_mtime=path.stat().st_mtime,
+        )
+        client.app.state.db.attach_document(session_id, doc["id"])
+
+    body = client.get(f"/api/sessions/{session_id}/environment").json()
+
+    by_base = {Path(f["path"]).name: f for f in body["folders"]}
+    assert by_base[named.name]["name"] == "report.md"
+    assert by_base[blank.name]["name"] is None
+
+
 def test_add_then_remove_folder_persists(client, session_id, folder):
     added = client.post(
         f"/api/sessions/{session_id}/environment/folders", json={"path": str(folder)}
