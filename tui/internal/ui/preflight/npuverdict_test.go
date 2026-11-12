@@ -6,6 +6,7 @@ package preflight
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
@@ -22,7 +23,7 @@ func TestReadNPUVerdictComesFromThePlan(t *testing.T) {
 		Ready:    false,
 		Problems: []setupapi.NPUProblem{{Code: "memlock", Title: "Locked-memory limit is too low.", Fix: "Raise the limit"}},
 	}
-	got, known := readNPUVerdictFrom(context.Background(), &setupapitest.Fake{P: setupapi.Plan{NPU: notReady}})
+	got, known := readNPUVerdictFrom(context.Background(), &setupapitest.Fake{P: setupapi.Plan{NPU: &notReady}})
 	if !known {
 		t.Fatal("a plan that answered is known")
 	}
@@ -36,6 +37,26 @@ func TestReadNPUVerdictComesFromThePlan(t *testing.T) {
 func TestReadNPUVerdictIsUnknownWhenThePlanFails(t *testing.T) {
 	if _, known := readNPUVerdictFrom(context.Background(), &setupapitest.Fake{PlanErr: errors.New("daemon down")}); known {
 		t.Fatal("a plan that failed to read is not known")
+	}
+}
+
+// A daemon older than v0.25.4 answers without an npu field. That is a gap in
+// the answer, not a report that the PC has no NPU, so it must stay unknown and
+// keep the memory verdict the user already had.
+func TestReadNPUVerdictIsUnknownWhenThePlanOmitsNPU(t *testing.T) {
+	npu, known := readNPUVerdictFrom(context.Background(), &setupapitest.Fake{P: setupapi.Plan{}})
+	if known {
+		t.Fatal("a plan without an npu field is not a confirmed absence")
+	}
+	size := 9.1
+	chat := gaiainit.Model{ID: "gemma4-it-e4b-FLM", SizeGB: &size}
+	capacity := lemonade.Capacity{MemoryGB: 96, MemorySource: "AMD iGPU", DiskFreeGB: -1, NPUMemoryGB: 64}
+	got := fitLine(capacity, npu, known, chat, true)
+	if !strings.Contains(got, "fits:") || !strings.Contains(got, "could not be checked") {
+		t.Fatalf("want the memory verdict with a readiness caveat, got %q", got)
+	}
+	if strings.Contains(got, "reports none") {
+		t.Fatalf("a plan without an npu field must not claim absence, got %q", got)
 	}
 }
 

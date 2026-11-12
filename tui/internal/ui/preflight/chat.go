@@ -203,10 +203,10 @@ func readNPUVerdictFrom(ctx context.Context, api setupapi.API) (setupapi.NPU, bo
 	ctx, cancel := context.WithTimeout(ctx, lemonadeProbeTimeout)
 	defer cancel()
 	plan, err := api.Plan(ctx)
-	if err != nil {
+	if err != nil || plan.NPU == nil {
 		return setupapi.NPU{}, false
 	}
-	return plan.NPU, true
+	return *plan.NPU, true
 }
 
 // gbPerGiB turns Lemonade's GiB into the decimal GB setup shows.

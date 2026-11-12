@@ -34,8 +34,10 @@ type Plan struct {
 	// choice.
 	VisionModel *string `json:"vision_model"`
 	// NPU is whether this PC has a Ryzen AI NPU and whether it can run a model
-	// yet, as the backend's own checks in npu_linux.py see it.
-	NPU NPU `json:"npu"`
+	// yet, as the backend's own checks in npu_linux.py see it. It is nil when
+	// the plan omits the field, as daemons before v0.25.4 do; that is unknown,
+	// not evidence that the PC has no NPU.
+	NPU *NPU `json:"npu"`
 }
 
 // NPU is the plan's "npu" field: present is whether Lemonade reports one on

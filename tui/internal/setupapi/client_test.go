@@ -35,6 +35,23 @@ func TestDecodeReadsAPlan(t *testing.T) {
 	}
 }
 
+// A daemon before v0.25.4 sends no npu field. Decoding it must leave the
+// verdict nil, so callers can tell an absent answer from a reported absence.
+func TestDecodeLeavesAMissingNPUVerdictUnknown(t *testing.T) {
+	for _, body := range []string{
+		`{"chat_model":{"id":"Gemma-4-E4B-it-GGUF"}}`,
+		`{"chat_model":{"id":"Gemma-4-E4B-it-GGUF"},"npu":null}`,
+	} {
+		var p Plan
+		if _, err := decode("/daemon/v1/setup/plan", "read", 200, []byte(body), &p); err != nil {
+			t.Fatal(err)
+		}
+		if p.NPU != nil {
+			t.Fatalf("npu = %+v, want nil for %s", p.NPU, body)
+		}
+	}
+}
+
 func TestDecodeAcceptsAccepted(t *testing.T) {
 	if _, err := decode("/daemon/v1/setup/models/download", "download", 202, []byte(`{"state":"idle"}`), nil); err != nil {
 		t.Fatal(err)
