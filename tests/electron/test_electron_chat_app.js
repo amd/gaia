@@ -1344,8 +1344,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should use dynamic version from build constant', () => {
-      expect(advancedContent).toContain('const version = __APP_VERSION__');
-      expect(advancedContent).toContain('GAIA v{version}');
+      const aboutContent = fs.readFileSync(path.join(settingsDir, 'AboutSettings.tsx'), 'utf8');
+      expect(aboutContent).toContain('`GAIA v${__APP_VERSION__}`');
     });
 
     it('should render as a modal settings dialog with section nav', () => {
