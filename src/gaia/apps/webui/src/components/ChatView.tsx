@@ -61,7 +61,7 @@ import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
-import { lastSentMessage } from '../utils/editLast';
+import { laterTurns, lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
@@ -1740,6 +1740,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onEditDraft={(text: string) => { editDraftRef.current = text; }}
                                     onEdit={handleEdit}
                                     onEditCancel={handleEditCancel}
+                                    laterCount={msg.role === 'user' ? laterTurns(messages, idx) : 0}
                                     onRegenerate={canRetry && !unsent ? () => handleRegenerate(msg) : undefined}
                                     extraActions={canRetry ? (
                                         <RetryWithMenu
