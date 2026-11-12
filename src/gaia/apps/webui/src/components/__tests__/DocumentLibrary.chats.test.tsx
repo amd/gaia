@@ -67,6 +67,16 @@ describe('the library says where each document is used', () => {
         expect(within(row('lease.pdf')).getByRole('button', { name: 'Attach lease.pdf to “Budget review”' })).toHaveTextContent('Add to this chat');
         expect(within(row('budget.xlsx')).queryByText('Add to this chat')).toBeNull();
     });
+
+    it('still counts the other chats right after a document is added to this one', async () => {
+        mockedApi.attachDocument.mockResolvedValue(undefined);
+        render(<DocumentLibrary />);
+        await screen.findByText('lease.pdf');
+
+        fireEvent.click(within(row('lease.pdf')).getByRole('button', { name: 'Attach lease.pdf to “Budget review”' }));
+
+        expect(await within(row('lease.pdf')).findByText('In this chat and 3 others')).toBeInTheDocument();
+    });
 });
 
 describe('the library filter', () => {

@@ -296,6 +296,11 @@ export function DocumentLibrary() {
             updateSessionInList(targetSessionId, {
                 document_ids: [...existing, docId],
             });
+            // The listed count predates this attach; without it the row says one chat too few.
+            const store = useChatStore.getState();
+            store.setDocuments(store.documents.map((d) => (
+                d.id === docId ? { ...d, sessions_using: (d.sessions_using ?? 0) + 1 } : d
+            )));
         }
         setNotice(t('docs.attached', { name: filename, chat: targetChatName }));
         log.doc.info(`Attached "${filename}" to session ${targetSessionId}`);
