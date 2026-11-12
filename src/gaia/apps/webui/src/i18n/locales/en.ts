@@ -1040,6 +1040,8 @@ export const enMessages = {
     'prompt.allowOnce': 'Allow once',
     'prompt.allowForChat': 'Allow for this chat',
     'prompt.alwaysAllow': 'Always allow {scope} in this chat',
+    'prompt.always.file': '{action} {name}',
+    'prompt.always.folder': '{action} in {folder}',
     'prompt.deny': 'Deny',
     'prompt.details': 'Details',
     'prompt.technicalDetails': 'Technical details',

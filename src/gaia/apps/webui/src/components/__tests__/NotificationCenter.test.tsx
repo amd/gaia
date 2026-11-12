@@ -102,7 +102,7 @@ describe('NotificationCenter permission prompts follow the interface language', 
     it('words a tool prompt in Arabic, the tool kept left to right', () => {
         setUiLocale('ar');
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         const title = container.querySelector('.notification-title')!;
@@ -129,7 +129,7 @@ describe('NotificationCenter permission prompts follow the interface language', 
 
     it('reads the same as before in English', () => {
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow running python?');

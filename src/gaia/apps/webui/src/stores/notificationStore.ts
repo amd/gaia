@@ -13,7 +13,7 @@ import { create } from 'zustand';
 import type { GaiaNotification, NotificationType } from '../types/agent';
 import { confirmTool } from '../services/api';
 import { useChatStore } from './chatStore';
-import { ref } from '../i18n/registry';
+import { isMessageKey, ref, type MessageKey } from '../i18n/registry';
 import { tEn, type Translate } from '../i18n/useT';
 
 // ── Constants ────────────────────────────────────────────────────────────
@@ -104,11 +104,33 @@ export function permissionPromptText(
   if (n.tool === PROJECT_TRUST_TOOL) {
     return { heading: t('prompt.trust.title'), question: t('prompt.trust.ask') };
   }
-  const tool = mark(n.toolLabel ?? n.tool ?? '');
+  const tool = toolAction(n, t) ?? mark(n.toolLabel ?? n.tool ?? '');
   return {
     heading: t(n.toolLabel ? 'prompt.title.tool' : 'prompt.title.toolId', { tool }),
     question: t('prompt.needsOk', { tool }),
   };
+}
+
+/** The call in the UI language ("writing file"), for a tool whose activity label is translated; the backend's own label is English. */
+function toolAction(n: GaiaNotification, t: Translate): string | null {
+  const key = `tool.${n.tool}.active`;
+  if (!n.toolLabel || !isMessageKey(key)) return null;
+  const label = t.bare(key as MessageKey);
+  return label.charAt(0).toLowerCase() + label.slice(1);
+}
+
+/**
+ * What an "always allow" answer covers, in the UI language. The backend words
+ * its scope in English (`write_file on notes.txt`, `write_file on files in /x`);
+ * null when the scope isn't one of those, and the caller keeps the backend's text.
+ */
+export function alwaysScopeText(n: GaiaNotification, t: Translate): string | null {
+  const action = toolAction(n, t);
+  const prefix = `${n.tool} `;
+  if (!action || !n.alwaysScope?.startsWith(prefix)) return null;
+  const rest = n.alwaysScope.slice(prefix.length);
+  if (rest.startsWith('on files in ')) return t.bare('prompt.always.folder', { action, folder: rest.slice('on files in '.length) });
+  return t.bare('prompt.always.file', { action, name: rest.startsWith('on ') ? rest.slice(3) : rest });
 }
 
 /** `C:\A\b.txt` and `c:/a/b.txt/` compare equal. Picks card wording only; too loose for an access check. */

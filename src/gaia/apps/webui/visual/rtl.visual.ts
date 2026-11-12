@@ -3145,12 +3145,34 @@ for (const locale of ['ar', 'en']) {
         expect(gap).toBeLessThan(16);
         const title = page.locator('.perm-card-title');
         if (locale === 'ar') await expect(title).toContainText('هل تسمح بـ');
-        else await expect(title).toHaveText('Allow running python?');
-        await expect(title.locator('bdi[dir="ltr"]').first()).toHaveText('running python');
+        else await expect(title).toHaveText('Allow running Python?');
         await expect(page.getByRole('button', { name: /Allow once/ })).toContainText(locale === 'ar' ? 'السماح مرة واحدة' : 'Allow once');
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
         await shot(page, `permission-python-${locale}`);
+    });
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a file-write prompt words its heading and always button in the UI language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [{
+            type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-always',
+            args: { file_path: '/private/tmp/plans/weekly-grocery-plan.md', content: '# Weekly grocery plan\n' },
+            always_scope: 'write_file on files in /private/tmp/plans', always_label: 'writing files in /private/tmp/plans',
+        }]);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('save my grocery plan');
+        await page.keyboard.press('Enter');
+        const card = page.locator('.perm-card');
+        await expect(card).toBeVisible();
+        if (locale === 'ar') {
+            await expect(card.locator('.perm-card-title')).toContainText('كتابة ملف');
+            await expect(card.locator('.perm-btn').nth(1)).toContainText('السماح دائمًا بـ');
+            expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+        } else {
+            await expect(card.locator('.perm-card-title')).toHaveText('Allow writing file?');
+        }
+        await shot(page, `permission-always-${locale}`);
     });
 }
 
