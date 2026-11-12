@@ -987,6 +987,7 @@ export interface ModelServerInfo {
  * Status of a custom model on the Lemonade server.
  */
 export interface ModelStatus {
+  checked?: boolean;
   downloaded?: boolean;
   found?: boolean;
   loaded?: boolean;

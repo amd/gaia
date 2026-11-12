@@ -1325,6 +1325,54 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** Starts with digits, like a real Hugging Face org: unisolated, an Arabic line moves them to its end. */
+const UNLISTED_ID = '01-ai/no-such-model-violet-otter';
+const CUSTOM_TITLE = { ar: 'معرّف نموذج مخصص', en: 'Custom model ID' };
+const CUSTOM_NOTE = {
+    ar: { unlisted: 'لا يُدرج', unchecked: 'تعذّر على GAIA التحقق' },
+    en: { unlisted: "doesn't list", unchecked: "couldn't check this ID" },
+};
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const checked of [true, false]) {
+        const state = checked ? 'unlisted' : 'unchecked';
+        test(`a saved custom model the server ${checked ? 'does not list' : 'could not check'} gets a note (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/settings', (route) => {
+                if (route.request().method() !== 'PUT') return route.fallback();
+                return route.fulfill({ json: {
+                    custom_model: UNLISTED_ID, context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+                    model_status: { found: false, downloaded: false, loaded: false, checked },
+                } });
+            }));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            const dialog = page.getByRole('dialog');
+            await dialog.locator('[data-section="advanced"]').click();
+            const section = dialog.locator('details.settings-disclosure', { has: page.locator('summary', { hasText: CUSTOM_TITLE[locale] }) });
+            await section.locator('summary').first().scrollIntoViewIfNeeded();
+            await section.locator('summary').first().click();
+            const input = section.locator('input.model-input');
+            await input.fill(UNLISTED_ID);
+            await input.press('Enter');
+
+            const note = section.locator('.model-warning[role="status"]');
+            await expect(note).toContainText(CUSTOM_NOTE[locale][state]);
+            await note.scrollIntoViewIfNeeded();
+            await shot(page, `custom-model-${state}-${locale}`);
+            if (checked) {
+                // The ID is its own bidi island in the Arabic sentence, under the section title and in the box.
+                await expect(note).toContainText(UNLISTED_ID);
+                if (locale === 'ar') expect(await note.textContent()).toContain(`⁨${UNLISTED_ID}⁩`);
+                expect(await section.locator('.settings-disclosure-hint').textContent()).toBe(`⁦${UNLISTED_ID}⁩`);
+                expect(await input.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            } else {
+                await expect(note).not.toContainText(UNLISTED_ID);
+            }
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.model-warning')).toEqual([]);
+        });
+    }
+}
+
 /** Text left in English in the Arabic UI, outside names, numbers and the English gloss. */
 const leftoverEnglish = (root: Page) =>
     root.locator('.setup').evaluate((setup) => {

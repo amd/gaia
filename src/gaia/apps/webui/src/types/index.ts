@@ -529,6 +529,8 @@ export interface ModelStatus {
     found: boolean;
     downloaded: boolean;
     loaded: boolean;
+    /** The model list was read, so `found` false means the ID isn't in it. */
+    checked: boolean;
 }
 
 export interface Settings {

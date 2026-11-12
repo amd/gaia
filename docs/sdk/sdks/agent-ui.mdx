@@ -709,7 +709,8 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
       "model_status": {
         "found": true,
         "downloaded": true,
-        "loaded": false
+        "loaded": false,
+        "checked": true
       }
     }
     ```
@@ -717,7 +718,7 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
     | Field | Type | Description |
     |-------|------|-------------|
     | `custom_model` | string or null | HuggingFace model ID overriding the default, or `null` if using the default model. |
-    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), and `loaded` (currently active). |
+    | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), `loaded` (currently active), and `checked` (the model list was read; when `false`, `found` says nothing). Settings notes a saved ID that is unlisted or could not be checked. |
   </Accordion>
 
   <Accordion title="PUT /api/settings">
