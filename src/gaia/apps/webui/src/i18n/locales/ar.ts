@@ -1297,6 +1297,8 @@ const messages: Messages = {
     'setup.unknown.failed': 'تعذّر التحقق مما إذا كان GAIA مُعدًّا: {error}',
     'setup.unknown.modelUnread': 'تعذّر على GAIA معرفة النموذج الذي يستخدمه ({error})',
     'setup.unknown.retry': 'التحقق مرة أخرى',
+    'setup.serverDown.notice': 'خادم النماذج في GAIA لا يستجيب، لذا لا يمكنه الرد الآن. محادثاتك ما زالت هنا.',
+    'setup.serverDown.setup': 'فتح الإعداد',
     'setup.check.title': 'فحص هذا الجهاز',
     'setup.where.title': 'اختر مكان تشغيل GAIA',
     'setup.where.local': 'على هذا الجهاز',
