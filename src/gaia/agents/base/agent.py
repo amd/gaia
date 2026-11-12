@@ -3346,6 +3346,7 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     # Before the prompt is composed: it decides the tool format.
                     LemonadeManager.learn_tool_calling(probe_client, model_id)
+                    LemonadeManager.learn_reasoning(probe_client, model_id)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -4259,8 +4260,8 @@ Do NOT wrap conversational replies in JSON.
             if cloud_model_provider(model_id):
                 # A cloud reasoning model can spend its whole budget thinking
                 # about one dense page; copying quotes needs little reasoning.
-                effort = cloud_lowest_reasoning_effort(model_id)
-                sampling = {"reasoning_effort": effort} if effort else {}
+                # None: no configured cloud_reasoning_effort is added either.
+                sampling = {"reasoning_effort": cloud_lowest_reasoning_effort(model_id)}
             else:
                 # Local anti-repetition penalties fight verbatim quote copying.
                 sampling = {
