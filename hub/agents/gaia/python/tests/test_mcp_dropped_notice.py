@@ -37,9 +37,10 @@ class _Client:
 class _Manager:
     """The slice of MCPClientManager that ``_load_mcp_tools`` uses."""
 
-    def __init__(self, servers, load_error=None):
+    def __init__(self, servers, load_error=None, failed=None):
         self._clients = {name: _Client(n) for name, n in servers.items()}
         self._load_error = load_error
+        self._failed = dict(failed or {})
         self.config = MagicMock(load_report={})
         self.config.get_servers.return_value = dict.fromkeys(servers, {})
 
@@ -55,6 +56,9 @@ class _Manager:
 
     def get_client(self, name):
         return self._clients.get(name)
+
+    def failed_servers_for_agent(self, _agent_id):
+        return dict(self._failed)
 
 
 @pytest.fixture
@@ -124,6 +128,43 @@ def test_tool_limit_skip_names_each_server_and_count(configured_home):
     assert "55 tools, over the limit of 50" in warning
     assert "Settings > Connectors" in warning
     assert "gaia " not in warning  # no CLI command as the remedy
+
+
+def test_a_server_that_fails_to_start_is_named(configured_home):
+    """The rest still load; the one that didn't start is named with why."""
+    manager = _Manager(
+        {"github": 3},
+        failed={"weatherbox": "[WinError 2] The system cannot find the file"},
+    )
+    agent = _skeleton(manager)
+    with patch.object(ChatAgent, "_register_mcp_tools") as register:
+        agent._load_mcp_tools()
+    register.assert_called_once()
+    assert agent.report_mcp_dropped() is True
+
+    [warning] = agent.console.warnings
+    assert "weatherbox" in warning
+    assert "cannot find the file" in warning
+    assert "github" not in warning
+    # A hand-added server isn't listed in Settings > Connectors: name its file.
+    assert "Settings > Connectors" not in warning
+    assert f"weatherbox is set up in {configured_home / 'mcp_servers.json'}" in warning
+
+
+def test_a_failed_connector_points_at_settings_and_a_hand_added_one_at_its_file(
+    configured_home,
+):
+    manager = _Manager(
+        {},
+        failed={"mcp-github": "exited with code 1", "weatherbox": "no such command"},
+    )
+    agent = _skeleton(manager)
+    agent._load_mcp_tools()
+    agent.report_mcp_dropped()
+
+    [warning] = agent.console.warnings
+    assert "Check GitHub in Settings > Connectors." in warning
+    assert f"weatherbox is set up in {configured_home / 'mcp_servers.json'}" in warning
 
 
 def test_servers_within_the_limit_load_without_a_notice(configured_home):
