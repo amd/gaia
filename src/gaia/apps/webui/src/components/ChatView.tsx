@@ -7,7 +7,7 @@ import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from 
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
-import { TOOL_CALL_JSON_SAFETY_RE, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
+import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
 import { useReadAloudStore } from '../stores/readAloudStore';
 import { readsAloudWhenDone } from '../utils/autoReadAloud';
@@ -165,6 +165,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const [liveHistoryNotice, setLiveHistoryNotice] = useState<string | null>(null);
     const lastStreamContentRef = useRef('');
     const lastAgentStepsRef = useRef<AgentStep[]>([]);
+    // Render keys that outlive a message's temporary id, and answers already on screen as the live bubble.
+    const messageKeysRef = useRef(new Map<number, number>());
+    const settledIdsRef = useRef(new Set<number>());
     const lastCardsRef = useRef<RenderCardData[]>([]);
     const prevStreamingRef = useRef(false);
     // Continuously snapshot the streaming state so we have it when streaming ends
@@ -305,7 +308,9 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 } else if (msgs.length !== lastMsgCountRef.current && !useChatStore.getState().isStreaming) {
                     // New messages from external source (MCP, API) — refresh
                     log.chat.info(`Messages changed externally: ${lastMsgCountRef.current} -> ${msgs.length}`);
-                    setMessages(keepFailedReply(useChatStore.getState().messages, msgs));
+                    const shown = useChatStore.getState().messages;
+                    carryMessageKeys(shown, msgs, messageKeysRef.current);
+                    setMessages(keepFailedReply(shown, msgs));
                     lastMsgCountRef.current = msgs.length;
                 }
             } catch (err) {
@@ -1056,6 +1061,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         failure: event.failed ? event.failure : undefined,
                     };
                     if (historyNotice) historyNotices.set(assistantMsg.id, historyNotice);
+                    settledIdsRef.current.add(assistantMsg.id);
                     addMessage(assistantMsg);
                     const readAloud = useReadAloudStore.getState();
                     if (readAloud.settings?.auto && readsAloudWhenDone(assistantMsg)) {
@@ -1097,6 +1103,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     failure: m.failure ?? prevMsgs.find((p) => p.id === m.id)?.failure,
                                 };
                             });
+                            carryMessageKeys(prevMsgs, msgs, messageKeysRef.current);
                             setMessages(msgs);
                             lastMsgCountRef.current = msgs.length;
                             if (reattach && !content && msgs[msgs.length - 1]?.role === 'user') {
@@ -1680,8 +1687,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
                         return (
                             <div
-                                key={msg.id}
-                                className={deletingMsgId === msg.id ? 'msg-deleting' : undefined}
+                                key={messageKeysRef.current.get(msg.id) ?? msg.id}
+                                className={deletingMsgId === msg.id ? 'msg-deleting' : settledIdsRef.current.has(messageKeysRef.current.get(msg.id) ?? msg.id) ? 'msg-settled' : undefined}
                                 data-message-id={msg.id}
                                 data-role={msg.role}
                             >
