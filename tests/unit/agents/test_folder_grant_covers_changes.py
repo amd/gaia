@@ -88,13 +88,20 @@ class TestWriteAndEdit:
         assert scope.subject == "files in C:\\Users\\me\\uxa"
 
 
+WINDOWS = os.name == "nt"
+windows_only = pytest.mark.skipif(not WINDOWS, reason="cmd.exe's ren and move")
+
+
 class TestRename:
+    @windows_only
     def test_a_rename_in_the_folder_is_covered(self, folder):
         granted = _file("write_file", folder / "summary.md")
         call = _shell(f'ren "{folder / "draft_old.txt"}" draft_archive.txt')
         assert _covers(granted, call)
 
-    @pytest.mark.parametrize("program", ["mv", "move"])
+    @pytest.mark.parametrize(
+        "program", ["mv", pytest.param("move", marks=windows_only)]
+    )
     def test_a_move_between_names_in_the_folder_is_covered(self, folder, program):
         granted = _file("write_file", folder / "summary.md")
         src, dst = folder / "draft_old.txt", folder / "draft_archive.txt"
@@ -145,6 +152,86 @@ class TestRename:
         assert not _covers(granted, call)
 
     def test_a_rename_alone_still_offers_the_folder_it_stays_in(self, folder):
-        call = _shell(f'ren "{folder / "draft_old.txt"}" draft_archive.txt')
+        call = _shell(f'mv "{folder / "draft_old.txt"}" "{folder / "a.txt"}"')
         assert call.phrase.startswith("changing files in ")
         assert os.path.normcase(call.subject).endswith(os.path.normcase(folder.name))
+
+
+class TestRenameCannotReachFurther:
+    """Shapes that look like a rename in the granted folder but do more."""
+
+    @pytest.mark.skipif(WINDOWS, reason="cmd.exe's rename is a built-in")
+    def test_perl_rename_runs_code_and_is_asked(self, folder):
+        # Perl's `rename` evaluates its first argument, so it is never a plain rename.
+        code = "s{^}{system q{touch pwned}}e"
+        (folder / code).write_text("")
+        granted = _file("write_file", folder / "summary.md")
+        call = _shell(f"rename '{code}' x", working_directory=str(folder))
+        assert not _covers(granted, call)
+
+    @pytest.mark.parametrize("program", ["rename-item", "move-item"])
+    def test_powershell_cmdlets_are_not_renames(self, folder, program):
+        granted = _file("write_file", folder / "summary.md")
+        call = _shell(f'{program} "{folder / "draft_old.txt"}" "{folder / "a.txt"}"')
+        assert not _covers(granted, call)
+
+    def test_renaming_a_subfolder_is_asked(self, folder):
+        granted = _file("write_file", folder / "summary.md")
+        call = _shell(f'mv "{folder / "sub"}" "{folder / "sub2"}"')
+        assert not _covers(granted, call)
+
+    def test_a_missing_source_is_asked(self, folder):
+        granted = _file("write_file", folder / "summary.md")
+        call = _shell(f'mv "{folder / "absent.txt"}" "{folder / "a.txt"}"')
+        assert not _covers(granted, call)
+
+    def test_a_linked_source_is_asked(self, folder):
+        outside = folder.parent / "other" / "secret.txt"
+        outside.write_text("secret")
+        link = folder / "link.txt"
+        try:
+            link.symlink_to(outside)
+        except OSError:
+            pytest.skip("this account cannot create symlinks")
+        granted = _file("write_file", folder / "summary.md")
+        call = _shell(f'mv "{link}" "{folder / "a.txt"}"')
+        assert not _covers(granted, call)
+
+    @pytest.mark.parametrize(
+        "name", ["con", "NUL", "con.txt", "lpt1.log", "a.txt.", "a.txt ", "a.txt:x"]
+    )
+    def test_device_names_and_names_windows_rewrites_are_asked(self, folder, name):
+        granted = _file("write_file", folder / "summary.md")
+        call = _shell(f'mv "{folder / "draft_old.txt"}" "{folder}{os.sep}{name}"')
+        assert not _covers(granted, call)
+
+    @windows_only
+    @pytest.mark.parametrize(
+        "command, cwd",
+        [
+            (r"mv \\attacker\s\a.txt \\attacker\s\b.txt", None),
+            ("mv a.txt b.txt", r"\\attacker\s"),
+            (r"ren \\?\UNC\attacker\s\a.txt b.txt", None),
+            ("mv //attacker/s/a.txt //attacker/s/b.txt", None),
+        ],
+    )
+    def test_a_network_path_is_asked_without_being_looked_at(
+        self, monkeypatch, command, cwd
+    ):
+        looked = []
+
+        def record(real):
+            def wrapper(path, *args, **kwargs):
+                looked.append(str(path))
+                return real(path, *args, **kwargs)
+
+            return wrapper
+
+        for name in ("isfile", "islink", "lexists", "realpath", "exists"):
+            monkeypatch.setattr(os.path, name, record(getattr(os.path, name)))
+        extra = {"working_directory": cwd} if cwd else {}
+        scope = _shell(command, **extra)
+        assert scope is None or not any(
+            k.startswith("file_change:") for k in scope.keys
+        )
+        assert not [p for p in looked if "attacker" in p]

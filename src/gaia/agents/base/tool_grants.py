@@ -59,6 +59,7 @@ from gaia.agents.base.write_safety import (
     is_too_broad_folder,
     lands_where_code_runs,
 )
+from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 #: Binaries whose name bounds nothing: they run whatever they are handed, so
 #: "allow `bash` this session" is "allow everything this session" wearing a
@@ -228,12 +229,13 @@ _FILE_CHANGE_TOOLS = frozenset({"write_file", "write_markdown_file", "edit_file"
 _FILE_CHANGE_FAMILY = "file_change"
 
 #: Programs that only rename or move a file. A plain call that keeps the file in
-#: one folder is a change there, and a folder grant covers it.
-_RENAME_PROGRAMS = frozenset(
-    {"ren", "rename", "mv", "move", "rename-item", "move-item"}
+#: one folder is a change there, and a folder grant covers it. Off Windows,
+#: ``rename`` is often Perl's, whose first argument is code it runs.
+_RENAME_PROGRAMS = (
+    frozenset({"ren", "rename", "mv", "move"}) if os.name == "nt" else frozenset({"mv"})
 )
-#: Of those, the ones whose new name is a bare name in the source's own folder.
-_RENAME_IN_PLACE = frozenset({"ren", "rename", "rename-item"})
+#: Of those, cmd.exe's, whose new name is a bare name in the source's own folder.
+_RENAME_IN_PLACE = frozenset({"ren", "rename"})
 
 _PATH_ARG_NAMES = ("file_path", "path", "filename", "file", "target_file")
 _COMMAND_ARG_NAMES = ("command", "cmd", "script", "command_line")
@@ -720,16 +722,28 @@ def _file_change_scope(parent: str, as_written: str) -> GrantScope:
 
 
 def _rename_operand(word: str, cwd: Any) -> Optional[str]:
-    """*word* as an absolute path, or None when the shell, not GAIA, decides it."""
+    """*word* as an absolute path, or None when the shell, not GAIA, decides it.
+
+    A network path, a device name or a name Windows rewrites is None too, and
+    is checked before anything on disk is looked at.
+    """
     if not word or word.startswith("-") or glob.has_magic(word):
         return None
     if any(ch in word for ch in "$%~`"):
         return None
     if os.path.isabs(word):
-        return os.path.normpath(word)
-    if isinstance(cwd, str) and os.path.isabs(cwd):
-        return os.path.normpath(os.path.join(cwd, word))
-    return None
+        path = os.path.normpath(word)
+    elif isinstance(cwd, str) and os.path.isabs(cwd):
+        path = os.path.normpath(os.path.join(cwd, word))
+    else:
+        return None
+    if _is_network_path(word) or _is_network_path(path):
+        return None
+    try:
+        safe_path_segment(os.path.basename(path))
+    except UnsafePathSegment:
+        return None
+    return path
 
 
 def _rename_scope(args: Dict[str, Any]) -> Optional[GrantScope]:
@@ -751,6 +765,9 @@ def _rename_scope(args: Dict[str, Any]) -> Optional[GrantScope]:
     cwd = args.get("working_directory")
     source = _rename_operand(argv[1], cwd)
     if source is None:
+        return None
+    # A folder or a link is not one of the folder's files.
+    if not os.path.isfile(source) or os.path.islink(source):
         return None
     folder = os.path.dirname(source)
     if program in _RENAME_IN_PLACE:
