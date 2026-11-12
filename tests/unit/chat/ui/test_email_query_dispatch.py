@@ -5,7 +5,8 @@
 ``gaia.ui._chat_helpers`` (#2109):
 
 - ``api_version_supported``: the sidecar contract-version floor gate
-- ``_query_context_from_history``: history-pair -> /query context flattening
+- the history pairs a relayed turn sends as its /query context (sizing to
+  the model's window is covered in ``test_relay_history_budget.py``)
 - ``_dispatch_sidecar_query``: the streaming producer's self-contained email
   dispatch branch — every path either relays the sidecar's /query loop to
   completion or emits a terminal SSE error and returns.
@@ -23,8 +24,8 @@ import pytest
 
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
-from gaia.ui._chat_helpers import _dispatch_sidecar_query, _query_context_from_history
-from gaia.ui.email_sidecar.errors import SidecarError
+from gaia.daemon.sidecars.errors import SidecarError
+from gaia.ui._chat_helpers import _dispatch_sidecar_query
 from gaia.ui.email_sidecar.profiles import EMAIL_PROFILE, api_version_supported
 from gaia.ui.email_sidecar.relay import EMAIL_QUERY_VERSION_UPGRADE_MESSAGE
 from gaia.ui.models import ChatRequest
@@ -63,57 +64,6 @@ class TestEmailQueryVersionSupported:
 
     def test_malformed_string_is_unsupported_no_crash(self):
         assert api_version_supported(EMAIL_PROFILE, "abc") is False
-
-
-# ── _query_context_from_history ─────────────────────────────────────────────
-
-
-class TestQueryContextFromHistory:
-    """Pins the truncation/windowing the /query relay applies to history."""
-
-    def test_empty_history_returns_empty_list(self):
-        assert _query_context_from_history([]) == []
-
-    def test_two_pairs_produce_four_alternating_dicts(self):
-        pairs = [("Q1", "A1"), ("Q2", "A2")]
-        result = _query_context_from_history(pairs)
-        assert result == [
-            {"role": "user", "content": "Q1"},
-            {"role": "assistant", "content": "A1"},
-            {"role": "user", "content": "Q2"},
-            {"role": "assistant", "content": "A2"},
-        ]
-
-    def test_more_than_five_pairs_keeps_only_last_five(self):
-        pairs = [(f"Q{i}", f"A{i}") for i in range(8)]
-        result = _query_context_from_history(pairs)
-        assert len(result) == 10  # 5 pairs * 2 messages
-        assert result[0] == {"role": "user", "content": "Q3"}
-        assert result[-1] == {"role": "assistant", "content": "A7"}
-
-    def test_long_assistant_message_is_truncated_with_marker(self):
-        long_answer = "x" * 3000
-        pairs = [("short question", long_answer)]
-        result = _query_context_from_history(pairs)
-        assistant_entry = result[1]
-        assert assistant_entry["content"].endswith("... (truncated)")
-        assert len(assistant_entry["content"]) == 2000 + len("... (truncated)")
-
-    def test_short_assistant_message_is_not_truncated(self):
-        pairs = [("Q", "short answer")]
-        result = _query_context_from_history(pairs)
-        assert result[1]["content"] == "short answer"
-
-    def test_long_user_message_is_truncated_without_marker(self):
-        """User messages are truncated to 2000 chars but never get the
-        '... (truncated)' marker — only assistant messages do (mirrors the
-        asymmetric truncation already used elsewhere in this module)."""
-        long_question = "y" * 3000
-        pairs = [(long_question, "ok")]
-        result = _query_context_from_history(pairs)
-        user_entry = result[0]
-        assert len(user_entry["content"]) == 2000
-        assert not user_entry["content"].endswith("... (truncated)")
 
 
 # ── _dispatch_sidecar_query (email) ────────────────────────────────────────────────────
@@ -312,10 +262,43 @@ class TestDispatchEmailQuery:
         assert call["handler"] is handler
         assert call["proxy"] is fake_handle._proxy
         assert call["query"] == "what's up"
-        assert call["context"] == _query_context_from_history(history_pairs)
+        assert call["context"] == [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": "hi there"},
+        ]
         assert call["model_id"] == "model-x"
-        # No terminal error was emitted before the relay handoff.
-        assert handler.events == []
+        # No terminal error was emitted before the relay handoff; email takes
+        # no mid-turn messages, so the chat is told not to offer adding one.
+        assert handler.events == [{"type": "followup_unavailable"}]
+
+
+class TestSessionIdReachesTheEmailSidecar:
+    """#2834: the chat's session id goes to an email sidecar that takes it, so
+    a follow-up resolves against the agent that showed the thread."""
+
+    def _session_id_sent(self, monkeypatch, api_version):
+        fake_handle = _FakeHandle(api_version=api_version)
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
+        calls = []
+        monkeypatch.setattr(
+            relay_module, "relay_query", lambda *a, **k: calls.append(k)
+        )
+        _dispatch_sidecar_query(
+            _FakeSSEHandler(), _make_request(), [], "model", "email", session_id="s1"
+        )
+        assert len(calls) == 1
+        return calls[0]["session_id"]
+
+    def test_sent_to_a_sidecar_that_takes_it(self, monkeypatch):
+        assert self._session_id_sent(monkeypatch, "2.14") == "s1"
+
+    def test_sent_at_exactly_the_contract_that_added_it(self, monkeypatch):
+        assert self._session_id_sent(monkeypatch, "2.12") == "s1"
+
+    def test_withheld_from_an_older_sidecar_that_would_422(self, monkeypatch):
+        assert self._session_id_sent(monkeypatch, "2.11") is None
 
 
 if __name__ == "__main__":

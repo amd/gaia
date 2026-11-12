@@ -192,6 +192,29 @@ def require_ui_header(request: Request) -> None:
         raise HTTPException(status_code=403, detail="missing X-Gaia-UI header")
 
 
+_FORWARDED_HEADERS = ("x-forwarded-for", "x-forwarded-host", "x-forwarded-proto")
+
+
+def via_tunnel(request: Request) -> bool:
+    """The request came over mobile access: ngrok adds ``X-Forwarded-*``."""
+    return any(h in request.headers for h in _FORWARDED_HEADERS)
+
+
+def require_local_pc(request: Request) -> None:
+    """Refuse a request that did not come from the PC running GAIA.
+
+    The tunnel connects from loopback, so the peer address alone can't tell a
+    paired phone from the desktop; the forwarded headers ngrok adds can.
+    """
+    host = request.client.host if request.client else ""
+    if not _is_loopback_name(host) or via_tunnel(request):
+        raise HTTPException(
+            status_code=403,
+            detail="Change this on the PC running GAIA. It can't be changed "
+            "over mobile access or from another computer.",
+        )
+
+
 def flagship_only(
     request: Request, agent_type: Optional[str], stored: Optional[str] = None
 ) -> Optional[str]:

@@ -12,6 +12,7 @@ file has gone a full window with no events and no change in size or mtime.
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from pathlib import Path
@@ -169,6 +170,24 @@ def test_a_slow_callback_does_not_block_the_observer_thread(tmp_path):
         handler.close()
 
 
+def test_an_attribute_event_uses_the_modified_settle_path(tmp_path):
+    target = tmp_path / "edited.txt"
+    target.write_text("updated")
+    seen = []
+    handler = FileChangeHandler(
+        on_modified=lambda path: seen.append(Path(path).read_text()),
+        extensions=[".txt"],
+        debounce_seconds=0,
+    )
+    try:
+        handler.on_attrib(_event(target))
+        assert handler.wait_idle(10)
+        assert seen == ["updated"]
+        assert handler.telemetry["files_modified"] == 1
+    finally:
+        handler.close()
+
+
 def test_a_file_deleted_before_it_settles_is_not_reported(tmp_path):
     target = tmp_path / "tmp.txt"
     target.write_text("x")
@@ -286,6 +305,52 @@ def test_real_watcher_reports_a_copied_file_once_complete(tmp_path, clock):
         clock.advance(watcher._handler, HOUR)
         assert watcher._handler.wait_idle(10)
     assert seen == ["".join(f"line {i}\n" for i in range(5))]
+
+
+def test_a_document_is_seen_while_another_file_in_the_folder_keeps_changing(
+    tmp_path,
+):
+    """watchdog 7's Windows reader held every event back until the folder went
+    quiet for a second, so a log written beside a document starved it (#6236)."""
+    doc_seen = threading.Event()
+    stop = threading.Event()
+
+    def only_the_doc(path):
+        if Path(path).name == "doc.txt":
+            doc_seen.set()
+            return True
+        return False
+
+    def keep_logging():
+        log = tmp_path / "app.log"
+        while not stop.is_set():
+            with log.open("a") as f:
+                f.write("tick\n")
+            stop.wait(0.02)
+
+    watcher = FileWatcher(
+        tmp_path,
+        on_created=lambda p: None,
+        on_modified=lambda p: None,
+        filter_func=only_the_doc,
+        debounce_seconds=HOUR,
+    )
+    logger_thread = threading.Thread(target=keep_logging, daemon=True)
+    with watcher:
+        logger_thread.start()
+        try:
+            doc = tmp_path / "doc.txt"
+
+            def doc_arrived():
+                if doc_seen.is_set():
+                    return True
+                doc.write_text(str(time.monotonic()))  # each write is an event
+                return False
+
+            _wait_until(doc_arrived, "the watcher to see doc.txt beside a busy log")
+        finally:
+            stop.set()
+            logger_thread.join(10)
 
 
 def test_a_file_still_locked_by_its_writer_is_retried(tmp_path):
@@ -412,6 +477,7 @@ def test_deleting_a_locked_file_forgets_its_retries(tmp_path):
     try:
         handler.on_created(_event(target))
         _wait_for_a_retry(handler)
+        target.unlink()
         handler.on_deleted(_event(target))
         assert handler.wait_idle(30)
         assert attempts == [str(target)]
@@ -491,4 +557,65 @@ def test_a_dispatch_bug_is_logged_and_dispatch_continues(tmp_path, monkeypatch, 
         assert len(calls) == 2 and calls[0] is calls[1]
         assert handler._dispatcher is calls[0] and calls[0].is_alive()
     finally:
+        handler.close()
+
+
+def test_a_delete_event_for_a_file_still_on_disk_is_a_change(tmp_path):
+    target = tmp_path / "report.docx"
+    target.write_text("new contents")
+    modified, deleted = [], []
+    handler = FileChangeHandler(
+        on_modified=modified.append,
+        on_deleted=deleted.append,
+        extensions=[".docx"],
+        debounce_seconds=WINDOW,
+    )
+    try:
+        handler.on_deleted(_event(target))
+        assert handler.wait_idle(10)
+        assert deleted == []
+        assert modified == [str(target)]
+    finally:
+        handler.close()
+
+
+@pytest.mark.skipif(not check_watchdog_available(), reason="watchdog not installed")
+def test_saving_by_rename_over_a_watched_file_never_reports_it_deleted(tmp_path):
+    from watchdog.observers import Observer
+
+    root = tmp_path.resolve()
+    target = root / "report.docx"
+    target.write_text("old contents")
+    deleted, changed = [], []
+    lock = threading.Lock()
+
+    def record(bucket):
+        def callback(*paths):
+            with lock:
+                bucket.append(paths[-1])
+
+        return callback
+
+    handler = FileChangeHandler(
+        on_modified=record(changed),
+        on_moved=record(changed),
+        on_deleted=record(deleted),
+        extensions=[".docx", ".tmp"],
+        debounce_seconds=WINDOW,
+    )
+    observer = Observer()
+    observer.schedule(handler, str(root), recursive=True)
+    observer.start()
+    try:
+        time.sleep(0.5)  # FSEvents drops events from before its stream starts
+        staged = root / "~WRL0001.tmp"
+        staged.write_text("new contents")
+        os.replace(staged, target)
+        _wait_until(lambda: str(target) in changed, "the save to be reported")
+        time.sleep(1.0)  # let any trailing delete event arrive
+        assert handler.wait_idle(10)
+        assert str(target) not in deleted
+    finally:
+        observer.stop()
+        observer.join(5)
         handler.close()

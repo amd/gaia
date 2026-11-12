@@ -68,9 +68,18 @@ class _ScriptedAgent:
     #: agent thread, exactly as the base loop does for a gated tool.
     gated_call = None
 
+    #: When set, the loop calls this (tool, result) before answering, the way
+    #: the base loop reports a tool's result to the console.
+    tool_call = None
+
     def process_query(self, query, max_steps=None):
         if self.block is not None:
             self.block.wait(timeout=10)
+        if self.tool_call is not None:
+            tool, result = self.tool_call
+            self.console.print_tool_usage(tool)
+            self.console.pretty_print_json({}, title="Arguments")
+            self.console.pretty_print_json(result, title="Result")
         if self.gated_call is not None:
             tool, args = self.gated_call
             self.approved = self.console.confirm_tool_execution(tool, args)
@@ -364,6 +373,25 @@ def test_one_terminal_event_per_run(built):
 # ---------------------------------------------------------------------------
 
 
+def test_a_render_tool_result_carries_its_card_type(built, monkeypatch):
+    """The sidecar's translator once had no render map, so no card ever drew."""
+    client, _ = built
+    card = {"kind": "guide", "guideType": "checklist", "title": "Camping"}
+    monkeypatch.setattr(
+        _ScriptedAgent,
+        "tool_call",
+        ("guides/show_checklist", {"ok": True, "data": card}),
+    )
+
+    r = client.post("/v1/gaia/query", json=_body())
+
+    assert r.status_code == 200, r.text
+    (result,) = [e for e in _events(r) if e["type"] == "tool_result"]
+    assert result["tool"] == "guides/show_checklist"
+    assert result["render"] == "guide"
+    assert result["data"] == card
+
+
 @pytest.mark.parametrize("session_id", [None, "s-stream"])
 def test_a_query_streams_its_answer_as_tokens(built, session_id):
     client, agents = built
@@ -383,7 +411,9 @@ def test_a_query_streams_its_answer_as_tokens(built, session_id):
 def test_a_retained_session_streams_even_if_its_agent_was_turned_off(built):
     """The flag is set per turn, not trusted from construction."""
     client, agents = built
-    assert client.post("/v1/gaia/query", json=_body(session_id="s-2")).status_code == 200
+    assert (
+        client.post("/v1/gaia/query", json=_body(session_id="s-2")).status_code == 200
+    )
     agents[0].streaming = False
 
     r = client.post("/v1/gaia/query", json=_body(session_id="s-2"))
@@ -740,9 +770,11 @@ def test_a_turn_sent_after_stop_waits_for_the_stopped_one(parked_session):
     second.join(timeout=10)
 
     assert results["second"].status_code == 200, results["second"].text
-    assert _terminals(results["second"]) == [
-        {"type": "final", "answer": "answered: hello"}
-    ], _events(results["second"])
+    [final] = _terminals(results["second"])
+    assert final.pop("context")["turns_in_view"] == 1
+    assert final == {"type": "final", "answer": "answered: hello"}, _events(
+        results["second"]
+    )
 
 
 def test_a_turn_sent_while_one_is_live_is_still_refused(parked_session):
@@ -1236,9 +1268,13 @@ class _RecordingHandler:
         self.auto_approve_gated_tools = False
         self.confirm_timeout_seconds = 60.0
         self._grants = set()
+        self._scopes = {}
 
     def session_grants(self):
         return self._grants
+
+    def session_grant_scopes(self):
+        return self._scopes
 
 
 def test_a_gated_tool_runs_once_the_decision_arrives(built):
@@ -1564,3 +1600,14 @@ def test_an_unknown_surface_is_refused(built):
     client, _ = built
     r = client.post("/v1/gaia/query", json=_body(surface="webui"))
     assert r.status_code == 422, r.text
+
+
+@pytest.fixture(autouse=True)
+def _no_model_server(monkeypatch):
+    """The turn-end context count reads no live Lemonade in these tests."""
+    from gaia.ui import turn_insights
+
+    def offline(base_url, headers):
+        raise ConnectionError("no model server in unit tests")
+
+    monkeypatch.setattr(turn_insights, "_loaded_chat_model", offline)

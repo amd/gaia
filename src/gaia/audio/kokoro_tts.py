@@ -14,8 +14,11 @@ import numpy as np
 
 try:
     import sounddevice as sd
-except ImportError:
+
+    _SD_IMPORT_ERROR = None
+except (ImportError, OSError) as _e:  # OSError: installed, but no PortAudio
     sd = None
+    _SD_IMPORT_ERROR = _e
 
 from gaia.audio.lemonade_tts import (
     DEFAULT_VOICE,
@@ -25,6 +28,7 @@ from gaia.audio.lemonade_tts import (
     LemonadeTTSError,
     write_wav,
 )
+from gaia.audio.sounddevice_hint import sounddevice_missing_message
 from gaia.logger import get_logger
 
 
@@ -172,8 +176,7 @@ class KokoroTTS:
     def _require_sounddevice() -> None:
         if sd is None:
             raise ImportError(
-                "sounddevice is required to play speech.\n"
-                'Install it with: uv pip install "amd-gaia[talk]"'
+                sounddevice_missing_message("playing speech", _SD_IMPORT_ERROR)
             )
 
     def generate_speech_streaming(
@@ -361,7 +364,7 @@ class KokoroTTS:
             return processed_text
         except Exception as e:
             self.log.error(f"Error during preprocessing test: {e}")
-            return None
+            raise
 
     def test_generate_audio_file(
         self, test_text: str, output_file: str = "output.wav"
@@ -380,10 +383,13 @@ class KokoroTTS:
             print(f"- Realtime ratio: {stats['realtime_ratio']:.2f}x (lower is better)")
         except Exception as e:
             self.log.error(f"Error during audio generation test: {e}")
+            raise
 
     def test_streaming_playback(self, test_text: str) -> None:
         """Test streaming audio generation with progress display."""
         self._require_sounddevice()
+        stream = None
+        stream_thread = None
         try:
             # Setup audio stream
             stream = sd.OutputStream(
@@ -411,8 +417,6 @@ class KokoroTTS:
 
             if total_chunks == 0:
                 print("No audio chunks generated from input text.")
-                stream.stop()
-                stream.close()
                 return
 
             # Define and start streaming thread
@@ -484,14 +488,21 @@ class KokoroTTS:
             stream_thread.join()
 
             print("\n\n\n")
-            stream.stop()
-            stream.close()
-
-            print("\nStreaming test completed")
-            print(f"Realtime ratio: {stats['realtime_ratio']:.2f}x (lower is better)")
 
         except Exception as e:
             self.log.error(f"Error during streaming test: {e}")
+            raise
+        finally:
+            # Without the sentinel the playback thread blocks forever.
+            if stream_thread is not None and stream_thread.is_alive():
+                audio_queue.put(None)
+                stream_thread.join()
+            if stream is not None:
+                stream.stop()
+                stream.close()
+
+        print("\nStreaming test completed")
+        print(f"Realtime ratio: {stats['realtime_ratio']:.2f}x (lower is better)")
 
 
 def main():

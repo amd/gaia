@@ -67,10 +67,12 @@ check.
 
 `read_file` is for text — Python, Markdown, config, plain text — and returns
 the extracted text of Word, PDF and Excel files, in parts when long. It refuses
-other binary document formats (`.doc`, `.pptx`, `.xls`, OpenDocument), because
-reading them raw produces garbage the model then reasons over as if it were
-real content. Those need `index_document` + `query_documents` instead — see
-the `document-brief` skill.
+other binary document formats, because reading them raw produces garbage the
+model then reasons over as if it were real content. PowerPoint (`.pptx`) and
+EPUB (`.epub`) need `index_document` + `query_documents` instead — see the
+`document-brief` skill. Nothing in GAIA reads legacy Office (`.doc`, `.ppt`,
+`.xls`) or OpenDocument (`.odt`, `.ods`, `.odp`) files: ask the user to re-save
+them as `.docx` / `.pptx` / `.xlsx` or PDF.
 
 ## Fork this
 

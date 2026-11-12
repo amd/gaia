@@ -34,9 +34,13 @@ READ_TOOLS = frozenset({"read_file", "read_python_file", "read_markdown_file"})
 SIDE_EFFECT_PATHS = {
     "transcribe_media": ("transcript_path",),
     "refine_transcript": ("refined_path", "output_path"),
+    "analyze_transcript": ("analysis_path", "output_path"),
+    "export_transcript": ("export_path", "output_path"),
     "take_screenshot": ("file_path", "output_path", "path"),
     "text_to_speech": ("file_path", "output_path", "audio_path"),
     "generate_image": ("file_path", "output_path", "image_path"),
+    "generate_music": ("audio_path",),
+    "generate_sound_effect": ("audio_path",),
 }
 _EXEC_TOOLS = frozenset({"run_python", "execute_python_file", "run_shell_command"})
 _UNOBSERVABLE = object()
@@ -213,17 +217,26 @@ def _payload(value: Any) -> dict:
     return tool_result_dict(value) or {}
 
 
+#: Marks of a code identifier rather than a file or folder name: a leading
+#: underscore, a call, a scope or an assignment.
+_CODE_NAME = re.compile(r"^_|[()=<>]|::")
+
+
 def _path_token(match: re.Match) -> str | None:
     value = next(g for g in match.groups() if g is not None).strip()
-    value = value.lstrip("([").rstrip(".,;:)]?!")
+    value = value.lstrip("([（「【《")
+    value = value.rstrip(".,;:)]?!؟،؛。？！，；：、」）】》")
     if not value or "://" in value or "@" in value or "\x00" in value:
         return None
+    if "<" in value or ">" in value:
+        return None  # a placeholder such as `<folder>/<name>`, not a real path
     quoted = any(match.group(i) is not None for i in (1, 2, 3))
     suffix = value.rsplit(".", 1)[-1].lower()
     # Dotted initials (U.S, e.g) are abbreviations, not file names.
     abbreviation = all(len(part) == 1 for part in value.split("."))
     if (
-        quoted
+        # A quoted code name is not a destination: `_daemon_alive`, `run()`.
+        (quoted and not _CODE_NAME.search(value))
         or "/" in value
         or "\\" in value
         or (
@@ -447,13 +460,18 @@ def _normalize_key(path: str, base: str) -> str:
     ):
         # A drive-lettered path off Windows: no filesystem here can resolve it.
         return ntpath.normcase(ntpath.normpath(ntpath.join(base, path)))
-    # Write tools report resolved paths; junctions and macOS /tmp are symlinks.
     # Prose names folders as `%TEMP%` or `$HOME`; tools report them expanded.
-    return os.path.normcase(
-        os.path.realpath(
-            os.path.join(base, os.path.expandvars(os.path.expanduser(path)))
-        )
-    )
+    joined = os.path.join(base, os.path.expandvars(os.path.expanduser(path)))
+    if joined.startswith(("\\\\", "//")):
+        # A network share: resolving it is a network round trip per mention,
+        # and an unreachable server raises. Its identity is its text.
+        return os.path.normcase(os.path.normpath(joined))
+    # Write tools report resolved paths; junctions and macOS /tmp are symlinks.
+    try:
+        return os.path.normcase(os.path.realpath(joined))
+    except OSError:
+        # Unresolvable (a vanished mount, a device name): the text is the key.
+        return os.path.normcase(os.path.normpath(joined))
 
 
 class CompletionEvidence:
@@ -485,6 +503,8 @@ class CompletionEvidence:
         # (ledger sequence, what the run named) for runs that printed something.
         self.summaries: list[tuple[int, str]] = []
         self._exec_started = 0
+        # key -> executor runs whose before/after stats of it were compared.
+        self.compared: dict[str, int] = {}
         # key -> the path as the write tool reported it, for showing the user.
         self.written_as: dict[str, str] = {}
 
@@ -544,11 +564,41 @@ class CompletionEvidence:
                             except ValueError:  # embedded NUL: never a path
                                 continue
         return {
-            path: self._stamp(path) for path in paths if self._readable(path, validator)
+            path: self._stamp(path)
+            for path in paths
+            if self._readable(path, validator) or self._named_output(path, validator)
         }
+
+    def _named_output(self, path: str, validator: Any = None) -> bool:
+        """Whether *path* is an output the user typed, so its metadata may be checked.
+
+        A grant can cover one input file only; the output the user named beside
+        it is still theirs to know about. Withheld and secret paths stay unseen.
+        """
+        if path.startswith(("\\\\", "//")):
+            return False
+        typed = [
+            os.path.join(self.root, os.path.expandvars(os.path.expanduser(p)))
+            for p in self.requested
+            if self.key(p) == path
+        ]
+        # The user named the link, not wherever it points.
+        if not typed or any(os.path.islink(p) for p in typed):
+            return False
+        if validator is None:
+            return True
+        if validator.withheld_root(path) is not None:
+            return False
+        blocked, _ = validator.is_read_blocked(path)
+        return not blocked
 
     def _readable(self, path: str, validator: Any = None) -> bool:
         """Whether the read boundary allows inspecting *path*, without prompting."""
+        unc = ("\\\\", "//")
+        if path.startswith(unc) and not self.root.startswith(unc):
+            # Never inside a local workspace, and asking a validator about it
+            # resolves it: a network round trip that can raise.
+            return False
         if validator is not None:
             allowed, _ = validator.validate_read(path, prompt_user=False)
             return bool(allowed)
@@ -588,6 +638,8 @@ class CompletionEvidence:
                         item.direct,
                     )
                 continue
+            if tool in _EXEC_TOOLS:
+                self.compared[path] = self.compared.get(path, 0) + 1
             if current != old:
                 # Even a failed subprocess may have changed bytes before failing.
                 self.files.pop(path, None)
@@ -715,6 +767,8 @@ class CompletionEvidence:
 
     def _written_by_executor(self, key: str) -> FileEvidence | None:
         """A file last modified during a successful shell or Python run."""
+        if self._compared_every_run(key):
+            return None
         stamp = self._stamp(key)
         if not isinstance(stamp, tuple):
             return None
@@ -731,6 +785,14 @@ class CompletionEvidence:
         )
         return self.files[key]
 
+    def _compared_every_run(self, key: str) -> bool:
+        """Every executor run had *key* stat'ed before and after: that beats mtime.
+
+        A coarse file clock dates a write made just before a run inside it.
+        """
+        runs = len(self.exec_windows)
+        return runs > 0 and self.compared.get(key, 0) >= runs
+
     def written_files(self) -> list[str]:
         """Files this turn wrote that are still on disk, outside the scratch folder.
 
@@ -740,7 +802,9 @@ class CompletionEvidence:
         keys = [key for key, item in self.files.items() if item.written]
         for path in self.requested:
             key = self.key(path)
-            stamp = None if key in self.files else self._stamp(key)
+            if key in self.files or self._compared_every_run(key):
+                continue
+            stamp = self._stamp(key)
             if isinstance(stamp, tuple) and any(
                 ok and start <= stamp[3] <= end
                 for start, end, ok, _ in self.exec_windows
@@ -763,13 +827,15 @@ class CompletionEvidence:
         """
         if not any(window[2] for window in self.exec_windows):
             return
-        if not self._readable(key, self.validator):
+        readable = self._readable(key, self.validator)
+        if not readable and not self._named_output(key, self.validator):
             return
         if os.path.isfile(key):
             if key not in self.files:
                 self._written_by_executor(key)
             return
-        if not os.path.isdir(key):
+        # Listing a folder outside the grant reveals more than one named file.
+        if not readable or not os.path.isdir(key):
             return
         seen = 0
         for folder, _, names in os.walk(key):

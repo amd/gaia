@@ -13,7 +13,8 @@ Single database (``~/.gaia/memory.db`` by default; ``GAIA_MEMORY_DB`` or
 
 Features:
 - FTS5 search with AND default, OR fallback, BM25 ranking
-- Knowledge deduplication (>80% word overlap in same category+context)
+- Knowledge deduplication (restatements and refinements only; a changed
+  value is a new row that consolidation retires)
 - Confidence scoring with decay (0.9x after 30 days of no access)
 - Context scoping (work, personal, global, project-specific)
 - Sensitivity classification (excluded from default search)
@@ -40,10 +41,13 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Tuple,
     Union,
     cast,
 )
 from uuid import uuid4
+
+from gaia.utils.sqlite_wal import enable_wal
 
 logger = logging.getLogger(__name__)
 
@@ -252,8 +256,12 @@ MAX_EXTRACTION_TURN_LENGTH: int = 256000
 MAX_FTS_QUERY_LENGTH: int = 500
 
 #: Minimum word-overlap ratio (Szymkiewicz-Simpson) to treat two entries as
-#: duplicates in the same category+context+entity scope.
+#: duplicates in the same category+context+subject scope.
 DEDUP_OVERLAP_THRESHOLD: float = 0.8
+
+#: Categories the extractor files one statement under interchangeably, so the
+#: same words in either are one memory.
+INTERCHANGEABLE_CATEGORIES: frozenset = frozenset({"fact", "preference"})
 
 #: Share of the *larger* word set two memories must share to be the same
 #: memory, so "prefers dark roast coffee" is not "prefers dark mode".
@@ -284,16 +292,64 @@ _STEM_STOPWORDS = frozenset(
     "there here also just like user users user's".split()
 )
 
+# Signs and language suffixes carry meaning in a memory: ``-5`` is not ``5``,
+# and ``C++`` / ``C#`` are not ``C``.  Separators inside dates, phone numbers,
+# and ranges remain word separators, so their historical format-insensitive
+# matching is preserved (``1990-05-14`` still matches ``1990/05/14``).
+_MEMORY_TOKEN_RE = re.compile(
+    r"""
+    (?<![a-z0-9_])[+-][0-9]+
+    | [a-z][a-z0-9]*[+#]+(?![a-z0-9_])
+    | [a-z0-9']+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_MEMORY_SYMBOL_RE = re.compile(
+    r"(?<![a-z0-9_])[+-][0-9]+|[a-z][a-z0-9]*[+#]+(?![a-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def _memory_tokens(text: str) -> list[str]:
+    """Tokens for memory identity comparisons, preserving meaningful symbols."""
+    return _MEMORY_TOKEN_RE.findall(text.lower())
+
+
+def _symbol_base(token: str) -> str | None:
+    """Return the plain value of a signed number or language suffix token."""
+    if not _MEMORY_SYMBOL_RE.fullmatch(token):
+        return None
+    return token[1:] if token[0] in "+-" else token.rstrip("+#")
+
+
+def _has_symbol_conflict(words1: set[str], words2: set[str]) -> bool:
+    """Whether matching plain values carry different meaningful symbols."""
+    variants: list[dict[str, set[str]]] = []
+    for words in (words1, words2):
+        by_base: dict[str, set[str]] = {}
+        for word in words:
+            base = _symbol_base(word) or word
+            by_base.setdefault(base, set()).add(word)
+        variants.append(by_base)
+
+    for base in variants[0].keys() & variants[1].keys():
+        left, right = variants[0][base], variants[1][base]
+        if left != right and any(
+            _symbol_base(word) is not None for word in left | right
+        ):
+            return True
+    return False
+
 
 def content_stems(text: str) -> set:
     """Content words of *text*, cut to a 4-letter stem so "works" meets "working".
 
-    A token with a digit is kept whole, however short: "Ada is 6" and "Ada is
-    7" are different memories.
+    Numeric and symbolic tokens are kept whole, however short: ``-5`` and
+    ``5`` are different memories, as are ``C`` and ``C++``.
     """
     stems = set()
-    for w in re.findall(r"[a-z0-9']+", text.lower()):
-        if any(ch.isdigit() for ch in w):
+    for w in _memory_tokens(text):
+        if any(ch.isdigit() for ch in w) or w.endswith(("+", "#")):
             stems.add(w)
         elif len(w) >= 3 and w not in _STEM_STOPWORDS:
             stems.add(w[:4])
@@ -350,6 +406,14 @@ CONFIDENCE_BUMP_PER_RECALL: float = 0.02
 LOW_CONFIDENCE_PRUNE_THRESHOLD: float = 0.1
 
 
+_SAME_WORDS_RE = re.compile(_MEMORY_SYMBOL_RE.pattern + r"|[a-z0-9]+", re.IGNORECASE)
+
+
+def _same_words(text: str) -> str:
+    """*text*'s words in order, ignoring case and punctuation but not signs."""
+    return " ".join(_SAME_WORDS_RE.findall(text.lower()))
+
+
 def _word_overlap(text1: str, text2: str) -> float:
     """Calculate word overlap ratio using Szymkiewicz-Simpson coefficient.
 
@@ -357,16 +421,80 @@ def _word_overlap(text1: str, text2: str) -> float:
 
     A subset of a longer text still counts as a match — appropriate for dedup.
     """
-    words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
-    words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
+    if _MEMORY_SYMBOL_RE.search(text1) or _MEMORY_SYMBOL_RE.search(text2):
+        words1 = set(_memory_tokens(text1))
+        words2 = set(_memory_tokens(text2))
+    else:
+        words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
+        words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
 
-    if not words1 or not words2:
+    if not words1 or not words2 or _has_symbol_conflict(words1, words2):
         return 0.0
 
     intersection = words1 & words2
     min_size = min(len(words1), len(words2))
 
     return len(intersection) / min_size if min_size > 0 else 0.0
+
+
+#: Words that never change what a memory says, so two memories that differ only
+#: in these are the same memory. Negations and pronouns are deliberately absent.
+_DEDUP_FILLER_WORDS = frozenset(
+    "a an the is are was were am be been s my i me user users".split()
+)
+
+
+def _dedup_tokens(text: str) -> List[str]:
+    """Words of *text* in order, lowercased, without punctuation or filler.
+
+    A number keeps its inner punctuation, so "10" is not a prefix of "10:30".
+    """
+    words = re.findall(r"\d[\d.,:/-]*\d|\w+", text.lower())
+    return [w for w in words if w not in _DEDUP_FILLER_WORDS]
+
+
+def fact_words(text: str) -> Tuple[str, ...]:
+    """The words two copies of one fact share: ``_dedup_tokens`` of *text*."""
+    return tuple(_dedup_tokens(text))
+
+
+def _merged_duplicate(new: str, existing: str) -> Optional[str]:
+    """The content to keep if *new* repeats *existing*, else None.
+
+    Two memories are the same only when one's words, in order, start the
+    other's: a restatement, or a refinement that adds to the end ("... is
+    Elena" -> "... is Elena Petrova"). The fuller one is kept. A swapped,
+    inserted or reordered word ("mother" -> "mother-in-law", "18" -> "19",
+    "is" -> "is not") makes a different fact, which must not overwrite this one.
+    """
+    new_tokens, old_tokens = _dedup_tokens(new), _dedup_tokens(existing)
+    if not new_tokens or not old_tokens:
+        return None
+    if new_tokens[: len(old_tokens)] == old_tokens:
+        return new
+    if old_tokens[: len(new_tokens)] == new_tokens:
+        return existing
+    return None
+
+
+def _same_subject_sql(entity: Optional[str]) -> Tuple[str, tuple]:
+    """SQL condition on ``k.entity`` for rows about the same subject as *entity*.
+
+    No tag, a bare label ("user", "health") or a ``user:`` tag is the user,
+    so those are one subject: the remember tool tags, extraction often
+    doesn't. Any other ``type:name`` tag (``person:Sam``, ``app:slack``) is
+    its own subject and matches only itself.
+    """
+    if entity is not None and ":" in entity and not _is_user_tag(entity):
+        return "k.entity = ?", (entity,)
+    return (
+        "(k.entity IS NULL OR instr(k.entity, ':') = 0 "
+        "OR lower(k.entity) LIKE 'user:%')"
+    ), ()
+
+
+def _is_user_tag(entity: str) -> bool:
+    return ":" not in entity or entity.lower().startswith("user:")
 
 
 # ============================================================================
@@ -512,6 +640,7 @@ CREATE TABLE IF NOT EXISTS tool_history (
     args        TEXT,
     result_summary TEXT,
     success     INTEGER NOT NULL,
+    executed    INTEGER NOT NULL DEFAULT 1,
     error       TEXT,
     duration_ms INTEGER,
     timestamp   TEXT NOT NULL
@@ -608,6 +737,13 @@ CREATE TABLE IF NOT EXISTS forgotten (
     sensitive    INTEGER NOT NULL DEFAULT 0,
     forgotten_at TEXT NOT NULL
 );
+
+-- Agent UI chats the user deleted (#5931). A stopped turn can finish after its
+-- chat is gone, in another process; its writes check here and file nothing.
+CREATE TABLE IF NOT EXISTS deleted_sessions (
+    session_id  TEXT PRIMARY KEY,
+    deleted_at  TEXT NOT NULL
+);
 """
 
 # Sync triggers for conversations_fts (external-content FTS5 table).
@@ -615,16 +751,14 @@ CREATE TABLE IF NOT EXISTS forgotten (
 # append-only — store_turn() only ever INSERTs, never UPDATEs existing rows.
 # If UPDATE support is added in the future, a corresponding AFTER UPDATE
 # trigger must be added here to keep the FTS index in sync.
-# Triggers are created separately (can't use IF NOT EXISTS on triggers
-# in all SQLite versions, so we catch the error).
 _TRIGGER_SQL = [
     """
-    CREATE TRIGGER conv_fts_ai AFTER INSERT ON conversations BEGIN
+    CREATE TRIGGER IF NOT EXISTS conv_fts_ai AFTER INSERT ON conversations BEGIN
         INSERT INTO conversations_fts(rowid, content) VALUES (new.id, new.content);
     END
     """,
     """
-    CREATE TRIGGER conv_fts_ad AFTER DELETE ON conversations BEGIN
+    CREATE TRIGGER IF NOT EXISTS conv_fts_ad AFTER DELETE ON conversations BEGIN
         INSERT INTO conversations_fts(conversations_fts, rowid, content)
         VALUES ('delete', old.id, old.content);
     END
@@ -642,6 +776,20 @@ _V2_INDEX_SQL = [
     "CREATE INDEX IF NOT EXISTS idx_conv_not_consolidated "
     "ON conversations(session_id) WHERE consolidated_at IS NULL",
 ]
+
+_SCHEMA_VERSION = 8
+
+# Every table, index and trigger the schema creates, to tell a complete database
+# from one that still needs creating or migrating.
+_SCHEMA_OBJECTS = frozenset(
+    re.findall(
+        r"CREATE\s+(?:VIRTUAL\s+)?(?:TABLE|INDEX|TRIGGER)\s+(?:IF\s+NOT\s+EXISTS\s+)?(\w+)",
+        re.sub(
+            r"--[^\n]*", "", "\n".join([_SCHEMA_SQL, *_TRIGGER_SQL, *_V2_INDEX_SQL])
+        ),
+        re.IGNORECASE,
+    )
+)
 
 
 # ============================================================================
@@ -738,6 +886,10 @@ class MemoryStoreClosedError(RuntimeError):
     """A store call arrived after ``close()``."""
 
 
+class MemoryScrubError(RuntimeError):
+    """Memory was erased, but the deleted text may still be readable in the file."""
+
+
 class MemoryStore:
     """Pure SQLite storage for agent memory. No agent dependencies."""
 
@@ -771,43 +923,55 @@ class MemoryStore:
     def _init_schema(self):
         """Create tables, indexes, triggers, and set WAL mode.
 
-        Fresh installs get the full v7 schema.  Existing databases at v1–v6 are
-        migrated automatically (v1→v2 and v6→v7 via ALTER TABLE ADD COLUMN;
-        v2→v3 through v5→v6 via CREATE TABLE IF NOT EXISTS in ``_SCHEMA_SQL``).
+        Fresh installs get the full v8 schema. Existing databases at v1–v7 are
+        migrated automatically; v8 adds the executed/not-run distinction to
+        tool history without discarding existing rows.
         """
         with self._locked():
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            enable_wal(self._conn)
             # Allow up to 5 s of retries before raising SQLITE_BUSY.  This
             # prevents spurious errors when the dashboard REST singleton and
             # the ChatAgent instance share the same WAL file concurrently.
             self._conn.execute("PRAGMA busy_timeout=5000")
-            self._conn.executescript(_SCHEMA_SQL)
-
-            # Create triggers (ignore if already exist)
-            for trigger_sql in _TRIGGER_SQL:
-                try:
+            if self._schema_is_current_locked():
+                return
+            # One write transaction, not one per statement: another process
+            # creating the same database then waits for a single commit
+            # instead of losing the write lock to ~40 back-to-back ones.
+            try:
+                self._conn.executescript("BEGIN IMMEDIATE;\n" + _SCHEMA_SQL)
+                for trigger_sql in _TRIGGER_SQL:
                     self._conn.execute(trigger_sql)
-                except sqlite3.OperationalError:
-                    pass  # Trigger already exists
 
-            # Initialize schema_version if empty (fresh install → v7)
-            cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
-            if cursor.fetchone()[0] == 0:
-                self._conn.execute(
-                    "INSERT INTO schema_version VALUES (?, ?)",
-                    (7, _now_iso()),
-                )
-            else:
-                # Run migrations for existing databases
-                self._migrate_schema_locked()
+                cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
+                if cursor.fetchone()[0] == 0:
+                    self._conn.execute(
+                        "INSERT INTO schema_version VALUES (?, ?)",
+                        (_SCHEMA_VERSION, _now_iso()),
+                    )
+                else:
+                    self._migrate_schema_locked()
 
-            # Create v2-specific indexes AFTER migration ensures the columns
-            # exist.  On fresh installs the columns are in the CREATE TABLE,
-            # so these are also safe.  IF NOT EXISTS makes them idempotent.
-            for idx_sql in _V2_INDEX_SQL:
-                self._conn.execute(idx_sql)
+                # After migration, which adds the columns these index.
+                for idx_sql in _V2_INDEX_SQL:
+                    self._conn.execute(idx_sql)
 
-            self._conn.commit()
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+
+    def _schema_is_current_locked(self) -> bool:
+        """True when every schema object exists at the current version (read-only).
+
+        Lets an existing database open without taking the write lock, so a
+        process writing to it cannot hold the open up.
+        """
+        names = {r[0] for r in self._conn.execute("SELECT name FROM sqlite_master")}
+        if not _SCHEMA_OBJECTS <= names:
+            return False
+        row = self._conn.execute("SELECT MAX(version) FROM schema_version").fetchone()
+        return row[0] == _SCHEMA_VERSION
 
     def _migrate_schema_locked(self):
         """Run schema migrations if needed. Must hold self._lock.
@@ -856,7 +1020,7 @@ class MemoryStore:
         if current_version < 3:
             logger.info("[MemoryStore] migrating schema v%d -> v3", current_version)
 
-            # v2 -> v3: add the procedures table (procedural memory, #887).
+            # v2 -> v3: add the procedures table (procedural memory).
             # The table and its indexes are created by _SCHEMA_SQL's
             # CREATE TABLE IF NOT EXISTS, which already ran in _init_schema(),
             # so this step only advances the version marker.  Additive only —
@@ -871,7 +1035,7 @@ class MemoryStore:
         if current_version < 4:
             logger.info("[MemoryStore] migrating schema v%d -> v4", current_version)
 
-            # v3 -> v4: add the skill_deltas table (adaptive skills, #2674).
+            # v3 -> v4: add the skill_deltas table (adaptive skills).
             # Same shape as the v2 -> v3 step: _SCHEMA_SQL's CREATE TABLE IF NOT
             # EXISTS already ran in _init_schema(), so this only advances the
             # marker. Additive — no existing row or read path is touched, and an
@@ -886,7 +1050,7 @@ class MemoryStore:
         if current_version < 5:
             logger.info("[MemoryStore] migrating schema v%d -> v5", current_version)
 
-            # v4 -> v5: add the synthesis_marks table (procedural memory, #887).
+            # v4 -> v5: add the synthesis_marks table (procedural memory).
             # Same shape as the two steps above — _SCHEMA_SQL's CREATE TABLE IF
             # NOT EXISTS already ran in _init_schema(), so this only advances the
             # marker.  A store written before this build has no marks and no
@@ -900,7 +1064,7 @@ class MemoryStore:
             current_version = 5
 
         if current_version < 6:
-            # v5 -> v6: add the forgotten table (#4730). Same shape as above:
+            # v5 -> v6: add the forgotten table. Same shape as above:
             # the table already exists, so this only advances the marker.
             self._conn.execute(
                 "UPDATE schema_version SET version = 6, migrated_at = ?",
@@ -923,6 +1087,28 @@ class MemoryStore:
             )
             logger.info("[MemoryStore] schema migration to v7 complete")
             current_version = 7
+
+        if current_version < 8:
+            # v7 -> v8: distinguish a pre-execution denial from a real failure.
+            try:
+                self._conn.execute(
+                    "ALTER TABLE tool_history ADD COLUMN executed INTEGER NOT NULL DEFAULT 1"
+                )
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
+            self._conn.execute("""
+                UPDATE tool_history
+                SET executed = 0
+                WHERE success = 0 AND executed = 1
+                  AND (result_summary LIKE '%"status": "denied%'
+                       OR result_summary LIKE '%''status'': ''denied''%')
+                """)
+            self._conn.execute(
+                "UPDATE schema_version SET version = 8, migrated_at = ?", (_now_iso(),)
+            )
+            logger.info("[MemoryStore] schema migration to v8 complete")
+            current_version = 8
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -1010,6 +1196,7 @@ class MemoryStore:
         context: str = "global",
         *,
         preserve_full: bool = False,
+        erase_count: int | None = None,
     ) -> None:
         """Store one conversation turn.
 
@@ -1020,6 +1207,9 @@ class MemoryStore:
         turn up to 256000 characters, or fail explicitly above that bound.
         Empty or whitespace-only turns are silently skipped — they add no
         signal to conversation history and pollute FTS5 with empty entries.
+        A turn that began before all of memory was erased (``erase_count`` as
+        read then, see :meth:`erase_count`) is dropped, so a turn still
+        finishing does not refill the log.
         """
         if not content or not content.strip():
             return  # Skip empty turns
@@ -1031,11 +1221,18 @@ class MemoryStore:
             content = content[:MAX_TURN_LENGTH]
         now = _now_iso()
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] turn not stored: all memory was erased after "
+                    "it began"
+                )
+                return
             try:
                 self._conn.execute(
                     "INSERT INTO conversations (session_id, role, content, context, timestamp) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (session_id, role, content, context, now),
+                    "SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS "
+                    "(SELECT 1 FROM deleted_sessions WHERE session_id = ?)",
+                    (session_id, role, content, context, now, session_id),
                 )
                 self._conn.commit()
             except Exception:
@@ -1251,7 +1448,9 @@ class MemoryStore:
     ) -> str:
         """Store a knowledge entry with deduplication.
 
-        >80% word overlap in same category+context → replaces with newer content.
+        Restating an entry in the same category+context+subject merges into it
+        and keeps the fuller wording; a different fact that shares most of its
+        words is stored as a new entry (see ``_merged_duplicate``).
         Validates due_at is a valid ISO 8601 string if provided.
 
         Args:
@@ -1315,15 +1514,24 @@ class MemoryStore:
         now = _now_iso()
 
         with self._locked():
-            if source in TEACHING_SOURCES:
-                # Taught again on purpose, so it is no longer forgotten.
-                self._unforget_locked(content)
+            # Write lock before the dedup read: every chat has its own connection,
+            # and two that both read "no match" would each insert the fact.
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                if source in TEACHING_SOURCES:
+                    # Taught again on purpose, so it is no longer forgotten.
+                    self._unforget_locked(content)
 
-            # Check for dedup match (scoped to category + context + entity)
-            existing_id = self._find_similar_locked(content, category, context, entity)
+                # Check for dedup match (scoped to category + context + subject)
+                match = self._find_similar_locked(content, category, context, entity)
+            except BaseException:
+                self._conn.rollback()
+                raise
 
-            if existing_id:
-                # Update existing: replace content with newer, take max confidence.
+            if match:
+                existing_id, content = match
+                # Update existing with the fuller wording, take max confidence.
                 # Set embedding = NULL because the old embedding is now stale
                 # (it was computed for the previous content).  This forces the
                 # item into get_items_without_embeddings() for re-embedding.
@@ -1419,64 +1627,85 @@ class MemoryStore:
 
     def _find_similar_locked(
         self, content: str, category: str, context: str, entity: str | None = None
-    ) -> Optional[str]:
-        """Find existing knowledge with >80% word overlap in same category+context+entity.
+    ) -> Optional[Tuple[str, str]]:
+        """Find an active entry that *content* duplicates in the same scope.
 
-        Must be called with self._lock held.
+        Returns ``(id, content_to_keep)`` or None. A candidate in the same
+        category needs ``DEDUP_OVERLAP_THRESHOLD`` word overlap and must pass
+        ``_merged_duplicate``; across ``INTERCHANGEABLE_CATEGORIES`` only the
+        same words match.
 
-        Cross-process note: self._lock is a threading.Lock — it protects against
-        concurrent inserts within the *same process* only. Two separate processes
-        may both see no duplicate and both insert, resulting in brief redundancy.
-        This is intentionally accepted: the next store() call from either process
-        will detect the overlap and deduplicate. SQLite WAL mode ensures each
-        INSERT is atomic so no data is corrupted.
+        Must be called with self._lock held and SQLite's write lock taken
+        (``BEGIN IMMEDIATE``): self._lock only covers this one connection, so
+        without the write lock another connection — another chat, the Memory
+        page, another process — can insert the same fact between this read and
+        the caller's insert.
         """
         safe_query = _sanitize_fts5_query(content, use_and=False)
         if not safe_query:
             return None
+        same_subject, subject_params = _same_subject_sql(entity)
 
         try:
-            # Scope dedup by category + context + entity
-            if entity is not None:
-                cursor = self._conn.execute(
-                    """
-                    SELECT k.id, k.content
-                    FROM knowledge k
-                    JOIN knowledge_fts f ON k.rowid = f.rowid
-                    WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity = ? AND k.superseded_by IS NULL
-                    ORDER BY rank
-                    LIMIT 25
-                    """,
-                    (safe_query, category, context, entity),
-                )
-            else:
-                cursor = self._conn.execute(
-                    """
-                    SELECT k.id, k.content
-                    FROM knowledge k
-                    JOIN knowledge_fts f ON k.rowid = f.rowid
-                    WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity IS NULL AND k.superseded_by IS NULL
-                    ORDER BY rank
-                    LIMIT 25
-                    """,
-                    (safe_query, category, context),
-                )
+            # Scope dedup by category + context + subject
+            cursor = self._conn.execute(
+                f"""
+                SELECT k.id, k.content
+                FROM knowledge k
+                JOIN knowledge_fts f ON k.rowid = f.rowid
+                WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
+                      AND {same_subject} AND k.superseded_by IS NULL
+                ORDER BY rank
+                LIMIT 25
+                """,
+                (safe_query, category, context, *subject_params),
+            )
             for row in cursor.fetchall():
                 existing_id, existing_content = row[0], row[1]
                 overlap = _word_overlap(content, existing_content)
-                if overlap >= DEDUP_OVERLAP_THRESHOLD:
+                if overlap < DEDUP_OVERLAP_THRESHOLD:
+                    continue
+                kept = _merged_duplicate(content, existing_content)
+                if kept is None:
                     logger.debug(
-                        "[MemoryStore] dedup match: overlap=%.2f id=%s",
+                        "[MemoryStore] near match kept apart: overlap=%.2f id=%s",
                         overlap,
                         existing_id,
                     )
-                    return cast(str, existing_id)
+                    continue
+                logger.debug(
+                    "[MemoryStore] dedup match: overlap=%.2f id=%s",
+                    overlap,
+                    existing_id,
+                )
+                return cast(str, existing_id), kept
+            if category in INTERCHANGEABLE_CATEGORIES:
+                kinds = sorted(INTERCHANGEABLE_CATEGORIES)
+                cursor = self._conn.execute(
+                    f"""
+                    SELECT k.id, k.content
+                    FROM knowledge k
+                    JOIN knowledge_fts f ON k.rowid = f.rowid
+                    WHERE knowledge_fts MATCH ? AND k.context = ?
+                          AND {same_subject} AND k.superseded_by IS NULL
+                          AND k.category IN ({",".join("?" * len(kinds))})
+                    ORDER BY rank
+                    LIMIT 25
+                    """,
+                    (safe_query, context, *subject_params, *kinds),
+                )
+                words = _same_words(content)
+                for existing_id, existing_content in cursor.fetchall():
+                    if _same_words(existing_content) == words:
+                        logger.debug(
+                            "[MemoryStore] dedup match across categories: id=%s",
+                            existing_id,
+                        )
+                        return cast(str, existing_id), content
         except sqlite3.OperationalError as e:
             # A failed dedup search means store() falls through to inserting a
             # duplicate -- debug level hid exactly that for as long as this
-            # query could raise (#4142's own bug was one such cause).
+            # query could raise.
             logger.warning("[MemoryStore] FTS5 dedup search failed: %s", e)
 
         return None
@@ -2054,13 +2283,20 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def forget(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool:
+    def forget(
+        self,
+        knowledge_id: str,
+        *,
+        allow_privileged: bool = False,
+        sensitive: bool = False,
+    ) -> bool:
         """Delete an entry the user asked to forget, and remember that they did.
 
         Unlike ``delete`` (used when newer information replaces a memory), the
         content is kept in ``forgotten`` in the same transaction, so a pass
         that re-reads conversations from before now can tell not to learn it
-        again (``is_forgotten``). A sensitive entry keeps only its word stems.
+        again (``is_forgotten``). A sensitive entry keeps only its word stems;
+        *sensitive* treats an unflagged entry as one (a copy of a sensitive fact).
 
         Returns False if not found. Same privileged-row rule as ``delete``.
         """
@@ -2075,7 +2311,8 @@ class MemoryStore:
                 ).fetchone()
                 if row is None:
                     return False
-                content, category, sensitive = row
+                content, category, flagged = row
+                sensitive = bool(flagged) or sensitive
                 if sensitive:
                     content = " ".join(sorted(content_stems(content)))
                 self._conn.execute(
@@ -2096,6 +2333,70 @@ class MemoryStore:
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def copies_of(
+        self, knowledge_id: str, contexts: Optional[Tuple[str, ...]] = None
+    ) -> List[str]:
+        """Ids of other current rows that store the same fact as *knowledge_id*.
+
+        A copy has the same words bar filler ("User is allergic to mango" and
+        "Allergic to mango.") about the same subject (``_same_subject_sql``),
+        in a chat-writable category. *contexts* limits it to those contexts;
+        None searches all. Forgetting one memory must take these with it.
+        """
+        with self._locked():
+            row = self._conn.execute(
+                "SELECT content, entity FROM knowledge WHERE id = ?", (knowledge_id,)
+            ).fetchone()
+            if row is None:
+                return []
+            content, entity = row
+            same_subject, params = _same_subject_sql(entity)
+            kinds = sorted(EXTRACTABLE_CATEGORIES)
+            sql = (
+                "SELECT k.id, k.content FROM knowledge k WHERE k.id != ? "
+                f"AND {same_subject} AND k.superseded_by IS NULL "
+                f"AND k.category IN ({','.join('?' * len(kinds))})"
+            )
+            args: tuple = (knowledge_id, *params, *kinds)
+            if contexts is not None:
+                sql += f" AND k.context IN ({','.join('?' * len(contexts))})"
+                args += tuple(contexts)
+            rows = self._conn.execute(sql, args).fetchall()
+        words = fact_words(content)
+        return [kid for kid, other in rows if words and fact_words(other) == words]
+
+    def forget_with_copies(
+        self,
+        knowledge_id: str,
+        contexts: Optional[Tuple[str, ...]] = None,
+        *,
+        allow_privileged: bool = False,
+    ) -> List[str]:
+        """``forget`` *knowledge_id* and its ``copies_of``; the ids erased.
+
+        If any of them is sensitive, all are forgotten as sensitive, so an
+        unflagged copy can't leave the fact's words in ``forgotten``.
+        Returns [] when *knowledge_id* is not found.
+        """
+        copies = self.copies_of(knowledge_id, contexts)
+        group = (knowledge_id, *copies)
+        with self._locked():
+            sensitive = (
+                self._conn.execute(
+                    "SELECT 1 FROM knowledge WHERE sensitive AND id IN "
+                    f"({','.join('?' * len(group))})",
+                    group,
+                ).fetchone()
+                is not None
+            )
+        if not self.forget(
+            knowledge_id, allow_privileged=allow_privileged, sensitive=sensitive
+        ):
+            return []
+        return [knowledge_id] + [
+            kid for kid in copies if self.forget(kid, sensitive=sensitive)
+        ]
 
     def _forgotten_rows(self, said_before: Optional[str]) -> List[tuple]:
         """``(content, sensitive)`` of what was forgotten, newest first.
@@ -2703,8 +3004,14 @@ class MemoryStore:
         success: bool,
         error: str | None = None,
         duration_ms: int | None = None,
+        executed: bool = True,
+        erase_count: int | None = None,
     ) -> None:
-        """Log a tool call to tool_history."""
+        """Log a tool call to tool_history.
+
+        Dropped when all of memory was erased after its turn began
+        (``erase_count`` as read then).
+        """
         now = _now_iso()
         args_json = _bounded_args_json(args)
         # Truncate the text columns to MAX_FTS_QUERY_LENGTH chars. Tool args,
@@ -2716,12 +3023,21 @@ class MemoryStore:
             error = error[:MAX_FTS_QUERY_LENGTH]
 
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] %s call not logged: all memory was erased "
+                    "after its turn began",
+                    tool_name,
+                )
+                return
             try:
                 self._conn.execute(
                     """
                     INSERT INTO tool_history
-                        (session_id, tool_name, args, result_summary, success, error, duration_ms, timestamp)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        (session_id, tool_name, args, result_summary, success, executed, error, duration_ms, timestamp)
+                    SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    WHERE NOT EXISTS
+                        (SELECT 1 FROM deleted_sessions WHERE session_id = ?)
                     """,
                     (
                         session_id,
@@ -2729,9 +3045,11 @@ class MemoryStore:
                         args_json,
                         result_summary,
                         int(success),
+                        int(executed),
                         error,
                         duration_ms,
                         now,
+                        session_id,
                     ),
                 )
                 self._conn.commit()
@@ -2748,7 +3066,7 @@ class MemoryStore:
                 SELECT id, session_id, tool_name, args, result_summary,
                        success, error, duration_ms, timestamp
                 FROM tool_history
-                WHERE success = 0 AND tool_name = ?
+                WHERE executed = 1 AND success = 0 AND tool_name = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
             """
@@ -2758,7 +3076,7 @@ class MemoryStore:
                 SELECT id, session_id, tool_name, args, result_summary,
                        success, error, duration_ms, timestamp
                 FROM tool_history
-                WHERE success = 0
+                WHERE executed = 1 AND success = 0
                 ORDER BY timestamp DESC
                 LIMIT ?
             """
@@ -2769,13 +3087,13 @@ class MemoryStore:
             return [self._row_to_tool_dict(r) for r in cursor.fetchall()]
 
     def get_tool_stats(self, tool_name: str) -> Dict:
-        """Returns: {total_calls, success_rate, avg_duration_ms, last_error}"""
+        """Executed-call stats plus the separately visible denial count."""
         with self._locked():
             cursor = self._conn.execute(
                 """
-                SELECT COUNT(*) as total,
-                       SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successes,
-                       AVG(duration_ms) as avg_ms
+                SELECT SUM(CASE WHEN executed = 1 THEN 1 ELSE 0 END) as total,
+                       SUM(CASE WHEN executed = 1 AND success = 1 THEN 1 ELSE 0 END) as successes,
+                       AVG(CASE WHEN executed = 1 THEN duration_ms END) as avg_ms
                 FROM tool_history
                 WHERE tool_name = ?
                 """,
@@ -2790,19 +3108,25 @@ class MemoryStore:
             cursor = self._conn.execute(
                 """
                 SELECT error FROM tool_history
-                WHERE tool_name = ? AND success = 0 AND error IS NOT NULL
+                WHERE tool_name = ? AND executed = 1 AND success = 0 AND error IS NOT NULL
                 ORDER BY timestamp DESC LIMIT 1
                 """,
                 (tool_name,),
             )
             err_row = cursor.fetchone()
             last_error = err_row[0] if err_row else None
+            denied_row = self._conn.execute(
+                "SELECT COUNT(*) FROM tool_history WHERE tool_name = ? AND executed = 0",
+                (tool_name,),
+            ).fetchone()
+            denied_count = denied_row[0] if denied_row else 0
 
         return {
             "total_calls": total,
             "success_rate": (successes / total) if total > 0 else 0.0,
             "avg_duration_ms": round(avg_ms) if avg_ms is not None else None,
             "last_error": last_error,
+            "denied_count": denied_count,
         }
 
     def _row_to_tool_dict(self, row) -> Dict:
@@ -2889,19 +3213,19 @@ class MemoryStore:
 
             # Tool stats
             t_total = self._conn.execute(
-                "SELECT COUNT(*) FROM tool_history"
+                "SELECT COUNT(*) FROM tool_history WHERE executed = 1"
             ).fetchone()[0]
 
             t_unique = self._conn.execute(
-                "SELECT COUNT(DISTINCT tool_name) FROM tool_history"
+                "SELECT COUNT(DISTINCT tool_name) FROM tool_history WHERE executed = 1"
             ).fetchone()[0]
 
             t_successes = self._conn.execute(
-                "SELECT COUNT(*) FROM tool_history WHERE success = 1"
+                "SELECT COUNT(*) FROM tool_history WHERE executed = 1 AND success = 1"
             ).fetchone()[0]
 
             t_errors = self._conn.execute(
-                "SELECT COUNT(*) FROM tool_history WHERE success = 0"
+                "SELECT COUNT(*) FROM tool_history WHERE executed = 1 AND success = 0"
             ).fetchone()[0]
 
             # Temporal stats
@@ -2928,7 +3252,7 @@ class MemoryStore:
                 (now_iso,),
             ).fetchone()[0]
 
-            # Procedures (procedural memory / skills, #887). COUNT(*) instead of
+            # Procedures (procedural memory / skills). COUNT(*) instead of
             # fetching rows so a large procedure table never loads into memory.
             p_total = self._conn.execute("SELECT COUNT(*) FROM procedures").fetchone()[
                 0
@@ -2972,6 +3296,9 @@ class MemoryStore:
                     round(t_successes / t_total, 4) if t_total > 0 else 0.0
                 ),
                 "total_errors": t_errors,
+                "denied_calls": self._conn.execute(
+                    "SELECT COUNT(*) FROM tool_history WHERE executed = 0"
+                ).fetchone()[0],
             },
             "temporal": {
                 "upcoming_count": upcoming_count,
@@ -3124,24 +3451,28 @@ class MemoryStore:
     def get_tool_summary(self, limit: int = 200) -> List[Dict]:
         """Per-tool stats for the tool activity table.
 
-        Uses a single LEFT JOIN to retrieve the last error per tool —
-        no N+1 queries. Capped at `limit` rows (default 200) to prevent
-        unbounded payloads when many distinct tool names are recorded.
+        Success and failure metrics include only calls that reached a tool;
+        pre-execution denials are reported separately. Uses a single LEFT JOIN
+        to retrieve the last error per tool — no N+1 queries. Capped at
+        `limit` rows (default 200) to prevent unbounded payloads when many
+        distinct tool names are recorded.
         """
         sql = """
             SELECT t.tool_name,
                    t.total,
                    t.successes,
                    t.failures,
+                   t.denied,
                    t.avg_ms,
                    t.last_used,
                    e.error AS last_error
             FROM (
                 SELECT tool_name,
-                       COUNT(*) AS total,
-                       SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS successes,
-                       SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures,
-                       AVG(duration_ms) AS avg_ms,
+                       SUM(CASE WHEN executed = 1 THEN 1 ELSE 0 END) AS total,
+                       SUM(CASE WHEN executed = 1 AND success = 1 THEN 1 ELSE 0 END) AS successes,
+                       SUM(CASE WHEN executed = 1 AND success = 0 THEN 1 ELSE 0 END) AS failures,
+                       SUM(CASE WHEN executed = 0 THEN 1 ELSE 0 END) AS denied,
+                       AVG(CASE WHEN executed = 1 THEN duration_ms END) AS avg_ms,
                        MAX(timestamp) AS last_used
                 FROM tool_history
                 GROUP BY tool_name
@@ -3154,7 +3485,7 @@ class MemoryStore:
                            PARTITION BY tool_name ORDER BY timestamp DESC
                        ) AS rn
                 FROM tool_history
-                WHERE success = 0 AND error IS NOT NULL
+                WHERE executed = 1 AND success = 0 AND error IS NOT NULL
             ) e ON t.tool_name = e.tool_name AND e.rn = 1
         """
         with self._locked():
@@ -3167,10 +3498,11 @@ class MemoryStore:
                 "total_calls": r[1],
                 "success_count": r[2],
                 "failure_count": r[3],
+                "denied_count": r[4],
                 "success_rate": round(r[2] / r[1], 4) if r[1] > 0 else 0.0,
-                "avg_duration_ms": round(r[4]) if r[4] is not None else None,
-                "last_used": r[5],
-                "last_error": r[6],
+                "avg_duration_ms": round(r[5]) if r[5] is not None else None,
+                "last_used": r[6],
+                "last_error": r[7],
             }
             for r in rows
         ]
@@ -3197,7 +3529,7 @@ class MemoryStore:
                 """
                 SELECT SUBSTR(timestamp, 1, 10) as day, COUNT(*)
                 FROM tool_history
-                WHERE timestamp >= ?
+                WHERE timestamp >= ? AND executed = 1
                 GROUP BY day
                 """,
                 (cutoff,),
@@ -3221,7 +3553,7 @@ class MemoryStore:
                 """
                 SELECT SUBSTR(timestamp, 1, 10) as day, COUNT(*)
                 FROM tool_history
-                WHERE timestamp >= ? AND success = 0
+                WHERE timestamp >= ? AND executed = 1 AND success = 0
                 GROUP BY day
                 """,
                 (cutoff,),
@@ -3260,13 +3592,13 @@ class MemoryStore:
     def get_recent_errors(self, limit: int = 20) -> List[Dict]:
         """Recent tool errors for the error log view.
 
-        Returns tool_history rows where success=0, newest first.
+        Returns executed tool_history rows where success=0, newest first.
         """
         sql = """
             SELECT id, session_id, tool_name, args, result_summary,
                    success, error, duration_ms, timestamp
             FROM tool_history
-            WHERE success = 0
+            WHERE executed = 1 AND success = 0
             ORDER BY timestamp DESC
             LIMIT ?
         """
@@ -3380,7 +3712,7 @@ class MemoryStore:
         with self._locked():
             cursor = self._conn.execute(
                 """
-                SELECT tool_name, args, result_summary, success, error, duration_ms, timestamp
+                SELECT tool_name, args, result_summary, success, executed, error, duration_ms, timestamp
                 FROM tool_history
                 WHERE tool_name = ?
                 ORDER BY timestamp DESC
@@ -3394,9 +3726,10 @@ class MemoryStore:
                     "args": _safe_json_loads(row[1]),
                     "result_summary": row[2],
                     "success": bool(row[3]),
-                    "error": row[4],
-                    "duration_ms": row[5],
-                    "timestamp": row[6],
+                    "executed": bool(row[4]),
+                    "error": row[5],
+                    "duration_ms": row[6],
+                    "timestamp": row[7],
                 }
                 for row in cursor.fetchall()
             ]
@@ -3443,7 +3776,7 @@ class MemoryStore:
             ]
 
     # ==================================================================
-    # Procedures (v3 — procedural memory, #887)
+    # Procedures (v3 — procedural memory)
     # ==================================================================
 
     def _row_to_procedure_dict(self, row) -> Dict:
@@ -3490,7 +3823,9 @@ class MemoryStore:
         enabled: bool = True,
         embedding: bytes | None = None,
         skill_id: str | None = None,
-    ) -> str:
+        *,
+        erase_count: int | None = None,
+    ) -> str | None:
         """Insert or update a procedure row (procedural memory).
 
         With ``skill_id`` None a new ``proc_<uuid>`` id is generated and a row
@@ -3514,9 +3849,13 @@ class MemoryStore:
             enabled: False disables recall without deleting the row.
             embedding: 768-float32 BLOB over ``when_to_use`` (its own FAISS index).
             skill_id: existing procedure id to update; None inserts a new row.
+            erase_count: :meth:`erase_count` when the work producing this
+                procedure began; if all memory was erased since, nothing is
+                written.
 
         Returns:
-            The procedure id (existing on update, new ``proc_<uuid>`` on insert).
+            The procedure id (existing on update, new ``proc_<uuid>`` on
+            insert), or None when an erase since ``erase_count`` dropped it.
 
         Raises:
             ValueError: if ``name``, ``when_to_use``, or ``markdown_body`` is
@@ -3535,6 +3874,12 @@ class MemoryStore:
         now = _now_iso()
 
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] procedure not stored: all memory was erased "
+                    "after it began"
+                )
+                return None
             try:
                 # existing_id is the str id only when skill_id was provided AND
                 # matches a row — keeping it a narrowed str (not str | None) so
@@ -3718,6 +4063,81 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
+    def record_skill_outcome(
+        self,
+        skill_ids: List[str],
+        success: bool,
+        *,
+        erase_count: int | None = None,
+    ) -> dict[str, tuple[int, int, int]]:
+        """Count one outcome on each procedure that was in context for it.
+
+        Adds one to ``attempt_count``, and to ``success_count`` when *success*,
+        on top of the counts the row was born with, and one to
+        ``provenance.outcomes``, the outcomes recorded since it was learned.
+        What makes an outcome is the caller's definition
+        (``ProceduralMemoryMixin._record_procedure_outcome``).
+
+        Args:
+            skill_ids: procedures recalled into the turn; duplicates count once.
+            success: whether the turn's outcome was a success.
+            erase_count: :meth:`erase_count` when the turn began; if all memory
+                was erased since, nothing is written.
+
+        Returns:
+            ``{skill_id: (success_count, attempt_count, outcomes)}`` after the
+            update, for the ids that still exist (one forgotten since recall is
+            skipped).
+        """
+        ids = list(dict.fromkeys(skill_ids))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] procedure outcome not stored: all memory was "
+                    "erased after the turn began"
+                )
+                return {}
+            try:
+                self._conn.execute(
+                    "UPDATE procedures SET attempt_count = attempt_count + 1, "
+                    "success_count = success_count + ?, "
+                    "provenance = json_set(COALESCE(provenance, '{}'), '$.outcomes', "
+                    "COALESCE(json_extract(provenance, '$.outcomes'), 0) + 1) "
+                    f"WHERE id IN ({placeholders})",
+                    (int(bool(success)), *ids),
+                )
+                rows = self._conn.execute(
+                    "SELECT id, success_count, attempt_count, "
+                    "json_extract(provenance, '$.outcomes') FROM procedures "
+                    f"WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return {row[0]: (int(row[1]), int(row[2]), int(row[3])) for row in rows}
+
+    def disable_skill(self, skill_id: str) -> bool:
+        """Stop recalling ``skill_id`` (``enabled = 0``); the row is kept.
+
+        Returns:
+            True if a row was updated, False if ``skill_id`` was not found.
+        """
+        with self._locked():
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE procedures SET enabled = 0 WHERE id = ?", (skill_id,)
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def touch_skills(self, skill_ids: List[str], when: str | None = None) -> int:
         """Stamp ``last_used_at`` on the given procedures (recall telemetry).
 
@@ -3748,7 +4168,7 @@ class MemoryStore:
                 raise
 
     # ------------------------------------------------------------------
-    # Skill deltas — the learned overlay on an authored skill (v4, #2674)
+    # Skill deltas — the learned overlay on an authored skill (v4)
     # ------------------------------------------------------------------
 
     def put_delta(
@@ -4056,6 +4476,7 @@ class MemoryStore:
                 SELECT session_id
                 FROM tool_history
                 WHERE (:since IS NULL OR timestamp > :since)
+                  AND executed = 1
                 GROUP BY session_id
                 HAVING SUM(success) >= :min_steps
             )
@@ -4073,6 +4494,7 @@ class MemoryStore:
                 )
             ) g ON g.session_id = th.session_id
             WHERE (:since IS NULL OR th.timestamp > :since)
+              AND th.executed = 1
             ORDER BY th.session_id, th.id
         """
         params = {"since": since, "min_steps": min_steps}
@@ -4117,7 +4539,7 @@ class MemoryStore:
         ]
 
     # ------------------------------------------------------------------
-    # Synthesis progress — what the distiller has already consumed (#887)
+    # Synthesis progress — what the distiller has already consumed
     # ------------------------------------------------------------------
 
     #: ``meta`` key holding the newest tool-history timestamp synthesis consumed.
@@ -4178,6 +4600,8 @@ class MemoryStore:
         outcome: str,
         goal: str | None = None,
         detail: str | None = None,
+        *,
+        erase_count: int | None = None,
     ) -> int:
         """Record that synthesis already handed these sessions to the distiller.
 
@@ -4193,9 +4617,12 @@ class MemoryStore:
                 ``"unusable"`` (SKIP / unparseable / truncated output).
             goal: The cluster goal, kept for the log trail.
             detail: Why, for the ``unusable`` case.
+            erase_count: :meth:`erase_count` when the pass began; if all memory
+                was erased since, nothing is written (``goal`` is the user's
+                own first message).
 
         Returns:
-            Number of sessions marked.
+            Number of sessions marked (0 when an erase dropped the write).
 
         Raises:
             ValueError: ``outcome`` is not one of ``SYNTHESIS_OUTCOMES`` —
@@ -4212,6 +4639,12 @@ class MemoryStore:
         now = _now_iso()
         rows = [(sid, outcome, goal, detail, now) for sid in ids]
         with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] synthesis marks not stored: all memory was "
+                    "erased after the pass began"
+                )
+                return 0
             try:
                 self._conn.executemany(
                     "INSERT INTO synthesis_marks "
@@ -4476,30 +4909,121 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] FTS5 indexes rebuilt")
 
+    _ERASE_COUNT_KEY = "erase_count"
+
+    def erase_count(self) -> int:
+        """How many times all of memory has been erased.
+
+        Work that started before an erase holds the count it saw and drops its
+        writes once the count moves. A counter, not a time, so a clock set
+        ahead or back cannot drop or let through every later write.
+        """
+        with self._locked():
+            return self._erase_count_locked()
+
+    def _erase_count_locked(self) -> int:
+        row = self._conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (self._ERASE_COUNT_KEY,)
+        ).fetchone()
+        return int(row[0]) if row is not None else 0
+
+    def _erased_since_for_write_locked(self, erase_count: Optional[int]) -> bool:
+        """Check *erase_count* under SQLite's write lock, ahead of a write.
+
+        The process lock alone misses an erase still uncommitted on another
+        connection. ``BEGIN IMMEDIATE`` waits for it, so the count read here is
+        final until this write commits. On True the transaction it began is
+        rolled back.
+        """
+        if erase_count is None:
+            return False
+        began = not self._conn.in_transaction
+        if began:
+            self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            erased = self._erase_count_locked() != erase_count
+        except Exception:
+            if began:
+                self._conn.rollback()
+            raise
+        if erased and began:
+            self._conn.rollback()
+        return erased
+
+    def erased_since(self, erase_count: Optional[int]) -> bool:
+        """Whether memory was erased after *erase_count* was read (None: no)."""
+        if erase_count is None:
+            return False
+        with self._locked():
+            return self._erase_count_locked() != erase_count
+
     def clear_all(self) -> Dict:
         """Permanently delete all knowledge, tool history, and conversation data.
 
         Wipes every knowledge entry, tool call log, and conversation turn
         from the database.  FTS5 indexes are reset to empty in the same
-        transaction so search stays consistent.
+        transaction so search stays consistent, then the file is vacuumed and
+        its WAL truncated so the deleted text can't be read back from disk.
+
+        Raises:
+            RuntimeError: the rows were deleted but another connection kept the
+                file from being scrubbed.
 
         Returns:
             Dict with counts of deleted rows per table:
             ``{knowledge: int, tool_history: int, conversations: int}``
         """
         with self._locked():
+            # Deleted rows otherwise stay readable in free pages, the WAL and
+            # the FTS index segments of the database file.
+            secure_delete = self._conn.execute("PRAGMA secure_delete").fetchone()[0]
+            self._conn.execute("PRAGMA secure_delete=ON")
             try:
                 knowledge_deleted = self._conn.execute("DELETE FROM knowledge").rowcount
                 self._rebuild_knowledge_fts_locked()
                 tool_deleted = self._conn.execute("DELETE FROM tool_history").rowcount
                 conv_deleted = self._conn.execute("DELETE FROM conversations").rowcount
                 self._rebuild_conversations_fts_locked()
+                # A plain FTS5 delete only tombstones; merging drops the old tokens.
+                for fts in ("knowledge_fts", "conversations_fts"):
+                    self._conn.execute(f"INSERT INTO {fts}({fts}) VALUES('optimize')")
                 # No conversation is left to relearn from.
                 self._conn.execute("DELETE FROM forgotten")
+                # Session goals are the user's own first message; the marks
+                # stay so learned procedures are not distilled again.
+                self._conn.execute(
+                    "UPDATE synthesis_marks SET goal = NULL, detail = NULL"
+                )
+                # Work begun before this must not refill memory.
+                self._conn.execute(
+                    "INSERT INTO meta (key, value) VALUES (?, ?) "
+                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    (self._ERASE_COUNT_KEY, str(self._erase_count_locked() + 1)),
+                )
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
+                self._conn.execute(f"PRAGMA secure_delete={secure_delete}")
                 raise
+            try:
+                self._conn.execute("VACUUM")
+                busy = self._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[
+                    0
+                ]
+            except sqlite3.OperationalError as e:
+                raise MemoryScrubError(
+                    f"Memory at {self._db_path} was erased, but the deleted text "
+                    f"could not be scrubbed from the file ({e}). Close other GAIA "
+                    "windows and erase again."
+                ) from e
+            finally:
+                self._conn.execute(f"PRAGMA secure_delete={secure_delete}")
+            if busy:
+                raise MemoryScrubError(
+                    f"Memory at {self._db_path} was erased, but another connection "
+                    "kept its write-ahead log from being cleared, so deleted text "
+                    "may remain there. Close other GAIA windows and erase again."
+                )
         logger.info(
             "[MemoryStore] cleared all: knowledge=%d tool_history=%d conversations=%d",
             knowledge_deleted,
@@ -4545,6 +5069,40 @@ class MemoryStore:
                 raise
         logger.info("[MemoryStore] cleared conversations: %d rows", deleted)
         return {"conversations": deleted}
+
+    def delete_session(self, session_id: str) -> Dict:
+        """Delete *session_id*'s conversation turns and tool calls.
+
+        Both hold the chat's own words: tool args and result summaries can
+        quote files, searches and pages. What was learned from the session
+        (knowledge, procedures) is kept. The FTS index follows through the
+        delete trigger. The id is recorded as deleted, so a turn still
+        finishing under it files nothing. Returns the deleted row counts.
+        """
+        with self._locked():
+            try:
+                self._conn.execute(
+                    "INSERT OR IGNORE INTO deleted_sessions (session_id, deleted_at) "
+                    "VALUES (?, ?)",
+                    (session_id, _now_iso()),
+                )
+                conv_deleted = self._conn.execute(
+                    "DELETE FROM conversations WHERE session_id = ?", (session_id,)
+                ).rowcount
+                tool_deleted = self._conn.execute(
+                    "DELETE FROM tool_history WHERE session_id = ?", (session_id,)
+                ).rowcount
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        logger.info(
+            "[MemoryStore] deleted session %s: %d conversation turns, %d tool calls",
+            session_id,
+            conv_deleted,
+            tool_deleted,
+        )
+        return {"conversations": conv_deleted, "tool_history": tool_deleted}
 
     def seed_bulk(self, items: List[Dict]) -> List[str]:
         """Bulk-insert knowledge rows, bypassing dedup.

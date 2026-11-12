@@ -222,7 +222,7 @@ def test_ungranted_error_is_headless_first_and_complete():
     assert "gaia connectors connect google --scopes" in msg
     assert "--grant-agent installed:email" in msg
     # CLI leads; the UI is the fallback, not the headline.
-    assert msg.index("gaia connectors connect") < msg.index("Settings -> Connections")
+    assert msg.index("gaia connectors connect") < msg.index("Settings -> Connectors")
 
 
 def test_ungranted_error_with_no_declared_requirement_names_the_gap():

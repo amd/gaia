@@ -119,3 +119,31 @@ def test_dependency_and_vcs_folders_are_not_descended_into(workspace):
     # Searching one of them directly still works.
     direct = _search(pattern=r"style_data\(", directory="node_modules")
     assert _files(direct) == ["copy.js"]
+
+
+def test_a_relative_file_path_searches_that_file_in_the_workspace(workspace):
+    result = _search(pattern=r"style_data\(", directory="src/report.R")
+
+    assert result["status"] == "success"
+    assert _files(result) == ["report.R"]
+    assert result["files_searched"] == 1
+
+
+def test_a_relative_secret_file_is_refused(workspace, monkeypatch):
+    from gaia import security as _security
+
+    monkeypatch.setattr(_security, "_is_interactive", lambda: False)
+    (workspace / ".env").write_text("TOKEN=ghp_SECRET\n", encoding="utf-8")
+
+    result = _search(pattern="TOKEN", directory=".env")
+
+    assert result["status"] == "error"
+    assert "ghp_SECRET" not in str(result)
+
+
+def test_a_binary_file_path_is_not_searched_and_says_so(workspace):
+    result = _search(pattern="style_data", directory="logo.png")
+
+    assert result["status"] == "success" and result["matches"] == []
+    assert result["files_searched"] == 0
+    assert "Nothing was searched" in result["message"]

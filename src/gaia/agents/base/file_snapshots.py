@@ -43,10 +43,6 @@ MANIFEST_VERSION = 1
 #: The answer a turn belongs to, when another process recorded the turn.
 MESSAGE_LINK = "message.json"
 
-#: Default retention; the user changes both in Settings (``gaia config``).
-DEFAULT_RETENTION_DAYS = 7
-DEFAULT_MAX_MB = 500
-
 #: A review diff longer than this is cut, and says so.
 MAX_DIFF_CHARS = 200_000
 
@@ -361,10 +357,6 @@ def recording_turn(
             ) from e
 
 
-def active_recorder() -> Optional[TurnRecorder]:
-    return _ACTIVE.get()
-
-
 def before_change(path: os.PathLike | str, tool: Optional[str] = None) -> None:
     """Call before writing, replacing, creating or deleting *path*.
 
@@ -556,13 +548,11 @@ def diff_turn(
             item["binary"] = True
         else:
             name = Path(entry["path"]).name
-            unified = "".join(
-                difflib.unified_diff(
-                    before_text.splitlines(keepends=True),
-                    after_text.splitlines(keepends=True),
-                    fromfile=f"a/{name}" if entry["existed"] else "/dev/null",
-                    tofile=f"b/{name}" if entry.get("after_exists") else "/dev/null",
-                )
+            unified = _unified_diff(
+                before_text,
+                after_text,
+                f"a/{name}" if entry["existed"] else "/dev/null",
+                f"b/{name}" if entry.get("after_exists") else "/dev/null",
             )
             if len(unified) > MAX_DIFF_CHARS:
                 unified = unified[:MAX_DIFF_CHARS]
@@ -836,6 +826,33 @@ def _spans(turns: List[_Turn], include_unchanged: bool = False) -> List[_Span]:
     return [s for s in spans.values() if s.change != "unchanged"]
 
 
+def _newline_lines(text: str) -> list:
+    """*text* split after each ``\\n`` only, keeping the ends, as git splits it.
+
+    ``str.splitlines`` also breaks on form feeds and Unicode line separators,
+    which would put a false "No newline" marker inside the diff.
+    """
+    return re.findall(r"[^\n]*\n|[^\n]+$", text)
+
+
+def _unified_diff(before: str, after: str, fromfile: str, tofile: str) -> str:
+    """A unified diff that marks a last line with no newline, as git does.
+
+    ``difflib`` leaves that line unterminated, so it ran into the next one.
+    """
+    lines = []
+    for line in difflib.unified_diff(
+        _newline_lines(before),
+        _newline_lines(after),
+        fromfile=fromfile,
+        tofile=tofile,
+    ):
+        lines.append(line)
+        if not line.endswith("\n"):
+            lines.append("\n\\ No newline at end of file\n")
+    return "".join(lines)
+
+
 def _count_lines(unified: str) -> tuple:
     added = removed = 0
     for line in unified.splitlines():
@@ -873,13 +890,11 @@ def _span_diff(span: _Span) -> Dict[str, Any]:
         item["binary"] = True
         return item
     name = Path(first["path"]).name
-    unified = "".join(
-        difflib.unified_diff(
-            before_text.splitlines(keepends=True),
-            after_text.splitlines(keepends=True),
-            fromfile=f"a/{name}" if first["existed"] else "/dev/null",
-            tofile=f"b/{name}" if last.get("after_exists") else "/dev/null",
-        )
+    unified = _unified_diff(
+        before_text,
+        after_text,
+        f"a/{name}" if first["existed"] else "/dev/null",
+        f"b/{name}" if last.get("after_exists") else "/dev/null",
     )
     item["additions"], item["deletions"] = _count_lines(unified)
     if len(unified) > MAX_DIFF_CHARS:

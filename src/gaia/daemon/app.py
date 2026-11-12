@@ -88,6 +88,7 @@ def create_app(
     broker=None,
     custody_auth=None,
     custody_store=None,
+    keychain_auth=None,
     clock=None,
     lemonade=None,
     lemonade_owner=None,
@@ -157,6 +158,11 @@ def create_app(
     )
 
     require_token = build_require_token(token)
+    relay_turns = None
+    if registry is not None:
+        from gaia.daemon.relay import RelayTurns
+
+        relay_turns = RelayTurns()
 
     # Clients read a status that misses their probe as a hung daemon, so it
     # never queues for the worker pool that sync routes and lease waits share.
@@ -181,6 +187,9 @@ def create_app(
             payload["agent_read_timeout_s"] = None if math.isinf(budget) else budget
         except ValueError as exc:
             payload["agent_read_timeout_error"] = str(exc)
+        if relay_turns is not None:
+            # An update's restart waits while a relayed turn is still open.
+            payload["relayed_turns"] = relay_turns.count
         if clock is not None:
             if not status_limiters:  # created on the event loop, lazily
                 status_limiters.append(anyio.CapacityLimiter(4))
@@ -307,6 +316,14 @@ def create_app(
     from gaia.daemon.provider_key_routes import build_provider_key_router
 
     app.include_router(build_provider_key_router(token))
+    # The TUI's GPU memory step; the Agent UI serves the same under /api/gpu-memory.
+    from gaia.daemon.gpu_memory_routes import build_gpu_memory_router
+
+    app.include_router(build_gpu_memory_router(token))
+    # The TUI's model setup; the Agent UI serves the same under /api/setup.
+    from gaia.daemon.setup_routes import build_setup_router
+
+    app.include_router(build_setup_router(token))
 
     if registry is not None:
         from gaia.daemon.relay import build_relay_router
@@ -315,7 +332,7 @@ def create_app(
         app.include_router(build_agents_router(token, registry))
         # Data plane (#2150): ANY /v1/<agent>/* relays to the agent's sidecar
         # behind the SAME client-token guard as the control plane above.
-        app.include_router(build_relay_router(token, registry))
+        app.include_router(build_relay_router(token, registry, relay_turns))
 
         if forwarder is not None:
             # OAuth forward-out plane (#2154): forwards granted connector access
@@ -340,6 +357,10 @@ def create_app(
 
         install_custody_exception_handler(app)
         app.include_router(build_custody_router(custody_auth, custody_store))
+        if keychain_auth is not None:
+            from gaia.daemon.custody.keychain_routes import build_keychain_router
+
+            app.include_router(build_keychain_router(keychain_auth))
     elif custody_auth is not None or custody_store is not None:
         raise ValueError(
             "create_app requires custody_auth AND custody_store together to "

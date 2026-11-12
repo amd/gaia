@@ -3,7 +3,7 @@
 
 import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, FolderOpen, Square } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
@@ -16,11 +16,22 @@ import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
-import { LOCAL_MODEL_WAIT_HINT, MODEL_WAIT_HINT, MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
+import { localizeLiveStatus } from '../utils/liveStatus';
 import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
+import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
+import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
 import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
+import type { MessageKey } from '../i18n/registry';
+import { useChatStore } from '../stores/chatStore';
+import { useLogsStore } from '../stores/logsStore';
+import {
+    buildCitationIndex, docForToken, findCitations, findPages,
+    type CitationIndex, type FoundPage, type LibraryDoc,
+} from '../utils/citations';
 import './MessageBubble.css';
 
 interface MessageBubbleProps {
@@ -30,8 +41,6 @@ interface MessageBubbleProps {
     agentSteps?: AgentStep[];
     /** Whether agent steps are currently active (streaming). */
     agentStepsActive?: boolean;
-    /** The live turn's agent step count; a saved message reads `message.stats.steps`. */
-    agentStepCount?: number;
     /** Live-streaming cards (issue #2108). `message.cards` wins when set —
      *  this prop carries in-flight cards for the synthetic streaming bubble,
      *  mirroring how `agentSteps` reaches it. */
@@ -42,10 +51,14 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** More message actions, before Copy (e.g. Retry with…). */
     extraActions?: React.ReactNode;
+    /** Shows a labelled Try again under a failed or cut-off reply, which asks the user to press it. */
+    onTryAgain?: () => void;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
     liveStatus?: string | null;
+    /** What a running tool's own model calls are doing; shown on that tool's row. */
+    toolStatus?: string | null;
     /** The run is blocked on the user's approval or answer; the indicator says so instead of timing the model. */
     awaitingUser?: boolean;
 }
@@ -58,7 +71,8 @@ interface MessageBubbleProps {
  * Types out on first show, swaps text in place after that, erases when done.
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
-    const text = awaitingUser ? WAITING_ON_USER_LABEL : (label || 'Thinking...');
+    const t = useT();
+    const text = awaitingUser ? t('activity.waiting') : (label ? localizeLiveStatus(t, label) : t('msg.thinking'));
     const [reduceMotion] = useState(prefersReducedMotion);
     const [chars, setChars] = useState(0);
     const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
@@ -113,18 +127,16 @@ function ThinkingIndicator({ active, label, awaitingUser = false }: { active: bo
         <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
             <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
             {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
-                <span className="thinking-indicator-elapsed"> · {elapsed}s</span>
+                <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
             )}
             {active && <span className="cursor" />}
             {showModelWaitHint && (
-                <span className="thinking-indicator-hint" role="status">{place?.remote === false ? LOCAL_MODEL_WAIT_HINT : MODEL_WAIT_HINT}</span>
+                <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
             )}
         </span>
     );
 }
 
-
-const WAITING_ON_USER_LABEL = 'Waiting for you';
 
 /** A phase shorter than this needs no clock; past it, the count shows GAIA is still working. */
 const PHASE_ELAPSED_MIN_S = 3;
@@ -141,6 +153,20 @@ function useElapsedSeconds(active: boolean, key?: string): number {
     }, [active, key]);
     return elapsed;
 }
+
+/** The answer an agent writes when a model call ends its turn (`_model_failure_answer` in agent.py). */
+const MODEL_FAILURE_RE = /^The model (?:call failed|stopped responding) at step \d+, so this request is unfinished\./;
+
+export function isModelFailure(content: string): boolean {
+    return MODEL_FAILURE_RE.test(content.trimStart());
+}
+
+const CHAT_REPORT_CLASSES: ReportClasses = {
+    root: 'msg-report',
+    button: 'msg-try-again',
+    hint: 'msg-report-hint',
+    error: 'msg-report-error',
+};
 
 /** Detect if message content looks like an error. */
 export function isErrorContent(content: string): boolean {
@@ -371,7 +397,7 @@ function stripUnverifiedScope(content: string): string {
     }
 }
 
-function cleanToolCallContent(content: string, streaming = false): string {
+export function cleanToolCallContent(content: string, streaming = false): string {
     if (!content) return content;
     content = stripUnverifiedScope(content);
     let cleaned = content;
@@ -421,9 +447,9 @@ export function escapeBareNumberLines(text: string): string {
 }
 
 /** Format a full absolute timestamp for the stats tooltip. */
-function formatFullTimestamp(iso: string): string {
+function formatFullTimestamp(iso: string, t: Translate): string {
     if (!iso) return '';
-    return new Date(iso).toLocaleString(undefined, {
+    return new Date(iso).toLocaleString(dateLocale(t), {
         month: 'short', day: 'numeric', year: 'numeric',
         hour: 'numeric', minute: '2-digit', second: '2-digit', hour12: true,
     });
@@ -432,21 +458,42 @@ function formatFullTimestamp(iso: string): string {
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
-/** The notices that close a turn cut off before its answer (gaia/ui/restart_recovery.py). */
-const CUT_OFF_NOTICES = [
-    'This answer was interrupted when GAIA closed. Send again to retry.',
-    'This answer was interrupted before it finished. Send again to retry.',
-    'This answer ended before GAIA could save a reply. Send again to retry.',
+/** The notices that close a turn cut off before its answer (gaia/ui/restart_recovery.py), and their translations. */
+const CUT_OFF_NOTICES: ReadonlyArray<readonly [string, MessageKey]> = [
+    ['This answer was interrupted when GAIA closed. Send again to retry.', 'msg.cutOff.interrupted'],
+    ['This answer was interrupted before it finished. Send again to retry.', 'msg.cutOff.cancelled'],
+    ['This answer ended before GAIA could save a reply. Send again to retry.', 'msg.cutOff.noReply'],
 ];
+
+/** restart_recovery.tools_ran_notice, the line the server puts just above a cut-off notice. */
+const TOOLS_RAN_RE = /(?:^|\n\n)Before it stopped, it had started these tools: (.+)\.$/;
+
+export interface CutOff {
+    /** What the turn streamed before it was cut off. */
+    body: string;
+    notice: MessageKey;
+    tools: string | null;
+}
+
+/** A reply the server closed with a cut-off notice, split so the notice shows in the UI's language. */
+export function splitCutOff(content: string): CutOff | null {
+    let text = content.trim();
+    const hit = CUT_OFF_NOTICES.find(([notice]) => text.endsWith(notice));
+    if (!hit) return null;
+    text = text.slice(0, -hit[0].length).trimEnd();
+    const tools = TOOLS_RAN_RE.exec(text);
+    if (tools) text = text.slice(0, tools.index).trimEnd();
+    return { body: text, notice: hit[1], tools: tools ? tools[1] : null };
+}
 
 /** How an assistant turn ended short of an answer, or undefined when it answered. */
 export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
     if (stopState) return 'stopped';
-    const text = content.trim();
-    return CUT_OFF_NOTICES.some((notice) => text.endsWith(notice)) ? 'interrupted' : undefined;
+    return splitCutOff(content) ? 'interrupted' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, agentStepCount, cards, onDelete, onResend, extraActions, latencyMs, liveStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+    const t = useT();
     useModelNames();
     const echo = useMemo(
         () => (message.role === 'assistant' && !isStreaming && agentSteps
@@ -454,18 +501,27 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : { steps: agentSteps, echoed: false }),
         [agentSteps, message.content, message.role, isStreaming],
     );
-    const isError = message.role === 'assistant' && (echo.echoed || isErrorContent(message.content));
+    const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
+    const place = useInferencePlace();
+    const showServerLog = useLogsStore((s) => s.show);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
+    const cutOff = useMemo(
+        () => (message.role === 'assistant' && !isStreaming ? splitCutOff(message.content) : null),
+        [message.content, message.role, isStreaming],
+    );
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
         () => (message.role === 'user'
             ? message.content
-            : cleanToolCallContent(message.content, Boolean(isStreaming))),
-        [message.content, message.role, isStreaming],
+            : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
+        [message.content, message.role, isStreaming, cutOff],
     );
+    const summaryFiles = message.turnSummary?.files;
+    const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
+    const readAloudId = `${message.session_id}:${message.id}`;
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
@@ -535,7 +591,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     // bubbles get one; previously only the assistant had a visible
     // timestamp readout via msg-stats-ts.
     const hoverTimestamp = message.created_at
-        ? `${message.role === 'user' ? 'Sent' : 'Replied'} ${formatFullTimestamp(message.created_at)}`
+        ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at, t) })
         : undefined;
 
     return (
@@ -545,11 +601,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         >
             <div className="msg-inner">
                 <div className="msg-header">
-                    <div className="msg-header-left">
-                        {message.role === 'assistant' && isStreaming && (
-                            <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
-                        )}
-                    </div>
+                    <div className="msg-header-left" />
                     {!isStreaming && (
                         <div className="msg-actions">
                             {/* Resend button - user messages only */}
@@ -557,18 +609,21 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 <button
                                     className="msg-action-btn"
                                     onClick={handleResend}
-                                    title="Resend message"
-                                    aria-label="Resend message"
+                                    title={t('msg.resend')}
+                                    aria-label={t('msg.resend')}
                                 >
                                     <RefreshCw size={12} />
                                 </button>
                             )}
                             {extraActions}
+                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                                <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
+                            )}
                             <button
                                 className={`msg-copy ${copied ? 'copied' : ''}`}
                                 onClick={handleCopy}
-                                title={copied ? 'Copied!' : 'Copy message'}
-                                aria-label={copied ? 'Copied to clipboard' : 'Copy message'}
+                                title={copied ? t('msg.copied') : t('msg.copy')}
+                                aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
                             >
                                 {copied ? <Check size={12} /> : <Copy size={12} />}
                             </button>
@@ -577,8 +632,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 <button
                                     className={`msg-action-btn msg-delete ${confirmDelete ? 'confirm' : ''}`}
                                     onClick={handleDelete}
-                                    title={confirmDelete ? 'Click again to confirm' : 'Delete message'}
-                                    aria-label={confirmDelete ? 'Confirm delete message' : 'Delete message'}
+                                    title={confirmDelete ? t('msg.confirmDelete') : t('msg.delete')}
+                                    aria-label={confirmDelete ? t('msg.confirmDeleteAria') : t('msg.delete')}
                                 >
                                     <Trash2 size={12} />
                                 </button>
@@ -587,19 +642,24 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     )}
                 </div>
                 <div className="msg-body">
-                    {/* Agent activity inside the message bubble */}
-                    {echo.steps && echo.steps.length > 0 && (
+                    {/* The turn as a timeline; the live line sits where the next step will appear */}
+                    {message.role === 'assistant' && ((echo.steps && echo.steps.length > 0) || isStreaming) && (
                         <AgentActivity
-                            steps={echo.steps}
+                            steps={echo.steps ?? []}
                             isActive={agentStepsActive ?? false}
-                            variant={agentStepsActive ? 'inline' : 'summary'}
-                            agentStepCount={agentStepCount ?? message.stats?.steps ?? undefined}
+                            running={!!isStreaming}
+                            awaitingUser={awaitingUser}
+                            toolStatus={isStreaming ? toolStatus : null}
+                            answer={isStreaming ? undefined : cleanedContent}
+                            liveLine={isStreaming && (
+                                <ThinkingIndicator active={!!agentStepsActive || !cleanedContent} label={liveStatus} awaitingUser={awaitingUser} />
+                            )}
                         />
                     )}
                     {isError && (
                         <div className="error-banner">
                             <AlertTriangle size={14} />
-                            <span>Something went wrong</span>
+                            <span>{t('msg.error')}</span>
                         </div>
                     )}
                     {/* Structured cards (#2108) — finalized message.cards wins;
@@ -623,25 +683,48 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 expanded={userExpanded}
                                 onToggle={toggleUserExpanded}
                                 controls={userBodyId}
-                                collapsedLabel={`Show all (${sizeLabel(message.content)})`}
-                                expandedLabel="Show less"
+                                collapsedLabel={t.hint(t('msg.showAll'), sizeLabel(message.content))}
+                                expandedLabel={t('msg.showLess')}
                                 className="msg-expand-toggle"
                             />
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
-                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} />
+                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
                             <Square size={9} fill="currentColor" aria-hidden="true" />
                             <span>
                                 {stopState === 'unconfirmed'
-                                    ? 'Stopped. GAIA did not confirm the stop, so some steps may be missing here. Reload the chat to see what it saved.'
+                                    ? t('msg.stoppedUnconfirmed')
                                     : message.stopError
-                                        ? `Stopped. GAIA reported an error while stopping: ${message.stopError}`
-                                        : 'Stopped'}
+                                        ? t('msg.stoppedError', { error: message.stopError })
+                                        : t('msg.stopped')}
                             </span>
                         </div>
+                    )}
+                    {cutOff && (
+                        <p className="msg-cut-off" role="note">
+                            {t.compose((say) => (cutOff.tools
+                                ? `${say('msg.cutOff.toolsRan', { tools: cutOff.tools })} ${say(cutOff.notice)}`
+                                : say(cutOff.notice)))}
+                        </p>
+                    )}
+                    {onTryAgain && !isStreaming && (
+                        <button type="button" className="msg-try-again" onClick={onTryAgain}>
+                            <RotateCw size={12} aria-hidden="true" />
+                            {t('msg.tryAgain')}
+                        </button>
+                    )}
+                    {/* A local model failed: what Lemonade and its backend wrote says why. */}
+                    {(isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && place?.remote === false && (
+                        <button type="button" className="msg-try-again" onClick={() => showServerLog('model_server')}>
+                            <ScrollText size={12} aria-hidden="true" />
+                            {t('logs.serverLog')}
+                        </button>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
+                        <TroubleshootingReport classes={CHAT_REPORT_CLASSES} note={t('msg.reportNote')} />
                     )}
                     {message.role === 'assistant'
                         && !isStreaming
@@ -649,10 +732,10 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         <EmailConnectCta content={cleanedContent} />
                     )}
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
-                        <div className="msg-stats" aria-label="About this answer">
+                        <div className="msg-stats" aria-label={t('msg.about')}>
                             {message.created_at && (
-                                <span className="msg-stats-ts" title="Message timestamp">
-                                    {formatFullTimestamp(message.created_at)}
+                                <span className="msg-stats-ts" title={t('msg.timestamp')}>
+                                    {formatFullTimestamp(message.created_at, t)}
                                 </span>
                             )}
                             {message.stats?.retried && message.stats.model && (
@@ -664,6 +747,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />
                     )}
+                    {message.role === 'assistant' && <ReadAloudNote messageId={readAloudId} />}
+                    {message.role === 'assistant' && <ReadAloudError messageId={readAloudId} />}
                 </div>
             </div>
         </div>
@@ -675,6 +760,7 @@ const StreamingContext = createContext(false);
 
 /** Custom code block with copy button; a long one opens collapsed to a preview. */
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
+    const t = useT();
     const [copied, setCopied] = useState(false);
     const [expanded, setExpanded] = useState(false);
     const streaming = useContext(StreamingContext);
@@ -711,17 +797,18 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     }, [code]);
 
     return (
-        <div className={`code-block${collapsed ? ' is-collapsed' : ''}`}>
+        // Code reads left to right even inside an Arabic answer.
+        <div className={`code-block${collapsed ? ' is-collapsed' : ''}`} dir="ltr">
             <div className="code-header">
                 <span className="code-lang">{lang || 'code'}</span>
                 <button
                     className={`code-copy ${copied ? 'copied' : ''}`}
                     onClick={handleCopy}
-                    title={copied ? 'Copied!' : 'Copy'}
-                    aria-label={copied ? 'Copied to clipboard' : 'Copy code'}
+                    title={copied ? t('msg.copied') : t('code.copy')}
+                    aria-label={copied ? t('msg.copiedAria') : t('code.copyAria')}
                 >
                     {copied ? <Check size={13} /> : <Copy size={13} />}
-                    <span>{copied ? 'Copied' : 'Copy'}</span>
+                    <span>{copied ? t('code.copied') : t('code.copy')}</span>
                 </button>
             </div>
             <pre id={bodyId}><code>{code}</code></pre>
@@ -748,11 +835,33 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 // exponential-backtracking ReDoS (js/redos) on adversarial non-matching input.
 // Exactly one separator between segments, so a last segment without an
 // extension (`C:\Users\me\notes`) is kept as well as `...\a.txt` or `...\dir\`.
-const WIN_PATH_RE = /\b[A-Z]:[\\/][^\s*?"<>|,;)}\]\\/]+(?:[\\/][^\s*?"<>|,;)}\]\\/]+)*[\\/]?/gi;
+// A space stays inside a folder name a `\` follows (`Program Files (x86)\`) and
+// inside a last name of at most three words ending in an extension (`Q3 report.txt`);
+// otherwise it ends the path, so "C:\out\docs and look at a.pdf" stops at `docs`.
+// A path in double quotes runs to the closing quote, spaces and all.
+const WIN_PATH_RE = /(?<=["\u201c])[A-Z]:[\\/][^*?"<>|\r\n\u201c\u201d]+(?=["\u201d])|\b[A-Z]:[\\/](?=[^\s*?"<>|,;)}\]\\/])(?:[^\s*?"<>|,;)}\]\\/]+(?:(?: +(?:[^\s*?"<>|,;:)}\]\\/]+|\([^\s*?"<>|,;:)}\]\\/]+\)))+\\|[\\/]))*(?:(?:[^\s*?"<>|,;:.)}\]\\/]+ +){1,2}[^\s*?"<>|,;)}\]\\/]+\.[A-Za-z0-9]{1,5}\b|[^\s*?"<>|,;)}\]\\/]+)?/gi;
 /** Sentence punctuation the path regex swallows: "see C:\a\b." ends at `b`. */
 const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 /** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */
 const WIN_PATH_ONLY_RE = new RegExp(`^(?:${WIN_PATH_RE.source})$`, 'i');
+
+/** Paths of the files this answer's turn wrote (`turn_summary.files`). */
+const WrittenFilesContext = createContext<readonly string[]>([]);
+
+/**
+ * The written file an inline-code span names: its exact path, or a bare name
+ * only one written file has. Two writes sharing a name stay plain code.
+ */
+function writtenFileFor(files: readonly string[], children: React.ReactNode): string | null {
+    if (typeof children !== 'string' || files.length === 0) return null;
+    const text = children.trim();
+    if (!text) return null;
+    if (files.includes(text)) return text;
+    if (/[\\/]/.test(text)) return null;
+    const name = text.toLowerCase();
+    const matches = files.filter((f) => (f.split(/[\\/]/).pop() ?? '').toLowerCase() === name);
+    return matches.length === 1 ? matches[0] : null;
+}
 
 function inlineCodePath(children: React.ReactNode): string | null {
     if (typeof children !== 'string') return null;
@@ -760,7 +869,7 @@ function inlineCodePath(children: React.ReactNode): string | null {
     return WIN_PATH_ONLY_RE.test(text) ? text : null;
 }
 
-function FilePathLink({ path }: { path: string }) {
+function FilePathLink({ path, label }: { path: string; label?: string }) {
     const handleClick = (e: React.MouseEvent) => {
         e.preventDefault();
         api.openFileOrFolder(path).catch((err) => {
@@ -770,6 +879,7 @@ function FilePathLink({ path }: { path: string }) {
     return (
         <span
             className="file-path-link"
+            dir="ltr"
             onClick={handleClick}
             title={`Open in file explorer: ${path}`}
             role="button"
@@ -777,27 +887,31 @@ function FilePathLink({ path }: { path: string }) {
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e as unknown as React.MouseEvent); } }}
         >
             <FolderOpen size={12} className="file-path-icon" />
-            {path}
+            {label ?? path}
         </span>
     );
 }
 
+/** Each Windows path in `text`; a quoted one is kept exactly, a trailing dot and all. */
+function findFilePaths(text: string): Array<{ start: number; path: string }> {
+    return [...text.matchAll(new RegExp(WIN_PATH_RE.source, 'gi'))].map((m) => {
+        const end = m.index + m[0].length;
+        const quoted = '"“'.includes(text[m.index - 1] ?? '\n') && '"”'.includes(text[end] ?? '\n');
+        return { start: m.index, path: quoted ? m[0] : m[0].replace(PATH_TRAILING_PUNCT_RE, '') };
+    });
+}
+
 /** Split text into segments, replacing file paths with clickable links. */
 function linkifyFilePaths(text: string): React.ReactNode {
-    // Combine both regexes: match files first, then directories
-    const combined = new RegExp(WIN_PATH_RE.source, 'gi');
     const parts: React.ReactNode[] = [];
     let lastIndex = 0;
-    let match: RegExpExecArray | null;
 
-    while ((match = combined.exec(text)) !== null) {
-        // Add text before the match
-        if (match.index > lastIndex) {
-            parts.push(text.slice(lastIndex, match.index));
+    for (const { start, path } of findFilePaths(text)) {
+        if (start > lastIndex) {
+            parts.push(text.slice(lastIndex, start));
         }
-        const path = match[0].replace(PATH_TRAILING_PUNCT_RE, '');
-        parts.push(<FilePathLink key={match.index} path={path} />);
-        lastIndex = match.index + path.length;
+        parts.push(<FilePathLink key={start} path={path} />);
+        lastIndex = start + path.length;
     }
 
     // No paths found — return original text
@@ -810,14 +924,142 @@ function linkifyFilePaths(text: string): React.ReactNode {
     return <>{parts}</>;
 }
 
+/** The library's documents, as citations in an answer can name them. */
+const CitationContext = createContext<CitationIndex>(buildCitationIndex([]));
+
+/** A cited library document; opens at `page` (the first page cited after it, when there is one). */
+function CitationLink({ doc, page, t }: { doc: LibraryDoc; page?: number; t: Translate }) {
+    return (
+        <a
+            className="citation-link"
+            href={api.documentFileUrl(doc.id, page)}
+            target="_blank"
+            rel="noopener noreferrer"
+            dir="ltr"
+            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: doc.filename })}
+            data-doc-id={doc.id}
+            data-page={page}
+        >
+            <FileText size={12} className="citation-icon" aria-hidden="true" />
+            {doc.filename}
+        </a>
+    );
+}
+
+function PageLink({ doc, page, label, t }: { doc: LibraryDoc; page: number; label: string; t: Translate }) {
+    return (
+        <a
+            className="citation-page"
+            href={api.documentFileUrl(doc.id, page)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={t('citation.openPage', { page })}
+            data-doc-id={doc.id}
+            data-page={page}
+        >
+            {label}
+        </a>
+    );
+}
+
+/** Page numbers cited at the start of `text`, before it names another document. */
+function leadingPages(index: CitationIndex, text: string): FoundPage[] {
+    const next = findCitations(index, text)[0];
+    return findPages(next ? text.slice(0, next.start) : text);
+}
+
 /**
- * Recursively process React children, replacing string children with
- * linkified file paths. This is needed because react-markdown v9 does
- * not support a `text` component override.
+ * A text run with its cited documents and pages linked, and any other Windows
+ * path linked as before. `carried` is a document named just before this run
+ * (in inline code), whose pages may open the run.
  */
-function linkifyChildren(children: React.ReactNode): React.ReactNode {
-    return React.Children.map(children, (child) =>
-        typeof child === 'string' ? linkifyFilePaths(child) : child
+function citeText(text: string, index: CitationIndex, t: Translate, carried: LibraryDoc | null): React.ReactNode {
+    // A filename that ends a longer path stays inside that path's chip.
+    const paths = findFilePaths(text);
+    const citations = findCitations(index, text).filter(
+        (c) => !paths.some((p) => p.start < c.start && c.start < p.start + p.path.length),
+    );
+    const parts: Array<{ start: number; end: number; node: React.ReactNode }> = [];
+    const addPages = (doc: LibraryDoc, pages: FoundPage[], offset: number) => {
+        for (const pg of pages) {
+            const start = offset + pg.start;
+            const end = offset + pg.end;
+            parts.push({ start, end, node: <PageLink key={`p${start}`} doc={doc} page={pg.page} label={text.slice(start, end)} t={t} /> });
+        }
+    };
+    if (carried) addPages(carried, findPages(text.slice(0, citations[0]?.start ?? text.length)), 0);
+    citations.forEach((c, i) => {
+        const tail = text.slice(c.end, citations[i + 1]?.start ?? text.length);
+        const pages = findPages(tail);
+        parts.push({ start: c.start, end: c.end, node: <CitationLink key={`c${c.start}`} doc={c.doc} page={pages[0]?.page} t={t} /> });
+        addPages(c.doc, pages, c.end);
+    });
+    if (parts.length === 0) return linkifyFilePaths(text);
+    parts.sort((a, b) => a.start - b.start);
+    const out: React.ReactNode[] = [];
+    let at = 0;
+    for (const part of parts) {
+        if (part.start > at) out.push(<React.Fragment key={`t${at}`}>{linkifyFilePaths(text.slice(at, part.start))}</React.Fragment>);
+        out.push(part.node);
+        at = part.end;
+    }
+    if (at < text.length) out.push(<React.Fragment key={`t${at}`}>{linkifyFilePaths(text.slice(at))}</React.Fragment>);
+    return <>{out}</>;
+}
+
+/** The library document an inline-code span names (a filename or a path to one), or null. */
+function inlineCodeDoc(index: CitationIndex, children: React.ReactNode): LibraryDoc | null {
+    return typeof children === 'string' ? docForToken(index, children) : null;
+}
+
+/**
+ * Process a block's children: cite library documents and their pages, and link
+ * other file paths. Needed because react-markdown v9 has no `text` override.
+ * A filename in inline code hands its document to the text after it, where
+ * "، الصفحتان 6–7" names the pages.
+ */
+function Linkified({ children }: { children?: React.ReactNode }) {
+    const index = useContext(CitationContext);
+    const t = useT();
+    const items = React.Children.toArray(children);
+    let carried: LibraryDoc | null = null;
+    const out = items.map((child, i) => {
+        if (typeof child === 'string') {
+            const node = citeText(child, index, t, carried);
+            carried = null;
+            return <React.Fragment key={`s${i}`}>{node}</React.Fragment>;
+        }
+        carried = null;
+        if (React.isValidElement(child) && child.type === InlineCode) {
+            const doc = inlineCodeDoc(index, (child.props as { children?: React.ReactNode }).children);
+            if (doc) {
+                const next = items[i + 1];
+                const pages = typeof next === 'string' ? leadingPages(index, next) : [];
+                carried = doc;
+                return <CitationLink key={`k${i}`} doc={doc} page={pages[0]?.page} t={t} />;
+            }
+        }
+        return child;
+    });
+    return <>{out}</>;
+}
+
+// `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
+function InlineCode({ className: _className, children, node: _node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
+    const index = useContext(CitationContext);
+    const writtenFiles = useContext(WrittenFilesContext);
+    const t = useT();
+    // A filename here outside a block Linkified handles (e.g. inside **bold**).
+    const doc = inlineCodeDoc(index, children);
+    if (doc) return <CitationLink doc={doc} t={t} />;
+    const path = inlineCodePath(children);
+    if (path) return <FilePathLink path={path} />;
+    const written = writtenFileFor(writtenFiles, children);
+    if (written) return <FilePathLink path={written} label={String(children).trim()} />;
+    return (
+        <code className="inline-code" dir="ltr" {...props}>
+            {children}
+        </code>
     );
 }
 
@@ -830,18 +1072,8 @@ const MARKDOWN_COMPONENTS: Components = {
     // <pre><code>, inline in just <code>. We use our `pre`
     // override to render fenced blocks as CodeBlock, so the
     // `code` component only handles inline code.
-    // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
-    code({ className, children, node: _node, ...props }) {
-        // If we get here, it's inline code (fenced blocks are
-        // handled by the `pre` override below).
-        const path = inlineCodePath(children);
-        if (path) return <FilePathLink path={path} />;
-        return (
-            <code className="inline-code" {...props}>
-                {children}
-            </code>
-        );
-    },
+    // If we get here, it's inline code (fenced blocks are handled by the `pre` override below).
+    code: InlineCode,
     // Fenced code blocks: react-markdown wraps them in <pre><code>.
     // Extract the language and code text, render as CodeBlock.
     // (The fence→card mount for email_pre_scan was retired at the
@@ -864,13 +1096,13 @@ const MARKDOWN_COMPONENTS: Components = {
             );
         }
         // Fallback: render as-is
-        return <pre>{children}</pre>;
+        return <pre dir="ltr">{children}</pre>;
     },
     // Custom table styling
     table({ children }) {
         return (
             <div className="md-table-wrap">
-                <table className="md-table">{children}</table>
+                <table className="md-table" dir="auto">{children}</table>
             </div>
         );
     },
@@ -889,31 +1121,34 @@ const MARKDOWN_COMPONENTS: Components = {
     },
     // Paragraphs — linkify file paths in text children
     p({ children }) {
-        return <p className="md-p">{linkifyChildren(children)}</p>;
+        return <p className="md-p" dir="auto"><Linkified>{children}</Linkified></p>;
     },
     // Headers
     h1({ children }) {
-        return <h2 className="md-h2">{linkifyChildren(children)}</h2>;
+        return <h2 className="md-h2" dir="auto"><Linkified>{children}</Linkified></h2>;
     },
     h2({ children }) {
-        return <h3 className="md-h3">{linkifyChildren(children)}</h3>;
+        return <h3 className="md-h3" dir="auto"><Linkified>{children}</Linkified></h3>;
     },
     h3({ children }) {
-        return <h4 className="md-h4">{linkifyChildren(children)}</h4>;
+        return <h4 className="md-h4" dir="auto"><Linkified>{children}</Linkified></h4>;
+    },
+    h4({ children }) {
+        return <h5 className="md-h4" dir="auto"><Linkified>{children}</Linkified></h5>;
     },
     // Lists
     ul({ children }) {
-        return <ul className="md-ul">{children}</ul>;
+        return <ul className="md-ul" dir="auto">{children}</ul>;
     },
     ol({ children, start }) {
-        return <ol className="md-ol" start={start}>{children}</ol>;
+        return <ol className="md-ol" start={start} dir="auto">{children}</ol>;
     },
     li({ children }) {
-        return <li className="md-li">{linkifyChildren(children)}</li>;
+        return <li className="md-li" dir="auto"><Linkified>{children}</Linkified></li>;
     },
     // Blockquote
     blockquote({ children }) {
-        return <blockquote className="md-blockquote">{linkifyChildren(children)}</blockquote>;
+        return <blockquote className="md-blockquote" dir="auto"><Linkified>{children}</Linkified></blockquote>;
     },
     // Horizontal rule
     hr() {
@@ -921,19 +1156,25 @@ const MARKDOWN_COMPONENTS: Components = {
     },
     // Table cells
     td({ children }) {
-        return <td>{linkifyChildren(children)}</td>;
+        return <td dir="auto"><Linkified>{children}</Linkified></td>;
     },
     th({ children }) {
-        return <th>{linkifyChildren(children)}</th>;
+        return <th dir="auto"><Linkified>{children}</Linkified></th>;
     },
 };
 
-export function RenderedContent({ content, showCursor, isStreaming = false }: { content: string; showCursor?: boolean; isStreaming?: boolean }) {
+const NO_WRITTEN_FILES: readonly string[] = [];
+
+export function RenderedContent({ content, showCursor, isStreaming = false, writtenFiles = NO_WRITTEN_FILES }: { content: string; showCursor?: boolean; isStreaming?: boolean; writtenFiles?: readonly string[] }) {
+    const documents = useChatStore((s) => s.documents);
+    const citations = useMemo(() => buildCitationIndex(documents), [documents]);
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 
     return (
         <StreamingContext.Provider value={isStreaming}>
+        <CitationContext.Provider value={citations}>
+        <WrittenFilesContext.Provider value={writtenFiles}>
         <div className="md-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
@@ -945,6 +1186,8 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
             </ReactMarkdown>
             {showCursor && <span className="cursor" />}
         </div>
+        </WrittenFilesContext.Provider>
+        </CitationContext.Provider>
         </StreamingContext.Provider>
     );
 }

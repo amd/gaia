@@ -68,7 +68,7 @@ def _validate_provider_secret(provider_id: str) -> None:
     if not getattr(provider, "client_secret", None):
         raise ConfigurationError(
             "Google OAuth client_secret is not configured. "
-            "Open Settings → Connections → Google and enter the Client Secret "
+            "Open Settings → Connectors → Google and enter the Client Secret "
             "from your Google Cloud Console Desktop-app OAuth credential, "
             "or set the GAIA_GOOGLE_CLIENT_SECRET environment variable. "
             "Without the secret, token refresh will fail with 401. "

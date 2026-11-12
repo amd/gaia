@@ -171,7 +171,8 @@ class TestMissingAndOutOfScope:
         assert resp.status_code == 403
         detail = resp.json()["detail"]
         assert str(home) in detail
-        assert DOCUMENT_ROOTS_ENV in detail
+        assert "move or copy it under one of those folders" in detail
+        assert DOCUMENT_ROOTS_ENV not in detail
 
     def test_outside_the_roots_answers_the_same_whether_or_not_it_exists(
         self, tmp_path, home, client
@@ -258,7 +259,7 @@ class TestFailureReason:
         assert failed["last_error"] == "embedder not loaded"
         assert failed["error_kind"] is None
 
-        async def ok(_path, display_name=None):
+        async def ok(_path, display_name=None, progress_key=None):
             return 3
 
         with patch("gaia.ui.server._index_document", ok):

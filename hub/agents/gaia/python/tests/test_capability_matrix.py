@@ -31,7 +31,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("gaia_agent")
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
 import yaml  # noqa: E402
 
@@ -62,19 +62,27 @@ _spec.loader.exec_module(capability_matrix)
 # image_gen bundles, `run_python`, `capture_skill` and #3402's
 # `wait_for_condition`, plus `sleep`, the three cli_setup tools, and the
 # persistent shell session's `get_shell_state` / `reset_shell_session`), plus
-# the eight live-browser tools. 95 since per-turn tool selection went off by
-# default: `load_tools` registers only while it is on. `set_reasoning_effort`
+# the eight live-browser tools. `set_reasoning_effort`
 # is in the loop_control bundle but registers on gpt-oss only, so not counted.
-_EXPECTED_TOOLS_TOTAL = 95
+# 98 with the three audio_generation tools (music, sound effects, model list).
+# 101 with get_thread, list_connected_mailboxes and list_waiting_on_you.
+# 102 with `forget_everything`, 103 once search_tools became a default tool.
+# 105 with analyze_transcript and export_transcript.
+_EXPECTED_TOOLS_TOTAL = 105
 # 11 since #3235 put `load_skill` in the core set: the shortlist prompt tells
 # the model to call it even when the skills bundle was not selected.
 # 16 with `sleep`, which joins the core set rather than a bundle: waiting out a
 # rate limit is not a capability a query can be matched to.
-_EXPECTED_CORE_COUNT = 16
+# 26 with the ten next most-called tools in the eval baseline, which took core
+# from 41% to 77% of calls.
+# 27 with `forget_everything`, beside `forget` so "forget everything" always reaches it.
+# 29 with `search_file_content` and `list_files`, which a model otherwise worked
+# around in about a fifth more steps.
+_EXPECTED_CORE_COUNT = 29
 # 25: the `cli_setup` bundle, `shell_session` (get_shell_state,
-# reset_shell_session), plus `browser_nav` and `browser_use` — the browser
-# tools arrive as two bundles so one pull-in cannot exhaust the dynamic slots.
-_EXPECTED_BUNDLE_COUNT = 25
+# reset_shell_session), plus `browser_nav` and `browser_use`.
+# 26 with `audio_generation`; 27 with `email_threads`.
+_EXPECTED_BUNDLE_COUNT = 27
 
 _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
     {
@@ -101,13 +109,17 @@ _EXPECTED_REST_OP_NAMES = {
     "query/{run_id}/followup",
     "query/{run_id}/tool_decision",
     "sessions/{session_id}/bypass",
+    "sessions/{session_id}/internet",
+    "sessions/{session_id}/grants",
+    "sessions/{session_id}/tools",
     "memory",
     "skills",
 }
-_EXPECTED_REST_FUNCTIONAL_COUNT = 8
+# One per route method: sessions/{session_id}/grants is both GET and DELETE.
+_EXPECTED_REST_FUNCTIONAL_COUNT = 12
 # + the init readiness probe and the three liveness/version probes
 # (/health, /version, /v1/gaia/version).
-_EXPECTED_REST_IN_CONTRACT_COUNT = 12
+_EXPECTED_REST_IN_CONTRACT_COUNT = 16
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 
@@ -155,10 +167,10 @@ def test_tools_count_matches_derived(matrix):
 def test_bundle_structure(matrix):
     assert len(matrix.core_tools) == _EXPECTED_CORE_COUNT
     assert len(matrix.bundles) == _EXPECTED_BUNDLE_COUNT
-    # load_tools is the CORE-only escape hatch — never in a bundle, so a bundle
-    # membership would double-render it in the native tools= schema.
-    assert "load_tools" in matrix.core_tools
-    assert not any("load_tools" in members for members in matrix.bundles.values())
+    # search_tools is CORE-only: a bundle membership would make it optional, and
+    # it is how a session reaches anything else.
+    assert "search_tools" in matrix.core_tools
+    assert not any("search_tools" in members for members in matrix.bundles.values())
 
 
 def test_skill_library_tools_match_framework(matrix):

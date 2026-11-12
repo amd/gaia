@@ -4,6 +4,7 @@
 """Unit tests for the DispatchQueue background task system."""
 
 import asyncio
+import threading
 import time
 
 import pytest
@@ -81,7 +82,7 @@ async def test_depends_on_waits_for_predecessor(queue):
 
     # Wait for both to complete
     for _ in range(100):
-        jobs = queue.get_all_jobs()
+        jobs = list(queue._jobs.values())
         if all(j.status in (JobStatus.DONE, JobStatus.FAILED) for j in jobs):
             break
         await asyncio.sleep(0.05)
@@ -120,7 +121,7 @@ async def test_visible_filter(queue):
     await asyncio.sleep(0.2)
 
     visible = queue.get_visible_jobs()
-    all_jobs = queue.get_all_jobs()
+    all_jobs = list(queue._jobs.values())
 
     assert len(visible) == 1
     assert visible[0].name == "visible"
@@ -131,27 +132,23 @@ async def test_visible_filter(queue):
 
 
 async def test_independent_jobs_run_concurrently(queue):
-    """Two independent jobs run in parallel, not sequentially."""
+    """Two independent jobs meet, proving the executor runs them concurrently."""
 
-    def _sleep():
-        time.sleep(0.2)
+    rendezvous = threading.Barrier(2, timeout=5)
 
-    t0 = time.monotonic()
-    queue.dispatch("a", _sleep)
-    queue.dispatch("b", _sleep)
+    def _rendezvous():
+        rendezvous.wait()
+
+    queue.dispatch("a", _rendezvous)
+    queue.dispatch("b", _rendezvous)
 
     for _ in range(100):
-        jobs = queue.get_all_jobs()
-        if all(j.status == JobStatus.DONE for j in jobs):
+        jobs = list(queue._jobs.values())
+        if all(j.status in (JobStatus.DONE, JobStatus.FAILED) for j in jobs):
             break
         await asyncio.sleep(0.05)
 
-    elapsed = time.monotonic() - t0
-    # Two 0.2s jobs: ~0.2s of sleep plus dispatch/thread-pool overhead each.
-    # Concurrent wall time lands well under the ~0.8s sequential total, but the
-    # per-job overhead pushes it past 0.4s on slower runners — so assert against
-    # the midpoint (0.6s) to distinguish parallel from sequential without flaking.
-    assert elapsed < 0.6, f"Jobs ran sequentially: {elapsed:.2f}s"
+    assert all(j.status == JobStatus.DONE for j in list(queue._jobs.values()))
 
 
 # ── Pruning ──────────────────────────────────────────────────────────────
@@ -176,15 +173,3 @@ async def test_prune_removes_old_completed_jobs(queue):
     await asyncio.sleep(0.2)
 
     assert queue.get_job(job_id) is None, "Old job should have been pruned"
-
-
-# ── Mono-to-Wall Conversion ─────────────────────────────────────────────
-
-
-def test_mono_to_wall(queue):
-    """mono_to_wall converts monotonic timestamps to wall-clock."""
-    mono_now = time.monotonic()
-    wall_now = time.time()
-    converted = queue.mono_to_wall(mono_now)
-    # Should be within 1 second of actual wall time
-    assert abs(converted - wall_now) < 1.0

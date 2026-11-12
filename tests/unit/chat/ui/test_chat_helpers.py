@@ -18,6 +18,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
+from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
 from gaia.ui import _chat_helpers
 from gaia.ui._chat_helpers import (
     _EMPTY_MODEL_ANSWER_MSG,
@@ -31,6 +32,7 @@ from gaia.ui._chat_helpers import (
     _find_last_tool_step,
     _managed_documents_dir,
     _resolve_rag_paths,
+    _runs_on_this_pc,
     set_agent_registry,
 )
 
@@ -434,6 +436,17 @@ class TestEmptyAnswerOutcome:
         assert sse_type == "failed"
         assert keep_steps is True
 
+    def test_an_error_without_a_tool_keeps_the_error_and_adds_nothing(self):
+        content, sse_type, keep_steps = _empty_answer_outcome(
+            turn_cancelled=False,
+            has_steps=False,
+            has_card=False,
+            turn_reported_error=True,
+        )
+        assert content == ""
+        assert sse_type == "failed"
+        assert keep_steps is True
+
     def test_nothing_with_a_backend_problem_reports_it_as_an_error(self):
         content, sse_type, keep_steps = _empty_answer_outcome(
             turn_cancelled=False,
@@ -458,10 +471,18 @@ class TestEmptyAnswerOutcome:
 _BASE = "http://lemonade.test:8000/api/v1"
 
 
-def _probe(model_id, handler):
+def _probe(model_id, handler, gaias_own=True):
     """Run the backend probe against a fake Lemonade served by ``handler``."""
     real_client = httpx.AsyncClient
     with (
+        patch(
+            "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+            return_value=gaias_own,
+        ),
+        patch(
+            "gaia.llm.lemonade_launcher.describe_start_hint",
+            return_value=MagicMock(instruction="START-HINT"),
+        ),
         patch.object(_chat_helpers, "_eval_provider_kwargs", return_value={}),
         patch(
             "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
@@ -470,10 +491,6 @@ def _probe(model_id, handler):
         patch(
             "httpx.AsyncClient",
             lambda **kw: real_client(transport=httpx.MockTransport(handler), **kw),
-        ),
-        patch(
-            "gaia.llm.lemonade_launcher.describe_start_hint",
-            return_value=MagicMock(instruction="START-HINT"),
         ),
     ):
         return asyncio.run(_empty_answer_backend_problem(model_id))
@@ -500,13 +517,20 @@ class TestEmptyAnswerBackendProblem:
         problem = _probe("Gemma-4-E4B-it-GGUF", refuse)
         assert _BASE in problem
         assert "isn't responding" in problem
+        assert problem.endswith(APP_SERVER_DOWN_HINT)
+        assert "gaia " not in problem
+
+    def test_a_server_the_user_runs_gets_its_start_hint(self):
+        def refuse(request):
+            raise httpx.ConnectError("connection refused", request=request)
+
+        problem = _probe("Gemma-4-E4B-it-GGUF", refuse, gaias_own=False)
         assert problem.endswith("START-HINT")
-        assert "lemonade-server serve" not in problem
 
     def test_unhealthy_status_names_the_http_code(self):
         problem = _probe("M-GGUF", lambda request: httpx.Response(503))
         assert "HTTP 503" in problem
-        assert problem.endswith("START-HINT")
+        assert problem.endswith(APP_SERVER_DOWN_HINT)
 
     @pytest.mark.parametrize("status", [401, 403])
     def test_a_rejected_key_names_the_key_not_a_start_hint(self, status):
@@ -522,6 +546,17 @@ class TestEmptyAnswerBackendProblem:
 
     def test_cloud_model_skips_the_loaded_check(self):
         assert _probe("fireworks.some-model", _health()) is None
+
+    def test_a_discovered_cloud_model_skips_the_loaded_check(self):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models(
+            {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+        )
+        try:
+            assert _probe("opencode.big-model", _health()) is None
+        finally:
+            lc.record_cloud_models({"data": []})
 
     def test_eval_on_claude_never_touches_lemonade(self):
         with (
@@ -647,8 +682,8 @@ class TestSessionAgentKwargsShape:
             "rag_documents",
             "library_documents",
             "allowed_paths",
+            "working_directory",
             "ui_session_id",
-            "dynamic_tools",
             "memory_incognito",
             "surface",
         }
@@ -673,28 +708,6 @@ class TestSessionAgentKwargsShape:
             memory_incognito=True,
         )
         assert kwargs["memory_incognito"] is True
-
-    def test_dynamic_tools_defaults_off_and_forwards_when_set(self):
-        """The Beta tool-loader toggle (#1798) defaults off and round-trips
-        through the helper — the field that makes the UI toggle apply."""
-        from gaia.ui._chat_helpers import _session_agent_kwargs
-
-        off = _session_agent_kwargs(
-            rag_file_paths=[],
-            library_paths=[],
-            allowed=["/root"],
-            session_id="s",
-        )
-        assert off["dynamic_tools"] is False
-
-        on = _session_agent_kwargs(
-            rag_file_paths=[],
-            library_paths=[],
-            allowed=["/root"],
-            session_id="s",
-            dynamic_tools=True,
-        )
-        assert on["dynamic_tools"] is True
 
     def test_empty_rag_file_paths_propagates_to_rag_documents(self):
         """Invariant checked by ``test_streaming_registered_agent_does_not_double_index``.
@@ -792,51 +805,16 @@ class TestStreamingRegisteredAgentDoesNotDoubleIndex:
         )
 
 
-# ── _stamp_chat_identity ─────────────────────────────────────────────
+# ── ChatAgent namespaced identity ───────────────────────────────────────────
 #
 # Regression coverage for the activation-filter bypass discovered during #1005
-# UI verification: ``_chat_helpers`` constructs ``ChatAgent(config)`` directly
-# at four call sites (built-in Chat streaming/non-streaming + two fallback
-# branches). Without stamping the namespaced id, those instances appear to the
-# activation filter as ``_gaia_namespaced_agent_id is None``, and
+# UI verification: an agent constructed without its namespaced id appears to
+# the activation filter as ``_gaia_namespaced_agent_id is None``, and
 # ``Agent._active_mcp_servers`` falls back to "ad-hoc agent — show every MCP
-# server unfiltered". The activations.json ledger gets written but ignored,
-# so deactivating ``mcp-github`` for ``installed:chat`` has no effect on what the
-# UI's Chat sees.
+# server unfiltered".
 
 
-class TestStampBuiltinChatIdentity:
-    """Tests for _stamp_chat_identity().
-
-    The stamp must hit the ChatAgentConfig BEFORE ChatAgent.__init__ runs,
-    because ``__init__`` calls ``_register_tools`` which reads the namespaced
-    id to decide which MCP servers' tools to surface. Stamping the instance
-    after construction is too late and reproduces the bypass bug.
-    """
-
-    def test_stamps_field_on_fresh_config(self):
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgentConfig
-
-        from gaia.ui._chat_helpers import _stamp_chat_identity
-
-        config = ChatAgentConfig()
-        assert config.namespaced_agent_id is None
-        _stamp_chat_identity(config)
-        assert config.namespaced_agent_id == "installed:chat"
-
-    def test_is_idempotent_no_overwrite_when_already_set(self):
-        # Callers that pre-fill the field with a custom id (e.g. a future
-        # custom-Chat wrapper) must NOT be clobbered.
-        pytest.importorskip("gaia_agent_chat")
-        from gaia_agent_chat.agent import ChatAgentConfig
-
-        from gaia.ui._chat_helpers import _stamp_chat_identity
-
-        config = ChatAgentConfig(namespaced_agent_id="custom:abc:chat")
-        _stamp_chat_identity(config)
-        assert config.namespaced_agent_id == "custom:abc:chat"
-
+class TestChatAgentNamespacedIdentity:
     def test_chat_agent_init_propagates_config_to_instance_attr_before_super(
         self,
     ):
@@ -854,16 +832,15 @@ class TestStampBuiltinChatIdentity:
         """
         from pathlib import Path as _Path
 
-        # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102); its
-        # source now lives under hub/agents/chat/python/.
+        # ChatAgent ships in the flagship package (#6099).
         src = (
             _Path(__file__).parents[4]
             / "hub"
             / "agents"
-            / "chat"
+            / "gaia"
             / "python"
-            / "gaia_agent_chat"
-            / "agent.py"
+            / "gaia_agent"
+            / "chat_agent.py"
         ).read_text(encoding="utf-8")
         init_start = src.index("def __init__(self, config: Optional[ChatAgentConfig]")
         super_init = src.index("super().__init__(", init_start)
@@ -878,55 +855,17 @@ class TestStampBuiltinChatIdentity:
             "UI Chat session."
         )
 
-    def test_every_direct_ChatAgent_construction_is_pre_stamped(self):
-        """Every ``agent = ChatAgent(config)`` in _chat_helpers.py must be
-        PRECEDED by ``_stamp_chat_identity(config)`` (within the
-        last 5 non-blank lines).
-
-        Structural guard: a fifth direct construction site added without
-        the prior stamp would silently re-introduce the activation-filter
-        bypass. This catches it at PR time instead of user-bug-report
-        time.
-
-        Why "before, not after": ``_register_tools`` runs inside
-        ``ChatAgent.__init__``; the activation filter consults the
-        namespaced id at that point. Stamping the instance after
-        construction is too late — the unfiltered tool set has already
-        been registered.
-        """
+    def test_the_ui_never_constructs_chat_agent_directly(self):
+        """Every in-process agent comes from the registry, which stamps the
+        namespaced id before construction. A direct ``ChatAgent(config)``
+        here would bypass that and re-open #1005."""
         import re
         from pathlib import Path as _Path
 
         src = (
             _Path(__file__).parents[4] / "src" / "gaia" / "ui" / "_chat_helpers.py"
         ).read_text(encoding="utf-8")
-
-        lines = src.splitlines()
-        offenders = []
-        for i, line in enumerate(lines):
-            if re.search(r"\bagent\s*=\s*ChatAgent\(", line):
-                # Look BACKWARD up to 5 non-blank lines for the stamp call.
-                window = []
-                j = i - 1
-                while j >= 0 and len(window) < 5:
-                    if lines[j].strip():
-                        window.append(lines[j])
-                    j -= 1
-                if not any("_stamp_chat_identity(config)" in w for w in window):
-                    offenders.append(
-                        f"line {i + 1}: {line.strip()!r} — missing prior "
-                        f"_stamp_chat_identity(config)"
-                    )
-
-        assert not offenders, (
-            "Every direct ``agent = ChatAgent(config)`` in _chat_helpers.py "
-            "must be PRECEDED by ``_stamp_chat_identity(config)`` "
-            "(within the last 5 non-blank lines) so the per-agent "
-            "activation filter (#1005) fires correctly. Post-construction "
-            "stamping is too late — ChatAgent.__init__ runs "
-            "_register_tools immediately and the filter would silently "
-            "bypass. Offending sites:\n  - " + "\n  - ".join(offenders)
-        )
+        assert not re.search(r"\bChatAgent\(", src)
 
 
 # ── Non-streaming email chat fails loud (#2109) ──────────────────────────────
@@ -1213,10 +1152,32 @@ class TestSessionTitleRequest:
         sent = self._sent_kwargs(LARGE_DEFAULT_MODEL_NAME)
         assert sent["chat_template_kwargs"] == {"enable_thinking": False}
 
-    def test_other_models_get_no_template_switch(self):
+    def test_the_title_is_asked_for_in_the_users_language(self):
+        """An Arabic question got an English sidebar title."""
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client("Gemma-4-E4B-it-GGUF", "خطة رحلة")
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    "Gemma-4-E4B-it-GGUF",
+                    "خطط لرحلة",
+                    "ok",
+                )
+            )
+        prompt = client.chat_completions.call_args.args[1][0]["content"]
+        assert "in the language the user wrote in" in prompt
+
+    def test_a_model_with_no_registered_switch_titles_with_thinking_off(self):
+        """Gemma 4 reasoned through all 24 tokens on "hi" (measured)."""
         sent = self._sent_kwargs("Gemma-4-E4B-it-GGUF")
-        assert "chat_template_kwargs" not in sent
+        assert sent["chat_template_kwargs"] == {"enable_thinking": False}
         assert sent["max_tokens"] == 24
+
+    def test_a_model_off_llama_cpp_gets_no_template_switch(self):
+        sent = self._sent_kwargs("gemma4-it-e2b-FLM")
+        assert "chat_template_kwargs" not in sent
 
     def test_a_model_that_always_reasons_gets_room_for_it(self):
         """gpt-oss cannot stop reasoning: at 24 tokens, ~6 went to reasoning
@@ -1227,9 +1188,19 @@ class TestSessionTitleRequest:
         assert sent["chat_template_kwargs"] == {"reasoning_effort": "low"}
         assert sent["max_tokens"] > 24
 
+    def test_a_model_that_grades_reasoning_its_own_way_gets_room_too(self):
+        """Muse Glimmer still reasons at its lowest strength, so a 24-token
+        budget named no chat."""
+        from gaia.llm.lemonade_client import MUSE_GLIMMER_MODEL_NAME
+
+        sent = self._sent_kwargs(MUSE_GLIMMER_MODEL_NAME)
+        assert sent["chat_template_kwargs"] == {"reasoning_strength": "low"}
+        assert sent["max_tokens"] >= 256
+
     @pytest.mark.parametrize("content", [None, "", "  \n "])
-    def test_reasoning_that_eats_the_budget_still_names_the_chat(self, content):
-        """If gpt-oss reasons past the budget, the reply carries no title text."""
+    def test_reasoning_that_eats_the_budget_is_a_failed_try(self, content):
+        """If gpt-oss reasons past the budget, the reply carries no title text;
+        the chat keeps its question as the name and a later turn asks again."""
         from gaia.llm.lemonade_client import GPT_OSS_20B_MODEL_NAME
         from gaia.ui import _chat_helpers as ch
 
@@ -1243,7 +1214,7 @@ class TestSessionTitleRequest:
                     "ok",
                 )
             )
-        assert title == "plan a trip to Lisbon"
+        assert title is None
 
     @staticmethod
     def _sent_prompt(model_id, user_msg):
@@ -1303,14 +1274,16 @@ class TestGuardModelTitles:
             )
 
     @pytest.mark.parametrize("verdict", ["safe", "unsafe\nS1", "unsafe S1,S10", "Yes"])
-    def test_classifier_verdict_falls_back_to_the_question(self, verdict):
-        assert self._title_reply(verdict) == "How do I reset my router password"
+    def test_classifier_verdict_is_not_a_title(self, verdict):
+        assert self._title_reply(verdict) is None
 
-    def test_empty_reply_falls_back_to_the_question(self):
-        assert self._title_reply("   ") == "How do I reset my router password"
+    def test_empty_reply_is_not_a_title(self):
+        assert self._title_reply("   ") is None
 
     def test_long_question_is_cut_at_a_word(self):
-        title = self._title_reply("safe", user_msg="word " * 40)
+        from gaia.ui import _chat_helpers as ch
+
+        title = ch._title_from_question("word " * 40)
         assert title.endswith("…") and len(title) <= 64
         assert "wor…" not in title
 
@@ -1366,6 +1339,72 @@ class TestGuardModelTitles:
         assert self._titling_model(model) == model
 
 
+class TestEchoedInstructionTitles:
+    """Gemma on the NPU sometimes answers the title prompt with the prompt itself."""
+
+    QUESTION = r"Read C:\gtest\run-rc9\fx\notes.txt"
+
+    def _title_reply(self, content):
+        from gaia.ui import _chat_helpers as ch
+
+        client = _resident_title_client("gemma4-it-e4b-FLM", content)
+        with patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client):
+            return asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    "gemma4-it-e4b-FLM",
+                    self.QUESTION,
+                    "ok",
+                )
+            )
+
+    @pytest.mark.parametrize(
+        "echo",
+        [
+            "Summarise user task in 3 to 6 plain words for a tab/window title",
+            "Summarise the user's task in 3 to 6 plain words for a tab/window title,",
+            "Summarize the user's task in plain words",
+            "Reply with ONLY the title, no quotes, no trailing punctuation",
+        ],
+    )
+    def test_echoed_instruction_is_not_a_title(self, echo):
+        assert self._title_reply(echo) is None
+
+    @pytest.mark.parametrize(
+        "title",
+        ["Read notes.txt file", "Translate the task for a user", "Plain Words Title"],
+    )
+    def test_titles_sharing_a_few_prompt_words_are_kept(self, title):
+        assert self._title_reply(title) == title
+
+    def test_chat_keeps_its_first_question_as_the_title(self):
+        from gaia.ui import _chat_helpers as ch
+
+        question_title = ch._title_from_question(self.QUESTION)
+        db = MagicMock()
+        sid = "echoed-instruction-title"
+        db.get_session.return_value = {"id": sid, "title": question_title}
+        db.get_messages.return_value = []
+        client = _resident_title_client(
+            "gemma4-it-e4b-FLM",
+            "Summarise user task in 3 to 6 plain words for a tab/window title",
+        )
+        with (
+            patch("gaia.llm.lemonade_client.LemonadeClient", return_value=client),
+            patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.get_base_url",
+                return_value="http://localhost:13305/api/v1",
+            ),
+        ):
+            asyncio.run(
+                ch._maybe_update_session_title(
+                    db, sid, self.QUESTION, "ok", "gemma4-it-e4b-FLM"
+                )
+            )
+        client.chat_completions.assert_called_once()
+        db.replace_auto_title.assert_not_called()
+
+
 async def test_spawn_background_keeps_the_task_alive_until_done():
     """asyncio holds tasks weakly; a fire-and-forget title task must be pinned."""
     import gaia.ui._chat_helpers as ch
@@ -1400,3 +1439,212 @@ def test_a_recoverable_error_from_a_tool_that_raised_is_not_saved_twice():
     assert not _echoes_failed_tool(
         {"content": "boom", "recoverable": True}, after_thought
     )
+
+
+# ── _runs_on_this_pc ─────────────────────────────────────────────────────
+
+
+class TestRunsOnThisPc:
+    """Data that stays on this PC goes only to a model known to run here."""
+
+    @pytest.fixture(autouse=True)
+    def _empty_catalog(self):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models({"data": []})
+        yield
+        lc.record_cloud_models({"data": []})
+
+    @staticmethod
+    def _catalog(*entries):
+        """Patch the catalog read so it also records cloud ids, as the real one does."""
+        from gaia.llm import lemonade_client as lc
+
+        payload = {"data": list(entries)}
+
+        def read(self, show_all=False, timeout=None):
+            lc.record_cloud_models(payload)
+            return payload
+
+        return patch.object(
+            lc.LemonadeClient, "list_models", autospec=True, side_effect=read
+        )
+
+    @staticmethod
+    def _no_catalog():
+        from gaia.llm import lemonade_client as lc
+
+        return patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=AssertionError("catalog read for a known model"),
+        )
+
+    def test_a_discovered_cloud_model_already_in_the_catalog_is_cloud(self):
+        from gaia.llm import lemonade_client as lc
+
+        lc.record_cloud_models(
+            {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+        )
+        with self._no_catalog():
+            assert _runs_on_this_pc("opencode.big-model") is False
+
+    def test_a_discovered_cloud_model_on_a_cold_catalog_is_cloud(self):
+        with self._catalog({"id": "opencode.big-model", "recipe": "cloud"}) as read:
+            assert _runs_on_this_pc("opencode.big-model") is False
+        read.assert_called_once()
+
+    def test_a_catalog_entry_naming_a_cloud_provider_is_cloud(self):
+        entry = {"id": "opencode.big-model", "cloud_provider": "opencode"}
+        with self._catalog(entry):
+            assert _runs_on_this_pc("opencode.big-model") is False
+
+    def test_a_known_cloud_prefix_is_cloud_without_a_catalog_read(self):
+        with self._no_catalog():
+            assert _runs_on_this_pc("fireworks.accounts/x/models/y") is False
+            assert _runs_on_this_pc("amd.DeepSeek-V4.1-Flash") is False
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "Gemma-4-E4B-it-GGUF",
+            "Qwen3.6-35B-A3B-GGUF",
+            "user.Qwen3.8-Flash-Next-GGUF",
+            "gemma4-it-e2b-FLM",
+        ],
+    )
+    def test_a_known_local_default_is_local_without_a_catalog_read(self, model):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(lc.LemonadeClient, "list_models") as read:
+            assert _runs_on_this_pc(model) is True
+        read.assert_not_called()
+
+    def test_the_known_defaults_are_the_ones_gaia_ships(self):
+        from gaia.llm.lemonade_client import (
+            DEFAULT_MODEL_NAME,
+            FLASH_OPTION_MODEL_NAME,
+            LARGE_DEFAULT_MODEL_NAME,
+        )
+
+        with self._no_catalog():
+            for model in (
+                DEFAULT_MODEL_NAME,
+                LARGE_DEFAULT_MODEL_NAME,
+                FLASH_OPTION_MODEL_NAME,
+            ):
+                assert _runs_on_this_pc(model) is True
+
+    def test_an_undotted_unknown_id_reads_the_catalog(self):
+        entry = {"id": "Some-Local-GGUF", "recipe": "llamacpp"}
+        with self._catalog(entry) as read:
+            assert _runs_on_this_pc("Some-Local-GGUF") is True
+        read.assert_called_once()
+
+    def test_an_undotted_router_alias_is_not_local(self):
+        entry = {"id": "smart-router", "recipe": "collection.router"}
+        with self._catalog(entry) as read:
+            assert _runs_on_this_pc("smart-router") is False
+        read.assert_called_once()
+
+    def test_an_undotted_id_the_catalog_does_not_list_fails_closed(self):
+        with self._catalog({"id": "Other-GGUF", "recipe": "llamacpp"}):
+            assert _runs_on_this_pc("smart-router") is False
+
+    def test_a_user_id_with_a_collection_recipe_is_not_local(self):
+        entry = {"id": "twin-model", "recipe": "collection.router"}
+        with self._catalog(entry):
+            assert _runs_on_this_pc("user.twin-model") is False
+
+    def test_an_unknown_dotted_id_with_no_entry_fails_closed(self):
+        with self._catalog():
+            assert _runs_on_this_pc("mystery.model") is False
+
+    def test_an_entry_without_a_recipe_is_not_local(self):
+        with self._catalog({"id": "mystery.model"}):
+            assert _runs_on_this_pc("mystery.model") is False
+
+    def test_an_unknown_recipe_is_not_local(self):
+        with self._catalog({"id": "mystery.model", "recipe": "remote-thing"}):
+            assert _runs_on_this_pc("mystery.model") is False
+
+    def test_a_local_and_a_cloud_entry_for_one_id_is_not_local(self):
+        # Lenient matching joins user.X and X; one cloud entry is enough to refuse.
+        entries = (
+            {"id": "user.Twin-GGUF", "recipe": "llamacpp"},
+            {"id": "twin-gguf", "recipe": "cloud"},
+        )
+        with self._catalog(*entries):
+            assert _runs_on_this_pc("Twin-GGUF") is False
+
+    def test_a_local_entry_alongside_a_router_entry_is_not_local(self):
+        entries = (
+            {"id": "user.Twin-GGUF", "recipe": "llamacpp"},
+            {"id": "Twin-GGUF-x", "recipe": "llamacpp"},
+            {"id": "twin-gguf", "recipe": "collection.omni"},
+        )
+        with self._catalog(*entries):
+            assert _runs_on_this_pc("Twin-GGUF") is False
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            [],
+            ["Some-Local-GGUF"],
+            "not json",
+            None,
+            {"data": None},
+            {"data": {"id": "Some-Local-GGUF", "recipe": "llamacpp"}},
+            {"data": ["Some-Local-GGUF"]},
+            {"models": [{"id": "Some-Local-GGUF", "recipe": "llamacpp"}]},
+        ],
+    )
+    def test_a_malformed_catalog_raises_the_unreadable_catalog_error(self, payload):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(lc.LemonadeClient, "list_models", return_value=payload):
+            with pytest.raises(lc.LemonadeClientError, match="unexpected shape"):
+                _runs_on_this_pc("Some-Local-GGUF")
+
+    def test_a_dotted_local_model_the_catalog_lists_is_local(self):
+        from gaia.llm.lemonade_client import may_be_cloud_model
+
+        assert may_be_cloud_model("Qwen3.5-9B-GGUF")
+        entry = {"id": "Qwen3.5-9B-GGUF", "recipe": "llamacpp"}
+        with self._catalog(entry) as read:
+            assert _runs_on_this_pc("Qwen3.5-9B-GGUF") is True
+        read.assert_called_once()
+
+    def test_a_dotted_id_the_catalog_does_not_list_fails_closed(self):
+        with self._catalog({"id": "Other-GGUF", "recipe": "llamacpp"}):
+            assert _runs_on_this_pc("opencode.big-model") is False
+            assert _runs_on_this_pc("user.Unregistered-1.0-GGUF") is False
+
+    def test_a_local_entry_does_not_launder_a_cloud_id(self):
+        # Same id listed as cloud too: cloud wins.
+        entries = (
+            {"id": "opencode.big-model", "recipe": "llamacpp"},
+            {"id": "opencode.big-model", "recipe": "cloud"},
+        )
+        with self._catalog(*entries):
+            assert _runs_on_this_pc("opencode.big-model") is False
+
+    @pytest.mark.parametrize("model", [None, "", "   "])
+    def test_an_empty_model_id_fails_closed(self, model):
+        with self._no_catalog():
+            assert _runs_on_this_pc(model) is False
+
+    def test_a_claude_model_is_cloud(self):
+        with self._no_catalog():
+            assert _runs_on_this_pc("claude-opus-5") is False
+
+    def test_an_unreadable_catalog_raises_rather_than_guessing_local(self):
+        from gaia.llm import lemonade_client as lc
+
+        with patch.object(
+            lc.LemonadeClient,
+            "list_models",
+            side_effect=lc.LemonadeClientError("connection refused"),
+        ):
+            with pytest.raises(lc.LemonadeClientError):
+                _runs_on_this_pc("opencode.big-model")

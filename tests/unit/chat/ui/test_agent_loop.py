@@ -4,13 +4,14 @@
 """AgentLoop agent-mode gate tests (#2005).
 
 The 'autonomous' mode's observation cycle is unimplemented, so the loop must
-not pretend it exists: the default is 'goal_driven', legacy-stored
-'autonomous' values normalize to 'goal_driven' with a loud warning, and the
-loop's behavior for a legacy 'autonomous' value is bit-identical to
-'goal_driven' (idle when no goals — no phantom observation cycle).
+not pretend it exists: the default is 'goal_driven', and a legacy stored
+'autonomous' is migrated to 'goal_driven' when the database opens (see
+test_database.py). A goal store that cannot be read fails the tick loudly
+rather than looking like "no goals".
 """
 
 import os
+import sqlite3
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -30,6 +31,14 @@ class FakeDB:
     def get_setting(self, key, default=None):
         return self._settings.get(key, default)
 
+    def set_setting(self, key, value):
+        self._settings[key] = value
+
+    def create_session(self, title=None, kind=None):
+        session = {"id": f"s{len(self._sessions) + 1}", "title": title, "kind": kind}
+        self._sessions.append(session)
+        return session
+
     def list_sessions(self, limit=20):
         return self._sessions
 
@@ -38,13 +47,6 @@ class FakeDB:
             if s["id"] == session_id:
                 return s
         return None
-
-
-@pytest.fixture(autouse=True)
-def _reset_warned_flag():
-    agent_loop_mod._warned_legacy_autonomous = False
-    yield
-    agent_loop_mod._warned_legacy_autonomous = False
 
 
 class TestResolveAgentMode:
@@ -57,24 +59,35 @@ class TestResolveAgentMode:
             resolve_agent_mode(FakeDB({"agent_mode": "goal_driven"})) == "goal_driven"
         )
 
-    def test_legacy_autonomous_normalizes_with_warning(self, caplog):
-        with caplog.at_level("WARNING", logger="gaia.ui.agent_loop"):
-            mode = resolve_agent_mode(FakeDB({"agent_mode": "autonomous"}))
-        assert mode == "goal_driven"
-        assert any("2005" in r.message for r in caplog.records)
-        assert any("not implemented" in r.message for r in caplog.records)
 
-    def test_legacy_autonomous_warns_only_once(self, caplog):
-        db = FakeDB({"agent_mode": "autonomous"})
-        with caplog.at_level("WARNING", logger="gaia.ui.agent_loop"):
-            resolve_agent_mode(db)
-            resolve_agent_mode(db)
-        warnings = [r for r in caplog.records if "2005" in r.message]
-        assert len(warnings) == 1
+class TestGoalStoreFailure:
+    """An unreadable goal store must not read as "nothing to do"."""
+
+    def test_unreadable_goal_store_raises_into_the_tick(self, tmp_path):
+        with (
+            patch.dict(os.environ, {"GAIA_HOME": str(tmp_path / ".gaia")}),
+            patch(
+                "gaia.agents.base.goal_store.GoalStore.get_actionable_goals",
+                side_effect=sqlite3.OperationalError("database is locked"),
+            ),
+        ):
+            with pytest.raises(RuntimeError, match="database is locked") as excinfo:
+                AgentLoop()._get_actionable_goals()
+        assert "goals.db" in str(excinfo.value)
+
+    def test_readable_goal_store_returns_its_goals(self, tmp_path):
+        with (
+            patch.dict(os.environ, {"GAIA_HOME": str(tmp_path / ".gaia")}),
+            patch(
+                "gaia.agents.base.goal_store.GoalStore.get_actionable_goals",
+                return_value=["g1", "g2"],
+            ),
+        ):
+            assert AgentLoop()._get_actionable_goals() == ["g1", "g2"]
 
 
 class TestRunStepModeGate:
-    """_run_step must treat legacy 'autonomous' exactly as 'goal_driven'."""
+    """_run_step pauses on 'manual' and idles without goals otherwise."""
 
     def _make_loop(self, db):
         loop = AgentLoop()
@@ -100,16 +113,6 @@ class TestRunStepModeGate:
     async def test_goal_driven_idles_without_goals(self, tmp_path):
         directive = await self._run("goal_driven", tmp_path)
         assert directive.directive == "idle"
-
-    async def test_legacy_autonomous_identical_to_goal_driven(self, tmp_path):
-        """No phantom observation cycle: legacy 'autonomous' == 'goal_driven'."""
-        auto = await self._run("autonomous", tmp_path)
-        goal = await self._run("goal_driven", tmp_path)
-        assert (auto.directive, auto.wake_in_seconds, auto.reason) == (
-            goal.directive,
-            goal.wake_in_seconds,
-            goal.reason,
-        )
 
     async def test_unset_mode_defaults_to_goal_driven(self, tmp_path):
         directive = await self._run(None, tmp_path)
@@ -144,13 +147,12 @@ class TestHourlyBudgetOnlySpentOnRealTicks:
                 assert directive.directive == "idle"
         assert loop._calls_this_hour == 0
 
-    async def test_idle_tick_with_no_session_does_not_spend_budget(self, tmp_path):
-        """The other early-return this fix covers: no active session at all."""
-        loop = self._make_loop(FakeDB({"agent_mode": "goal_driven"}, sessions=[]))
-        for _ in range(5):
-            directive = await self._run(loop, tmp_path)
-            assert directive.directive == "idle"
-        assert loop._calls_this_hour == 0
+    async def test_idle_tick_with_no_goals_creates_no_background_chat(self, tmp_path):
+        db = FakeDB({"agent_mode": "goal_driven"}, sessions=[])
+        loop = self._make_loop(db)
+        with patch.object(AgentLoop, "_get_actionable_goals", return_value=[]):
+            await self._run(loop, tmp_path)
+        assert db._sessions == []
 
     async def test_idle_tick_with_no_goals_never_hits_rate_limit(self, tmp_path):
         """Regression: previously this would exhaust the budget purely on

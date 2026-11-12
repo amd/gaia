@@ -21,6 +21,7 @@ external processes during tests.
 import io
 import logging
 import platform
+import re
 import uuid
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -177,10 +178,8 @@ class TestFileUpload:
         assert data["content_type"] == "text/plain"
         assert data["is_image"] is False
         assert data["url"].startswith("/api/files/uploads/")
-        assert data["filename"].endswith(".txt")
-        # Filename should be UUID format + extension
-        stem = data["filename"].rsplit(".", 1)[0]
-        uuid.UUID(stem)  # Raises ValueError if not valid UUID
+        # A random ID, then the name the user knows the file by.
+        assert re.fullmatch(r"[0-9a-f]{12}_test\.txt", data["filename"])
         logger.info("Upload text file response: %s", data)
 
     def test_upload_image_file(self, client, sample_png_bytes):
@@ -292,7 +291,7 @@ class TestFileUpload:
         assert "too large" in resp.json()["detail"].lower()
 
     def test_upload_preserves_extension(self, client):
-        """Verify uploaded filename is UUID.ext pattern."""
+        """Verify uploaded filename is <id>_<name>.ext pattern."""
         for ext, ctype in [
             (".md", "text/markdown"),
             (".csv", "text/csv"),
@@ -309,9 +308,10 @@ class TestFileUpload:
             assert data["filename"].endswith(
                 ext
             ), f"Extension not preserved: expected {ext}, got {data['filename']}"
-            # Verify UUID prefix
-            stem = data["filename"][: -len(ext)]
-            uuid.UUID(stem)  # Validates UUID format
+            # Verify the ID prefix and the kept name
+            assert re.fullmatch(
+                rf"[0-9a-f]{{12}}_myfile{re.escape(ext)}", data["filename"]
+            )
 
     def test_upload_is_stored_under_gaia_home(self, client):
         """The upload lands in ``<GAIA_HOME>/chat/uploads``."""
@@ -628,9 +628,7 @@ class TestFileSearch:
             "/api/files/search",
             params={"query": "test", "max_results": 0},
         )
-        # FastAPI validates ge=1 on the query model for FileSearchRequest,
-        # but the endpoint uses plain int param with manual clamping.
-        # max(0, 1) = 1, so it should return at most 1 result.
+        # The endpoint clamps max_results itself: max(0, 1) = 1.
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1
@@ -1313,9 +1311,8 @@ class TestSecurityEdgeCases:
         assert resp.status_code == 200
         data = resp.json()
         assert data["original_name"] == "my file (copy) [2].txt"
-        # Stored filename should be a clean UUID
-        stem = data["filename"].rsplit(".", 1)[0]
-        uuid.UUID(stem)  # Validates no special chars leaked through
+        # No special characters leak into the stored name
+        assert re.fullmatch(r"[0-9a-f]{12}_my_file_copy_2\.txt", data["filename"])
 
 
 # ── TestBrowseEdgeCases ──────────────────────────────────────────────────────

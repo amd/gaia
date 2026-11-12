@@ -2,8 +2,8 @@
 
 Developer-focused landing page for GAIA - Local AI Agents framework.
 
-Serves `amd-gaia.ai` (the landing page and its downloads). The retired `/hub`
-pages redirect to `/#install` (`public/serve.json`). The `/docs` tab is Mintlify, a
+Serves `amd-gaia.ai` (the landing page, its downloads, and `/hub`, the published
+skills). `/roadmap` redirects to the docs roadmap and the retired `/hub/<agent>` pages to `/hub` (`public/serve.json`). The `/docs` tab is Mintlify, a
 separate origin — see [Deployment](#deployment) for how the two are stitched
 together.
 
@@ -64,7 +64,7 @@ website/
 │   ├── favicon.ico
 │   ├── gaia-icon.png
 │   ├── robots.txt
-│   └── serve.json                   # `serve` redirects (retired /hub → /#install)
+│   └── serve.json                   # `serve` redirects (/roadmap, retired /hub/<agent>)
 ├── scripts/
 ├── src/
 │   ├── components/                  # Astro components (Downloads, Header, Footer, …)
@@ -105,9 +105,14 @@ trusting a copy — the headlines only:
 - **Font (Display)**: Antonio — headings, buttons, figures, the wordmark
 - **Font (UI)**: Titillium Web, standing in for AMD's Klavika
 - **Font (Code)**: JetBrains Mono
-- **Background**: `src/scripts/starfield.ts`, a canvas of streaking stars. It
-  holds a still frame under `prefers-reduced-motion` or when a visitor pauses it
-  from the footer.
+- **Background**: `src/scripts/starfield.ts`, a deep Hubble field flown through
+  at warp: streaking stars, and real Hubble galaxies and clusters from the one
+  atlas in `public/space/` (credits in `public/space/CREDITS.md`). It holds a still
+  frame under `prefers-reduced-motion` or when a visitor pauses it from the footer.
+- **Headline**: `src/scripts/scramble.ts` resolves it out of the writing systems in
+  `src/data/scramble-scripts.ts`, on the starfield's warp clock. Their characters
+  come from `public/fonts/gaia-scripts.woff2`, a Noto subset (SIL OFL 1.1). Adding a
+  character means regenerating that subset, or it renders as a missing-glyph box.
 
 ## Deployment
 
@@ -188,7 +193,6 @@ Open TODO — these are not yet in `public/`, which currently holds only
 nothing is broken; they are polish items, not blockers.
 
 - [ ] `og-image.png` (1200x630) - Social share image. Until it exists, share cards use the square `gaia-icon.png` with `twitter:card=summary`
-- [ ] Integration logos (VS Code, Blender, Jira, Docker)
 - [ ] GAIA logo SVG (if different from favicon)
 
 ## License

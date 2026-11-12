@@ -22,7 +22,7 @@ import re
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -301,14 +301,19 @@ def _format_time_12h(time_24: str) -> str:
         return f"{h - 12}:{m:02d} PM"
 
 
-def _format_every(seconds: int) -> str:
-    """ "Every 30 minutes", "Every hour", "Every 90 minutes" — never rounded."""
+def _every_parts(seconds: int) -> Tuple[int, str]:
+    """(90, "minute") for 5400 s: the largest whole unit, never rounded."""
     for size, unit in ((_WEEK, "week"), (_DAY, "day"), (_HOUR, "hour")):
         if seconds >= size and seconds % size == 0:
-            break
-    else:
-        size, unit = (_MINUTE, "minute") if seconds % _MINUTE == 0 else (1, "second")
-    count = seconds // size
+            return seconds // size, unit
+    if seconds % _MINUTE == 0:
+        return seconds // _MINUTE, "minute"
+    return seconds, "second"
+
+
+def _format_every(seconds: int) -> str:
+    """ "Every 30 minutes", "Every hour", "Every 90 minutes" — never rounded."""
+    count, unit = _every_parts(seconds)
     return f"Every {unit}" if count == 1 else f"Every {count} {unit}s"
 
 
@@ -345,9 +350,7 @@ def _take(pattern: str, s: str):
 
 def _reject_dates_and_one_offs(s: str) -> None:
     """Reject calendar dates and one-time phrasing: every schedule repeats."""
-    one_time = (
-        "One-time tasks aren't supported yet — a schedule repeats. " + _RECURRING_HINT
-    )
+    one_time = "A schedule here repeats; it can't run just once. " + _RECURRING_HINT
     for pattern, month_group, day_group in (
         (rf"\b({_MONTH_RE})\.? (\d{{1,2}})(?:st|nd|rd|th)?\b", 1, 2),
         (rf"\b(\d{{1,2}})(?:st|nd|rd|th)? (?:of )?({_MONTH_RE})\b", 2, 1),
@@ -360,8 +363,7 @@ def _reject_dates_and_one_offs(s: str) -> None:
             if not 1 <= day <= calendar.monthrange(2024, month)[1]:
                 raise _ScheduleInputError(
                     f"{_MONTH_DISPLAY[month]} {day} isn't a date. "
-                    "One-time tasks aren't supported yet either — a schedule "
-                    "repeats. " + _RECURRING_HINT
+                    "A schedule here repeats, too. " + _RECURRING_HINT
                 )
             raise _ScheduleInputError(one_time)
     if re.search(r"\b(?:\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d{4}-\d{1,2}-\d{1,2})\b", s):
@@ -591,17 +593,46 @@ def parse_schedule_input(text: str) -> ScheduleConfig:
         return ScheduleConfig(raw_input=text, description=str(e))
 
 
-def _build_description(config: ScheduleConfig) -> str:
-    """Human-readable description of a parsed schedule."""
-    days = config.days_of_week
+def describe_parts(config: ScheduleConfig) -> Dict[str, Any]:
+    """The description as data, so the Agent UI can word it in its own language.
+
+    ``kind`` is ``every`` (count + unit, optional days), ``window`` (that plus
+    start/end hour), ``days`` (named days, optional time) or ``daily`` (time).
+
+    Raises:
+        ValueError: the config was rejected by the parser (no interval).
+    """
+    if config.interval_seconds <= 0:
+        raise ValueError(config.description or "The schedule has no interval.")
+    parts: Dict[str, Any] = dict.fromkeys(
+        ("count", "unit", "days", "time", "start_hour", "end_hour")
+    )
+    days = sorted(config.days_of_week) if config.days_of_week else None
+    count, unit = _every_parts(config.interval_seconds)
     if config.start_hour is not None:
-        start = _format_time_12h(f"{config.start_hour:02d}:00")
-        end_h = config.end_hour if config.end_hour is not None else 0
-        text = f"{_format_every(config.interval_seconds)}, {start} - "
-        text += _format_time_12h(f"{end_h:02d}:00")
+        end_hour = config.end_hour if config.end_hour is not None else 0
+        parts.update(kind="window", count=count, unit=unit, days=days)
+        parts.update(start_hour=config.start_hour, end_hour=end_hour)
+    elif days and config.interval_seconds in (_DAY, _WEEK):
+        parts.update(kind="days", days=days, time=config.time_of_day)
+    elif config.time_of_day:
+        parts.update(kind="daily", time=config.time_of_day)
+    else:
+        parts.update(kind="every", count=count, unit=unit, days=days)
+    return parts
+
+
+def _build_description(config: ScheduleConfig) -> str:
+    """Human-readable English description of a parsed schedule."""
+    parts = describe_parts(config)
+    kind, days = parts["kind"], parts["days"]
+    if kind == "window":
+        start = _format_time_12h(f"{parts['start_hour']:02d}:00")
+        end = _format_time_12h(f"{parts['end_hour']:02d}:00")
+        text = f"{_format_every(config.interval_seconds)}, {start} - {end}"
         return f"{text}, {_format_days(days)}" if days else text
 
-    if days and config.interval_seconds in (_DAY, _WEEK):
+    if kind == "days":
         named = _format_days(days)
         if named == "every day":
             text = "Daily"
@@ -609,15 +640,15 @@ def _build_description(config: ScheduleConfig) -> str:
             text = named.capitalize()
         else:
             text = f"Every {named}"
-    elif config.time_of_day:
+    elif kind == "daily":
         text = "Daily"
     else:
         text = _format_every(config.interval_seconds)
         if days:
             text += f" on {_format_days(days)}"
 
-    if config.time_of_day:
-        text += f" at {_format_time_12h(config.time_of_day)}"
+    if parts["time"]:
+        text += f" at {_format_time_12h(parts['time'])}"
     return text
 
 
@@ -831,6 +862,9 @@ class ScheduledTask:
         # The last run's error, or None when it succeeded.
         self.last_error = last_error
         self._timer_task: Optional[asyncio.Task] = None
+        # A run is in flight, timed or Run now; a second one waits for the next.
+        self._executing = False
+        self._manual_run: Optional[asyncio.Task] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -849,14 +883,19 @@ class ScheduledTask:
             "session_id": self.session_id,
             "schedule_config": self.schedule_config,
             "description": self.describe(),
+            "description_parts": describe_parts(self._describe_config()),
             "last_error": self.last_error,
+            "running": self._executing,
         }
 
     def describe(self) -> str:
         """When it runs, in the words the schedule form's preview uses."""
+        return _build_description(self._describe_config())
+
+    def _describe_config(self) -> ScheduleConfig:
         if self.schedule_config:
-            return _build_description(ScheduleConfig.from_json(self.schedule_config))
-        return _format_every(self.interval_seconds)
+            return ScheduleConfig.from_json(self.schedule_config)
+        return ScheduleConfig(interval_seconds=self.interval_seconds)
 
 
 class Scheduler:
@@ -903,6 +942,8 @@ class Scheduler:
         self._max_concurrent_runs = max_concurrent_runs
         self._run_semaphore: Optional[asyncio.Semaphore] = None
         self._tasks: Dict[str, ScheduledTask] = {}
+        # Run now runs outlive their request, so hold them until they finish.
+        self._manual_runs: set = set()
         self._lock = asyncio.Lock()
         self._running = False
         self._missed_since: Optional[datetime] = None
@@ -945,6 +986,7 @@ class Scheduler:
                     except asyncio.CancelledError:
                         pass
                     task._timer_task = None
+                await self._cancel_manual_run(task)
         logger.info("Scheduler shut down, all timers cancelled")
 
     async def create_task(
@@ -971,9 +1013,14 @@ class Scheduler:
             Task dict with status info.
 
         Raises:
-            ValueError: If name is duplicate, interval is invalid, or ``tz``
-                is not a known time zone.
+            ValueError: If name is duplicate or contains "/", interval is
+                invalid, or ``tz`` is not a known time zone.
         """
+        if "/" in name:
+            raise ValueError(
+                f"Schedule name '{name}' can't contain '/'. "
+                "Use another character, such as '-' or '&', and try again."
+            )
         config = parse_schedule_input(interval)
         if config.interval_seconds <= 0:
             raise ValueError(config.description)
@@ -1155,12 +1202,61 @@ class Scheduler:
                     await task._timer_task
                 except asyncio.CancelledError:
                     pass
+            await self._cancel_manual_run(task)
 
             self._db_delete_task(task.id)
             del self._tasks[name]
 
         logger.info("Deleted scheduled task '%s'", name)
         return True
+
+    async def run_task_now(self, name: str) -> Dict[str, Any]:
+        """Start one run of a task now, keeping its next scheduled time.
+
+        Returns at once with the task marked running; the run goes on in the
+        background and saves its reply in the task's chat as a timed run does.
+
+        Raises:
+            KeyError: If task not found.
+            ValueError: If a run of it is already in flight.
+        """
+        async with self._lock:
+            task = self._tasks.get(name)
+            if not task:
+                raise KeyError(f"Task '{name}' not found")
+            if task._executing:
+                raise ValueError(f"'{name}' is already running")
+            # Claimed before returning, so a second click can't start another.
+            task._executing = True
+        run = asyncio.create_task(
+            self._execute_task(task, reschedule=False, claimed=True)
+        )
+        task._manual_run = run
+        self._manual_runs.add(run)
+        run.add_done_callback(self._manual_run_done)
+        logger.info("Scheduled task '%s': run now", name)
+        return task.to_dict()
+
+    @staticmethod
+    async def _cancel_manual_run(task: ScheduledTask) -> None:
+        """Stop a Run now in flight, as a timer is stopped on delete and shutdown."""
+        run = task._manual_run
+        task._manual_run = None
+        if run is None or run.done():
+            return
+        run.cancel()
+        try:
+            await run
+        except asyncio.CancelledError:
+            pass
+
+    def _manual_run_done(self, run: asyncio.Task) -> None:
+        self._manual_runs.discard(run)
+        if not run.cancelled() and run.exception() is not None:
+            logger.error(
+                "A Run now run failed outside its executor",
+                exc_info=run.exception(),
+            )
 
     def get_task(self, name: str) -> Optional[Dict[str, Any]]:
         """Get task info by name.
@@ -1420,7 +1516,29 @@ class Scheduler:
         logger.warning("Scheduled task '%s': %s", task.name, message)
         self._db_store_result(task.id, plan.last_missed.isoformat(), error=message)
 
-    async def _execute_task(self, task: ScheduledTask):
+    async def _execute_task(
+        self, task: ScheduledTask, reschedule: bool = True, claimed: bool = False
+    ):
+        """Run *task* once, unless a run of it is already in flight.
+
+        *reschedule* moves its next run on from now (a timed run); Run now
+        passes False to keep it. *claimed* means the caller already marked
+        the task running.
+        """
+        if not claimed:
+            if task._executing:
+                logger.info(
+                    "Scheduled task '%s' is still running; skipping this run",
+                    task.name,
+                )
+                return
+            task._executing = True
+        try:
+            await self._execute_task_once(task, reschedule)
+        finally:
+            task._executing = False
+
+    async def _execute_task_once(self, task: ScheduledTask, reschedule: bool):
         """Execute a single task run.
 
         If the database supports sessions (i.e. is a full ChatDatabase),
@@ -1526,19 +1644,19 @@ class Scheduler:
                     exc_info=True,
                 )
 
-        # Update next run
-        config = (
-            ScheduleConfig.from_json(task.schedule_config)
-            if task.schedule_config
-            else None
-        )
-        if config:
-            next_run = compute_next_run(config)
-        else:
-            next_run = datetime.now(timezone.utc) + timedelta(
-                seconds=task.interval_seconds
+        if reschedule:
+            config = (
+                ScheduleConfig.from_json(task.schedule_config)
+                if task.schedule_config
+                else None
             )
-        task.next_run_at = next_run.isoformat()
+            if config:
+                next_run = compute_next_run(config)
+            else:
+                next_run = datetime.now(timezone.utc) + timedelta(
+                    seconds=task.interval_seconds
+                )
+            task.next_run_at = next_run.isoformat()
         task.last_result = error if error else (result or "completed")
         task.last_error = error
 

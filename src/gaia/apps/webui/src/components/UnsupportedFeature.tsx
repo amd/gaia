@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef } from 'react';
-import { AlertTriangle, Lightbulb, ExternalLink, X, AlertCircle, Bug } from 'lucide-react';
+import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
+import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
 import './UnsupportedFeature.css';
 
-const GITHUB_ISSUES_URL = 'https://github.com/amd/gaia/issues';
 const GITHUB_NEW_ISSUE_URL = 'https://github.com/amd/gaia/issues/new';
 const GITHUB_FEATURE_REQUEST_URL = `${GITHUB_NEW_ISSUE_URL}?template=feature_request.md`;
 const GITHUB_BUG_REPORT_URL = `${GITHUB_NEW_ISSUE_URL}?template=bug_report.md`;
@@ -23,34 +23,30 @@ interface FileTypeCategory {
 const UNSUPPORTED_FILE_CATEGORIES: FileTypeCategory[] = [
     {
         label: 'Image',
-        extensions: new Set(['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.webp', '.ico', '.heic', '.heif']),
-        message: 'Image files cannot be indexed for text search.',
+        extensions: new Set(['.ico', '.heic', '.heif']),
+        message: 'This image format cannot be indexed.',
         alternatives: [
-            'Index PDFs that contain images — text is extracted automatically',
-            'Paste image descriptions or OCR text directly into the chat',
-            'Use GAIA\'s VLM agent for image analysis: gaia vlm',
+            'Convert it to PNG or JPEG — GAIA reads the text in those images',
         ],
-        featureTitle: 'Support image file indexing and OCR',
+        featureTitle: 'Support HEIC and ICO image indexing',
     },
     {
         label: 'Video',
-        extensions: new Set(['.mp4', '.avi', '.mkv', '.mov', '.wmv', '.flv', '.webm', '.m4v']),
-        message: 'Video files are not supported for indexing.',
+        extensions: VIDEO_EXTENSIONS,
+        message: 'Video files can\'t go in the document library.',
         alternatives: [
-            'Extract subtitles or transcripts from videos and index those',
-            'Use GAIA\'s voice/talk mode for audio: gaia talk',
+            'Attach the video to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support video file indexing',
+        featureTitle: 'Support video files in the document library',
     },
     {
         label: 'Audio',
-        extensions: new Set(['.mp3', '.wav', '.flac', '.aac', '.ogg', '.wma', '.m4a', '.opus']),
-        message: 'Audio files are not supported for indexing.',
+        extensions: AUDIO_EXTENSIONS,
+        message: 'Audio files can\'t go in the document library.',
         alternatives: [
-            'Use GAIA\'s voice mode for speech interaction: gaia talk',
-            'Transcribe audio to text first, then index the transcript',
+            'Attach the recording to a chat, and GAIA will transcribe it',
         ],
-        featureTitle: 'Support audio file transcription and indexing',
+        featureTitle: 'Support audio files in the document library',
     },
     {
         label: 'Archive',
@@ -119,10 +115,13 @@ export function getUnsupportedCategory(extension: string): FileTypeCategory | nu
  * in ``src/gaia/rag/sdk.py::_extract_text_from_file`` — listing one without
  * a backend handler causes the RAG pipeline to index binary garbage.
  * .pptx and .docx ARE supported (python-pptx / python-docx ship with GAIA);
- * legacy .doc/.ppt/.xls are intentionally excluded.
+ * legacy .doc/.ppt/.xls are intentionally excluded. Raster images are read by
+ * the vision model.
  */
 export const SUPPORTED_EXTENSIONS = new Set([
-    '.pdf', '.pptx', '.docx', '.txt', '.md', '.mdx', '.markdown', '.rst', '.csv', '.json', '.xlsx',
+    '.pdf', '.pptx', '.docx', '.epub',
+    '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tif', '.tiff',
+    '.txt', '.md', '.mdx', '.markdown', '.rst', '.csv', '.json', '.xlsx',
     '.html', '.htm', '.xml', '.svg',
     '.yaml', '.yml', '.py', '.js', '.ts', '.java', '.c', '.cpp',
     '.h', '.rs', '.go', '.rb', '.sh', '.bat', '.ps1', '.log',
@@ -217,6 +216,7 @@ export const PERMANENT_FAILURE_HINTS: Record<string, string> = {
     encrypted: 'The PDF needs a password to open. Save a copy without the password, then index that.',
     empty: 'The PDF has no readable text, which usually means it is a scan. Run OCR on it, then index it again.',
     empty_file: 'This file is empty. Add content to it, then index it again.',
+    unsupported_workbook: 'This is an old .xls workbook or has a password. Open it in Excel, save a copy as .xlsx without a password, then index that.',
 };
 
 /** The backend's message without its leading category label, e.g. "File not found:". */
@@ -304,7 +304,7 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         Icon = AlertTriangle;
     } else if (isFileTypeError) {
         title = `File type not supported: ${ext}`;
-        detail = 'This file format cannot be indexed. Supported: PDF, PPTX, TXT, MD, CSV, JSON, XLSX, HTML, XML, YAML, and 30+ code file formats.';
+        detail = 'This file format cannot be indexed. Supported: PDF, DOCX, PPTX, XLSX, EPUB, images (PNG, JPG, WEBP, ...), TXT, MD, CSV, JSON, HTML, XML, YAML, and 30+ code file formats.';
         issueUrl = featureRequestUrl(`Support ${ext} file indexing`);
         Icon = AlertTriangle;
     } else if (isConnectionError) {
@@ -341,61 +341,6 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
             <button className="upload-error-dismiss" onClick={onDismiss} aria-label="Dismiss">
                 <X size={14} />
             </button>
-        </div>
-    );
-}
-
-// ── Inline Unsupported Feature Banner (for chat messages) ────────────────
-
-interface UnsupportedFeatureBannerProps {
-    /** Short title of the unsupported feature. */
-    title: string;
-    /** Description of what the user asked for. */
-    description: string;
-    /** Things the user can do instead. */
-    alternatives?: string[];
-    /** Pre-filled feature request title for GitHub. */
-    featureTitle?: string;
-}
-
-/**
- * Rendered inside assistant messages when the agent detects an unsupported feature.
- * Shows what's available instead and links to GitHub for feature requests.
- */
-export function UnsupportedFeatureBanner({ title, description, alternatives, featureTitle }: UnsupportedFeatureBannerProps) {
-    const issueUrl = featureTitle
-        ? featureRequestUrl(featureTitle)
-        : `${GITHUB_ISSUES_URL}`;
-
-    return (
-        <div className="unsupported-banner">
-            <div className="unsupported-banner-header">
-                <AlertTriangle size={16} />
-                <span>{title}</span>
-            </div>
-            <div className="unsupported-banner-body">
-                <p>{description}</p>
-                {alternatives && alternatives.length > 0 && (
-                    <>
-                        <p><strong>What you can do instead:</strong></p>
-                        <ul className="unsupported-alternatives">
-                            {alternatives.map((alt, i) => (
-                                <li key={i}>{alt}</li>
-                            ))}
-                        </ul>
-                    </>
-                )}
-            </div>
-            <div className="unsupported-feature-request">
-                <Lightbulb size={14} />
-                <span>
-                    Want this feature?{' '}
-                    <a href={issueUrl} target="_blank" rel="noopener noreferrer">
-                        Request it on GitHub
-                        <ExternalLink size={10} style={{ marginLeft: 3, verticalAlign: 'middle' }} />
-                    </a>
-                </span>
-            </div>
         </div>
     );
 }

@@ -27,6 +27,8 @@ _GUARDED = (
     "Desktop",
     "Documents",
     "Downloads",
+    "Library/Containers",
+    "Library/Group Containers",
     "Library/Mobile Documents",
     "Movies/TV",
     "Music",
@@ -103,7 +105,7 @@ def _find_files(*allowed):
 
     registered = {}
 
-    def mock_tool(atomic=True):
+    def mock_tool(atomic=True, **_kwargs):
         def decorator(func):
             registered[func.__name__] = func
             return func
@@ -163,7 +165,8 @@ class TestFindFilesOnMacOS:
             "~/Library/Mobile Documents, ~/Movies/TV, ~/Music, "
             "~/Pictures/Photos Library.photoslibrary: macOS asks for permission "
             "before GAIA can read them; ask the user to name the folder to "
-            "search it."
+            "search it. Skipped other apps' private data (~/Library/Containers, "
+            "~/Library/Group Containers)."
         ), out
 
     def test_a_miss_still_carries_the_note(self, home, on_macos):
@@ -249,12 +252,22 @@ class TestSearchDirectoryOnMacOS:
         assert "skipped_folders" in result, result
 
 
+def _link_folder(link: Path, target: Path) -> None:
+    """A folder link: a junction on Windows (no privilege needed), else a symlink."""
+    if os.name == "nt":  # sys.platform is patched here
+        import _winapi
+
+        _winapi.CreateJunction(str(target), str(link))
+    else:
+        link.symlink_to(target, target_is_directory=True)
+
+
 class TestAnAliasOfAGuardedFolder:
     """A walk of / reaches ~/Music as /System/Volumes/Data/Users/<u>/Music."""
 
     def test_is_skipped_under_its_other_path(self, home, on_macos, tmp_path):
         alias = tmp_path / "Data"
-        alias.symlink_to(home.parent)
+        _link_folder(alias, home.parent)
         guard = ProtectedFolders(_FakeHost(home))
 
         assert guard.blocks(alias / home.name / "Music")

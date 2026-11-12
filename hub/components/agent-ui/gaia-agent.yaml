@@ -7,7 +7,7 @@
 # there. Nothing publishes it or bumps its version any more.
 id: agent-ui
 name: GAIA Agent UI
-version: 0.25.1
+version: 0.25.2
 description: "Desktop app for chatting with GAIA agents, with documents and RAG"
 author: AMD
 license: MIT

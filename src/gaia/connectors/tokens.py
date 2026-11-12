@@ -58,8 +58,10 @@ from gaia.connectors.providers import reload as reload_provider
 from gaia.connectors.store import (
     DEFAULT_ACCOUNT,
     delete_connection,
+    has_forward_recovery,
     load_connection,
     peek_connection,
+    recover_forward_recovery,
     save_connection,
 )
 
@@ -123,6 +125,19 @@ def load_current_connection(
     ``ConnectionBusyError`` while the lock is busy, so "busy" can also mean
     "unreadable and not yet cleared". Blocking keyring I/O.
     """
+    # A forwarded save spans the client and connection slots. If its process
+    # died between those writes, restore the pre-save pair while holding the
+    # same lock before constructing a provider from the possibly new client.
+    if has_forward_recovery(provider_id):
+        if not lock_held:
+            with _refresh_lock.try_held_sync(provider_id) as acquired:
+                if acquired:
+                    return load_current_connection(
+                        provider_id, account_email=account_email, lock_held=True
+                    )
+            raise ConnectionBusyError(provider_id)
+        recover_forward_recovery(provider_id)
+
     provider = get_provider(provider_id)
     current = peek_connection(provider_id, account_email=account_email)
     if current is None:
@@ -390,7 +405,7 @@ async def _refresh_token(
     if response.status_code == 400:
         try:
             payload = response.json()
-        except Exception:
+        except ValueError:
             payload = {}
         if payload.get("error") == "invalid_grant":
             # The caller clears the stored entry (only if it still holds this
@@ -408,16 +423,16 @@ async def _refresh_token(
         # absent or wrong in the refresh POST.  Distinguish the two cases
         # so the error tells the user what to do rather than just "try again":
         #   - No client_secret configured → ConfigurationError (fix: re-enter
-        #     credentials in Settings → Connections).
+        #     credentials in Settings → Connectors).
         #   - Secret is present but token rejected → AuthRequiredError (fix:
-        #     reconnect from Settings → Connections).
+        #     reconnect from Settings → Connectors).
         # Public PKCE clients (Microsoft/Entra) never have a secret — that's
         # the correct, expected state, not a misconfiguration — so only
         # providers in PROVIDERS_REQUIRING_CLIENT_SECRET take the
         # config-missing branch (#1638).
         try:
             err_payload = response.json()
-        except Exception:
+        except ValueError:
             err_payload = {}
         from gaia.connectors.oauth_pkce import PROVIDERS_REQUIRING_CLIENT_SECRET
 
@@ -428,7 +443,7 @@ async def _refresh_token(
         ):
             raise ConfigurationError(
                 f"Token endpoint returned 401 for {provider.provider_id}: "
-                "client_secret is not configured. Open Settings → Connections "
+                "client_secret is not configured. Open Settings → Connectors "
                 f"→ {provider.provider_id} and re-enter the Client Secret, or "
                 "set the GAIA_GOOGLE_CLIENT_SECRET environment variable. "
                 "See docs/runbooks/google-oauth-client.md."
@@ -439,7 +454,7 @@ async def _refresh_token(
             message=(
                 f"Token endpoint returned 401 for {provider.provider_id} "
                 f"({err_payload.get('error', 'invalid_client')}). "
-                "Reconnect from Settings → Connections → "
+                "Reconnect from Settings → Connectors → "
                 f"{provider.provider_id}. "
                 "See docs/runbooks/google-oauth-client.md."
             ),

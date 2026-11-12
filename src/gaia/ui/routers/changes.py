@@ -10,11 +10,18 @@ endpoints.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from gaia.agents.base import file_snapshots
+from gaia.agents.tools.protected_folders import (
+    ASKING,
+    DENIED,
+    macos_access,
+    macos_guarded_folder,
+)
 from gaia.config import GaiaConfig, GaiaConfigError
 from gaia.logger import get_logger
 
@@ -55,6 +62,55 @@ def _snapshot_http_error(e: file_snapshots.SnapshotError) -> HTTPException:
     return HTTPException(status_code=409, detail=str(e))
 
 
+async def _list_turns(session_id: str) -> list:
+    try:
+        return await asyncio.to_thread(file_snapshots.list_turns, session_id)
+    except file_snapshots.SnapshotError as e:
+        raise _snapshot_http_error(e) from e
+
+
+def _refuse_if_macos_blocks(turns: list) -> None:
+    """Answer now when macOS would hold an undo on its permission dialog.
+
+    The undo runs in this process, which may lack the access the agent that
+    made the change was given; its first read would then wait on the dialog
+    for as long as nobody answers, holding the chat.
+    """
+    folders = {
+        folder
+        for turn in turns
+        for entry in turn.get("files", [])
+        if (folder := macos_guarded_folder(entry["path"])) is not None
+    }
+    if not folders:
+        return
+    access = macos_access(folders)
+    home = Path.home().resolve()
+    asking = sorted(
+        f"~/{f.relative_to(home)}" for f, s in access.items() if s == ASKING
+    )
+    denied = sorted(
+        f"~/{f.relative_to(home)}" for f, s in access.items() if s == DENIED
+    )
+    if asking:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"macOS is asking whether GAIA may use {', '.join(asking)}. Answer "
+                "that dialog, then undo again."
+            ),
+        )
+    if denied:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"macOS denied GAIA access to {', '.join(denied)}, so the change "
+                "can't be undone. Allow it in System Settings > Privacy & Security "
+                "> Files and Folders, then undo again."
+            ),
+        )
+
+
 @router.get("/api/sessions/{session_id}/changes")
 async def list_changes(session_id: str, db: ChatDatabase = Depends(get_db)):
     """Every turn in the session that changed files, oldest first."""
@@ -89,6 +145,10 @@ async def undo_changes(
 ):
     """Put every file the turn changed back as it was; all or nothing."""
     _require_session(db, session_id)
+    turns = await _list_turns(session_id)
+    await asyncio.to_thread(
+        _refuse_if_macos_blocks, [t for t in turns if t["turn_id"] == turn_id]
+    )
     lock = http_request.app.state.session_locks.setdefault(session_id, asyncio.Lock())
     if lock.locked():
         raise HTTPException(
@@ -124,6 +184,8 @@ async def undo_session_changes(
 ):
     """Put every file the chat changed back as it was; all or nothing."""
     _require_session(db, session_id)
+    live = [t for t in await _list_turns(session_id) if not t.get("restored_at")]
+    await asyncio.to_thread(_refuse_if_macos_blocks, live)
     lock = http_request.app.state.session_locks.setdefault(session_id, asyncio.Lock())
     if lock.locked():
         raise HTTPException(

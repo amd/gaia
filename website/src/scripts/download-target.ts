@@ -232,8 +232,8 @@ export async function resolveTargets(nav: NavigatorLike): Promise<PlatformKey[]>
  * The header Install button's download for a visitor, or null to keep it on
  * the install section. Only a machine placed on exactly ONE platform gets a
  * file: a Mac of unknown architecture resolves to two, an unplaceable machine
- * to none, and a platform with no primary download on this release has no
- * entry -- each keeps the section, where every option shows.
+ * to none, and a platform with no Install file on this release has no entry
+ * -- each keeps the section, where every option shows.
  */
 export function pickInstallTarget<T>(
   targets: readonly PlatformKey[],
@@ -333,15 +333,15 @@ export function desktopArtifactFileName(
 }
 
 /**
- * Other packagings of the desktop app, offered under a platform's "more
- * options" rather than as its main download. Linux's AppImage runs on any
- * distro, so it leads; the .deb is for a visitor who wants the package manager.
+ * Other packagings of the desktop app, offered in the full download list
+ * rather than as a platform's button. Linux's AppImage runs on any distro, so
+ * it is the button; the .deb is for a visitor who wants the package manager.
  */
 const DESKTOP_EXTRA_FILENAMES: Partial<
   Record<PlatformKey, { label: string; name: (version: string) => string }[]>
 > = {
   'linux-x64': [
-    { label: 'Desktop app (.deb — Debian, Ubuntu)', name: (v) => `gaia-agent-ui-${v}-amd64.deb` },
+    { label: '.deb (Debian, Ubuntu)', name: (v) => `gaia-agent-ui-${v}-amd64.deb` },
   ],
 };
 

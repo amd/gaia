@@ -28,7 +28,9 @@ from gaia.ui.email_sidecar import relay
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
+    SIDECAR_AGENT_IDS,
     memory_supported,
+    profile_for,
     surface_supported,
 )
 from gaia.ui.models import ChatRequest
@@ -159,7 +161,7 @@ def test_prompt_args_are_made_json_safe():
 
 def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None: None
     relay._dispatch_one(
         handler,
         {
@@ -177,7 +179,7 @@ def test_the_relay_hands_the_ui_prompt_its_args_and_label():
     assert prompt["type"] == "permission_request"
     assert prompt["args"] == {"path": "C:\\a.txt", "kind": "file"}
     assert prompt["tool_label"] == "using a file"
-    # Still no "always": the grant would live where this chat can't see it.
+    # No "always": folder access asks afresh every time.
     assert "always_scope" not in prompt
 
 
@@ -259,7 +261,7 @@ def test_a_noted_call_matching_the_prompt_is_not_sent_twice():
 
 def test_the_relay_puts_gaias_context_back_on_the_ui_prompt():
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None: None
     relay._dispatch_one(
         handler,
         {
@@ -284,15 +286,81 @@ def test_the_relay_puts_gaias_context_back_on_the_ui_prompt():
     }
 
 
+def test_a_resolved_write_path_is_context_not_an_argument():
+    """rc11: a relayed "Allow writing file?" still named a bare shop2.txt."""
+    event = _permission(
+        "write_file",
+        {"file_path": "/Users/you/shop2.txt", "content": "milk"},
+        call_args={"file_path": "shop2.txt", "content": "milk"},
+    )
+    assert event["args"] == {"file_path": "shop2.txt", "content": "milk"}
+    assert event["prompt_context"] == {"file_path": "/Users/you/shop2.txt"}
+
+    same = _permission(
+        "write_file",
+        {"file_path": "/Users/you/a.txt", "content": "x"},
+        call_args={"file_path": "/Users/you/a.txt", "content": "x"},
+    )
+    assert "prompt_context" not in same
+
+
+def test_the_relay_shows_the_ui_prompt_where_a_write_lands():
+    handler = SSEOutputHandler()
+    handler.set_relay_confirmation = lambda _cid, _scope=None: None
+    relay._dispatch_one(
+        handler,
+        {
+            "type": "needs_confirmation",
+            "action": "write_file",
+            "summary": "shop2.txt",
+            "confirm_id": "c-2",
+            "args": {"file_path": "shop2.txt", "content": "milk"},
+            "prompt_context": {"file_path": "/Users/you/shop2.txt"},
+        },
+        GAIA_PROFILE,
+        answers_confirmations=True,
+    )
+    (prompt,) = _drain(handler)
+    assert prompt["args"] == {"file_path": "/Users/you/shop2.txt", "content": "milk"}
+
+
+def test_a_relative_write_reaches_the_ui_prompt_as_its_full_path():
+    """End to end: the agent's prompt, the sidecar wire, then the UI relay."""
+    agent_side = SSEOutputHandler()
+    agent_side.note_call_args("write_file", {"file_path": "shop2.txt", "content": "m"})
+    agent_side.confirm_tool_execution(
+        "write_file",
+        {"file_path": "/Users/you/shop2.txt", "content": "m"},
+        timeout=0.01,
+    )
+    [prompt] = [e for e in _drain(agent_side) if e["type"] == "permission_request"]
+    [wire] = CanonicalTranslator("r1", agent_id="gaia").translate(prompt)
+    wire["confirm_id"] = "c-3"
+
+    ui_side = SSEOutputHandler()
+    ui_side.set_relay_confirmation = lambda _cid, _scope=None: None
+    relay._dispatch_one(ui_side, wire, GAIA_PROFILE, answers_confirmations=True)
+    (shown,) = _drain(ui_side)
+    assert wire["args"]["file_path"] == "shop2.txt"
+    assert shown["args"]["file_path"] == "/Users/you/shop2.txt"
+
+
 # ── memory mode ────────────────────────────────────────────────────────────
 
 
 @pytest.mark.parametrize(
     "version, expected", [("2.18", True), ("3.0", True), ("2.17", False), (None, False)]
 )
-def test_only_a_flagship_at_2_18_takes_memory(version, expected):
+def test_flagship_memory_floor_is_2_18(version, expected):
     assert memory_supported(GAIA_PROFILE, version) is expected
-    assert memory_supported(EMAIL_PROFILE, "9.9") is False
+
+
+@pytest.mark.parametrize(
+    "version, expected",
+    [("2.16", True), ("2.18", True), ("2.15", False), (None, False)],
+)
+def test_email_memory_floor_is_2_16(version, expected):
+    assert memory_supported(EMAIL_PROFILE, version) is expected
 
 
 @pytest.mark.parametrize(
@@ -355,10 +423,10 @@ class _Handler:
         self.events.append(event)
 
 
-def _dispatch(monkeypatch, api_version, memory):
+def _dispatch(monkeypatch, api_version, memory, agent_type="gaia", proxy=None):
     handle = SimpleNamespace(
         api_version=api_version,
-        proxy=lambda: SimpleNamespace(init=lambda: (200, {})),
+        proxy=lambda: proxy or SimpleNamespace(init=lambda: (200, {})),
     )
     monkeypatch.setattr(
         daemon_client_module, "acquire_handle", lambda _agent_id: handle
@@ -369,10 +437,10 @@ def _dispatch(monkeypatch, api_version, memory):
     handler = _Handler()
     helpers._dispatch_sidecar_query(
         handler,
-        ChatRequest(session_id="s1", message="hi", agent_type="gaia"),
+        ChatRequest(session_id="s1", message="hi", agent_type=agent_type),
         [],
         "m",
-        "gaia",
+        agent_type,
         memory=memory,
     )
     return handler.events, calls
@@ -398,6 +466,45 @@ def test_a_memory_on_turn_still_runs_on_an_older_agent(monkeypatch):
 def test_a_current_agent_is_told_the_mode(monkeypatch):
     _events, calls = _dispatch(monkeypatch, "2.18", "private")
     assert calls[0]["memory"] == "private"
+
+
+def test_every_profile_without_a_memory_floor_explains_the_refusal():
+    for agent_id in SIDECAR_AGENT_IDS:
+        profile = profile_for(agent_id)
+        if profile.min_memory_api_version is None:
+            assert profile.memory_upgrade_message.strip(), agent_id
+
+
+@pytest.mark.parametrize("version", ["2.4", "2.15"])
+@pytest.mark.parametrize("memory", ["private", "off"])
+def test_email_refuses_private_turns_before_init_or_query(monkeypatch, version, memory):
+    init_calls = []
+    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
+    events, calls = _dispatch(monkeypatch, version, memory, "email", proxy)
+
+    assert init_calls == []
+    assert calls == []
+    assert len(events) == 1 and events[0]["type"] == "agent_error"
+    message = events[0]["content"]
+    assert "email agent" in message
+    assert "private" in message and "memory" in message
+    assert "not sent" in message
+
+
+@pytest.mark.parametrize(
+    "version, expected_memory",
+    [("2.4", None), ("2.15", None), ("2.16", "on"), ("2.18", "on"), ("9.9", "on")],
+)
+def test_email_memory_mode_is_relayed_only_after_the_contract_floor(
+    monkeypatch, version, expected_memory
+):
+    init_calls = []
+    proxy = SimpleNamespace(init=lambda: (init_calls.append(True) or (200, {})))
+    events, calls = _dispatch(monkeypatch, version, "on", "email", proxy)
+
+    assert init_calls == [True]
+    assert len(calls) == 1 and calls[0]["memory"] == expected_memory
+    assert not [event for event in events if event["type"] == "agent_error"]
 
 
 # ── provider-error wording (#5295) ─────────────────────────────────────────
@@ -588,6 +695,137 @@ def test_a_relayed_page_fetch_names_its_site_in_the_turn_summary():
     summary = handler.turn_ledger.summary(location=None)
     assert summary["sites"] == ["example.com", "docs.python.org"]
     assert summary["live_data"] == {"attempted": 2, "failed": 0}
+
+
+_SEARCH_RESULT = (
+    'Web search results for: "2024 nobel physics"\n\n'
+    "1. The Nobel Prize in Physics 2024 - NobelPrize.org\n"
+    "   https://www.nobelprize.org/prizes/physics/2024/summary/\n"
+    "   The Nobel Prize in Physics 2024 was awarded jointly to John J. Hopfield"
+    " and Geoffrey Hinton for foundational discoveries and inventions.\n\n"
+    "2. Hopfield and Hinton win physics Nobel - Reuters\n"
+    "   https://www.reuters.com/science/nobel-physics-2024/\n"
+    "   The two scientists were honoured for work that enables machine learning"
+    " with artificial neural networks.\n\n"
+    "Use fetch_page(url) to read the full content of any result."
+)
+
+
+def test_a_relayed_web_search_lists_its_hits_as_sources_and_names_its_site():
+    handler = SSEOutputHandler()
+    _relay(
+        handler,
+        _sidecar_events("search_web", {"query": "2024 nobel physics"}, _SEARCH_RESULT),
+    )
+    summary = handler.turn_ledger.summary(location=None)
+    assert summary["pages"] == [
+        {
+            "url": "https://www.nobelprize.org/prizes/physics/2024/summary/",
+            "title": "The Nobel Prize in Physics 2024 - NobelPrize.org",
+            "kind": "search_result",
+        },
+        {
+            "url": "https://www.reuters.com/science/nobel-physics-2024/",
+            "title": "Hopfield and Hinton win physics Nobel - Reuters",
+            "kind": "search_result",
+        },
+    ]
+    assert summary["sites"] == ["duckduckgo.com"]
+    assert summary["live_data"] == {"attempted": 1, "failed": 0}
+
+
+def _real_search_web(hits):
+    """What the built-in ``search_web`` tool returns for *hits*, from the tool
+    itself with only DuckDuckGo stubbed."""
+    from unittest.mock import MagicMock, patch
+
+    from gaia.agents.tools.browser_tools import BrowserToolsMixin
+
+    tools = {}
+
+    class _Host(BrowserToolsMixin):
+        def __init__(self, web_client):
+            self._web_client = web_client
+            self._path_validator = None
+            self._tools = {}
+
+    def capture(atomic=True):
+        def decorator(func):
+            tools[func.__name__] = func
+            return func
+
+        return decorator
+
+    client = MagicMock()
+    client.search_duckduckgo.return_value = hits
+    with patch("gaia.agents.base.tools.tool", capture):
+        _Host(client).register_browser_tools()
+    return tools["search_web"]("q", num_results=10)
+
+
+def _relayed_search(result):
+    handler = SSEOutputHandler()
+    _relay(handler, _sidecar_events("search_web", {"query": "q"}, result))
+    return handler.turn_ledger.summary(location=None)
+
+
+def test_the_real_search_tool_output_reaches_a_relayed_turn_as_sources():
+    hits = [
+        {
+            "title": f"Result {i}",
+            "url": f"https://site{i}.example.org/p",
+            "snippet": "s",
+        }
+        for i in range(10)
+    ]
+    summary = _relayed_search(_real_search_web(hits))
+    assert [p["url"] for p in summary["pages"]] == [h["url"] for h in hits]
+    assert [p["title"] for p in summary["pages"]] == [h["title"] for h in hits]
+    assert summary["sites"] == ["duckduckgo.com"]
+
+
+def test_a_relayed_search_with_no_results_lists_no_sources():
+    summary = _relayed_search(_real_search_web([]))
+    assert summary["pages"] == []
+    assert summary["live_data"] == {"attempted": 1, "failed": 0}
+
+
+def test_a_relayed_search_lists_a_repeated_hit_once():
+    hit = {"title": "Same", "url": "https://dup.example.org/", "snippet": ""}
+    summary = _relayed_search(_real_search_web([hit, dict(hit)]))
+    assert summary["pages"] == [
+        {"url": "https://dup.example.org/", "title": "Same", "kind": "search_result"}
+    ]
+
+
+def test_a_relayed_search_hit_that_is_not_a_web_link_is_dropped():
+    events = _sidecar_events("search_web", {"query": "q"}, _SEARCH_RESULT)
+    events[-1]["data"]["sources"] = [
+        {"title": "script", "url": "javascript:alert(1)"},
+        {"title": "file", "url": "file:///C:/Windows/win.ini"},
+        {"title": "no url"},
+        {"title": "not a string", "url": ["https://a.example.org/"]},
+        "https://bare-string.example.org/",
+        {"title": {"x": 1}, "url": "https://ok.example.org/"},
+    ]
+    handler = SSEOutputHandler()
+    _relay(handler, events)
+    assert handler.turn_ledger.summary(location=None)["pages"] == [
+        {"url": "https://ok.example.org/", "title": None, "kind": "search_result"}
+    ]
+
+
+def test_search_shaped_text_from_another_tool_is_not_a_source():
+    summary = _relayed_summary("read_file", {"path": "notes.txt"}, _SEARCH_RESULT)
+    assert all(p["kind"] != "search_result" for p in summary["pages"])
+    assert summary["sites"] == []
+
+
+def test_a_relayed_search_the_service_refused_names_no_sources():
+    refused = {"status": "error", "error": "Web search is temporarily unavailable"}
+    summary = _relayed_search(refused)
+    assert summary["pages"] == []
+    assert summary["sites"] == []
 
 
 def test_a_relayed_write_lists_the_file_in_the_turn_summary(tmp_path):

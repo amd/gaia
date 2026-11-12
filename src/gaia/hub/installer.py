@@ -30,6 +30,7 @@ Safety properties (CLAUDE.md — fail loudly, no silent fallbacks):
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import math
@@ -43,6 +44,7 @@ import sysconfig
 import tempfile
 import threading
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -51,6 +53,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from gaia.config import gaia_agents_dir
 from gaia.daemon.sidecars.spec import builtin_specs
+from gaia.frozen import is_frozen
 from gaia.hub import catalog as catalog_mod
 from gaia.hub import prerelease as prerelease_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
@@ -82,7 +85,7 @@ SITE_PACKAGES_DIRNAME = "site-packages"
 # install --target` install is only importable via an explicit sys.path
 # mutation in the installing process (see _hot_register) -- a later, unrelated
 # process using the SAME interpreter/venv (e.g. the next `gaia chat`
-# invocation, which imports `gaia_agent_chat` directly rather than through
+# invocation, which imports `gaia_agent` directly rather than through
 # AgentRegistry) would otherwise never see it. Python's `site` module reads
 # every `.pth` file in site-packages at interpreter startup and appends each
 # line to sys.path, so one shared file with one absolute path per installed
@@ -300,6 +303,22 @@ def read_sentinel(
         artifact_kind=data.get("artifact_kind", ARTIFACT_KIND_WHEEL),
         executable=data.get("executable", ""),
     )
+
+
+def binary_changed(
+    agent_id: str,
+    before: Optional[InstalledAgent],
+    install_root: Optional[Path] = None,
+) -> bool:
+    """True when an install replaced *before* with different bytes.
+
+    A same-version reinstall writes the same artifact, so a running copy of it
+    has nothing to restart for.
+    """
+    if before is None:
+        return False
+    after = read_sentinel(agent_id, install_root)
+    return after is not None and after.artifact_sha256 != before.artifact_sha256
 
 
 def list_installed(install_root: Optional[Path] = None) -> Dict[str, InstalledAgent]:
@@ -916,8 +935,8 @@ def _default_run_pip(args: List[str]) -> None:
     """Install ``args`` via pip, trying frontends in order until one works.
 
     The standalone ``uv`` binary leads (fastest, honours the active venv), then
-    ``python -m uv``, then ``python -m pip`` -- guaranteed present in any
-    venv, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
+    ``python -m uv``, then ``python -m pip`` -- present in any venv uv did not
+    create, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
     ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)
     still installs the wheel instead of hard-failing. Raises InstallError
     if every frontend fails, or at once when one is stuck or blocked on the
@@ -1036,12 +1055,13 @@ def _install_binary_artifact(
     """
     install_dir.mkdir(parents=True, exist_ok=True)
     target = install_dir / generic_name
+    _remove_replaced_binaries(target)
     tmp_fd, tmp_name = tempfile.mkstemp(dir=str(install_dir), prefix=".gaia-hub-tmp-")
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(tmp_fd, "wb") as f:
             f.write(artifact_bytes)
-        os.replace(str(tmp_path), str(target))
+        _replace_binary(tmp_path, target)
     except PermissionError as exc:
         tmp_path.unlink(missing_ok=True)
         raise InstallError(
@@ -1055,6 +1075,53 @@ def _install_binary_artifact(
         mode = target.stat().st_mode
         target.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
     return target
+
+
+#: Prefix of a binary moved aside because a running process held it.
+_REPLACED_PREFIX = ".replaced-"
+
+
+def _replace_binary(new: Path, target: Path) -> None:
+    """Move *new* over *target*, even while *target* is running on Windows.
+
+    Windows refuses to overwrite a running executable but lets it be renamed,
+    so the old one moves aside (the running process keeps its image) and the
+    next install deletes it.
+    """
+    try:
+        os.replace(str(new), str(target))
+        return
+    except PermissionError:
+        if os.name != "nt" or not target.exists():
+            raise
+    aside = target.with_name(f"{_REPLACED_PREFIX}{uuid.uuid4().hex[:8]}-{target.name}")
+    os.replace(str(target), str(aside))
+    try:
+        os.replace(str(new), str(target))
+    except OSError as swap_error:
+        try:
+            os.replace(str(aside), str(target))
+        except OSError as restore_error:
+            raise InstallError(
+                f"Could not install the new {target.name} ({swap_error}) or put "
+                f"the previous one back ({restore_error}). The previous one is "
+                f"{aside}: rename it to {target.name}, or run the install again."
+            ) from swap_error
+        raise
+    logger.info("Replaced running %s; the old copy is %s", target, aside.name)
+
+
+def _remove_replaced_binaries(target: Path) -> None:
+    """Delete binaries earlier installs moved aside, except ones still running."""
+    for old in target.parent.glob(f"{_REPLACED_PREFIX}*-{target.name}"):
+        try:
+            old.unlink()
+        except PermissionError:
+            # Still the image of a process started before that install.
+            logger.info("Keeping %s: a running process still uses it", old)
+        except OSError as exc:
+            # A leftover is harmless; the next install tries again.
+            logger.warning("Could not delete the old copy %s: %s", old, exc)
 
 
 def _filename_matches_platform(filename: str, platform_key: str) -> bool:
@@ -1194,8 +1261,7 @@ def resolve_installable_version(
         raise CoreTooOldError(
             f"No published version of '{agent_id}' runs on GAIA {core}: the "
             f"oldest needs GAIA {required} or newer. Upgrade with "
-            f"`{catalog_mod.CORE_UPGRADE_COMMAND}` (or re-run the installer from "
-            f"https://amd-gaia.ai), then install '{agent_id}' again.",
+            f"{catalog_mod.core_upgrade_hint()}, then install '{agent_id}' again.",
             required=required,
             core=core,
         )
@@ -1210,12 +1276,35 @@ def resolve_installable_version(
         )
         raise CoreTooOldError(
             f"'{agent_id}' {version} needs GAIA {floor} or newer, and this is "
-            f"GAIA {core}. Upgrade with `{catalog_mod.CORE_UPGRADE_COMMAND}` (or "
-            f"re-run the installer from https://amd-gaia.ai), then retry.{hint}",
+            f"GAIA {core}. Upgrade with {catalog_mod.core_upgrade_hint()}, "
+            f"then retry.{hint}",
             required=floor,
             core=core,
         )
     return version
+
+
+def published_artifact_sha256(
+    agent_id: str,
+    *,
+    manifest: Optional[Dict[str, Any]] = None,
+    base_url: Optional[str] = None,
+    fetcher: Optional[catalog_mod.Fetcher] = None,
+    platform_key: Optional[str] = None,
+) -> str:
+    """The sha256 of the artifact :func:`install` would fetch for this machine now.
+
+    Same selection as an install with no *version*: the newest published
+    version this core can run, and its artifact for *platform_key*. Raises
+    :class:`catalog_mod.CatalogError` when the hub can't be read and
+    :class:`InstallError` when it has nothing for this machine.
+    """
+    if manifest is None:
+        manifest = catalog_mod.fetch_manifest(
+            agent_id, base_url=base_url, fetcher=fetcher
+        )
+    _, artifact = _resolve_version(manifest, None, platform_key=platform_key)
+    return str(artifact.get("sha256") or "")
 
 
 def _resolve_version(
@@ -1337,7 +1426,7 @@ def _snapshot_backup(agent_id: str, install_root: Path) -> None:
 # _hot_register (below) makes a freshly-installed wheel importable in the
 # CALLING process only, via an in-memory sys.path mutation. Some callers
 # never construct an AgentRegistry at all -- e.g. `gaia chat`'s CLI handler
-# does a bare `from gaia_agent_chat.agent import ChatAgent` (cli.py) -- so a
+# does a bare `from gaia_agent.agent import GaiaAgent` (cli.py) -- so a
 # later, unrelated `gaia` invocation using the SAME interpreter/venv would
 # still fail to import a wheel agent installed by an earlier `gaia init`.
 # Writing one absolute site-packages path per installed wheel agent into a
@@ -1526,6 +1615,7 @@ def register_installed_sidecars(registry: Any) -> None:
             category=spec.category,
             tags=list(spec.tags),
             icon=spec.icon,
+            consumes_mcp_servers=spec.consumes_mcp_servers,
         )
 
 
@@ -1589,6 +1679,82 @@ class InstallResult:
         }
 
 
+def _install_source(
+    agent_id: str,
+    version: Optional[str],
+    manifest: Optional[Dict[str, Any]],
+    base_url: str,
+    fetcher: catalog_mod.Fetcher,
+):
+    """The manifest, download origin and RC source :func:`install` uses."""
+    rc_source = None
+    if version is None:
+        try:
+            rc_fetcher = fetcher
+            if fetcher is catalog_mod.fetch_bytes:
+                rc_fetcher = functools.partial(
+                    catalog_mod.fetch_bytes,
+                    timeout=prerelease_mod.MANIFEST_READ_TIMEOUT_SECONDS,
+                )
+            rc_source = prerelease_mod.flagship_source(agent_id, fetcher=rc_fetcher)
+        except prerelease_mod.PrereleaseFlagshipError as exc:
+            raise InstallError(str(exc)) from exc
+    if rc_source is not None:
+        return rc_source.manifest, rc_source.base_url, rc_source
+    if manifest is None:
+        manifest = catalog_mod.fetch_manifest(
+            agent_id, base_url=base_url, fetcher=fetcher
+        )
+    return manifest, base_url, None
+
+
+def _machine_gate(
+    manifest: Dict[str, Any], artifact: Dict[str, Any], install_root: Path
+) -> None:
+    """Refuse a machine the manifest's requirements rule out, or a full disk."""
+    report = check_compatibility(
+        manifest.get("requirements"),
+        download_size_bytes=artifact.get("size_bytes", 0),
+        install_dir=install_root,
+        artifact_kind=artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL),
+    )
+    if not report.compatible:
+        blockers = "; ".join(report.blockers)
+        if not report.disk_ok:
+            raise DiskSpaceError(blockers)
+        raise CompatibilityError(blockers)
+
+
+def no_build_reason(
+    agent_id: str,
+    *,
+    base_url: Optional[str] = None,
+    fetcher: Optional[catalog_mod.Fetcher] = None,
+    platform_key: Optional[str] = None,
+    install_root: Optional[Path] = None,
+) -> Optional[str]:
+    """Why :func:`install` would find no build of *agent_id* for this machine.
+
+    ``None`` when it has one. Runs install's own source, version, artifact and
+    machine checks, downloading nothing; these are the refusals
+    ``gaia init`` treats as "no build for this machine" rather than a failure.
+
+    Raises:
+        catalog_mod.CatalogError, InstallError, requests.RequestException: the
+            question could not be answered (hub unreachable, malformed
+            manifest, no version this core runs).
+    """
+    fetcher = fetcher or catalog_mod.fetch_bytes
+    base_url = (base_url or catalog_mod.get_hub_base_url()).rstrip("/")
+    manifest, _, _ = _install_source(agent_id, None, None, base_url, fetcher)
+    try:
+        _, artifact = _resolve_version(manifest, None, platform_key=platform_key)
+        _machine_gate(manifest, artifact, install_root or default_install_root())
+    except (UnsupportedPlatformError, CompatibilityError) as exc:
+        return str(exc)
+    return None
+
+
 def install(
     agent_id: str,
     *,
@@ -1647,20 +1813,9 @@ def install(
             agent_id, status="running", phase="resolving", percent=5, version=version
         )
         try:
-            rc_source = None
-            if version is None:
-                try:
-                    rc_source = prerelease_mod.flagship_source(
-                        agent_id, fetcher=fetcher
-                    )
-                except prerelease_mod.PrereleaseFlagshipError as exc:
-                    raise InstallError(str(exc)) from exc
-            if rc_source is not None:
-                manifest, base_url = rc_source.manifest, rc_source.base_url
-            elif manifest is None:
-                manifest = catalog_mod.fetch_manifest(
-                    agent_id, base_url=base_url, fetcher=fetcher
-                )
+            manifest, base_url, rc_source = _install_source(
+                agent_id, version, manifest, base_url, fetcher
+            )
             language = manifest.get("language", "python")
 
             # Trust gate — refuse any non-verified package unless the caller
@@ -1681,6 +1836,14 @@ def install(
                 manifest, version, platform_key=platform_key
             )
             artifact_kind = artifact.get("artifact_kind", ARTIFACT_KIND_WHEEL)
+            if artifact_kind == ARTIFACT_KIND_WHEEL and is_frozen():
+                raise InstallError(
+                    f"'{agent_id}' {resolved_version} ships as a Python package, "
+                    "and this GAIA build can't install packages: it runs agents "
+                    "that ship as binaries. A wheel agent needs GAIA installed "
+                    "from PyPI or source; see "
+                    "https://amd-gaia.ai/docs/guides/custom-agent."
+                )
             effective_platform_key = platform_key or current_platform_key()
 
             # --- compatibility / disk gate ---
@@ -1692,16 +1855,7 @@ def install(
                 version=resolved_version,
             )
             if not skip_compatibility_check:
-                report = check_compatibility(
-                    manifest.get("requirements"),
-                    download_size_bytes=artifact.get("size_bytes", 0),
-                    install_dir=root,
-                )
-                if not report.compatible:
-                    blockers = "; ".join(report.blockers)
-                    if not report.disk_ok:
-                        raise DiskSpaceError(blockers)
-                    raise CompatibilityError(blockers)
+                _machine_gate(manifest, artifact, root)
 
             # --- download + verify ---
             _set_progress(
@@ -1765,7 +1919,7 @@ def install(
                 # later, unrelated `gaia` invocation using the same
                 # interpreter/venv can import this wheel too (#2358) — closes
                 # the gap for call sites that never touch AgentRegistry (e.g.
-                # `gaia chat`'s hardcoded `import gaia_agent_chat`).
+                # `gaia chat`'s hardcoded `import gaia_agent`).
                 if artifact_kind == ARTIFACT_KIND_WHEEL:
                     _add_wheel_agent_to_active_env_path(
                         install_dir / SITE_PACKAGES_DIRNAME,
@@ -2346,8 +2500,3 @@ def run_setup(
 
     _persist()
     return SetupResult(steps=steps)
-
-
-def get_setup_status(install_root: Optional[Path] = None) -> Optional[Dict[str, Any]]:
-    """Return the latest persisted setup state (for the polling endpoint)."""
-    return read_setup_state(default_setup_state_path(install_root))

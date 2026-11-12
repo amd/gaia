@@ -236,7 +236,8 @@ def build_registration():
     )
 ```
 
-`gaia agent init hello` scaffolds exactly this layout; `hub/agents/hello-world/python/`
+`gaia agent init hello` scaffolds exactly this layout;
+[`tests/fixtures/agents/hello-world/`](https://github.com/amd/gaia/tree/main/tests/fixtures/agents/hello-world)
 is the reference package.
 
 ---
@@ -248,18 +249,18 @@ Most unit tests should mock Lemonade. Real inference belongs in integration test
 ```python
 # tests/test_hello_agent.py
 import pytest
-from gaia.agents.hello.agent import HelloAgent, HelloAgentConfig
+from gaia_agent_hello_world.agent import HelloWorldAgent
 
 
-def test_hello_agent_registers_now_tool(mock_lemonade_client):
-    agent = HelloAgent(config=HelloAgentConfig())
-    assert "now" in agent._tools_registry
+def test_hello_agent_builds_without_lemonade():
+    agent = HelloWorldAgent(skip_lemonade=True)
+    assert agent.response_mode == "conversational"
 
 
 def test_hello_agent_integration(require_lemonade):
     # Skips automatically when Lemonade isn't running.
-    agent = HelloAgent(config=HelloAgentConfig())
-    result = agent.process_query("What time is it?")
+    agent = HelloWorldAgent()
+    result = agent.process_query("Say hello")
     assert result["result"]
 ```
 

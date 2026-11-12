@@ -19,7 +19,7 @@ on:
       - 'src/gaia/version.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_lemonade_server.yml'
       - '.github/actions/setup-venv/**'
@@ -32,15 +32,6 @@ on:
       - 'src/gaia/version.py'
   merge_group:
   workflow_dispatch:
-    inputs:
-      runson:
-        description: 'Which runner group to run the workflow on'
-        default: 'stx'
-        required: true
-        type: choice
-        options:
-        - 'stx'
-        - 'stx-test'
 
 permissions:
   contents: read
@@ -51,7 +42,7 @@ concurrency:
 
 jobs:
   test-lemonade-server:
-    name: Lemonade Server Smoke Test (${{ inputs.runson || (contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test') || 'stx' }})
+    name: Lemonade Server Smoke Test (Strix Halo)
     # Runs on the AMD Ryzen DevLab Dispatch ephemeral pool via the devlab-dispatch label.
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')

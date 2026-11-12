@@ -260,7 +260,7 @@ class ConnectionForwarder:
                 f"{scope_command}"
                 f"(`gaia connectors connect {provider}` prints the full OAuth-client "
                 f"setup if the connector isn't configured yet.) In the Agent UI you "
-                f"can instead use Settings -> Connections."
+                f"can instead use Settings -> Connectors."
             )
 
         required = list(requirement.required_scopes) if requirement else granted

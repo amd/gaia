@@ -190,6 +190,8 @@ class TestBuildPlan:
             gaia / "electron-updater.log",
             gaia / "electron-startup-failures.json",
             gaia / "bin",
+            gaia / "core",
+            gaia / "app-core",
             gaia / "traces",
             gaia / "host",
         ]
@@ -971,55 +973,6 @@ class TestLemonadeProductCodeUninstall:
 
 
 # ---------------------------------------------------------------------------
-# Lemonade Python interpreter resolution
-# ---------------------------------------------------------------------------
-
-
-class TestLemonadePythonResolution:
-    """When called from the GAIA installer bundle, ``sys.executable`` is
-    the GAIA venv, NOT where Lemonade was installed — so pip-uninstalling
-    against it is a no-op. ``_resolve_lemonade_python`` locates the real
-    interpreter by inspecting the lemonade-server console script.
-    """
-
-    def test_resolves_direct_shebang_posix(self, fake_home, monkeypatch):
-        lemonade = fake_home / "bin" / "lemonade-server"
-        lemonade.parent.mkdir(parents=True, exist_ok=True)
-        lemonade.write_bytes(b"#!/opt/venvs/lemon/bin/python\n# rest\n")
-
-        # Patch only uc's view: pyfakefs teardown calls os.getuid() on a global "linux".
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
-        monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() == "/opt/venvs/lemon/bin/python"
-
-    def test_resolves_env_shebang_posix(self, fake_home, monkeypatch):
-        lemonade = fake_home / "bin" / "lemonade-server"
-        lemonade.parent.mkdir(parents=True, exist_ok=True)
-        lemonade.write_bytes(b"#!/usr/bin/env python3\n# rest\n")
-
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
-        monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() == "python3"
-
-    def test_not_on_path_returns_none(self, monkeypatch):
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
-        monkeypatch.setattr(uc.shutil, "which", lambda name: None)
-        assert uc._resolve_lemonade_python() is None
-
-    def test_script_without_shebang_returns_none(self, fake_home, monkeypatch):
-        lemonade = fake_home / "bin" / "lemonade-server"
-        lemonade.parent.mkdir(parents=True, exist_ok=True)
-        lemonade.write_bytes(b"# no shebang here\nprint('hi')\n")
-
-        monkeypatch.setattr(uc, "sys", SimpleNamespace(platform="linux"))
-        monkeypatch.setattr(uc.shutil, "which", lambda name: str(lemonade))
-
-        assert uc._resolve_lemonade_python() is None
-
-
-# ---------------------------------------------------------------------------
 # GAIA home safety: a misconfigured GAIA_HOME must not become a deletion plan
 # ---------------------------------------------------------------------------
 
@@ -1411,6 +1364,229 @@ class TestWindowsJunctions:
 
 
 # ---------------------------------------------------------------------------
+# Windows self-hosted venv cleanup
+# ---------------------------------------------------------------------------
+
+
+class TestDeferredWindowsVenvRemoval:
+    """The helper removes an active Windows virtual environment after exit."""
+
+    def test_deferred_helper_waits_for_current_process_and_venv_launcher(
+        self, monkeypatch, tmp_path
+    ):
+        venv = tmp_path / ".gaia" / "venv"
+        venv.mkdir(parents=True)
+        captured = _Capture()
+        popen_calls = []
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc.os, "getpid", lambda: 101)
+        monkeypatch.setattr(uc.os, "getppid", lambda: 202)
+        monkeypatch.setattr(uc.tempfile, "gettempdir", lambda: str(tmp_path))
+        monkeypatch.setattr(
+            uc.subprocess, "Popen", lambda *a, **kw: popen_calls.append((a, kw))
+        )
+
+        assert uc._defer_windows_venv_removal(venv, printer=captured)
+
+        args, kwargs = popen_calls[0]
+        command = args[0][-1]
+        assert "Wait-Process -Id $pidToWait" in command
+        assert "Get-Process -Id $parentPidToWait" in command
+        assert (
+            "$parent.Path.StartsWith($target, [StringComparison]::OrdinalIgnoreCase)"
+            in command
+        )
+        assert "Wait-Process -Id $parentPidToWait" in command
+        assert "$pidToWait = 101" in command
+        assert "$parentPidToWait = 202" in command
+        assert kwargs["stdin"] is subprocess.DEVNULL
+        assert "[deferred]" in captured.text
+
+    def test_deferred_helper_does_not_wait_for_non_process_parent(
+        self, monkeypatch, tmp_path
+    ):
+        venv = tmp_path / ".gaia" / "venv"
+        venv.mkdir(parents=True)
+        popen_calls = []
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc.os, "getpid", lambda: 101)
+        monkeypatch.setattr(uc.os, "getppid", lambda: 1)
+        monkeypatch.setattr(uc.tempfile, "gettempdir", lambda: str(tmp_path))
+        monkeypatch.setattr(
+            uc.subprocess, "Popen", lambda *a, **kw: popen_calls.append((a, kw))
+        )
+
+        assert uc._defer_windows_venv_removal(venv)
+
+        command = popen_calls[0][0][0][-1]
+        assert "$parentPidToWait = 1" in command
+        assert "if ($parentPidToWait -gt 1)" in command
+
+    def test_execute_plan_accepts_a_deferred_active_venv(self, monkeypatch, tmp_path):
+        venv = tmp_path / ".gaia" / "venv"
+        plan = uc.build_plan(
+            venv=True,
+            purge=False,
+            purge_lemonade=False,
+            purge_models=False,
+            home=tmp_path,
+        )
+        deferred = []
+
+        def unexpected_remove(*_args, **_kwargs):
+            raise AssertionError("an active venv must be deferred before rmtree")
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc, "_remove_path", unexpected_remove)
+        monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: True)
+        monkeypatch.setattr(
+            uc,
+            "_defer_windows_venv_removal",
+            lambda path, **_kw: deferred.append(path) or True,
+        )
+
+        assert (
+            uc.execute_plan(plan, allowed_roots=[venv.parent], home=tmp_path)
+            == uc.EXIT_OK
+        )
+        assert deferred == [venv]
+
+    def test_purge_defers_the_bin_folder_whose_launcher_started_it(
+        self, monkeypatch, tmp_path
+    ):
+        """`gaia` on PATH is ~/.gaia/bin/gaia.exe, which Windows keeps locked
+        until this command exits; rmtree would fail on it."""
+        gaia_bin = tmp_path / ".gaia" / "bin"
+        gaia_bin.mkdir(parents=True)
+        # Never read or write the machine's real user PATH.
+        monkeypatch.setattr(uc, "_read_user_path", lambda: ("", 2))
+        plan = uc.build_plan(
+            venv=False,
+            purge=True,
+            purge_lemonade=False,
+            purge_models=False,
+            home=tmp_path,
+        )
+        deferred, removed = [], []
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: False)
+        monkeypatch.setattr(uc.sys, "argv", [str(gaia_bin / "gaia"), "uninstall"])
+        monkeypatch.setattr(
+            uc,
+            "_defer_windows_venv_removal",
+            lambda path, **_kw: deferred.append(path) or True,
+        )
+        monkeypatch.setattr(
+            uc, "_remove_path", lambda path, **_kw: removed.append(path) or True
+        )
+        monkeypatch.setattr(uc, "_clear_credentials", lambda **_kw: True)
+        monkeypatch.setattr(uc, "_stop_daemon", lambda **_kw: True)
+
+        uc.execute_plan(plan, allowed_roots=[tmp_path / ".gaia"], home=tmp_path)
+
+        assert deferred == [gaia_bin]
+        assert gaia_bin not in removed
+
+    def test_is_launched_from_reads_the_launchers_argv0(self, monkeypatch, tmp_path):
+        gaia_bin = tmp_path / ".gaia" / "bin"
+        scripts = tmp_path / ".gaia" / "venv" / "Scripts"
+
+        monkeypatch.setattr(uc.sys, "argv", [str(gaia_bin / "gaia")])
+        assert uc._is_launched_from(gaia_bin)
+        assert not uc._is_launched_from(scripts)
+
+        monkeypatch.setattr(uc.sys, "argv", [str(scripts / "gaia")])
+        assert not uc._is_launched_from(gaia_bin)
+
+        monkeypatch.setattr(uc.sys, "argv", [""])
+        assert not uc._is_launched_from(gaia_bin)
+
+    def test_deferred_log_is_named_for_the_folder(self, monkeypatch, tmp_path):
+        """Venv and bin can both be deferred in one run; one shared log
+        would let either helper delete the other's failure report."""
+        popen_calls = []
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc.os, "getpid", lambda: 101)
+        monkeypatch.setattr(uc.tempfile, "gettempdir", lambda: str(tmp_path))
+        monkeypatch.setattr(
+            uc.subprocess, "Popen", lambda *a, **kw: popen_calls.append(a)
+        )
+
+        assert uc._defer_windows_venv_removal(tmp_path / ".gaia" / "venv")
+        assert uc._defer_windows_venv_removal(tmp_path / ".gaia" / "bin")
+
+        logs = [call[0][-1].split("$log = ")[1].split(";")[0] for call in popen_calls]
+        assert logs == [
+            "'" + str(tmp_path / "gaia-uninstall-venv-101.log") + "'",
+            "'" + str(tmp_path / "gaia-uninstall-bin-101.log") + "'",
+        ]
+
+    def test_execute_plan_does_not_defer_linked_active_venv(
+        self, monkeypatch, tmp_path
+    ):
+        venv = tmp_path / ".gaia" / "venv"
+        plan = uc.build_plan(
+            venv=True,
+            purge=False,
+            purge_lemonade=False,
+            purge_models=False,
+            home=tmp_path,
+        )
+        removed = []
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(uc, "_is_link", lambda path: path == venv)
+        monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: True)
+        monkeypatch.setattr(
+            uc,
+            "_defer_windows_venv_removal",
+            lambda *_args, **_kwargs: pytest.fail(
+                "linked venvs must use the safe link-removal path"
+            ),
+        )
+        monkeypatch.setattr(
+            uc, "_remove_path", lambda path, **_kwargs: removed.append(path) or True
+        )
+
+        assert (
+            uc.execute_plan(plan, allowed_roots=[venv.parent], home=tmp_path)
+            == uc.EXIT_OK
+        )
+        assert removed == [venv]
+
+    def test_execute_plan_reports_failed_active_venv_defer(self, monkeypatch, tmp_path):
+        venv = tmp_path / ".gaia" / "venv"
+        plan = uc.build_plan(
+            venv=True,
+            purge=False,
+            purge_lemonade=False,
+            purge_models=False,
+            home=tmp_path,
+        )
+
+        monkeypatch.setattr(uc, "_is_windows", lambda: True)
+        monkeypatch.setattr(
+            uc,
+            "_remove_path",
+            lambda *_args, **_kwargs: pytest.fail(
+                "active venv must not be removed first"
+            ),
+        )
+        monkeypatch.setattr(uc, "_is_running_from_venv", lambda _path: True)
+        monkeypatch.setattr(
+            uc, "_defer_windows_venv_removal", lambda *_args, **_kwargs: False
+        )
+
+        assert (
+            uc.execute_plan(plan, allowed_roots=[venv.parent], home=tmp_path)
+            == uc.EXIT_FS_ERROR
+        )
+
+
+# ---------------------------------------------------------------------------
 # The pre-3.12 junction-detection fallback
 # ---------------------------------------------------------------------------
 
@@ -1510,6 +1686,11 @@ def _installer_block(dirs: str) -> str:
 
 
 def _current_dirs(home: Path) -> str:
+    return str(home / ".gaia" / "bin")
+
+
+def _venv_and_bin_dirs(home: Path) -> str:
+    """What 0.23 up to the #6603 fix wrote; re-running the installer rewrites it."""
     return f"{home / '.gaia' / 'venv' / 'bin'}:{home / '.gaia' / 'bin'}"
 
 
@@ -1572,7 +1753,7 @@ class TestInstallerLeftovers:
         zshrc.write_bytes(
             (_RC_BEFORE + _installer_block(_current_dirs(home)) + _RC_AFTER).encode()
         )
-        # A pre-0.23 venv-only block, then the current block the 0.23 installer
+        # A pre-0.23 venv-only block, then the venv+bin block the 0.23 installer
         # appended because the old one lacked ~/.gaia/bin.
         bashrc = home / ".bashrc"
         bashrc.write_bytes(
@@ -1580,7 +1761,7 @@ class TestInstallerLeftovers:
                 "export A=1\r\n"
                 + _installer_block(_legacy_dirs(home))
                 + "export B=2\n"
-                + _installer_block(_current_dirs(home))
+                + _installer_block(_venv_and_bin_dirs(home))
             ).encode()
         )
         profile = home / ".profile"
@@ -2224,3 +2405,68 @@ class TestCredentialStore:
         assert _REAL_CLEAR_CREDENTIALS(printer=captured) is False
         assert "keychain locked" in captured.text
         assert "[removed]" not in captured.text
+
+
+class TestTheLemonadeCheckDidNotRun:
+    """A crashed probe is not evidence that Lemonade is absent (#5772)."""
+
+    def test_a_failed_check_is_reported_instead_of_nothing_to_do(self, monkeypatch):
+        from gaia.installer import lemonade_installer
+
+        monkeypatch.setattr(
+            lemonade_installer.LemonadeInstaller,
+            "check_installation",
+            lambda self: lemonade_installer.LemonadeInfo(
+                installed=False,
+                error="registry read failed",
+                check_failed=True,
+            ),
+        )
+        captured = _Capture()
+
+        assert uc._remove_lemonade(printer=captured) is False
+
+        assert "installation check failed: registry read failed" in captured.text
+        assert "nothing to do" not in captured.text
+        assert "uninstalled" not in captured.text
+
+    def test_an_absent_lemonade_is_still_nothing_to_do(self, monkeypatch):
+        from gaia.installer import lemonade_installer
+
+        monkeypatch.setattr(
+            lemonade_installer.LemonadeInstaller,
+            "check_installation",
+            lambda self: lemonade_installer.LemonadeInfo(
+                installed=False,
+                error="Lemonade Server not found",
+            ),
+        )
+        captured = _Capture()
+
+        assert uc._remove_lemonade(printer=captured) is True
+        assert "not installed" in captured.text
+
+    def test_a_failed_check_turns_the_run_into_completed_with_errors(
+        self, fake_home, monkeypatch
+    ):
+        from gaia.installer import lemonade_installer
+
+        _seed_gaia_tree(fake_home)
+        monkeypatch.setattr(
+            lemonade_installer.LemonadeInstaller,
+            "check_installation",
+            lambda self: lemonade_installer.LemonadeInfo(
+                installed=False,
+                error="registry read failed",
+                check_failed=True,
+            ),
+        )
+        captured = _Capture()
+
+        exit_code = uc.run(
+            _ns(purge=True, purge_lemonade=True, yes=True), printer=captured
+        )
+
+        assert exit_code == uc.EXIT_FS_ERROR, captured.text
+        assert "completed with errors" in captured.text
+        assert "gaia uninstall: done." not in captured.text

@@ -8,9 +8,11 @@
 # final-stamped twin a final would promote. Then it verifies them and writes the
 # manifest of what a real train would publish, and where. It publishes nothing:
 #
-#   - workflow_dispatch only, so nothing a contributor pushes can start it;
-#   - no environment, no secret, and every job's token is read-only, except the
-#     Agent UI installer jobs, which build-installers.yml forces to declare
+#   - a nightly schedule and workflow_dispatch only, so nothing a contributor
+#     pushes can start it; the schedule builds main's head after it merged;
+#   - no environment, no secret, and every job's token is read-only (the plan
+#     job also reads Actions runs, to skip a commit that already passed), except
+#     the Agent UI installer jobs, which build-installers.yml forces to declare
 #     contents: write and id-token: write (see below);
 #   - it only ever builds its own commit. Checking out another ref would run that
 #     code with this branch's cache scope, which later release builds restore;
@@ -21,20 +23,41 @@
 # final-) keeps the two builds' artifacts apart; it defaults to empty, which is
 # what publish.yml, release_components.yml and the PR gates still get.
 #
-# Run it:  gh workflow run release_train_dryrun.yml --ref main -f rc_tag=v0.25.1-rc3
+# It runs nightly on main, so a passing result for the commit is usually there
+# before anyone decides to tag (#6611). The nightly names the next unused RC of
+# version.py's version, and skips a commit whose passing run's artifacts can
+# still be downloaded (7 days); after that it builds the commit again.
+#
+# Run it:  gh workflow run release_train_dryrun.yml --ref main [-f rc_tag=v0.25.1-rc3]
+# Find the verified build of a commit, and its digests. A nightly that skipped
+# passes with no manifest, so ask for a run that is still whole:
+#   python util/release_train.py verified-run --repo amd/gaia --sha <sha>
+#   gh run download <run-id> -n release-train-manifest   # release-manifest.json
 
 name: Release train dry run
 
 on:
+  schedule:
+    - cron: '41 7 * * *'   # 07:41 UTC: after US Pacific midnight, off the :00 rush
   workflow_dispatch:
     inputs:
       rc_tag:
-        description: 'The release candidate to build this commit as (vX.Y.Z-rcN; X.Y.Z must match src/gaia/version.py). Its twin is vX.Y.Z.'
-        required: true
+        description: 'The release candidate to build this commit as (vX.Y.Z-rcN; X.Y.Z must match src/gaia/version.py). Its twin is vX.Y.Z. Empty: the next unused RC.'
+        required: false
+        default: ''
         type: string
 
 permissions:
   contents: read
+
+# One dry run per branch at a time: a nightly that lands during a dispatch
+# waits, then sees that run's pass and skips. GitHub keeps one pending run per
+# group, so a newer queued run replaces an older queued one; a running one is
+# never cancelled. That includes a dispatch queued behind a running dry run:
+# if the nightly queues after it, the dispatch is cancelled. Dispatch again.
+concurrency:
+  group: release-train-dryrun-${{ github.ref }}
+  cancel-in-progress: false
 
 env:
   PYTHONUTF8: '1'
@@ -42,9 +65,15 @@ env:
 jobs:
   plan:
     name: Plan
+    # Forks keep the schedule off; a fork's maintainer can still dispatch it.
+    if: github.event_name != 'schedule' || github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read   # gh run list, to find a passing run of this commit
     outputs:
+      build: ${{ steps.fresh.outputs.build }}
       rc_tag: ${{ steps.plan.outputs.rc_tag }}
       final_tag: ${{ steps.plan.outputs.final_tag }}
       base_version: ${{ steps.plan.outputs.base_version }}
@@ -58,18 +87,48 @@ jobs:
         with:
           python-version: '3.12'
 
+      # A dispatch always builds. The nightly has nothing new to say about a
+      # commit that already passed, so it stops here and builds nothing.
+      - name: Skip a commit that already passed
+        id: fresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT}" != "schedule" ]; then
+            echo "build=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Only a pass whose artifacts can still be downloaded counts: past
+          # retention the commit would have a verdict but nothing to promote.
+          prior="$(python3 util/release_train.py verified-run \
+            --repo "${GITHUB_REPOSITORY}" --sha "${GITHUB_SHA}")"
+          if [ -n "${prior}" ]; then
+            echo "${GITHUB_SHA} already passed, artifacts still live: ${prior}" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Check the tag against the tree
         id: plan
+        if: steps.fresh.outputs.build == 'true'
         env:
           RC_TAG: ${{ inputs.rc_tag }}
         run: |
           set -euo pipefail
           echo "Building ${GITHUB_REF_NAME} = ${GITHUB_SHA}"
+          if [ -z "${RC_TAG}" ]; then
+            RC_TAG="$(git ls-remote --tags --refs origin | python3 util/release_train.py next-tag --target .)"
+            echo "No rc_tag given; building as the next unused candidate, ${RC_TAG}"
+          fi
           python3 util/release_train.py plan --tag "${RC_TAG}" --target . | tee -a "$GITHUB_OUTPUT"
 
       # Phase 1's single version source: every generated version field must
       # already agree with src/gaia/version.py before anything is stamped.
       - name: Check every version field against its source
+        if: steps.fresh.outputs.build == 'true'
         run: python3 util/release_versions.py --check
 
   # ── Core wheel + sdist and the @amd-gaia/agent-ui tarball ──────────────────
@@ -78,6 +137,10 @@ jobs:
   core-dist:
     name: Core packages (${{ matrix.flavor }})
     needs: plan
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -207,11 +270,19 @@ jobs:
   sidecar:
     name: Flagship sidecar
     needs: plan
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.build == 'true'
     uses: ./.github/workflows/build_flagship_sidecar.yml
 
   flagship-npm-tests:
     name: Flagship npm tests
     needs: plan
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.build == 'true'
     uses: ./.github/workflows/test_agent_gaia_npm.yml
 
   # ── Agent UI installers ─────────────────────────────────────────────────────
@@ -226,7 +297,11 @@ jobs:
   # checkout on this commit.
   ui-rc:
     name: Agent UI installers (rc)
-    needs: plan
+    needs: [plan, sidecar]
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.sidecar.result == 'success'
     permissions:
       contents: write
       id-token: write
@@ -236,10 +311,15 @@ jobs:
       ref: ${{ github.sha }}
       artifact_prefix: rc-
       publish_to_release: false
+      flagship: artifact
 
   ui-final:
     name: Agent UI installers (final)
     needs: plan
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.build == 'true'
     permissions:
       contents: write
       id-token: write
@@ -252,7 +332,7 @@ jobs:
 
   # ── Terminal binaries and installers ───────────────────────────────────────
   # Both flavors build the packages around this run's own sidecar, as
-  # publish.yml's rc-tui does for a real candidate. The candidate's .deb/.rpm
+  # publish.yml's tui-installers does for a real candidate. The candidate's .deb/.rpm
   # carry X.Y.Z~rc.N inside (installer/tui/linux/README.md).
   tui-rc:
     name: Terminal (rc)
@@ -450,7 +530,8 @@ jobs:
       - lock
     if: >-
       !cancelled() &&
-      needs.plan.result == 'success'
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

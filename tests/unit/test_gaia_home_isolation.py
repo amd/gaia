@@ -4,11 +4,18 @@
 """Unit tests never write the developer's real ``~/.gaia`` (see tests/unit/conftest.py)."""
 
 import os
+import sqlite3
 from pathlib import Path
+
+import pytest
 
 from gaia import security
 from gaia.config import gaia_home
-from gaia.logger import LOG_FILE_ENV, log_manager
+from gaia.logger import LOG_FILE_ENV, configure
+
+# The owning process (the CLI) installs logging; under these unit tests this
+# module does the equivalent so the log-file location can be asserted.
+log_manager = configure()
 
 # Read at collection, before any test can patch the home.
 _REAL_GAIA_HOME = Path.home() / ".gaia"
@@ -51,3 +58,21 @@ def test_a_moved_home_still_gets_its_own_dot_gaia(monkeypatch, tmp_path):
 def test_the_log_file_is_not_the_real_one():
     assert os.environ.get(LOG_FILE_ENV)
     assert not _under(log_manager.log_file, _REAL_GAIA_HOME)
+
+
+def _unresolvable(path, *_a, **_k):
+    raise OSError(1920, "The file cannot be accessed by the system", path)
+
+
+def test_a_broken_realpath_does_not_break_the_database_guard(monkeypatch, tmp_path):
+    # Coverage opens its data file through the same guard; a raise here left the
+    # test's patch in place for every later test on the worker.
+    monkeypatch.setattr(os.path, "realpath", _unresolvable)
+    sqlite3.connect(str(tmp_path / "scratch.db")).close()
+
+
+def test_a_broken_realpath_still_keeps_tests_out_of_the_real_home(monkeypatch):
+    monkeypatch.setattr(os.path, "realpath", _unresolvable)
+    with pytest.raises(pytest.fail.Exception, match="real home"):
+        sqlite3.connect(str(_REAL_GAIA_HOME / "never-created.db"))
+    assert not (_REAL_GAIA_HOME / "never-created.db").exists()

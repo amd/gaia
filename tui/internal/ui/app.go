@@ -24,6 +24,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
 	"github.com/amd/gaia/tui/internal/ui/theme"
+	"github.com/amd/gaia/tui/internal/update"
 )
 
 // prepareTerminal does everything that has to TALK to the terminal before
@@ -75,12 +76,17 @@ func RunFlagship(dev bool, mockAgent string, ctrl *control.Options, fullAccess, 
 			}
 		}()
 	}
+	if err := update.Settle(); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+	}
 	m := withLastModel(root.NewFlagshipModel(*agent, dev).
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithFullAccessNotice(notice).
-		WithClaude(useClaude, claudeModel)).
+		WithClaude(useClaude, claudeModel).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace).
+		WithUpdateCheck().
 		WithLocalPreflight(preflight.LocalOptions{
 			// The gate has to answer about the binary this launch will actually
 			// spawn — with --mock that is the mock, not the name the seed carries.
@@ -105,7 +111,7 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options, t
 		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
 	}
 
-	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace)
+	c := client.NewSubprocessClient(bin, argv[1:], dev).WithTrace(trace).WithLogf(control.DevLogf)
 	defer func() {
 		if err := closeSession(c, os.Stderr, slowCloseNotice); err != nil {
 			fmt.Fprintf(os.Stderr, "%v\n", err)
@@ -189,7 +195,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	if removed, err := control.ClearStale(daemon.PIDAlive); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 	} else if removed && dev {
-		fmt.Fprintln(os.Stderr, "[DEBUG] removed a stale control discovery file")
+		control.DevLogf("removed a stale control discovery file")
 	}
 
 	if ctrl == nil {
@@ -207,9 +213,11 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 				p.Quit()
 			}
 		}()
-		if _, err := p.Run(); err != nil {
+		final, err := p.Run()
+		if err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
+		beforeExit(final)
 		return nil
 	}
 
@@ -251,12 +259,35 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	// Bracket Run: tea.Program.Send silently discards messages outside it, so
 	// the control API must refuse injection rather than report a false success.
 	srv.MarkRunning()
-	_, err = p.Run()
+	final, err := p.Run()
 	srv.MarkStopped()
 	if err != nil {
 		return fmt.Errorf("TUI error: %w", err)
 	}
+	beforeExit(final)
 	return nil
+}
+
+// exitHook is a model with work to finish once the program has stopped —
+// however it stopped: a key, a closed terminal, a signal.
+type exitHook interface{ BeforeExit() error }
+
+// beforeExit runs the final model's exit work, after unwrapping the
+// recorder and repaint wrappers around it.
+func beforeExit(m tea.Model) {
+	for m != nil {
+		if h, ok := m.(exitHook); ok {
+			if err := h.BeforeExit(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+			}
+			return
+		}
+		u, ok := m.(interface{ Unwrap() tea.Model })
+		if !ok {
+			return
+		}
+		m = u.Unwrap()
+	}
 }
 
 // RunAgent launches one catalog agent by id, over whatever transport that entry
@@ -381,11 +412,13 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 				abandonWait: interruptAbandonWait,
 				release:     func() { signal.Stop(sigs) },
 			})
-		if res.Interrupted {
-			// Explicit, not left to the defer: a stop that could not end the
-			// agent must say so before the process exits.
-			if err := c.Close(); err != nil {
+		// Explicit, not left to the defer: a stop or an abandoned turn's cancel
+		// that did not land must say so before the process exits.
+		if err := c.Close(); err != nil {
+			if res.Interrupted {
 				fmt.Fprintf(os.Stderr, "❌ Could not stop the agent, so it may still be running: %v\n", err)
+			} else {
+				fmt.Fprintf(os.Stderr, "❌ %v\n", err)
 			}
 		}
 		return res.ExitCode, nil
@@ -400,7 +433,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		WithCatalog(cat).
 		WithFullAccess(fullAccess).
 		WithClaude(useClaude, claudeModel).
-		WithModel(model)).
+		WithModel(model).
+		WithTerminalVersion(update.Current)).
 		WithTrace(trace)
 	if err := run(m, dev, ctrl); err != nil {
 		return 1, err
@@ -416,10 +450,16 @@ func knownIDs(cat *catalog.Catalog) string {
 	for _, a := range cat.All() {
 		ids = append(ids, a.ID)
 	}
+	known := "Known ids: " + strings.Join(ids, ", ") + "."
 	if len(ids) == 0 {
-		return "The catalog is empty."
+		known = "The catalog is empty."
 	}
-	return "Known ids: " + strings.Join(ids, ", ") + "."
+	// An agent whose install record is unreadable is missing from the list
+	// above; say so, or it reads as never installed.
+	if warnings := cat.Warnings(); len(warnings) > 0 {
+		known += " " + strings.Join(warnings, " ")
+	}
+	return known
 }
 
 // orDefault names what will actually be used when a flag was left unset, so a

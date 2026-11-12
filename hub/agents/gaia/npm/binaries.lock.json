@@ -1,34 +1,34 @@
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.3.1",
+  "agentVersion": "0.3.5",
   "components": {
     "sidecar": {
-      "componentVersion": "0.3.1",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.1",
+      "componentVersion": "0.3.5",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.5",
       "platforms": {
         "win32-x64": {
           "filename": "gaia-agent-win32-x64.exe",
           "executable": "gaia-agent.exe",
-          "sha256": "PENDING-replace-with-real-sha256",
-          "size": 0
+          "sha256": "608edd72ca58431ed043095baab0e8fe2f796c89c556975427596a799a6e38ce",
+          "size": 157825349
         },
         "darwin-arm64": {
           "filename": "gaia-agent-darwin-arm64",
           "executable": "gaia-agent",
-          "sha256": "PENDING-replace-with-real-sha256",
-          "size": 0
+          "sha256": "1427b448b024cd3bc43fdf0046b95215d729a3741ba8f7b85f30268e9fd411ac",
+          "size": 142802096
         },
         "darwin-x64": {
           "filename": "gaia-agent-darwin-x64",
           "executable": "gaia-agent",
-          "sha256": "PENDING-replace-with-real-sha256",
-          "size": 0
+          "sha256": "5c77559ab570610159ce6826a0b735558824edafec15071fc1c6561e288fdd62",
+          "size": 152486048
         },
         "linux-x64": {
           "filename": "gaia-agent-linux-x64",
           "executable": "gaia-agent",
-          "sha256": "PENDING-replace-with-real-sha256",
-          "size": 0
+          "sha256": "f44f0969ec0c67d6b4d0e7c8d529d3bb228cf0ef61848b67b0c8604b110a8e06",
+          "size": 190760056
         }
       }
     },

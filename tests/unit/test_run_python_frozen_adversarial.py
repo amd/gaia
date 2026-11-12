@@ -16,10 +16,10 @@ from unittest.mock import patch
 
 import pytest
 
-pytest.importorskip("gaia_agent_chat")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_chat import python_runner  # noqa: E402
-from gaia_agent_chat.python_runner import (  # noqa: E402
+from gaia_agent import python_runner  # noqa: E402
+from gaia_agent.python_runner import (  # noqa: E402
     BUNDLED_LIBRARIES,
     RUN_PYTHON_FILE_FLAG,
     dispatch,
@@ -74,7 +74,7 @@ def relay():
         return _REAL_POPEN([_PYTHON, "-c", _DISPATCH, *argv[1:]], *args, **kwargs)
 
     # Python jobs start through Popen so a timeout can kill the whole tree.
-    with patch("gaia_agent_chat.python_jobs.subprocess.Popen", side_effect=spawn):
+    with patch("gaia_agent.python_jobs.subprocess.Popen", side_effect=spawn):
         yield seen
 
 

@@ -38,7 +38,7 @@ on:
       - 'src/gaia/version.py'
   pull_request:
     # No `branches:` filter: it matches the PR base, so `[ main ]` skipped stacked PRs (#2767).
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths:
       - '.github/workflows/test_gaia_init_hw.yml'
       - '.github/actions/setup-venv/**'
@@ -78,11 +78,9 @@ jobs:
       matrix:
         include:
           # The default profile: what a bare `gaia init` gives a new user.
+          # The NPU profile, with an agent turn, is test_npu_agent_chat.yml's.
           - profile: gaia
             model: Gemma-4-E4B-it-GGUF
-          # Built-in FLM models on the NPU: the #1655 fresh-pull path.
-          - profile: npu
-            model: gemma4-it-e2b-FLM
     steps:
       - uses: actions/checkout@v7
 

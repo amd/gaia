@@ -141,13 +141,18 @@ class TestAbandonedWorkerLogIsolation:
         """Start a tool that overruns its timeout, then have the abandoned
         worker log *after* the caller has already moved on, mirroring the
         real bug: the emitting call happens once nothing is waiting on it.
+
+        The ordering is driven by events, not wall-clock sleeps: the worker
+        blocks on ``go_log`` until the timeout has fired and the test lets it
+        log, so a loaded runner cannot invert the sequence (#7009).
         """
         from gaia.agents.base.agent import Agent, ToolExecutionTimeout
 
+        go_log = threading.Event()
         logged = threading.Event()
 
         def slow_tool():
-            time.sleep(0.2)  # overrun the 0.05s window below
+            go_log.wait(10)  # the test releases this after the timeout fires
             logging.getLogger(self.LEAK_LOGGER).info(message)
             logged.set()
             return "finished late"
@@ -162,6 +167,7 @@ class TestAbandonedWorkerLogIsolation:
         with pytest.raises(ToolExecutionTimeout):
             Agent._call_tool_bounded(agent, slow_tool, {}, "slow_tool")
 
+        go_log.set()
         assert logged.wait(5), "abandoned worker never reached its log call"
 
     def test_abandoned_worker_log_is_dropped_when_filter_is_attached(self, caplog):

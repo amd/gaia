@@ -7,6 +7,8 @@ Tests the /api/schedules/* endpoints using FastAPI TestClient.
 """
 
 import asyncio
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import FastAPI
@@ -14,7 +16,7 @@ from fastapi.testclient import TestClient
 
 from gaia.ui.database import ChatDatabase
 from gaia.ui.routers.schedules import get_scheduler, router
-from gaia.ui.scheduler import Scheduler
+from gaia.ui.scheduler import ScheduledTask, Scheduler, parse_schedule_input
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -283,3 +285,123 @@ class TestScheduleResults:
     def test_results_not_found(self, client):
         resp = client.get("/api/schedules/nonexistent/results")
         assert resp.status_code == 404
+
+
+class TestRunScheduleNow:
+    """POST /api/schedules/{name}/run (#5718)."""
+
+    def test_run_now(self, client):
+        client.post(
+            "/api/schedules",
+            json={"name": "now", "interval": "every 1h", "prompt": "N"},
+        )
+        resp = client.post("/api/schedules/now/run")
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "now"
+
+    def test_run_now_unknown(self, client):
+        assert client.post("/api/schedules/missing/run").status_code == 404
+
+    def test_run_now_while_running_is_409(self, app_with_scheduler):
+        _, scheduler, _ = app_with_scheduler
+        client = TestClient(app_with_scheduler[0])
+        client.post(
+            "/api/schedules",
+            json={"name": "busy", "interval": "every 1h", "prompt": "B"},
+        )
+        scheduler._tasks["busy"]._executing = True
+        try:
+            resp = client.post("/api/schedules/busy/run")
+            assert resp.status_code == 409
+            assert "already running" in resp.json()["detail"]
+            listed = client.get("/api/schedules/busy").json()
+            assert listed["running"] is True
+        finally:
+            scheduler._tasks["busy"]._executing = False
+
+    def test_run_now_name_is_exact(self, client):
+        client.post(
+            "/api/schedules",
+            json={"name": "exact", "interval": "every 1h", "prompt": "E"},
+        )
+        assert client.post("/api/schedules/EXACT/run").status_code == 404
+        assert client.post("/api/schedules/exac/run").status_code == 404
+
+
+# ── Names with "/" ──────────────────────────────────────────────────────────
+
+
+LEGACY = "Inbox/News digest"
+LEGACY_URL = "/api/schedules/Inbox%2FNews%20digest"
+
+
+@pytest.fixture
+def legacy_client():
+    """A server whose database already holds a schedule named with a "/"."""
+    db = ChatDatabase(":memory:")
+    config = parse_schedule_input("every 2 hours")
+    config.timezone = "UTC"
+    Scheduler(db=db, executor=fake_executor)._db_create_task(
+        ScheduledTask(
+            task_id="legacy-id",
+            name=LEGACY,
+            interval_seconds=config.interval_seconds,
+            prompt="Summarize my news",
+            next_run_at=datetime.now(timezone.utc).isoformat(),
+            schedule_config=config.to_json(),
+        )
+    )
+    scheduler = Scheduler(db=db, executor=fake_executor)
+
+    # Start on the client's loop, so the loaded schedule's timer lives there.
+    @asynccontextmanager
+    async def lifespan(_app):
+        await scheduler.start()
+        yield
+        await scheduler.shutdown()
+
+    app = FastAPI(lifespan=lifespan)
+    app.include_router(router)
+    app.dependency_overrides[get_scheduler] = lambda: scheduler
+    with TestClient(app) as client:
+        yield client, scheduler
+    db.close()
+
+
+class TestSlashInName:
+    """A "/" in a name arrives decoded, so routes must still find the schedule."""
+
+    def test_existing_slash_schedule_can_be_opened(self, legacy_client):
+        client, _ = legacy_client
+        resp = client.get(LEGACY_URL)
+        assert resp.status_code == 200
+        assert resp.json()["name"] == LEGACY
+        assert client.get(f"{LEGACY_URL}/results").status_code == 200
+
+    def test_existing_slash_schedule_can_be_paused_and_resumed(self, legacy_client):
+        client, _ = legacy_client
+        paused = client.put(LEGACY_URL, json={"status": "paused"})
+        assert paused.status_code == 200
+        assert paused.json()["status"] == "paused"
+        resumed = client.put(LEGACY_URL, json={"status": "active"})
+        assert resumed.json()["status"] == "active"
+
+    def test_existing_slash_schedule_can_be_run_and_cancelled(self, legacy_client):
+        client, _ = legacy_client
+        assert client.post(f"{LEGACY_URL}/run").status_code == 200
+        cancelled = client.put(LEGACY_URL, json={"status": "cancelled"})
+        assert cancelled.json()["status"] == "cancelled"
+
+    def test_existing_slash_schedule_can_be_deleted(self, legacy_client):
+        client, scheduler = legacy_client
+        assert client.delete(LEGACY_URL).status_code == 200
+        assert scheduler.get_task(LEGACY) is None
+
+    def test_new_slash_name_is_rejected_with_a_fix(self, client):
+        resp = client.post(
+            "/api/schedules",
+            json={"name": "AM/PM check", "interval": "every 1h", "prompt": "P"},
+        )
+        assert resp.status_code == 400
+        assert "/" in resp.json()["detail"]
+        assert client.get("/api/schedules").json()["total"] == 0

@@ -42,7 +42,7 @@ gaia connectors configure mcp-tavily --set TAVILY_API_KEY=tvly-...
 **From the Agent UI:**
 
 1. Launch the Agent UI: `gaia chat --ui`.
-2. **Settings** (gear) → **Connections** → click the **Tavily** tile.
+2. **Settings** (gear) → **Connectors** → click the **Tavily** tile.
 3. Paste the key into the **Tavily API Key** field and click **Save**.
 
 Either path stores the key in your OS keyring (a single slot, distinct from
@@ -61,7 +61,7 @@ gaia connectors grants grant mcp-tavily builtin:chat --scopes "*"
 gaia connectors activations activate mcp-tavily builtin:chat
 ```
 
-(In the UI: the tile's **Per-agent** toggle flips both at once.) See the
+(In the UI: the tile's **GAIA can use Tavily in chat** switch does both at once.) See the
 [connections security model](/security/connections) for why visibility
 and credential access are gated separately.
 
@@ -84,7 +84,9 @@ gaia knowledge usage          # show credits spent
 ### `Unauthorized` / `401` from the MCP server
 
 The key in your keyring is wrong or revoked. Click **Disconnect** on the tile
-(or `gaia connectors disconnect mcp-tavily`) and re-add a fresh key.
+(or `gaia connectors disconnect mcp-tavily`) and re-add a fresh key. **Check**
+on the tile won't catch this: the Tavily server only checks the key when a
+search runs, so it starts fine with a bad one.
 
 ### `npx: command not found`
 
@@ -102,7 +104,7 @@ which npx        # must resolve to a real path
 
 ## Revoking access
 
-- **From GAIA:** Settings → Connections → Tavily → **Disconnect** (or
+- **From GAIA:** Settings → Connectors → Tavily → **Disconnect** (or
   `gaia connectors disconnect mcp-tavily`). The key is removed from the keyring
   and the entry is dropped from `mcp_servers.json`.
 - **From Tavily:** rotate or delete the key in your

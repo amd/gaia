@@ -10,18 +10,22 @@ and session-document attachments.
 import asyncio
 import json
 import logging
+import sqlite3
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
+from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
+from .. import session_environment
 from .._chat_helpers import (
     _SIDECAR_AGENT_TYPES,
     _agent_type_unknown,
     evict_session_agent,
+    forget_relayed_context,
     get_agent_registry,
     resolve_device_model,
     resolve_session_model,
@@ -42,11 +46,13 @@ from ..models import (
     SessionListResponse,
     SessionPinRequest,
     SessionResponse,
+    SessionSearchResponse,
     UpdateSessionRequest,
 )
 from ..run_manager import run_manager
 from ..security import flagship_only
 from ..utils import message_to_response, session_to_response
+from .memory import _get_store as get_memory_store
 
 logger = logging.getLogger(__name__)
 
@@ -184,22 +190,25 @@ def _reject_unknown_agent_type(agent_type: str | None) -> None:
     # here told the user 'gaia' was both unknown and registered.
     valid_ids = sorted(
         {reg.id for reg in registry.list()}
-        | {"chat"}
         | {aid for aid in _SIDECAR_AGENT_TYPES if profile_for(aid).always_relay}
     )
     load_error = registry.get_load_error(agent_type)
     reason = f" It failed to load: {load_error}." if load_error else ""
+    # The app lists only registered agents, so an unknown non-gaia id comes
+    # from an API caller, who can install it from the Agent Hub on the host.
     install = (
-        "`gaia init`"
+        f" To install the GAIA agent: {AGENT_UI_SETUP_HINT}"
         if agent_type == "gaia"
-        else f"`gaia hub install {agent_type} --trust`"
+        else (
+            " Or install it from the Agent Hub on the GAIA host with "
+            f"`gaia hub install {agent_type} --trust`, then try again."
+        )
     )
     raise HTTPException(
         status_code=422,
         detail=(
             f"Unknown agent_type '{agent_type}'.{reason} Registered agent ids: "
-            f"{', '.join(valid_ids)}. Pick one of these, or install the agent "
-            f"with {install} and try again."
+            f"{', '.join(valid_ids)}. Pick one of these.{install}"
         ),
     )
 
@@ -229,6 +238,16 @@ async def create_session(
     request.agent_type = flagship_only(http_request, request.agent_type)
     _reject_unknown_agent_type(request.agent_type)
     try:
+        # Off the loop: a relayed agent is asked over the daemon.
+        await asyncio.to_thread(
+            session_environment.check_new_chat_folders,
+            request.agent_type,
+            request.folders,
+        )
+    except session_environment.EnvironmentChangeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    session = None
+    try:
         # Read before the chat exists, so a bad config leaves no chat behind.
         start_mode = session_permissions.default_mode()
         session = db.create_session(
@@ -242,8 +261,25 @@ async def create_session(
             mail_provider=request.mail_provider,
         )
         session_permissions.seed_new_session(session["id"], start_mode)
+        for folder in request.folders:
+            session_environment.grant_folder(db, session["id"], folder)
         return await _session_response(db, session)
     except Exception as e:
+        if session is not None:
+            # A chat is made whole or not at all.
+            try:
+                db.delete_session(session["id"])
+            except Exception as cleanup_err:  # the original error stays the answer
+                logger.error(
+                    "Could not remove half-made chat %s: %s",
+                    session["id"],
+                    cleanup_err,
+                    exc_info=True,
+                )
+            finally:
+                session_permissions.forget_session(session["id"])
+        if isinstance(e, session_environment.EnvironmentChangeError):
+            raise HTTPException(status_code=400, detail=str(e)) from e
         logger.error("Failed to create session: %s", e, exc_info=True)
         raise HTTPException(
             status_code=500,
@@ -252,7 +288,7 @@ async def create_session(
                 if _is_gaia_config_error(e)
                 else "Failed to create session. Check server logs for details."
             ),
-        )
+        ) from e
 
 
 @router.get("/api/sessions/events")
@@ -278,6 +314,27 @@ async def session_events():
             await _system_emitter.unsubscribe(q)
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+# Declared before /api/sessions/{session_id}, which would otherwise claim "search".
+@router.get("/api/sessions/search", response_model=SessionSearchResponse)
+async def search_sessions(
+    q: str = Query(..., min_length=1, max_length=200),
+    limit: int = 20,
+    include_automated: bool = False,
+    db: ChatDatabase = Depends(get_db),
+):
+    """Find chats by title or message text, ignoring case and accents.
+
+    Eval and scheduled chats are left out unless *include_automated*, as the
+    sidebar leaves them out. Private chats are included: the search runs on
+    this PC and its results go only to the local UI that already lists them.
+    """
+    limit = max(1, min(limit, 50))
+    results, truncated = await asyncio.to_thread(
+        db.search_sessions, q, limit, include_automated
+    )
+    return SessionSearchResponse(query=q, results=results, truncated=truncated)
 
 
 @router.post("/api/sessions/{session_id}/activate", status_code=200)
@@ -395,10 +452,24 @@ async def delete_session(
     session_locks = http_request.app.state.session_locks
     # Every turn and goal tick holds this lock for its whole run.
     async with session_locks.setdefault(session_id, asyncio.Lock()):
+        # First, so a failure leaves the chat in place to delete again.
+        try:
+            await asyncio.to_thread(get_memory_store().delete_session, session_id)
+        except (sqlite3.Error, OSError) as e:
+            logger.error("Could not delete the memory of %s: %s", session_id, e)
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"The chat was not deleted: its conversation in Memory "
+                    f"could not be removed ({e}). Try again; the GAIA log has "
+                    f"the details."
+                ),
+            ) from e
         if not db.delete_session(session_id):
             raise HTTPException(status_code=404, detail="Session not found")
         session_locks.pop(session_id, None)
         evict_session_agent(session_id)
+        forget_relayed_context(session_id)
         session_permissions.forget_session(session_id)
         followups.forget(session_id)
         answer_retry.forget(session_id)

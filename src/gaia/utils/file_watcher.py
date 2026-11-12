@@ -592,11 +592,28 @@ class FileChangeHandler(FileSystemEventHandler):
         if self._on_modified and self._should_process(event.src_path):
             self._schedule_settle("modified", event.src_path)
 
+    def on_attrib(self, event: FileSystemEvent) -> None:
+        """Treat Windows attribute events as file modifications.
+
+        watchdog 7 emits some content-write notifications as attribute events
+        on Windows.  They must follow the same settle path or edits can be
+        silently lost when the watcher is busy.
+        """
+        self.on_modified(event)
+
     def on_deleted(self, event: FileSystemEvent) -> None:
         """Handle file deletion."""
         if self._ignore_directories and event.is_directory:
             return
         if self._should_process(event.src_path):
+            if os.path.exists(event.src_path):
+                # macOS reports a file replaced by rename as deleted; it is not.
+                if self._on_modified or self._on_created:
+                    self._schedule_settle(
+                        "modified" if self._on_modified else "created",
+                        event.src_path,
+                    )
+                return
             with self._cond:
                 self._pending.pop(event.src_path, None)
                 self._locked_retries.pop(event.src_path, None)
@@ -699,7 +716,7 @@ class FileWatcher:
         if not WATCHDOG_AVAILABLE:
             raise ImportError(
                 "FileWatcher requires the 'watchdog' package.\n"
-                "Install with: pip install 'watchdog>=2.1.0'\n"
+                "Install with: pip install 'watchdog>=2.1.0,<7'\n"
                 "Or: uv pip install -e '.[dev]'"
             )
 

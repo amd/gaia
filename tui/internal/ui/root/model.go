@@ -3,13 +3,13 @@ package root
 import (
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/agents"
 	"github.com/amd/gaia/tui/internal/ui/chat"
@@ -85,6 +85,11 @@ type FlagshipModel struct {
 	gateChatModel string
 	// launchNotice is shown once in the first chat frame.
 	launchNotice string
+	// updateCheck asks the first chat to check for a newer GAIA release.
+	updateCheck bool
+	// terminalVersion is the release stamped into this TUI binary.
+	terminalVersion        string
+	terminalVersionChecked bool
 	// trace records every agent event to a JSONL file (--trace). Nil when off.
 	// Owned by the caller of RunFlagship, which closes it after the event loop.
 	trace *event.TraceWriter
@@ -224,6 +229,15 @@ func (m FlagshipModel) chatCommandNames() []string {
 	return m.chat.AvailableCommandNames()
 }
 
+// BeforeExit runs once the event loop has stopped, however it stopped. With
+// an update queued it saves the conversation to reopen afterwards.
+func (m FlagshipModel) BeforeExit() error {
+	if m.chat == nil {
+		return nil
+	}
+	return m.chat.KeepConversationForUpdate()
+}
+
 // Close releases everything the session opened — the agent child in
 // particular. The host calls it once the event loop has stopped.
 //
@@ -232,7 +246,7 @@ func (m FlagshipModel) chatCommandNames() []string {
 // that no longer exists.
 func (m FlagshipModel) Close() error {
 	if m.chat != nil {
-		m.chat.CancelActiveTurn()
+		m.chat.Retire()
 	}
 	if m.chatClient != nil {
 		// Returned, not dropped: app.go prints it, and a wedged agent that
@@ -299,6 +313,18 @@ func (m FlagshipModel) WithModel(model string) FlagshipModel {
 // model made by Bubble Tea can never close the file out from under a live turn.
 func (m FlagshipModel) WithTrace(w *event.TraceWriter) FlagshipModel {
 	m.trace = w
+	return m
+}
+
+// WithUpdateCheck has the first chat check once for a newer GAIA release.
+func (m FlagshipModel) WithUpdateCheck() FlagshipModel {
+	m.updateCheck = true
+	return m
+}
+
+// WithTerminalVersion records the release stamped into this TUI binary.
+func (m FlagshipModel) WithTerminalVersion(version string) FlagshipModel {
+	m.terminalVersion = version
 	return m
 }
 
@@ -598,23 +624,13 @@ func (m FlagshipModel) View() string {
 	return base
 }
 
-func clampInt(v, lo, hi int) int {
-	if v < lo {
-		return lo
-	}
-	if v > hi {
-		return hi
-	}
-	return v
-}
-
-// logf writes transport diagnostics to stderr in dev mode. It must never be
-// given a daemon token — daemon.Instance redacts its own token when formatted.
+// logf writes transport diagnostics to the session log in dev mode. It must
+// never be given a daemon token — daemon.Instance redacts its own token when formatted.
 func (m FlagshipModel) logf(format string, args ...any) {
 	if !m.dev {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+	control.DevLogf(format, args...)
 }
 
 func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea.Model, tea.Cmd) {
@@ -652,7 +668,7 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	// connection reaching it. clientBox.set below would otherwise overwrite
 	// b.c without closing it (see clientBox's own doc comment).
 	if m.chat != nil {
-		m.chat.CancelActiveTurn()
+		m.chat.Retire()
 		m.chatClient.retire()
 	}
 	m.chatClient.set(c)
@@ -673,6 +689,17 @@ func (m FlagshipModel) launchAgent(agent catalog.Agent, setupVerified bool) (tea
 	if m.launchNotice != "" {
 		chatModel = chatModel.WithNotice(m.launchNotice)
 		m.launchNotice = ""
+	}
+	if m.updateCheck {
+		// Once per launch; an /agents switch must not check again.
+		chatModel = chatModel.WithUpdateCheck()
+		m.updateCheck = false
+		// The conversation an update closed comes back on the launch after it.
+		if resumed, err := chat.TakeResumedConversation(); err != nil {
+			chatModel = chatModel.WithNotice("Could not restore the conversation from before the update: " + err.Error())
+		} else if len(resumed) > 0 {
+			chatModel = chatModel.WithMessages(resumed)
+		}
 	}
 	chatModel = m.withStartupModel(agent, chatModel, m.gateChatModel)
 	m.gateChatModel = ""

@@ -13,6 +13,10 @@ Builds a `.deb` and an `.rpm` for **x86-64 only**, each containing:
 All files are owned `root:root`. The desktop entry sets `Terminal=true` — this is
 a TUI, so the launcher has to open a terminal for it.
 
+The `gaia` command that setup runs is not in either package. The first time GAIA
+opens, setup installs it into `~/.gaia` as the user, from the same release, so
+that step needs internet.
+
 ## Build it
 
 ```bash
@@ -29,9 +33,13 @@ dist/gaia_1.4.0_amd64.deb
 dist/gaia-1.4.0.x86_64.rpm
 ```
 
-- `--payload` is a directory that already contains exactly two executables named
-  `gaia-tui` and `gaia-agent`, no extension. The script copies them; it does not
-  build them.
+- `--payload` is a directory that already contains two executables named
+  `gaia-tui` and `gaia-agent`, no extension, and `core/`, the frozen `gaia` with
+  its `_internal` folder. The script copies them; it does not build them. The
+  core installs to `/usr/lib/gaia`, linked as `/usr/bin/gaia`, and a pre-remove
+  script stops a daemon running it before the package is removed or upgraded.
+  `--without-core` leaves the core out, as packages before it shipped one did;
+  CI uses it only to rebuild such a release's package.
 - `--out` is created if absent.
 - `--version` is `MAJOR.MINOR.PATCH`, or `MAJOR.MINOR.PATCH-rc.N` for a release
   candidate. Any other suffix is rejected up front rather than failing later
@@ -102,8 +110,8 @@ Then install in a container that did **not** build the packages:
 docker run --rm -v "$PWD/dist:/out:ro" debian:bookworm \
   bash -c 'dpkg -i /out/gaia_1.4.0_amd64.deb && gaia-tui version && dpkg -P gaia'
 
-docker run --rm -v "$PWD/dist:/out:ro" fedora:41 \
-  bash -c 'rpm -i /out/gaia-1.4.0.x86_64.rpm && gaia-tui version && rpm -e gaia'
+docker run --rm -v "$PWD/dist:/out:ro" fedora:latest \
+  bash -c 'dnf install -y /out/gaia-1.4.0.x86_64.rpm && gaia-tui version && rpm -e gaia'
 ```
 
 Use `debian:bookworm`, not `-slim`. The slim image ships

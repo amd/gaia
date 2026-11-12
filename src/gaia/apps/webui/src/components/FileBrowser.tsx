@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { ensureModel } from '../stores/modelNeededStore';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import {
     X, Search, Folder, FileText, Home, Download, Monitor, ChevronRight,
@@ -10,9 +11,11 @@ import {
 import { useChatStore } from '../stores/chatStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
+import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from './UnsupportedFeature';
 import type { FileEntry, BrowseResponse, QuickLink } from '../types';
 import './FileBrowser.css';
@@ -29,17 +32,17 @@ function getFileIcon(entry: FileEntry) {
 }
 
 // Format date
-function formatDate(iso: string | null): string {
+function formatDate(iso: string | null, t: Translate): string {
     if (!iso) return '';
     const d = new Date(iso);
     const now = new Date();
     const diff = now.getTime() - d.getTime();
     const hours = Math.floor(diff / 3600000);
-    if (hours < 1) return 'Just now';
-    if (hours < 24) return `${hours}h ago`;
+    if (hours < 1) return t('time.justNow');
+    if (hours < 24) return t('time.hoursAgo', { n: hours });
     const days = Math.floor(hours / 24);
-    if (days < 7) return `${days}d ago`;
-    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
+    if (days < 7) return t('time.daysAgo', { n: days });
+    return d.toLocaleDateString(dateLocale(t), { month: 'short', day: 'numeric', year: d.getFullYear() !== now.getFullYear() ? 'numeric' : undefined });
 }
 
 function formatSearchScope(locations: string[]): string {
@@ -128,6 +131,7 @@ async function indexAndAttachFiles(
                     succeededFiles.push(filepath);
                 }
             } else {
+                if (!(await ensureModel('embedding'))) break;
                 const doc = await api.uploadDocumentByPath(filepath);
                 if (doc?.id) {
                     docIds.push(doc.id);
@@ -174,12 +178,21 @@ async function indexAndAttachFiles(
     return { docIds, supported, succeededFiles, unsupported, failed, lastError };
 }
 
-export function FileBrowser() {
+const isHiddenName = (name: string) => name.startsWith('.');
+
+interface FileBrowserProps {
+    /** Starts a new chat with this first message; used when no chat is open. */
+    onStartChat: (text: string) => Promise<boolean>;
+}
+
+export function FileBrowser({ onStartChat }: FileBrowserProps) {
+    const t = useT();
     const { setShowFileBrowser, currentSessionId, updateSessionInList, setPendingPrompt } = useChatStore();
     const closeBrowser = useCallback(() => setShowFileBrowser(false), [setShowFileBrowser]);
     useEscapeToClose(true, closeBrowser);
     const dialogRef = useRef<HTMLDivElement>(null);
     useFocusTrap(dialogRef, true);
+    useDialogFocus(dialogRef, true);
 
     // Browse state
     const [currentPath, setCurrentPath] = useState<string>('');
@@ -188,6 +201,7 @@ export function FileBrowser() {
     const [quickLinks, setQuickLinks] = useState<QuickLink[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [showHidden, setShowHidden] = useState(false);
 
     // Search state
     const [searchQuery, setSearchQuery] = useState('');
@@ -360,8 +374,11 @@ export function FileBrowser() {
         }
     }, [selectedFiles, currentSessionId, updateSessionInList, entries]);
 
+    // A second click can land before the re-render that disables the button.
+    const askingRef = useRef(false);
     const handleAskAgent = useCallback(async () => {
-        if (selectedFiles.size === 0) return;
+        if (selectedFiles.size === 0 || askingRef.current) return;
+        askingRef.current = true;
         const files = Array.from(selectedFiles);
         setIndexError(null);
         setIndexingFiles(new Set(files));
@@ -403,7 +420,11 @@ export function FileBrowser() {
                 ? `Please analyze this document for me: ${fileNames[0]}`
                 : `Please analyze these documents for me:\n${fileNames.map(n => `- ${n}`).join('\n')}`;
 
-            setPendingPrompt(prompt);
+            if (currentSessionId) {
+                setPendingPrompt({ sessionId: currentSessionId, text: prompt });
+            } else {
+                await onStartChat(prompt);
+            }
             setShowFileBrowser(false);
             setSelectedFiles(new Set());
         } catch (err) {
@@ -413,10 +434,11 @@ export function FileBrowser() {
                 error: err instanceof Error ? err.message : 'An unexpected error occurred.',
             });
         } finally {
+            askingRef.current = false;
             setIndexingFiles(new Set());
             setIndexStatus(null);
         }
-    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser]);
+    }, [selectedFiles, currentSessionId, updateSessionInList, entries, setPendingPrompt, setShowFileBrowser, onStartChat]);
 
     // Build breadcrumb segments from current path
     const pathSegments = currentPath ? currentPath.replace(/\\/g, '/').split('/').filter(Boolean) : [];
@@ -428,6 +450,7 @@ export function FileBrowser() {
     const searchScope = formatSearchScope(searchedLocations);
 
     // Items to display: search results or browse entries
+    const visibleEntries = entries.filter(e => !isHiddenName(e.name));
     const displayItems = searchResults
         ? searchResults.map((r: any) => ({
             name: r.name,
@@ -437,7 +460,17 @@ export function FileBrowser() {
             extension: r.extension || '',
             modified: r.modified || '',
         }))
-        : entries;
+        : showHidden ? entries : visibleEntries;
+    const hiddenCount = entries.length - visibleEntries.length;
+
+    // Nothing the user can't see gets indexed: covers Show hidden turned off and leaving a search.
+    useEffect(() => {
+        if (showHidden || searchResults) return;
+        setSelectedFiles(prev => {
+            const kept = [...prev].filter(p => !isHiddenName(p.split(/[\\/]/).pop() ?? ''));
+            return kept.length === prev.size ? prev : new Set(kept);
+        });
+    }, [showHidden, searchResults]);
 
     return (
         <div ref={dialogRef} className="modal-overlay" onClick={() => setShowFileBrowser(false)} role="dialog" aria-modal="true" aria-label="File browser">
@@ -510,27 +543,37 @@ export function FileBrowser() {
 
                     {/* Breadcrumb */}
                     {!searchResults && (
-                        <div className="fb-breadcrumb">
-                            <button className="fb-crumb" onClick={() => loadDirectory('/')}>
-                                <HardDrive size={12} />
-                            </button>
-                            {breadcrumbs.map((crumb, i) => (
-                                <span key={i} className="fb-crumb-item">
-                                    <ChevronRight size={12} className="fb-crumb-sep" />
-                                    <button className="fb-crumb" onClick={() => loadDirectory(crumb.path)}>
-                                        {crumb.label}
-                                    </button>
-                                </span>
-                            ))}
-                            {parentPath && (
-                                <button
-                                    className="fb-up-btn"
-                                    onClick={() => loadDirectory(parentPath)}
-                                    title="Go up"
-                                >
-                                    <ArrowUp size={14} />
+                        <div className="fb-pathbar">
+                            <div className="fb-breadcrumb">
+                                <button className="fb-crumb" onClick={() => loadDirectory('/')}>
+                                    <HardDrive size={12} />
                                 </button>
-                            )}
+                                {breadcrumbs.map((crumb, i) => (
+                                    <span key={i} className="fb-crumb-item">
+                                        <ChevronRight size={12} className="fb-crumb-sep" />
+                                        <button className="fb-crumb" onClick={() => loadDirectory(crumb.path)}>
+                                            {crumb.label}
+                                        </button>
+                                    </span>
+                                ))}
+                                {parentPath && (
+                                    <button
+                                        className="fb-up-btn"
+                                        onClick={() => loadDirectory(parentPath)}
+                                        title="Go up"
+                                    >
+                                        <ArrowUp size={14} />
+                                    </button>
+                                )}
+                            </div>
+                            <label className="fb-hidden-toggle">
+                                <input
+                                    type="checkbox"
+                                    checked={showHidden}
+                                    onChange={(e) => setShowHidden(e.target.checked)}
+                                />
+                                Show hidden
+                            </label>
                         </div>
                     )}
 
@@ -569,7 +612,11 @@ export function FileBrowser() {
 
                             {!loading && displayItems.length === 0 && (
                                 <div className="fb-empty">
-                                    {searchResults ? 'No files found' : 'This folder is empty'}
+                                    {searchResults
+                                        ? 'No files found'
+                                        : hiddenCount > 0
+                                            ? 'Only hidden items here. Turn on Show hidden to see them.'
+                                            : 'This folder is empty'}
                                 </div>
                             )}
 
@@ -613,7 +660,7 @@ export function FileBrowser() {
                                         </button>
                                     )}
                                     <span className="fb-entry-size">{entry.type === 'file' ? formatSize(entry.size) : ''}</span>
-                                    <span className="fb-entry-date">{formatDate(entry.modified)}</span>
+                                    <span className="fb-entry-date">{formatDate(entry.modified, t)}</span>
                                 </div>
                                 );
                             })}

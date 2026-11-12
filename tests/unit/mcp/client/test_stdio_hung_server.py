@@ -406,7 +406,8 @@ for line in sys.stdin:
         send({"jsonrpc": "2.0", "method": echo})
         send({"jsonrpc": "2.0", "id": echo, "result": {}})
         send({"jsonrpc": "2.0", "id": req["id"],
-              "result": {"serverInfo": {"name": echo}, "note": echo}})
+              "result": {"protocolVersion": "2025-11-25",
+                         "serverInfo": {"name": echo}, "note": echo}})
     elif mode == "result":  # a successful result, echoing as value and key
         send({"jsonrpc": "2.0", "id": req["id"],
               "result": {"content": [{"type": "text", "text": echo}], echo: echo}})
@@ -492,7 +493,8 @@ def test_ordinary_words_in_a_server_error_stay_readable(tmp_path):
         + textwrap.indent(
             textwrap.dedent("""
         if req["method"] == "initialize":
-            send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+            send({"jsonrpc": "2.0", "id": req["id"],
+                  "result": {"protocolVersion": "2025-11-25"}})
         else:
             send({"jsonrpc": "2.0", "id": req["id"], "error": {
                 "code": -32000,
@@ -1263,9 +1265,11 @@ def test_known_secrets_are_cleaned_in_every_form_they_arrive_in(
         upper = os.environ.get("STUB_UPPER_HEX") == "1"
         for line in sys.stdin:
             req = json.loads(line)
+            if "id" not in req:
+                continue
             if req["method"] == "initialize":
                 sys.stdout.write(json.dumps({"jsonrpc": "2.0", "id": req["id"],
-                                             "result": {}}) + "\\n")
+                    "result": {"protocolVersion": "2025-11-25"}}) + "\\n")
             elif req["method"] == "tools/list":  # a non-object JSON line
                 # UTF-8 bytes, as Node writes them whatever the console code page.
                 line = json.dumps("leaked " + secret, ensure_ascii=ascii_only)
@@ -1332,7 +1336,8 @@ def test_a_validation_error_never_echoes_a_secret_from_the_tool_schema(
             textwrap.dedent("""
         conf = " ".join(sys.argv)
         if req["method"] == "initialize":
-            send({"jsonrpc": "2.0", "id": req["id"], "result": {}})
+            send({"jsonrpc": "2.0", "id": req["id"],
+                  "result": {"protocolVersion": "2025-11-25"}})
         elif req["method"] == "tools/list":
             send({"jsonrpc": "2.0", "id": req["id"], "result": {"tools": [
                 {"name": "x", "inputSchema": {"description": conf,
@@ -1360,14 +1365,30 @@ def test_a_validation_error_never_echoes_a_secret_from_the_tool_schema(
     assert secret not in text
 
 
-def test_a_reused_pid_is_never_taken_for_the_server():
-    """Only a process created after this launch can be the server we track."""
-    t = StdioTransport(sys.executable, args=["-c", "pass"])
-    t._started_at = time.time()
-    # This test's own process existed long before the "launch".
-    assert t._own_process(os.getpid()) is None
-    t._started_at = 0.0
-    assert t._own_process(os.getpid()) is not None
+def test_the_popen_returned_by_launch_is_tracked_despite_a_coarse_timestamp(
+    tmp_path, monkeypatch
+):
+    """A launch must not be rejected when psutil reports an old create time."""
+    real_process = stdio_module.psutil.Process
+
+    class _CoarseTimestampProcess:
+        def __init__(self, pid=None):
+            # Keep the fixture's no-argument Process() call working while
+            # making the launched-process timestamp deliberately coarse.
+            self._process = real_process() if pid is None else real_process(pid)
+
+        def __getattr__(self, name):
+            return getattr(self._process, name)
+
+        def create_time(self):
+            return 0.0  # Any create time must not reject the launched process.
+
+    monkeypatch.setattr(stdio_module.psutil, "Process", _CoarseTimestampProcess)
+    transport = _transport(_stub(tmp_path, "time.sleep(3600)"))
+    try:
+        assert transport._ps_server is not None
+    finally:
+        transport.disconnect()
 
 
 @pytest.mark.parametrize(
