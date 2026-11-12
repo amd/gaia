@@ -1721,14 +1721,15 @@ def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
     return None
 
 
-# The user told this turn not to act: "Do NOT run anything in this turn",
-# "without using any tools", "answer only with a plan". "Don't do anything
-# else" or "don't run anything destructive" only limits the work.
+# The user told this turn not to act: "use no tools", "don't do anything
+# yet", "answer only with a plan". "Don't run anything yet" forbids running,
+# not writing the files asked for; "don't do anything else" limits the work.
 _NO_ACTION_REQUEST_PATTERN = re.compile(
     r"\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?"
-    r"(?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing)"
-    r"|do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+"
-    r"(?:anything|any\s+(?:tools?|code|commands?|scripts?|files?)|tools)"
+    r"(?:(?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing))"
+    r"\s+(?:any\s+tools?|tools)"
+    r"|(?:do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+"
+    r"(?:anything|any\s+files?))"
     r"(?=\s*(?:$|[.,;:!?)\]—–-]|(?:in\s+this\s+turn|yet|now|for\s+now|until"
     r"|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b))"
     r"|\b(?:answer|reply|respond)\s+(?:only|just)\s+with\s+(?:a|an|the|your)\s+"

@@ -152,8 +152,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   the look-first check told the model to open the file the user had said not
   to touch. The model read either nudge as the user's newest instruction, so
   the plan was lost or a run was attempted. A request this turn not to act
-  (do not run anything, use no tools, plan only) now turns both checks off.
-  "Don't do anything else" or "don't run anything destructive" still gets them.
+  (answer only with a plan, use no tools, don't do anything yet) now turns
+  both checks off. "Don't run anything yet" alone still lets the agent write
+  the files it was asked for, and "don't do anything else" keeps both checks.
 
 ## [0.3.5]
 

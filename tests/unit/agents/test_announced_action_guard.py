@@ -706,14 +706,12 @@ REQUESTED_PLAN = (
     "request_text",
     [
         NO_ACTION_PLAN_REQUEST,
-        "For orders.csv I want net revenue by region. Do NOT run anything in "
-        "this turn.",
         "Don't use any tools, just tell me how you'd do it.",
-        "Without running anything, how would you clean this CSV?",
         "Without using any tools, explain it.",
         "do not call any tools to answer this",
-        "Don’t run anything yet.",
+        "Don’t run any tools yet.",
         "Don't open any files.",
+        "Don't do anything yet.",
         "Just give me the plan for migrating the DB.",
         "Answer only with a short plan.",
         "Plan only, please.",
@@ -727,6 +725,12 @@ def test_requests_not_to_act_are_recognised(request_text):
     "request_text",
     [
         "What is the net revenue excluding returned orders, broken down by region?",
+        # Not running is not "do nothing": the files are still to be written.
+        "In ~/gaia-eval/resilience/ create totals.py and test_totals.py. "
+        "Don't run anything yet.",
+        "For orders.csv I want net revenue by region. Do NOT run anything in "
+        "this turn.",
+        "Without running anything, how would you clean this CSV?",
         "Fix foo.py and don't do anything else.",
         "Clean up the folder but don't touch anything else in it.",
         "Don't run anything destructive.",
@@ -757,11 +761,24 @@ def test_an_announced_step_the_user_forbade_is_not_pushed(agent):
     sent = _script(agent, *[_answer(answer)] * 3)
 
     result = agent.process_query(
-        "Show the sales trend, but do not run anything yet.", max_steps=20
+        "Show the sales trend, but don't use any tools yet.", max_steps=20
     )
 
     assert len(sent) == 1
     assert _final_text(result) == answer
+
+
+def test_an_announced_write_is_still_pushed_when_only_running_is_forbidden(agent):
+    """gaia_resilience: "create totals.py ... Don't run anything yet" owes the write."""
+    sent = _script(agent, *[_answer("I'll create totals.py now.")] * 5)
+
+    result = agent.process_query(
+        "Create totals.py with a total_with_tax function. Don't run anything yet.",
+        max_steps=20,
+    )
+
+    assert len(sent) == _MAX_UNFINISHED_ANSWER_REPROMPTS + 1
+    assert _final_text(result).startswith("I didn't finish:")
 
 
 def test_a_plan_is_still_sent_back_when_only_extra_work_is_forbidden(agent):
