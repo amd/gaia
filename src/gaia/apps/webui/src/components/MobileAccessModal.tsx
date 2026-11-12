@@ -33,6 +33,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
     const [status, setStatus] = useState<TunnelStatus | null>(null);
     const [copied, setCopied] = useState(false);
     const [copiedCommand, setCopiedCommand] = useState<string | null>(null);
+    const [copyFailed, setCopyFailed] = useState(false);
     const t = useT();
     const needsSetup = Array.isArray(setupCommands);
     // Nothing to poll for or scan while the tunnel cannot start.
@@ -132,18 +133,26 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
         if (!status?.url || !status?.token) return;
         const mobileUrl = `${status.url}/?token=${status.token}`;
         navigator.clipboard.writeText(mobileUrl).then(() => {
+            setCopyFailed(false);
             setCopied(true);
             if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
             copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+        }).catch((err) => {
+            log.system.error('Could not copy the mobile URL', err);
+            setCopyFailed(true);
         });
     }, [status]);
 
     const copyCommand = useCallback((command: string) => {
         navigator.clipboard.writeText(command).then(() => {
+            setCopyFailed(false);
             setCopiedCommand(command);
             if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
             copyTimerRef.current = setTimeout(() => setCopiedCommand(null), 2000);
-        }).catch((err) => log.system.error('Could not copy the ngrok install command', err));
+        }).catch((err) => {
+            log.system.error('Could not copy the ngrok install command', err);
+            setCopyFailed(true);
+        });
     }, []);
 
     // Clean up copy timer on unmount
@@ -299,6 +308,10 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                             <p>{t('mobileAccess.installSteps')}</p>
                             <p>{t('mobileAccess.linkLifetime')}</p>
                         </div>
+                    )}
+
+                    {copyFailed && (
+                        <div className="tunnel-error" role="alert">{t('mobile.copyFailed')}</div>
                     )}
 
                     {/* Actions */}

@@ -442,6 +442,7 @@ export const enMessages = {
     'activity.exit': 'exit {code}',
     'activity.copyOutput': 'Copy output',
     'activity.copyOutputAria': 'Copy command output',
+    'activity.copyFailed': "Couldn't copy the output",
     'activity.noOutput': 'No output',
     'activity.openPath': 'Open: {path}',
     'tool.failed': '{label} failed',
@@ -2248,6 +2249,7 @@ export const enMessages = {
     'mobile.copyCommand': 'Copy command',
     'mobile.copy': 'Copy',
     'mobile.copied': 'Copied',
+    'mobile.copyFailed': "Couldn't copy. Select the text and copy it instead.",
     'mobile.downloadPage': 'ngrok download page',
     'mobile.retry': 'Retry',
 

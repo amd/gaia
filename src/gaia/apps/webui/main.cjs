@@ -115,6 +115,7 @@ const {
   isAllowedExternalUrl,
   isInAppNavigation,
   describeBlockedUrl,
+  openExternalLink,
 } = require("./services/link-policy.cjs");
 const { installWindowKeys } = require("./services/window-keys.cjs");
 const { installQuitCleanup } = require("./services/quit-cleanup.cjs");
@@ -613,24 +614,31 @@ function findDistPath() {
 }
 
 /** Refuse a link loudly — the user clicked it, so they get told why nothing happened. */
-function reportBlockedLink(url) {
-  const message = describeBlockedUrl(url);
+function showLinkNotice(title, message) {
   console.error(`[main] ${message}`);
   // Non-blocking and parented: showErrorBox would freeze the main process.
   dialog
     .showMessageBox(mainWindow && !mainWindow.isDestroyed() ? mainWindow : null, {
       type: "warning",
-      title: "Link blocked",
-      message: "Link blocked",
+      title,
+      message: title,
       detail: message,
       buttons: ["OK"],
       noLink: true,
     })
     .catch((err) =>
       console.error(
-        `[main] Could not show the link-blocked dialog: ${err && err.message ? err.message : err}`
+        `[main] Could not show the "${title}" dialog: ${err && err.message ? err.message : err}`
       )
     );
+}
+
+function reportBlockedLink(url) {
+  showLinkNotice("Link blocked", describeBlockedUrl(url));
+}
+
+function openAllowedLink(url) {
+  openExternalLink(shell, url, (message) => showLinkNotice("Link could not be opened", message));
 }
 
 // Windows and macOS draw the native controls into the app's own top row; Linux
@@ -701,7 +709,7 @@ function createWindow() {
   // arrives as file:///C:/… — check the scheme before handing it to the OS.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openAllowedLink(url);
     } else {
       reportBlockedLink(url);
     }
@@ -715,7 +723,7 @@ function createWindow() {
     if (isInAppNavigation(url, currentUrl)) return;
     event.preventDefault();
     if (isAllowedExternalUrl(url)) {
-      shell.openExternal(url);
+      openAllowedLink(url);
       return;
     }
     reportBlockedLink(url);

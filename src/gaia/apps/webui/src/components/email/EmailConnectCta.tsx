@@ -146,14 +146,7 @@ export function detectProvider(content: string): EmailProvider | 'all' {
 // ── OAuth helpers (mirror ConnectorsSection.openAuthUrl) ─────────────────────
 
 function openAuthUrl(url: string): void {
-    const anyWindow = window as unknown as {
-        gaia?: { openExternal?: (url: string) => void };
-    };
-    if (anyWindow.gaia?.openExternal) {
-        anyWindow.gaia.openExternal(url);
-    } else {
-        window.open(url, '_blank', 'noopener');
-    }
+    window.open(url, '_blank', 'noopener');
 }
 
 // ── Single-provider connect button ────────────────────────────────────────────

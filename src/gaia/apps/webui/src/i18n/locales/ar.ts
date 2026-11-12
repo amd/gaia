@@ -442,6 +442,7 @@ const messages: Messages = {
     'activity.exit': 'رمز الخروج {code}',
     'activity.copyOutput': 'نسخ المخرجات',
     'activity.copyOutputAria': 'نسخ مخرجات الأمر',
+    'activity.copyFailed': 'تعذّر نسخ المخرجات',
     'activity.noOutput': 'لا توجد مخرجات',
     'activity.openPath': 'فتح: {path}',
     'tool.failed': 'تعذّر: {label}',
@@ -2249,6 +2250,7 @@ const messages: Messages = {
     'mobile.copyCommand': 'نسخ الأمر',
     'mobile.copy': 'نسخ',
     'mobile.copied': 'تم النسخ',
+    'mobile.copyFailed': 'تعذّر النسخ. حدّد النص وانسخه بدلًا من ذلك.',
     'mobile.downloadPage': 'صفحة تنزيل ngrok',
     'mobile.retry': 'إعادة المحاولة',
 

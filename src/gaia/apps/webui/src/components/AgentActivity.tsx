@@ -1091,7 +1091,9 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
 
 function CommandOutputView({ output }: { output: CommandOutput }) {
     const t = useT();
-    const [copied, setCopied] = useState(false);
+    const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+    const copied = copyState === 'copied';
+    const copyFailed = copyState === 'failed';
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -1102,10 +1104,18 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
 
     const handleCopy = useCallback(() => {
         const text = output.stdout || output.stderr || '';
-        navigator.clipboard.writeText(text).catch(() => {});
-        setCopied(true);
-        if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
+        const show = (state: 'copied' | 'failed', ms: number) => {
+            setCopyState(state);
+            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
+            copyTimerRef.current = setTimeout(() => setCopyState('idle'), ms);
+        };
+        Promise.resolve()
+            .then(() => navigator.clipboard.writeText(text))
+            .then(() => show('copied', 2000))
+            .catch((err) => {
+                log.ui.warn('Could not copy the command output to the clipboard', err);
+                show('failed', 4000);
+            });
     }, [output]);
 
     const hasOutput = !!(output.stdout || output.stderr);
@@ -1130,6 +1140,9 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
                         >
                             {t('activity.exit', { code: output.returnCode })}
                         </span>
+                    )}
+                    {copyFailed && (
+                        <span className="cmd-copy-error" role="alert">{t('activity.copyFailed')}</span>
                     )}
                     {hasOutput && (
                         <button

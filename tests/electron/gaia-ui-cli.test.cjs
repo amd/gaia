@@ -8,7 +8,7 @@ const path = require("path");
 const { execFileSync } = require("child_process");
 
 const CLI = path.join(__dirname, "../../src/gaia/apps/webui/bin/gaia-ui.cjs");
-const { npmDistTag, helpText, startBackend } = require(CLI);
+const { npmDistTag, helpText, startBackend, stopBackend } = require(CLI);
 
 describe("gaia-ui help for release candidates", () => {
   test("a prerelease points at the next dist-tag, a final at latest", () => {
@@ -92,6 +92,44 @@ describe("gaia-ui when the backend dies", () => {
       );
     } finally {
       err.mockRestore();
+      log.mockRestore();
+    }
+  });
+});
+
+// Ctrl+C used to wait out the 3 s force-kill timer even after the backend
+// had already stopped. Last in the file: stopping sets module-level state.
+describe("gaia-ui on Ctrl+C", () => {
+  test("exits as soon as the backend stops, not after the force-kill delay", async () => {
+    const { spawn } = require("child_process");
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    await new Promise((resolve) => child.once("spawn", resolve));
+    const log = jest.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const started = Date.now();
+      const code = await new Promise((resolve) => {
+        stopBackend(child, resolve, 60000);
+      });
+      expect(code).toBe(0);
+      expect(child.exitCode !== null || child.signalCode !== null).toBe(true);
+      expect(Date.now() - started).toBeLessThan(10000);
+    } finally {
+      log.mockRestore();
+      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+    }
+  }, 20000);
+
+  test("exits at once when the backend is already gone", () => {
+    const log = jest.spyOn(console, "log").mockImplementation(() => {});
+    const exit = jest.fn();
+    const kill = jest.fn();
+    try {
+      stopBackend({ exitCode: 1, signalCode: null, kill, once: jest.fn() }, exit, 60000);
+      expect(exit).toHaveBeenCalledWith(0);
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
       log.mockRestore();
     }
   });

@@ -458,18 +458,9 @@ function OAuthConfigureBody({
         return () => window.removeEventListener('focus', handleFocus);
     }, [onChanged]);
 
-    // Open the OAuth URL in a real browser (Electron prefers the system
-    // browser via the IPC bridge; fall back to window.open for the
-    // dev-server case).
+    // Electron's window-open handler hands this to the system browser.
     const openAuthUrl = (url: string) => {
-        const anyWindow = window as unknown as {
-            gaia?: { openExternal?: (url: string) => void };
-        };
-        if (anyWindow.gaia?.openExternal) {
-            anyWindow.gaia.openExternal(url);
-        } else {
-            window.open(url, '_blank', 'noopener');
-        }
+        window.open(url, '_blank', 'noopener');
     };
 
     const handleConnect = async () => {

@@ -29,12 +29,12 @@ function functionBody(name) {
 }
 
 describe("external links go through the scheme allow-list", () => {
-  test("setWindowOpenHandler checks the resolved URL before openExternal", () => {
+  test("setWindowOpenHandler checks the resolved URL before opening it", () => {
     const start = MAIN.indexOf("setWindowOpenHandler(");
     const handler = MAIN.slice(start, MAIN.indexOf("});", start));
     expect(handler.indexOf("isAllowedExternalUrl(url)")).toBeGreaterThan(-1);
     expect(handler.indexOf("isAllowedExternalUrl(url)")).toBeLessThan(
-      handler.indexOf("shell.openExternal(url)")
+      handler.indexOf("openAllowedLink(url)")
     );
     expect(handler).toContain('return { action: "deny" }');
   });
@@ -45,15 +45,22 @@ describe("external links go through the scheme allow-list", () => {
     const handler = MAIN.slice(start, MAIN.indexOf("\n  });", start));
     expect(handler).toContain("event.preventDefault()");
     expect(handler.indexOf("isAllowedExternalUrl(url)")).toBeLessThan(
-      handler.indexOf("shell.openExternal(url)")
+      handler.indexOf("openAllowedLink(url)")
     );
   });
 
-  test("every openExternal in main.cjs is behind the allow-list", () => {
-    const calls = MAIN.match(/shell\.openExternal\(/g) || [];
+  test("every openAllowedLink in main.cjs is behind the allow-list", () => {
+    const calls = MAIN.match(/openAllowedLink\(url\);/g) || [];
     const guarded =
-      MAIN.match(/if \(isAllowedExternalUrl\(url\)\) \{\s*shell\.openExternal\(url\)/g) || [];
+      MAIN.match(/if \(isAllowedExternalUrl\(url\)\) \{\s*openAllowedLink\(url\)/g) || [];
+    expect(calls.length).toBeGreaterThan(0);
     expect(calls.length).toBe(guarded.length);
+  });
+
+  // An uncaught openExternal rejection is fatal (main-safety-net.cjs).
+  test("main.cjs never calls shell.openExternal directly", () => {
+    expect(MAIN).not.toMatch(/shell\.openExternal\(/);
+    expect(functionBody("openAllowedLink")).toContain("openExternalLink(shell, url,");
   });
 });
 
