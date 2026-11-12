@@ -25,6 +25,7 @@ import { PanelSection } from './PanelSection';
 import type { ChatFileChange, GitRepo, SessionChanges, SessionGit } from '../../types/sessionPanel';
 import { ref, type MessageKey, type Param } from '../../i18n/registry';
 import { tEn, useT, type Translate } from '../../i18n/useT';
+import { fileText } from '../CalendarApproval';
 
 function plural(n: number, one: string, many = `${one}s`): string {
     return `${n} ${n === 1 ? one : many}`;
@@ -168,7 +169,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                     return (
                         <li key={f.path} className="sp-change">
                             <div className="sp-item-text">
-                                <span className="sp-item-name" dir="auto" title={f.path}>{baseName(f.path)}</span>
+                                <span className="sp-item-name" dir="auto" title={fileText(f.path)}>{fileText(baseName(f.path))}</span>
                                 <span className="sp-meta">
                                     {t(CHANGE_LABEL[f.change])}
                                     {f.additions != null && <> · <span className="sp-add">+{f.additions}</span> <span className="sp-del">−{f.deletions}</span></>}
@@ -183,7 +184,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                                     type="button"
                                     className="btn-icon-sm"
                                     onClick={() => onJumpToMessage(latest)}
-                                    aria-label={t('chg.goToLast', { name: baseName(f.path) })}
+                                    aria-label={t('chg.goToLast', { name: fileText(baseName(f.path)) })}
                                     title={t('sp.goToTurn')}
                                 >
                                     <CornerDownRight size={12} />

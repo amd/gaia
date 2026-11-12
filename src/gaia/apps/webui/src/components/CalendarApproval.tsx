@@ -138,6 +138,11 @@ export function visibleText(value: string, multiline: boolean): string {
     return multiline ? shown : shown.replace(/\n/g, '[U+000A]');
 }
 
+/** A file name or path from a tool, marked the way the approval card marks it. */
+export function fileText(value: string): string {
+    return visibleText(value, false);
+}
+
 /** `HIDDEN_NOTE` plus what `calendar_tools.py` adds to it; a Python test keeps them equal. */
 const UNSEEN_NOTE = "This text holds characters that don't show. Those that hide or reorder text " +
     'appear as [U+XXXX]; ideograph variant marks are kept as written. They are saved as written.';

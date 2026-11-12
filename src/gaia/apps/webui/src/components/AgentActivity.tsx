@@ -43,6 +43,7 @@ import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/reg
 import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
 import './AgentActivity.css';
+import { fileText } from './CalendarApproval';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
 
@@ -741,13 +742,13 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
                 key={match.index}
                 className="tool-result-path"
                 onClick={handleClick}
-                title={t('activity.openPath', { path: filePath })}
+                title={t('activity.openPath', { path: fileText(filePath) })}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => { if (e.key === 'Enter') handleClick(); }}
             >
                 <FolderOpen size={10} style={{ flexShrink: 0, opacity: 0.7 }} />
-                {filePath}
+                {fileText(filePath)}
             </span>
         );
         // Advance past the full raw match; push trimmed trailing brackets as plain text

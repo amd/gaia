@@ -18,6 +18,7 @@ import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { IndexingProgress } from './IndexingProgress';
 import './DocumentLibrary.css';
+import { fileText } from './CalendarApproval';
 
 /** Split a stored indexing error into a one-line summary and the rest. */
 function splitFailureReason(lastError: string): { summary: string; more: string } {
@@ -791,7 +792,7 @@ export function DocumentLibrary() {
                         {documents.map((doc) => (
                             <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <span className="doc-name" dir="auto">{doc.filename}</span>
+                                    <span className="doc-name" dir="auto">{fileText(doc.filename)}</span>
                                     {renderDocStatus(doc)}
                                 </div>
                                 <div className="doc-row-actions">
@@ -799,8 +800,8 @@ export function DocumentLibrary() {
                                         <button
                                             className="btn-icon-sm doc-open-folder"
                                             onClick={() => handleOpenFolder(doc.filepath, doc.filename)}
-                                            title={t('docs.openFolder', { path: doc.filepath })}
-                                            aria-label={t('docs.openFolderAria', { name: doc.filename })}
+                                            title={t('docs.openFolder', { path: fileText(doc.filepath) })}
+                                            aria-label={t('docs.openFolderAria', { name: fileText(doc.filename) })}
                                         >
                                             <FolderOpen size={14} />
                                         </button>

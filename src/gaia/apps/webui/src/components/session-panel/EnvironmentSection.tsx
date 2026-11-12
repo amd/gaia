@@ -27,6 +27,7 @@ import type { LocalModelStatus, PermissionMode, TunnelStatus } from '../../types
 import type { ScopeEntry, ScopeSource } from '../../types/sessionPanel';
 import type { MessageKey } from '../../i18n/registry';
 import { useT } from '../../i18n/useT';
+import { fileText } from '../CalendarApproval';
 
 const SOURCE_LABEL: Record<ScopeSource, MessageKey> = {
     added: 'env.source.added',
@@ -171,8 +172,8 @@ function Folders({ sessionId }: { sessionId: string }) {
                 ? <Folder size={13} className="sp-item-icon" aria-hidden="true" />
                 : <File size={13} className="sp-item-icon" aria-hidden="true" />}
             <div className="sp-item-text">
-                <span className="sp-item-name" dir="auto" title={entry.path}>{baseName(entry.path)}</span>
-                <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span className="sp-item-path" dir="ltr">{entry.path}</span></span>
+                <span className="sp-item-name" dir="auto" title={fileText(entry.path)}>{fileText(baseName(entry.path))}</span>
+                <span className="sp-meta" title={fileText(entry.path)}>{t(SOURCE_LABEL[entry.source])} · <span className="sp-item-path" dir="ltr">{fileText(entry.path)}</span></span>
             </div>
             {entry.removable && !locked && (
                 <button
@@ -180,7 +181,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                     className="btn-icon-sm sp-item-remove"
                     onClick={() => void remove(entry)}
                     disabled={busyPath !== null}
-                    aria-label={t('env.remove', { path: entry.path })}
+                    aria-label={t('env.remove', { path: fileText(entry.path) })}
                     title={t('env.removeShort')}
                 >
                     <X size={12} />

@@ -58,3 +58,11 @@ describe('linkifyPaths', () => {
         expect(linkifyPaths('no paths here')).toBe('no paths here');
     });
 });
+
+describe('linkifyPaths with hidden characters', () => {
+    it('shows a right-to-left override in a tool result path as a code', () => {
+        const { container, links } = renderText("Wrote 'C:\\w\\invoice\u202Etxt.md'.");
+        expect(links).toEqual(['C:\\w\\invoice[U+202E]txt.md']);
+        expect(container.querySelector('.tool-result-path')!.getAttribute('title')).toBe('Open: C:\\w\\invoice[U+202E]txt.md');
+    });
+});

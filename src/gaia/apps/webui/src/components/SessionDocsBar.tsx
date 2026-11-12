@@ -6,6 +6,7 @@ import { CheckCircle2, FileText, X } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { fileText } from './CalendarApproval';
 
 /** The documents indexed for this chat, shown under the header; renders nothing when there are none. */
 export function SessionDocsBar({ sessionId, onDetachFailed }: {
@@ -39,7 +40,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
             log.doc.info(`Detached document from session: ${doc?.filename || docId}`);
         } catch (err) {
             log.doc.error(`Failed to detach document: ${doc?.filename || docId}`, err);
-            onDetachFailed(doc?.filename || docId, err);
+            onDetachFailed(doc?.filename ? fileText(doc.filename) : docId, err);
         }
     }, [documents, sessionId, updateSessionInList, onDetachFailed]);
 
@@ -63,13 +64,13 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
             </button>
             <div className={`doc-context-pills${docsExpanded ? ' doc-context-pills-expanded' : ''}`}>
                 {visibleDocs.map((d) => (
-                    <span key={d.id} className="doc-pill" title={d.filepath || d.filename}>
+                    <span key={d.id} className="doc-pill" title={fileText(d.filepath || d.filename)}>
                         <FileText size={9} className="doc-pill-icon" aria-hidden="true" />
-                        <span className="doc-pill-name" dir="auto">{d.filename}</span>
+                        <span className="doc-pill-name" dir="auto">{fileText(d.filename)}</span>
                         <button
                             className="doc-pill-remove"
                             onClick={(e) => handleRemoveDocument(e, d.id)}
-                            aria-label={`Remove ${d.filename} from this chat`}
+                            aria-label={`Remove ${fileText(d.filename)} from this chat`}
                         >
                             <X size={10} />
                         </button>

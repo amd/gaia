@@ -295,3 +295,26 @@ describe('totalText', () => {
         expect(totalText({ ...CHANGES, totals: { files: 1, additions: 0, deletions: 2, uncounted: 0 } })).toBe('1 file changed, +0 −2');
     });
 });
+
+describe('ChangesSection marks hidden characters in names', () => {
+    it('shows a right-to-left override as a code in the list and in the review', async () => {
+        mocked.getSessionChanges.mockResolvedValue({
+            ...CHANGES,
+            files: [file({ path: 'C:\\repo\\invoice\u202Etxt.md', message_ids: [2] })],
+            totals: { files: 1, additions: 1, deletions: 1, uncounted: 0 },
+        });
+        renderSection();
+        const name = await waitFor(() => {
+            const found = document.querySelector('.sp-change .sp-item-name');
+            expect(found).not.toBeNull();
+            return found!;
+        });
+        expect(name.textContent).toBe('invoice[U+202E]txt.md');
+        expect(name.getAttribute('title')).toBe('C:\\repo\\invoice[U+202E]txt.md');
+
+        fireEvent.click(screen.getByRole('button', { name: /Review changes/ }));
+        const dialog = screen.getByRole('dialog', { name: "Review this chat's changes" });
+        expect(dialog).toHaveTextContent('C:\\repo\\invoice[U+202E]txt.md');
+        expect(document.body.textContent).not.toContain('\u202E');
+    });
+});

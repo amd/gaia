@@ -493,3 +493,15 @@ describe('DocumentLibrary dates follow the interface language', () => {
         }
     });
 });
+
+it('shows a right-to-left override in a document name as a code', async () => {
+    mockedApi.listDocuments.mockResolvedValue({
+        documents: [{ ...COMPLETE_DOC, filename: 'plan\u202Efdp.md', filepath: 'C:\\d\\plan\u202Efdp.md' }],
+        total: 1, total_size_bytes: 2048, total_chunks: 5,
+    });
+    render(<DocumentLibrary />);
+    expect(await screen.findByText('plan[U+202E]fdp.md')).toBeInTheDocument();
+    const folder = screen.getByRole('button', { name: /plan\[U\+202E\]fdp\.md/ });
+    expect(folder.getAttribute('title')).toContain('C:\\d\\plan[U+202E]fdp.md');
+    expect(document.querySelector('.doc-name')!.textContent).not.toContain('\u202E');
+});

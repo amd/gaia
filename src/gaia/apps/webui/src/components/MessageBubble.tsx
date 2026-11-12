@@ -33,6 +33,7 @@ import {
     type CitationIndex, type FoundPage, type LibraryDoc,
 } from '../utils/citations';
 import './MessageBubble.css';
+import { fileText } from './CalendarApproval';
 
 interface MessageBubbleProps {
     message: Message;
@@ -881,13 +882,13 @@ function FilePathLink({ path, label }: { path: string; label?: string }) {
             className="file-path-link"
             dir="ltr"
             onClick={handleClick}
-            title={`Open in file explorer: ${path}`}
+            title={`Open in file explorer: ${fileText(path)}`}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e as unknown as React.MouseEvent); } }}
         >
             <FolderOpen size={12} className="file-path-icon" />
-            {label ?? path}
+            {fileText(label ?? path)}
         </span>
     );
 }
@@ -936,12 +937,12 @@ function CitationLink({ doc, page, t }: { doc: LibraryDoc; page?: number; t: Tra
             target="_blank"
             rel="noopener noreferrer"
             dir="ltr"
-            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: doc.filename })}
+            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: fileText(doc.filename) })}
             data-doc-id={doc.id}
             data-page={page}
         >
             <FileText size={12} className="citation-icon" aria-hidden="true" />
-            {doc.filename}
+            {fileText(doc.filename)}
         </a>
     );
 }

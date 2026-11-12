@@ -3,6 +3,7 @@
 
 import { UnsupportedCard } from './UnsupportedCard';
 import { isOptionalString } from './primitiveShared';
+import { fileText } from '../CalendarApproval';
 
 interface DiffPayload {
     title?: string;
@@ -49,7 +50,7 @@ export function DiffCard({ data }: { data: unknown }) {
             {(data.title || data.badge) && (
                 <div className="render-diff__title">
                     {data.badge && <span className="render-diff__badge">{data.badge}</span>}
-                    {data.title}
+                    {data.title && fileText(data.title)}
                 </div>
             )}
             {data.note && <div className="render-diff__note">{data.note}</div>}

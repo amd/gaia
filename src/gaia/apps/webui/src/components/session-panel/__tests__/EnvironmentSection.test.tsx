@@ -345,3 +345,17 @@ describe('Permission mode', () => {
         expect(screen.getByRole('button', { name: 'Turn it on' })).toBeInTheDocument();
     });
 });
+
+describe('EnvironmentSection marks hidden characters in names', () => {
+    it('shows a right-to-left override in a folder as a code', async () => {
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [{ path: 'C:\\Users\\me\\exe\u202Etxt', kind: 'folder', source: 'added', removable: true }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const list = await screen.findByRole('list');
+        expect(list).toHaveTextContent('exe[U+202E]txt');
+        expect(list.textContent).not.toContain('\u202E');
+        expect(list.querySelector('.sp-item-name')!.getAttribute('title')).toBe('C:\\Users\\me\\exe[U+202E]txt');
+    });
+});
