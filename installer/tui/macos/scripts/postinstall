@@ -28,8 +28,18 @@ for binary in gaia-tui gaia-agent gaia; do
     fi
 done
 
+# The native agent ships only where it is built (Apple silicon); gaia-tui runs
+# gaia-agent where it is absent.
+NATIVE_AGENT="${BIN_DIR}/gaiacpp"
+if [ -e "$NATIVE_AGENT" ] && [ ! -x "$NATIVE_AGENT" ]; then
+    echo "GAIA install failed: ${NATIVE_AGENT} is not executable." >&2
+    echo "Re-run the installer from https://amd-gaia.ai to repair it." >&2
+    exit 1
+fi
+
 echo "GAIA Terminal UI installed:"
 echo "  ${BIN_DIR}/gaia-tui"
 echo "  ${BIN_DIR}/gaia-agent"
+[ ! -e "$NATIVE_AGENT" ] || echo "  ${NATIVE_AGENT}"
 echo "  ${BIN_DIR}/gaia"
 echo "Run \`gaia-tui\` to start."

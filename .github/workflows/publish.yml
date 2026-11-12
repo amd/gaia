@@ -791,25 +791,36 @@ jobs:
   # waits on them, not on the macOS and Linux packages and their smoke tests.
   tui-binaries:
     name: Terminal binaries
-    needs: [validate]
+    needs: [validate, build-gaiacpp]
+    if: >-
+      !cancelled() &&
+      needs.validate.result == 'success' &&
+      needs.build-gaiacpp.result == 'success'
     uses: ./.github/workflows/tui_installers.yml
     with:
       version: ${{ needs.validate.outputs.npm_version }}
       installers: false
+      gaiacpp: artifact
+      gaiacpp_tag: ${{ needs.validate.outputs.tag_name }}
 
+  # Every package, final or RC, ships THIS run's gaiacpp beside gaia-tui, so the
+  # terminal UI runs the native agent; build-gaiacpp must have passed first.
   tui-installers:
     name: Terminal installers
-    needs: [validate, rc-flagship, tui-binaries]
+    needs: [validate, rc-flagship, tui-binaries, build-gaiacpp]
     if: >-
       !cancelled() &&
       needs.validate.result == 'success' &&
       needs.tui-binaries.outputs.binaries_ok == 'true' &&
+      needs.build-gaiacpp.result == 'success' &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     uses: ./.github/workflows/tui_installers.yml
     with:
       version: ${{ needs.validate.outputs.npm_version }}
       sidecar: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}
       build_binaries: false
+      gaiacpp: artifact
+      gaiacpp_tag: ${{ needs.validate.outputs.tag_name }}
 
   # installers_ok means every leg that ran passed its clean-runner install. It
   # does not mean every package exists: tui_installers.yml builds no Intel .pkg
@@ -864,14 +875,16 @@ jobs:
           fi
 
   # Embeds THIS run's desktop app setup (same commit, same tag), never a
-  # published one, and the same flagship agent the terminal installers wrap.
+  # published one, and the same flagship agent and gaiacpp the terminal
+  # installers wrap.
   windows-setup:
     name: Windows setup
-    needs: [validate, build-desktop-installers, tui-binaries, rc-flagship]
+    needs: [validate, build-desktop-installers, tui-binaries, rc-flagship, build-gaiacpp]
     if: >-
       !cancelled() &&
       needs.build-desktop-installers.result == 'success' &&
       needs.tui-binaries.outputs.binaries_ok == 'true' &&
+      needs.tui-binaries.outputs.gaiacpp_ok == 'true' &&
       (needs.validate.outputs.is_rc != 'true' || needs.rc-flagship.result == 'success')
     permissions:
       contents: read
@@ -881,6 +894,7 @@ jobs:
       version: ${{ needs.validate.outputs.npm_version }}
       sidecar: ${{ needs.validate.outputs.is_rc == 'true' && 'artifact' || 'pinned' }}
       agent_ui_artifact: windows-installer
+      gaiacpp: artifact
 
   # A final does not publish without the setup: its notes promise it. An RC
   # ships without it and its notes say so; this job turns the run red so that
@@ -1037,6 +1051,8 @@ jobs:
           Installer checksums are in `gaia-installers-SHA256SUMS.txt`. The terminal hub is also attached as standalone binaries (`gaia-<os>-<arch>`, checksums in `gaia-tui-SHA256SUMS.txt`).
 
           The GAIA agent itself is attached as `gaia-agent-<os>-<arch>`, built from this candidate's commit. This candidate's `gaia init` and `gaia hub install gaia` install it from here rather than from the Agent Hub, and say so if it is missing.
+
+          On Windows x64, Linux x64 and Apple Silicon, the terminal installers and the one-line installer also put `gaiacpp`, the native GAIA agent attached as `gaiacpp-<os>-<arch>`, beside `gaia-tui`, and the terminal runs it in place of `gaia-agent`. Elsewhere the terminal runs `gaia-agent`.
 
           ### One-line installer
 

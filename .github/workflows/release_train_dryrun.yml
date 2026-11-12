@@ -348,6 +348,8 @@ jobs:
       version: ${{ needs.plan.outputs.rc_npm }}
       artifact_prefix: rc-
       installers: false
+      # The dry run builds no gaiacpp; publish.yml's real tag run does.
+      gaiacpp: stub
 
   tui-final-binaries:
     name: Terminal binaries (final)
@@ -361,6 +363,8 @@ jobs:
       version: ${{ needs.plan.outputs.base_version }}
       artifact_prefix: final-
       installers: false
+      # The dry run builds no gaiacpp; publish.yml's real tag run does.
+      gaiacpp: stub
 
   tui-rc:
     name: Terminal (rc)
@@ -374,6 +378,8 @@ jobs:
     with:
       version: ${{ needs.plan.outputs.rc_npm }}
       sidecar: artifact
+      # The dry run builds no gaiacpp; publish.yml's real tag run does.
+      gaiacpp: stub
       artifact_prefix: rc-
       build_binaries: false
 
@@ -389,6 +395,7 @@ jobs:
     with:
       version: ${{ needs.plan.outputs.base_version }}
       sidecar: artifact
+      gaiacpp: stub
       artifact_prefix: final-
       build_binaries: false
 
@@ -456,6 +463,7 @@ jobs:
     with:
       version: ${{ needs.plan.outputs.rc_npm }}
       sidecar: artifact
+      gaiacpp: stub
       agent_ui_artifact: rc-windows-installer
       artifact_prefix: rc-
 
@@ -474,6 +482,7 @@ jobs:
     with:
       version: ${{ needs.plan.outputs.base_version }}
       sidecar: artifact
+      gaiacpp: stub
       agent_ui_artifact: final-windows-installer
       artifact_prefix: final-
 

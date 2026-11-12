@@ -27,6 +27,7 @@ $GAIA_RELEASES_URL = $GAIA_RELEASES_URL.TrimEnd('/')
 $GAIA_RELEASE_TAG = $env:GAIA_RELEASE_TAG
 $TUI_SUMS_FILE = "gaia-tui-SHA256SUMS.txt"
 $CORE_SUMS_FILE = "gaia-core-SHA256SUMS.txt"
+$GAIACPP_SUMS_FILE = "gaiacpp-SHA256SUMS.txt"
 # The release this run installs from, resolved once. A hashtable so functions
 # can set it without reaching the caller's scope under iex.
 $RELEASE = @{ Tag = $null }
@@ -561,6 +562,134 @@ function Write-AgentInstallRecord {
     return $true
 }
 
+# A gaiacpp.exe left by an earlier install would run in place of gaia-agent
+# beside a gaia-tui from another release, so it goes whenever this release's
+# does not land.
+function Remove-StaleGaiacpp {
+    $stale = "$GAIA_BIN\gaiacpp.exe"
+    if (-not (Test-Path -LiteralPath $stale)) { return }
+    try {
+        Remove-Item -LiteralPath $stale -Force
+    }
+    catch {
+        Write-GaiaError "Could not remove $stale, left by an earlier install: $_"
+        Write-Host "  Fix:  close any running GAIA, then re-run this installer." -ForegroundColor $COLOR_YELLOW
+        throw "GAIA install failed - see the error above."
+    }
+    Write-Step "Removed the native GAIA agent an earlier install left in $GAIA_BIN"
+}
+
+# What `gaiacpp.exe --version` prints, or $null when it cannot start on this PC.
+function Get-GaiacppVersion {
+    param([Parameter(Mandatory)][string]$Path)
+    try {
+        $out = (& $Path --version | Out-String).Trim()
+    }
+    catch {
+        return $null
+    }
+    if ($LASTEXITCODE -ne 0) { return $null }
+    return $out
+}
+
+# gaiacpp, the native GAIA agent. gaia-tui runs it from beside itself in place
+# of gaia-agent, so it comes from the same release as gaia-tui into $GAIA_BIN.
+#
+# A PC or release with no gaiacpp keeps the Python agent, and says so. A
+# checksum mismatch, or a binary from another release, fails the install.
+function Install-Gaiacpp {
+    Write-Step "Installing the native GAIA agent (gaiacpp)"
+
+    $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    if ($arch -ne "AMD64") {
+        Remove-StaleGaiacpp
+        Write-GaiaWarning "No native GAIA agent is built for processor architecture '$arch', so the GAIA Terminal UI uses the Python GAIA agent."
+        return
+    }
+    $filename = "gaiacpp-windows-x64.exe"
+
+    if (-not $RELEASE.Tag) { $RELEASE.Tag = Resolve-ReleaseTag }
+    $tag = $RELEASE.Tag
+    if (-not $tag) { throw "GAIA install failed - see the error above." }
+    $releaseUrl = "$GAIA_RELEASES_URL/download/$tag"
+    $sumsUrl = "$releaseUrl/$GAIACPP_SUMS_FILE"
+
+    $stage = Join-Path $env:TEMP ("gaia-gaiacpp-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    try {
+        try {
+            Invoke-WebRequest -Uri $sumsUrl -OutFile "$stage\$GAIACPP_SUMS_FILE" -UseBasicParsing -TimeoutSec $HTTP_TIMEOUT_SEC
+        }
+        catch {
+            Remove-StaleGaiacpp
+            Write-GaiaWarning "Could not fetch the native GAIA agent's checksums for $tag, so the GAIA Terminal UI uses the Python GAIA agent."
+            Write-Host "  URL:  $sumsUrl" -ForegroundColor $COLOR_YELLOW
+            Write-Host "  A release from before the native agent shipped has none. Otherwise check your" -ForegroundColor $COLOR_YELLOW
+            Write-Host "  network and re-run this installer." -ForegroundColor $COLOR_YELLOW
+            return
+        }
+        # Same rule as Resolve-TuiAsset: exactly one line for the file, lowercase hex.
+        $found = @()
+        foreach ($line in Get-Content -LiteralPath "$stage\$GAIACPP_SUMS_FILE") {
+            $parts = $line.Trim() -split '\s+', 2
+            if ($parts.Count -eq 2 -and $parts[1].TrimStart('*') -ceq $filename) { $found += $parts[0] }
+        }
+        if ($found.Count -eq 0) {
+            Remove-StaleGaiacpp
+            Write-GaiaWarning "$tag publishes no native GAIA agent for this PC ($filename), so the GAIA Terminal UI uses the Python GAIA agent."
+            return
+        }
+        if ($found.Count -ne 1 -or $found[0] -cnotmatch '^[0-9a-f]{64}\z') {
+            Write-GaiaError "$tag publishes no single valid SHA-256 for $filename - refusing to install unverified."
+            Write-Host "  Look: $sumsUrl" -ForegroundColor $COLOR_YELLOW
+            Write-Host "  Fix:  report it at https://github.com/amd/gaia/issues" -ForegroundColor $COLOR_YELLOW
+            throw "GAIA install failed - see the error above."
+        }
+
+        $resolved = @{ Version = $tag; Sha256 = $found[0]; Url = "$releaseUrl/$filename" }
+        $ok = Install-VerifiedBinary -Resolved $resolved -Filename $filename -DestName "gaiacpp.exe" -DestDir $stage -Label "native GAIA agent" -Optional
+        if (-not $ok) {
+            Remove-StaleGaiacpp
+            Write-GaiaWarning "The native GAIA agent did not install, so the GAIA Terminal UI uses the Python GAIA agent. Re-run this installer to retry."
+            return
+        }
+
+        # gaia-tui picks gaiacpp whenever it is there, so one that cannot start
+        # on this PC must not be put there.
+        $expected = "gaiacpp " + ($tag.Substring(1) -replace '-rc([0-9]+)\z', '-rc.$1')
+        $got = Get-GaiacppVersion -Path "$stage\gaiacpp.exe"
+        if ($null -eq $got) {
+            Remove-StaleGaiacpp
+            Write-GaiaWarning "The native GAIA agent $tag does not start on this PC, so the GAIA Terminal UI uses the Python GAIA agent."
+            Write-Host "  Report it at https://github.com/amd/gaia/issues with your Windows version." -ForegroundColor $COLOR_YELLOW
+            return
+        }
+        if ($got -cne $expected) {
+            Write-GaiaError "The native GAIA agent on $tag reports '$got', not '$expected' - refusing to install it."
+            Write-Host "  Look: $GAIA_RELEASES_URL/tag/$tag" -ForegroundColor $COLOR_YELLOW
+            Write-Host "  Fix:  report it at https://github.com/amd/gaia/issues" -ForegroundColor $COLOR_YELLOW
+            throw "GAIA install failed - see the error above."
+        }
+
+        if (-not (Test-Path $GAIA_BIN)) {
+            New-Item -ItemType Directory -Path $GAIA_BIN -Force | Out-Null
+        }
+        try {
+            Move-Item -LiteralPath "$stage\gaiacpp.exe" -Destination "$GAIA_BIN\gaiacpp.exe" -Force
+        }
+        catch {
+            Write-GaiaError "Downloaded and verified the native GAIA agent, but could not write $GAIA_BIN\gaiacpp.exe: $_"
+            Write-Host "  Fix:  close any running GAIA (and any tool scanning that" -ForegroundColor $COLOR_YELLOW
+            Write-Host "        folder), then re-run this installer." -ForegroundColor $COLOR_YELLOW
+            throw "GAIA install failed - see the error above."
+        }
+    }
+    finally {
+        if (Test-Path $stage) { Remove-Item -Path $stage -Recurse -Force }
+    }
+    Write-Success "Native GAIA agent $tag installed to $GAIA_BIN\gaiacpp.exe; the GAIA Terminal UI runs it"
+}
+
 # The user environment key Add-ToPath edits. Tests point it at a scratch key.
 $USER_ENV_KEY = "Environment"
 
@@ -744,6 +873,9 @@ function Main {
     # After Install-Tui so it lands in the same directory, which is where
     # the hub looks for its agent first.
     $flagshipInstalled = Install-FlagshipAgent -Pin $pin
+
+    # The native agent the hub runs in place of gaia-agent, from the same release.
+    Install-Gaiacpp
 
     # Show next steps
     Show-NextSteps -FlagshipInstalled:$flagshipInstalled

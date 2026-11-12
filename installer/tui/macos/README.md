@@ -1,11 +1,12 @@
 # macOS installer for the GAIA Terminal UI
 
-Builds `gaia-<version>-darwin-<arch>.pkg`, which installs two command-line tools:
+Builds `gaia-<version>-darwin-<arch>.pkg`, which installs these command-line tools:
 
 | Path | Mode |
 | --- | --- |
 | `/usr/local/bin/gaia-tui` | 0755 |
 | `/usr/local/bin/gaia-agent` | 0755 |
+| `/usr/local/bin/gaiacpp` (Apple silicon package only) | 0755 |
 | `/usr/local/share/doc/gaia-tui/LICENSE.md` | 0644 |
 
 Nothing else is written, and the package is constrained to the system volume —
@@ -41,7 +42,7 @@ then forget both receipts (`--forget` drops the receipt only; it deletes nothing
 so the order matters):
 
 ```bash
-sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
+sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/bin/gaiacpp
 sudo rm -rf /usr/local/share/doc/gaia-tui
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
 sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
@@ -65,7 +66,8 @@ All four arguments are required.
 - `--payload` is a directory that already contains two executables named
   `gaia-tui` and `gaia-agent` (no extension), `core/` (the frozen `gaia` and its
   `_internal` folder) and `LICENSE.md`. The script copies them; it does not build
-  them. The core is its own component, installed to `/usr/local/lib/gaia` and
+  them. A `gaiacpp` there, the native agent `gaia-tui` runs in place of
+  `gaia-agent`, is packaged too; only Apple silicon has one. The core is its own component, installed to `/usr/local/lib/gaia` and
   linked as `/usr/local/bin/gaia`. A missing `LICENSE.md` is a hard error — every
   package GAIA ships carries the licence. `--without-core` leaves the core out, as
   packages before it shipped one did; CI uses it only to rebuild such a release's
@@ -124,7 +126,7 @@ published `.pkg` is unsigned.
 
 Enabling signing therefore needs three things together, not one: the four
 variables, a Developer ID **Application** certificate imported into the runner's
-keychain, and a workflow step that codesigns both binaries before they are
+keychain, and a workflow step that codesigns every payload binary before it is
 staged. Wiring only the secrets turns the macOS leg red.
 
 Codesign the Go binaries *before* staging them:
@@ -132,7 +134,7 @@ Codesign the Go binaries *before* staging them:
 ```bash
 codesign --force --options runtime --timestamp \
   --sign "Developer ID Application: … ($APPLE_TEAM_ID)" \
-  ./stage/darwin-arm64/gaia-tui ./stage/darwin-arm64/gaia-agent
+  ./stage/darwin-arm64/gaia-tui ./stage/darwin-arm64/gaia-agent ./stage/darwin-arm64/gaiacpp
 ```
 
 `--options runtime` (the hardened runtime) is required for notarization.
@@ -148,7 +150,7 @@ other than `Accepted`.
 | --- | --- |
 | `build-pkg.sh` | Entry point; the only thing CI calls |
 | `distribution.xml` | `productbuild --distribution` template; `@VERSION@`, `@HOST_ARCHITECTURES@`, `@PKG_IDENTIFIER@`, `@DOCS_IDENTIFIER@`, `@COMPONENT_PKG@` and `@DOCS_COMPONENT_PKG@` are substituted at build time |
-| `scripts/postinstall` | Runs with the binaries component. Verifies both binaries landed and are executable, then prints their paths. A non-zero exit here is surfaced by Installer.app |
+| `scripts/postinstall` | Runs with the binaries component. Verifies the binaries landed and are executable (`gaiacpp` when the package carries it), then prints their paths. A non-zero exit here is surfaced by Installer.app |
 
 Minimum OS: macOS 11.
 

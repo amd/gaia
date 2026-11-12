@@ -6,8 +6,9 @@
 #
 #   ./build-pkg.sh --version <x.y.z> --arch <arm64|x64> --payload <dir> --out <dir>
 #
-# Produces <out>/gaia-<version>-darwin-<arch>.pkg, installing gaia-tui and
-# gaia-agent to /usr/local/bin, plus LICENSE.md to /usr/local/share/doc/gaia-tui.
+# Produces <out>/gaia-<version>-darwin-<arch>.pkg, installing gaia-tui,
+# gaia-agent and, when the payload holds it, gaiacpp to /usr/local/bin, plus
+# LICENSE.md to /usr/local/share/doc/gaia-tui.
 #
 # Signing and notarization are opt-in via the environment — see README.md.
 #
@@ -40,6 +41,10 @@ readonly LICENSE_NAME="LICENSE.md"
 # Not `readonly`: bash 3.2, which is what /bin/bash still is on macOS, rejects
 # `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-tui gaia-agent)
+# gaiacpp, the native agent gaia-tui runs in place of gaia-agent, is packaged
+# when the payload holds it: only Apple silicon has a build. tui_installers.yml
+# stages it wherever one is built, and its smoke test checks both packages.
+readonly NATIVE_AGENT="gaiacpp"
 PKG_SCRIPTS=(postinstall)
 
 readonly DISTRIBUTION_TEMPLATE="${SCRIPT_DIR}/distribution.xml"
@@ -53,6 +58,7 @@ Usage: build-pkg.sh --version <x.y.z> --arch <arm64|x64> --payload <dir> --out <
   --version         Release version, e.g. 1.4.0. Embedded in the package and filename.
   --arch            Architecture of the staged binaries: arm64 or x64.
   --payload         Directory containing the executables gaia-tui and gaia-agent, plus LICENSE.md.
+                    A gaiacpp there is packaged beside them.
   --out             Directory to write gaia-<version>-darwin-<arch>.pkg into (created if absent).
   --allow-unsigned  Proceed without Apple credentials. Required to build an
                     unsigned package, so that shipping one is always a decision
@@ -130,6 +136,13 @@ for binary in "${PAYLOAD_BINARIES[@]}"; do
         "The staging directory must contain both gaia-tui and gaia-agent (no extension)." \
         "Check the build step that copies the Go binaries into ${PAYLOAD_DIR}."
 done
+
+SHIPPED_BINARIES=("${PAYLOAD_BINARIES[@]}")
+if [ -f "${PAYLOAD_DIR}/${NATIVE_AGENT}" ]; then
+    SHIPPED_BINARIES+=("$NATIVE_AGENT")
+else
+    echo "build-pkg.sh: the payload has no ${NATIVE_AGENT}, so the package ships gaia-agent alone" >&2
+fi
 
 [ "$WITHOUT_CORE" -eq 1 ] || { [ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ]; } || die \
     "payload is missing the frozen gaia core: ${PAYLOAD_DIR}/core/gaia and core/_internal." \
@@ -226,13 +239,13 @@ STAGED_SCRIPTS="${WORK_DIR}/scripts"
 mkdir -p "$BIN_ROOT" "$DOC_ROOT" "$CORE_ROOT"
 chmod 0755 "$BIN_ROOT" "$DOC_ROOT" "$CORE_ROOT"
 
-for binary in "${PAYLOAD_BINARIES[@]}"; do
+for binary in "${SHIPPED_BINARIES[@]}"; do
     cp "${PAYLOAD_DIR}/${binary}" "${BIN_ROOT}/${binary}"
     chmod 0755 "${BIN_ROOT}/${binary}"
 done
 
-BIN_FILES=("${PAYLOAD_BINARIES[@]}")
-SIGNED_BINARIES=("${PAYLOAD_BINARIES[@]}")
+BIN_FILES=("${SHIPPED_BINARIES[@]}")
+SIGNED_BINARIES=("${SHIPPED_BINARIES[@]}")
 if [ "$WITHOUT_CORE" -eq 0 ]; then
     cp -a "${PAYLOAD_DIR}/core/." "${CORE_ROOT}/"
     chmod 0755 "${CORE_ROOT}/gaia"
@@ -273,7 +286,7 @@ if [ "$SIGN_PKG" -eq 1 ]; then
             *)
                 die "payload binary '${binary}' is not signed with a Developer ID Application certificate." \
                     "Notarization rejects packages containing unsigned or ad-hoc-signed executables." \
-                    "Sign both binaries before staging them:" \
+                    "Sign every payload binary before staging it:" \
                     "$CODESIGN_HINT" \
                     "codesign reported: ${CODESIGN_INFO}"
                 ;;

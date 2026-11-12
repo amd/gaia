@@ -614,6 +614,17 @@ TUI_ASSETS = (
 HUB_PLATFORMS = ("linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64")
 WIN_HUB_PLATFORMS = ("win32-x64", "win32-arm64")
 HUB_VERSION = "0.99.0"
+GAIACPP_SUMS_FILE = "gaiacpp-SHA256SUMS.txt"
+GAIACPP_ASSETS = (
+    "gaiacpp-windows-x64.exe",
+    "gaiacpp-linux-x64",
+    "gaiacpp-darwin-arm64",
+)
+
+
+def _gaiacpp_version(tag: str) -> str:
+    """What a release's gaiacpp prints: v0.99.1-rc1 is gaiacpp 0.99.1-rc.1."""
+    return re.sub(r"-rc(\d+)$", r"-rc.\1", tag[1:])
 
 
 def _make_handler(root: Path, state: dict):
@@ -689,9 +700,28 @@ def fake_hub(tmp_path):
         omit_sums_file=False,
         raw_sums=None,
         core_digest_overrides=None,
+        gaiacpp=True,
+        gaiacpp_digest_overrides=None,
+        gaiacpp_body=None,
     ):
         tag_dir = root / "releases" / "download" / tag
         tag_dir.mkdir(parents=True, exist_ok=True)
+        # Shell scripts, so install.sh's start check can run them.
+        native_lines = []
+        for name in GAIACPP_ASSETS if gaiacpp else ():
+            body = gaiacpp_body or f'echo "gaiacpp {_gaiacpp_version(tag)}"'
+            blob = f"#!/bin/sh\n{body}\n".encode()
+            (tag_dir / name).write_bytes(blob)
+            digest = (gaiacpp_digest_overrides or {}).get(
+                name, hashlib.sha256(blob).hexdigest()
+            )
+            native_lines.append(f"{digest}  {name}\n")
+        if gaiacpp:
+            (tag_dir / GAIACPP_SUMS_FILE).write_text(
+                "".join(native_lines), encoding="utf-8"
+            )
+        else:
+            (tag_dir / GAIACPP_SUMS_FILE).unlink(missing_ok=True)
         lines = []
         for name in TUI_ASSETS:
             blob = f"#!/bin/sh\necho gaia {tag} {name}\n".encode()
@@ -1040,6 +1070,7 @@ _MAIN_STEPS = (
     "add_to_path",
     "install_tui",
     "install_flagship_agent",
+    "install_gaiacpp",
 )
 
 
@@ -1064,7 +1095,7 @@ def test_cli_only_installs_the_cli_and_leaves_the_packaged_binaries(tmp_path):
     result = _run_main_with_stubbed_steps(tmp_path, "1")
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert _steps_run(result) == list(_MAIN_STEPS[:-2])
+    assert _steps_run(result) == list(_MAIN_STEPS[:-3])
 
 
 @posix_only
@@ -1401,6 +1432,29 @@ def test_an_rc_pin_records_the_candidates_agent_version(
     assert version == RC_AGENT_VERSION
 
 
+# ── functional: gaiacpp, beside gaia-tui and from its release ──────────────
+#
+# Optional like the agent: a machine or release without one keeps the Python
+# agent. Never unverified, and never one that cannot start or is another
+# release's, because gaia-tui runs whatever gaiacpp sits beside it.
+
+PYTHON_AGENT = "uses the Python GAIA agent"
+
+
+def _run_install_gaiacpp(tmp_path, base_url, tag=None):
+    """install_gaiacpp as main runs it, on a stand-in for a Linux x64 machine."""
+    env = _channel_env(base_url)
+    if tag is not None:
+        env["GAIA_RELEASE_TAG"] = tag
+    result, home = _run_sh_function(
+        tmp_path,
+        'DOWNLOAD_CMD=curl; resolve_release_tag; mkdir -p "$GAIA_BIN"; '
+        "gaiacpp_asset_name() { printf 'gaiacpp-linux-x64\\n'; }; install_gaiacpp",
+        env,
+    )
+    return result, home / ".gaia" / "bin" / "gaiacpp"
+
+
 @posix_only
 @needs_curl
 def test_daemon_starts_the_agent_install_sh_placed(tmp_path, fake_hub, monkeypatch):
@@ -1421,6 +1475,164 @@ def test_daemon_starts_the_agent_install_sh_placed(tmp_path, fake_hub, monkeypat
     with pytest.raises(SidecarSpawnError, match="does not match"):
         _daemon_spawn_argv()
     assert _check_counts_agent() is False
+
+
+@posix_only
+@needs_curl
+@pytest.mark.parametrize("tag", [None, RC_TAG])
+def test_gaiacpp_installs_beside_gaia_tui_from_its_release(tmp_path, fake_hub, tag):
+    result, installed = _run_install_gaiacpp(tmp_path, fake_hub.base, tag=tag)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert os.access(installed, os.X_OK)
+    want = _gaiacpp_version(tag or RELEASE_TAG)
+    assert f'echo "gaiacpp {want}"' in installed.read_text(encoding="utf-8")
+
+
+@posix_only
+def test_a_machine_with_no_gaiacpp_build_keeps_the_python_agent(tmp_path):
+    # Whatever machine runs this test, it stands in for one with no build.
+    snippet = "gaiacpp_asset_name() { return 1; }; install_gaiacpp"
+    result, home = _run_sh_function(tmp_path, snippet)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert PYTHON_AGENT in result.stdout
+    assert not (home / ".gaia" / "bin" / "gaiacpp").exists()
+
+
+@posix_only
+@needs_curl
+def test_a_release_without_gaiacpp_keeps_the_python_agent_and_drops_a_stale_one(
+    tmp_path, fake_hub
+):
+    fake_hub.release(gaiacpp=False)
+    stale = tmp_path / "home" / ".gaia" / "bin" / "gaiacpp"
+    stale.parent.mkdir(parents=True)
+    stale.write_text("#!/bin/sh\necho gaiacpp 0.1.0\n", encoding="utf-8")
+
+    result, installed = _run_install_gaiacpp(tmp_path, fake_hub.base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert PYTHON_AGENT in result.stdout
+    assert not installed.exists()
+
+
+@posix_only
+@needs_curl
+def test_a_tampered_gaiacpp_fails_the_install(tmp_path, fake_hub):
+    fake_hub.release(gaiacpp_digest_overrides={n: "d" * 64 for n in GAIACPP_ASSETS})
+
+    result, installed = _run_install_gaiacpp(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "Checksum mismatch" in result.stdout + result.stderr
+    assert not installed.exists()
+
+
+@posix_only
+@needs_curl
+def test_a_gaiacpp_that_cannot_start_here_is_not_installed(tmp_path, fake_hub):
+    fake_hub.release(gaiacpp_body="exit 127")
+
+    result, installed = _run_install_gaiacpp(tmp_path, fake_hub.base)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "does not start on this machine" in result.stdout
+    assert not installed.exists()
+
+
+@posix_only
+@needs_curl
+def test_another_releases_gaiacpp_fails_the_install(tmp_path, fake_hub):
+    fake_hub.release(gaiacpp_body='echo "gaiacpp 0.1.0"')
+
+    result, installed = _run_install_gaiacpp(tmp_path, fake_hub.base)
+
+    assert result.returncode != 0
+    assert "not 'gaiacpp 0.99.0'" in result.stdout
+    assert not installed.exists()
+
+
+def _ps1_gaiacpp(tmp_path, base_url, prints=None, tag=None, arch="AMD64"):
+    """Install-Gaiacpp; `prints` stands in for what the downloaded binary says."""
+    probe = (
+        f"function Get-GaiacppVersion {{ param($Path) return {prints} }}\n"
+        if prints is not None
+        else ""
+    )
+    return _run_ps1(
+        tmp_path,
+        base_url,
+        f'$env:PROCESSOR_ARCHITECTURE = "{arch}"\n{probe}Install-Gaiacpp',
+        tag=tag,
+    )
+
+
+@needs_powershell
+@pytest.mark.parametrize("tag", [None, RC_TAG])
+def test_ps1_gaiacpp_installs_beside_gaia_tui_from_its_release(tmp_path, fake_hub, tag):
+    want = _gaiacpp_version(tag or RELEASE_TAG)
+    result, bin_dir = _ps1_gaiacpp(
+        tmp_path, fake_hub.base, prints=f"'gaiacpp {want}'", tag=tag
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f'echo "gaiacpp {want}"' in (bin_dir / "gaiacpp.exe").read_text(
+        encoding="utf-8"
+    )
+
+
+@needs_powershell
+def test_ps1_arm64_keeps_the_python_agent_and_drops_a_stale_gaiacpp(tmp_path):
+    bin_dir = tmp_path / "ps-bin"
+    bin_dir.mkdir()
+    (bin_dir / "gaiacpp.exe").write_text("stale", encoding="utf-8")
+
+    result, _ = _ps1_gaiacpp(tmp_path, "http://127.0.0.1:1", arch="ARM64")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert PYTHON_AGENT in result.stdout
+    assert not (bin_dir / "gaiacpp.exe").exists()
+
+
+@needs_powershell
+def test_ps1_a_release_without_gaiacpp_keeps_the_python_agent(tmp_path, fake_hub):
+    fake_hub.release(gaiacpp=False)
+
+    result, bin_dir = _ps1_gaiacpp(tmp_path, fake_hub.base, prints="'unused'")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert PYTHON_AGENT in result.stdout
+    assert not (bin_dir / "gaiacpp.exe").exists()
+
+
+@needs_powershell
+def test_ps1_a_tampered_gaiacpp_fails_the_install(tmp_path, fake_hub):
+    fake_hub.release(gaiacpp_digest_overrides={n: "d" * 64 for n in GAIACPP_ASSETS})
+
+    result, bin_dir = _ps1_gaiacpp(tmp_path, fake_hub.base, prints="'gaiacpp 0.99.0'")
+
+    assert result.returncode != 0
+    assert "Checksum mismatch" in result.stdout
+    assert not (bin_dir / "gaiacpp.exe").exists()
+
+
+@needs_powershell
+def test_ps1_a_gaiacpp_that_cannot_start_here_is_not_installed(tmp_path, fake_hub):
+    result, bin_dir = _ps1_gaiacpp(tmp_path, fake_hub.base, prints="$null")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "does not start on this PC" in result.stdout
+    assert not (bin_dir / "gaiacpp.exe").exists()
+
+
+@needs_powershell
+def test_ps1_another_releases_gaiacpp_fails_the_install(tmp_path, fake_hub):
+    result, bin_dir = _ps1_gaiacpp(tmp_path, fake_hub.base, prints="'gaiacpp 0.1.0'")
+
+    assert result.returncode != 0
+    assert "not 'gaiacpp 0.99.0'" in result.stdout
+    assert not (bin_dir / "gaiacpp.exe").exists()
 
 
 # ── a pinned release: core, terminal and agent from the same release ───────

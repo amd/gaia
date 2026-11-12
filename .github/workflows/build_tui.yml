@@ -392,6 +392,8 @@ jobs:
     with:
       version: ${{ needs.installer-version.outputs.version }}
       sidecar: stub
+      # A PR builds no gaiacpp; the stand-in keeps its packaging under test.
+      gaiacpp: stub
 
   # The one Windows setup, on a clean runner, the same workflow the release
   # calls. The desktop app it embeds comes from a named, published release --
@@ -408,5 +410,6 @@ jobs:
     with:
       version: ${{ needs.installer-version.outputs.version }}
       sidecar: stub
+      gaiacpp: stub
       agent_ui_release: v0.24.1
       agent_ui_release_sha256: 9aa26f8622a22a0df771e201d754823586d52b6a4dca8b754fb6fc6bb7973428

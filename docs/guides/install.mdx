@@ -339,7 +339,7 @@ installations using that folder will stop working. Silent uninstalls keep it.
 Each part you installed has its own entry in **Settings → Apps → Installed apps**, so you can remove one and keep the other. To remove GAIA completely, uninstall both:
 
 - **GAIA** — the desktop app. Removes the app, its Start Menu / Desktop shortcuts, and the autostart registry entry.
-- **GAIA Terminal UI** — the terminal. Stops GAIA's background service, then removes `gaia-tui`, `gaia-agent`, `gaia`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
+- **GAIA Terminal UI** — the terminal. Stops GAIA's background service, then removes `gaia-tui`, `gaia-agent`, `gaiacpp`, `gaia`, the PATH entry, the Windows Terminal profile, the font if the installer added it, and its shortcuts.
 
 Each uninstaller shows the cleanup prompt above; decline it and `~/.gaia/` is left alone. For tiered cleanup instead of deleting the whole shared folder, open PowerShell before you uninstall and run the `gaia` inside the desktop app (with the terminal installed, plain `gaia uninstall --purge` does the same):
 ```powershell

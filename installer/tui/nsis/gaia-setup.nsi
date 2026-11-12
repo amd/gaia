@@ -10,7 +10,7 @@
 ;                shortcuts and uninstaller -- because electron-updater
 ;                re-runs exactly that file to update the app. A second owner here
 ;                would be duplicated by the first auto-update.
-;   Terminal     gaia-tui + gaia-agent, PATH, Windows Terminal profile, shortcuts,
+;   Terminal     gaia-tui + gaia-agent + gaiacpp, PATH, Windows Terminal profile, shortcuts,
 ;                shown as "GAIA Terminal UI", installed under gaia-tui ids. An
 ;                install an earlier setup made under the "Terminal Hub" ids is
 ;                moved onto them on upgrade (MigrateLegacyInstall).
@@ -37,7 +37,7 @@
 ; Build:
 ;   makensis -DVERSION=<x.y.z, or x.y.z-rc.N for a release candidate> \
 ;            -DVERSION_QUAD=<x.y.z.0, VERSION's four-integer form> \
-;            -DPAYLOAD_DIR=<dir with gaia-tui.exe, gaia-agent.exe, LICENSE.md, core\> \
+;            -DPAYLOAD_DIR=<dir with gaia-tui.exe, gaia-agent.exe, gaiacpp.exe, LICENSE.md, core\> \
 ;            -DICON=<path to gaia.ico> \
 ;            -DFONTS_DIR=<dir staged by installer/tui/fetch_fonts.py> \
 ;            -DAGENT_UI_SETUP=<path to gaia-agent-ui-<v>-x64-setup.exe> \
@@ -57,7 +57,7 @@ Unicode true
   !error "VERSION_QUAD is required: -DVERSION_QUAD=<x.y.z.0>, the four integers Windows stores the version as"
 !endif
 !ifndef PAYLOAD_DIR
-  !error "PAYLOAD_DIR is required: the directory holding gaia-tui.exe, gaia-agent.exe, LICENSE.md and core\ (the frozen gaia)"
+  !error "PAYLOAD_DIR is required: the directory holding gaia-tui.exe, gaia-agent.exe, gaiacpp.exe, LICENSE.md and core\ (the frozen gaia)"
 !endif
 !ifndef ICON
   !error "ICON is required: -DICON=src/gaia/img/gaia.ico"
@@ -96,6 +96,8 @@ Unicode true
 
 !define TUI_EXE           "gaia-tui.exe"
 !define AGENT_EXE         "gaia-agent.exe"
+; The native agent gaia-tui runs, in place of gaia-agent, from beside itself.
+!define NATIVE_AGENT_EXE  "gaiacpp.exe"
 ; The frozen gaia core; its _internal folder sits beside it.
 !define CORE_EXE          "gaia.exe"
 
@@ -395,7 +397,7 @@ wait_for_file:
   ; /SD IDCANCEL: a silent install must fail rather than block on an invisible
   ; dialog, and must fail HERE, with the previous install still intact.
   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION \
-    "GAIA is still running, so Setup cannot replace $R8.$\r$\n$\r$\nClose GAIA - quit gaia-tui and the desktop app (including its icon in the notification area), and end any gaia-agent left behind - then click Retry.$\r$\n$\r$\nNothing has been changed; your existing installation is intact." \
+    "GAIA is still running, so Setup cannot replace $R8.$\r$\n$\r$\nClose GAIA - quit gaia-tui and the desktop app (including its icon in the notification area), and end any gaia-agent or gaiacpp left behind - then click Retry.$\r$\n$\r$\nNothing has been changed; your existing installation is intact." \
     /SD IDCANCEL IDRETRY retry
   SetErrorLevel ${EXIT_RUNNING}
   Abort "GAIA is running. Close it and run Setup again - nothing was changed."
@@ -447,6 +449,7 @@ Section "GAIA Terminal UI (terminal)" SecMain
 
   File "${PAYLOAD_DIR}\${TUI_EXE}"
   File "${PAYLOAD_DIR}\${AGENT_EXE}"
+  File "${PAYLOAD_DIR}\${NATIVE_AGENT_EXE}"
   File "${PAYLOAD_DIR}\LICENSE.md"
   ; The frozen gaia core: gaia.exe and its _internal folder, beside gaia-tui so
   ; the terminal UI and PATH both find it. An update's files replace all of it.
@@ -1067,6 +1070,8 @@ Function Preflight
     Call AbortIfRunning
     StrCpy $R8 "${AGENT_EXE}"
     Call AbortIfRunning
+    StrCpy $R8 "${NATIVE_AGENT_EXE}"
+    Call AbortIfRunning
     StrCpy $R8 "${CORE_EXE}"
     Call AbortIfRunning
     ; An upgrade empties the legacy folder too, so what runs from there counts.
@@ -1150,6 +1155,7 @@ Section "Uninstall"
   Call un.StopDaemon
   Delete "$INSTDIR\${TUI_EXE}"
   Delete "$INSTDIR\${AGENT_EXE}"
+  Delete "$INSTDIR\${NATIVE_AGENT_EXE}"
   Delete "$INSTDIR\${CORE_EXE}"
   RMDir /r "$INSTDIR\_internal"
   Delete "$INSTDIR\LICENSE.md"

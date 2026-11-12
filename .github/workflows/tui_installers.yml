@@ -13,7 +13,7 @@
 # would have fixed the gate and created a drift problem; one workflow, two
 # callers, fixes both.
 #
-# The two callers differ in exactly one way, `sidecar`:
+# The callers differ in `sidecar` and `gaiacpp`. `sidecar` is:
 #
 #   pinned  (release) fetch the real gaia-agent and verify it against the digest
 #           committed in hub/agents/gaia/npm/binaries.lock.json.
@@ -25,6 +25,21 @@
 #   artifact (release-train dry run) the gaia-agent-<platform> artifacts the
 #           caller's own build_flagship_sidecar.yml run uploaded, verified
 #           against the hash each freeze leg recorded.
+#
+# Each package also ships gaiacpp, the native agent the terminal UI runs in
+# place of gaia-agent, on every platform build_agents.yml builds it for. Callers
+# name where it comes from in `gaiacpp`; there is no default, so no caller ships
+# without it by accident:
+#
+#   artifact  (publish.yml) the bundle THIS run's build_agents.yml uploaded for
+#             `gaiacpp_tag`, verified against the SHA-256 its pin file records.
+#   release   (a by-hand rebuild) the binaries attached to the published
+#             `gaiacpp_tag` release, verified against its gaiacpp-SHA256SUMS.txt.
+#   stub      (PR gate, dry run) gaia-tui stands in, as `sidecar: stub` does.
+#
+# Every source but stub is checked to be stamped with `version`; the packaged
+# copy is re-checked against the same checksum list as it is staged. The
+# verified binaries are uploaded as `gaiacpp-binaries` for windows_setup.yml.
 #
 # `artifact_prefix` lets one run build twice (a release candidate and its
 # final-stamped twin) without the artifacts colliding. It defaults to empty,
@@ -65,6 +80,16 @@ on:
         required: false
         default: true
         type: boolean
+      gaiacpp:
+        description: 'Where the packages'' gaiacpp comes from: artifact (this run''s build_agents.yml bundle), release (the published gaiacpp_tag release), or stub (PR gate). Required when installers is true.'
+        required: false
+        default: ''
+        type: string
+      gaiacpp_tag:
+        description: 'The release tag gaiacpp was built for (artifact) or is downloaded from (release), e.g. v0.25.4-rc1.'
+        required: false
+        default: ''
+        type: string
       build_binaries:
         description: >-
           Build the six binaries here. false: reuse the tui-binaries artifact
@@ -77,6 +102,9 @@ on:
       binaries_ok:
         description: 'true when all six targets built and the Windows icon check passed.'
         value: ${{ jobs.tui-build.outputs.ok }}
+      gaiacpp_ok:
+        description: 'true when the gaiacpp named in `gaiacpp` was verified and uploaded as gaiacpp-binaries (empty when this call reuses an earlier call''s).'
+        value: ${{ jobs.gaiacpp.outputs.ok }}
       installers_ok:
         description: 'true when every installer built AND smoke-tested on a clean runner.'
         value: ${{ jobs.installers-ok.outputs.ok }}
@@ -189,7 +217,8 @@ jobs:
 
   # ── Native double-click installers ─────────────────────────────────────────
   # The setup files that replace the raw binary a website download gives you:
-  # gaia-tui plus the gaia-agent sidecar, on disk and on PATH.
+  # gaia-tui, the gaia-agent sidecar and, where one is built, gaiacpp, on disk
+  # and on PATH.
   #
   # No installer is built for a platform the flagship publishes no sidecar for --
   # it would install a front end with nothing behind it. win-arm64 and
@@ -207,12 +236,75 @@ jobs:
       artifact_prefix: ${{ inputs.artifact_prefix }}tui-
       flagship: ${{ inputs.sidecar == 'artifact' && 'artifact' || '' }}
 
+  # The gaiacpp every package ships, verified once here and re-checked as each
+  # payload is staged. It is a binary, so a release verifies it in the
+  # binaries call, where windows_setup.yml can pick it up without waiting for
+  # the macOS and Linux packages; the packages call then reuses that artifact.
+  gaiacpp:
+    name: Verify gaiacpp
+    if: inputs.build_binaries && inputs.gaiacpp != ''
+    outputs:
+      ok: ${{ steps.done.outputs.ok }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - uses: actions/download-artifact@v8
+        if: inputs.gaiacpp == 'artifact'
+        with:
+          name: gaia-cpp-agents-${{ inputs.gaiacpp_tag }}
+          path: gaiacpp-bundle
+
+      - name: Verify gaiacpp
+        env:
+          GAIACPP: ${{ inputs.gaiacpp }}
+          GAIACPP_TAG: ${{ inputs.gaiacpp_tag }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          case "${GAIACPP}" in
+            artifact)
+              python installer/tui/fetch_gaiacpp.py bundle --bundle gaiacpp-bundle/lemonade \
+                --tag "${GAIACPP_TAG}" --version "${VERSION}" --out gaiacpp
+              ;;
+            release)
+              python installer/tui/fetch_gaiacpp.py release \
+                --tag "${GAIACPP_TAG}" --version "${VERSION}" --out gaiacpp
+              ;;
+            stub)
+              echo "::warning::gaia-tui stands in for gaiacpp in these packages (gaiacpp: stub). Nothing built this way may be published."
+              ;;
+            *)
+              echo "::error::gaiacpp must be artifact, release or stub (got '${GAIACPP}'). The packages ship gaiacpp beside gaia-tui; name where it comes from in the caller's 'with:', and the release tag in gaiacpp_tag."
+              exit 1
+              ;;
+          esac
+
+      - uses: actions/upload-artifact@v7
+        if: inputs.gaiacpp != 'stub'
+        with:
+          name: ${{ inputs.artifact_prefix }}gaiacpp-binaries
+          path: gaiacpp/
+          if-no-files-found: error
+          retention-days: 7
+
+      # Set last: gaiacpp_ok means verified AND uploaded.
+      - id: done
+        run: echo "ok=true" >> "$GITHUB_OUTPUT"
+
   tui-installers:
     name: Build installers (${{ matrix.label }})
-    needs: [tui-build, core]
+    needs: [tui-build, core, gaiacpp]
     if: >-
       !cancelled() && inputs.installers &&
       needs.core.result == 'success' &&
+      (needs.gaiacpp.result == 'success' ||
+       (!inputs.build_binaries && needs.gaiacpp.result == 'skipped')) &&
       (needs.tui-build.result == 'success' ||
        (!inputs.build_binaries && needs.tui-build.result == 'skipped'))
     runs-on: ${{ matrix.os }}
@@ -254,10 +346,16 @@ jobs:
           pattern: ${{ inputs.artifact_prefix }}tui-gaia-core-*
           path: core-download
 
+      - uses: actions/download-artifact@v8
+        if: inputs.gaiacpp != 'stub'
+        with:
+          name: ${{ inputs.artifact_prefix }}gaiacpp-binaries
+          path: gaiacpp
+
       # One staging directory per target, holding what both build scripts
-      # consume: gaia-tui, gaia-agent, LICENSE.md and core/ (the frozen gaia). A
-      # staging directory that is absent afterwards means "no installer for
-      # this platform".
+      # consume: gaia-tui, gaia-agent, gaiacpp where one is built, LICENSE.md
+      # and core/ (the frozen gaia). A staging directory that is absent
+      # afterwards means "no installer for this platform".
       #
       # fetch_sidecar.py verifies the sidecar against the digest COMMITTED in
       # hub/agents/gaia/npm/binaries.lock.json, never one served by the hub that
@@ -267,6 +365,8 @@ jobs:
           PLATFORMS: ${{ matrix.platforms }}
           SIDECAR: ${{ inputs.sidecar }}
           CORE_PREFIX: ${{ inputs.artifact_prefix }}tui-
+          GAIACPP: ${{ inputs.gaiacpp }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           for p in ${PLATFORMS}; do
@@ -320,6 +420,21 @@ jobs:
                 continue
               fi
               [ "${rc}" -eq 0 ] || exit "${rc}"
+            fi
+            # Exit 3 is "no gaiacpp is built for this platform": its package
+            # runs gaia-agent. Anything else that is not 0 fails the leg.
+            rc=0
+            python installer/tui/fetch_gaiacpp.py has --platform "${p}" || rc=$?
+            if [ "${rc}" -eq 3 ]; then
+              echo "no gaiacpp is built for ${p}; its package ships gaia-agent alone"
+            elif [ "${rc}" -ne 0 ]; then
+              exit "${rc}"
+            elif [ "${GAIACPP}" = "stub" ]; then
+              cp "stage/${p}/gaia-tui" "stage/${p}/gaiacpp"
+              chmod +x "stage/${p}/gaiacpp"
+            else
+              python installer/tui/fetch_gaiacpp.py stage --dir gaiacpp \
+                --platform "${p}" --version "${VERSION}" --dest "stage/${p}"
             fi
             ls -l "stage/${p}"
           done
@@ -431,9 +546,21 @@ jobs:
         if: matrix.label == 'macos'
         env:
           VERSION: ${{ inputs.version }}
+          GAIACPP: ${{ inputs.gaiacpp }}
         run: |
           set -euo pipefail
+          # 0 when the release builds gaiacpp for $1, 1 when it builds none.
+          gaiacpp_built() {
+            local rc=0
+            python3 installer/tui/fetch_gaiacpp.py has --platform "$1" || rc=$?
+            case "${rc}" in
+              0) return 0 ;;
+              3) return 1 ;;
+              *) echo "::error::installer/tui/fetch_gaiacpp.py has --platform $1 failed (exit ${rc})"; exit 1 ;;
+            esac
+          }
           test ! -e /usr/local/bin/gaia-tui || { echo "::error::gaia-tui already present - runner is not clean"; exit 1; }
+          test ! -e /usr/local/bin/gaiacpp || { echo "::error::gaiacpp already present - runner is not clean"; exit 1; }
           arm64_pkg="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform darwin-arm64)"
           x64_pkg="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform darwin-x64)"
 
@@ -468,6 +595,20 @@ jobs:
           got="$(gaia-tui version 2>&1)"
           echo "gaia-tui version -> ${got}"
           case "${got}" in *"${VERSION}"*) ;; *) echo "::error::gaia-tui did not report ${VERSION}"; exit 1 ;; esac
+          # gaia-tui runs the first gaiacpp on PATH, then one beside itself, so
+          # the packaged copy must be both.
+          if gaiacpp_built darwin-arm64; then
+            test -x /usr/local/bin/gaiacpp || { echo "::error::gaiacpp did not land in /usr/local/bin"; exit 1; }
+            found="$(command -v gaiacpp || true)"
+            [ "${found}" = /usr/local/bin/gaiacpp ] || { echo "::error::gaia-tui would not run the packaged gaiacpp: the first gaiacpp on PATH is '${found}'"; exit 1; }
+            if [ "${GAIACPP}" != "stub" ]; then
+              got="$(gaiacpp --version | tr -d '\r')"
+              echo "gaiacpp --version -> ${got}"
+              [ "${got}" = "gaiacpp ${VERSION}" ] || { echo "::error::the packaged gaiacpp printed '${got}', expected 'gaiacpp ${VERSION}'"; exit 1; }
+            fi
+          else
+            test ! -e /usr/local/bin/gaiacpp || { echo "::error::the arm64 package carries a gaiacpp, but none is built for darwin-arm64"; exit 1; }
+          fi
           pkgutil --pkg-info ai.amd.gaia.terminal-hub
           pkgutil --pkg-info ai.amd.gaia.terminal-hub.docs
           pkgutil --pkg-info ai.amd.gaia.terminal-hub.core
@@ -501,6 +642,13 @@ jobs:
               test -n "$(find "${x64_tmp}/expanded" -path "*/Payload/${b}" -print -quit)" \
                 || { echo "::error::the x64 package does not carry ${b}"; exit 1; }
             done
+            x64_gaiacpp="$(find "${x64_tmp}/expanded" -path '*/Payload/gaiacpp' -print -quit)"
+            if gaiacpp_built darwin-x64; then
+              test -n "${x64_gaiacpp}" || { echo "::error::the x64 package does not carry gaiacpp"; exit 1; }
+            else
+              # Another platform's build would be found first on PATH and fail to start.
+              test -z "${x64_gaiacpp}" || { echo "::error::the x64 package carries a gaiacpp, but none is built for darwin-x64"; exit 1; }
+            fi
             if [ -n "$(find "${x64_tmp}/expanded" -path '*/Payload/usr' -print -quit)" ]; then
               echo "::error::the x64 package carries a /usr directory entry; installing it would reset /usr/local to root:wheel and break Homebrew on Intel"
               exit 1
@@ -511,20 +659,29 @@ jobs:
 
           # A .pkg ships no uninstaller by macOS convention, so removal is the
           # documented manual one: delete the files and forget the receipt.
-          sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/bin/gaia
+          sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/bin/gaiacpp /usr/local/bin/gaia
           sudo rm -rf /usr/local/share/doc/gaia-tui /usr/local/lib/gaia
           sudo pkgutil --forget ai.amd.gaia.terminal-hub
           sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
           sudo pkgutil --forget ai.amd.gaia.terminal-hub.core
           test ! -e /usr/local/bin/gaia-tui || { echo "::error::gaia-tui survived removal"; exit 1; }
+          test ! -e /usr/local/bin/gaiacpp || { echo "::error::gaiacpp survived removal"; exit 1; }
           echo "OK - installed, ran, removed"
 
       - name: Linux — install, verify, uninstall in clean containers
         if: matrix.label == 'linux'
         env:
           VERSION: ${{ inputs.version }}
+          GAIACPP: ${{ inputs.gaiacpp }}
         run: |
           set -euo pipefail
+          rc=0
+          python3 installer/tui/fetch_gaiacpp.py has --platform linux-x64 || rc=$?
+          case "${rc}" in
+            0) GAIACPP_SHIPPED=1 ;;
+            3) GAIACPP_SHIPPED=0 ;;
+            *) echo "::error::installer/tui/fetch_gaiacpp.py has --platform linux-x64 failed (exit ${rc})"; exit 1 ;;
+          esac
           DEB="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform linux-x64 --ext deb)"
           RPM="$(python3 installer/tui/artifacts.py names --version "${VERSION}" --platform linux-x64 --ext rpm)"
           # The version INSIDE the packages: X.Y.Z~rc.N for a candidate, so the
@@ -544,14 +701,27 @@ jobs:
             expect() { [ "$2" = "$3" ] || fail "$1: expected [$3], got [$2]"; }
             absent() { [ ! -e "$1" ] || fail "$1 exists, expected it gone"; }
             executable() { [ -x "$1" ] || fail "$1 missing or not executable"; }
+            # gaia-tui runs the first gaiacpp on PATH, so the packaged one must be it.
+            native_agent() {
+              if [ "${GAIACPP_SHIPPED}" != 1 ]; then
+                absent /usr/bin/gaiacpp
+                return 0
+              fi
+              executable /usr/bin/gaiacpp
+              expect "first gaiacpp on PATH" "$(command -v gaiacpp)" /usr/bin/gaiacpp
+              if [ "${GAIACPP}" != stub ]; then
+                expect "gaiacpp --version" "$(gaiacpp --version)" "gaiacpp ${VERSION}"
+              fi
+            }
           '
           run_in() {
             local image="$1" pkg="$2"
             { printf '%s\n' "${CHECKS}"; cat; } | docker run --rm -i \
               -e PKG="/pkg/${pkg}" -e VERSION -e PKG_VERSION -e BASE -e ORDER -e RPMCMP \
+              -e GAIACPP -e GAIACPP_SHIPPED \
               -v "${PWD}/dist:/pkg:ro" "${image}" bash -euo pipefail -s
           }
-          export VERSION PKG_VERSION BASE ORDER RPMCMP
+          export VERSION PKG_VERSION BASE ORDER RPMCMP GAIACPP GAIACPP_SHIPPED
           echo "===== .deb on debian:bookworm ====="
           run_in debian:bookworm "${DEB}" <<'EOF'
             absent /usr/bin/gaia-tui
@@ -560,6 +730,7 @@ jobs:
             dpkg --compare-versions "${PKG_VERSION}" "${ORDER}" "${BASE}" || fail "dpkg: expected ${PKG_VERSION} ${ORDER} ${BASE}"
             executable /usr/bin/gaia-tui
             executable /usr/bin/gaia-agent
+            native_agent
             executable /usr/lib/gaia/gaia
             gaia --version | tee /tmp/core || fail "the packaged gaia did not start"
             command -v gaia-tui || fail "gaia-tui not on PATH"
@@ -570,6 +741,7 @@ jobs:
             dpkg -r gaia
             absent /usr/bin/gaia-tui
             absent /usr/bin/gaia-agent
+            absent /usr/bin/gaiacpp
             absent /usr/bin/gaia
             absent /usr/lib/gaia
             [ -f /root/.gaia/smoke-marker ] || fail "removal deleted ~/.gaia user data"
@@ -585,6 +757,7 @@ jobs:
             expect "rpm.vercmp(${PKG_VERSION}, ${BASE})" "$(rpm --eval "%{lua: print(rpm.vercmp(\"${PKG_VERSION}\", \"${BASE}\"))}")" "${RPMCMP}"
             executable /usr/bin/gaia-tui
             executable /usr/bin/gaia-agent
+            native_agent
             executable /usr/lib/gaia/gaia
             gaia --version | tee /tmp/core || fail "the packaged gaia did not start"
             command -v gaia-tui || fail "gaia-tui not on PATH"
@@ -595,6 +768,7 @@ jobs:
             rpm -e gaia
             absent /usr/bin/gaia-tui
             absent /usr/bin/gaia-agent
+            absent /usr/bin/gaiacpp
             absent /usr/bin/gaia
             absent /usr/lib/gaia
             [ -f /root/.gaia/smoke-marker ] || fail "removal deleted ~/.gaia user data"

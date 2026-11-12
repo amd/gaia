@@ -26,13 +26,14 @@ GAIA_RELEASES_URL="${GAIA_RELEASES_URL%/}"
 # Empty means the latest stable release. A tag pins the whole install to that
 # release (resolve_pin): v0.25.0 or a candidate such as v0.25.1-rc2.
 GAIA_RELEASE_TAG="${GAIA_RELEASE_TAG:-}"
-# 1 installs only the gaia command: a package (.pkg, .deb, .rpm) owns gaia-tui
-# and gaia-agent.
+# 1 installs only the gaia command: a package (.pkg, .deb, .rpm) owns gaia-tui,
+# gaia-agent and gaiacpp.
 GAIA_CLI_ONLY="${GAIA_CLI_ONLY:-}"
 # Set by resolve_pin: "", "final" or "rc".
 PIN_KIND=""
 TUI_SUMS_FILE="gaia-tui-SHA256SUMS.txt"
 CORE_SUMS_FILE="gaia-core-SHA256SUMS.txt"
+GAIACPP_SUMS_FILE="gaiacpp-SHA256SUMS.txt"
 
 # The flagship agent ships on its own cadence through the Agent Hub, the same
 # place `gaia init` and `gaia hub install` take it from.
@@ -643,6 +644,112 @@ install_flagship_agent() {
     print_success "GAIA agent $version installed to $GAIA_BIN/gaia-agent"
 }
 
+# Print this machine's gaiacpp as publish.yml attaches it, e.g.
+# "gaiacpp-linux-x64". Fails where no gaiacpp is built.
+gaiacpp_asset_name() {
+    case "$(uname -s)/$(uname -m)" in
+        Linux/x86_64|Linux/amd64)    printf 'gaiacpp-linux-x64\n' ;;
+        Darwin/arm64|Darwin/aarch64) printf 'gaiacpp-darwin-arm64\n' ;;
+        *) return 1 ;;
+    esac
+}
+
+# A gaiacpp left by an earlier install would run in place of gaia-agent beside
+# a gaia-tui from another release, so it goes whenever this release's does not land.
+remove_stale_gaiacpp() {
+    if [ -e "$GAIA_BIN/gaiacpp" ] || [ -L "$GAIA_BIN/gaiacpp" ]; then
+        if ! rm -f "$GAIA_BIN/gaiacpp"; then
+            print_error "Could not remove $GAIA_BIN/gaiacpp, left by an earlier install."
+            echo "  Fix:  check you own $GAIA_BIN, then retry."
+            exit 1
+        fi
+        print_step "Removed the native GAIA agent an earlier install left in $GAIA_BIN"
+    fi
+}
+
+# gaiacpp, the native GAIA agent. gaia-tui runs it from beside itself in place
+# of gaia-agent, so it comes from the same release as gaia-tui into $GAIA_BIN.
+#
+# A machine or release with no gaiacpp keeps the Python agent, and says so. A
+# checksum mismatch, or a binary from another release, fails the install.
+install_gaiacpp() {
+    print_step "Installing the native GAIA agent (gaiacpp)"
+
+    filename=""
+    if ! filename="$(gaiacpp_asset_name)"; then
+        remove_stale_gaiacpp
+        print_warning "No native GAIA agent is built for $(uname -s)/$(uname -m), so the GAIA Terminal UI uses the Python GAIA agent."
+        return 0
+    fi
+
+    scratch_dir gaiacpp
+    tmp="$SCRATCH"
+    release_url="$GAIA_RELEASES_URL/download/$RELEASE_TAG"
+    if ! fetch_file "$release_url/$GAIACPP_SUMS_FILE" "$tmp/$GAIACPP_SUMS_FILE"; then
+        remove_stale_gaiacpp
+        print_warning "Could not fetch the native GAIA agent's checksums for $RELEASE_TAG, so the GAIA Terminal UI uses the Python GAIA agent."
+        echo "  URL:  $release_url/$GAIACPP_SUMS_FILE"
+        echo "  A release from before the native agent shipped has none. Otherwise check your"
+        echo "  network and re-run this installer."
+        return 0
+    fi
+
+    if ! awk -v f="$filename" '$2 == f || $2 == "*" f { found = 1 } END { exit !found }' \
+            "$tmp/$GAIACPP_SUMS_FILE"; then
+        remove_stale_gaiacpp
+        print_warning "$RELEASE_TAG publishes no native GAIA agent for this machine ($filename), so the GAIA Terminal UI uses the Python GAIA agent."
+        return 0
+    fi
+    # Listed, so from here it is verified or refused, like gaia-tui.
+    want="$(awk -v f="$filename" '$2 == f || $2 == "*" f { print $1 }' "$tmp/$GAIACPP_SUMS_FILE")"
+    case "$want" in
+        *[!0-9a-f]*|"") want="" ;;
+    esac
+    if [ "${#want}" -ne 64 ]; then
+        print_error "$RELEASE_TAG publishes no single valid SHA-256 for $filename — refusing to install unverified."
+        echo "  Look: $release_url/$GAIACPP_SUMS_FILE"
+        echo "  Fix:  report it at https://github.com/amd/gaia/issues"
+        exit 1
+    fi
+
+    print_step "Downloading the native GAIA agent $RELEASE_TAG ($filename)"
+    _rc=0
+    download_and_verify "$release_url/$filename" "$tmp/$filename.part" "$want" \
+            "$tmp/gaiacpp" "native GAIA agent" || _rc=$?
+    if [ "$_rc" -eq 2 ]; then
+        echo "  Look: $release_url/$GAIACPP_SUMS_FILE"
+        exit 1
+    elif [ "$_rc" -ne 0 ]; then
+        remove_stale_gaiacpp
+        print_warning "The native GAIA agent did not install, so the GAIA Terminal UI uses the Python GAIA agent. Re-run this installer to retry."
+        return 0
+    fi
+
+    # gaia-tui picks gaiacpp whenever it is there, so one that cannot start on
+    # this machine must not be put there.
+    expected="$(printf '%s\n' "${RELEASE_TAG#v}" | sed 's/-rc\([0-9][0-9]*\)$/-rc.\1/')"
+    got=""
+    if ! got="$("$tmp/gaiacpp" --version 2>/dev/null)"; then
+        remove_stale_gaiacpp
+        print_warning "The native GAIA agent $RELEASE_TAG does not start on this machine, so the GAIA Terminal UI uses the Python GAIA agent."
+        echo "  Report it at https://github.com/amd/gaia/issues with your OS version."
+        return 0
+    fi
+    if [ "$got" != "gaiacpp $expected" ]; then
+        print_error "The native GAIA agent on $RELEASE_TAG reports '$got', not 'gaiacpp $expected' — refusing to install it."
+        echo "  Look: $GAIA_RELEASES_URL/tag/$RELEASE_TAG"
+        echo "  Fix:  report it at https://github.com/amd/gaia/issues"
+        exit 1
+    fi
+
+    if ! install -m 0755 "$tmp/gaiacpp" "$GAIA_BIN/gaiacpp"; then
+        print_error "Downloaded and verified the native GAIA agent, but could not write $GAIA_BIN/gaiacpp."
+        echo "  Fix:  check you own $GAIA_BIN and that it is writable, then retry."
+        exit 1
+    fi
+    print_success "Native GAIA agent $RELEASE_TAG installed to $GAIA_BIN/gaiacpp; the GAIA Terminal UI runs it"
+}
+
 # Link GAIA's own commands to the frozen gaia from $GAIA_BIN, the one directory on PATH
 link_gaia_commands() {
     print_step "Linking GAIA commands into $GAIA_BIN..."
@@ -919,6 +1026,9 @@ main() {
     # The agent the hub spawns. After install_tui so it lands in the same
     # directory, which is where the hub looks for it first.
     install_flagship_agent
+
+    # The native agent the hub runs in place of gaia-agent, from the same release.
+    install_gaiacpp
 
     # Show next steps
     show_next_steps

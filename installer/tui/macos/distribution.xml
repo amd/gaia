@@ -77,7 +77,7 @@
 
     <choice id="@PKG_IDENTIFIER@"
             title="GAIA Terminal UI"
-            description="Installs the gaia-tui and gaia-agent command-line tools, and a gaia link, into /usr/local/bin."
+            description="Installs the gaia-tui and gaia-agent command-line tools, gaiacpp on Apple silicon, and a gaia link, into /usr/local/bin."
             visible="false"
             selected="true"
             enabled="false">
