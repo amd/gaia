@@ -1808,6 +1808,7 @@ const SETTINGS_UPDATE_STATES: Array<[string, Record<string, unknown>]> = [
     ['ready', { status: 'downloaded', version: '0.26.0' }],
     ['failed', { status: 'error', error: 'net::ERR_INTERNET_DISCONNECTED' }],
     ['pinned', { pinnedVersion: 'v0.25.3', currentVersion: '0.25.3-rc.2' }],
+    ['flatpak', { status: 'disabled', disabledReason: 'flatpak', currentVersion: '0.26.0' }],
 ];
 
 for (const locale of ['ar', 'en']) {
@@ -1854,6 +1855,23 @@ for (const locale of ['ar', 'en']) {
         await expect(desktop.locator('#desktop-minimizeToTray-hint')).not.toContainText('AppIndicator');
         await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText(locale === 'ar' ? 'شريط التطبيقات' : 'dock');
         await shot(page, `desktop-${locale}-no-tray`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`desktop app as a Flatpak on GNOME (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await withDesktopBridges(p, { status: 'disabled', disabledReason: 'flatpak' }, { available: true, reason: null, via: 'background-apps' });
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const desktop = page.locator('.settings-disclosure', { hasText: /Desktop app|تطبيق سطح المكتب/ });
+        await expect(desktop).toBeVisible();
+        await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await desktop.scrollIntoViewIfNeeded();
+        await expect(desktop.locator('#desktop-minimizeToTray-hint')).toContainText(locale === 'ar' ? 'تطبيقات الخلفية' : 'Background Apps');
+        await expect(desktop).not.toContainText(locale === 'ar' ? 'علبة النظام' : /\btray\b/);
+        await shot(page, `desktop-${locale}-flatpak`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
     });

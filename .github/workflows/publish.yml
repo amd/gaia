@@ -368,7 +368,7 @@ jobs:
           name: npm-package-build
           path: src/gaia/apps/webui/dist/
 
-  # Build the GAIA Agent UI desktop installers (NSIS / DMG / DEB / AppImage)
+  # Build the GAIA Agent UI desktop installers (NSIS / DMG / DEB / AppImage / Flatpak)
   # via the reusable build-installers workflow. The reusable workflow uploads
   # each platform's artifacts to a workflow-run artifact named
   # "<platform>-installer". The github-release job below downloads those
@@ -944,7 +944,7 @@ jobs:
 
           - **Windows** — the GAIA installer from https://amd-gaia.ai/#install (`gaia-*-win-x64-setup.exe`): choose the desktop app, the terminal, or both. `gaia-agent-ui-*-x64-setup.exe` below is the desktop app on its own (autostart on by default)
           - **macOS** — `gaia-agent-ui-*-arm64.dmg` (drag to Applications, Apple Silicon only)
-          - **Linux** — `gaia-agent-ui-*-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-*-x86_64.AppImage` (any distro)
+          - **Linux** — `gaia-agent-ui-*-amd64.deb` (Debian/Ubuntu), `gaia-agent-ui-*-x86_64.flatpak` (Fedora and other distros with Flatpak) or `gaia-agent-ui-*-x86_64.AppImage` (any distro)
 
           On first launch the app sets up its Python backend automatically (~5–10 minutes for the minimal profile, depends on your internet speed).
 
@@ -1010,7 +1010,7 @@ jobs:
 
           cat >> RELEASE_BODY.md << 'EOF'
           - **macOS** — `gaia-agent-ui-@NPM_VERSION@-arm64.dmg` (Apple Silicon only)
-          - **Linux** — `gaia-agent-ui-@NPM_VERSION@-amd64.deb` (Debian/Ubuntu) or `gaia-agent-ui-@NPM_VERSION@-x86_64.AppImage` (any distro)
+          - **Linux** — `gaia-agent-ui-@NPM_VERSION@-amd64.deb` (Debian/Ubuntu), `gaia-agent-ui-@NPM_VERSION@-x86_64.flatpak` (Fedora and other distros with Flatpak) or `gaia-agent-ui-@NPM_VERSION@-x86_64.AppImage` (any distro)
 
           The terminal on its own:
 
@@ -1170,13 +1170,13 @@ jobs:
           name: macos-installer
           path: release-assets
 
-      - name: Download Desktop Installer (Linux DEB + AppImage)
+      - name: Download Desktop Installer (Linux DEB + AppImage + Flatpak)
         uses: actions/download-artifact@v8
         with:
           name: linux-installer
           path: release-assets
 
-      # The release notes name these four installers, and electron-updater reads
+      # The release notes name these five installers, and electron-updater reads
       # the manifests and blockmaps from the release, so none may be missing (#3520).
       - name: Check every desktop installer is attached
         env:
@@ -1189,6 +1189,7 @@ jobs:
             "gaia-agent-ui-${v}-arm64.dmg" "gaia-agent-ui-${v}-arm64.dmg.blockmap" latest-mac.yml
             "gaia-agent-ui-${v}-arm64.zip" "gaia-agent-ui-${v}-arm64.zip.blockmap"
             "gaia-agent-ui-${v}-amd64.deb" "gaia-agent-ui-${v}-x86_64.AppImage" latest-linux.yml
+            "gaia-agent-ui-${v}-x86_64.flatpak"
           )
           missing=()
           for f in "${expected[@]}"; do

@@ -546,7 +546,7 @@ Ask: **"`v<version>-rcN` passed testing on `<sha>`. Tag the final `v<version>` o
    ```bash
    gh release view v<version> --repo amd/gaia
    ```
-   Required artifacts: `.whl`, `.tar.gz`, `.deb`, `.AppImage`, `.dmg`, `.exe`, and the `latest*.yml` files for the Electron auto-updater. If any are missing, the corresponding build job didn't run or didn't upload — investigate.
+   Required artifacts: `.whl`, `.tar.gz`, `.deb`, `.AppImage`, `.flatpak`, `.dmg`, `.exe`, and the `latest*.yml` files for the Electron auto-updater. If any are missing, the corresponding build job didn't run or didn't upload — investigate.
 
    **Then bring the Full Changelog up to the tag.** The notes are written before the tag, so they cannot list the notes commit itself or anything merged after it. `claude.yml`'s `release-notes` job runs once the final publishes and only reads: it fails, and files one issue keyed `release-notes/v<version>`, when `docs/releases/v<version>.mdx` is missing at the tag or the published body's `**N commits**` (or its listed lines) disagrees with `git log <previous-final>..v<version>`. It never writes notes, bumps `version.py`, pushes, or edits the release. To clear it: regenerate the list against the tag with the Phase 1 recipe, merge that in a PR, run `gh release edit v<version> --repo amd/gaia --notes-file <body>` with the corrected body, and re-run the job; a green run closes the issue.
 

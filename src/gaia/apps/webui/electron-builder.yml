@@ -1,8 +1,8 @@
 # electron-builder configuration for GAIA Agent UI.
 #
 # Replaces forge.config.cjs (Phase C of the desktop-installer plan).
-# Produces four installer artifacts: NSIS .exe (Windows), DMG (macOS),
-# DEB + AppImage (Linux).
+# Produces five installer artifacts: NSIS .exe (Windows), DMG (macOS),
+# DEB + AppImage + Flatpak (Linux).
 #
 # Paths with `../../../../installer/...` resolve from this file's location
 # (src/gaia/apps/webui/) to the repo root's `installer/` tree populated by
@@ -88,6 +88,10 @@ asarUnpack: []
 # afterPack hook: prune Chromium locales to en-US only (~45 MB savings).
 # electron-builder only loads hooks from inside this app's own folder.
 afterPack: ./scripts/after-pack.cjs
+
+# artifactBuildCompleted hook: record Flathub as the .flatpak's runtime repo,
+# so it installs on a PC that has not added Flathub. Other artifacts pass through.
+artifactBuildCompleted: ../../../../installer/scripts/flatpak-runtime-repo.cjs
 
 # Auto-update provider — R2-primary generic feed (#1724).
 #
@@ -197,13 +201,18 @@ dmg:
     width: 660
     height: 400
 
-# ─── Linux (DEB + AppImage) ─────────────────────────────────────────────
+# ─── Linux (DEB + AppImage + Flatpak) ───────────────────────────────────
 linux:
   target:
     - target: deb
       arch:
         - x64
     - target: AppImage
+      arch:
+        - x64
+    # Needs flatpak-builder, ostree and the runtime, SDK and base app named
+    # under `flatpak:` below installed on the build machine.
+    - target: flatpak
       arch:
         - x64
   icon: ../../../../installer/linux/gaia-agent-ui.png
@@ -265,6 +274,44 @@ deb:
     # over those files. No Breaks/Conflicts: the terminal package is also `gaia`,
     # on the same version numbers, and must stay installed alongside.
     - "--replaces=gaia"
+
+flatpak:
+  artifactName: gaia-agent-ui-${version}-${arch}.${ext}
+  runtime: org.freedesktop.Platform
+  runtimeVersion: "25.08"
+  sdk: org.freedesktop.Sdk
+  base: org.electronjs.Electron2.BaseApp
+  baseVersion: "25.08"
+  finishArgs:
+    - --share=ipc
+    - --share=network
+    - --socket=wayland
+    - --socket=fallback-x11
+    - --socket=pulseaudio
+    # `all`, not `dri`: the Ryzen AI NPU is /dev/accel, which `dri` leaves out.
+    - --device=all
+    # Without this ~/.gaia is a tmpfs inside the sandbox and is lost on exit.
+    # It is the Flatpak's own folder, not the one a terminal install uses: the
+    # daemon tells its peers apart by process ID, which the sandbox hides.
+    - --persist=.gaia
+    # Where the model server keeps downloaded models; in memory without this.
+    - --persist=.cache
+    # The folders GAIA can read documents from and save files to.
+    - --filesystem=xdg-documents
+    - --filesystem=xdg-download
+    - --filesystem=xdg-desktop
+    - --filesystem=xdg-pictures
+    - --filesystem=xdg-music
+    - --filesystem=xdg-videos
+    # Where "Start GAIA when you sign in" writes its entry; the desktop reads
+    # the host's folder, not the sandbox's own config.
+    - --filesystem=xdg-config/autostart:create
+    - --talk-name=org.freedesktop.Notifications
+    - --talk-name=org.kde.StatusNotifierWatcher
+    # To ask whether this desktop has Background Apps (GNOME 44 or newer).
+    - --talk-name=org.freedesktop.background.Monitor
+    # The keyring, where connector sign-ins are stored.
+    - --talk-name=org.freedesktop.secrets
 
 appImage:
   artifactName: gaia-agent-ui-${version}-${arch}.${ext}

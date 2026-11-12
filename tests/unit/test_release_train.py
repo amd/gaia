@@ -196,7 +196,7 @@ def build_art(
                     f"{ui}-arm64.zip.blockmap",
                 ],
             ),
-            (lin, [f"{ui}-x86_64.AppImage"]),
+            (lin, [f"{ui}-x86_64.AppImage", f"{ui}-x86_64.flatpak"]),
         ):
             for n in names:
                 _write(d / n, b"MZ installer " + f.npm.encode())

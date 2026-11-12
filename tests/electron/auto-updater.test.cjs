@@ -55,6 +55,7 @@ beforeEach(() => {
   mockAutoUpdaterInstance.allowDowngrade = false;
   mockAutoUpdaterInstance._feedURL = null;
   delete process.env.GAIA_DISABLE_UPDATE;
+  delete process.env.FLATPAK_ID;
   delete process.env.GAIA_UPDATE_PRERELEASE;
   delete process.env.GAIA_UPDATE_FEED_URL;
   refuseFetch();
@@ -768,11 +769,25 @@ describe("getState() extended state", () => {
 
     const state = await electronMock.ipcMain.simulateInvoke("gaia:update:get-status");
     expect(state.status).toBe(mod.STATES.DISABLED);
+    expect(state.disabledReason).toBe("env");
     expect(state.currentVersion).toBe(electronMock.app.getVersion());
     expect(electronMock.ipcMain._handlers.has("gaia:update:check")).toBe(false);
 
     mod.destroy();
     expect(electronMock.ipcMain._handlers.has("gaia:update:get-status")).toBe(false);
+  });
+
+  test("a Flatpak never updates itself, and Settings is told that is why", async () => {
+    process.env.FLATPAK_ID = "ai.amd.gaia";
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    const state = await electronMock.ipcMain.simulateInvoke("gaia:update:get-status");
+    expect(state.status).toBe(mod.STATES.DISABLED);
+    expect(state.disabledReason).toBe("flatpak");
+    expect(state.currentVersion).toBe(electronMock.app.getVersion());
+    expect(electronMock.ipcMain._handlers.has("gaia:update:check")).toBe(false);
+    expect(mockAutoUpdaterInstance.checkForUpdates).not.toHaveBeenCalled();
   });
 });
 

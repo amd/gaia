@@ -37,7 +37,7 @@ export function describeUpdateStatus(s: UpdateState, t: Translate): string {
         case 'no-channel':
             return s.error ?? t('update.status.noChannel');
         case 'disabled':
-            return t('update.status.disabled');
+            return t(s.disabledReason === 'flatpak' ? 'update.status.disabledFlatpak' : 'update.status.disabled');
         default:
             return t('update.status.upToDate');
     }

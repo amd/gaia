@@ -70,7 +70,7 @@ const desktopRows = DESKTOP_PLATFORMS.flatMap((platform) => {
   return artifact ? [{ platform, artifact }] : [];
 });
 
-// Other packagings of the desktop app (Linux's .deb): the list only, never a button.
+// Other packagings of the desktop app (Linux's .deb and Flatpak): the list only, never a button.
 const desktopExtraRows = DESKTOP_PLATFORMS.flatMap((platform) =>
   desktopExtraFileNames(platform, version).flatMap(({ label, name }) => {
     const artifact = published(name);

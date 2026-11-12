@@ -335,13 +335,15 @@ export function desktopArtifactFileName(
 /**
  * Other packagings of the desktop app, offered in the full download list
  * rather than as a platform's button. Linux's AppImage runs on any distro, so
- * it is the button; the .deb is for a visitor who wants the package manager.
+ * it is the button; the .deb is for a visitor who wants the package manager,
+ * and the Flatpak is the one that fits Fedora and GNOME's Background Apps.
  */
 const DESKTOP_EXTRA_FILENAMES: Partial<
   Record<PlatformKey, { label: string; name: (version: string) => string }[]>
 > = {
   'linux-x64': [
     { label: '.deb (Debian, Ubuntu)', name: (v) => `gaia-agent-ui-${v}-amd64.deb` },
+    { label: 'Flatpak (Fedora, other distros)', name: (v) => `gaia-agent-ui-${v}-x86_64.flatpak` },
   ],
 };
 
