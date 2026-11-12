@@ -12,7 +12,21 @@ export function isProgressTick(event: StreamEvent): boolean {
 
 /** A status event's line for the user; the tool-list re-read is said in their language. */
 export function statusText(event: StreamEvent): string {
-    return event.phase === 'loading_tools' ? getT()('chat.loadingTools') : (event.message || '').trim();
+    if (event.phase === 'loading_tools') return getT()('chat.loadingTools');
+    if (event.phase === 'model_queue' && event.queue) return queueText(event.queue);
+    return (event.message || '').trim();
+}
+
+function queueText(queue: NonNullable<StreamEvent['queue']>): string {
+    const t = getT();
+    const seconds = String(Math.floor(queue.waited_s ?? 0));
+    if (queue.event === 'granted') return t('chat.modelQueue.granted', { seconds });
+    const length = queue.queue_length ?? 1;
+    if (length > 1 && queue.position != null) {
+        return t('chat.modelQueue.waitingInLine', { position: String(queue.position), length: String(length), seconds });
+    }
+    if (!queue.holder && queue.scope !== 'process') return t('chat.modelQueue.priority', { seconds });
+    return t('chat.modelQueue.waiting', { seconds });
 }
 
 /** Map an SSE agent event to an AgentStep for the UI. */
