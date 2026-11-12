@@ -101,7 +101,7 @@ class TestCreateSchedule:
             "/api/schedules",
             json={"name": "dup", "interval": "every 2h", "prompt": "Second"},
         )
-        assert resp.status_code == 400
+        assert resp.status_code == 409
         assert "already exists" in resp.json()["detail"]
 
     def test_create_invalid_interval(self, client):
