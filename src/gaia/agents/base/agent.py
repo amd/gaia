@@ -1724,19 +1724,34 @@ def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
 # The user told this turn not to act: "use no tools", "don't do anything
 # yet", "answer only with a plan". "Don't run anything yet" forbids running,
 # not writing the files asked for; "don't do anything else" limits the work.
-_NO_ACTION_REQUEST_PATTERN = re.compile(
-    r"(?P<forbid>\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?"
-    r"(?:(?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing))"
-    r"\s+(?:any\s+tools?|tools)"
-    r"|(?:do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+"
-    r"(?:anything|any\s+files?))"
+# "Don't touch anything, just read config.py": the ban is followed by work.
+_NO_ACTION_THEN_WORK = (
+    r"(?:read|open|look|check|inspect|run|execute|fix|edit|write|update|change"
+    r"|create|save|delete|remove|move|install|search|grep|list|modify|apply)"
+)
+_NO_ACTION_BAN = r"\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?"
+_NO_ACTION_BAN_END = (
+    rf"(?![\s,;:—–-]*(?:(?:just|only|but|and|then)\s+)?{_NO_ACTION_THEN_WORK}\b)"
     r"(?=\s*(?:$|[.,;:!?)\]—–-]|(?:in\s+this\s+turn|yet|now|for\s+now|until"
-    r"|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b)))"
+    r"|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b))"
+)
+_NO_ACTION_REQUEST_PATTERN = re.compile(
+    rf"(?P<forbid>{_NO_ACTION_BAN}"
+    r"(?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing))"
+    rf"\s+(?:any\s+tools?|tools){_NO_ACTION_BAN_END}"
+    # "Fix foo.py but don't touch anything" limits the work; it does not stop it.
+    rf"|(?<!\bbut\s)(?<!\band\s)(?<!\bthen\s){_NO_ACTION_BAN}"
+    r"(?:do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+"
+    rf"(?:anything|any\s+files?){_NO_ACTION_BAN_END})"
     r"|\b(?:answer|reply|respond)\s+(?:only|just)\s+with\s+(?:a|an|the|your)\s+"
     r"(?:[\w-]+\s+){0,3}plan\b"
     r"|\b(?:only|just)\s+(?:give|write|show|send|outline)\s+(?:me\s+)?"
     r"(?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}plan\b"
-    r"|\bplan\s+only\b|\bonly\s+(?:a|the)\s+plan\b"
+    # "Plan only." stands as its own clause, not "the plan only covers X".
+    r"|(?:^|[.;:!?(]\s*|\b(?:give|send|show)\s+me\s+)(?:(?:a|the|your)\s+)?"
+    r"plan\s+only\b(?=\s*(?:$|[.,;:!?)]|please\b))"
+    r"|(?<!\bnot\s)\bonly\s+(?:a|the)\s+plan\b"
+    r"(?=\s*(?:$|[.,;:!?)]|please\b|for\s+now\b|then\b))"
     r"|\b(?:use|call|run)\s+no\s+tools\b",
     re.IGNORECASE,
 )

@@ -723,6 +723,9 @@ REQUESTED_PLAN = (
         "Give me only a plan, then wait for my go-ahead.",
         "Just give me a plan. I'll decide later whether to run it.",
         "Answer only with a short plan and close with a one-line summary.",
+        "I want only a plan.",
+        "Give me the plan only.",
+        "Show the sales trend, but don't use any tools yet.",
     ],
 )
 def test_requests_not_to_act_are_recognised(request_text):
@@ -760,6 +763,15 @@ def test_requests_not_to_act_are_recognised(request_text):
         "Just give me a plan and then carry it out.",
         "Plan only at first, and then run step 1 once it reads well.",
         "Answer only with a short plan. After that, execute it.",
+        # "Plan only" inside a request to do work.
+        "My migration plan only covers Postgres; extend it to MySQL.",
+        "Write not only a plan but the code too.",
+        "Update the plan only for step 3 and save it to plan.md",
+        # A ban followed by, or following, the work to do.
+        "Don't touch anything — just read config.py and tell me what it sets",
+        "Don't touch anything, just read config.py and tell me what it sets",
+        "Don't touch anything - open config.py and tell me what it sets",
+        "Fix the bug in foo.py but don't touch anything.",
         "",
     ],
 )
