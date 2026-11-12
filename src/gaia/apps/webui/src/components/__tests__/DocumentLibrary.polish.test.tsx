@@ -50,5 +50,5 @@ it('says before a folder is added that its subfolders are skipped', async () => 
     mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
     render(<DocumentLibrary />);
 
-    expect(await screen.findByText(/subfolders are skipped/)).toBeInTheDocument();
+    expect(await screen.findByText(/A folder typed here adds only .* subfolders are skipped/)).toBeInTheDocument();
 });
