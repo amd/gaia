@@ -138,6 +138,12 @@
     padding: 16px 18px;
 }
 
+.connector-just-connected {
+    padding-inline: 18px;
+    padding-block-end: 10px;
+    font-size: 13px;
+}
+
 .configure-body { }
 
 .connector-desc {

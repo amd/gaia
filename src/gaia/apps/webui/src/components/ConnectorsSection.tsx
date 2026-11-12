@@ -106,6 +106,9 @@ export function ConnectorsSection() {
     const [disconnectNotice, setDisconnectNotice] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    // Groups are settled when the list loads, so a tile that connects stays under the pointer.
+    const [connectedAtLoad, setConnectedAtLoad] = useState<ReadonlySet<string>>(new Set());
+    const [justConnected, setJustConnected] = useState<string | null>(null);
     // Kept here, not in the tile: a first save moves the tile into "Connected" and remounts it.
     const [checks, setChecks] = useState<Record<string, McpCheck | null>>({});
     // Bumped per connector so a check that a newer check or a toggle replaced can't repaint.
@@ -142,6 +145,7 @@ export function ConnectorsSection() {
                 api.listAgentMcps(),
             ]);
             setConnectors(rows);
+            setConnectedAtLoad(new Set(rows.filter((c) => !('error' in c) && c.configured).map((c) => c.id)));
             setAgentMcps(mcps);
             setError(null);
         } catch (e) {
@@ -160,7 +164,13 @@ export function ConnectorsSection() {
         // Refresh only the changed connector to avoid full reload.
         try {
             const row = await api.getConnector(id);
-            setConnectors((prev) => prev.map((c) => (c.id === id ? row : c)));
+            setConnectors((prev) => {
+                const before = prev.find((c) => c.id === id);
+                const was = !!before && !('error' in before) && before.configured;
+                const now = !('error' in row) && row.configured;
+                setJustConnected(!was && now ? id : null);
+                return prev.map((c) => (c.id === id ? row : c));
+            });
         } catch {
             void load();
         }
@@ -196,9 +206,9 @@ export function ConnectorsSection() {
     const shown = connectors.filter((c) => !q || searchText(c).some((s) => s.toLowerCase().includes(q)));
     const unavailable = shown.filter((c): c is UnavailableConnectorRow => 'error' in c);
     const available = shown.filter((c): c is ConnectorRow => !('error' in c));
-    const connected = available.filter((c) => c.configured);
-    const accounts = available.filter((c) => !c.configured && c.type === 'oauth_pkce');
-    const servers = available.filter((c) => !c.configured && c.type !== 'oauth_pkce');
+    const connected = available.filter((c) => connectedAtLoad.has(c.id));
+    const accounts = available.filter((c) => !connectedAtLoad.has(c.id) && c.type === 'oauth_pkce');
+    const servers = available.filter((c) => !connectedAtLoad.has(c.id) && c.type !== 'oauth_pkce');
     const nothingConnected = !connectors.some((c) => !('error' in c) && c.configured);
 
     const tiles = (rows: ConnectorRow[]) => (
@@ -213,6 +223,7 @@ export function ConnectorsSection() {
                     check={checks[c.id] ?? null}
                     onRunCheck={() => void runCheck(c.id)}
                     onClearCheck={() => clearCheck(c.id)}
+                    justConnected={justConnected === c.id}
                 />
             ))}
         </div>
@@ -330,6 +341,7 @@ function ConnectorTile({
     check,
     onRunCheck,
     onClearCheck,
+    justConnected,
 }: {
     connector: ConnectorRow;
     expanded: boolean;
@@ -338,6 +350,7 @@ function ConnectorTile({
     check: McpCheck | null;
     onRunCheck: () => void;
     onClearCheck: () => void;
+    justConnected: boolean;
 }) {
     const t = useT();
     const { agents } = useChatStore();
@@ -351,12 +364,12 @@ function ConnectorTile({
                 : null;
         }
         if (connector.type === 'mcp_server' && connector.enabled === false) {
-            return <span className="connector-status disabled">{t('settings.connectors.disabled')}</span>;
+            return <span className="connector-status disabled">{t('settings.connectors.paused')}</span>;
         }
         return (
             <span className="connector-status ok">
                 <CheckCircle2 size={12} />
-                {connector.account_id ? <bdi dir="ltr">{connector.account_id}</bdi> : t('settings.connectors.configured')}
+                {connector.account_id ? <bdi dir="ltr">{connector.account_id}</bdi> : t('settings.connectors.connected')}
             </span>
         );
     };
@@ -381,6 +394,11 @@ function ConnectorTile({
                 </button>
                 <ConnectorTileMenu connector={connector} onChanged={onChanged} />
             </div>
+            {justConnected && (
+                <p className="settings-ok connector-just-connected" role="status">
+                    {t('settings.connectors.nowConnected', { name: connector.display_name })}
+                </p>
+            )}
 
             {expanded && (
                 <div className="connector-detail">
@@ -1326,7 +1344,7 @@ function AgentMcpTile({
                 <span className="agent-mcp-server-name">{server.server_name}</span>
                 <span className="agent-mcp-agent-label">{t('settings.connectors.via', { name: server.agent_name })}</span>
                 {server.disabled ? (
-                    <span className="agent-mcp-status disabled">{t('settings.connectors.disabled')}</span>
+                    <span className="agent-mcp-status disabled">{t('settings.connectors.paused')}</span>
                 ) : (
                     <span className="agent-mcp-status enabled">
                         <CheckCircle2 size={11} /> {t('settings.connectors.active')}
@@ -1455,28 +1473,24 @@ function ConnectorAgentGrants({
               )
             : [];
 
-    // "No agents require access" above a switch that grants access reads as a
-    // contradiction, so the grants block appears only when it has a row or
-    // nothing else does.
-    const showGrants = relevantAgents.length > 0 || activatableAgents.length === 0;
+    // A grants block with no agent in it is only noise in a one-agent app.
+    if (relevantAgents.length === 0 && activatableAgents.length === 0) return null;
 
     return (
         <div className="connection-grants">
-            {showGrants && (
-                <div className="grants-header">{t('settings.connectors.grants')}</div>
-            )}
-            {!showGrants ? null : relevantAgents.length === 0 ? (
-                <div className="grants-empty">{t('settings.connectors.noGrants')}</div>
-            ) : (
-                relevantAgents.map((agent) => (
-                    <AgentGrantCard
-                        key={agent.namespaced_agent_id}
-                        agent={agent}
-                        connectorId={connectorId}
-                        grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
-                        onChanged={() => void load()}
-                    />
-                ))
+            {relevantAgents.length > 0 && (
+                <>
+                    <div className="grants-header">{t('settings.connectors.grants')}</div>
+                    {relevantAgents.map((agent) => (
+                        <AgentGrantCard
+                            key={agent.namespaced_agent_id}
+                            agent={agent}
+                            connectorId={connectorId}
+                            grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
+                            onChanged={() => void load()}
+                        />
+                    ))}
+                </>
             )}
 
             {/* Activations gate MCP tool visibility. OAuth connectors have no

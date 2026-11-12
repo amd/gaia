@@ -1,7 +1,7 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import type { ConnectorRow } from '../../types';
@@ -20,7 +20,7 @@ function row(id: string, type: string, over: Partial<ConnectorRow> = {}): Connec
     } as ConnectorRow;
 }
 
-const group = (title: string) => screen.getByText(title).closest('details') as HTMLDetailsElement;
+const group = (title: string) => screen.getByText(title, { selector: '.settings-disclosure-title' }).closest('details') as HTMLDetailsElement;
 
 function list(rows: ConnectorRow[]) {
     mocked.listConnectors.mockResolvedValue({ connectors: rows });
@@ -55,6 +55,36 @@ describe('ConnectorsSection groups', () => {
         await screen.findByText('Slack');
         expect(screen.getAllByText('Setup required')).toHaveLength(1);
         expect(screen.queryByText('Not configured')).not.toBeInTheDocument();
+    });
+
+    it('keeps a connector in place when it connects, and says so', async () => {
+        const git = row('Git', 'mcp_server');
+        list([row('Microsoft', 'oauth_pkce'), git]);
+        mocked.configureConnector.mockResolvedValue({} as never);
+        mocked.getConnector.mockResolvedValue({ ...git, configured: true });
+        render(<ConnectorsSection />);
+        await screen.findByText('Git');
+        fireEvent.click(screen.getByText('MCP servers', { selector: '.settings-disclosure-title' }));
+        fireEvent.click(screen.getByRole('button', { name: /^Git/ }));
+        fireEvent.click(document.querySelector('.configure-actions .btn-primary, .configure-actions button')!);
+
+        await waitFor(() => expect(mocked.getConnector).toHaveBeenCalledWith('Git'));
+        // Still under MCP servers, where the pointer was, not moved to a "Connected" group above.
+        const servers = group('MCP servers');
+        expect(within(servers).getByText('Git')).toBeInTheDocument();
+        expect(screen.queryByText('Connected', { selector: '.settings-disclosure-title' })).not.toBeInTheDocument();
+        expect(within(servers).getByText('Connected')).toBeInTheDocument();
+        expect(screen.getByRole('status')).toHaveTextContent('Git is connected.');
+    });
+
+    it('calls a turned-off connector Paused, and a working one Connected', async () => {
+        list([row('Git', 'mcp_server', { configured: true }), row('GitHub', 'mcp_server', { configured: true, enabled: false })]);
+        render(<ConnectorsSection />);
+        await screen.findByText('Git');
+        const connected = group('Connected');
+        expect(within(connected).getByText('Paused')).toBeInTheDocument();
+        expect(within(connected).queryByText('Configured')).not.toBeInTheDocument();
+        expect(within(connected).queryByText('Disabled')).not.toBeInTheDocument();
     });
 
     it('searches every group and opens what it finds', async () => {

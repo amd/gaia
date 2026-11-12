@@ -259,6 +259,14 @@ describe('MCP connector configure panel', () => {
         useChatStore.setState({ agents: [] as never });
     });
 
+    it('shows no per-agent grants block when no agent needs this connector', async () => {
+        useChatStore.setState({ agents: [] as never });
+        await openTile(mcpRow({ id: 'mcp-git', display_name: 'Git', configured: true }));
+        await waitFor(() => expect(mocked.listConnectorActivations).toHaveBeenCalled());
+        expect(screen.queryByText('Per-agent grants')).toBeNull();
+        expect(document.querySelector('.connection-grants')).toBeNull();
+    });
+
     it('turning the single switch on also resumes a paused connector', async () => {
         useChatStore.setState({ agents: [GAIA] as never });
         mocked.enableConnector.mockResolvedValue({} as never);
