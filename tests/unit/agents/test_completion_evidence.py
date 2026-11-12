@@ -3,6 +3,7 @@
 """Completion evidence is per artifact, after the latest write, and delivered."""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -1535,8 +1536,12 @@ def test_a_bare_output_no_run_wrote_is_still_missing(tmp_path):
     kx = tmp_path / "kx"
     kx.mkdir()
     (kx / "reconciliation.md").write_text("# Recon\n")
-    # Already there before the turn: not this turn's write.
-    (kx / "recon_tables.xlsx").write_bytes(b"PK")
+    # Already there before the turn: not this turn's write. Back-dated so a
+    # coarse filesystem clock can't stamp it inside the run's window.
+    old = kx / "recon_tables.xlsx"
+    old.write_bytes(b"PK")
+    stamp = old.stat().st_mtime - 3600
+    os.utime(old, (stamp, stamp))
     query = f"Read {kx / 'reconciliation.md'} and make recon_tables.xlsx from it."
     ledger = CompletionEvidence(query, str(tmp_path))
 
