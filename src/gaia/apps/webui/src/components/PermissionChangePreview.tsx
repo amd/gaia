@@ -4,7 +4,7 @@
 import { useState } from 'react';
 import { useT } from '../i18n/useT';
 import { CodeBlock } from './PermissionPrompt';
-import { unseen, visibleText } from './CalendarApproval';
+import { unseenWith, visibleWith } from './CalendarApproval';
 import './render/render.css';
 import './PermissionChangePreview.css';
 
@@ -13,6 +13,15 @@ const CHANGE_PREVIEW_LINES = 20;
 
 /** Unchanged lines kept around an edit so it reads in place. */
 const CONTEXT_LINES = 2;
+
+/**
+ * Only tab and newline stay as written. Unlike calendar prose, a file keeps no joiner or
+ * direction mark unshown: an RLM before a statement would draw a line of code reversed.
+ */
+const FILE_KEPT: ReadonlySet<string> = new Set(['\t', '\n']);
+
+export const fileText = (value: string, multiline: boolean) => visibleWith(FILE_KEPT, value, multiline);
+export const fileUnseen = (value: unknown) => unseenWith(FILE_KEPT, value);
 
 type Change =
     | { kind: 'write'; text: string }
@@ -65,7 +74,7 @@ function EditDiff({ lines }: { lines: string[] }) {
     return (
         <>
             <pre dir="ltr" className="render-diff__body perm-card-diff" data-testid="perm-edit-diff">
-                {shown.map((line, i) => <div key={i} className={lineClass(line)}>{visibleText(line, true)}</div>)}
+                {shown.map((line, i) => <div key={i} className={lineClass(line)}>{fileText(line, true)}</div>)}
             </pre>
             {long && (
                 <button type="button" className="perm-card-args-toggle" onClick={() => setExpanded((v) => !v)} aria-expanded={expanded}>
@@ -82,14 +91,14 @@ export function ChangePreview({ args }: { args: Record<string, unknown> }) {
     const change = fileChange(args);
     if (!change) return null;
     // A character that hides or reorders text would make the preview read unlike the file.
-    const hidden = change.kind === 'edit' ? unseen(args.old_content) || unseen(args.new_content) : unseen(change.text);
+    const hidden = change.kind === 'edit' ? fileUnseen(args.old_content) || fileUnseen(args.new_content) : fileUnseen(change.text);
     return (
         <div className="perm-card-change">
             <p className="perm-card-change-label">{t(change.kind === 'edit' ? 'prompt.willChange' : 'prompt.willWrite')}</p>
             {change.kind === 'edit'
                 ? <EditDiff lines={change.lines} />
                 : change.text
-                ? <CodeBlock code={visibleText(change.text, true)} previewLines={CHANGE_PREVIEW_LINES} testId="perm-write-preview" exact />
+                ? <CodeBlock code={fileText(change.text, true)} previewLines={CHANGE_PREVIEW_LINES} testId="perm-write-preview" exact />
                 : <p className="perm-card-detail">{t('prompt.emptyFile')}</p>}
             {hidden && <p className="perm-card-risk" role="note" data-testid="perm-change-unseen">{t('prompt.unseenChars')}</p>}
         </div>
