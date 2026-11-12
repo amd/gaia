@@ -106,6 +106,29 @@ describe('GPU memory: what a bigger share unlocks', () => {
         expect(screen.getByRole('radio', { name: 'GPU 64.0 GB Recommended' })).toHaveAttribute('aria-checked', 'true');
     });
 
+    it('reaches Keep with the arrow keys, wrapping both ways, and the main button follows', () => {
+        render(<Harness initial={gpuStatus({ recommended_setting_gb: 48 })} onSkip={vi.fn()} />);
+        const group = screen.getByRole('radiogroup', { name: 'GPU memory' });
+        const keep = screen.getByRole('radio', { name: 'Keep 32.0 GB (current)' });
+        fireEvent.keyDown(group, { key: 'ArrowLeft' });
+        expect(keep).toHaveAttribute('aria-checked', 'true');
+        expect(keep).toHaveFocus();
+        expect(screen.getByRole('button', { name: 'Keep as is' })).toBeInTheDocument();
+        fireEvent.keyDown(group, { key: 'ArrowLeft' });
+        expect(screen.getByRole('radio', { name: 'GPU 96.0 GB' })).toHaveAttribute('aria-checked', 'true');
+        fireEvent.keyDown(group, { key: 'ArrowRight' });
+        expect(keep).toHaveAttribute('aria-checked', 'true');
+        fireEvent.keyDown(group, { key: 'ArrowRight' });
+        expect(screen.getByRole('radio', { name: 'GPU 48.0 GB Recommended' })).toHaveAttribute('aria-checked', 'true');
+        expect(screen.queryByRole('button', { name: 'Keep as is' })).toBeNull();
+    });
+
+    it('offers no Keep when the current share is unknown', () => {
+        render(<Harness initial={gpuStatus({ gpu_gb: null, recommended_setting_gb: null })} />);
+        expect(screen.queryByRole('radio', { name: /Keep/ })).toBeNull();
+        expect(screen.getAllByRole('radio')[0]).toHaveAttribute('aria-checked', 'true');
+    });
+
     it('lets setup skip the step', () => {
         const onSkip = vi.fn();
         render(<Harness initial={gpuStatus()} onSkip={onSkip} />);
