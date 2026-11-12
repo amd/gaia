@@ -1,29 +1,37 @@
 ---
 title: "Email"
-description: "Read and search your mailbox with the flagship GAIA agent — every email body processed locally on your machine."
+description: "Read, draft and send mail with the flagship GAIA agent — every email body processed locally on your machine."
 icon: "envelope"
 ---
 
 # Email
 
-The flagship [`gaia` agent](/guides/gaia) reads your mailbox — Gmail or Outlook — through **eight read-only tools**, and every inference over an email body runs locally on your machine via Lemonade. No email content ever leaves your device.
+The flagship [`gaia` agent](/guides/gaia) reads your mailbox, Gmail or Outlook, through **eight reading tools**, and drafts and sends mail through the bundled **`send-email` skill**. With a local model, every inference over an email body runs on your machine via Lemonade and mail you read stays on your device; with a cloud model, the mail the agent reads goes to that provider. Mail you send leaves only after you approve it.
 
-**Reading is all it does today.** It lists your inbox, searches it, opens a message or a whole conversation, finds the threads waiting on your reply, and lists folders. It does not archive, label, draft, reply, or send. Triage itself — working out what actually needs you — is judgment the model does, driven by the bundled `inbox-triage` skill; the tools hand it facts, never verdicts. The plan for the write verbs is [Email triage as a skill](/plans/email-triage-skill).
+It lists your inbox, searches it, opens a message or a whole conversation, finds the threads waiting on your reply, and lists folders. Asked to send, reply, forward or draft, it loads the `send-email` skill, which saves drafts, replies, forwards and sends, and every send asks you first. It does not archive, label or delete messages yet. Triage itself — working out what actually needs you — is judgment the model does, driven by the bundled `inbox-triage` skill; the tools hand it facts, never verdicts. The plan for the remaining verbs is [Email triage as a skill](/plans/email-triage-skill).
 
 ## Action surface
 
-These eight tools are the whole surface.
+The reading tools are always there. The drafting and sending tools ship in the `send-email` skill and join the tool list, as `send-email/<tool>`, only once the agent loads it, so a turn that only reads mail doesn't carry them.
 
 | Tool | What you'd ask for |
 |---|---|
 | `check_mailbox_access` | *"Is my email set up?"* — reports which mailbox was picked, the connected address, and the inbox unread count. Also the first thing to call after another mail tool fails. |
-| `list_inbox` | *"What came in today?"*, *"What's unread?"* — recent inbox mail, newest first: sender, subject, received time, unread/flagged state, and a short preview. Never full bodies. |
+| `list_inbox` | *"What came in today?"*, *"What's unread?"* — recent inbox mail, newest first: sender, subject, received time, unread/flagged state, attached files (name, type and size), and a short preview. Never full bodies, and never the attachments themselves. |
 | `search_email` | *"Did I get anything about the Acme invoice?"* — searches every folder, in **relevance** order rather than newest-first. Every term is ANDed, so 2–3 distinctive keywords beat a sentence. If nothing matches, it retries with progressively fewer terms and flags the result as approximate, so you may see hits for a narrower query than you typed. |
 | `read_email` | *"Open that one"* — one message in full, including its body. Very long bodies are truncated, and the result says so. |
 | `list_mail_folders` | *"How much is sitting in Archive?"* — every folder with its unread and total counts. |
 | `get_thread` | *"Catch me up on the thread with Dana"* — every message in one conversation, oldest first, with bodies. Long bodies are clipped so the whole thread fits; no message is ever dropped. |
 | `list_waiting_on_you` | *"What's waiting on me?"* — inbox threads where someone asked you directly for a reply, a decision, or a meeting time, and you were already in that conversation. Oldest first, with how many days each has waited. |
 | `list_connected_mailboxes` | *"Which account are you reading?"* — each mailbox's connection state and which one the other tools use. Reads local connector state only, so it works with the internet off. |
+| `send-email/list_drafts` | *"What have I got in drafts?"* — saved drafts with the ids the other draft tools take. |
+| `send-email/create_draft` | *"Draft a reply to Dana"* — saves a new draft, a reply draft, or a forward draft. Nothing leaves the mailbox, so it doesn't ask. |
+| `send-email/update_draft` | *"Make that shorter"* — changes the fields you name and keeps the rest. Asks first, showing the new text and what it replaces, because the draft may be one you wrote. Refuses a Gmail draft with attachments, since the edit would drop them. |
+| `send-email/discard_draft` | *"Throw that draft away"* — asks first, because a discarded draft can't be recovered. |
+| `send-email/send_draft` | *"Send it"* — asks first, showing the saved draft as it will go out. Refuses if the draft changed after you approved it. |
+| `send-email/send_now` | *"Email Sam that I'm running late"* — composes and sends in one step. Asks first. |
+| `send-email/reply_to_message` | *"Tell her yes"* — replies in the conversation, to the sender or to everyone. Asks first. |
+| `send-email/forward_message` | *"Send that to Kit"* — forwards the message's text with an optional note. Attachments stay behind, and the prompt names each one left out. Asks first. |
 
 `list_waiting_on_you` is narrow on purpose: newsletters, cold outreach, and automated senders never qualify, and neither does a sender you told to stop writing. A first message from someone you have never replied to won't appear either — the full triage pass still catches those. It scans the 50 most recent inbox messages by default (up to 100 on Gmail, 200 on Outlook), and says when older mail was not checked.
 
@@ -61,14 +69,13 @@ gaia connectors configure google \
 
 Both flags are required together — Google rejects token requests that omit the secret even for Desktop-app PKCE clients.
 
-Then sign in, and grant the flagship read access:
+Then sign in, and grant the flagship access:
 
 ```bash
-gaia connectors connect google --scopes https://www.googleapis.com/auth/gmail.readonly
-gaia connectors grants grant google installed:gaia --scopes https://www.googleapis.com/auth/gmail.readonly
+gaia connectors connect google --grant-agent installed:gaia
 ```
 
-`gmail.readonly` is the whole ask — read-only is the whole capability. The second command is a local ledger write: no browser, no OAuth round-trip.
+That one consent asks for `gmail.readonly` to read and `gmail.compose` to draft and send, plus `calendar.events` for the [calendar tools](/guides/gaia). It does not ask for `gmail.modify`, which could also relabel, archive and trash your mail, or `https://mail.google.com/`, the scope that can permanently delete it.
 
 The first command prints an authorization URL. Open it in a browser **on the machine running GAIA** — the sign-in completes via a `127.0.0.1` callback on that box.
 
@@ -143,18 +150,30 @@ If your Google account is already connected for something else, the flagship reu
 
 ```bash
 gaia connectors grants grant google installed:gaia \
-  --scopes https://www.googleapis.com/auth/gmail.readonly
+  --scopes https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose
 ```
 
-That is a local ledger write — no browser, no OAuth round-trip. If your existing connection was authorized with a broader Gmail scope, pass that scope instead — the grant cannot ask for more than the connection carries.
+That is a local ledger write — no browser, no OAuth round-trip. It replaces the flagship's Google grant, so if it already holds `calendar.events`, list that scope too. The grant cannot ask for more than the connection carries, so on a connection that only holds `gmail.readonly` (one made before the flagship could write), pass just that scope: reading works, and drafting or sending asks you to reconnect Google and approve `gmail.compose`.
 
 ## Privacy
 
 - **Local LLM only by default** — email bodies are processed by your local Lemonade model. Nothing pins them there: if you configure the flagship against a cloud provider, mail content goes with it.
-- **No mail mutation** — this tool surface cannot archive, send, label, or delete, so an instruction planted in an email body has no mail action to trigger. There is no confirmation dialog to get wrong, because there is no mutation to confirm.
+- **Nothing is sent without your yes** — an instruction planted in an email body could make the model try to send. The prompt shows the account it sends from, then the recipients, subject and body exactly as they will go out, so you can see where it is going; if the connected mailbox changes while it waits, nothing is sent, and declining or letting it time out sends nothing. There is no "always" option for mail.
+- **The prompt can't be disguised** — a subject or address with a line break or control character is refused before you're asked, naming the field. So is a display name with invisible or direction-changing characters, or one that looks like an address. A reply goes to bare addresses, because a name on incoming mail is whatever the sender typed. An international domain is shown and sent in its ASCII form (`xn--bcher-kva.de` for `bücher.de`). Text in the body keeps its characters, because Arabic and Hebrew mail needs them, and the prompt shows the ones that could hide or reorder text as `[U+202E]`. A Gmail draft with an HTML version shows that too.
+- **A long email must be read to the end in the terminal** — where it doesn't fit, the terminal UI scrolls it with `↑`/`↓`/`PgUp`/`PgDn`, and `y` only works once the last line has been on screen. `n` and `Esc` work throughout.
+- **`sent: "unknown"` means check Sent** — if the connection drops after the request went out, or the provider answers with a server error, GAIA can't tell whether the mail left. The agent says so and doesn't retry on its own. If you ask it to try again, the prompt warns the first try may have gone out. `sent: false` means it definitely didn't.
+- **Full access doesn't skip this** — in the terminal UI and Agent UI the send still asks. Where nobody can answer, as with `gaia -p --dangerously-skip-permissions` or `GAIA_AUTO_APPROVE_TOOLS`, the send is refused and nothing goes out. Discarding or changing a saved draft are the mail actions full access runs unasked, since nothing leaves the mailbox.
 - **Untrusted input** — message bodies are wrapped in `<<<UNTRUSTED_EMAIL_BODY_*>>>` delimiters and flagged when they show phishing signals ([#4150](https://github.com/amd/gaia/issues/4150)). That is not a general injection defence: the flagship also holds web, file, and shell tools, so treat mail from untrusted senders as untrusted input.
 
 ## Troubleshooting
+
+### "Reconnect Google in Settings -> Connectors"
+
+Your connection can read but was made before GAIA asked for write access, or the write option was unticked on Google's consent screen. Reconnect and leave it ticked. Reading keeps working until you do. On Outlook the same message names `Mail.ReadWrite` or `Mail.Send`.
+
+### A send failed
+
+The error says the mail was not sent, and GAIA does not retry it. If the connection dropped while sending, it can't tell whether the provider received it, so check Sent before asking again. An Outlook reply that fails partway names the draft it left behind.
 
 ### "No readable mailbox is available"
 
@@ -166,7 +185,7 @@ The agent could not reach any mailbox, and the error names each provider's own s
 
 ### "Gmail API returned 401"
 
-The access token has expired or scopes were revoked. Reconnect Google in Settings → Connectors, or re-run `gaia connectors connect google --scopes https://www.googleapis.com/auth/gmail.readonly`.
+The access token has expired or scopes were revoked. Reconnect Google in Settings → Connectors, or re-run `gaia connectors connect google --grant-agent installed:gaia`.
 
 ### Reading stopped partway through a big inbox
 

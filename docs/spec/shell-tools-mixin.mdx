@@ -30,7 +30,7 @@ ShellToolsMixin provides secure shell command execution with comprehensive rate 
 - Read-only list (`ALLOWED_COMMANDS`): what a blanket pre-approval (`GAIA_AUTO_APPROVE_TOOLS`, `auto_approve_gated_tools`) may run
 - Anything else is `TIER_CONFIRM`: it runs once the user approves it (`git commit`, `npm test`, `rm notes.txt`), and is refused under a blanket pre-approval unless the console's `full_access` is on
 - `TIER_CONFIRM_ONCE` for what GAIA's own checks don't cover (`git push`, `git -c`, `python -c`, uninspectable PowerShell, shell operators, a path outside the allowed folders): the prompt shows the exact line and its full folder with a risk note, offers no "always", and an approval runs that line once through the shell. It is refused under a blanket pre-approval, and `wait_for_condition` never polls one
-- `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible or line-break characters, broken quoting), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), and for folders no approval may open
+- `TIER_REFUSE` for text a prompt can't show honestly (encoded PowerShell, invisible or line-break characters, broken quoting), for anything that deletes or discards work on a line GAIA can't fully check (`git push --force`, `git reset --hard`, also inside `$(…)` or behind a `-c`), for a granted CLI's `never_offered_actions` (`gh issue close`, `gh pr merge`), and for any of these run through a launcher such as `sudo`, `env`, `timeout`, `nice` or `xargs` (an unfamiliar launcher option is read both ways, so it can't hide the command), and for folders no approval may open. A command refused on its text ends its hint with `NOT_APPROVABLE`, so the agent doesn't tell the user to approve it
 - Every command on a line validated before any of it runs, and the strictest segment decides the line: one `TIER_REFUSE` segment stops it, one `TIER_CONFIRM_ONCE` segment makes the whole line a one-time approval
 - Path validation for all file-like arguments
 - Git subcommand filtering (write subcommands are `TIER_CONFIRM`)
@@ -57,6 +57,10 @@ refused command anywhere refuses the line before any of it runs, and one
 confirmation covers the line. The result carries the combined output, the exit
 code of the last command that ran, and a `steps` list giving each command and
 its own exit code.
+
+Grouping steps in parentheses, `(a || b) && c`, is refused before anything
+runs, with a hint to write the chain without them: each step runs on its own,
+so the parentheses would otherwise reach the commands as `(a` and `b)`.
 
 `2>&1` and `2>/dev/null` are the only redirections allowed, because they are
 the only two that name no file: they say where a command's stderr goes, and

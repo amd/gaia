@@ -4,10 +4,9 @@
 
 Like the Graph tests next door, these drive a real ``httpx`` client over a
 ``MockTransport`` so they assert the *shape of the outgoing Gmail request* —
-path, ``format``, ``metadataHeaders``, ``labelIds`` — not merely that a stub
-was called. Gmail 400s on a label *name* where an ID is required and ignores
-``metadataHeaders`` unless ``format=metadata`` is sent with it; a protocol
-double accepts both.
+path, ``format``, ``fields``, ``labelIds`` — not merely that a stub was
+called. Gmail 400s on a label *name* where an ID is required and drops
+``payload.parts`` under ``format=metadata``; a protocol double accepts both.
 """
 
 import json
@@ -418,16 +417,19 @@ def test_list_inbox_without_unread_only_asks_for_the_inbox_alone():
     assert listing.params.get_list("labelIds") == ["INBOX"]
 
 
-def test_format_and_metadata_headers_are_sent_together():
-    """`metadataHeaders` is ignored unless `format=metadata` rides with it."""
+def test_listing_asks_for_full_format_under_a_bodyless_field_mask():
+    """`format=metadata` drops the parts attachments live in; the mask keeps
+    the full format from shipping every body."""
     seen = []
     make_backend(inbox_handler(["m1"], record=seen)).list_inbox()
 
     fetch = next(u for u in seen if "/users/me/messages/" in u.path)
-    assert fetch.params["format"] == "metadata"
-    headers = fetch.params.get_list("metadataHeaders")
-    assert headers, "metadataHeaders must accompany format=metadata"
-    assert {"Subject", "From", "Date"} <= set(headers)
+    assert fetch.params["format"] == "full"
+    assert "metadataHeaders" not in fetch.params
+    fields = fetch.params["fields"]
+    assert "payload(" in fields and "parts(" in fields
+    assert "body/size" in fields
+    assert "data" not in fields.replace("body/size", "")
 
 
 def test_list_inbox_fetches_every_listed_id_and_the_fetches_overlap():

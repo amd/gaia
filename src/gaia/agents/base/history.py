@@ -4,6 +4,7 @@
 """Model-facing conversation history, budgeted without splitting tool groups."""
 
 import json
+import re
 from collections import deque
 from copy import deepcopy
 from dataclasses import dataclass
@@ -197,7 +198,52 @@ def fit_turns(
         plan.hidden_tokens,
         on_cut,
     )
-    return [plan.turn(index) for index, _ in plan.retained]
+    kept = [plan.turn(index) for index, _ in plan.retained]
+    if plan.evicted or plan.unreplayable:
+        kept = _note_hidden_turns(kept)
+    return kept
+
+
+#: Opens the oldest turn the model still sees once earlier ones were left out.
+HIDDEN_TURNS_NOTE = (
+    "[GAIA note: earlier turns of this chat are no longer shown to you; if asked "
+    "about them, say you can no longer see them, not that they never happened.]"
+)
+
+
+def _note_hidden_turns(kept: list[list[dict[str, Any]]]) -> list[list[dict[str, Any]]]:
+    """*kept* with ``HIDDEN_TURNS_NOTE`` opening its oldest user question.
+
+    The stored turns are left as they are: only the noted message is copied.
+    A tool result recorded as a user message is passed over, since its prefix
+    is parsed. With no question left in view there is nothing to carry it.
+    """
+    for at, turn in enumerate(kept):
+        for index, message in enumerate(turn):
+            content = message.get("content")
+            if message.get("role") != "user":
+                continue
+            if isinstance(content, str):
+                if content.startswith(_RECORDED_RESULT_PREFIX):
+                    continue
+                if content.startswith(HIDDEN_TURNS_NOTE):
+                    return kept
+                noted: Any = f"{HIDDEN_TURNS_NOTE}\n\n{content}"
+            elif isinstance(content, list):
+                opening = {"type": "text", "text": HIDDEN_TURNS_NOTE}
+                if content and content[0] == opening:
+                    return kept
+                noted = [opening, *content]
+            else:
+                continue
+            copy = list(turn)
+            copy[index] = {**message, "content": noted}
+            return [*kept[:at], copy, *kept[at + 1 :]]
+    logger.warning(
+        "Older turns were left out, but no user message is in view to tell the "
+        "model so; it may deny what they said."
+    )
+    return kept
 
 
 def _turn_cost(turn: list[dict[str, Any]]) -> int:
@@ -553,7 +599,9 @@ def history_budget(agent: Any, query: str) -> int:
     """Reserve prompt, tools, output and safety margin for any transport."""
     ctx = context_window(agent)
     prompt = getattr(agent, "system_prompt", "")
-    tools = getattr(agent, "_openai_tools", [])
+    # Looked up on the class so a test double's auto-attributes don't count.
+    budgeted = getattr(type(agent), "_history_tool_schemas", None)
+    tools = budgeted(agent) if budgeted else getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
     return _budget_in_window(ctx, overhead, _reply_reserve(agent))
 
@@ -589,6 +637,24 @@ def fit_pushed_history(
     return select_history(pushed_turns(messages), history_budget(agent, query), on_cut)
 
 
+def fit_history_to_turn(
+    agent: Any, messages: list[dict[str, Any]], query: str
+) -> list[dict[str, Any]]:
+    """Admitted history re-fit once this turn's own inputs are known.
+
+    Transports budget before the turn starts; the memory context framed into
+    *query* and this turn's skills and tool filter are only resolved inside
+    ``process_query``, so older turns they no longer leave room for drop here.
+    """
+    if not messages:
+        return messages
+    turns = pushed_turns(messages)
+    budget = history_budget(agent, query)
+    if sum(_turn_cost(turn) for turn in turns) <= budget:
+        return messages
+    return select_history(turns, budget)
+
+
 def pushed_turns(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     """Group a flat message list into turns: each user message starts one."""
     turns: list[list[dict[str, Any]]] = []
@@ -613,7 +679,6 @@ DOCUMENT_TOOLS = frozenset(
         "summarize_document",
         "dump_document",
         "read_file",
-        "read_document",
     }
 )
 
@@ -641,15 +706,47 @@ def _message_kind(message: dict[str, Any]) -> str:
 #: Opens the per-turn memory block ``MemoryMixin`` prepends to a user message.
 MEMORY_CONTEXT_HEADER = "[GAIA Memory Context]"
 
+#: Closes that block, so a short user message never reads as its last line.
+MEMORY_CONTEXT_FOOTER = (
+    "[End GAIA Memory Context — the rest of this message is from the user]"
+)
+
+_FOOTER_BREAK = MEMORY_CONTEXT_FOOTER + "\n\n"
+
+# Stored memories can quote or imitate the boundary. Treat separator, case,
+# and dash variants as the same marker so none can close the user-message fence.
+_FOOTER_SEPARATOR = r"(?:[^\S\n]|[-_‐-―−])*"
+_FOOTER_LIKE_LINE = re.compile(
+    rf"^.*\bend{_FOOTER_SEPARATOR}gaia{_FOOTER_SEPARATOR}memory"
+    rf"{_FOOTER_SEPARATOR}context\b.*(?:\n|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def frame_user_message(context: str, user_input: str) -> str:
+    """*user_input* behind the per-turn context block, fenced off from it."""
+    if not context:
+        return user_input
+    # A stored note quoting the footer, or a near-copy, must not end the block
+    # early.
+    context = _FOOTER_LIKE_LINE.sub("", context).rstrip()
+    if not context.startswith(MEMORY_CONTEXT_HEADER):
+        context = f"{MEMORY_CONTEXT_HEADER}\n{context}"
+    return f"{context}\n{_FOOTER_BREAK}{user_input}"
+
+
+def user_text_of(content: str) -> str:
+    """The user's own words in a message ``frame_user_message`` built."""
+    if content.startswith(MEMORY_CONTEXT_HEADER) and _FOOTER_BREAK in content:
+        return content.partition(_FOOTER_BREAK)[2]
+    return content
+
 
 def _turn_preview(turn: list[dict[str, Any]], limit: int = 60) -> str:
     for message in turn:
         content = message.get("content")
         if message.get("role") == "user" and isinstance(content, str) and content:
-            if content.startswith(MEMORY_CONTEXT_HEADER):
-                # The user's text follows the block's last blank line.
-                content = content.rpartition("\n\n")[2]
-            text = " ".join(content.split())
+            text = " ".join(user_text_of(content).split())
             if not text:
                 continue
             return text if len(text) <= limit else text[: limit - 1] + "…"

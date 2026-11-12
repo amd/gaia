@@ -7,7 +7,12 @@ answers the TUI, the Agent UI and headless service callers alike), so LLM
 errors carry the TUI's advice and each other front-end swaps those exact
 sentences for its own with :func:`surface_wording`. Keep every TUI string here
 a whole sentence or a phrase that reads correctly after the swap.
+
+``gaia init`` speaks to a terminal, so its lines carry ``CLI_*`` advice that
+the Agent UI's setup log swaps for the app's own.
 """
+
+from gaia.llm.local_only import SETTINGS_HINT as CLI_LOCAL_ONLY_HINT
 
 #: How a TUI user picks another model.
 TUI_MODEL_SWITCH_HINT = "Pick another model with /model in the TUI."
@@ -94,6 +99,12 @@ CLI_RESTART_HINT = (
     "If it keeps happening, run `gaia daemon status` and check the daemon log."
 )
 
+#: What an app user does when GAIA's model server was down for a chat: the
+#: next message has the daemon start it.
+APP_SERVER_DOWN_HINT = (
+    f"Send your message again and GAIA will start its model server. {APP_RESTART_HINT}"
+)
+
 #: When GAIA's background service is not running at all, so the CLI must start
 #: it: `gaia daemon status` (the restart hint) would only report it is down.
 APP_SERVICE_DOWN_HINT = "Close GAIA and open it again so its background service starts."
@@ -108,8 +119,36 @@ CLI_WEDGED_SERVER_HINT = (
     "restarts it on the next query."
 )
 
+#: How a user who skipped the default vision model gets it later. Printed by
+#: ``gaia init``; the Agent UI's setup log shows the app's version.
+CLI_VISION_DOWNLOAD_HINT = (
+    "To ask about images, download it (~6 GB) with `gaia download --agent vlm`."
+)
+AGENT_UI_VISION_DOWNLOAD_HINT = (
+    "To ask about images later, tick it under Settings > Model (a ~6 GB download)."
+)
+
+#: How to download a vision model the image tools found missing.
+VISION_DOWNLOAD_HINT = (
+    "Download it under Settings > Model in the Agent UI, or with /setup in the "
+    "TUI, then ask again."
+)
+AGENT_UI_VISION_DOWNLOAD_STEP = (
+    "Download it under Settings > Model > Manage downloads and disk space, then "
+    "ask again."
+)
+
+#: How an Agent UI user lets cloud models back in; the CLI's command is
+#: ``local_only.SETTINGS_HINT``.
+AGENT_UI_LOCAL_ONLY_HINT = (
+    "To allow cloud models again, turn off Local only under Settings > Privacy."
+)
+
 _SWAPS = {
     "agent_ui": (
+        (CLI_LOCAL_ONLY_HINT, AGENT_UI_LOCAL_ONLY_HINT),
+        (CLI_VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_HINT),
+        (VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_STEP),
         (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),
         (TUI_MODEL_SWITCH_HINT, AGENT_UI_MODEL_SWITCH_HINT),
         (TUI_PROVIDER_AUTH_HINT, AGENT_UI_PROVIDER_AUTH_HINT),

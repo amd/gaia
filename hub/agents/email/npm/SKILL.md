@@ -119,9 +119,9 @@ The interface:
 | `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. Attachments must exactly match the confirmed draft's (the token binds their content digests). |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for `"archive"`/`"quarantine"`, bound to the `(action, message_id)`. |
 | `archive(req)` | `confirm` token + a connected mailbox | Removes from inbox. Gate fires first (no/invalid token → 403). Returns a `batch_id` undo handle (+ `post_archive_id` for the Outlook id change). |
-| `unarchive(req)` | A connected mailbox | Restores within the 30s window (ungated — pass `batch_id`); expired/unknown → 409. |
+| `unarchive(req)` | A connected mailbox | Restores within the undo window (120 s by default; ungated — pass `batch_id`); expired/unknown → 409. |
 | `quarantine(req)` | `confirm` token + a connected **Gmail** mailbox | Applies `GAIA_PHISHING_QUARANTINE` + archives a phishing message. Refuses `is_phishing:false` → 400; Gmail-only (Outlook → 400). |
-| `unquarantine(req)` | A connected mailbox | Restores prior labels within the 30s window (ungated — pass `action_id`); expired/unknown → 409. |
+| `unquarantine(req)` | A connected mailbox | Restores prior labels within the undo window (120 s by default; ungated — pass `action_id`); expired/unknown → 409. |
 | `listCalendarEvents(opts?)` | Connected mailbox + calendar scope | Read-only view of the primary calendar. Optional `timeMin`/`timeMax` — omitting both defaults to a forward window (now → +30 days); `provider` only when >1 account. Missing scope → 403 + reconnect CTA. |
 | `previewCalendarEvent(req)` | Nothing external | Mints a single-use confirmation token bound to the event (calendar analogue of `draft`). |
 | `createCalendarEvent(req)` | Preview token + connected calendar | Token gate fires first: no/invalid token → 403, then the calendar checks. |
@@ -136,7 +136,8 @@ actions (`archive` / `quarantine`), and the calendar actions (view / create / re
 need a connected mailbox whose relevant scope was granted. Mint the gate token with
 `draft` (for `send`), `confirmAction` (for `archive` / `quarantine`), or
 `previewCalendarEvent` (for `createCalendarEvent`); `archive` and `quarantine` are
-reversible inside a 30s window via the ungated `unarchive` / `unquarantine`. Every
+reversible inside the undo window (120 s by default, `GAIA_EMAIL_UNDO_WINDOW_SECONDS`
+to change) via the ungated `unarchive` / `unquarantine`. Every
 non-2xx response throws `HttpError` (`status`, `url`, `bodyText`) — handle it; there is
 no silent null.
 
@@ -178,7 +179,7 @@ The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, 
 exactly one `final` or `error`. This is the one loop every v2 front-door relays to. The **host
 mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
 stays stateless. A slice too big for the model's window beside the agent's prompt
-keeps only its newest whole turns, announced in a `status` event (`{ message, phase?, queue? }`; `phase: "model_queue"` reports the queue position and holder while the model is busy). A single turn too large for the whole budget is retained with its longest messages truncated and a note saying how much, so its answer stays in view. The typed client wraps it (#2097): `query()` returns an async
+keeps only its newest whole turns, announced in a `status` event (`{ message, level?, phase?, queue? }`; `phase: "model_queue"` reports the queue position and holder while the model is busy). A single turn too large for the whole budget is retained with its longest messages truncated and a note saying how much, so its answer stays in view. The typed client wraps it (#2097): `query()` returns an async
 iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
 
 ```ts
@@ -462,7 +463,7 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **`archive` / `quarantine` are gated like `send`**, but their token comes from
   `confirmAction` (not `draft`) and is bound to the `(action, message_id)` — a token
   for one can't authorize the other. Undo with `unarchive` (pass the returned
-  `batch_id`) / `unquarantine` (pass the `action_id`) **within 30s**; past the window
+  `batch_id`) / `unquarantine` (pass the `action_id`) **within the undo window (120 s by default)**; past the window
   the reversal returns **409** (restore manually in the mail client). For Outlook,
   use the `post_archive_id` from the archive response — the folder move changes the id.
 - **Cleanup is automatic by default** — the sidecar is reaped on exit/crash/signal;

@@ -47,13 +47,10 @@ from gaia.security import AllowedPathsEnvError, env_allowed_paths
 # in ``_chat_helpers`` (shared by both server.py and the router modules).
 # pylint: disable=unused-import
 from ._chat_helpers import _attach_chat_stream  # noqa: F401
-from ._chat_helpers import _build_history_pairs  # noqa: F401
-from ._chat_helpers import _compute_allowed_paths  # noqa: F401
 from ._chat_helpers import _get_chat_response  # noqa: F401
 from ._chat_helpers import _index_document  # noqa: F401
-from ._chat_helpers import _resolve_rag_paths  # noqa: F401
 from ._chat_helpers import _stream_chat_response  # noqa: F401
-from ._chat_helpers import writing_tool_registry
+from ._chat_helpers import _ui_cloud_provider, writing_tool_registry
 from .agent_loop import agent_loop
 
 # pylint: enable=unused-import
@@ -72,26 +69,25 @@ from .routers import goals as goals_router_mod
 from .routers import gpu_memory as gpu_memory_router_mod
 from .routers import hub as hub_router_mod
 from .routers import lemonade as lemonade_router_mod
+from .routers import logs as logs_router_mod
 from .routers import mcp as mcp_router_mod
 from .routers import memory as memory_router_mod
 from .routers import onboarding as onboarding_router_mod
 from .routers import providers as providers_router_mod
+from .routers import resources as resources_router_mod
 from .routers import schedules as schedules_router_mod
 from .routers import sessions as sessions_router_mod
 from .routers import setup as setup_router_mod
 from .routers import skills as skills_router_mod
+from .routers import speech as speech_router_mod
 from .routers import spending as spending_router_mod
 from .routers import system as system_router_mod
 from .routers import tunnel as tunnel_router_mod
 from .security import UIRequestGuardMiddleware
 from .tunnel import TunnelManager
-from .utils import ALLOWED_EXTENSIONS as _ALLOWED_EXTENSIONS  # noqa: F401
 from .utils import UploadStaticFiles
-from .utils import compute_file_hash as _compute_file_hash  # noqa: F401
-from .utils import sanitize_document_path as _sanitize_document_path  # noqa: F401
 from .utils import sanitize_static_path as _sanitize_static_path
 from .utils import uploads_dir
-from .utils import validate_file_path as _validate_file_path  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -342,11 +338,6 @@ def _run_scheduled_prompt(
     except ImportError as e:
         raise RuntimeError(_scheduled_import_error(e)) from e
 
-    # Beta dynamic tool loader (#1798). Inert here: scheduled runs
-    # use the default "full" prompt profile and the loader only
-    # activates on the "doc" profile — wired for future-proofing so
-    # this path doesn't silently diverge if that ever changes.
-    dynamic_tools = db.get_setting("dynamic_tools", "false") == "true"
     # Nobody is watching a scheduled run, so confirmation-gated tools
     # (shell, file writes) are denied here — same posture as an
     # autonomous background tick (#2210).
@@ -355,7 +346,6 @@ def _run_scheduled_prompt(
         max_steps=_SCHEDULED_MAX_STEPS,
         silent_mode=True,
         debug=False,
-        dynamic_tools=dynamic_tools,
         memory_incognito=not memory_enabled(db),
     )
     with writing_tool_registry():
@@ -455,7 +445,7 @@ class _ScheduledRuns:
         await turn_queue.acquire(f"schedule:{uuid.uuid4()}")
         try:
             cancel = threading.Event()
-            # Background mode: nobody is watching, so gated tools are denied.
+            # Background mode: nobody can approve, so a gated step ends the run.
             console = SSEOutputHandler(background_mode=True)
             worker = run_in_own_thread(
                 lambda: _run_scheduled_prompt(
@@ -635,7 +625,6 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             import httpx
 
             from gaia.llm.lemonade_client import (
-                cloud_model_provider,
                 lemonade_auth_headers,
                 resolve_ctx_size,
                 resolve_lemonade_api_key,
@@ -669,7 +658,7 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
             model_id = db.get_setting("custom_model") or _default_model_name()
             # Before the lease: waiting on a sidecar's local load for a cloud
             # model held the whole UI at "starting" for nothing.
-            if cloud_model_provider(model_id, None):
+            if _ui_cloud_provider(model_id):
                 return
 
             # model_load_lock guards other threads in THIS process; the broker
@@ -957,8 +946,11 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
     app.include_router(onboarding_router_mod.router)
     app.include_router(setup_router_mod.router)
     app.include_router(gpu_memory_router_mod.router)
+    app.include_router(resources_router_mod.router)
     app.include_router(lemonade_router_mod.router)
+    app.include_router(logs_router_mod.router)
     app.include_router(providers_router_mod.router)
+    app.include_router(speech_router_mod.router)
     app.include_router(spending_router_mod.router)
     app.include_router(skills_router_mod.router)
     app.include_router(hub_router_mod.router)

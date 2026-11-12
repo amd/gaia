@@ -230,6 +230,100 @@ class TestEnsureModelPulled:
         assert wire.json_body(1) == {"model_name": "Whisper-Base"}
         assert said and "Whisper-Base" in said[0] and "0.15 GB" in said[0]
 
+    def test_a_caller_that_can_show_progress_gets_the_download_percent(
+        self, monkeypatch
+    ):
+        """The pull streams, by name only, and each new percent reaches the caller."""
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        pulls, said, percents = [], [], []
+
+        def pull_model_stream(client, model_name, **kwargs):
+            pulls.append((client.base_url, model_name, kwargs))
+            yield {"event": "progress", "bytes_downloaded": 0, "bytes_total": 200}
+            yield {"event": "progress", "bytes_downloaded": 50, "bytes_total": 200}
+            yield {"event": "progress", "bytes_downloaded": 51, "bytes_total": 200}
+            yield {"event": "progress", "bytes_downloaded": 200, "bytes_total": 200}
+            yield {"event": "complete", "percent": 100}
+
+        monkeypatch.setattr(LemonadeClient, "pull_model_stream", pull_model_stream)
+        wire = Wire(
+            monkeypatch,
+            [
+                catalog(
+                    {
+                        "id": "Whisper-Base",
+                        "labels": ["transcription"],
+                        "downloaded": False,
+                        "size": 0.148,
+                    }
+                )
+            ],
+        )
+        LemonadeASRClient(base_url=BASE, model="Whisper-Base").ensure_model(
+            say=said.append, on_percent=percents.append
+        )
+        # Only the catalog read went out as a plain request; the pull streamed.
+        assert [r.url for r in wire.requests] == [f"{BASE}/models?show_all=true"]
+        assert pulls == [(BASE, "Whisper-Base", {})]
+        assert percents == [0, 25, 100]
+        assert said and "0.15 GB" in said[0]
+
+    def test_the_streamed_pull_carries_the_speech_clients_key(self, monkeypatch):
+        """An authenticated Lemonade rejects a pull without the caller's key."""
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        monkeypatch.delenv("LEMONADE_API_KEY", raising=False)
+        keys = []
+
+        def pull_model_stream(client, model_name, **kwargs):
+            keys.append(client._auth_headers().get("Authorization"))
+            yield {"event": "complete", "percent": 100}
+
+        monkeypatch.setattr(LemonadeClient, "pull_model_stream", pull_model_stream)
+        Wire(
+            monkeypatch,
+            [
+                catalog(
+                    {
+                        "id": "Whisper-Base",
+                        "labels": ["transcription"],
+                        "downloaded": False,
+                    }
+                )
+            ],
+        )
+        LemonadeASRClient(
+            base_url=BASE, model="Whisper-Base", api_key="k-123"
+        ).ensure_model(on_percent=lambda _p: None)
+
+        assert keys == ["Bearer k-123"]
+
+    def test_a_failed_streamed_pull_raises_the_speech_error(self, monkeypatch):
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        def pull_model_stream(client, model_name, **kwargs):
+            yield {"event": "progress", "bytes_downloaded": 1, "bytes_total": 2}
+            raise LemonadeClientError("disk full")
+
+        monkeypatch.setattr(LemonadeClient, "pull_model_stream", pull_model_stream)
+        Wire(
+            monkeypatch,
+            [
+                catalog(
+                    {
+                        "id": "Whisper-Base",
+                        "labels": ["transcription"],
+                        "downloaded": False,
+                    }
+                )
+            ],
+        )
+        with pytest.raises(LemonadeASRError, match="Whisper-Base.*disk full"):
+            LemonadeASRClient(base_url=BASE, model="Whisper-Base").ensure_model(
+                on_percent=lambda _p: None
+            )
+
     def test_unknown_model_lists_the_ones_that_exist(self, monkeypatch):
         Wire(
             monkeypatch,

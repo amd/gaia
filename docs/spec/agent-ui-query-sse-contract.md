@@ -84,7 +84,7 @@ net-new agent instrumentation.
 | `reasoning` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.22** — an older sidecar 422s the unknown field (see §7). `true` streams the model's reasoning as `reasoning` events (§4) instead of folding it into `status` lines, for a client that shows reasoning on its own. Omitted ⇒ `false`, today's behaviour. |
 | `documents` | array of strings (absolute file paths) | no | **Flagship (`gaia`) only, contract ≥ 2.16** (#4166) — the email agent and an older flagship 422 the unknown field (see §7). The files the user attached to this conversation. Send the whole set on every turn; the agent indexes the ones it has not indexed yet before the turn runs, so a file attached mid-conversation is read on the next turn. Each path is granted as that exact file — never its folder — and a relative path is a 422. A file that is missing, a folder, or a secret the path policy refuses is named as not indexed in the turn's `index_documents` step, and the turn still runs. See §2.5. |
 | `allowed_paths` | array of absolute path strings | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Caller-computed conversation scope. A new session gets exactly this scope; a retained session gains newly supplied entries and keeps what the user granted; `GAIA_ALLOWED_PATHS` can only narrow it. A relative path is a 422. This is an access allowlist, not the chat working directory. Omitted ⇒ the agent's default scope. |
-| `memory` | `"on"` \| `"private"` \| `"off"` | no | **Flagship (`gaia`) only, contract ≥ 2.18** — the email agent and an older flagship 422 the unknown field (see §7). Controls whether this turn may write memory. `private` and `off` suppress all writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
+| `memory` | `"on"` \| `"private"` \| `"off"` | no | **Email agent, contract ≥ 2.16; flagship (`gaia`), contract ≥ 2.18** — an older peer 422s the unknown field (see §7). Controls whether this turn may read or write memory. `private` and `off` suppress all reads and writes, including errors and lessons. Send it every turn when the caller owns the setting; omit it to retain the agent's current mode. |
 | `changes_turn_id` | string matching `^\d{14}-[0-9a-f]{8}$` | no | **Flagship (`gaia`) only, contract ≥ 2.19** — the email agent and older flagship 422 the unknown field (see §7). Records file changes for this turn's Undo history. Requires `session_id`; omit it to record no changes. |
 | `surface` | `"agent_ui"` \| `"tui"` \| `"cli"` | no | **Flagship (`gaia`) only, contract ≥ 2.20** — identifies the front-end so provider errors and feature wording fit the caller. Omit for headless callers. |
 | `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
@@ -217,7 +217,7 @@ the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place |
+| `status` | `{message, level?, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `level: "warning"` means the agent is warning the user (for example, configured MCP servers were dropped): show it as a warning, not only as the live line. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place |
 | `token` | `{delta}` | stream assistant text |
 | `reasoning` | `{delta, retracts_answer?}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning (a model whose template opened the block sends only `</think>`): drop it from the answer shown so far |
 | `tool_call` | `{tool, args}` | "using tool" card |
@@ -241,6 +241,7 @@ indistinguishable from a dead one.
   "properties": {
     "type":    { "const": "status" },
     "message": { "type": "string" },
+    "level":   { "const": "warning" }, // optional; absent for progress lines
     "phase":   { "type": "string" },   // optional, §4.4
     "words":   { "type": "integer" },  // with phase "reasoning"
     "chars":   { "type": "integer" },  // with phase "tool_call"
@@ -378,7 +379,7 @@ unknown `render` degrades to the generic result card (see §7).
 
 ### 4.3 Generic render primitives (#2108)
 
-Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers six
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers eight
 **generic primitives** any agent can emit on `tool_result.render` without
 shipping its own frontend component. `data` must match the schema for the key:
 
@@ -390,6 +391,8 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `image` | `{ src: string, alt?: string, caption?: string, path?: string }` |
 | `audio` | `{ src: string, caption?: string, path?: string, duration_seconds?: number }` — added (additive, MINOR) for generated music and sound effects (#540) |
 | `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
+| `guide` | `{ kind: "guide", guideType: "recipe"\|"workout"\|"howto"\|"checklist"\|"itinerary", title: string, description: string, notes: string, servings: integer\|null, items: string[], steps: string[] }` — `items` are the ingredients, equipment, materials, checklist entries or packing list; `steps` are the recipe steps, exercises, how-to steps or one line per day ("Day 1 - Lisbon: …"), and `[]` for a checklist; `servings` is set only for a recipe. The bundled `guides` skill's `guides/show_recipe`, `guides/show_workout`, `guides/show_how_to`, `guides/show_checklist` and `guides/show_itinerary` emit it |
+| `calculator` | `{ kind: "calculator", calculator: "tip", title: string, currency: string, inputs: { bill: number, tipPercent: number, people: integer } }` or `{ kind: "calculator", calculator: "loan", title: string, currency: string, inputs: { amount: number, annualRatePercent: number, years: number, downPayment: number } }` — starting numbers only; the card computes the tip, total and per-person share, or the monthly payment, total paid and interest, and recomputes as the person edits them. `title` may be `""`; `currency` is an ISO 4217 code such as `"EUR"`. The bundled `calculators` skill's `calculators/show_tip_calculator` and `calculators/show_loan_calculator` emit it |
 
 Rules every receiver implements and every producer can rely on:
 
@@ -434,12 +437,12 @@ is on the wire. It is sent when the phase actually starts, never on a timer, and
 
 | `phase` | Sent when | Count |
 |---|---|---|
-| `reading` | a model call is sent (again after a load finishes) | — |
+| `reading` | a model call is sent (again after a load finishes); while `extract_document_items` runs, before each page's call ("Reading page 4 of 12…") | — |
 | `loading_model` / `downloading_model` | the agent starts loading (or first downloading) the model | — |
 | `reasoning` | the model's first reasoning output, then about once a second | `words` reasoned so far |
 | `tool_call` | a long tool call's arguments are still streaming | `chars` so far |
 | `reconnecting` | GAIA's own Lemonade Server stopped mid-request or during a `/model` switch: sent once while the agent waits for the daemon to bring it back, then it retries. A server the user runs, or a remote `LEMONADE_BASE_URL`, is never waited on | — |
-| `model_restart` | GAIA's own Lemonade Server stopped under a model call: sent while the step waits to retry and again while the daemon starts it (`message` "The model server stopped. GAIA is restarting it…"), or before the daemon starts a server that was never running ("Starting the model server…") | — |
+| `model_restart` | GAIA's own Lemonade Server stopped under a model call, the answer's or one a tool makes itself: sent while the step waits to retry and again while the daemon starts it (`message` "The model server stopped. GAIA is restarting it…"), or before the daemon starts a server that was never running ("Starting the model server…") | — |
 | `model_retry` | a model call failed for another reason (the model service was busy, timed out, stopped sending, or the connection dropped) and is retried: once per retry, `message` naming the trouble, the wait and the attempt ("The model service is busy — retrying in 8s (2/4)") | — |
 | `answer_restart` | a reply was cut off part-way (the model server stopped or the connection dropped) and the step starts over; carries `retracts_answer: true` | — |
 | `model_queue` | the turn is queued for the model behind another request, then every ~2 s while it waits, then once when it gets the model | `queue` (below) |
@@ -629,7 +632,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 
 | Source event | Emitters (`sse_handler.py`) | Decision | → Canonical | Rationale |
 |---|---|---|---|---|
-| `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, drop the `status`/`steps`/`elapsed` sub-fields (progress-only). |
+| `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, carry `status: "warning"` as `level: "warning"`, drop the other `status` values and the `steps`/`elapsed` sub-fields (progress-only). |
 | `step` | `print_step_header` | **fold** | `status` | Step counter is progress narration; render as a `status` line (e.g. `"Step 3/20"`). No dedicated canonical type. |
 | `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** / **map** | `status`, or `reasoning` | Reasoning narration, not final assistant text — never `token` (which is answer text the UI commits to the message). Folds to `status` unless the request set `reasoning: true` (contract ≥ 2.22), which maps it to `reasoning` unchanged, `retracts_answer` included. See §9 Q1, now resolved. |
 | `commentary` | `_emit` (before a `tool_start`) | **drop** | — | Re-derived from the `token` text by the receiving host's own handler, so the sidecar's copy would double it. |
@@ -641,6 +644,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 | `policy_alert` | `print_policy_alert` | **map** | `error` | A governance **block** is an actionable, must-surface refusal. `reason` → `detail`; `decision`/`rule_ids`/`policy_version`/`receipt_id` → a structured tail on `detail` or dropped. See open question Q2 (per-tool vs terminal). |
 | `user_input_request` | `request_user_input_blocking` | **map** | `needs_input` | `request_id`/`message`/`options`/`choices`/`allow_free_text`/`sensitive`/`timeout_seconds` map straight across; `choices` strings become `{value, label}` options so a bare choice list is still pickable. `respond_url` is derived from `run_id`. (Was folded into `needs_confirmation` before #2469 — see §9 Q3, now resolved.) |
 | `tool_confirm_denied` | `confirm_tool_execution` (background mode) | **fold** | `status` | Unattended auto-deny is informational — the run continues and the agent retries. Surface the actionable `message` as a `status` line, not an `error` (the run did not fail). |
+| `skill_use` | `print_skill_use` | **fold** | `status` | "Using skill: _name_" when GAIA loaded the skill for one of its `loads_with` tools, or it was already loaded. Dropped when the model called `load_skill` itself, which already went out as a `tool_call`. |
 | `agent_created` | `print_agent_created` | **drop** | — | Registry-refresh signal with no chat-stream meaning. Must move to a **host control channel**, not the `/query` event stream. Dropping it here is a contract decision, not a silent loss — call it out in #2016. |
 | `None` (queue sentinel) | `signal_done` | **n/a** | *stream close* | Not a wire event. The canonical stream ends after the terminal `final`/`error`; the sentinel maps to closing the `text/event-stream` response. |
 
@@ -822,8 +826,12 @@ turns (and their estimated tokens) no longer replayed to the model, and
 `message` is the line the TUI keeps in the transcript. It is sent only when more
 turns are hidden than in the last reported view (the newest turn moved the cut,
 or a smaller model or longer prompt shrank the budget), so a stable cut is
-reported once.
+reported once. The model is told on every such turn, not once: the oldest user
+message it is sent opens with a one-sentence note that earlier turns exist and
+are no longer shown.
 
-Over stdio the agent never sends `tool_result.render`,
-`needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
-other transports, and it sets `source` itself on an error it synthesizes.
+Over stdio the agent never sends `needs_confirmation.confirm_url` or
+`error.source`. The TUI decodes them for other transports, and it sets `source`
+itself on an error it synthesizes. It does send `tool_result.render` for the
+card tools (`guide`, `calculator`), and the TUI draws both: every line of a
+guide, and a calculator's results computed from its starting numbers.

@@ -438,7 +438,7 @@ class TestFTS5Search:
 
 
 class TestDeduplication:
-    """>80% word overlap in same category+context → updates existing."""
+    """A restatement in the same category+context updates the existing entry."""
 
     def test_dedup_high_overlap_same_category_context(self, store):
         """High overlap in same category+context deduplicates."""
@@ -454,22 +454,21 @@ class TestDeduplication:
         assert id2 == id1
 
     def test_dedup_replaces_with_newer_content(self, store):
-        """Dedup replaces content with the newer version (not longer)."""
+        """A refinement replaces content with the newer, fuller version."""
         id1 = store.store(
             category="fact",
             content="Project uses React 18 with webpack bundler",
         )
         id2 = store.store(
             category="fact",
-            content="Project uses React 19 with webpack bundler",
+            content="Project uses React 18 with webpack bundler and Babel",
         )
         assert id2 == id1
 
-        # Newer content should be stored
         results = store.search("React webpack bundler")
         match = next((r for r in results if r["id"] == id1), None)
         assert match is not None
-        assert "React 19" in match["content"]
+        assert match["content"].endswith("and Babel")
 
     def test_dedup_takes_max_confidence(self, store):
         """Dedup takes the maximum confidence of old and new."""
@@ -507,7 +506,7 @@ class TestDeduplication:
 
         id2 = store.store(
             category="fact",
-            content="GAIA supports NPU acceleration on AMD chips",
+            content="GAIA supports NPU acceleration on AMD hardware today",
         )
         assert id2 == id1
 
@@ -553,6 +552,27 @@ class TestDeduplication:
             context="personal",
         )
         assert id1 != id2
+
+    @pytest.mark.parametrize(
+        "left, right",
+        [
+            ("User's setting is -5", "User's setting is 5"),
+            ("User knows C", "User knows C++"),
+            ("User knows C", "User knows C#"),
+            ("User's setting is +1", "User's setting is 1"),
+        ],
+    )
+    def test_dedup_keeps_symbol_significant_values_separate(self, store, left, right):
+        """Signs and language suffixes identify distinct memory values."""
+        id1 = store.store(category="fact", content=left)
+        id2 = store.store(category="fact", content=right)
+        assert id2 != id1
+
+    def test_dedup_still_splits_hyphenated_prose(self, store):
+        """A normal word hyphen remains a separator for overlap matching."""
+        id1 = store.store(category="fact", content="User's mother-in-law lives nearby")
+        id2 = store.store(category="fact", content="User's mother in law lives nearby")
+        assert id2 == id1
 
     def test_dedup_never_downgrades_user_source(self, store):
         """A discovery re-run that merges into a user item keeps source='user'."""
@@ -1409,7 +1429,7 @@ class TestSensitivity:
         # Store a highly overlapping entry WITHOUT sensitive=True (e.g., heuristic extraction)
         dedup_id = store.store(
             category="fact",
-            content="Sarah email is sarah@company.com company data",
+            content="Sarah email is sarah@company.com sensitive data!",
             sensitive=False,  # No sensitive flag — default
         )
 
@@ -1941,9 +1961,18 @@ class TestHelperFunctions:
         """Partial overlap returns correct Szymkiewicz-Simpson coefficient."""
         from gaia.agents.base.memory_store import _word_overlap
 
-        # intersection = {"the", "quick"} = 2, min(4, 4) = 4 → 0.5
-        result = _word_overlap("the quick brown fox", "the quick red cat")
+        # intersection = {"one", "quick"} = 2, min(4, 4) = 4 → 0.5
+        result = _word_overlap("one quick brown fox", "one quick red cat")
         assert result == pytest.approx(0.5)
+
+    def test_word_overlap_ignores_filler(self):
+        """ "I am" and "User is" say nothing, so they don't lower the overlap."""
+        from gaia.agents.base.memory_store import _word_overlap
+
+        assert (
+            _word_overlap("I am allergic to mango.", "User is allergic to mango.")
+            == 1.0
+        )
 
     def test_word_overlap_empty(self):
         """Empty strings return 0.0."""
@@ -4130,7 +4159,7 @@ class TestStoreEmbedding:
         # Store a high-overlap entry — should dedup and clear embedding
         store.store(
             category="fact",
-            content="The deployment pipeline uses Kubernetes containers",
+            content="The deployment pipeline uses Docker containers on Linux",
         )
 
         with store._lock:
@@ -5457,6 +5486,32 @@ class TestIterSessions:
         assert s["success_count"] == 3
         assert s["attempt_count"] == 3
         assert "write_file" not in s["tools"]
+        assert s["declined_count"] == 1
+
+    def test_a_session_with_no_denials_reports_none(self, store):
+        store.store_turn("sessClean", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessClean", f"good{i}", {}, "ok", True)
+        assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
+
+    def test_only_a_call_stopped_before_it_ran_counts_as_declined(self, store):
+        """A tool that ran and reported "denied", or a refusal that isn't a denial,
+        is not a decline."""
+        store.store_turn("sessMixed", "user", "do work")
+        for i in range(3):
+            store.log_tool_call("sessMixed", f"good{i}", {}, "ok", True)
+        store.log_tool_call(
+            "sessMixed", "http_get", {}, "{'status': 'denied'}", True, executed=True
+        )
+        store.log_tool_call(
+            "sessMixed",
+            "run_shell",
+            {},
+            "{'status': 'error', 'error': 'not allowlisted'}",
+            False,
+            executed=False,
+        )
+        assert store.iter_sessions(min_steps=3)[0]["declined_count"] == 0
 
     def test_since_watermark_excludes_older_rows(self, store):
         """since= counts only tool calls strictly newer than the watermark."""

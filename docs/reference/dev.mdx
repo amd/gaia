@@ -33,7 +33,7 @@ GAIA utilizes both NPU and iGPU on Ryzen AI systems for optimal performance on 3
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| **OS** | Windows 11 Pro 24H2 / Ubuntu 22.04+ | - |
+| **OS** | Windows 11 Pro 24H2 / Ubuntu 24.04+ | - |
 | **RAM** | 16GB | 64GB |
 | **CPU** | Ryzen AI 300-series | Ryzen AI MAX+ 395 |
 | **Storage** | 20GB free | - |
@@ -298,9 +298,14 @@ installs the package. That lane must name the file and run the check too.
 </Note>
 
 <Note>
-A pull request can run part of the unit suite, but only when every file it
-changes is a unit test or modified Python code under `src/gaia` or a hub agent
-package that the nightly coverage map records. `util/select_tests.py` then picks
+A pull request, and its group in the merge queue, can run part of the unit
+suite, but only when every file it changes is a unit test or modified Python
+code under `src/gaia` or a hub agent package that the nightly coverage map
+records. A queue group runs no unit tests when none of its files is in the
+workflow's `paths` filter (a docs-only group, say), the same as such a PR; if
+any one is, every file in the group counts. `CLAUDE.md`, `AGENTS.md`,
+`CONTRIBUTING.md`, `REVIEW.md`, `.claude/` and `scripts/` always run the full
+suite, since the doc-path tests read them. `util/select_tests.py` then picks
 the test files that change can reach, from that map plus imports and
 patch-target strings. Any other change runs the full suite: data files, `util/`
 scripts, test helpers and fixtures, `eval/`, configs, workflows, any
@@ -310,8 +315,12 @@ load those by path, and neither imports nor coverage can follow what such a
 script reads. Of the last 600 merges to main, about one in five (21%) would have
 had a narrowed run; the rest run everything. Linux runs the selection; Windows
 and macOS run the part of it that touches the OS (processes, paths, locks,
-permissions). Every push to main runs the full suite on Linux, and the nightly
-run covers all three operating systems. The coverage map has one known blind
+permissions). Every push to main runs the full suite on Linux. The nightly run
+is the full suite on all three operating systems at the head of main, and a red
+one files an issue that the next green one closes. A final release needs a
+dispatched or nightly run on its commit, never a selected one. The check to
+require is **Unit Tests Result**, which passes only when every lane passed or was
+meant to be skipped. The coverage map has one known blind
 spot: code behind a cache or a shared fixture is credited only to the first test
 that ran it, so a test that only reaches it second can be left out until the
 nightly run.
@@ -427,9 +436,8 @@ python util/release_versions.py --check   # what lint runs; changes nothing
 
 | Source | Fields that follow it |
 |---|---|
-| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/terminal-hub/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship and chat agents' `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md` |
-| `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL; the `gaia-agent-gaia>=` floor of the deprecated chat shim |
-| `hub/agents/chat/python/pyproject.toml` | The chat agent's `gaia-agent.yaml` |
+| `src/gaia/version.py` | Agent UI `package.json` and lockfile; `version` in `hub/components/terminal-hub/gaia-agent.yaml`; the `docs/docs.json` navbar label (with `LEMONADE_VERSION`); the flagship agent's `amd-gaia>=` floor and `min_gaia_version`, and the minimum core in the flagship's npm `README.md` and `SKILL.md` |
+| `hub/agents/gaia/python/gaia_agent/__init__.py` | The flagship's `pyproject.toml`, `gaia-agent.yaml`, `npm/package.json`, and `npm/binaries.lock.json` version and sidecar URL |
 
 `--stamp` does the work of `installer/version/bump-ui-version.mjs`, the flagship's
 `stamp_version.py`, and the hand edits to the Terminal UI manifest and the navbar.
@@ -437,10 +445,8 @@ Those scripts still work, and release workflows still call them.
 `--stamp vX.Y.Z-rcN` writes a release candidate's versions into the same files
 as `util/release_tag.py stamp`, with the same result.
 
-The flagship and chat agents keep their own versions until they join core's
-([#5172](https://github.com/amd/gaia/issues/5172)). Until then, two fields print as
-`HELD` and don't fail: the chat agent's `__init__.py` version and the flagship npm
-lockfile's root version.
+The flagship agent keeps its own version until it joins core's
+([#5172](https://github.com/amd/gaia/issues/5172)).
 
 ### The flagship agent in a core release
 
@@ -477,6 +483,10 @@ approval, and keeps the result off every stable channel:
   and Windows setup use these, never the download server's `gaia`, which can be many
   commits older. A candidate whose flagship build fails is not published; an
   install that cannot reach the pre-release's agent fails with the reason.
+  `GAIA_RC_FLAGSHIP_URL` points a candidate core at another copy of those
+  assets (a `file://` directory works); the release pipeline uses it so the
+  frozen core's real-engine check installs the flagship from the same run,
+  before the pre-release exists.
 - **PyPI** — `X.Y.ZrcN`. `pip install amd-gaia` skips it; `pip install --pre amd-gaia`
   or `amd-gaia==X.Y.ZrcN` gets it.
 - **npm** — `@amd-gaia/agent-ui@X.Y.Z-rc.N` under the `next` dist-tag; `latest`
@@ -487,12 +497,17 @@ approval, and keeps the result off every stable channel:
   channel) and the terminal's `.pkg`/`.deb`/`.rpm` packages, which need a
   numeric-only version.
 
-A candidate is held only by CI that would make it ship broken: lint, the Linux
-unit tests, the import check on the oldest supported Python, and its own builds
-and their smoke tests. The macOS and Windows unit tests, the integration lanes
-and the release dry run show as warnings on the run and don't block it. A final
-requires all of it, including a passing dry run on its commit.
-`RC_CRITICAL` and `FINAL_REQUIRED` in `util/check_release_ci.py` are the lists.
+Tests never hold a candidate: it publishes as soon as its own builds and the
+smoke tests of those artifacts pass. CI on its commit (lint, the unit tests on
+every OS, the integration lanes, the release dry run) is read once and shown on
+the run as passed, failed, still running, or not run, with a warning for each
+that isn't green. A final requires all of it except the Linux NPU agent-chat
+check, waits for it, and needs a passing dry run on its commit, so clear an RC's
+warnings before tagging the final. The Linux NPU check still runs and shows as a
+warning on the final, but doesn't hold it until its runners can lock enough
+memory for the NPU model ([#6764](https://github.com/amd/gaia/issues/6764)).
+`RC_REPORTED`, `FINAL_REQUIRED` and `FINAL_ADVISORY` in
+`util/check_release_ci.py` are the lists.
 
 The candidate reuses the final's release notes (`docs/releases/vX.Y.Z.mdx`), and
 the `-rcN` suffix is stamped from the tag at build time, so the final `vX.Y.Z`

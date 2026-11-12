@@ -1,6 +1,6 @@
 # `@amd-gaia/gaia` — technical reference
 
-Version **0.1.1**. Companion to [`README.md`](./README.md), which is the
+Version **0.3.5**. Companion to [`README.md`](./README.md), which is the
 user-facing doc. This file specifies the wire and file formats the package
 depends on and the guarantees it makes.
 
@@ -32,16 +32,16 @@ of truth for what is downloaded and what it must hash to.
 ```jsonc
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.1.1",
+  "agentVersion": "0.3.5",
   "components": {
     "sidecar": {
-      "componentVersion": "0.1.1",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.1",
+      "componentVersion": "0.3.5",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.3.5",
       "platforms": { "<platformKey>": { /* entry */ } }
     },
     "tui": {
-      "componentVersion": "0.23.0",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0",
+      "componentVersion": "0.25.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.25.0",
       "platforms": { "<platformKey>": { /* entry */ } }
     }
   }
@@ -147,13 +147,16 @@ without an agent behind it.
 
 ### 2.5 Placeholder hashes
 
-Between releases every `sha256` is `PENDING-replace-with-real-sha256`. The release
-pipeline regenerates the file with real hashes: for the sidecar, computed from the
-artifacts it just published; for the TUI, computed from the `terminal-hub`
-artifacts it downloaded and cross-checked against that lane's own recorded hashes
+The committed lock carries real hashes, never placeholders: the desktop-installer
+build verifies the sidecar it bundles against it, and a placeholder there fails
+that build on every platform (#3932). The release pipeline regenerates the file
+with real hashes: for the sidecar, computed from the artifacts it just published;
+for the TUI, computed from the `terminal-hub` artifacts it downloaded and
+cross-checked against that lane's own recorded hashes
 (`agents/terminal-hub/manifest.json`, which the hub computes server-side at publish
 time). Both are then re-fetched from the public origin and re-hashed before the
-release is allowed to ship.
+release is allowed to ship, and the release then opens a PR that commits the same
+file to `main`.
 
 `isPlaceholderSha()` treats a value as a placeholder when it is all zeros or
 contains `PENDING` (case-insensitive). A placeholder **blocks the fetch before any
@@ -298,13 +301,18 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 `changes_turn_id`, `surface`) is optional.
 
 `max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
-is **150** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
+is **1000** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
 `GAIA_AGENT_MAX_STEPS` in the sidecar's launch environment, still wins.
 
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
 window, the agent drops the oldest whole turns until it does, and streams a
-`status` event saying older messages are out of the model's view. A single turn
+`status` event saying older messages are out of the model's view. The model is
+told as well: the oldest user message it still reads opens with one bracketed
+sentence saying earlier turns exist and are no longer shown, so it says it can
+no longer see them instead of denying them. `turns` is fitted the same way. The
+agent only knows about turns it was sent: a caller that leaves turns out before
+calling (the Agent UI does) adds the same sentence itself. A single turn
 bigger than the whole budget is kept, not dropped: its longest messages are cut
 with a note saying how many characters are missing, so its answer stays in view.
 
@@ -355,7 +363,7 @@ the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 `internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
 Internet switched off and `false` when it is on. With `true` the turn refuses
 web search and page fetches, the browser, connector (MCP) and Agent Hub
-tools, mailbox reads, and any call or shell command that contacts a host other than the agent's own machine, and
+tools, mailbox reads, drafts and sends, calendar access, and any call or shell command that contacts a host other than the agent's own machine, and
 the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
@@ -430,7 +438,9 @@ again, and a `status` with `"phase": "answer_restart"` and
 since the last `tool_call` and shows the status `message` in its place. While
 the daemon restarts the server, `status` lines carry `"phase":
 "model_restart"`. If it is not back within the retries, `final` carries
-`failure: "model_server_down"`.
+`failure: "model_server_down"`. A tool's own model calls report the same
+restart, and `extract_document_items` sends `"phase": "reading"` before each
+page's call ("Reading page 4 of 12…").
 
 ```json
 {
@@ -482,6 +492,12 @@ Claude Code skill folders), or `null` for any other root. An agent that predates
 carries a value the host does not know, as ungrouped and show it flat, never
 drop the skill. A skill root that cannot be read is a `500` naming it.
 
+A `tool_result` from a card tool carries `render` (`guide` or `calculator`)
+on `/query` and over stdio, with the card in `data`. Those tools come from the
+bundled `guides` and `calculators` skills and register as `<skill>/<tool>` when
+the skill loads. A failed call carries no `render`, so a client never draws an
+invalid card ahead of the model's retry.
+
 `/query` streams the answer as `token` events before its terminal `final`. A
 run cancelled mid-answer (`/cancel`, or a dropped connection) ends with an
 empty `final` and sends no `token` after the cancel, so a host keeps the text
@@ -496,6 +512,9 @@ UI's Context panel shows. `window` is the model's context window in tokens,
 by kind; `categories` lists the panel's rows (their tokens add up to `used`),
 `tool_loading` which tools ride every request, and `tokenizer.exact` whether
 the counts came from the loaded model's own tokenizer or the shared estimate.
+A caller that sends `turns` gets it measured over those turns plus this turn's
+`model_messages`, tool results included, so `turns_in_view` and `turns_hidden`
+count whole turns; turns the caller left out itself are not in either count.
 A turn that was stopped or ended on a model failure carries no `context`; a
 measurement that failed carries `context_error`, one sentence saying why, and
 the answer still stands. Older binaries send neither, so read `context` only
@@ -516,6 +535,22 @@ connection. Cloud models go through that server too, so the provider was never
 reached; the turn fails at once instead of retrying, and its `answer` names the
 server, not the provider. Offer to start the server. Older binaries never send
 `failure`, so read it only when present.
+
+#### The "not confirmed" note on `final.answer`
+
+When the turn's own tool log shows work that is not confirmed, the agent loop
+ends the answer with one plain-English line, for example
+`I haven't confirmed this works — the tests didn't pass.` It appears when a
+check failed, a check was blocked before it could run, a file was changed and
+nothing checked it afterwards, or the answer claims something the tool record
+does not support. It is capped at 200 characters and added at most once per
+turn. A turn where every check passed, or nothing needed checking, carries
+nothing. It is part of `final.answer` and of the streamed text, so it is also
+what you store and replay in the next turn's `context`. A client that wants the
+answer without it can drop the line that starts `I haven't confirmed this works`
+(the older label `Verification:` is dropped the same way). The agent applies
+`strip_verification_scope` from `gaia.agents.base.verification` to its own
+history.
 
 ### 5.2 `session_id` and agent retention
 
@@ -570,7 +605,11 @@ only a cancelled turn that outlasts the wait still gets `409`. A
 `/query` that needs a **new** session while every retained slot is busy and
 none is idle enough to evict gets `503` with the reason in `detail` — a
 temporary, retryable condition, not a bug: wait for a turn to finish (or
-close an idle session) and retry. A
+close an idle session) and retry. A `/query` that fails before its run starts
+because the model server is unavailable (for example GAIA's own server can't
+start) also gets `503`, with `detail` worded for the request's `surface`:
+what failed and the fix, never the raw connection error. When that fix is to
+repair GAIA's setup, retrying the same request fails the same way. A
 `session_id` can also be evicted from the retention table under an idle
 timeout (**4 hours** without a turn) or an LRU cap on concurrent sessions
 (**100**) — the two knobs that decide when the `503` above can happen at all

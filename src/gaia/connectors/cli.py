@@ -391,9 +391,8 @@ def _handle_connect(args: argparse.Namespace) -> int:
             for agent_scopes in resolved.values():
                 declared.update(agent_scopes)
             # The catalog spec's default_scopes (not the raw OAuthProvider's)
-            # — the same source connector_routes._build_scope_union and the
-            # TUI's connectScopes union against, so a bare connect matches
-            # what every other surface would request for the same account.
+            # — the same source the TUI's connectScopes unions against, so a
+            # bare connect matches what the TUI requests for the same account.
             catalog_defaults = REGISTRY.get(args.connector_id).default_scopes
             scopes = sorted(declared | set(catalog_defaults))
         else:

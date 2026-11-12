@@ -174,7 +174,7 @@ jobs:
 
       - name: Prepare Lemonade bump commit
         if: steps.detect.outputs.should_bump == 'true'
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
           anthropic_api_key: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -474,7 +474,8 @@ jobs:
           set -euo pipefail
           python -m pytest -v --tb=short \
             tests/unit/test_lemonade_download_urls.py::TestEveryReleaseIsPinned \
-            tests/integration/test_lemonade_embeddable_assets.py
+            tests/integration/test_lemonade_embeddable_assets.py \
+            tests/integration/test_lemonade_linux_abi.py
           python util/check_doc_versions.py
 
       - name: Open the bump PR

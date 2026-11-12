@@ -178,6 +178,9 @@ class TurnTracker:
         self.done_stats: Optional[Dict[str, Any]] = None
         self.message_id: Optional[int] = None
         self.cancelled = False
+        # A backend terminal event is distinct from a transport disconnect: the
+        # backend may still list it briefly, but re-attaching would replay it.
+        self.saw_done = False
         self.stop_requested = False
         self.history_notice: Optional[str] = None
         self.live_status: Optional[str] = None
@@ -231,8 +234,22 @@ class TurnTracker:
                 if k in event
             }
         elif etype == "done":
+            self.saw_done = True
+            failed = bool(event.get("failed")) or self.error is not None
+            if failed and self.error is None:
+                self.error = str(
+                    event.get("failure")
+                    or event.get("content")
+                    or self._last_error_detail()
+                    or "Unknown error"
+                )
             self._finish_locked(
-                "cancelled" if event.get("cancelled") else "completed", None
+                (
+                    "cancelled"
+                    if event.get("cancelled")
+                    else "error" if failed else "completed"
+                ),
+                self.error if failed else None,
             )
             self.cancelled = bool(event.get("cancelled"))
             self.message_id = event.get("message_id")
@@ -290,6 +307,13 @@ class TurnTracker:
         for step in reversed(self.steps):
             if step["type"] == "tool":
                 return step
+        return None
+
+    def _last_error_detail(self) -> Optional[str]:
+        # A refused turn closes with an empty failed `done`; its reason is this step.
+        for step in reversed(self.steps):
+            if step["type"] == "error" and step.get("detail"):
+                return step["detail"]
         return None
 
     def _add_step(self, step: Dict[str, Any]) -> None:
@@ -395,15 +419,18 @@ class TurnTracker:
                 }
             )
         elif etype == "agent_error":
+            detail = _cap(event.get("content"))
             self._add_step(
                 {
                     "type": "error",
                     "label": "Error",
-                    "detail": _cap(event.get("content")),
+                    "detail": detail,
                     "active": False,
                     "success": False,
                 }
             )
+            if event.get("fatal"):
+                self.error = detail or "The agent turn failed."
         elif etype == "policy_alert":
             tool = event.get("tool") or "unknown tool"
             self._add_step(
@@ -753,7 +780,7 @@ class TurnRegistry:
         # attaching then would replay the turn we just watched end.
         if (
             current is not None
-            and current.outcome in ("completed", "cancelled")
+            and (current.outcome in ("completed", "cancelled") or current.saw_done)
             and time.monotonic() - (current.ended_at or 0) < ATTACH_GRACE_S
         ):
             return current, ""

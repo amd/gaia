@@ -385,7 +385,9 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
     from gaia.llm import npu_linux
 
     disk, _ = model_store_free_gb(info)
-    npu_gb = _npu_memory_gb(info.get("devices") or {}, ram)
+    npu_gb = _npu_memory_gb(
+        info.get("devices") or {}, ram, _physical_counts_carve_out(info)
+    )
     return MachineCapacity(
         memory_gb=pool[0],
         memory_source=pool[1],
@@ -395,15 +397,28 @@ def capacity_from_system_info(info: Dict[str, Any]) -> MachineCapacity:
     )
 
 
-def _npu_memory_gb(devices: Dict[str, Any], physical_gb: float) -> Optional[float]:
+def _physical_counts_carve_out(info: Dict[str, Any]) -> bool:
+    """Lemonade's ``Physical Memory`` includes an APU's GPU carve-out.
+
+    True on Windows, where it is installed RAM; on Linux it is ``MemTotal``,
+    which the carve-out is already out of.
+    """
+    return str(info.get("OS Version") or "").lower().startswith("windows")
+
+
+def _npu_memory_gb(
+    devices: Dict[str, Any], physical_gb: float, counts_carve_out: bool
+) -> Optional[float]:
     """System RAM an FLM model can load into, or ``None`` with no NPU.
 
-    The NPU shares the RAM the OS sees, so an APU's GPU carve-out — which
-    installed RAM still counts — comes off first.
+    The NPU shares the RAM the OS sees, so when *physical_gb* still counts an
+    APU's GPU carve-out, it comes off first.
     """
     npu = devices.get("amd_npu")
     if not isinstance(npu, dict) or not npu.get("available") or physical_gb <= 0:
         return None
+    if not counts_carve_out:
+        return physical_gb
     carve_out = 0.0
     for vendor, integrated, gpu in _gpu_entries(devices):
         if vendor == "AMD" and integrated:

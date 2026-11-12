@@ -184,6 +184,8 @@ export interface SetupCheck {
     ready: boolean;
     stage?: 'setup' | 'upgrade' | 'server' | 'load' | string;
     reasons?: string[];
+    /** Setup was seen ready on this PC before, so a `server` stage is an outage, not a first run. */
+    initialized?: boolean;
     models?: Array<{ id: string; role: string; size_gb: number | null; loaded: boolean; error: string | null }>;
     /** True but no setup step, e.g. no GAIA agent build for this PC. */
     warnings?: string[];
@@ -262,6 +264,8 @@ export interface SetupRunStatus {
     model_failed?: boolean;
     /** Each piece besides the models, by id. */
     components?: Record<string, 'active' | 'done' | 'failed'>;
+    /** Why a failed piece failed, when setup knows: `transient` may pass on Retry. */
+    component_kinds?: Record<string, 'transient' | 'other'>;
     tests?: SetupTest[];
     /** The run only starts the model server; models are chosen and pulled after. */
     server_only?: boolean;

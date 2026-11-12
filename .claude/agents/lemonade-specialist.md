@@ -41,7 +41,7 @@ From `src/gaia/llm/lemonade_client.py`:
 | Use | Model | Size |
 |-----|-------|------|
 | General/default (`DEFAULT_MODEL_NAME`) | `Gemma-4-E4B-it-GGUF` | ~3 GB |
-| Every `AGENT_PROFILES` entry (chat, code, jira, blender, docker, talk, rag, vlm, …) | `gemma-4-e4b` | ~3 GB |
+| Every `AGENT_PROFILES` entry (chat, bash, talk, rag, vlm, minimal, mcp, sd) | `gemma-4-e4b` | ~3 GB |
 | Vision / VLM | `Gemma-4-E4B-it-GGUF` (default; `Qwen3-VL-4B-Instruct-GGUF` also supported) | ~3 GB |
 | Prompt enhancement | `Qwen3-8B-GGUF` | ~5 GB |
 | Legacy pinned sessions only | `Qwen3.5-35B-A3B-GGUF` — still a selectable model, no longer any profile's default | ~17 GB Q4_K_M |

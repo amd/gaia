@@ -11,11 +11,16 @@ import { act, render } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../services/api');
+vi.mock('../stores/backendStore', async (orig) => ({
+    ...(await orig<typeof import('../stores/backendStore')>()),
+    resyncBackend: vi.fn(),
+}));
 
 import App from '../App';
 import * as api from '../services/api';
 import { useChatStore } from '../stores/chatStore';
 import { useModelStore } from '../stores/modelStore';
+import { resyncBackend } from '../stores/backendStore';
 import type { Session, SetupCheck, SystemStatus } from '../types';
 
 const mocked = vi.mocked(api);
@@ -155,7 +160,7 @@ describe('system status poll', () => {
         await advance(10_000);
         expect(useChatStore.getState().backendConnected).toBe(true);
         expect(document.body.textContent).toMatch(/GAIA is slow to answer/i);
-        expect(document.body.textContent).not.toMatch(/Lost the connection/i);
+        expect(document.body.textContent).not.toMatch(/Can’t reach GAIA’s assistant/i);
     });
 
     it('calls a backend that has answered nothing for five minutes lost, with a next step', async () => {
@@ -170,7 +175,7 @@ describe('system status poll', () => {
         expect(useChatStore.getState().backendConnected).toBe(true);
         await advance(90_000);
         expect(useChatStore.getState().backendConnected).toBe(false);
-        expect(document.body.textContent).toMatch(/Lost the connection to GAIA/i);
+        expect(document.body.textContent).toMatch(/Can’t reach GAIA’s assistant/i);
     });
 
     it('shows the connection back once a backend that was unreachable answers again, even slowly', async () => {
@@ -188,7 +193,7 @@ describe('system status poll', () => {
         expect(useChatStore.getState().backendConnected).toBe(false);
         await advance(70_000);
         expect(useChatStore.getState().backendConnected).toBe(true);
-        expect(document.body.textContent).not.toMatch(/Lost the connection/i);
+        expect(document.body.textContent).not.toMatch(/Can’t reach GAIA’s assistant/i);
         // Coming back from an outage without an answer yet is slow, not fine.
         expect(document.body.textContent).toMatch(/GAIA is slow to answer/i);
     });
@@ -225,5 +230,20 @@ describe('system status poll', () => {
         await advance(20_000);
         expect(document.body.textContent).toMatch(/model server isn't running/i);
         expect(document.body.textContent).toContain('lemond --start');
+    });
+
+    it('asks the desktop app where the backend is when the status check cannot connect', async () => {
+        fakeTimers();
+        mocked.getSystemStatus.mockRejectedValue(new TypeError('Failed to fetch'));
+        render(<App />);
+        await advance(1_000);
+        expect(resyncBackend).toHaveBeenCalled();
+    });
+
+    it('does not ask again while the backend answers', async () => {
+        fakeTimers();
+        render(<App />);
+        await advance(30_000);
+        expect(resyncBackend).not.toHaveBeenCalled();
     });
 });

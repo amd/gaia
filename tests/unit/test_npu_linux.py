@@ -554,7 +554,7 @@ def test_bound_driver_is_read_from_the_sysfs_link(tmp_path):
     (tmp_path / "bus/pci/drivers/amdxdna").mkdir(parents=True)
     (device / "driver").symlink_to(tmp_path / "bus/pci/drivers/amdxdna")
     assert npu_linux._driver_of(device) == "amdxdna"
-    assert npu_linux._bound_devices(tmp_path) == [("accel0", device)]
+    assert npu_linux.bound_devices(tmp_path) == [("accel0", device)]
 
 
 def test_embedded_flm_is_found_once_the_backend_is_in(tmp_path, monkeypatch):

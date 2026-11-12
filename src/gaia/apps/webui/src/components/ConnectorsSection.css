@@ -3,14 +3,6 @@
 
 /* Connectors section — tile grid + expandable detail view (T-8b). */
 
-.connectors-section .settings-help {
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin-bottom: 12px;
-    line-height: 1.5;
-    font-family: var(--font-sans);
-}
-
 .connectors-loading {
     display: flex;
     justify-content: center;
@@ -82,6 +74,12 @@
 }
 [data-theme="dark"] .connector-tile-header:hover {
     background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+.connector-tile-header--static,
+.connector-tile-header--static:hover,
+[data-theme="dark"] .connector-tile-header--static:hover {
+    background: none;
+    cursor: default;
 }
 
 .connector-tile-name {
@@ -162,29 +160,6 @@
     padding: 6px 10px;
     margin-bottom: 10px;
     font-family: var(--font-sans);
-}
-
-/* Informational missing-config notice — not an error, just "you need to
- * set GAIA_GOOGLE_CLIENT_ID before you can connect". Pairs with the
- * disabled "Setup required" badge in OAuthConfigureBody. */
-.configure-info {
-    display: flex;
-    align-items: flex-start;
-    gap: 6px;
-    font-size: 12px;
-    color: var(--text-secondary);
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-light);
-    border-radius: var(--radius-sm);
-    padding: 6px 10px;
-    margin-bottom: 10px;
-    font-family: var(--font-sans);
-    line-height: 1.4;
-}
-.configure-info svg {
-    flex-shrink: 0;
-    margin-top: 2px;
-    color: var(--text-muted);
 }
 
 .connector-setup-required {
@@ -327,6 +302,28 @@
     transition: border-color var(--duration) var(--ease);
 }
 .mcp-key-input:focus { border-color: var(--accent); }
+.mcp-key-help {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+}
+.mcp-key-help p { margin: 0; }
+.mcp-key-help a { color: var(--accent); }
+.mcp-key-help code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: var(--bg-tertiary);
+}
+.connector-setup-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    align-self: flex-start;
+    margin-bottom: 10px;
+    text-decoration: none;
+}
 
 /* ── Agent grants ─────────────────────────────────────────────── */
 
@@ -561,14 +558,6 @@
     margin-top: 20px;
 }
 
-.agent-mcps-section-header {
-    font-size: var(--fs-label);
-    font-weight: 600;
-    font-family: var(--font-sans);
-    color: var(--text-muted);
-    margin-bottom: 8px;
-}
-
 .agent-mcp-tile {
     border: 1px solid var(--border-light);
     border-radius: var(--radius-md);
@@ -761,4 +750,31 @@
     margin: 0 0 8px;
     font-size: 12px;
     color: var(--text-muted);
+}
+
+.connector-check {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-block-start: 8px;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+p.connector-check { flex-direction: row; align-items: center; gap: 6px; }
+.connector-check p { margin: 0; }
+.connector-check--ok { color: var(--accent-green); }
+.connector-check--failed { color: var(--danger); }
+.connector-check summary { cursor: pointer; color: var(--text-secondary); }
+.connector-check pre {
+    margin-block: 4px 0;
+    padding: 6px 8px;
+    max-block-size: 160px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    text-align: start;
+    font-size: 11px;
+    color: var(--text-primary);
+    background: var(--bg-secondary);
+    border-radius: 4px;
 }

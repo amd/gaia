@@ -7,9 +7,11 @@ import { Sidebar } from './components/Sidebar';
 import { ChatView } from './components/ChatView';
 import { NewChat } from './components/NewChat';
 import { ModelNeededDialog } from './components/ModelNeededDialog';
+import { LogsDialog } from './components/LogsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { DownloadChip } from './components/setup/DownloadChip';
@@ -19,8 +21,10 @@ import { useChatStore } from './stores/chatStore';
 import { useModelStore } from './stores/modelStore';
 import { useNotificationStore } from './stores/notificationStore';
 import { useScheduleStore } from './stores/scheduleStore';
+import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
@@ -31,6 +35,7 @@ import { getSessionHash } from './utils/format';
 import { lastSessionTarget, readUrlTarget, rememberLastSession, resolveUrlNavTarget } from './utils/sessionNav';
 import { NEW_CHAT_DRAFT_KEY, chatDraftKey, clearSavedDraft, readSavedDraft, writeSavedDraft } from './utils/savedDraft';
 import { getApiBase } from './utils/apiBase';
+import { followBackendLifecycle, resyncBackend } from './stores/backendStore';
 import { cleanupAbandonedDraft, isAbandonedDraft } from './utils/sessionCleanup';
 import { FLAGSHIP_AGENT_ID, hasFlagshipAgent, isFlagshipMissingError } from './utils/newTask';
 import { runWhileVisible } from './utils/visibleInterval';
@@ -53,6 +58,8 @@ type SetupGate =
     | { state: 'upgrading' }
     | { state: 'ready' }
     | { state: 'needed'; check: SetupCheck }
+    /** Set up before, but its model server isn't answering: the app, with a notice. */
+    | { state: 'serverDown' }
     | { state: 'addingLocal' }
     /** `upgradeFailed`: the check answered, but updating GAIA's own model server failed. */
     | { state: 'unknown'; error: string; upgradeFailed?: boolean };
@@ -71,6 +78,13 @@ const UPGRADE_WAIT_MS = 5 * 60_000;
 
 /** The embedded server's update ended in failure, as opposed to still running. */
 class UpgradeFailed extends Error {}
+
+/** The model in use could not be read, so a setup check can't be trusted to say "not set up". */
+class ModelUnread extends Error {
+    constructor(reason: string) {
+        super(getT().bare('setup.unknown.modelUnread', { error: reason }));
+    }
+}
 
 async function waitForEmbeddedUpgrade(): Promise<void> {
     const deadline = Date.now() + UPGRADE_WAIT_MS;
@@ -170,30 +184,38 @@ function App() {
             for (;;) {
                 await useModelStore.getState().refresh();
                 const active = useModelStore.getState().active;
+                const remote = !!active?.remote;
                 let check: SetupCheck;
                 try {
-                    check = await api.checkSetup(!!active?.remote);
+                    check = await api.checkSetup(remote);
+                    // Asked without the model, the answer is a local model's: a cloud install would read as not set up.
+                    if (!active && !check.ready) {
+                        throw new ModelUnread(useModelStore.getState().error ?? 'no answer');
+                    }
                 } catch (err) {
-                    if (!waitForStart || !isRefused(err) || waited >= BACKEND_START_WAIT_MS) throw err;
+                    const starting = isRefused(err) || err instanceof ModelUnread;
+                    if (!waitForStart || !starting || waited >= BACKEND_START_WAIT_MS) throw err;
                     // A refused local connection is cheap; poll steadily so the app opens as soon as it listens.
                     await sleep(RETRY_INITIAL_MS);
                     waited += RETRY_INITIAL_MS;
                     continue;
                 }
                 // A new pinned embedded server is an update, not first-run setup: the models stay.
-                if (!check.ready && check.stage === 'upgrade' && !active?.remote) {
+                if (!check.ready && check.stage === 'upgrade') {
                     setSetup({ state: 'upgrading' });
                     // A re-check after the wait timed out finds that update still going: follow it.
                     const run = await api.getSetupStatus();
                     const updating = run.upgrade_embedded && (run.state === 'running' || run.state === 'verifying');
-                    if (!updating) await api.startSetup(false, false, { upgradeEmbedded: true });
+                    if (!updating) await api.startSetup(remote, false, { upgradeEmbedded: true });
                     await waitForEmbeddedUpgrade();
-                    check = await api.checkSetup(false);
+                    check = await api.checkSetup(remote);
                 }
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
                 setNoAgentBuild(!!check.no_agent_build);
-                setSetup(check.ready ? { state: 'ready' } : { state: 'needed', check });
+                // Seen ready before: an unreachable server is an outage, not a first run.
+                const serverDown = !check.ready && check.stage === 'server' && !!check.initialized;
+                setSetup(check.ready ? { state: 'ready' } : serverDown ? { state: 'serverDown' } : { state: 'needed', check });
                 return;
             }
         } catch (err) {
@@ -208,6 +230,12 @@ function App() {
             setSetup({ state: 'unknown', error });
         }
     }, []);
+
+    // The status poll sees the model server again: ask whether GAIA is ready now.
+    const lemonadeRunning = useChatStore((s) => s.systemStatus?.lemonade_running === true);
+    useEffect(() => {
+        if (setup.state === 'serverDown' && lemonadeRunning) void checkSetup(true);
+    }, [setup.state, lemonadeRunning, checkSetup]);
 
     // Only the latest read may set the list; an older one in flight predates whatever setup installed.
     const agentsReadSeq = useRef(0);
@@ -283,6 +311,8 @@ function App() {
     const applyStatus = useCallback((outcome: StatusOutcome) => {
         if (outcome.kind === 'unreachable') {
             log.system.warn('System status check failed', outcome.error);
+            // The backend may be back on another port; the next check goes wherever it is.
+            resyncBackend();
             wasUnreachable.current = true;
             slowCount.current = 0;
             slowSince.current = null;
@@ -345,6 +375,8 @@ function App() {
     refreshStatus.current = checkSystemStatus;
 
     useEffect(() => runWhileVisible(statusPoller.start), [statusPoller]);
+    // The desktop app restarts a crashed backend on a new port; re-check once it's back.
+    useEffect(() => followBackendLifecycle(() => { void checkSystemStatus(); }), [checkSystemStatus]);
 
     // ── Chats ───────────────────────────────────────────────────────────
     const sessionFingerprint = useRef('');
@@ -381,6 +413,13 @@ function App() {
         const load = () => { void useScheduleStore.getState().loadSchedules(); };
         load();
         const t = setInterval(load, 30_000);
+        return () => clearInterval(t);
+    }, []);
+    // Goals also run unattended: an unreadable goal store raises one notification.
+    useEffect(() => {
+        const check = () => { void useGoalHealthStore.getState().check(); };
+        check();
+        const t = setInterval(check, 30_000);
         return () => clearInterval(t);
     }, []);
     // Queued messages go out when their chat's turn ends, even with another chat open.
@@ -549,7 +588,13 @@ function App() {
     const newChat = useCallback(() => {
         const store = useChatStore.getState();
         const outgoing = store.currentSessionId;
-        if (outgoing && isAbandonedDraft(outgoing, store)) void cleanupAbandonedDraft(outgoing);
+        // A first message the chat had not sent yet comes back to the new chat's box.
+        const unsent = store.pendingPrompt?.sessionId === outgoing ? store.pendingPrompt : null;
+        if (unsent) {
+            store.setPendingPrompt(null);
+            setDraftText(unsent.text);
+        }
+        if (outgoing && isAbandonedDraft(outgoing, useChatStore.getState())) void cleanupAbandonedDraft(outgoing);
         store.setShowMemoryDashboard(false);
         store.setShowSchedules(false);
         choseNewChatRef.current = true;
@@ -681,7 +726,7 @@ function App() {
     useMobileAccessRequests((on) => { void (on ? openMobileAccess() : stopMobileAccess()); });
     useEffect(() => { announceMobileAccess(tunnelActive); }, [tunnelActive]);
 
-    const isMobile = typeof window !== 'undefined' && window.innerWidth <= 768;
+    const isMobile = useMediaQuery('(max-width: 768px)');
 
     // A transient status loss must not replace a UI that was already shown.
     const showStartup = shouldShowStartupScreen(
@@ -753,14 +798,23 @@ function App() {
                 aria-hidden="true"
             />
 
-            <Sidebar
-                onNewChat={newChat}
-                onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}
-                tunnelActive={tunnelActive}
-            />
+            <ErrorBoundary area="sidebar" variant="compact">
+                <Sidebar
+                    onNewChat={newChat}
+                    onMobileAccess={isMobile ? undefined : () => void openMobileAccess()}
+                    tunnelActive={tunnelActive}
+                />
+            </ErrorBoundary>
 
             <div className="main-content">
                 {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
+                {setup.state === 'serverDown' && (
+                    <div className="app-notice is-warning" role="status">
+                        <span>{t('setup.serverDown.notice')}</span>
+                        <button type="button" className="link-btn" onClick={() => void checkSetup(true)}>{t('setup.unknown.retry')}</button>
+                        <button type="button" className="link-btn" onClick={() => runSetupAgain(true)}>{t('setup.serverDown.setup')}</button>
+                    </div>
+                )}
                 {setup.state === 'unknown' && (setup.upgradeFailed ? (
                     <div className="app-notice is-warning" role="status">
                         <span>{t('setup.upgrading.failed', { error: setup.error })}</span>
@@ -788,7 +842,13 @@ function App() {
                         </button>
                     </div>
                 )}
-                {main}
+                {/* Leaving the crashed area, or New chat again, clears the crash. */}
+                <ErrorBoundary
+                    resetKey={showMemoryDashboard ? 'memory' : (currentSessionId ?? `new-${newChatFocus}`)}
+                    area="main"
+                >
+                    {main}
+                </ErrorBoundary>
             </div>
 
             {showSchedules && <Suspense fallback={null}><ScheduleManager /></Suspense>}
@@ -813,8 +873,21 @@ function App() {
             )}
             {settingsSection && <SettingsDialog onUseSkill={useSkill} />}
             <ModelNeededDialog />
+            <LogsDialog />
             <UpdateIndicator />
-            {createError && <div className="toast" role="alert">{createError}</div>}
+            {createError && (
+                <div className="toast toast-dismissible" role="alert">
+                    <span>{createError}</span>
+                    <button
+                        type="button"
+                        className="toast-dismiss"
+                        onClick={() => setCreateError(null)}
+                        aria-label={t('banner.dismiss')}
+                    >
+                        <X size={14} aria-hidden="true" />
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

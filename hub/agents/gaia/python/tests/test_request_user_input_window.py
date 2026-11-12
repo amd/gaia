@@ -53,7 +53,7 @@ def test_the_watchdog_outlasts_the_longest_wait(ask):
 def test_a_wait_is_capped_below_the_watchdog(ask, asked, waited):
     entry, console = ask
 
-    assert entry["function"](message="Which repo?", timeout_seconds=asked) == (
+    assert entry["function"](message="Which repo?", timeout_seconds=asked).startswith(
         "__NO_RESPONSE__"
     )
 

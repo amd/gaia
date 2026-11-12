@@ -289,7 +289,7 @@ const chatHelpText = `  GAIA Chat
 
   Commands    /help /clear /full-access /slack /setup
               /memory /model /provider /gateway /agents
-              /models /gpu
+              /models /gpu /read-aloud /voice
   /cost       Session spend · /cost help for rates
   /update     New GAIA release? · /update now
   /           Browse commands on an empty line: ↑/↓ or
@@ -301,7 +301,7 @@ const chatHelpText = `  GAIA Chat
   Mouse wheel   Scrolls
   Click         Picks a palette row or question
                 option · Ctrl+T to click links too
-  Ctrl+O        Each step in full, or folded
+  Ctrl+O  Fold · Ctrl+F/Ctrl+G open/reveal media
 
   Copy and paste
   ──────────────────

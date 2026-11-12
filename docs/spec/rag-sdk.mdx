@@ -40,7 +40,7 @@ RAGSDK provides document retrieval and Q&A capabilities using Retrieval-Augmente
 class RAGConfig:
     """Configuration for RAG SDK."""
 
-    model: str = "Qwen3.5-35B-A3B-GGUF"
+    model: str = DEFAULT_MODEL_NAME  # "Gemma-4-E4B-it-GGUF"
     max_tokens: int = 1024
     chunk_size: int = 500  # max useful; chunks are capped at EMBED_MAX_CHARS (2000)
     chunk_overlap: int = 100
@@ -144,6 +144,11 @@ class RAGSDK:
                 "error_type": str (some failures, see below)
             }
 
+        Indexing a path again returns "already_indexed": True when its bytes
+        are unchanged, and re-indexes it ("reindexed": True) when they changed.
+        The new version is built without the index lock and swapped in, so
+        the old one keeps serving searches until then, and stays if it fails.
+
         error_type, when set, names a failure a caller can act on:
             "file_locked": Windows refused the read; another program holds
                 the document exclusively or has locked part of it (or the user
@@ -154,6 +159,12 @@ class RAGSDK:
                 Two booleans come with it: "lemonade_unreachable" (Lemonade
                 Server could not be reached at all) and "embedder_busy" (the
                 server timed out, busy with another model or app).
+            "vision_model_failed": the vision model failed twice in a row
+                before reading any image in a PDF or PowerPoint, so indexing
+                stopped instead of storing the pages as blank. "error" names
+                the model and its last error. Fix the model, then index again.
+                A model that reads some images and fails on others still
+                indexes, with those pages listed in "degraded_pages".
         """
         ...
 
@@ -161,8 +172,34 @@ class RAGSDK:
         """Remove a document from the index."""
         ...
 
-    def reindex_document(self, file_path: str) -> Dict[str, Any]:
-        """Reindex a document (remove old chunks and add new ones)."""
+    def reindex_document(
+        self,
+        file_path: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        wait_callback: Optional[Callable[[int], None]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Re-index a document that may have changed (the file watcher's path).
+        Same as index_document() on an edited file: built without the index
+        lock, so searches keep answering from the old version until the swap,
+        and the old version stays if it fails. Unchanged bytes are not
+        re-embedded and return "already_indexed": True.
+        """
+        ...
+
+    def is_current(self, file_path: str) -> bool:
+        """Whether the document is indexed from the bytes it holds now."""
+        ...
+
+    def freshness(self, file_path: str) -> str:
+        """
+        "current", "changed", "missing", "locked", "unreadable" or
+        "not_indexed". Cheap enough to call before every search: it hashes
+        only when the file's size, mtime, inode or (POSIX) ctime moved since
+        indexing, or it was written within 2 s of that stat. On Windows an
+        edit that later restores both size and mtime is caught by
+        is_current(), not here.
+        """
         ...
 
     def query(self, question: str, include_metadata: bool = True) -> RAGResponse:

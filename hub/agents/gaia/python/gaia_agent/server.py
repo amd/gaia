@@ -682,27 +682,33 @@ def _worded(event: Dict[str, Any], surface: str) -> Dict[str, Any]:
 def _terminal_error_detail(exc: BaseException) -> str:
     """Actionable copy for a run-killing exception.
 
-    Lemonade being unreachable is by far the most common failure and its raw
-    urllib3 repr tells a user nothing, so it gets named copy with the fix.
-    Anything else is surfaced verbatim — a generic 'something went wrong' would
-    hide the one detail that makes a bug reportable.
+    A model-server failure gets its classified wording, which names the fix in
+    the caller's front-end. Anything else is surfaced verbatim — a generic
+    'something went wrong' would hide the one detail that makes a bug
+    reportable.
     """
-    text = f"{type(exc).__name__}: {exc}"
-    lowered = text.lower()
-    if any(
-        s in lowered
-        for s in (
-            "connection refused",
-            "max retries",
-            "failed to establish",
-            "newconnectionerror",
+    from gaia_agent.stdio import model_server_failure, model_server_message
+
+    typed = model_server_failure(exc)
+    if typed is not None:
+        return model_server_message(typed)
+    return f"{type(exc).__name__}: {exc}"
+
+
+def _start_failure(exc: BaseException, surface: str) -> HTTPException:
+    """The HTTP error for a run that failed before its loop started."""
+    from gaia_agent.stdio import model_server_failure, model_server_message
+
+    typed = model_server_failure(exc)
+    if typed is None:
+        return HTTPException(
+            status_code=500, detail=f"Failed to start the query run: {exc}"
         )
-    ):
-        return (
-            f"Local Lemonade Server is not reachable. {start_advice()} "
-            f"See {_DOCS_URL}. (underlying error: {text})"
-        )
-    return text
+    logger.warning("%s /query could not start: %s", AGENT_ID, exc)
+    # Not the caller's fault and not a bug: the model server is unavailable.
+    return HTTPException(
+        status_code=503, detail=surface_wording(model_server_message(typed), surface)
+    )
 
 
 def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -760,9 +766,13 @@ def _measure_turn_context(
     pushed: List[Dict[str, Any]],
     query: str,
     result: Optional[Dict[str, Any]],
+    received_turns: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """What the next model call holds: the pushed history plus this turn.
 
+    With *received_turns* (a caller that sends ``turns``), the measurement is
+    over those whole turns plus this turn as recorded, tool results included:
+    the same turns, in the same budget, the next ``/query`` is fitted from.
     None for a turn with no answer (stopped, or the model failed), which adds
     nothing the caller's next push would carry.
     """
@@ -771,11 +781,15 @@ def _measure_turn_context(
     answer = _run_answer(result)
     if answer is None:
         return None
-    messages = list(pushed) + [
+    exchange = [
         {"role": "user", "content": query},
         {"role": "assistant", "content": answer},
     ]
-    turns = pushed_turns(messages)
+    if received_turns is not None:
+        recorded = result.get("model_messages") if isinstance(result, dict) else None
+        turns = list(received_turns) + _as_model_turns(agent, [recorded or exchange])
+    else:
+        turns = pushed_turns(list(pushed) + exchange)
     model_id = getattr(agent, "model_id", None)
     box: Dict[str, Any] = {}
 
@@ -854,7 +868,19 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     )
     rag = agent.rag
     lines: List[str] = []
-    for doc in pending:
+    cancel = getattr(agent, "_cancel_event", None)
+    stopped = False
+    for position, doc in enumerate(pending):
+        # Stop ends the loading here; what is left stays pending for the next turn.
+        if cancel is not None and cancel.is_set():
+            left = len(pending) - position
+            lines.append(
+                "Stopped: "
+                + ("1 document was" if left == 1 else f"{left} documents were")
+                + " not loaded. They load with your next message."
+            )
+            stopped = True
+            break
         name = Path(doc).name
         reason = (
             "document search is not available in this session"
@@ -881,6 +907,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     if succeeded:
         agent.rebuild_system_prompt()
     all_indexed = succeeded == len(pending)
+    status = "stopped" if stopped else "indexed" if all_indexed else "not all indexed"
     handler._emit(
         {
             "type": "tool_result",
@@ -889,7 +916,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             "success": all_indexed,
             # The status/message shape is what a relaying host summarizes from.
             "result_data": {
-                "status": "indexed" if all_indexed else "not all indexed",
+                "status": status,
                 "message": "; ".join(lines),
                 "success": all_indexed,
             },
@@ -1315,21 +1342,26 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
 _TURN_RECORD_WAIT_SECONDS = 15.0
 
 
+def _as_model_turns(
+    agent: Any, turns: List[List[Dict[str, Any]]]
+) -> List[List[Dict[str, Any]]]:
+    """*turns* as *agent*'s model reads them: tool calls as text without native tools."""
+    from gaia.agents.base.history import text_tool_history
+
+    uses_native = getattr(agent, "_uses_native_tool_calls", None)
+    if callable(uses_native) and not uses_native():
+        return text_tool_history(turns)
+    return turns
+
+
 def _history_from_turns(
     agent: Any, turns: List[List[Dict[str, Any]]], query: str, handler: Any
 ) -> List[Dict[str, Any]]:
     """The newest whole *turns* that fit *agent*'s window, as its model reads them."""
-    from gaia.agents.base.history import (
-        history_budget,
-        select_history,
-        text_tool_history,
-    )
+    from gaia.agents.base.history import history_budget, select_history
 
-    uses_native = getattr(agent, "_uses_native_tool_calls", None)
-    if callable(uses_native) and not uses_native():
-        turns = text_tool_history(turns)
     return select_history(
-        turns,
+        _as_model_turns(agent, turns),
         history_budget(agent, query),
         lambda cut: handler._emit({"type": "status", "message": cut.notice}),
     )
@@ -1388,7 +1420,7 @@ _QUERY_SSE_RESPONSES = {
         "description": (
             "Server-Sent Events stream (text/event-stream). Each `data:` line is "
             "one canonical event discriminated on `type`: status {message, "
-            "phase?, queue?, retracts_answer?} | token {delta} | "
+            "level?, phase?, queue?, retracts_answer?} | token {delta} | "
             "reasoning {delta, retracts_answer?} | "
             "tool_call {tool, args} | tool_result {tool, data, render?} | "
             "needs_confirmation {run_id, action, summary, confirm_id?, "
@@ -1648,9 +1680,7 @@ async def query(request: QueryRequest):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         _unwind_setup()
-        raise HTTPException(
-            status_code=500, detail=f"Failed to start the query run: {exc}"
-        ) from exc
+        raise _start_failure(exc, _wording_surface(request)) from exc
 
     def _process() -> None:
         if request.documents:
@@ -1669,6 +1699,11 @@ async def query(request: QueryRequest):
                 lambda cut: handler.print_warning(cut.notice),
             )
         pushed = list(getattr(agent, "conversation_history", None) or [])
+        received_turns = (
+            _as_model_turns(agent, request.turns)
+            if request.turns is not None and hasattr(agent, "conversation_history")
+            else None
+        )
         try:
             if request.max_steps is not None:
                 run.result = agent.process_query(
@@ -1678,7 +1713,7 @@ async def query(request: QueryRequest):
                 run.result = agent.process_query(request.query)
             try:
                 run.context = _measure_turn_context(
-                    agent, pushed, request.query, run.result
+                    agent, pushed, request.query, run.result, received_turns
                 )
             except Exception as exc:  # the answer stands; the meter says why it's blank
                 logger.exception("Context measurement failed for run_id=%s", run.run_id)
@@ -1807,7 +1842,9 @@ async def query(request: QueryRequest):
 
     async def _stream():
         translator = CanonicalTranslator(
-            request.run_id, agent_id=AGENT_ID, reasoning=request.reasoning
+            request.run_id,
+            agent_id=AGENT_ID,
+            reasoning=request.reasoning,
         )
         terminated = False
         last_write = time.monotonic()
@@ -2409,6 +2446,14 @@ def _warm_chat_model(state: _StartupWarmUp) -> None:
         return
     try:
         result = agent.warm_up(cancel=state.cancel)
+        if result.get("primed") is False:
+            logger.info(
+                "GAIA sidecar: loaded %s in %ss (its prompt is read by the first "
+                "turn: FastFlowLM keeps no cache a new chat can reuse)",
+                getattr(agent, "model_id", "?"),
+                result.get("seconds"),
+            )
+            return
         logger.info(
             "GAIA sidecar: warmed %s in %ss (%s of %s prompt tokens cached)",
             getattr(agent, "model_id", "?"),

@@ -297,11 +297,11 @@ jobs:
   # checkout on this commit.
   ui-rc:
     name: Agent UI installers (rc)
-    needs: plan
+    needs: [plan, sidecar]
     if: >-
       !cancelled() &&
       needs.plan.result == 'success' &&
-      needs.plan.outputs.build == 'true'
+      needs.sidecar.result == 'success'
     permissions:
       contents: write
       id-token: write
@@ -311,6 +311,7 @@ jobs:
       ref: ${{ github.sha }}
       artifact_prefix: rc-
       publish_to_release: false
+      flagship: artifact
 
   ui-final:
     name: Agent UI installers (final)
@@ -330,44 +331,75 @@ jobs:
       publish_to_release: false
 
   # ── Terminal binaries and installers ───────────────────────────────────────
-  # Both flavors build the packages around this run's own sidecar, as
-  # publish.yml's tui-installers does for a real candidate. The candidate's .deb/.rpm
-  # carry X.Y.Z~rc.N inside (installer/tui/linux/README.md).
-  tui-rc:
-    name: Terminal (rc)
-    needs: [plan, sidecar]
+  # The binaries need no sidecar, so they build at once, as publish.yml's
+  # tui-binaries does. Both flavors then build the packages around this run's
+  # own sidecar, as publish.yml's tui-installers does for a real candidate. The
+  # candidate's .deb/.rpm carry X.Y.Z~rc.N inside (installer/tui/linux/README.md).
+  tui-rc-binaries:
+    name: Terminal binaries (rc)
+    needs: plan
     if: >-
       !cancelled() &&
       needs.plan.result == 'success' &&
-      needs.sidecar.result == 'success'
+      needs.plan.outputs.build == 'true'
+    uses: ./.github/workflows/tui_installers.yml
+    with:
+      version: ${{ needs.plan.outputs.rc_npm }}
+      artifact_prefix: rc-
+      installers: false
+
+  tui-final-binaries:
+    name: Terminal binaries (final)
+    needs: plan
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.build == 'true'
+    uses: ./.github/workflows/tui_installers.yml
+    with:
+      version: ${{ needs.plan.outputs.base_version }}
+      artifact_prefix: final-
+      installers: false
+
+  tui-rc:
+    name: Terminal (rc)
+    needs: [plan, sidecar, tui-rc-binaries]
+    if: >-
+      !cancelled() &&
+      needs.plan.result == 'success' &&
+      needs.sidecar.result == 'success' &&
+      needs.tui-rc-binaries.outputs.binaries_ok == 'true'
     uses: ./.github/workflows/tui_installers.yml
     with:
       version: ${{ needs.plan.outputs.rc_npm }}
       sidecar: artifact
       artifact_prefix: rc-
+      build_binaries: false
 
   tui-final:
     name: Terminal (final)
-    needs: [plan, sidecar]
+    needs: [plan, sidecar, tui-final-binaries]
     if: >-
       !cancelled() &&
       needs.plan.result == 'success' &&
-      needs.sidecar.result == 'success'
+      needs.sidecar.result == 'success' &&
+      needs.tui-final-binaries.outputs.binaries_ok == 'true'
     uses: ./.github/workflows/tui_installers.yml
     with:
       version: ${{ needs.plan.outputs.base_version }}
       sidecar: artifact
       artifact_prefix: final-
+      build_binaries: false
 
   # Go builds with -trimpath and the commit's date are reproducible, which is
   # what lets a final promote the candidate's twins without trusting one runner.
   # Rebuild one target and compare.
   tui-reproducible:
     name: Terminal build is reproducible
-    needs: [plan, tui-rc]
+    needs: [plan, tui-rc-binaries]
     if: >-
       !cancelled() &&
-      needs.tui-rc.outputs.binaries_ok == 'true'
+      needs.tui-rc-binaries.outputs.binaries_ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -410,11 +442,11 @@ jobs:
   # ── The combined Windows setup, embedding this run's own builds ────────────
   setup-rc:
     name: Windows setup (rc)
-    needs: [plan, ui-rc, tui-rc, sidecar]
+    needs: [plan, ui-rc, tui-rc-binaries, sidecar]
     if: >-
       !cancelled() &&
       needs.ui-rc.result == 'success' &&
-      needs.tui-rc.outputs.binaries_ok == 'true' &&
+      needs.tui-rc-binaries.outputs.binaries_ok == 'true' &&
       needs.sidecar.result == 'success'
     permissions:
       contents: read
@@ -428,11 +460,11 @@ jobs:
 
   setup-final:
     name: Windows setup (final)
-    needs: [plan, ui-final, tui-final, sidecar]
+    needs: [plan, ui-final, tui-final-binaries, sidecar]
     if: >-
       !cancelled() &&
       needs.ui-final.result == 'success' &&
-      needs.tui-final.outputs.binaries_ok == 'true' &&
+      needs.tui-final-binaries.outputs.binaries_ok == 'true' &&
       needs.sidecar.result == 'success'
     permissions:
       contents: read
@@ -447,11 +479,11 @@ jobs:
   # ── The lock, generated from this run instead of committed ─────────────────
   lock:
     name: Generate the flagship lock and npm package
-    needs: [plan, sidecar, tui-final]
+    needs: [plan, sidecar, tui-final-binaries]
     if: >-
       !cancelled() &&
       needs.sidecar.result == 'success' &&
-      needs.tui-final.outputs.binaries_ok == 'true'
+      needs.tui-final-binaries.outputs.binaries_ok == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -521,6 +553,8 @@ jobs:
       - flagship-npm-tests
       - ui-rc
       - ui-final
+      - tui-rc-binaries
+      - tui-final-binaries
       - tui-rc
       - tui-final
       - tui-reproducible

@@ -4,7 +4,7 @@
 // Pins what the shell sends when a chat starts, when it shows first-run setup,
 // and which sidebar destination is open.
 
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -108,6 +108,70 @@ async function sendFirstMessage(text: string) {
     await userEvent.type(box, text);
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
 }
+
+describe('the chat-create error', () => {
+    it('stays until it is dismissed', async () => {
+        mocked.setPermissionMode.mockRejectedValue(new Error('mode refused'));
+        render(<App />);
+        await sendFirstMessage('go');
+
+        const message = await screen.findByText(/The chat was created, but/);
+        expect(message).toHaveTextContent('mode refused');
+
+        await userEvent.click(within(message.closest('[role="alert"]') as HTMLElement).getByRole('button', { name: 'Dismiss' }));
+
+        expect(screen.queryByText(/The chat was created, but/)).not.toBeInTheDocument();
+    });
+});
+
+describe('the window width', () => {
+    const PHONE = '(max-width: 768px)';
+
+    afterEach(() => useChatStore.setState({ sidebarCollapsed: false, sidebarOpen: true }));
+
+    /** A window whose width can change while the app is open. */
+    function stubWidth(phone: boolean) {
+        const listeners = new Set<() => void>();
+        const setWidth = () => { window.innerWidth = phone ? 600 : 1200; };
+        setWidth();
+        vi.stubGlobal('matchMedia', (query: string) => ({
+            get matches() { return query === PHONE && phone; },
+            media: query,
+            addEventListener: (_: string, listener: () => void) => { if (query === PHONE) listeners.add(listener); },
+            removeEventListener: (_: string, listener: () => void) => { listeners.delete(listener); },
+        }));
+        return (next: boolean) => act(() => {
+            phone = next;
+            setWidth();
+            listeners.forEach((listener) => listener());
+        });
+    }
+
+    it('offers mobile access as soon as a window widens with its drawer open', async () => {
+        const resize = stubWidth(true);
+        render(<App />);
+        await screen.findByLabelText('Message');
+        act(() => useChatStore.setState({ sidebarOpen: true }));
+        expect(screen.queryByRole('button', { name: 'Mobile access' })).not.toBeInTheDocument();
+
+        resize(false);
+
+        expect(screen.getByRole('button', { name: 'Mobile access' })).toBeInTheDocument();
+    });
+
+    it('applies a collapsed sidebar as soon as a window widens with its drawer open', async () => {
+        const resize = stubWidth(true);
+        useChatStore.setState({ sidebarCollapsed: true });
+        render(<App />);
+        await screen.findByLabelText('Message');
+        act(() => useChatStore.setState({ sidebarOpen: true }));
+        expect(document.querySelector('.sb')).not.toHaveClass('is-collapsed');
+
+        resize(false);
+
+        expect(document.querySelector('.sb')).toHaveClass('is-collapsed');
+    });
+});
 
 describe('a new chat', () => {
     it('creates the session on the flagship agent with its first message', async () => {
@@ -396,6 +460,29 @@ describe('first-run setup', () => {
         expect(mocked.checkSetup).toHaveBeenCalledTimes(2);
     });
 
+    it('updates the server quietly for a cloud chat model too, not the first-run screen', async () => {
+        mocked.getActiveModel.mockResolvedValue({
+            provider: 'fireworks', model: 'fireworks.accounts/fireworks/models/kimi', label: 'Kimi', remote: true, is_default: false,
+        });
+        let finishUpgrade!: (status: { state: 'ready' }) => void;
+        mocked.checkSetup
+            .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
+            .mockResolvedValueOnce(READY);
+        mocked.startSetup.mockResolvedValue({ state: 'running', upgrade_embedded: true } as never);
+        mocked.getSetupStatus.mockImplementation(() => (mocked.startSetup.mock.calls.length
+            ? new Promise((resolve) => { finishUpgrade = resolve; })
+            : Promise.resolve({ state: 'idle' })));
+        render(<App />);
+
+        expect(await screen.findByText('Updating the local model server…')).toBeInTheDocument();
+        expect(screen.queryByRole('heading', { name: 'Set up GAIA' })).not.toBeInTheDocument();
+        await waitFor(() => expect(mocked.startSetup).toHaveBeenCalledWith(true, false, { upgradeEmbedded: true }));
+
+        finishUpgrade({ state: 'ready' });
+        expect(await screen.findByLabelText('Message')).toBeInTheDocument();
+        expect(mocked.checkSetup.mock.calls).toEqual([[true], [true]]);
+    });
+
     it('a re-check during an update follows it instead of starting a second one', async () => {
         mocked.checkSetup
             .mockResolvedValueOnce({ ready: false, stage: 'upgrade', steps: [] })
@@ -456,10 +543,10 @@ describe('first-run setup', () => {
     }
 
     it('a first task picked at the end of setup starts the first chat', async () => {
-        await finishSetupWith({ skill: 'check-in', title: 'Check in', note: '', prompt: 'Good morning. Let us check in.', needs_input: false });
+        await finishSetupWith({ skill: 'coding', title: 'Work on code', note: '', prompt: 'Look around w and tell me what this project does.', needs_input: false });
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
-        expect(mocked.sendMessageStream.mock.calls[0][1]).toBe('Good morning. Let us check in.');
+        expect(mocked.sendMessageStream.mock.calls[0][1]).toBe('Look around w and tell me what this project does.');
     });
 
     it('a first task that needs a subject opens a new chat with it typed in', async () => {
@@ -492,7 +579,7 @@ describe('first-run setup', () => {
 
         expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         // Setup reads as progress: the check's reason is not shown as a problem.
-        expect(screen.getByText('This takes a few seconds. Nothing downloads yet.')).toBeInTheDocument();
+        expect(screen.getByText('This takes a few seconds. No models download yet.')).toBeInTheDocument();
         expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });
@@ -564,5 +651,40 @@ describe('sidebar destinations', () => {
 
         expect(await screen.findByRole('dialog', { name: 'Document library' })).toBeInTheDocument();
         expect(screen.queryByRole('dialog', { name: 'Scheduled tasks' })).not.toBeInTheDocument();
+    });
+});
+
+describe('New chat right after sending a first message', () => {
+    // v0.26.0-rc18: New chat clicked ~20 ms after Enter dropped the prompt.
+    // The chat existed but had not sent it yet, so it was cleaned up as an
+    // empty draft with the prompt inside, and nothing said so.
+    it('keeps the unsent message in the new chat box', async () => {
+        mocked.getMessages.mockImplementation(() => new Promise(() => { /* history still loading */ }));
+        mocked.deleteSession.mockResolvedValue({ deleted: true } as never);
+        // Earlier tests leave queued sends behind, which would keep the draft.
+        useChatStore.setState({ messageQueues: {} });
+        render(<App />);
+        await sendFirstMessage('Reply with exactly: RACE-LOST-1');
+        await waitFor(() => expect(useChatStore.getState().pendingPrompt?.sessionId).toBe('sess-new-0001'));
+
+        await userEvent.click(await screen.findByRole('button', { name: 'New chat' }));
+
+        expect(useChatStore.getState().currentSessionId).toBeNull();
+        expect(useChatStore.getState().pendingPrompt).toBeNull();
+        expect(await screen.findByLabelText('Message')).toHaveValue('Reply with exactly: RACE-LOST-1');
+        expect(mocked.sendMessageStream).not.toHaveBeenCalled();
+        // The chat it came from is now an empty draft, and is cleaned up as one.
+        await waitFor(() => expect(mocked.deleteSession).toHaveBeenCalledWith('sess-new-0001'));
+    });
+
+    it("leaves another chat's unsent message where it is", async () => {
+        render(<App />);
+        await screen.findByRole('button', { name: 'New chat' });
+        useChatStore.getState().setPendingPrompt({ sessionId: 'elsewhere', text: 'NOT-MINE' });
+
+        await userEvent.click(screen.getByRole('button', { name: 'New chat' }));
+
+        expect(useChatStore.getState().pendingPrompt).toEqual({ sessionId: 'elsewhere', text: 'NOT-MINE' });
+        expect(await screen.findByLabelText('Message')).toHaveValue('');
     });
 });

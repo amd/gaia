@@ -10,6 +10,7 @@ These tests use mocking to avoid actual network calls and installations.
 import io
 import sys
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from gaia.installer.lemonade_installer import (
@@ -337,6 +338,55 @@ class TestRunInit(unittest.TestCase):
 
         result = run_init(profile="invalid", yes=True)
         self.assertEqual(result, 1)
+
+
+class TestInitProfilePersistence(unittest.TestCase):
+    """`gaia init` exits non-zero when it can't save the profile (#3954)."""
+
+    def _run(self, update):
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(
+            profile="minimal", yes=True, skip_models=True, skip_webui_build=True
+        )
+        with (
+            patch.object(InitCommand, "_print_header"),
+            patch.object(InitCommand, "_print"),
+            patch.object(InitCommand, "_print_step"),
+            patch.object(InitCommand, "_choose_lemonade", return_value=True),
+            patch.object(InitCommand, "_ensure_lemonade_ready", return_value=True),
+            patch.object(InitCommand, "_ensure_llamacpp_backend", return_value=True),
+            patch.object(InitCommand, "_verify_setup", return_value=True),
+            patch.object(
+                InitCommand, "_print_completion", return_value=True
+            ) as completion,
+            patch.object(InitCommand, "_print_error") as print_error,
+            # Never touch the real ~/.gaia/config.json during a test.
+            patch("gaia.config.GaiaConfig.update", update),
+        ):
+            rc = cmd.run()
+        return rc, print_error, completion
+
+    def test_saved_profile_exits_zero(self):
+        update = MagicMock()
+        rc, print_error, completion = self._run(update)
+
+        self.assertEqual(rc, 0)
+        update.assert_called_once()
+        print_error.assert_not_called()
+        completion.assert_called_once()
+
+    def test_unsaved_profile_exits_one_and_says_why(self):
+        update = MagicMock(side_effect=OSError("disk full"))
+        rc, print_error, completion = self._run(update)
+
+        self.assertEqual(rc, 1)
+        print_error.assert_called_once()
+        message = print_error.call_args.args[0]
+        self.assertIn("Failed to save profile 'minimal'", message)
+        self.assertIn("disk full", message)
+        self.assertIn("gaia config set profile minimal", message)
+        completion.assert_not_called()
 
 
 class TestInitProfiles(unittest.TestCase):
@@ -1050,6 +1100,11 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.addCleanup(home.cleanup)
         os.environ["GAIA_HOME"] = home.name
         os.environ.pop("GAIA_CONFIG_DIR", None)
+        # A gaia-agent on this machine's PATH would count as installed.
+        path_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(path_dir.cleanup)
+        self.path_dir = Path(path_dir.name)
+        os.environ["PATH"] = path_dir.name
         self._install_flagship()
         # The hub, as `gaia init` reads it: a build for this machine unless a
         # test serves a different one.
@@ -1170,7 +1225,7 @@ class TestCheckSetupStatus(unittest.TestCase):
         embedded = MagicMock()
         embedded.version = LEMONADE_VERSION
         embedded.status.return_value = status
-        embedded.older_installed_version.return_value = older
+        embedded.other_installed_version.return_value = older
         return patch(
             "gaia.llm.lemonade_embedded.EmbeddedLemonade", return_value=embedded
         )
@@ -1270,7 +1325,7 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         self.assertEqual(status.stage, "setup")
 
-    def test_older_installed_version_reads_other_unpacked_versions(self):
+    def test_other_installed_version_reads_other_unpacked_versions(self):
         import platform
         import tempfile
         from pathlib import Path
@@ -1279,15 +1334,16 @@ class TestCheckSetupStatus(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as home:
             embedded = EmbeddedLemonade(home=Path(home))
-            self.assertIsNone(embedded.older_installed_version())
+            self.assertIsNone(embedded.other_installed_version())
             daemon = "lemond.exe" if platform.system() == "Windows" else "lemond"
-            for version in ("9.2.0", "10.10.1", embedded.version):
+            for version in ("9.2.0", "2026.45.3", embedded.version):
                 d = embedded.root / "dist" / version
                 d.mkdir(parents=True)
                 (d / daemon).write_bytes(b"")
             # A half-unpacked dir with no daemon does not count.
             (embedded.root / "dist" / "99.0.0").mkdir()
-            self.assertEqual(embedded.older_installed_version(), "10.10.1")
+            (embedded.root / "dist" / "not-a-version").mkdir()
+            self.assertEqual(embedded.other_installed_version(), "2026.45.3")
 
     def test_ready_when_server_up_and_required_models_present(self):
         from gaia.installer.init_command import check_setup_status
@@ -1496,6 +1552,123 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertEqual(status.stage, "setup")
         self.assertFalse(status.agent_missing)
         self.assertNotIn(self.AGENT_MISSING, status.reasons)
+
+    def _write_agent(self, directory, mode=0o755):
+        name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / name
+        path.write_bytes(b"\x7fELF")
+        path.chmod(mode)
+        return path
+
+    def _frozen_at(self, directory):
+        """Run the check as the frozen gaia in *directory*."""
+        name = "gaia.exe" if sys.platform == "win32" else "gaia"
+        frozen = patch("gaia.installer.init_command.is_frozen", return_value=True)
+        exe = patch.object(sys, "executable", str(directory / name))
+        frozen.start()
+        exe.start()
+        self.addCleanup(frozen.stop)
+        self.addCleanup(exe.stop)
+
+    def test_agent_beside_the_frozen_gaia_is_ready(self):
+        """The Windows setup's terminal component installs gaia.exe and
+        gaia-agent.exe side by side, with no sentinel and nothing in ~/.gaia/bin."""
+        import tempfile
+
+        self._remove_flagship()
+        install = tempfile.TemporaryDirectory()
+        self.addCleanup(install.cleanup)
+        self._write_agent(Path(install.name))
+        self._frozen_at(Path(install.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready, status.reasons)
+        self.assertFalse(status.agent_missing)
+        self.assertEqual(self.hub_fetches, [])
+
+    def test_agent_on_path_is_ready(self):
+        """The .deb, .rpm and .pkg put gaia-agent in /usr/bin or /usr/local/bin
+        and the frozen gaia under lib/gaia, so only PATH finds the agent."""
+        import tempfile
+
+        self._remove_flagship()
+        self._write_agent(self.path_dir)
+        core = tempfile.TemporaryDirectory()
+        self.addCleanup(core.cleanup)
+        self._frozen_at(Path(core.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertTrue(status.ready, status.reasons)
+        self.assertFalse(status.agent_missing)
+
+    def test_agent_on_a_pip_install_path_is_not_the_agent(self):
+        """A pip or source gaia: a gaia-agent console script on PATH is not
+        something a GAIA installer shipped."""
+        self._remove_flagship()
+        self._write_agent(self.path_dir)
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_frozen_gaia_with_no_agent_anywhere_still_needs_it(self):
+        """A terminal install whose agent is gone must still send the user to setup."""
+        import tempfile
+
+        self._remove_flagship()
+        install = tempfile.TemporaryDirectory()
+        self.addCleanup(install.cleanup)
+        self._frozen_at(Path(install.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+
+    def test_a_directory_named_gaia_agent_beside_the_frozen_gaia_is_not_the_agent(self):
+        import tempfile
+
+        self._remove_flagship()
+        install = tempfile.TemporaryDirectory()
+        self.addCleanup(install.cleanup)
+        name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+        (Path(install.name) / name).mkdir()
+        self._frozen_at(Path(install.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    def test_agent_beside_a_source_interpreter_is_not_the_agent(self):
+        """From a checkout sys.executable is Python; a stray gaia-agent in its
+        folder is not something an installer shipped."""
+        import tempfile
+
+        self._remove_flagship()
+        venv = tempfile.TemporaryDirectory()
+        self.addCleanup(venv.cleanup)
+        self._write_agent(Path(venv.name))
+        with patch.object(sys, "executable", str(Path(venv.name) / "python")):
+            status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+
+    @unittest.skipIf(sys.platform == "win32", "Windows has no exec bit")
+    def test_non_executable_agent_beside_the_frozen_gaia_is_not_the_agent(self):
+        import tempfile
+
+        self._remove_flagship()
+        install = tempfile.TemporaryDirectory()
+        self.addCleanup(install.cleanup)
+        self._write_agent(Path(install.name), mode=0o644)
+        self._frozen_at(Path(install.name))
+
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
 
     def test_only_the_tui_in_bin_still_needs_the_agent(self):
         """A terminal install whose agent download failed leaves gaia-tui alone."""
@@ -2010,6 +2183,72 @@ class TestDiagnoseLaunchpadOutage(unittest.TestCase):
         "ERROR: b'GPGKeyTemporarilyNotFoundError'\n"
     )
 
+    # Trimmed from CI on 2026-11-11: add-apt.log, then apt-update.log.
+    ADD_APT_API_TIMEOUT = (
+        "Traceback (most recent call last):\n"
+        '  File "/usr/bin/add-apt-repository", line 452, in <module>\n'
+        "    sys.exit(0 if addaptrepo.main() else 1)\n"
+        '  File "/usr/lib/python3/dist-packages/softwareproperties/ppa.py", '
+        "line 111, in lp\n"
+        '  File "/usr/lib/python3/dist-packages/launchpadlib/launchpad.py", '
+        "line 494, in login_anonymously\n"
+        '  File "/usr/lib/python3/dist-packages/httplib2/__init__.py", '
+        "line 1139, in connect\n"
+        "    sock.connect((self.host, self.port))\n"
+        "TimeoutError: [Errno 110] Connection timed out\n"
+    )
+    APT_UPDATE_ONLINE = (
+        "Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]\n"
+        "Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease\n"
+        "Hit:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease\n"
+        "Reading package lists...\n"
+    )
+
+    def test_launchpad_api_timeout_is_named_as_an_outage(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        message = diagnose_launchpad_outage(
+            self.ADD_APT_API_TIMEOUT + self.APT_UPDATE_ONLINE
+        )
+        self.assertIn("could not reach Launchpad", message)
+        self.assertIn("TimeoutError: [Errno 110] Connection timed out", message)
+        self.assertNotIn("Traceback", message)
+
+    def test_dropped_connection_names_the_last_error(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        dropped_then_timed_out = (
+            "http.client.RemoteDisconnected: Remote end closed connection "
+            "without response\n"
+            "During handling of the above exception, another exception occurred:\n"
+            + self.ADD_APT_API_TIMEOUT
+            + self.APT_UPDATE_ONLINE
+        )
+        message = diagnose_launchpad_outage(dropped_then_timed_out)
+        self.assertIn("Connection timed out", message)
+        self.assertNotIn("RemoteDisconnected", message)
+
+    def test_timeout_on_an_offline_machine_is_not_blamed_on_launchpad(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        offline = (
+            "Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]\n"
+            "Err:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease\n"
+            "  Temporary failure resolving 'azure.archive.ubuntu.com'\n"
+        )
+        self.assertIsNone(diagnose_launchpad_outage(self.ADD_APT_API_TIMEOUT + offline))
+
+    def test_timeout_outside_launchpadlib_is_not_blamed_on_launchpad(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        elsewhere = (
+            "Traceback (most recent call last):\n"
+            '  File "/usr/lib/python3/dist-packages/urllib3/connection.py", '
+            "line 199, in _new_conn\n"
+            "TimeoutError: [Errno 110] Connection timed out\n"
+        )
+        self.assertIsNone(diagnose_launchpad_outage(elsewhere + self.APT_UPDATE_ONLINE))
+
     def test_index_outage_blames_launchpad_not_apt(self):
         from gaia.installer.lemonade_installer import diagnose_launchpad_outage
 
@@ -2491,8 +2730,8 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
     make `gaia init --profile sd/rag/vlm/minimal/all` hard-fail, since none
     of those agents are in the hub index (#2358 review finding).
 
-    `chat` is on this list: the `gaia-agent-chat` wheel is not a catalog
-    agent, so asking the Hub for it could only ever no-op. Its completion
+    `chat` is on this list: there is no chat agent package (#6103), so
+    asking the Hub for it could only ever no-op. Its completion
     message says no chat agent is installed and names `gaia hub install gaia`
     -- see ``TestPrintCompletionHeadlineGate``. `npu` is not: it installs the
     flagship (#2972).
@@ -2519,7 +2758,7 @@ class TestHubInstallWiringFlagshipOnlyScope(_HubInstallWiringTestBase):
                 mock_install.assert_not_called()
 
     def test_chat_is_not_a_hub_install_target(self):
-        """The publish workflow for `gaia-agent-chat` is gone, so a profile
+        """There is no chat agent package to publish (#6103), so a profile
         that asked the Hub for `chat` would wait on a publish that can never
         land."""
         from gaia.installer.init_command import HUB_INSTALL_AGENTS, INIT_PROFILES

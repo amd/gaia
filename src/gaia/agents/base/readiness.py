@@ -429,7 +429,7 @@ def _replay_cloud_key(model_id: str) -> bool:
     """
     import requests
 
-    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, ensure_authenticated
+    from gaia.llm.cloud_keys import PROVIDERS, CloudKeyError, reconnect_provider
     from gaia.llm.gateway import GatewayError
 
     provider = str(model_id or "").lower().split(".", 1)[0]
@@ -438,7 +438,7 @@ def _replay_cloud_key(model_id: str) -> bool:
     from gaia.llm.local_only import CloudDisabledError
 
     try:
-        return ensure_authenticated(provider)
+        return reconnect_provider(provider)
     except CloudDisabledError as e:
         logger.warning(str(e))
         return False
@@ -563,17 +563,6 @@ def pull_model(probe_base: str, model_id: str) -> None:
 # ---------------------------------------------------------------------------
 # GET — readiness
 # ---------------------------------------------------------------------------
-
-
-def model_list_unreadable(hint: Optional[str]) -> bool:
-    """Whether a hint reports the one failure the structured fields cannot.
-
-    The backend answered /health but its model list read failed, so
-    ``present:false`` means "could not tell", not "missing". Only the hint
-    carries that distinction.
-    """
-    h = (hint or "").lower()
-    return "model list" in h and "could not be read" in h
 
 
 def compute_init_status(

@@ -136,6 +136,88 @@ class TestListConnectors:
         assert "configured" in entry
         assert "description" in entry
 
+    def test_a_failing_summary_is_listed_by_name_as_unavailable(
+        self, ui_api_client, monkeypatch
+    ):
+        from gaia.ui.routers import connectors as router
+
+        real = router._connector_summary
+
+        def summary(connector_id):
+            if connector_id == "google":
+                raise RuntimeError("keyring locked")
+            return real(connector_id)
+
+        monkeypatch.setattr(router, "_connector_summary", summary)
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = {e["id"]: e for e in resp.json()["connectors"]}
+        assert rows["google"] == {
+            "id": "google",
+            "display_name": "Google",
+            "error": "unavailable",
+        }
+        assert rows["mcp-test"]["display_name"] == "MCP Test"
+
+    def test_a_corrupt_activations_file_is_named_on_every_unavailable_row(
+        self, ui_api_client
+    ):
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = resp.json()["connectors"]
+        assert rows
+        for row in rows:
+            assert row["error"] == "unavailable"
+            assert row["reason"] == "activations_unreadable"
+            assert row["path"] == str(path)
+
+    @pytest.mark.parametrize("body", ["[]", '{"activations": []}'])
+    def test_a_wrong_shape_activations_file_is_named_too(self, ui_api_client, body):
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        rows = ui_api_client.get("/api/connectors").json()["connectors"]
+        assert rows and all(r["reason"] == "activations_unreadable" for r in rows)
+
+    def test_an_unreadable_but_valid_activations_file_is_not_called_corrupt(
+        self, ui_api_client, monkeypatch
+    ):
+        """A permissions error must not tell the user to delete the file."""
+        import builtins
+
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"version": 1, "activations": {}}', encoding="utf-8")
+        real_open = builtins.open
+
+        def deny(file, *a, **k):
+            if str(file) == str(path):
+                raise PermissionError(13, "Permission denied", str(file))
+            return real_open(file, *a, **k)
+
+        monkeypatch.setattr(builtins, "open", deny)
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        for row in resp.json()["connectors"]:
+            assert "reason" not in row
+            assert "path" not in row
+
+    def test_no_activations_file_adds_no_reason(self, ui_api_client):
+        from gaia.connectors.activations import _activations_path
+
+        assert not _activations_path().exists()
+        for row in ui_api_client.get("/api/connectors").json()["connectors"]:
+            assert "reason" not in row
+
     def test_unconfigured_connector_shows_configured_false(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors")
         entry = next(e for e in resp.json()["connectors"] if e["id"] == "google")
@@ -788,6 +870,52 @@ class TestTestEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
+
+
+class TestConnectorActionsLiftTheKeyringHold:
+    """A connectors-screen action may ask the OS to unlock the store again."""
+
+    @pytest.fixture(autouse=True)
+    def held(self):
+        from gaia.connectors import store
+
+        store._refuse(RuntimeError("Prompt dismissed"))
+        yield store
+        store.retry_keyring()
+
+    def test_test_lifts_the_hold(self, ui_api_client, monkeypatch, held):
+        seen = []
+
+        async def check(connector_id):
+            seen.append(held.keyring_refusal())
+            return {"ok": True, "detail": "token_valid"}
+
+        monkeypatch.setattr("gaia.ui.routers.connectors.health_check", check)
+        resp = ui_api_client.post("/api/connectors/google/test", headers=UI_HEADER)
+        assert resp.status_code == 200
+        assert seen == [None]
+
+    def test_authorize_lifts_the_hold(self, ui_api_client, monkeypatch, held):
+        seen = []
+
+        async def start(connector_id, scopes=None, grant_agents=None):
+            seen.append(held.keyring_refusal())
+            return {"flow_id": "f", "authorization_url": "https://x"}
+
+        monkeypatch.setattr(
+            "gaia.ui.routers.connectors.connections.start_authorization", start
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": []},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        assert seen == [None]
+
+    def test_listing_does_not_lift_the_hold(self, ui_api_client, held):
+        ui_api_client.get("/api/connectors")
+        assert held.keyring_refusal() is not None
 
 
 # ---------------------------------------------------------------------------

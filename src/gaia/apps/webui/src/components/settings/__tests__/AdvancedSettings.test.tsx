@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdvancedSettings } from '../AdvancedSettings';
 import * as api from '../../../services/api';
@@ -9,11 +9,14 @@ import { useChatStore } from '../../../stores/chatStore';
 import type { SystemStatus } from '../../../types';
 
 vi.mock('../../../services/api');
-const modelActions = vi.hoisted(() => ({ downloadError: null as string | null }));
+const modelActions = vi.hoisted(() => ({
+    downloadError: null as string | null,
+    downloadModel: vi.fn(),
+}));
 vi.mock('../../../hooks/useModelActions', () => ({
     useModelActions: () => ({
         isLoadingModel: false, isDownloadingModel: false, downloadError: modelActions.downloadError,
-        loadModel: vi.fn(), downloadModel: vi.fn(),
+        loadModel: vi.fn(), downloadModel: modelActions.downloadModel,
     }),
 }));
 
@@ -37,6 +40,7 @@ function status(overrides: Partial<SystemStatus>): SystemStatus {
 beforeEach(() => {
     vi.clearAllMocks();
     modelActions.downloadError = null;
+    modelActions.downloadModel.mockReset();
     useChatStore.getState().setSystemStatus(null);
     mockedApi.getMCPRuntimeStatus.mockResolvedValue({ servers: [] } as never);
     mockedApi.getLemonadeTarget.mockResolvedValue({
@@ -110,6 +114,26 @@ describe('AdvancedSettings', () => {
         expect(screen.getByText(/Cannot download 'user.x'/)).toHaveAttribute('role', 'alert');
     });
 
+    it('Force Re-download keeps the model in use, and loads the repaired one when none is', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
+            default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
+        }));
+        const { unmount } = render(<AdvancedSettings />);
+        fireEvent.click(await screen.findByText('Force Re-download'));
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, false);
+        unmount();
+
+        modelActions.downloadModel.mockReset();
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: null,
+            default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
+        }));
+        render(<AdvancedSettings />);
+        fireEvent.click(await screen.findByText('Force Re-download'));
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, true);
+    });
+
     it('shows why Download could not start, once', async () => {
         modelActions.downloadError = "Cannot download 'user.x': add it from its Hugging Face link.";
         mockedApi.getSystemStatus.mockResolvedValue(status({
@@ -117,8 +141,10 @@ describe('AdvancedSettings', () => {
             default_model_name: 'user.x', model_labels: null,
         }));
         render(<AdvancedSettings />);
-        await screen.findByText('Download');
+        const download = await screen.findByText('Download');
+        fireEvent.click(download);
 
+        expect(modelActions.downloadModel).toHaveBeenCalledWith(false, undefined, true);
         expect(screen.getAllByText(/Cannot download 'user.x'/)).toHaveLength(1);
     });
 
@@ -164,5 +190,48 @@ describe('AdvancedSettings', () => {
         expect(await screen.findByText('Start Lemonade from the tray icon.')).toBeInTheDocument();
         expect(screen.getByText('Not Running')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+    });
+
+    describe('Custom model ID', () => {
+        async function save(id: string, modelStatus: { found: boolean; checked: boolean }) {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.updateSettings.mockResolvedValue({
+                custom_model: id, model_status: { downloaded: false, loaded: false, ...modelStatus },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+            const input = await screen.findByRole('textbox', { name: 'Custom model override' });
+            await waitFor(() => expect(input).toBeEnabled());
+            fireEvent.change(input, { target: { value: id } });
+            fireEvent.click(screen.getByRole('button', { name: 'Save custom model' }));
+            await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ custom_model: id }));
+        }
+
+        it('says when the model server does not list the saved ID', async () => {
+            await save('fireworks.no-such-model', { found: false, checked: true });
+            expect(await screen.findByText(
+                "Saved, but the model server doesn't list “fireworks.no-such-model”. Check the ID: messages will fail if the model doesn't exist.",
+            )).toBeInTheDocument();
+        });
+
+        it('says when the ID could not be checked', async () => {
+            await save('Qwen3-4B-GGUF', { found: false, checked: false });
+            expect(await screen.findByText(
+                "Saved, but GAIA couldn't check this ID because the model server isn't answering.",
+            )).toBeInTheDocument();
+        });
+
+        it('adds nothing for an ID the model server lists', async () => {
+            await save('Qwen3-4B-GGUF', { found: true, checked: true });
+            expect(await screen.findByText('Saved')).toBeInTheDocument();
+            expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
+        });
+
+        it('drops the note once the ID is edited', async () => {
+            await save('fireworks.no-such-model', { found: false, checked: true });
+            await screen.findByText(/Saved, but the model server/);
+            fireEvent.change(screen.getByRole('textbox', { name: 'Custom model override' }), { target: { value: 'x' } });
+            expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
+        });
     });
 });

@@ -114,7 +114,8 @@ icon: "bug"
 
   <Accordion title="A cloud model or provider is refused: 'Local only is on'" icon="lock">
     `network_policy` is set to `local_ai_only`, so GAIA refuses every cloud AI model
-    and won't hand Lemonade a cloud key. Check it with `gaia config get
+    and won't hand Lemonade a cloud key. In the Agent UI, check or change it with
+    **Settings → Privacy → Local only**. From the terminal, check it with `gaia config get
     network_policy`, and allow cloud models again with `gaia config set
     network_policy cloud_allowed`. If you never set it, look at `~/.gaia/policy.json`:
     a file GAIA can't read counts as Local only. See [Local only](/reference/cli#local-only).
@@ -144,6 +145,24 @@ icon: "bug"
     other windows) and click **Always Allow**. The model list updates once you
     answer. If you click **Deny**, GAIA can't use the saved key; paste it again under
     **Settings → Model**.
+
+    You only need to answer this once for each saved key. On a Mac, the GAIA daemon
+    reads the keychain for the agent, so updating the agent doesn't ask again. The
+    dialog then names the daemon's Python, and **Always Allow** lets any script that
+    Python runs read your saved keys without asking. A
+    terminal install without the `gaia` command has no daemon, so its agent reads the
+    keychain itself and asks again after each update.
+  </Accordion>
+
+  <Accordion title="The model list says the OS key store is locked" icon="lock">
+    You closed the system prompt that unlocks your key store (on Linux, GNOME's
+    "Unlock keyring" or "Choose password for new keyring"), so GAIA can't read a
+    saved key. GAIA waits five minutes before asking again, so the prompt doesn't
+    keep coming back. To use a saved key sooner, choose **Try again** in the
+    model list or under **Settings → Model**, then unlock or create the keyring
+    in the prompt that opens. Connecting or testing a connector asks again too.
+    Until then a connector reads as unavailable and the new-chat inbox card stays
+    hidden.
   </Accordion>
 
   <Accordion title="Use GAIA's own says GAIA's server is not installed" icon="box-open">
@@ -164,7 +183,7 @@ icon: "bug"
       keeps happening, the release asset changed and GAIA needs an update.
     - **`not published for <OS>/<arch>`** — there is no Lemonade build for this machine
       (for example, Intel Macs). Run Lemonade Server on another machine and point GAIA at
-      it with `LEMONADE_BASE_URL`.
+      it (see [A Lemonade on another computer](/guides/install#a-lemonade-on-another-computer)).
     - **`exited immediately` / `did not answer`** — the server started but failed. Its own
       error is in `~/.gaia/lemonade/lemond.log`.
     - **`could not bind port …: it was taken by another program first`** — another
@@ -195,6 +214,12 @@ icon: "bug"
       `gaia lemonade embedded stop`, then start it again (or run `gaia init`).
     - **`… is stuck rather than loading a model`** — the Lemonade you installed. Restart
       it with the command the error names, then retry.
+
+    In the Agent UI, this log and every other GAIA log are one click away:
+    **Model server log** in the sidebar's model popover or under a reply that failed on a
+    local model, and **Settings → Advanced → Logs**. The model server tab shows llama.cpp's
+    and FastFlowLM's output too, and works for a Lemonade you run yourself. See
+    [Logs](/guides/agent-ui#logs).
   </Accordion>
 
   <Accordion title="gaia init can't install the GAIA agent" icon="store">
@@ -398,6 +423,10 @@ icon: "bug"
     gaia api start --port 8080
     ```
 
+    If `gaia api start` says it can't run in this GAIA install, you're on the
+    installed build, which has no API server. Use a source install, or
+    `gaia -p` from scripts — see [`gaia api`](/reference/cli#api-server).
+
     **Check if port is in use:**
     ```powershell
     # Windows
@@ -477,6 +506,16 @@ What GAIA does on a small PC:
   server you started yourself keeps its models loaded beside GAIA's. To have GAIA
   use that server instead, set `LEMONADE_BASE_URL` (see
   [`gaia init`](/reference/cli#init-command), "Another Lemonade Server").
+- **Each GAIA process gives its math library 2 threads.** The OpenBLAS that
+  numpy and FAISS bundle otherwise reserves memory for every CPU thread when it
+  loads: about 5 GB per process on a 32-thread PC, enough for a dozen GAIA
+  processes to run Windows out of memory. Document search and memory recall run
+  on FAISS's own threads, so they keep their speed. To choose another number, set
+  `OPENBLAS_NUM_THREADS` in the environment GAIA starts from; GAIA leaves it, and
+  `OMP_NUM_THREADS` or `GOTO_NUM_THREADS`, alone when you set them. A value in a
+  `.env` file is read too late to count. Programs GAIA runs for you inherit the
+  2 threads too, so a numpy script started from a chat does its matrix math on
+  2 threads unless you set the variable yourself.
 
 On a graphics card, GAIA reads free memory only for an AMD card on Linux.
 Elsewhere a model that does not fit the card fails in Lemonade with its own
@@ -606,13 +645,7 @@ error. To run the chat model in the cloud instead, see
 
 <AccordionGroup>
   <Accordion title="Missing RAG dependencies" icon="puzzle-piece">
-    `gaia init` installs the RAG extra and fails, showing the installer's error, if that install fails. To install it yourself into the one-line installer's environment (no `pip`, not activated):
-    ```bash
-    uv pip install --python ~/.gaia/venv/bin/python "amd-gaia[rag]"
-    # Windows: uv pip install --python "$env:USERPROFILE\.gaia\venv\Scripts\python.exe" "amd-gaia[rag]"
-    ```
-
-    In an activated virtualenv of your own:
+    The apps and the one-line installer need nothing extra: documents are read by the GAIA agent, which ships with what it needs. On a `pip` install, `gaia init` installs the RAG extra and fails, showing the installer's error, if that install fails. To install it yourself in an activated virtualenv of your own:
     ```bash
     uv pip install "amd-gaia[rag]"
     ```
@@ -746,6 +779,31 @@ error. To run the chat model in the cloud instead, see
     reach safe mode.
   </Accordion>
 
+  <Accordion title="GAIA's window stopped working" icon="window-restore">
+    When only the window fails (its page crashes, often because the PC ran out
+    of memory), GAIA itself keeps running, along with any answer or folder
+    index in progress. **Reload window** brings the window back; **Quit GAIA**
+    quits, and asks first if work is still running. The details go to
+    `~/.gaia/electron-main.log` as a `RENDER_PROCESS_GONE` line. If it keeps
+    happening, close other apps to free memory, then restart GAIA.
+  </Accordion>
+
+  <Accordion title="GAIA's assistant stopped and is restarting" icon="rotate">
+    The desktop app restarts its assistant when it stops on its own. The banner
+    shows how long it has been restarting, and your chats are saved. GAIA tries
+    up to three times in ten minutes, waiting longer before each try. If they all
+    fail, a dialog offers to restart GAIA, save diagnostics, or quit, and the
+    banner offers **Restart GAIA**, which starts the assistant again without
+    closing the app.
+
+    To report it, choose **Save diagnostics** and attach the bundle. It holds
+    these files from `~/.gaia/`:
+
+    - `electron-main.log`: the exit code and the assistant's last output.
+    - `logs/backend-faults.log`: the stack of every thread, when the assistant
+      died in a hard crash that skipped normal logging.
+  </Accordion>
+
   <Accordion title="Cannot find module 'electron'" icon="window-restore">
     **Cause**: Import path is incorrect
 
@@ -786,6 +844,49 @@ error. To run the chat model in the cloud instead, see
     chmod +x gaia-agent-ui-*.AppImage
     ./gaia-agent-ui-*.AppImage
     ```
+  </Accordion>
+
+  <Accordion title="GAIA can't start: this PC is missing something GAIA needs" icon="puzzle-piece">
+    **Cause:** a system library the desktop app needs is not installed. It
+    happens on minimal installs, containers and WSL; a full desktop install
+    already has them. The message names each missing file, for example
+    `libX11-xcb.so.1`, which GAIA needs whenever it runs on X11 rather than
+    Wayland. It appears as a dialog or a desktop notification, and in the
+    terminal when GAIA was started from one.
+
+    **Fix on Fedora:** install the desktop libraries, then open GAIA again:
+    ```bash
+    sudo dnf install gtk3 nss alsa-lib at-spi2-atk cups-libs mesa-libgbm libdrm \
+      libX11-xcb libxcb libXcomposite libXdamage libXrandr libXfixes libXtst \
+      libXScrnSaver libxkbcommon-x11 libxshmfence libnotify
+    ```
+
+    **Fix on Debian and Ubuntu:** `libX11-xcb.so.1` is in `libx11-xcb1`:
+    ```bash
+    sudo apt install libx11-xcb1
+    ```
+
+    For any other file the message names, ask your package manager which
+    package holds it, then install that package:
+    ```bash
+    dnf provides '*/libnss3.so'     # Fedora
+    apt-file search libnss3.so      # Debian, Ubuntu (sudo apt install apt-file)
+    ```
+
+    Builds before this check stop without a message in the same situation.
+  </Accordion>
+
+  <Accordion title="Cloud models and downloads fail: the certificate store has no ca-certificates.crt" icon="certificate">
+    **Cause:** the model server inside GAIA trusts HTTPS sites through exactly
+    one file, `/etc/ssl/certs/ca-certificates.crt`. The `ca-certificates`
+    package Fedora 44 first shipped leaves that file out, so every cloud model
+    and every model download fails. GAIA says so in setup's cloud step and in
+    a failed download, and `~/.gaia/lemonade/lemond.log` shows
+    `Problem with the SSL CA cert`. Your key is not the problem.
+
+    **Fix:** install your system's updates (GNOME Software, or
+    `sudo dnf upgrade ca-certificates`); the updated package adds the file.
+    Then restart GAIA.
   </Accordion>
 
   <Accordion title="Chromium sandbox / --no-sandbox on Ubuntu 24.04.1+" icon="shield-halved">
@@ -849,24 +950,11 @@ error. To run the chat model in the cloud instead, see
     environment variable, which current Electron releases ignore.
   </Accordion>
 
-  <Accordion title="Resetting a broken bootstrap" icon="rotate-left">
-    If the Python backend bootstrap (uv, virtualenv, `amd-gaia[ui]` install)
-    got interrupted or is in a half-installed state, clear the cached state
-    and relaunch:
-
-    ```bash
-    rm -rf ~/.gaia/venv ~/.gaia/electron-install-state.json
-    ./gaia-agent-ui-*.AppImage
-    ```
-
-    The AppImage will re-run its first-launch bootstrap from scratch.
-  </Accordion>
-
   <Accordion title="Log files" icon="file-lines">
     The Linux AppImage writes logs under `~/.gaia/`:
 
-    - `~/.gaia/electron-install.log` — Python backend bootstrap (uv, venv,
-      pip install) output.
+    - `~/.gaia/electron-install.log` — the backend check and GAIA agent
+      update the app runs on launch.
     - `~/.gaia/gaia.log` — runtime backend log from `gaia chat --ui`.
     - `~/.gaia/electron-main.log` — Electron main-process stdout/stderr,
       teed to disk so errors are visible even when the app was not launched
@@ -888,7 +976,8 @@ error. To run the chat model in the cloud instead, see
   <Accordion title="Collecting a diagnostics bundle for bug reports" icon="box-archive">
     GAIA ships a `gaia diagnostics` command that bundles the logs above,
     including the rotated `gaia.log.1`, `gaia.log.2`, ... copies, plus the
-    daemon, Lemonade and agent sidecar logs, together with a short
+    daemon, Lemonade and agent sidecar logs (for a Lemonade you run yourself, its
+    recent log lines with secrets removed), together with a short
     system-info snapshot (OS version, relevant environment variables, the
     ports GAIA's daemon, Lemonade and UI backend are on, and all TCP
     listeners) into a single tarball:
@@ -903,7 +992,47 @@ error. To run the chat model in the cloud instead, see
     - `--no-logs` — omit log files (useful if logs might contain sensitive
       chat content). State and system info are still included.
 
+    API keys, tokens and similar secrets are removed from the logs in the
+    bundle. In the Agent UI, **Settings → Advanced → Logs → Save all logs**
+    writes the same bundle.
+
     Attach the resulting `.tgz` to your GitHub issue.
+  </Accordion>
+
+  <Accordion title="A model call failed: the problem report it names" icon="file-medical">
+    When a call to a local model fails (GAIA couldn't reach the model
+    server, a model wouldn't load, the server stopped mid-answer or timed
+    out, setup failed, or an agent didn't start), GAIA saves what it saw at
+    that moment and the failed answer names it, for example
+    `GF-20261104-192233-3f2a`. Nothing is sent anywhere.
+
+    Each report is a JSON file in `~/.gaia/failures/` holding:
+    - GAIA, Python and Lemonade versions, the OS and kernel
+    - the CPU, GPU and NPU and each backend's state and version (llama.cpp,
+      FastFlowLM), as Lemonade reports them
+    - the model, the address the agent called and the one Lemonade listens
+      on (GAIA's own, one you installed, or a remote one), and whether an
+      API key was sent; never the key
+    - what GAIA last asked for: each load request (model, recipe options,
+      context window) and how the window was chosen, the free-memory check,
+      and each chat request's size (estimated prompt tokens, number of tools
+      and their schema size, `max_tokens`, streaming), with start and end
+      times, the HTTP status and body or the connection error. Never the
+      words of your messages
+    - the models Lemonade had loaded, whether `lemond`, `llama-server` and
+      `flm` were running and for how long, how GAIA's own `lemond` exited if
+      it stopped, and whether Lemonade restarted since the last report
+    - the error and the last 200 lines of GAIA's Lemonade log, where
+      llama.cpp and FastFlowLM print their own errors and exit codes
+
+    Keys, tokens and your home folder are taken out before the file is
+    written. GAIA keeps the last 10 reports, each at most 256 KB. It reads
+    only a Lemonade on this PC; a remote server is named but not contacted.
+
+    To share one, select **Save a troubleshooting report** under the failed
+    answer, or in **Settings → Privacy**. The bundle holds these reports,
+    GAIA's logs and this PC's details. Look it over, then attach it to your
+    GitHub issue along with the report name from the answer.
   </Accordion>
 </AccordionGroup>
 

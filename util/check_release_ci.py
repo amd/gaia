@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Refuse to release a commit that CI has not passed.
+"""Refuse to release a final that CI has not passed; report CI on a candidate.
 
 A release tag starts publish.yml, but the test workflows do not run on a tag:
 they ran (or did not) when the commit landed on main, and main has no required
-status checks. This checks, through the Actions API, that every required check
-has a successful run on the tagged commit.
+status checks. This reads, through the Actions API, each check's runs on the
+tagged commit.
 
-What is required depends on the tag. This file is the one place that says so:
+What happens depends on the tag. This file is the one place that says so:
 
-- a release candidate (vX.Y.Z-rcN) needs only RC_CRITICAL. RC_ADVISORY is
-  reported in the job summary as warnings and is never waited for or
-  dispatched, so one flaky macOS test cannot hold a candidate back. publish.yml
-  builds and smoke-tests the candidate's artifacts itself (RC_IN_RUN_CRITICAL),
-  so the hour-long dry run is advisory too;
+- a release candidate (vX.Y.Z-rcN) is never held by tests. RC_REPORTED is read
+  once, with no dispatch and no wait, each check's state (passed, failed, still
+  running, no run) goes to the job summary and a warning annotation, and the
+  script exits 0. Candidates exist to be tested; publish.yml still builds and
+  smoke-tests the candidate's own artifacts (RC_IN_RUN_CRITICAL);
 - a final (vX.Y.Z) needs FINAL_REQUIRED: every job of every workflow, plus the
-  dry run.
+  dry run. FINAL_ADVISORY is read once after that, never dispatched or waited
+  for, and each check not green is a warning that does not hold the release.
 
 A check names a workflow and, optionally, the jobs in it that count. Most
 commits on main have no run of their own: the next merge cancels it, and path
-filters skip others. So a check with no passing and no in-progress run is
-dispatched once against the tag, which tests the exact commit, and the gate
-waits for it (up to --wait-minutes). A check that is then red stops the release.
+filters skip others. So on a final, a check with no passing and no in-progress
+run is dispatched once against the tag, which tests the exact commit, and the
+gate waits for it (up to --wait-minutes). A check that is then red stops the
+release.
 
 Usage::
 
@@ -52,9 +54,12 @@ class Check:
     jobs: tuple[str, ...] = ()
     # False: the gate never starts it, and a missing run fails with `remedy`.
     dispatch: bool = True
-    # Appended to the `gh workflow run` command the report prints.
+    # Appended to the `gh workflow run` command the report prints; `{tag}` is
+    # replaced with the release tag.
     remedy_args: str = ""
     why: str = ""
+    # Only runs of these events count. Empty: any event.
+    events: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
@@ -70,9 +75,25 @@ _DRY_RUN_WHY = (
     "and the manifest"
 )
 
-# Each workflow must accept workflow_dispatch. The slowest check sets how long
-# a release waits, so this stays to what a broken candidate would ship.
-RC_CRITICAL = (
+# Named, so a push run that skipped the Linux row cannot pass as the Linux row.
+_NPU_WINDOWS = "NPU agent chat (Windows, cold)"
+_NPU_LINUX = "NPU agent chat (Linux, cold)"
+_NPU_WHY = (
+    "one Agent UI turn on the NPU default model, through GAIA's own Lemonade "
+    "and the gaia-agent sidecar, on Windows and Linux Strix Halo (#6632)"
+)
+
+# Which test_unit.yml runs count. Pull requests and the merge queue select tests
+# on every system, and a push to main selects them on Windows and macOS. An RC
+# report, which never dispatches, still reads push runs; a final needs the full
+# suite everywhere, which only a dispatched or nightly run is.
+UNIT_RC_EVENTS = ("push", "workflow_dispatch", "schedule")
+UNIT_FULL_SUITE_EVENTS = ("workflow_dispatch", "schedule")
+
+# Read once on an RC and reported; never dispatched, waited for, or blocking.
+# test_unit.yml is split so the summary says whether the Linux suite passed.
+# Each workflow must accept workflow_dispatch: the report prints that command.
+RC_REPORTED = (
     Check("lint.yml", why="formatting, imports, version fields, security scans"),
     Check(
         "test_unit.yml",
@@ -81,18 +102,8 @@ RC_CRITICAL = (
             "the full unit suite on the OS the release is built on, and every "
             "module imports on the oldest Python the wheel declares"
         ),
+        events=UNIT_RC_EVENTS,
     ),
-)
-
-# Named, so a push run that started only the Windows row cannot pass for both.
-_NPU_JOBS = ("NPU agent chat (Windows, cold)", "NPU agent chat (Linux, cold)")
-_NPU_WHY = (
-    "one Agent UI turn on the NPU default model, through GAIA's own Lemonade "
-    "and the gaia-agent sidecar, on Windows and Linux Strix Halo (#6632)"
-)
-
-# Shown on an RC, never waited for or dispatched.
-RC_ADVISORY = (
     Check(
         "test_unit.yml",
         jobs=(
@@ -100,17 +111,19 @@ RC_ADVISORY = (
             "Unit Tests (Windows, py3.12)",
             "Offline Integration Tests",
         ),
+        events=UNIT_RC_EVENTS,
     ),
     Check("test_gaia_cli_linux.yml"),
-    Check("release_train_dryrun.yml", why=_DRY_RUN_WHY),
-    Check("test_npu_agent_chat.yml", jobs=_NPU_JOBS, why=_NPU_WHY),
+    Check("release_train_dryrun.yml", remedy_args="-f rc_tag={tag}", why=_DRY_RUN_WHY),
+    Check("test_npu_agent_chat.yml", jobs=(_NPU_WINDOWS,), why=_NPU_WHY),
+    Check("test_npu_agent_chat.yml", jobs=(_NPU_LINUX,), why=_NPU_WHY),
 )
 
 # The dry run takes an RC name, so the gate never starts one for a final: run
 # it on the candidate's commit before tagging the final there.
 FINAL_REQUIRED = (
     Check("lint.yml"),
-    Check("test_unit.yml"),
+    Check("test_unit.yml", events=UNIT_FULL_SUITE_EVENTS),
     Check("test_gaia_cli_linux.yml"),
     Check(
         "release_train_dryrun.yml",
@@ -118,20 +131,24 @@ FINAL_REQUIRED = (
         remedy_args="-f rc_tag=<the candidate tagged on this commit>",
         why=_DRY_RUN_WHY,
     ),
-    Check("test_npu_agent_chat.yml", jobs=_NPU_JOBS, why=_NPU_WHY),
+    Check("test_npu_agent_chat.yml", jobs=(_NPU_WINDOWS,), why=_NPU_WHY),
 )
 
-# Jobs in publish.yml itself that approve-publish requires on a candidate.
-# Listed here so the whole RC gate reads in one place; a test pins it to the
-# workflow. The Windows setup is not one: a candidate ships without it and
-# says so (windows-setup-missing turns the run red).
+# The Linux NPU row goes back into FINAL_REQUIRED once the Linux Strix Halo
+# runners lock enough memory for the NPU model (#6764).
+FINAL_ADVISORY = (Check("test_npu_agent_chat.yml", jobs=(_NPU_LINUX,), why=_NPU_WHY),)
+
+# Jobs in publish.yml itself that approve-publish requires on a candidate: they
+# build the candidate and smoke-test those artifacts. Listed here so the whole
+# RC gate reads in one place; a test pins it to the workflow. ci-green is not
+# one. Nor is the Windows setup: a candidate ships without it and says so
+# (windows-setup-missing turns the run red).
 RC_IN_RUN_CRITICAL = (
     "build-pypi",
     "build-npm",
     "build-desktop-installers",
     "rc-flagship",
     "tui-installers-complete",
-    "ci-green",
 )
 
 PENDING_STATUSES = {"queued", "in_progress", "waiting", "requested", "pending"}
@@ -151,7 +168,9 @@ class Verdict:
 
 def _dispatch_command(check: Check, repo: str, tag: str) -> str:
     cmd = f"gh workflow run {check.workflow} --repo {repo} --ref {tag}"
-    return f"{cmd} {check.remedy_args}" if check.remedy_args else cmd
+    if not check.remedy_args:
+        return cmd
+    return f"{cmd} {check.remedy_args.replace('{tag}', tag)}"
 
 
 def _missing(check: Check, repo: str, tag: str) -> Verdict:
@@ -172,6 +191,8 @@ def judge(
     get_jobs: Callable[[int], list[dict]] | None = None,
 ) -> Verdict:
     """Decide one check's state from its workflow's runs on the commit."""
+    if check.events:
+        runs = [r for r in runs if r.get("event") in check.events]
     if not runs:
         return _missing(check, repo, tag)
     if not check.jobs:
@@ -331,27 +352,84 @@ def check(
         sleep(poll_seconds)
 
 
-def advise(
+def snapshot(
     repo: str,
     tag: str,
     checks: tuple[Check, ...],
     get_runs: Callable[[str], list[dict]],
     get_jobs: Callable[[int], list[dict]] | None = None,
 ) -> list[Verdict]:
-    """Each advisory check's state right now: no dispatch, no wait."""
+    """Each check's state right now: no dispatch, no wait."""
     return [judge(c, get_runs(c.workflow), repo, tag, get_jobs) for c in checks]
 
 
-def report(
-    verdicts: list[Verdict],
-    sha: str,
-    is_rc: bool = False,
-    advisory: list[Verdict] | None = None,
-) -> tuple[bool, str]:
-    ok = all(v.state == "success" for v in verdicts)
-    kind = "release candidate" if is_rc else "final release"
+RC_STATE_WORDS = {
+    "success": "passed",
+    "failed": "failed",
+    "pending": "still running",
+    "missing": "no run on this commit",
+}
+
+
+def report_rc(verdicts: list[Verdict], sha: str, tag: str) -> tuple[str, list[str]]:
+    """A candidate's CI as a job summary plus one warning per check not green."""
     lines = [
-        f"### CI on {sha[:12]} ({kind} gate)",
+        f"### CI on {sha[:12]} ({tag}: reported, does not block a release candidate)",
+        "",
+        "| Check | State | Detail |",
+        "|---|---|---|",
+    ]
+    lines += [
+        f"| `{v.check.label}` | {RC_STATE_WORDS[v.state]} | {v.detail} |"
+        for v in verdicts
+    ]
+    warnings = []
+    not_green = [v for v in verdicts if v.state != "success"]
+    if not_green:
+        lines += [
+            "",
+            f"{tag} publishes anyway: tests never hold a release candidate. The "
+            "final requires these unless marked advisory, so before tagging it:",
+            "",
+        ]
+        for v in not_green:
+            state = RC_STATE_WORDS[v.state]
+            advisory = v.check in FINAL_ADVISORY
+            lines.append(
+                f"- `{v.check.label}` {state}."
+                + (" Advisory on the final." if advisory else "")
+                + (f" `{v.remedy}`" if v.remedy else "")
+            )
+            final = (
+                "the final reports it as advisory"
+                if advisory
+                else "the final requires it"
+            )
+            warnings.append(
+                f"{v.check.label} {state} on {sha[:12]} ({v.detail}). "
+                f"{tag} publishes anyway; {final}."
+            )
+    return "\n".join(lines), warnings
+
+
+def advisory_warnings(advisory: list[Verdict], sha: str) -> list[str]:
+    """One warning per advisory check on a final that is not green."""
+    return [
+        f"{v.check.label} {RC_STATE_WORDS[v.state]} on {sha[:12]} ({v.detail}). "
+        "Advisory on a final: it does not hold the release."
+        for v in advisory
+        if v.state != "success"
+    ]
+
+
+def report(
+    verdicts: list[Verdict], sha: str, advisory: list[Verdict] | None = None
+) -> tuple[bool, str]:
+    """A final's gate: every required check must have passed; advisory never holds."""
+    advisory = advisory or []
+    ok = all(v.state == "success" for v in verdicts)
+    lines = [
+        f"### CI on {sha[:12]} (final release gate)",
         "",
         "| Check | Gate | State | Detail |",
         "|---|---|---|---|",
@@ -360,9 +438,12 @@ def report(
         f"| `{v.check.label}` | required | {v.state} | {v.detail} |" for v in verdicts
     ]
     lines += [
-        f"| `{v.check.label}` | advisory | {v.state} | {v.detail} |"
-        for v in advisory or []
+        f"| `{v.check.label}` | advisory | {v.state} | {v.detail} |" for v in advisory
     ]
+    not_green = [v for v in advisory if v.state != "success"]
+    if not_green:
+        lines += ["", "Advisory, so these do not hold the release:", ""]
+        lines += [f"- `{v.check.label}` {RC_STATE_WORDS[v.state]}." for v in not_green]
     blocked = [v for v in verdicts if v.state != "success"]
     if blocked:
         lines += ["", "Nothing was published. To unblock this release:", ""]
@@ -384,14 +465,14 @@ def report(
                     f"new tag. If it was a flake, `{v.remedy}`, then re-run this "
                     "release's failed jobs once it passes."
                 )
-    warned = [v for v in advisory or [] if v.state != "success"]
-    if warned:
-        lines += [
-            "",
-            "Advisory checks are not green. They do not block a release candidate, "
-            "but the final requires them, so fix them before tagging it.",
-        ]
     return ok, "\n".join(lines)
+
+
+def _write_summary(text: str) -> None:
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a", encoding="utf-8") as f:
+            f.write(text + "\n")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -419,31 +500,30 @@ def main(argv: list[str] | None = None) -> int:
     def get_jobs(run_id: int) -> list[dict]:
         return fetch_jobs(args.repo, run_id, token)
 
+    if is_rc:
+        verdicts = snapshot(args.repo, args.tag, RC_REPORTED, get_runs, get_jobs)
+        text, warnings = report_rc(verdicts, args.sha, args.tag)
+        print(text)
+        _write_summary(text)
+        for w in warnings:
+            print(f"::warning::{w}")
+        return 0
+
     verdicts = check(
         args.repo,
         args.tag,
-        RC_CRITICAL if is_rc else FINAL_REQUIRED,
+        FINAL_REQUIRED,
         get_runs,
         lambda c: dispatch(args.repo, c, args.tag, token),
         args.wait_minutes,
         get_jobs=get_jobs,
     )
-    advisory = (
-        advise(args.repo, args.tag, RC_ADVISORY, get_runs, get_jobs) if is_rc else []
-    )
-    ok, text = report(verdicts, args.sha, is_rc, advisory)
+    advisory = snapshot(args.repo, args.tag, FINAL_ADVISORY, get_runs, get_jobs)
+    ok, text = report(verdicts, args.sha, advisory)
     print(text)
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as f:
-            f.write(text + "\n")
-    for v in advisory:
-        if v.state != "success":
-            print(
-                f"::warning::advisory {v.check.label} is {v.state} on "
-                f"{args.sha[:12]}: {v.detail}. It does not block {args.tag}; "
-                "the final requires it."
-            )
+    _write_summary(text)
+    for w in advisory_warnings(advisory, args.sha):
+        print(f"::warning::{w}")
     if not ok:
         print(
             f"::error::{args.tag} ({args.sha[:12]}) is not green on its required "

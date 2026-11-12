@@ -133,7 +133,10 @@ def test_relayed_sidecar_history_carries_the_withdrawn_reply(db, monkeypatch):
 
     pairs = helpers._build_history_pairs(helpers.model_context_messages(db, sid))
 
-    assert helpers._relayed_history(pairs, "M-GGUF", "next", None, None) == [
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    handler = SSEOutputHandler()
+    assert helpers._relayed_history(pairs, "M-GGUF", "next", handler, None) == [
         {"role": "user", "content": "Write an 800-word essay."},
         {"role": "assistant", "content": STOPPED},
     ]

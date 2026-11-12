@@ -25,6 +25,7 @@ describe('localizeLiveStatus', () => {
             'Waiting for GAIA to start this answer…',
             'The model server stopped. GAIA is restarting it…',
             'Starting the model server…',
+            'Reading page 4 of 12…',
         ]) {
             expect(localizeLiveStatus(tEn, label)).toBe(label);
         }
@@ -42,6 +43,12 @@ describe('localizeLiveStatus', () => {
         expect(ar('Reasoning — 1,234 words so far')).toContain('الكلمات حتى الآن: 1,234');
         expect(ar('Connection lost. Reconnecting (attempt 2 of 3)…')).toContain('المحاولة 2 من 3');
         expect(ar('Loading Gemma-4-E4B-it-GGUF into memory')).toContain('جارٍ تحميل Gemma-4-E4B-it-GGUF');
+    });
+
+    it('keeps the page counts in the Arabic extraction progress line', () => {
+        expect(ar('Reading page 4 of 12…')).toContain('4');
+        expect(ar('Reading page 4 of 12…')).toContain('12');
+        expect(ar('Reading page 4 of 12…')).not.toBe('Reading page 4 of 12…');
     });
 
     it('shows a line it does not know as written', () => {

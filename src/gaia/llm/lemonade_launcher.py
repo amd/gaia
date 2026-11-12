@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from gaia.env import child_env
+
 log = logging.getLogger(__name__)
 
 # macOS: the Lemonade app installs the daemon + client into a standard bin
@@ -189,6 +191,7 @@ def get_installed_version(tooling: LemonadeTooling) -> Optional[str]:
     try:
         result = subprocess.run(
             [tooling.client_path, "--version"],
+            env=child_env(),
             capture_output=True,
             text=True,
             timeout=10,
@@ -313,8 +316,8 @@ def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
     """Whether the server to start for *base_url* is GAIA's own, not a system install.
 
     The one decision every start path makes before launching anything: True
-    when ``gaia init`` installed GAIA's embedded server (this version, or an
-    older one the daemon upgrades when it starts it), ``LEMONADE_BASE_URL``
+    when ``gaia init`` installed GAIA's embedded server (this version, or a
+    mismatched one the daemon repairs when it starts it), ``LEMONADE_BASE_URL``
     names no other, and *base_url* is unset or is the address GAIA resolves on
     its own. That server is started through the daemon, never by
     :func:`resolve_lemonade` / :func:`build_start_command`, and binds a port
@@ -330,11 +333,28 @@ def gaia_runs_lemonade(base_url: Optional[str] = None) -> bool:
     if configured_lemonade_url():
         return False
     embedded = EmbeddedLemonade()
-    if not (embedded.is_installed() or embedded.replaces_older_install()):
+    if not (
+        embedded.is_installed()
+        or embedded.replaces_other_install()
+        or embedded.is_incomplete()
+    ):
         return False
     if base_url is None:
         return True
     return resolve_lemonade_base_url(base_url) == resolve_lemonade_base_url()
+
+
+def server_down_advice(base_url: Optional[str] = None) -> str:
+    """What an app user does about a model server that isn't answering.
+
+    GAIA's own server is started by the daemon on the next message; one the
+    user runs needs this machine's start instruction.
+    """
+    from gaia.llm.surface_hints import APP_SERVER_DOWN_HINT
+
+    if gaia_runs_lemonade(base_url):
+        return APP_SERVER_DOWN_HINT
+    return describe_start_hint().instruction
 
 
 def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:

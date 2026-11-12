@@ -18,8 +18,10 @@ import re
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from urllib.parse import urlsplit
 
 from gaia.agents.base.file_snapshots import before_change
+from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.agents.tools.workspace_paths import _workspace_target
 from gaia.tool_cancellation import ToolCancelled, tool_cancelled
 
@@ -43,6 +45,15 @@ _NEAR_EMPTY_NOTE = (
     "if you have one; otherwise try another source, or report the value as not "
     "found.]"
 )
+
+
+class _DownloadRefused(ValueError):
+    """The destination screen refused the file before anything was written."""
+
+
+def _download_refusal(reason: str) -> Dict[str, Any]:
+    """A download the write policy stopped before it ran."""
+    return {**NOT_EXECUTED, "status": "error", "error": reason}
 
 
 def _download_denied(validator, dest_path: Path) -> str:
@@ -165,6 +176,149 @@ def _search_unavailable_result(
             "fetch_page on a URL you already know. Do not invent search results."
         ),
     }
+
+
+#: Appended to a result's title line; the Agent UI strips it from source titles.
+PRIMARY_SOURCE_MARKER = " [primary source]"
+
+#: Hosts whose first path segment is the owner and second is the repository.
+_REPO_HOSTS = frozenset(
+    {"github.com", "gitlab.com", "codeberg.org", "bitbucket.org", "huggingface.co"}
+)
+
+#: Package registries, keyed by host, with the path prefix before the name.
+_REGISTRY_PREFIXES = {
+    "pypi.org": ("project",),
+    "npmjs.com": ("package",),
+    "crates.io": ("crates",),
+    "rubygems.org": ("gems",),
+    "nuget.org": ("packages",),
+    "pkg.go.dev": (),
+    "sourceforge.net": ("projects",),
+}
+
+#: Query words that describe the question, not the thing it is about.
+_GENERIC_QUERY_WORDS = frozenset(
+    {
+        "about",
+        "best",
+        "build",
+        "changelog",
+        "check",
+        "cite",
+        "current",
+        "docs",
+        "documentation",
+        "download",
+        "free",
+        "from",
+        "guide",
+        "install",
+        "latest",
+        "news",
+        "newest",
+        "notes",
+        "number",
+        "official",
+        "online",
+        "page",
+        "recent",
+        "release",
+        "released",
+        "releases",
+        "server",
+        "site",
+        "software",
+        "stable",
+        "that",
+        "this",
+        "today",
+        "tutorial",
+        "update",
+        "updates",
+        "used",
+        "version",
+        "versions",
+        "website",
+        "what",
+        "when",
+        "where",
+        "which",
+        "with",
+    }
+)
+
+_RELEASE_QUERY_WORDS = frozenset(
+    {"version", "versions", "release", "releases", "released", "changelog"}
+)
+
+_RELEASE_PRIMARY_NOTE = (
+    "This is a version or release question. Open the project's own releases, "
+    "changelog or download page with fetch_page (results marked [primary "
+    "source] come from the project itself) and answer from that page, not "
+    "from a search snippet."
+)
+
+_RELEASE_NO_PRIMARY_NOTE = (
+    "None of these results comes from the project itself (its own site, "
+    "repository or package registry). News articles and aggregators often lag "
+    "behind the newest release, so do not answer from them: search again for "
+    "the project's releases page (for example '<project> releases github') or "
+    "fetch it directly, then cite that page."
+)
+
+
+def _query_words(query: str) -> List[str]:
+    return re.findall(r"[a-z0-9]+", query.lower())
+
+
+def _project_words(query: str) -> frozenset:
+    """Query words distinctive enough to name the subject's own domain."""
+    return frozenset(
+        w
+        for w in _query_words(query)
+        if len(w) >= 4 and not w.isdigit() and w not in _GENERIC_QUERY_WORDS
+    )
+
+
+def _is_release_query(query: str) -> bool:
+    return not _RELEASE_QUERY_WORDS.isdisjoint(_query_words(query))
+
+
+def _is_primary_source(url: str, project_words: frozenset) -> bool:
+    """True when *url* is the subject's own site, repository or package page."""
+    if not project_words:
+        return False
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower().removeprefix("www.")
+    segments = [s for s in parts.path.lower().split("/") if s]
+    if host in _REPO_HOSTS:
+        # The owner names the project, or the repository is exactly its name:
+        # someone's "climate-memes" repo is not climate's own page.
+        if not segments:
+            return False
+        owner = set(segments[0].split("-"))
+        repo = segments[1] if len(segments) > 1 else ""
+        return not project_words.isdisjoint(owner) or repo in project_words
+    if host in _REGISTRY_PREFIXES:
+        prefix = _REGISTRY_PREFIXES[host]
+        if segments[: len(prefix)] != list(prefix) or len(segments) <= len(prefix):
+            return False
+        name = segments[len(prefix)]
+        return not project_words.isdisjoint(re.split(r"[-_.]", name))
+    # Whole label parts only, so "realpython.com" is not python's own site.
+    labels = host.split(".")[:-1]
+    words = {w for label in labels for w in label.split("-")}
+    return not project_words.isdisjoint(words)
+
+
+def _rank_by_source(
+    results: List[Dict[str, str]], query: str
+) -> List[Tuple[Dict[str, str], bool]]:
+    """Results paired with their primary flag, primary sources first."""
+    words = _project_words(query)
+    flagged = [(r, _is_primary_source(r.get("url", ""), words)) for r in results]
+    return sorted(flagged, key=lambda pair: not pair[1])
 
 
 def _merge_spans(spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
@@ -515,7 +669,11 @@ class BrowserToolsMixin:
             """Search the web and return results with titles, URLs, and snippets.
 
             Uses DuckDuckGo to find relevant web pages. Returns titles, URLs, and
-            brief descriptions. Use fetch_page to read the full content of any result.
+            brief descriptions. Use fetch_page to read the full content of any
+            result. For a version or release question, the project's own site,
+            repository or package page is listed first and marked [primary
+            source]: fetch its releases or changelog page and answer from it,
+            since snippets and news articles go stale.
 
             Args:
                 query: Search query string
@@ -574,13 +732,27 @@ class BrowserToolsMixin:
             lines = [f'Web search results for: "{query}"', ""]
             if source_note:
                 lines[1:1] = [source_note]
-            for i, result in enumerate(results, 1):
-                lines.append(f"{i}. {result['title']}")
+            # Only release questions: on everyday searches a shared word
+            # ("boston" in boston.com) does not make a site the subject's own.
+            release_query = _is_release_query(query)
+            ranked = (
+                _rank_by_source(results, query)
+                if release_query
+                else [(r, False) for r in results]
+            )
+            for i, (result, primary) in enumerate(ranked, 1):
+                marker = PRIMARY_SOURCE_MARKER if primary else ""
+                lines.append(f"{i}. {result['title']}{marker}")
                 lines.append(f"   {result['url']}")
                 if result.get("snippet"):
                     lines.append(f"   {result['snippet']}")
                 lines.append("")
 
+            if release_query:
+                any_primary = any(primary for _, primary in ranked)
+                lines.append(
+                    _RELEASE_PRIMARY_NOTE if any_primary else _RELEASE_NO_PRIMARY_NOTE
+                )
             lines.append("Use fetch_page(url) to read the full content of any result.")
             return "\n".join(lines)
 
@@ -589,7 +761,7 @@ class BrowserToolsMixin:
             url: str,
             save_to: str = "~/Downloads",
             filename: str = None,
-        ) -> str:
+        ) -> Union[str, Dict[str, Any]]:
             """Download a file from a URL to the local filesystem.
 
             Downloads the file and saves it locally. Useful for getting documents,
@@ -616,7 +788,7 @@ class BrowserToolsMixin:
                 resolved_dir = str(Path(save_to).expanduser().resolve())
                 is_blocked, reason = validator.is_write_blocked(resolved_dir)
                 if is_blocked:
-                    return f"Error: {reason}"
+                    return _download_refusal(reason)
 
             # WebClient calls this with the final file path before creating
             # anything, so a refusal leaves the filesystem untouched.
@@ -624,7 +796,7 @@ class BrowserToolsMixin:
                 if validator:
                     is_blocked, reason = validator.is_write_blocked(str(dest_path))
                     if is_blocked:
-                        raise ValueError(
+                        raise _DownloadRefused(
                             f"Downloaded file blocked by security policy: {reason}"
                         )
                     # Ask about the folder when it can be granted whole, so one
@@ -634,7 +806,7 @@ class BrowserToolsMixin:
                     if validator.grant_refusal_reason(str(target)):
                         target = dest_path
                     if not validator.is_path_allowed(str(target), prompt_user=True):
-                        raise ValueError(_download_denied(validator, dest_path))
+                        raise _DownloadRefused(_download_denied(validator, dest_path))
                 before_change(dest_path, "download_file")
 
             try:
@@ -644,6 +816,8 @@ class BrowserToolsMixin:
                     filename=filename,
                     on_path_resolved=_screen_destination,
                 )
+            except _DownloadRefused as e:
+                return _download_refusal(str(e))
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:

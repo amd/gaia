@@ -1,31 +1,51 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useState } from 'react';
-import { ChevronRight, FileDown, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ChevronRight } from 'lucide-react';
 import { useT } from '../../i18n/useT';
-import * as api from '../../services/api';
 import type { SetupLogStage, SetupRunStatus } from '../../types';
+import { TroubleshootingReport, type ReportClasses } from '../TroubleshootingReport';
 import { FollowLog } from './FollowLog';
-import { formatBytes } from './format';
 
 const STAGES: SetupLogStage[] = ['check', 'download', 'test'];
 
-function errorText(err: unknown): string {
-    return err instanceof Error ? err.message : String(err);
+const REPORT_CLASSES: ReportClasses = {
+    root: 'setup-report',
+    button: 'btn-secondary setup-report-button',
+    hint: 'setup-hint',
+    error: 'setup-error',
+};
+
+const PERCENT = /\d+(\.\d+)?\s*%/;
+
+/** A redrawn progress bar prints a line per redraw: keep only the last of each run. */
+export function collapseProgress(lines: string[]): string[] {
+    const out: string[] = [];
+    let last: string | null = null;
+    for (const line of lines) {
+        // Same text before the percent is the same bar; a new file or shard keeps its own line.
+        const at = line.search(PERCENT);
+        const shape = at >= 0 ? line.slice(0, at) : null;
+        if (shape !== null && shape === last) out[out.length - 1] = line;
+        else out.push(line);
+        last = shape;
+    }
+    return out;
 }
 
 /**
- * Each stage's log, collapsed until asked for, and a report to send us.
- * The report carries setup's whole record, so a user who hits a problem has
- * everything we need without a terminal.
+ * Each stage's log and a report to send us, behind one quiet "Having trouble?"
+ * that opens by itself when a step fails. The report carries setup's whole
+ * record, so a user who hits a problem has everything we need without a terminal.
  */
-export function StageLogs({ run, before = {} }: { run: SetupRunStatus | null; before?: Partial<Record<SetupLogStage, string[]>> }) {
+export function StageLogs({ run, before = {}, failed = false }: { run: SetupRunStatus | null; before?: Partial<Record<SetupLogStage, string[]>>; failed?: boolean }) {
     const t = useT();
+    const [help, setHelp] = useState(failed);
     const [open, setOpen] = useState<Set<SetupLogStage>>(() => new Set());
-    const [saving, setSaving] = useState(false);
-    const [saved, setSaved] = useState<api.SetupReport | null>(null);
-    const [error, setError] = useState<string | null>(null);
+    useEffect(() => {
+        if (failed) setHelp(true);
+    }, [failed]);
 
     const toggle = (stage: SetupLogStage) => setOpen((s) => {
         const next = new Set(s);
@@ -33,58 +53,31 @@ export function StageLogs({ run, before = {} }: { run: SetupRunStatus | null; be
         return next;
     });
 
-    const save = useCallback(async () => {
-        setSaving(true);
-        setError(null);
-        setSaved(null);
-        try {
-            const report = await api.createSetupReport();
-            const blob = await api.fetchSetupReport(report.name);
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = report.name;
-            a.click();
-            // Later, not now: the desktop app's save dialog reads the URL after the click.
-            setTimeout(() => URL.revokeObjectURL(url), 60_000);
-            setSaved(report);
-        } catch (err) {
-            setError(t('setup.logs.reportFailed', { error: errorText(err) }));
-        } finally {
-            setSaving(false);
-        }
-    }, [t]);
-
     // What the screen saw before the run, then what the run printed.
-    const linesOf = (stage: SetupLogStage) => [...(before[stage] ?? []), ...(run?.logs?.[stage] ?? [])];
+    const linesOf = (stage: SetupLogStage) => collapseProgress([...(before[stage] ?? []), ...(run?.logs?.[stage] ?? [])]);
     const stages = STAGES.filter((s) => linesOf(s).length > 0);
     return (
         <section className="setup-logs" aria-label={t('setup.logs.title')}>
-            {stages.map((stage) => {
-                const lines = linesOf(stage);
-                const shown = open.has(stage);
-                return (
-                    <div key={stage} className="setup-log">
-                        <button type="button" className="setup-log-toggle" onClick={() => toggle(stage)} aria-expanded={shown}>
-                            <ChevronRight size={13} className={shown ? 'is-open' : ''} aria-hidden="true" /> {t(`setup.logs.${stage}`)}
-                        </button>
-                        {shown && <FollowLog lines={lines} className="setup-log-pre" />}
-                    </div>
-                );
-            })}
-            <div className="setup-report">
-                <button type="button" className="btn-secondary setup-report-button" onClick={() => void save()} disabled={saving}>
-                    {saving ? <Loader2 size={13} className="spin" aria-hidden="true" /> : <FileDown size={13} aria-hidden="true" />}
-                    <span>{t('setup.logs.report')}</span>
-                </button>
-                <span className="setup-hint">{t('setup.logs.reportNote')}</span>
-                {saved && (
-                    <p className="setup-hint" role="status">
-                        {t('setup.logs.reportSaved', { size: formatBytes(saved.size_bytes) })} <bdi dir="ltr">{saved.path}</bdi>
-                    </p>
-                )}
-                {error && <p className="setup-error" role="alert">{error}</p>}
-            </div>
+            <button type="button" className="setup-log-toggle setup-help-toggle" onClick={() => setHelp((h) => !h)} aria-expanded={help} aria-controls="setup-help">
+                <ChevronRight size={13} className={help ? 'is-open' : ''} aria-hidden="true" /> {t('setup.logs.help')}
+            </button>
+            {help && (
+                <div id="setup-help" className="setup-help">
+                    {stages.map((stage) => {
+                        const lines = linesOf(stage);
+                        const shown = open.has(stage);
+                        return (
+                            <div key={stage} className="setup-log">
+                                <button type="button" className="setup-log-toggle" onClick={() => toggle(stage)} aria-expanded={shown}>
+                                    <ChevronRight size={13} className={shown ? 'is-open' : ''} aria-hidden="true" /> {t(`setup.logs.${stage}`)}
+                                </button>
+                                {shown && <FollowLog lines={lines} className="setup-log-pre" />}
+                            </div>
+                        );
+                    })}
+                    <TroubleshootingReport classes={REPORT_CLASSES} note={t('setup.logs.reportNote')} />
+                </div>
+            )}
         </section>
     );
 }

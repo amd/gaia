@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -48,6 +49,30 @@ def test_a_repeat_right_after_a_warm_up_is_debounced():
     warmer.request("a")
     warmer.wait(5)
     assert warmer.request("b") is False
+
+
+def test_a_fresh_request_skips_the_debounce():
+    calls = []
+    warmer = warmup.PrefixWarmer(lambda: calls.append(1) or {"seconds": 0.1})
+    warmer.request("a")
+    warmer.wait(5)
+    assert warmer.request("model pick", fresh=True) is True
+    warmer.wait(5)
+    assert calls == [1, 1]
+
+
+def test_a_fresh_request_during_a_warm_up_runs_once_it_ends():
+    job, release, calls = _gate_job({"seconds": 1.0})
+    warmer = warmup.PrefixWarmer(job)
+    warmer.request("a")
+    assert warmer.request("model pick", fresh=True) is False
+    assert warmer.request("model pick", fresh=True) is False
+    release.set()
+    deadline = time.monotonic() + 5
+    while len(calls) < 2 and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert warmer.wait(5)
+    assert calls == [1, 1]
 
 
 def test_never_starts_while_a_chat_turn_runs():
@@ -475,6 +500,7 @@ def ui_flagship(monkeypatch, tmp_path):
 
         client = agent.chat.llm_client
         monkeypatch.setattr(client, "chat", fake_chat)
+        monkeypatch.setattr(client._backend, "slot_count", lambda _model: 3)
         for name, value in (
             ("get_last_usage", None),
             ("get_last_ttft_seconds", None),
@@ -510,8 +536,9 @@ def test_ui_warm_up_primes_a_new_chats_first_turn(ui_flagship):
     from gaia.ui.database import resolved_default_model
 
     result = warmup._warm_new_chat_prefix(db)
-    assert result is not None and len(requests) == 1
-    warm = requests[-1]
+    assert result is not None and len(requests) == 2
+    warm, full = requests
+    assert len(warm[1]) < len(full[1])
 
     session = {"model": resolved_default_model(), "agent_type": "gaia", "device": "gpu"}
     model_id, device_ctx = chat.resolve_session_model(session, "gaia", None, registry)
@@ -529,7 +556,6 @@ def test_ui_warm_up_primes_a_new_chats_first_turn(ui_flagship):
             library_paths=[],
             allowed=chat._compute_allowed_paths([]),
             session_id="0f6c2d0e-real-session",
-            dynamic_tools=False,
             memory_incognito=chat._memory_off(session, db),
         ),
     )

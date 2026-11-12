@@ -320,3 +320,106 @@ def test_load_dotenv_is_only_called_from_gaia_env():
         "Call gaia.env.load_env() instead of load_dotenv() so GAIA_NO_DOTENV "
         f"is honored: {offenders}"
     )
+
+
+BUNDLE = "/home/u/.gaia/app-core/_internal"
+
+
+class TestFrozenLoaderPaths:
+    """A frozen GAIA on Linux must not hand its bundled libraries to its children."""
+
+    @pytest.fixture
+    def frozen_linux(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(sys, "_MEIPASS", BUNDLE, raising=False)
+
+    def test_restores_the_users_library_path(self, frozen_linux, monkeypatch):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
+        monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+        env = gaia_env.child_env()
+        assert env["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+        assert "LD_LIBRARY_PATH_ORIG" not in env
+        # A gaia the child starts sets up its own bundle instead of reusing ours.
+        assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
+    def test_drops_the_bundle_path_when_the_user_had_none(
+        self, frozen_linux, monkeypatch
+    ):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/home/u/.gaia/app-core/_internal")
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+        assert "LD_LIBRARY_PATH" not in gaia_env.child_env()
+
+    def test_a_second_pass_keeps_the_users_path(self, frozen_linux, monkeypatch):
+        """The entry unfreezes os.environ at start; child_env runs it again."""
+        monkeypatch.setenv("LD_LIBRARY_PATH", f"{BUNDLE}:/opt/rocm/lib")
+        monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+        gaia_env.unfreeze_loader_paths(os.environ)
+        assert gaia_env.child_env()["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+
+    def test_a_path_set_after_start_is_kept(self, frozen_linux, monkeypatch):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/rocm/lib")
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+        assert gaia_env.child_env()["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+
+    def test_a_relaunch_of_itself_reuses_the_bundle_and_its_libraries(
+        self, frozen_linux, monkeypatch
+    ):
+        """No reset (a one-file build would unpack again), and the bundle path:
+        the reusing child finds its libraries only through it."""
+        monkeypatch.setenv("LD_LIBRARY_PATH", f"{BUNDLE}:/opt/rocm/lib")
+        monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+        monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
+        env = gaia_env.child_env(relaunch_self=True)
+        assert env["LD_LIBRARY_PATH"] == f"{BUNDLE}:/opt/rocm/lib"
+        assert env["LD_LIBRARY_PATH_ORIG"] == "/opt/rocm/lib"
+        assert "PYINSTALLER_RESET_ENVIRONMENT" not in env
+
+    def test_a_relaunch_after_the_startup_pass_gets_the_bundle_back(
+        self, frozen_linux, monkeypatch
+    ):
+        monkeypatch.setenv("LD_LIBRARY_PATH", f"{BUNDLE}:/opt/rocm/lib")
+        monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+        gaia_env.unfreeze_loader_paths(os.environ)
+        relaunch = gaia_env.child_env(relaunch_self=True)
+        assert relaunch["LD_LIBRARY_PATH"] == f"{BUNDLE}:/opt/rocm/lib"
+        assert "PYINSTALLER_RESET_ENVIRONMENT" not in relaunch
+        other = gaia_env.child_env()
+        assert other["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+        assert other["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
+
+    def test_a_relaunch_with_no_user_path_gets_only_the_bundle(
+        self, frozen_linux, monkeypatch
+    ):
+        monkeypatch.setenv("LD_LIBRARY_PATH", BUNDLE)
+        monkeypatch.delenv("LD_LIBRARY_PATH_ORIG", raising=False)
+        gaia_env.unfreeze_loader_paths(os.environ)
+        env = gaia_env.child_env(relaunch_self=True)
+        assert env["LD_LIBRARY_PATH"] == BUNDLE
+        assert "LD_LIBRARY_PATH_ORIG" not in env
+
+    def test_an_explicit_path_still_wins(self, frozen_linux, monkeypatch):
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/bundle")
+        env = gaia_env.child_env({"LD_LIBRARY_PATH": "/caller"})
+        assert env["LD_LIBRARY_PATH"] == "/caller"
+
+    def test_source_runs_keep_the_path(self, monkeypatch):
+        monkeypatch.delattr(sys, "frozen", raising=False)
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/rocm/lib")
+        assert gaia_env.child_env()["LD_LIBRARY_PATH"] == "/opt/rocm/lib"
+
+    @pytest.mark.parametrize("platform", ["darwin", "win32"])
+    def test_other_platforms_keep_the_users_values(self, monkeypatch, platform):
+        """PyInstaller only rewrites the path on Linux; elsewhere it is the user's."""
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        monkeypatch.setattr(sys, "platform", platform)
+        monkeypatch.setenv("LD_LIBRARY_PATH", "/opt/x")
+        monkeypatch.setenv("DYLD_LIBRARY_PATH", "/opt/y")
+        monkeypatch.setenv("LIBPATH", "C:/vs/lib")
+        env = gaia_env.child_env()
+        assert (env["LD_LIBRARY_PATH"], env["DYLD_LIBRARY_PATH"], env["LIBPATH"]) == (
+            "/opt/x",
+            "/opt/y",
+            "C:/vs/lib",
+        )

@@ -127,7 +127,6 @@
                     "pages": [
                       "guides/mcp/agent-ui",
                       "guides/mcp/tui",
-                      "guides/mcp/client",
                       "guides/mcp/windows-system-health"
                     ]
                   }
@@ -322,12 +321,6 @@
             ]
           },
           {
-            "group": "Packaging",
-            "pages": [
-              "spec/electron-integration"
-            ]
-          },
-          {
             "group": "Agents & Apps",
             "pages": [
               "spec/mcp-agent",
@@ -414,6 +407,8 @@
             "group": "Agent UI",
             "pages": [
               "plans/gaia-ui-redesign",
+              "plans/voice",
+              "plans/phone-calls",
               "plans/security-model",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
@@ -443,6 +438,7 @@
               "plans/cua",
               "plans/docker-containers",
               "plans/mcp-docs",
+              "plans/codebase-knowledge-index",
               "plans/desktop-installer",
               "plans/tool-loader",
               "plans/nightly-benchmarks",
@@ -466,6 +462,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.26.0",
               "releases/v0.25.4",
               "releases/v0.25.3",
               "releases/v0.25.2",
@@ -532,7 +529,7 @@
   "navbar": {
     "links": [
       {
-        "label": "v0.25.4 \u00b7 Lemonade 2026.44.1",
+        "label": "v0.26.0 \u00b7 Lemonade 2026.44.1",
         "href": "https://github.com/amd/gaia/releases"
       },
       {
@@ -566,6 +563,10 @@
     "copyright": "Copyright \u00a9 2024-2026 Advanced Micro Devices, Inc."
   },
   "redirects": [
+    {
+      "source": "/spec/electron-integration",
+      "destination": "/sdk/sdks/agent-ui"
+    },
     {
       "source": "/guides/hub-publishing",
       "destination": "/guides/custom-agent"

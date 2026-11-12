@@ -367,8 +367,15 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// `final` with the "stopped" text) must still clear cancelPending here,
 		// or the next Esc/Ctrl+C's guard is stuck failing for the rest of the
 		// session (#2901 second-cycle crash).
+		// Only a reply the user asked for: not a stopped turn, a /model
+		// switch's confirmation, or the hidden warm-up.
+		readable := content != "" && !m.cancelPending && !m.awaitingModelSwitch && !m.warming
 		m.settleTurn()
 		m.updateViewport()
+		if readable {
+			read, readCmd := m.autoReadAloud(content)
+			return read, readCmd, true
+		}
 		return m, nil, true
 
 	case event.CanonicalErrorEvent:

@@ -13,7 +13,8 @@ Single database (``~/.gaia/memory.db`` by default; ``GAIA_MEMORY_DB`` or
 
 Features:
 - FTS5 search with AND default, OR fallback, BM25 ranking
-- Knowledge deduplication (>80% word overlap in same category+context)
+- Knowledge deduplication (restatements and refinements only; a changed
+  value is a new row that consolidation retires)
 - Confidence scoring with decay (0.9x after 30 days of no access)
 - Context scoping (work, personal, global, project-specific)
 - Sensitivity classification (excluded from default search)
@@ -38,8 +39,10 @@ from typing import (
     Dict,
     Iterator,
     List,
+    NamedTuple,
     Optional,
     Sequence,
+    Tuple,
     Union,
     cast,
 )
@@ -48,6 +51,30 @@ from uuid import uuid4
 from gaia.utils.sqlite_wal import enable_wal
 
 logger = logging.getLogger(__name__)
+
+
+class SkillOutcomeRecord(NamedTuple):
+    """A procedure's record after ``MemoryStore.record_skill_outcome``.
+
+    ``success_count`` / ``attempt_count`` are the row's totals: birth counts in
+    tool calls plus one per outcome.  ``outcomes`` / ``outcome_successes`` count
+    turns since the lineage was learned, and ``learned_from`` the sessions it
+    was distilled from — the two numbers in the same unit.
+    ``unscored_outcomes`` are outcomes counted before approvals were (an RC
+    row), so whether each was an approval is unknown.
+    """
+
+    success_count: int
+    attempt_count: int
+    outcomes: int
+    outcome_successes: int
+    learned_from: int
+    unscored_outcomes: int = 0
+
+    @property
+    def scored_outcomes(self) -> int:
+        """Outcomes whose approvals are in ``outcome_successes``."""
+        return self.outcomes - self.unscored_outcomes
 
 
 # ============================================================================
@@ -254,8 +281,12 @@ MAX_EXTRACTION_TURN_LENGTH: int = 256000
 MAX_FTS_QUERY_LENGTH: int = 500
 
 #: Minimum word-overlap ratio (Szymkiewicz-Simpson) to treat two entries as
-#: duplicates in the same category+context+entity scope.
+#: duplicates in the same category+context+subject scope.
 DEDUP_OVERLAP_THRESHOLD: float = 0.8
+
+#: Categories the extractor files one statement under interchangeably, so the
+#: same words in either are one memory.
+INTERCHANGEABLE_CATEGORIES: frozenset = frozenset({"fact", "preference"})
 
 #: Share of the *larger* word set two memories must share to be the same
 #: memory, so "prefers dark roast coffee" is not "prefers dark mode".
@@ -286,16 +317,64 @@ _STEM_STOPWORDS = frozenset(
     "there here also just like user users user's".split()
 )
 
+# Signs and language suffixes carry meaning in a memory: ``-5`` is not ``5``,
+# and ``C++`` / ``C#`` are not ``C``.  Separators inside dates, phone numbers,
+# and ranges remain word separators, so their historical format-insensitive
+# matching is preserved (``1990-05-14`` still matches ``1990/05/14``).
+_MEMORY_TOKEN_RE = re.compile(
+    r"""
+    (?<![a-z0-9_])[+-][0-9]+
+    | [a-z][a-z0-9]*[+#]+(?![a-z0-9_])
+    | [a-z0-9']+
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+_MEMORY_SYMBOL_RE = re.compile(
+    r"(?<![a-z0-9_])[+-][0-9]+|[a-z][a-z0-9]*[+#]+(?![a-z0-9_])",
+    re.IGNORECASE,
+)
+
+
+def _memory_tokens(text: str) -> list[str]:
+    """Tokens for memory identity comparisons, preserving meaningful symbols."""
+    return _MEMORY_TOKEN_RE.findall(text.lower())
+
+
+def _symbol_base(token: str) -> str | None:
+    """Return the plain value of a signed number or language suffix token."""
+    if not _MEMORY_SYMBOL_RE.fullmatch(token):
+        return None
+    return token[1:] if token[0] in "+-" else token.rstrip("+#")
+
+
+def _has_symbol_conflict(words1: set[str], words2: set[str]) -> bool:
+    """Whether matching plain values carry different meaningful symbols."""
+    variants: list[dict[str, set[str]]] = []
+    for words in (words1, words2):
+        by_base: dict[str, set[str]] = {}
+        for word in words:
+            base = _symbol_base(word) or word
+            by_base.setdefault(base, set()).add(word)
+        variants.append(by_base)
+
+    for base in variants[0].keys() & variants[1].keys():
+        left, right = variants[0][base], variants[1][base]
+        if left != right and any(
+            _symbol_base(word) is not None for word in left | right
+        ):
+            return True
+    return False
+
 
 def content_stems(text: str) -> set:
     """Content words of *text*, cut to a 4-letter stem so "works" meets "working".
 
-    A token with a digit is kept whole, however short: "Ada is 6" and "Ada is
-    7" are different memories.
+    Numeric and symbolic tokens are kept whole, however short: ``-5`` and
+    ``5`` are different memories, as are ``C`` and ``C++``.
     """
     stems = set()
-    for w in re.findall(r"[a-z0-9']+", text.lower()):
-        if any(ch.isdigit() for ch in w):
+    for w in _memory_tokens(text):
+        if any(ch.isdigit() for ch in w) or w.endswith(("+", "#")):
             stems.add(w)
         elif len(w) >= 3 and w not in _STEM_STOPWORDS:
             stems.add(w[:4])
@@ -329,6 +408,33 @@ def _mentions(text: set, memory: set) -> bool:
     )
 
 
+#: Content words a short restatement of a one-word memory may add ("diagnosed 2019").
+_SHORT_RESTATEMENT = 3
+
+
+def _rewords(text: set, memory: set) -> bool:
+    """Whether *text* restates *memory*.
+
+    One shared word is enough only for a one-word memory in a short text:
+    "User has diabetes, diagnosed 2019" restates "I have diabetes", a report
+    on diabetes research funding does not.
+    """
+    shared = text & memory
+    if len(memory) == 1:
+        return bool(shared) and len(text) <= _SHORT_RESTATEMENT
+    return _same_memory(text, memory) or (len(shared) >= 2 and _mentions(text, memory))
+
+
+_NEGATION_RE = re.compile(
+    r"\b(?:not|no|never|none|neither|nor|without)\b|n['’]t\b", re.IGNORECASE
+)
+
+
+def _negated(text: str) -> bool:
+    """Whether *text* says something is not so ("is not", "isn't", "never")."""
+    return bool(_NEGATION_RE.search(text))
+
+
 def is_about_user(item: Dict) -> bool:
     """Whether a knowledge row is about the user, not the agent's own records.
 
@@ -352,16 +458,33 @@ CONFIDENCE_BUMP_PER_RECALL: float = 0.02
 LOW_CONFIDENCE_PRUNE_THRESHOLD: float = 0.1
 
 
+_SAME_WORDS_RE = re.compile(_MEMORY_SYMBOL_RE.pattern + r"|[a-z0-9]+", re.IGNORECASE)
+
+
+def _same_words(text: str) -> str:
+    """*text*'s words in order, ignoring case and punctuation but not signs."""
+    return " ".join(_SAME_WORDS_RE.findall(text.lower()))
+
+
 def _word_overlap(text1: str, text2: str) -> float:
     """Calculate word overlap ratio using Szymkiewicz-Simpson coefficient.
 
     |intersection| / min(|A|, |B|)
 
     A subset of a longer text still counts as a match — appropriate for dedup.
+    Filler words don't count, so "I am ..." and "User is ..." overlap fully.
     """
-    words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
-    words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
+    if _MEMORY_SYMBOL_RE.search(text1) or _MEMORY_SYMBOL_RE.search(text2):
+        words1 = set(_memory_tokens(text1))
+        words2 = set(_memory_tokens(text2))
+    else:
+        words1 = set(re.sub(r"[^\w\s]", " ", text1.lower()).split())
+        words2 = set(re.sub(r"[^\w\s]", " ", text2.lower()).split())
 
+    if _has_symbol_conflict(words1, words2):
+        return 0.0
+    words1 = {w.removesuffix("'s") for w in words1} - _DEDUP_FILLER_WORDS
+    words2 = {w.removesuffix("'s") for w in words2} - _DEDUP_FILLER_WORDS
     if not words1 or not words2:
         return 0.0
 
@@ -369,6 +492,86 @@ def _word_overlap(text1: str, text2: str) -> float:
     min_size = min(len(words1), len(words2))
 
     return len(intersection) / min_size if min_size > 0 else 0.0
+
+
+#: Words that never change what a memory says, so two memories that differ only
+#: in these are the same memory. Negations and pronouns are deliberately absent.
+_DEDUP_FILLER_WORDS = frozenset(
+    "a an the is are was were am be been s my i me user users".split()
+)
+
+
+def _dedup_tokens(text: str) -> List[str]:
+    """Words of *text* in order, lowercased, without punctuation or filler.
+
+    A number keeps its inner punctuation, so "10" is not a prefix of "10:30".
+    """
+    words = re.findall(r"\d[\d.,:/-]*\d|\w+", text.lower())
+    return [w for w in words if w not in _DEDUP_FILLER_WORDS]
+
+
+def fact_words(text: str) -> Tuple[str, ...]:
+    """The words two copies of one fact share: ``_dedup_tokens`` of *text*."""
+    return tuple(_dedup_tokens(text))
+
+
+def _merged_duplicate(new: str, existing: str) -> Optional[str]:
+    """The content to keep if *new* repeats *existing*, else None.
+
+    Two memories are the same only when one's words, in order, start the
+    other's: a restatement, or a refinement that adds to the end ("... is
+    Elena" -> "... is Elena Petrova"). The fuller one is kept. A swapped,
+    inserted or reordered word ("mother" -> "mother-in-law", "18" -> "19",
+    "is" -> "is not") makes a different fact, which must not overwrite this one.
+    """
+    new_tokens, old_tokens = _dedup_tokens(new), _dedup_tokens(existing)
+    if not new_tokens or not old_tokens:
+        return None
+    if new_tokens[: len(old_tokens)] == old_tokens:
+        return new
+    if old_tokens[: len(new_tokens)] == new_tokens:
+        return existing
+    return None
+
+
+def _plain_fact_words(text: str) -> Tuple[str, ...]:
+    """``fact_words`` of *text* without its bracketed asides ("(health info)")."""
+    return fact_words(re.sub(r"\([^()]*\)", " ", text))
+
+
+def _same_fact(new: str, existing: str) -> Optional[str]:
+    """The content to keep if the two texts state one fact, else None."""
+    if _word_overlap(new, existing) < DEDUP_OVERLAP_THRESHOLD:
+        return None
+    return _merged_duplicate(new, existing)
+
+
+#: Names a ``type:name`` tag gives the user themselves ("person:user").
+_USER_TAG_NAMES = ("user", "me", "self", "myself")
+
+
+def _same_subject_sql(entity: Optional[str]) -> Tuple[str, tuple]:
+    """SQL condition on ``k.entity`` for rows about the same subject as *entity*.
+
+    No tag, a bare label ("user", "health"), a ``user:`` tag or a tag that
+    names the user (``person:user``) is the user, so those are one subject:
+    the remember tool tags, extraction often doesn't. Any other ``type:name``
+    tag (``person:Sam``, ``app:slack``) is its own subject and matches only
+    itself.
+    """
+    if entity is not None and not _is_user_tag(entity):
+        return "k.entity = ?", (entity,)
+    return (
+        "(k.entity IS NULL OR instr(k.entity, ':') = 0 "
+        "OR lower(k.entity) LIKE 'user:%' "
+        "OR lower(trim(substr(k.entity, instr(k.entity, ':') + 1))) IN "
+        f"({','.join('?' * len(_USER_TAG_NAMES))}))"
+    ), _USER_TAG_NAMES
+
+
+def _is_user_tag(entity: str) -> bool:
+    kind, sep, name = entity.lower().partition(":")
+    return not sep or kind == "user" or name.strip() in _USER_TAG_NAMES
 
 
 # ============================================================================
@@ -1322,7 +1525,9 @@ class MemoryStore:
     ) -> str:
         """Store a knowledge entry with deduplication.
 
-        >80% word overlap in same category+context → replaces with newer content.
+        Restating an entry in the same category+context+subject merges into it
+        and keeps the fuller wording; a different fact that shares most of its
+        words is stored as a new entry (see ``_merged_duplicate``).
         Validates due_at is a valid ISO 8601 string if provided.
 
         Args:
@@ -1386,15 +1591,28 @@ class MemoryStore:
         now = _now_iso()
 
         with self._locked():
-            if source in TEACHING_SOURCES:
-                # Taught again on purpose, so it is no longer forgotten.
-                self._unforget_locked(content)
+            # Write lock before the dedup read: every chat has its own connection,
+            # and two that both read "no match" would each insert the fact.
+            if not self._conn.in_transaction:
+                self._conn.execute("BEGIN IMMEDIATE")
+            try:
+                if source in TEACHING_SOURCES:
+                    # Taught again on purpose, so it is no longer forgotten.
+                    self._unforget_locked(content)
 
-            # Check for dedup match (scoped to category + context + entity)
-            existing_id = self._find_similar_locked(content, category, context, entity)
+                # Check for dedup match (scoped to category + context + subject)
+                match = self._find_similar_locked(content, category, context, entity)
+                if category in EXTRACTABLE_CATEGORIES:
+                    match, sensitive = self._fold_sensitive_copies_locked(
+                        content, context, entity, sensitive, match
+                    )
+            except BaseException:
+                self._conn.rollback()
+                raise
 
-            if existing_id:
-                # Update existing: replace content with newer, take max confidence.
+            if match:
+                existing_id, content = match
+                # Update existing with the fuller wording, take max confidence.
                 # Set embedding = NULL because the old embedding is now stale
                 # (it was computed for the previous content).  This forces the
                 # item into get_items_without_embeddings() for re-embedding.
@@ -1490,60 +1708,69 @@ class MemoryStore:
 
     def _find_similar_locked(
         self, content: str, category: str, context: str, entity: str | None = None
-    ) -> Optional[str]:
-        """Find existing knowledge with >80% word overlap in same category+context+entity.
+    ) -> Optional[Tuple[str, str]]:
+        """Find an active entry that *content* duplicates in the same scope.
 
-        Must be called with self._lock held.
+        Returns ``(id, content_to_keep)`` or None. A candidate in the same
+        category needs ``DEDUP_OVERLAP_THRESHOLD`` word overlap and must pass
+        ``_merged_duplicate``; across ``INTERCHANGEABLE_CATEGORIES`` only the
+        same words match.
 
-        Cross-process note: self._lock is a threading.Lock — it protects against
-        concurrent inserts within the *same process* only. Two separate processes
-        may both see no duplicate and both insert, resulting in brief redundancy.
-        This is intentionally accepted: the next store() call from either process
-        will detect the overlap and deduplicate. SQLite WAL mode ensures each
-        INSERT is atomic so no data is corrupted.
+        Must be called with self._lock held and SQLite's write lock taken
+        (``BEGIN IMMEDIATE``): self._lock only covers this one connection, so
+        without the write lock another connection — another chat, the Memory
+        page, another process — can insert the same fact between this read and
+        the caller's insert.
         """
         safe_query = _sanitize_fts5_query(content, use_and=False)
         if not safe_query:
             return None
+        same_subject, subject_params = _same_subject_sql(entity)
 
         try:
-            # Scope dedup by category + context + entity
-            if entity is not None:
-                cursor = self._conn.execute(
-                    """
-                    SELECT k.id, k.content
-                    FROM knowledge k
-                    JOIN knowledge_fts f ON k.rowid = f.rowid
-                    WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity = ? AND k.superseded_by IS NULL
-                    ORDER BY rank
-                    LIMIT 25
-                    """,
-                    (safe_query, category, context, entity),
-                )
-            else:
-                cursor = self._conn.execute(
-                    """
-                    SELECT k.id, k.content
-                    FROM knowledge k
-                    JOIN knowledge_fts f ON k.rowid = f.rowid
-                    WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
-                          AND k.entity IS NULL AND k.superseded_by IS NULL
-                    ORDER BY rank
-                    LIMIT 25
-                    """,
-                    (safe_query, category, context),
-                )
+            # Scope dedup by category + context + subject
+            cursor = self._conn.execute(
+                f"""
+                SELECT k.id, k.content
+                FROM knowledge k
+                JOIN knowledge_fts f ON k.rowid = f.rowid
+                WHERE knowledge_fts MATCH ? AND k.category = ? AND k.context = ?
+                      AND {same_subject} AND k.superseded_by IS NULL
+                ORDER BY rank
+                LIMIT 25
+                """,
+                (safe_query, category, context, *subject_params),
+            )
             for row in cursor.fetchall():
                 existing_id, existing_content = row[0], row[1]
-                overlap = _word_overlap(content, existing_content)
-                if overlap >= DEDUP_OVERLAP_THRESHOLD:
-                    logger.debug(
-                        "[MemoryStore] dedup match: overlap=%.2f id=%s",
-                        overlap,
-                        existing_id,
-                    )
-                    return cast(str, existing_id)
+                kept = _same_fact(content, existing_content)
+                if kept is None:
+                    continue
+                logger.debug("[MemoryStore] dedup match: id=%s", existing_id)
+                return cast(str, existing_id), kept
+            if category in INTERCHANGEABLE_CATEGORIES:
+                kinds = sorted(INTERCHANGEABLE_CATEGORIES)
+                cursor = self._conn.execute(
+                    f"""
+                    SELECT k.id, k.content
+                    FROM knowledge k
+                    JOIN knowledge_fts f ON k.rowid = f.rowid
+                    WHERE knowledge_fts MATCH ? AND k.context = ?
+                          AND {same_subject} AND k.superseded_by IS NULL
+                          AND k.category IN ({",".join("?" * len(kinds))})
+                    ORDER BY rank
+                    LIMIT 25
+                    """,
+                    (safe_query, context, *subject_params, *kinds),
+                )
+                words = _same_words(content)
+                for existing_id, existing_content in cursor.fetchall():
+                    if _same_words(existing_content) == words:
+                        logger.debug(
+                            "[MemoryStore] dedup match across categories: id=%s",
+                            existing_id,
+                        )
+                        return cast(str, existing_id), content
         except sqlite3.OperationalError as e:
             # A failed dedup search means store() falls through to inserting a
             # duplicate -- debug level hid exactly that for as long as this
@@ -1551,6 +1778,68 @@ class MemoryStore:
             logger.warning("[MemoryStore] FTS5 dedup search failed: %s", e)
 
         return None
+
+    def _fold_sensitive_copies_locked(
+        self,
+        content: str,
+        context: str,
+        entity: Optional[str],
+        sensitive: bool,
+        match: Optional[Tuple[str, str]],
+    ) -> Tuple[Optional[Tuple[str, str]], bool]:
+        """Keep a sensitive fact to one row per context, with no unflagged copy.
+
+        Returns the row to merge into and the flag to store. Whatever the
+        category: a write that repeats a sensitive row merges into the one in
+        its context, and is itself sensitive in any other; a sensitive write
+        takes over the unflagged copies in its context and flags the rest.
+        A rewording too loose to merge (``_mentions``) still takes the flag.
+        Same locking as ``_find_similar_locked``; writes without committing.
+        """
+        same_subject, params = _same_subject_sql(entity)
+        kinds = sorted(EXTRACTABLE_CATEGORIES)
+        rows = self._conn.execute(
+            "SELECT k.id, k.content, k.context, k.sensitive FROM knowledge k "
+            f"WHERE {same_subject} AND k.superseded_by IS NULL "
+            f"AND k.category IN ({','.join('?' * len(kinds))})"
+            # Only a sensitive write needs the unflagged rows read too.
+            + ("" if sensitive else " AND k.sensitive = 1"),
+            (*params, *kinds),
+        ).fetchall()
+        copies = [r for r in rows if _same_fact(content, r[1]) is not None]
+        stems = content_stems(content)
+        if sensitive:
+            for kid, other, _, flagged in rows:
+                if not flagged and _rewords(content_stems(other), stems):
+                    self._conn.execute(
+                        "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (kid,)
+                    )
+        elif any(_rewords(stems, content_stems(r[1])) for r in rows):
+            sensitive = True
+        if not copies:
+            return match, sensitive
+        here = [r for r in copies if r[2] == context]
+        if match is None and here:
+            first = here[0]
+            match = (first[0], cast(str, _same_fact(content, first[1])))
+        for kid, other, _, _ in here:
+            if match is not None and kid != match[0]:
+                # A dropped copy may be the fuller one: keep its detail.
+                fuller = _same_fact(match[1], other)
+                if fuller is not None:
+                    match = (match[0], fuller)
+                self._conn.execute(
+                    "DELETE FROM knowledge_fts WHERE rowid = "
+                    "(SELECT rowid FROM knowledge WHERE id = ?)",
+                    (kid,),
+                )
+                self._conn.execute("DELETE FROM knowledge WHERE id = ?", (kid,))
+        for kid, _, row_context, flagged in copies:
+            if row_context != context and not flagged:
+                self._conn.execute(
+                    "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (kid,)
+                )
+        return match, True
 
     def _insert_knowledge_fts_locked(self, knowledge_id: str):
         """Insert a knowledge entry into the FTS5 index. Must hold self._lock.
@@ -2125,48 +2414,158 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
-    def forget(self, knowledge_id: str, *, allow_privileged: bool = False) -> bool:
+    def forget(
+        self,
+        knowledge_id: str,
+        *,
+        allow_privileged: bool = False,
+        sensitive: bool = False,
+    ) -> bool:
         """Delete an entry the user asked to forget, and remember that they did.
 
         Unlike ``delete`` (used when newer information replaces a memory), the
         content is kept in ``forgotten`` in the same transaction, so a pass
         that re-reads conversations from before now can tell not to learn it
-        again (``is_forgotten``). A sensitive entry keeps only its word stems.
+        again (``is_forgotten``). A sensitive entry keeps only its word stems;
+        *sensitive* treats an unflagged entry as one (a copy of a sensitive fact).
+        Older versions it superseded, directly or through a chain, are
+        forgotten with it, and as sensitive if any version is.
 
         Returns False if not found. Same privileged-row rule as ``delete``.
         """
         with self._locked():
             try:
-                self._validate_existing_category_locked(
-                    knowledge_id, allow_privileged=allow_privileged, where="forget"
-                )
-                row = self._conn.execute(
-                    "SELECT content, category, sensitive FROM knowledge WHERE id = ?",
-                    (knowledge_id,),
-                ).fetchone()
-                if row is None:
+                if (
+                    self._conn.execute(
+                        "SELECT 1 FROM knowledge WHERE id = ?", (knowledge_id,)
+                    ).fetchone()
+                    is None
+                ):
                     return False
-                content, category, sensitive = row
-                if sensitive:
-                    content = " ".join(sorted(content_stems(content)))
-                self._conn.execute(
-                    "DELETE FROM knowledge_fts WHERE rowid = "
-                    "(SELECT rowid FROM knowledge WHERE id = ?)",
-                    (knowledge_id,),
-                )
-                self._conn.execute(
-                    "DELETE FROM knowledge WHERE id = ?", (knowledge_id,)
-                )
-                self._conn.execute(
-                    "INSERT INTO forgotten (content, category, sensitive, forgotten_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (content, category, int(bool(sensitive)), _now_iso()),
-                )
+                ids = [
+                    r[0]
+                    for r in self._conn.execute(
+                        """
+                        WITH RECURSIVE chain(id) AS (
+                            SELECT ?
+                            UNION
+                            SELECT k.id FROM knowledge k
+                            JOIN chain c ON k.superseded_by = c.id
+                        )
+                        SELECT id FROM chain
+                        """,
+                        (knowledge_id,),
+                    ).fetchall()
+                ]
+                rows = {}
+                for kid in ids:
+                    self._validate_existing_category_locked(
+                        kid, allow_privileged=allow_privileged, where="forget"
+                    )
+                    rows[kid] = self._conn.execute(
+                        "SELECT content, category, sensitive FROM knowledge "
+                        "WHERE id = ?",
+                        (kid,),
+                    ).fetchone()
+                sensitive = sensitive or any(r[2] for r in rows.values())
+                now = _now_iso()
+                for kid, (content, category, _flagged) in rows.items():
+                    if sensitive:
+                        content = " ".join(sorted(content_stems(content)))
+                    self._conn.execute(
+                        "DELETE FROM knowledge_fts WHERE rowid = "
+                        "(SELECT rowid FROM knowledge WHERE id = ?)",
+                        (kid,),
+                    )
+                    self._conn.execute("DELETE FROM knowledge WHERE id = ?", (kid,))
+                    self._conn.execute(
+                        "INSERT INTO forgotten "
+                        "(content, category, sensitive, forgotten_at) "
+                        "VALUES (?, ?, ?, ?)",
+                        (content, category, int(bool(sensitive)), now),
+                    )
                 self._conn.commit()
                 return True
             except Exception:
                 self._conn.rollback()
                 raise
+
+    def copies_of(
+        self, knowledge_id: str, contexts: Optional[Tuple[str, ...]] = None
+    ) -> List[str]:
+        """Ids of other current rows that store the same fact as *knowledge_id*.
+
+        A copy has the same words bar filler and bracketed asides ("I am
+        allergic to mango" and "User is allergic to mango (health info)"),
+        about the same subject (``_same_subject_sql``), in a chat-writable
+        category. When either row is sensitive a looser rewording counts too
+        (``_same_memory``). *contexts* limits it to those contexts;
+        None searches all. Forgetting one memory must take these with it.
+        """
+        with self._locked():
+            row = self._conn.execute(
+                "SELECT content, entity, sensitive FROM knowledge WHERE id = ?",
+                (knowledge_id,),
+            ).fetchone()
+            if row is None:
+                return []
+            content, entity, flagged = row
+            same_subject, params = _same_subject_sql(entity)
+            kinds = sorted(EXTRACTABLE_CATEGORIES)
+            sql = (
+                "SELECT k.id, k.content, k.sensitive FROM knowledge k WHERE k.id != ? "
+                f"AND {same_subject} AND k.superseded_by IS NULL "
+                f"AND k.category IN ({','.join('?' * len(kinds))})"
+            )
+            args: tuple = (knowledge_id, *params, *kinds)
+            if contexts is not None:
+                sql += f" AND k.context IN ({','.join('?' * len(contexts))})"
+                args += tuple(contexts)
+            rows = self._conn.execute(sql, args).fetchall()
+        words, stems = _plain_fact_words(content), content_stems(content)
+        return [
+            kid
+            for kid, other, other_flagged in rows
+            if (words and _plain_fact_words(other) == words)
+            or (
+                (flagged or other_flagged)
+                # "Is not allergic" is the user's correction, not a copy.
+                and _negated(content) == _negated(other)
+                and _same_memory(stems, content_stems(other))
+            )
+        ]
+
+    def forget_with_copies(
+        self,
+        knowledge_id: str,
+        contexts: Optional[Tuple[str, ...]] = None,
+        *,
+        allow_privileged: bool = False,
+    ) -> List[str]:
+        """``forget`` *knowledge_id* and its ``copies_of``; the ids erased.
+
+        If any of them is sensitive, all are forgotten as sensitive, so an
+        unflagged copy can't leave the fact's words in ``forgotten``.
+        Returns [] when *knowledge_id* is not found.
+        """
+        copies = self.copies_of(knowledge_id, contexts)
+        group = (knowledge_id, *copies)
+        with self._locked():
+            sensitive = (
+                self._conn.execute(
+                    "SELECT 1 FROM knowledge WHERE sensitive AND id IN "
+                    f"({','.join('?' * len(group))})",
+                    group,
+                ).fetchone()
+                is not None
+            )
+        if not self.forget(
+            knowledge_id, allow_privileged=allow_privileged, sensitive=sensitive
+        ):
+            return []
+        return [knowledge_id] + [
+            kid for kid in copies if self.forget(kid, sensitive=sensitive)
+        ]
 
     def _forgotten_rows(self, said_before: Optional[str]) -> List[tuple]:
         """``(content, sensitive)`` of what was forgotten, newest first.
@@ -3833,6 +4232,94 @@ class MemoryStore:
                 self._conn.rollback()
                 raise
 
+    def record_skill_outcome(
+        self,
+        skill_ids: List[str],
+        success: bool,
+        *,
+        erase_count: int | None = None,
+    ) -> dict[str, SkillOutcomeRecord]:
+        """Count one outcome on each procedure that was in context for it.
+
+        Adds one to ``attempt_count``, and to ``success_count`` when *success*,
+        on top of the counts the row was born with, and one to
+        ``provenance.outcomes`` (and ``provenance.outcome_successes`` when
+        *success*), the outcomes recorded since it was learned.  A row that
+        counted outcomes before approvals were counted gets those outcomes
+        recorded as ``provenance.unscored_outcomes`` on its first update.
+        What makes an outcome is the caller's definition
+        (``ProceduralMemoryMixin._record_procedure_outcome``).
+
+        Args:
+            skill_ids: procedures recalled into the turn; duplicates count once.
+            success: whether the turn's outcome was a success.
+            erase_count: :meth:`erase_count` when the turn began; if all memory
+                was erased since, nothing is written.
+
+        Returns:
+            ``{skill_id: SkillOutcomeRecord}`` after the update, for the ids
+            that still exist (one forgotten since recall is skipped).
+        """
+        ids = list(dict.fromkeys(skill_ids))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self._locked():
+            if self._erased_since_for_write_locked(erase_count):
+                logger.info(
+                    "[MemoryStore] procedure outcome not stored: all memory was "
+                    "erased after the turn began"
+                )
+                return {}
+            try:
+                self._conn.execute(
+                    "UPDATE procedures SET attempt_count = attempt_count + 1, "
+                    "success_count = success_count + ?, "
+                    "provenance = json_set("
+                    "CASE WHEN json_extract(provenance, '$.outcomes') IS NOT NULL "
+                    "AND json_extract(provenance, '$.outcome_successes') IS NULL "
+                    "THEN json_set(provenance, '$.unscored_outcomes', "
+                    "json_extract(provenance, '$.outcomes')) "
+                    "ELSE COALESCE(provenance, '{}') END, "
+                    "'$.outcomes', "
+                    "COALESCE(json_extract(provenance, '$.outcomes'), 0) + 1, "
+                    "'$.outcome_successes', "
+                    "COALESCE(json_extract(provenance, '$.outcome_successes'), 0) + ?) "
+                    f"WHERE id IN ({placeholders})",
+                    (int(bool(success)), int(bool(success)), *ids),
+                )
+                rows = self._conn.execute(
+                    "SELECT id, success_count, attempt_count, "
+                    "json_extract(provenance, '$.outcomes'), "
+                    "json_extract(provenance, '$.outcome_successes'), "
+                    "COALESCE(json_array_length(provenance, '$.from_sessions'), 0), "
+                    "COALESCE(json_extract(provenance, '$.unscored_outcomes'), 0) "
+                    f"FROM procedures WHERE id IN ({placeholders})",
+                    ids,
+                ).fetchall()
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+        return {row[0]: SkillOutcomeRecord(*(int(v) for v in row[1:])) for row in rows}
+
+    def disable_skill(self, skill_id: str) -> bool:
+        """Stop recalling ``skill_id`` (``enabled = 0``); the row is kept.
+
+        Returns:
+            True if a row was updated, False if ``skill_id`` was not found.
+        """
+        with self._locked():
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE procedures SET enabled = 0 WHERE id = ?", (skill_id,)
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
     def touch_skills(self, skill_ids: List[str], when: str | None = None) -> int:
         """Stamp ``last_used_at`` on the given procedures (recall telemetry).
 
@@ -4163,8 +4650,11 @@ class MemoryStore:
         Returns:
             A list of dicts, oldest session first, each shaped
             ``{session_id, goal, tools, tool_sequence, success_count,
-            attempt_count, started_at, last_at}``.  ``goal`` is None when the
-            session has no user turn.
+            attempt_count, declined_count, started_at, last_at}``.  ``goal`` is
+            None when the session has no user turn.  ``declined_count`` counts
+            the calls in the window denied before they ran (a declined or
+            unanswered prompt, or an effect declined earlier in the request);
+            they are in neither count.
         """
         sql = """
             WITH eligible AS (
@@ -4174,11 +4664,21 @@ class MemoryStore:
                   AND executed = 1
                 GROUP BY session_id
                 HAVING SUM(success) >= :min_steps
+            ),
+            declined AS (
+                SELECT session_id, COUNT(*) AS n
+                FROM tool_history
+                WHERE (:since IS NULL OR timestamp > :since)
+                  AND executed = 0
+                  AND (result_summary LIKE '%"status": "denied%'
+                       OR result_summary LIKE '%''status'': ''denied''%')
+                GROUP BY session_id
             )
             SELECT th.session_id, th.tool_name, th.args, th.success, th.timestamp,
-                   g.content AS goal
+                   g.content AS goal, COALESCE(d.n, 0) AS declined
             FROM tool_history th
             JOIN eligible e ON e.session_id = th.session_id
+            LEFT JOIN declined d ON d.session_id = th.session_id
             LEFT JOIN (
                 SELECT session_id, content
                 FROM conversations
@@ -4201,7 +4701,7 @@ class MemoryStore:
         # pass is cheap (no further DB reads).
         sessions: Dict[str, Dict] = {}
         order: List[str] = []
-        for session_id, tool_name, args, success, timestamp, goal in rows:
+        for session_id, tool_name, args, success, timestamp, goal, declined in rows:
             sess = sessions.get(session_id)
             if sess is None:
                 sess = {
@@ -4211,6 +4711,7 @@ class MemoryStore:
                     "tool_sequence": [],
                     "success_count": 0,
                     "attempt_count": 0,
+                    "declined_count": int(declined),
                     "started_at": timestamp,
                     "last_at": timestamp,
                 }

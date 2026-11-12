@@ -327,6 +327,48 @@ class TestUnusableEpisodes:
         host._synthesize_skills()
         assert host.chat.calls == 1
 
+    def test_runs_where_a_step_was_declined_teach_nothing(self, host, store):
+        """A declined step never ran, so the rest of the run looked like a clean
+        success: three such runs relearned the refused procedure and superseded
+        the one being declined, resetting its record (#7207)."""
+        for n in range(3):
+            session = f"declined_{n}"
+            _seed_episode(store, session, "Produce the daily status snapshot")
+            store.log_tool_call(
+                session,
+                "write_file",
+                {"path": "snapshot.txt"},
+                "{'status': 'denied', 'error': 'The user declined write_file.'}",
+                False,
+                error="The user declined write_file.",
+                executed=False,
+            )
+
+        result = host._synthesize_skills()
+
+        assert host.chat.calls == 0
+        assert result["stored"] == 0
+        assert result["consumed"] == 3
+        marks = store.get_synthesis_marks()
+        assert {marks[f"declined_{n}"]["outcome"] for n in range(3)} == {"unusable"}
+        assert store.get_synthesis_watermark() is not None
+
+    def test_a_refusal_that_is_not_a_denial_still_teaches(self, host, store):
+        """Only a denied call disqualifies a run, not every call that did not run."""
+        for n in range(3):
+            session = f"capped_{n}"
+            _seed_episode(store, session, "Triage an inbound support ticket")
+            store.log_tool_call(
+                session,
+                "search_tools",
+                {},
+                "{'executed': False, 'status': 'error', 'error': 'search cap'}",
+                False,
+                executed=False,
+            )
+
+        assert host._synthesize_skills()["stored"] == 1
+
     def test_infra_failure_leaves_the_cluster_unmarked(self, host, store):
         """Lemonade being down is not "undistillable" — the next pass retries."""
         _seed_cluster(store, "t_", "Triage an inbound support ticket")
@@ -717,3 +759,117 @@ class TestForgetEverythingMidPass:
         marks = store.get_synthesis_marks()
         assert {m["goal"] for m in marks.values()} == {_GOAL}
         assert store.get_synthesis_watermark() is not None
+
+
+# ---------------------------------------------------------------------------
+# A goal the embedder refuses stays that session's problem (#4729)
+# ---------------------------------------------------------------------------
+
+# Verbatim llama-server reply for a goal over the embedder's batch.
+_TOO_LARGE = (
+    "Embedding failed: Error generating embeddings: Request failed with status "
+    '500: {"error":{"code":500,"message":"input (513 tokens) is too large to '
+    'process. increase the physical batch size (current batch size: 512)"}}'
+)
+
+
+class _SmallBatchEmbedder:
+    """An embedder loaded at llama-server's default 512 batch."""
+
+    def __init__(self, limit: int = 512):
+        self.limit = limit
+        self.calls = []
+
+    def __call__(self, text):
+        self.calls.append(text)
+        if len(text) > self.limit:
+            raise RuntimeError(_TOO_LARGE)
+        return _embed(text)
+
+
+_LONG_GOAL = "Please migrate these records: " + "4" * 600
+
+
+class TestRejectedGoal:
+    @pytest.fixture
+    def embedder(self, host):
+        embedder = _SmallBatchEmbedder()
+        host._embed_text = embedder
+        return embedder
+
+    def test_one_long_first_message_does_not_abort_the_pass(
+        self, host, store, embedder
+    ):
+        _seed_episode(store, "pasted", _LONG_GOAL)
+        _seed_cluster(store, "ticket_", _GOAL)
+
+        result = host._synthesize_skills()
+
+        assert result["stored"] == 1
+        marks = store.get_synthesis_marks()
+        assert marks["pasted"]["outcome"] == "unusable"
+        assert "too large" in marks["pasted"]["detail"]
+
+    def test_the_next_startup_does_not_retry_it(self, host, store, embedder):
+        _seed_episode(store, "pasted", _LONG_GOAL)
+        host._synthesize_skills()
+        embedder.calls.clear()
+
+        host._synthesize_skills()
+
+        assert _LONG_GOAL not in embedder.calls
+        assert store.get_synthesis_watermark() is not None
+
+    def test_sessions_sharing_the_goal_are_tried_once_and_all_marked(
+        self, host, store, embedder
+    ):
+        _seed_cluster(store, "pasted_", _LONG_GOAL)
+
+        host._synthesize_skills()
+
+        assert embedder.calls.count(_LONG_GOAL) == 1
+        marks = store.get_synthesis_marks()
+        assert {marks[f"pasted_{n}"]["outcome"] for n in range(3)} == {"unusable"}
+
+    def test_force_reopens_a_rejected_session(self, host, store, embedder):
+        _seed_episode(store, "pasted", _LONG_GOAL)
+        host._synthesize_skills()
+        embedder.calls.clear()
+
+        host._synthesize_skills(force=True)
+
+        assert _LONG_GOAL in embedder.calls
+
+    @pytest.mark.parametrize(
+        "error",
+        [
+            "Embedding failed: Connection refused",
+            "Embedding failed: Request failed with status 500: model not loaded",
+            "Embedding failed: Request failed with status 404: too large a model",
+        ],
+    )
+    def test_an_outage_still_aborts_the_pass_and_marks_nothing(
+        self, host, store, error
+    ):
+        def down(_text):
+            raise RuntimeError(error)
+
+        host._embed_text = down
+        _seed_cluster(store, "ticket_", _GOAL)
+
+        with pytest.raises(RuntimeError, match="Embedding failed"):
+            host._synthesize_skills()
+        assert store.get_synthesis_marks() == {}
+        assert store.get_synthesis_watermark() is None
+
+    def test_cluster_by_goal_without_a_handler_still_raises(self):
+        from gaia.agents.base.skill_synthesis import GoalEmbedRejected, cluster_by_goal
+
+        def rejects(_text):
+            raise GoalEmbedRejected("too large")
+
+        with pytest.raises(GoalEmbedRejected):
+            cluster_by_goal(
+                [{"session_id": "s", "goal": "g", "steps": [], "success": True}],
+                rejects,
+            )

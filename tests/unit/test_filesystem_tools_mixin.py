@@ -41,7 +41,7 @@ def _make_mock_agent_and_tools():
 
     registered_tools = {}
 
-    def mock_tool(atomic=True):
+    def mock_tool(atomic=True, **_kwargs):
         def decorator(func):
             registered_tools[func.__name__] = func
             return func
@@ -372,13 +372,24 @@ class TestBrowseDirectory:
         assert "0 items" in result
 
     def test_browse_path_validation_denied(self, tmp_path):
-        """Path validator denial is returned as error string."""
+        """Path validator denial is a refusal that never ran."""
         mock_validator = MagicMock()
         mock_validator.validate_read.return_value = (False, "blocked by policy")
         self.agent._path_validator = mock_validator
 
         result = self.browse(path=str(tmp_path))
-        assert "Access denied" in result
+        assert result["executed"] is False
+        assert result["status"] == "error"
+        assert result["error"] == "Access denied: blocked by policy"
+
+    def test_a_reason_that_already_says_access_denied_says_it_once(self, tmp_path):
+        reason = f"Access denied: '{tmp_path}' is not in allowed paths."
+        mock_validator = MagicMock()
+        mock_validator.validate_read.return_value = (False, reason)
+        self.agent._path_validator = mock_validator
+
+        result = self.browse(path=str(tmp_path))
+        assert result["error"] == reason
 
 
 # =============================================================================
@@ -1040,7 +1051,7 @@ class TestReadFile:
         assert "2 rows" in result
 
     def test_read_path_validation_denied(self, tmp_path):
-        """Path validator denial returns error string."""
+        """Path validator denial is a refusal that never ran."""
         f = tmp_path / "secret.txt"
         f.write_text("classified")
         mock_validator = MagicMock()
@@ -1048,7 +1059,9 @@ class TestReadFile:
         self.agent._path_validator = mock_validator
 
         result = self.read(file_path=str(f))
-        assert "Access denied" in result
+        assert result["executed"] is False
+        assert "Access denied" in result["error"]
+        assert "classified" not in str(result)
 
 
 # =============================================================================
@@ -1443,7 +1456,7 @@ class TestParseSizeRangeDirect:
                 self._tools = {}
                 self._bookmarks = {}
 
-        def mock_tool(atomic=True):
+        def mock_tool(atomic=True, **_kwargs):
             def decorator(func):
                 return func
 

@@ -633,6 +633,35 @@ class TestStatus:
 
         assert spawned and "GGML_VK_DISABLE_COOPMAT" not in spawned[0]
 
+    def test_start_on_linux_warns_when_lemond_has_no_ca_file(
+        self, manager, monkeypatch, caplog
+    ):
+        """#7226: still starts, since local models need no HTTPS, but says why
+        cloud models and downloads will fail."""
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(
+            "gaia.llm.npu_linux.raise_memlock_soft_limit", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_tls.ca_store_problem", lambda **_: "no CA file"
+        )
+        monkeypatch.setattr(manager, "is_installed", lambda: True)
+        monkeypatch.setattr(manager, "write_config", lambda: None)
+        monkeypatch.setattr(manager, "_health", lambda *a, **k: {"status": "ok"})
+        spawned = []
+
+        def fake_popen(argv, **kwargs):
+            spawned.append(argv)
+            return SimpleNamespace(pid=4321, poll=lambda: None, returncode=None)
+
+        monkeypatch.setattr("gaia.llm.lemonade_embedded.subprocess.Popen", fake_popen)
+
+        with caplog.at_level("WARNING"):
+            manager.start(port=65530)
+
+        assert spawned
+        assert "no CA file" in caplog.text
+
     def test_start_refuses_to_spawn_a_second_daemon(self, manager, monkeypatch):
         manager._write_state(
             {"pid": 4321, "port": 65535, "api_key": "k", "version": manager.version}
@@ -664,19 +693,26 @@ class TestStatus:
         assert killed == [4321], "stalled daemon was never signalled"
         assert not manager.state_path.exists()
 
-    def test_start_refuses_when_a_newer_version_is_running(self, manager, monkeypatch):
+    def test_failed_repair_leaves_a_newer_running_version_up(
+        self, manager, monkeypatch
+    ):
         manager._write_state(
             {"pid": 1, "port": 4321, "api_key": "k", "version": "9999.1.0"}
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: {"ok": True})
-        with pytest.raises(EmbeddedLemonadeError) as exc:
+
+        def failed_install(self, force=False):
+            raise EmbeddedLemonadeError("download failed")
+
+        monkeypatch.setattr(EmbeddedLemonade, "install", failed_install)
+        with pytest.raises(EmbeddedLemonadeError, match="still running") as exc:
             manager.start()
         assert "9999.1.0" in str(exc.value)
-        assert "stop" in str(exc.value)
+        assert "download failed" in str(exc.value)
 
-    def _older_running(self, manager, monkeypatch, events):
+    def _other_running(self, manager, monkeypatch, events, version="11.7.0"):
         manager._write_state(
-            {"pid": 1, "port": 4321, "api_key": "k", "version": "11.7.0"}
+            {"pid": 1, "port": 4321, "api_key": "k", "version": version}
         )
         monkeypatch.setattr(EmbeddedLemonade, "_health", lambda *a, **k: {"ok": True})
 
@@ -687,10 +723,10 @@ class TestStatus:
 
         monkeypatch.setattr(EmbeddedLemonade, "_stop_locked", fake_stop)
 
-    def test_start_replaces_an_older_running_version(self, manager, monkeypatch):
-        """GAIA's own server is upgraded in place; the user runs nothing."""
+    def test_start_replaces_a_different_running_version(self, manager, monkeypatch):
+        """GAIA repairs its own server in place; the user runs nothing."""
         events = []
-        self._older_running(manager, monkeypatch, events)
+        self._other_running(manager, monkeypatch, events)
 
         class Reached(Exception):
             pass
@@ -707,21 +743,21 @@ class TestStatus:
         )
         monkeypatch.setattr(EmbeddedLemonade, "_spawn", reached_spawn)
         with pytest.raises(Reached):
-            manager.start(install_if_missing=False, upgrade_older=True)
+            manager.start(install_if_missing=False, upgrade_mismatch=True)
         assert events == ["install", "stop"]
 
-    def test_a_failed_upgrade_download_leaves_the_old_server_running(
+    def test_a_failed_repair_download_leaves_the_running_server_up(
         self, manager, monkeypatch
     ):
         events = []
-        self._older_running(manager, monkeypatch, events)
+        self._other_running(manager, monkeypatch, events)
 
         def failing_install(self, force=False):
             raise EmbeddedLemonadeError("download failed")
 
         monkeypatch.setattr(EmbeddedLemonade, "install", failing_install)
         with pytest.raises(EmbeddedLemonadeError, match="download failed") as exc:
-            manager.start(upgrade_older=True)
+            manager.start(upgrade_mismatch=True)
         assert events == []
         message = str(exc.value)
         assert "11.7.0 is still running on port 4321" in message
@@ -730,7 +766,7 @@ class TestStatus:
     def test_no_install_never_downloads_an_upgrade(self, manager, monkeypatch):
         """`gaia lemonade embedded start --no-install` must not download."""
         events = []
-        self._older_running(manager, monkeypatch, events)
+        self._other_running(manager, monkeypatch, events)
 
         def refused_install(self, force=False):
             raise AssertionError("downloaded despite --no-install")
@@ -740,9 +776,32 @@ class TestStatus:
             manager.start(install_if_missing=False)
         assert events == []
 
-    def test_an_older_install_is_upgraded_when_asked(self, manager, monkeypatch):
-        (manager.root / "dist" / "11.9.0").mkdir(parents=True)
-        assert manager.replaces_older_install()
+    def test_start_replaces_a_newer_running_version(self, manager, monkeypatch):
+        """A newer incompatible build is also repaired to the pinned version."""
+        events = []
+        self._other_running(manager, monkeypatch, events, version="2026.45.3")
+
+        class Reached(Exception):
+            pass
+
+        def fake_install(self, force=False):
+            events.append("install")
+
+        def reached_spawn(self, *args, **kwargs):
+            raise Reached
+
+        monkeypatch.setattr(EmbeddedLemonade, "install", fake_install)
+        monkeypatch.setattr(
+            EmbeddedLemonade, "is_installed", lambda self: "install" in events
+        )
+        monkeypatch.setattr(EmbeddedLemonade, "_spawn", reached_spawn)
+        with pytest.raises(Reached):
+            manager.start(install_if_missing=False, upgrade_mismatch=True)
+        assert events == ["install", "stop"]
+
+    def test_another_install_is_repaired_when_asked(self, manager, monkeypatch):
+        (manager.root / "dist" / "2026.45.3").mkdir(parents=True)
+        assert manager.replaces_other_install()
 
         class Reached(Exception):
             pass
@@ -752,14 +811,15 @@ class TestStatus:
 
         monkeypatch.setattr(EmbeddedLemonade, "install", reached_install)
         with pytest.raises(Reached):
-            manager.start(install_if_missing=False, upgrade_older=True)
+            manager.start(install_if_missing=False, upgrade_mismatch=True)
         with pytest.raises(EmbeddedLemonadeError, match="not installed"):
             manager.start(install_if_missing=False)
 
-    def test_only_an_older_install_counts_as_one_to_upgrade(self, manager):
+    def test_any_parseable_other_install_requires_repair(self, manager):
         (manager.root / "dist" / manager.version).mkdir(parents=True)
-        (manager.root / "dist" / "9999.1.0").mkdir(parents=True)
-        assert not manager.replaces_older_install()
+        (manager.root / "dist" / "2026.45.3").mkdir(parents=True)
+        (manager.root / "dist" / "not-a-version").mkdir(parents=True)
+        assert manager.replaces_other_install()
 
     def test_live_instance_is_reported_with_its_base_url(self, manager, monkeypatch):
         manager._write_state(
