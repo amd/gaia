@@ -155,6 +155,18 @@ describe('What GAIA knows about you', () => {
         await waitFor(() => expect(mockedApi.editKnowledge).toHaveBeenCalledWith('k2', { content: 'Lives in Edmonton' }));
     });
 
+    it('Enter that picks an IME candidate does not save the edit', async () => {
+        await renderAbout();
+
+        fireEvent.click(within(itemRow('Lives in Calgary')).getByRole('button', { name: /Edit/ }));
+        const box = screen.getByRole('textbox', { name: 'Edit memory' });
+        fireEvent.change(box, { target: { value: 'にほ' } });
+        fireEvent.keyDown(box, { key: 'Enter', isComposing: true });
+
+        expect(mockedApi.editKnowledge).not.toHaveBeenCalled();
+        expect(screen.getByRole('textbox', { name: 'Edit memory' })).toBeInTheDocument();
+    });
+
     it('adds something the user types', async () => {
         await renderAbout();
 
