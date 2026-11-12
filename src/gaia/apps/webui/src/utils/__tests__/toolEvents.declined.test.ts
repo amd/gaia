@@ -20,8 +20,10 @@ describe('a declined call', () => {
     it.each([
         ['on the event', { status: 'denied', timed_out: true }],
         ['in relayed data', { data: { status: 'denied', timed_out: true } }],
-    ])('is not called declined when nobody answered (%s)', (_where, extra) => {
-        expect(toolResultUpdates(result(extra as Partial<StreamEvent>)).declined).toBeUndefined();
+    ])('is marked timed out, not declined, when nobody answered (%s)', (_where, extra) => {
+        const updates = toolResultUpdates(result(extra as Partial<StreamEvent>));
+        expect(updates.declined).toBeUndefined();
+        expect(updates.timedOut).toBe(true);
     });
 
     it('leaves an ordinary failure alone', () => {
