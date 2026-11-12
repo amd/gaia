@@ -1150,7 +1150,7 @@ describe('Chat App Integration', () => {
     it('should have drag-and-drop with visual overlay', () => {
       expect(chatContent).toContain('isDragOver');
       expect(chatContent).toContain('drag-overlay');
-      expect(chatContent).toContain('Drop files to index');
+      expectTranslated(chatContent, "t('chat.dropToAdd')", 'chat.dropToAdd', 'Drop files to add them to this chat');
     });
 
     it('should auto-upload dropped files', () => {
