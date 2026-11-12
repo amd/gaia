@@ -30,6 +30,14 @@ from tests.unit.connectors.conftest import make_fake_agent_registry
 UI_HEADER = {"x-gaia-ui": "1"}
 
 
+def _with_identity(connector_id, scopes):
+    """*scopes* plus the provider's identity and refresh scopes, as sign-in asks."""
+    from gaia.ui.routers import connectors as router
+
+    identity = router.REGISTRY.get(connector_id).default_scopes
+    return sorted(set(scopes) | set(identity))
+
+
 @pytest.fixture
 def fresh_google_provider():
     """Drop the cached Google provider; restore the whole cache on teardown."""
@@ -563,7 +571,7 @@ class TestAuthorizeGrantAgents:
         )
         assert resp.status_code == 200, resp.text
         _, kwargs = mock_start.call_args
-        assert kwargs["scopes"] == self._SCOPES
+        assert kwargs["scopes"] == _with_identity("google", self._SCOPES)
 
     def test_authorize_empty_scopes_with_no_grant_agents_passes_through_empty(
         self, ui_api_client, monkeypatch
@@ -632,7 +640,7 @@ class TestAuthorizeGrantAgents:
             headers=UI_HEADER,
         )
         assert resp.status_code == 200, resp.text
-        assert captured["config"]["scopes"] == sorted(self._SCOPES)
+        assert captured["config"]["scopes"] == _with_identity("google", self._SCOPES)
 
 
 # ---------------------------------------------------------------------------
@@ -771,7 +779,10 @@ class TestSidecarRegistrationEndToEnd:
 
         assert resp.status_code == 200, resp.text
         _, kwargs = mock_start.call_args
-        assert kwargs["scopes"] == declared
+        # Plus identity and refresh, without which Microsoft returns no refresh token.
+        assert kwargs["scopes"] == _with_identity(connector_id, declared)
+        if connector_id == "microsoft":
+            assert "offline_access" in kwargs["scopes"]
         assert sorted(kwargs["grant_agents"]["installed:gaia"]) == declared
         assert not any("gmail.modify" in s or "drive" in s for s in kwargs["scopes"])
 
@@ -826,7 +837,9 @@ class TestSidecarRegistrationEndToEnd:
 
         assert resp.status_code == 200, resp.text
         _, kwargs = mock_start.call_args
-        assert kwargs["scopes"] == [read_scope]
+        assert kwargs["scopes"] == _with_identity(connector_id, [read_scope])
+        identity = _with_identity(connector_id, [])
+        assert [s for s in kwargs["scopes"] if s not in identity] == [read_scope]
         assert read_scope in kwargs["grant_agents"]["installed:gaia"]
 
     def test_authorize_404s_when_the_bridge_is_not_wired(self, monkeypatch):
