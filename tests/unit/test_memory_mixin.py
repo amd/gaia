@@ -1438,6 +1438,41 @@ class TestRecallTool:
 
         assert "Flagged private marker" in contents
 
+    def test_a_bare_recall_lists_only_what_about_you_shows(self, mixin_with_tools):
+        """ "What do you remember about me?" must not recite GAIA's own tool notes.
+
+        The user can neither see nor forget those in Memory > About you.
+        """
+        store = mixin_with_tools.memory_store
+        store.store(category="fact", content="Keeps a sailboat called Wren")
+        store.store(
+            category="error",
+            source="error_auto",
+            content="write_file: [Errno 13] Permission denied: '/Library/Harbor-Notes'",
+        )
+        shown = {
+            r["content"]
+            for r in store.get_all_knowledge(about_user=True, limit=200)["items"]
+        }
+
+        func = mixin_with_tools._registered_tools["recall"]["function"]
+        contents = {r["content"] for r in func(limit=100)["results"]}
+
+        assert contents == shown
+        assert "Keeps a sailboat called Wren" in contents
+
+    def test_a_recall_for_errors_still_reaches_gaias_own_notes(self, mixin_with_tools):
+        mixin_with_tools.memory_store.store(
+            category="error",
+            source="error_auto",
+            content="write_file: [Errno 13] Permission denied: '/Library/Harbor-Notes'",
+        )
+
+        func = mixin_with_tools._registered_tools["recall"]["function"]
+        contents = [r["content"] for r in func(category="error")["results"]]
+
+        assert any("Harbor-Notes" in c for c in contents)
+
     def test_recall_with_no_arguments_honours_the_limit(self, mixin_with_tools):
         for i in range(10):
             mixin_with_tools.memory_store.store(

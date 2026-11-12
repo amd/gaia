@@ -27,6 +27,8 @@
  *   - On `update-downloaded`, the chip offers the restart; nothing interrupts
  *   - Renderer integration via IPC channel `gaia:update:status`
  *   - Disabled entirely via GAIA_DISABLE_UPDATE=1 env var (CI / dev / corp)
+ *   - macOS never downloads or installs: ad-hoc signed builds can't replace
+ *     themselves (#7061), so a found update links to its release page
  *   - Rollback: listReleases() → installVersion(tag) → pin persisted to
  *     ~/.gaia/update-config.json so auto-update stays paused until resumeUpdates()
  *
@@ -291,6 +293,30 @@ function _releasesErrorMessage(err, doing) {
   }
 }
 
+/**
+ * Whether this build can replace itself. macOS builds are ad-hoc signed, and
+ * Squirrel.Mac rejects any other ad-hoc build as the update (#7061), so a Mac
+ * update is offered as a download from its release page instead.
+ */
+function _selfInstalls() {
+  return process.platform !== "darwin";
+}
+
+/** The release page for `version`, where its installers are downloaded by hand. */
+function _releasePage(version) {
+  return `${RELEASES_PAGE}/tag/${_tagForVersion(version)}`;
+}
+
+/** The refusal for an install this build can't do itself. */
+function _manualInstallError(version) {
+  const url = version ? _releasePage(version) : RELEASES_PAGE;
+  return _userError(
+    "manualInstall",
+    { url },
+    `GAIA can't update itself on this Mac yet. Download the new version from ${url} and install it over this one.`
+  );
+}
+
 const STATES = Object.freeze({
   IDLE: "idle",
   CHECKING: "checking",
@@ -330,6 +356,11 @@ const state = {
   lastCheckError: null,
   // The update has downloaded and its backend is being fetched before the restart.
   preparing: false,
+  // This build can't install updates itself (macOS, #7061): an update is offered
+  // as a download from `downloadUrl` instead.
+  manualInstall: !_selfInstalls(),
+  // The release page of the offered update, or null.
+  downloadUrl: null,
 };
 
 let mainWindowRef = null;
@@ -471,9 +502,14 @@ function _refreshPreferences() {
 
 function _applyInstallPolicy() {
   if (!autoUpdaterRef) return;
-  autoUpdaterRef.autoDownload = state.autoUpdate && !state.pinnedVersion;
+  const selfInstalls = _selfInstalls();
+  autoUpdaterRef.autoDownload = selfInstalls && state.autoUpdate && !state.pinnedVersion;
   autoUpdaterRef.autoInstallOnAppQuit =
-    (state.autoUpdate || installRequested) && !abandonedDownload && !wizardNextInstall && !state.preparing;
+    selfInstalls &&
+    (state.autoUpdate || installRequested) &&
+    !abandonedDownload &&
+    !wizardNextInstall &&
+    !state.preparing;
   autoUpdaterRef.allowPrerelease = _prereleasesAllowed();
 }
 
@@ -517,6 +553,7 @@ const USER_ERROR_CODES = new Set([
   "diskSpace",
   "downloadFailed",
   "failedWith",
+  "manualInstall",
   "noEarlier",
   "noInstaller",
   "offline",
@@ -894,6 +931,9 @@ async function installVersion(tag) {
       `Invalid release tag "${tag}" — expected the form "vMAJOR.MINOR.PATCH" (e.g. "v0.20.0")`
     );
   }
+  if (!_selfInstalls()) {
+    throw _manualInstallError(tag.replace(/^v/, ""));
+  }
   if (checkInProgress) {
     throw _userError(
       "checkBusy",
@@ -1063,7 +1103,7 @@ async function setAutoUpdate(enabled) {
   _applyInstallPolicy();
   log("info", `Auto-update ${enabled ? "enabled" : "disabled"}`);
   // Turning it on with an update already offered means "install it".
-  if (enabled && !state.pinnedVersion && state.status === STATES.AVAILABLE) {
+  if (enabled && _selfInstalls() && !state.pinnedVersion && state.status === STATES.AVAILABLE) {
     await downloadUpdate();
   }
 }
@@ -1404,6 +1444,7 @@ async function downloadUpdate() {
       `No update is waiting to download (status: ${state.status}) — check for updates first.`
     );
   }
+  if (!_selfInstalls()) throw _manualInstallError(state.version);
   log("info", `User asked to install ${state.version}`);
   installRequested = true;
   _applyInstallPolicy();
@@ -1552,6 +1593,7 @@ function wireAutoUpdaterEvents() {
       status: STATES.AVAILABLE,
       version: info.version || null,
       releaseNotes,
+      downloadUrl: info.version ? _releasePage(info.version) : RELEASES_PAGE,
       error: null,
       lastCheckError: null,
     });
@@ -1568,6 +1610,7 @@ function wireAutoUpdaterEvents() {
       version: null,
       progress: 0,
       releaseNotes: null,
+      downloadUrl: null,
       error: null,
       lastCheckError: null,
     });
