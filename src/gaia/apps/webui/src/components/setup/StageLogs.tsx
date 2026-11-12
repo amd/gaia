@@ -18,14 +18,15 @@ const REPORT_CLASSES: ReportClasses = {
 };
 
 const PERCENT = /\d+(\.\d+)?\s*%/;
-const NUMBERS = /\d+(\.\d+)?/g;
 
 /** A redrawn progress bar prints a line per redraw: keep only the last of each run. */
 export function collapseProgress(lines: string[]): string[] {
     const out: string[] = [];
     let last: string | null = null;
     for (const line of lines) {
-        const shape = PERCENT.test(line) ? line.replace(NUMBERS, '#') : null;
+        // Same text before the percent is the same bar; a new file or shard keeps its own line.
+        const at = line.search(PERCENT);
+        const shape = at >= 0 ? line.slice(0, at) : null;
         if (shape !== null && shape === last) out[out.length - 1] = line;
         else out.push(line);
         last = shape;

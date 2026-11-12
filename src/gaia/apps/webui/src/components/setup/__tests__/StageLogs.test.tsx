@@ -42,6 +42,21 @@ describe('setup logs', () => {
         expect(screen.getByRole('button', { name: 'Save a troubleshooting report' })).toBeEnabled();
     });
 
+    it('keeps each file of a split download, even when only digits tell them apart', () => {
+        const lines = [
+            'Downloading model-00001-of-00002.gguf... 60%',
+            'Downloading model-00001-of-00002.gguf... 100%',
+            'Downloading model-00002-of-00002.gguf... 5%',
+            'Downloading model-00002-of-00002.gguf... 30%',
+        ];
+        expect(collapseProgress(lines)).toEqual([lines[1], lines[3]]);
+    });
+
+    it('leaves lines without a percent, and bars split by other lines, alone', () => {
+        const lines = ['Step 1 of 3', 'Step 1 of 3', 'Fetching... 10%', 'retrying', 'Fetching... 20%'];
+        expect(collapseProgress(lines)).toEqual(lines);
+    });
+
     it('keeps only the last line of a redrawn progress bar', () => {
         expect(collapseProgress([
             '$ gaia init --profile gaia',
