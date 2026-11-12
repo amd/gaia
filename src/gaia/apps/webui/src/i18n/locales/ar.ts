@@ -1818,6 +1818,7 @@ const messages: Messages = {
     'settings.connectors.agentServers': 'خوادم الوكلاء المخصصين',
     'settings.connectors.unavailable': 'غير متاحة',
     'settings.connectors.unavailableHint': 'تعذّر على GAIA قراءة هذه الموصلات. أعد تشغيل GAIA. إذا تكرر ذلك، احفظ تقرير استكشاف الأخطاء من الإعدادات ← الخصوصية وأرفقه بتقرير الخطأ.',
+    'settings.connectors.activationsUnreadableHint': 'تعذّر على GAIA قراءة ملف إعدادات الموصلات في {path}. احذف هذا الملف، ثم أعد فتح هذه الصفحة. ستحتاج إلى تشغيل الموصلات التي كنت قد فعّلتها لأي وكيل مرة أخرى.',
     'settings.connectors.unavailableStatus': 'تعذّر التحميل',
     'settings.connectors.notRevoked': 'قُطع الاتصال محليًا، لكن المزوّد لم يؤكد الإلغاء ({reason}). قد يظل ظاهرًا كمتصل في أذونات التطبيقات بحسابك.',
     'settings.connectors.localOnly': 'قُطع الاتصال محليًا. {reason}',
