@@ -63,7 +63,7 @@ describe('AdvancedSettings', () => {
         await screen.findByText('amd.o1-mini');
 
         expect(screen.queryByText('Wrong model loaded.')).not.toBeInTheDocument();
-        expect(screen.queryByText('Force Re-download')).not.toBeInTheDocument();
+        expect(screen.queryByText('Download again')).not.toBeInTheDocument();
         expect(screen.queryByText('Device')).not.toBeInTheDocument();
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
         expect(screen.queryByText(/Expected:/)).not.toBeInTheDocument();
@@ -96,7 +96,7 @@ describe('AdvancedSettings', () => {
         render(<AdvancedSettings />);
         await screen.findByText('Wrong model loaded.');
 
-        expect(screen.getByText('Force Re-download')).toBeInTheDocument();
+        expect(screen.getByText('Download again')).toBeInTheDocument();
         expect(screen.getByText('Device')).toBeInTheDocument();
         // Context size lives in Settings › Model, sized to what fits (#5213).
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
@@ -109,7 +109,7 @@ describe('AdvancedSettings', () => {
             default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
         }));
         render(<AdvancedSettings />);
-        await screen.findByText('Force Re-download');
+        await screen.findByText('Download again');
 
         expect(screen.getByText(/Cannot download 'user.x'/)).toHaveAttribute('role', 'alert');
     });
@@ -120,7 +120,7 @@ describe('AdvancedSettings', () => {
             default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
         }));
         const { unmount } = render(<AdvancedSettings />);
-        fireEvent.click(await screen.findByText('Force Re-download'));
+        fireEvent.click(await screen.findByText('Download again'));
         expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, false);
         unmount();
 
@@ -130,7 +130,7 @@ describe('AdvancedSettings', () => {
             default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
         }));
         render(<AdvancedSettings />);
-        fireEvent.click(await screen.findByText('Force Re-download'));
+        fireEvent.click(await screen.findByText('Download again'));
         expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, true);
     });
 
