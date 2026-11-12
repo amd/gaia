@@ -898,8 +898,20 @@ _ACTION_EVIDENCE: Dict[str, "tuple[Callable[[Dict[str, Any]], bool], str]"] = {
 }
 
 
-def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Finding]:
-    """Work the answer reports that no tool of that kind did."""
+def action_findings(
+    answer: str, records: Sequence[Dict[str, Any]], may_act: bool = True
+) -> List[Finding]:
+    """Work the answer reports that no tool of that kind did.
+
+    With *may_act* false the user barred tools this turn, so the correction
+    asks only for the claim to go, never for the work to be done.
+    """
+    remedy = (
+        "Do it now, or drop the claim."
+        if may_act
+        else "The user asked for no tools this turn, so don't call one: drop "
+        "the claim or reword it so it doesn't say you did."
+    )
     findings: List[Finding] = []
     for kind, phrase in action_claims(answer):
         backed, why = _ACTION_EVIDENCE[kind]
@@ -908,7 +920,7 @@ def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Find
         findings.append(
             Finding(
                 ACTION,
-                f'Your answer says "{phrase}", but {why}. Do it now, or drop the claim.',
+                f'Your answer says "{phrase}", but {why}. {remedy}',
                 f'I said "{phrase}", but {why}',
             )
         )
@@ -985,8 +997,11 @@ def ungrounded(
     history: str = "",
     locate: Optional[Callable[[str], Optional[str]]] = None,
     plan_only: bool = False,
+    may_act: bool = True,
 ) -> List[Finding]:
     """Every gap between *answer* and this turn's tool record, look first.
+
+    *may_act* is false when the user barred tools this turn.
 
     *history* is the text of earlier turns. An answer that already says it did
     not look, or that its figures are unverified, has nothing left to correct
@@ -999,7 +1014,7 @@ def ungrounded(
         findings += content_findings(answer, records, history + "\n" + query)
     return (
         findings
-        + action_findings(answer, records)
+        + action_findings(answer, records, may_act)
         + request_findings(answer, query, records)
     )
 

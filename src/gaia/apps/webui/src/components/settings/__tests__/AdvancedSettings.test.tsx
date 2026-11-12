@@ -63,7 +63,7 @@ describe('AdvancedSettings', () => {
         await screen.findByText('amd.o1-mini');
 
         expect(screen.queryByText('Wrong model loaded.')).not.toBeInTheDocument();
-        expect(screen.queryByText('Force Re-download')).not.toBeInTheDocument();
+        expect(screen.queryByText('Download again')).not.toBeInTheDocument();
         expect(screen.queryByText('Device')).not.toBeInTheDocument();
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
         expect(screen.queryByText(/Expected:/)).not.toBeInTheDocument();
@@ -96,7 +96,7 @@ describe('AdvancedSettings', () => {
         render(<AdvancedSettings />);
         await screen.findByText('Wrong model loaded.');
 
-        expect(screen.getByText('Force Re-download')).toBeInTheDocument();
+        expect(screen.getByText('Download again')).toBeInTheDocument();
         expect(screen.getByText('Device')).toBeInTheDocument();
         // Context size lives in Settings › Model, sized to what fits (#5213).
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
@@ -109,7 +109,7 @@ describe('AdvancedSettings', () => {
             default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
         }));
         render(<AdvancedSettings />);
-        await screen.findByText('Force Re-download');
+        await screen.findByText('Download again');
 
         expect(screen.getByText(/Cannot download 'user.x'/)).toHaveAttribute('role', 'alert');
     });
@@ -120,7 +120,7 @@ describe('AdvancedSettings', () => {
             default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
         }));
         const { unmount } = render(<AdvancedSettings />);
-        fireEvent.click(await screen.findByText('Force Re-download'));
+        fireEvent.click(await screen.findByText('Download again'));
         expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, false);
         unmount();
 
@@ -130,7 +130,7 @@ describe('AdvancedSettings', () => {
             default_model_name: 'Gemma-4-E4B-it-GGUF', model_labels: null,
         }));
         render(<AdvancedSettings />);
-        fireEvent.click(await screen.findByText('Force Re-download'));
+        fireEvent.click(await screen.findByText('Download again'));
         expect(modelActions.downloadModel).toHaveBeenCalledWith(true, undefined, true);
     });
 
@@ -224,6 +224,33 @@ describe('AdvancedSettings', () => {
         it('adds nothing for an ID the model server lists', async () => {
             await save('Qwen3-4B-GGUF', { found: true, checked: true });
             expect(await screen.findByText('Saved')).toBeInTheDocument();
+            expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
+        });
+
+        it('still carries the note when Settings is opened again on the saved bad ID', async () => {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.getSettings.mockResolvedValue({
+                custom_model: 'fireworks.no-such-model',
+                model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+
+            expect(await screen.findByDisplayValue('fireworks.no-such-model')).toBeInTheDocument();
+            expect(await screen.findByText(/the model server doesn't list “fireworks.no-such-model”/)).toBeInTheDocument();
+            expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+        });
+
+        it('opens with no note on a saved ID the model server lists', async () => {
+            mockedApi.getSystemStatus.mockResolvedValue(status({}));
+            mockedApi.getSettings.mockResolvedValue({
+                custom_model: 'Qwen3-4B-GGUF',
+                model_status: { found: true, checked: true, downloaded: true, loaded: false },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+
+            await screen.findByDisplayValue('Qwen3-4B-GGUF');
             expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
         });
 
