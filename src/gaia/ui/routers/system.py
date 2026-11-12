@@ -1059,9 +1059,7 @@ async def _check_model_status(model_name: str) -> ModelStatus:
 
             # Check health: is model currently loaded?
             health_resp = await client.get(f"{base_url}/health", headers=_auth)
-            health_data = (
-                health_resp.json() if health_resp.status_code == 200 else None
-            )
+            health_data = health_resp.json() if health_resp.status_code == 200 else None
             if isinstance(health_data, dict):
                 loaded_model = health_data.get("model_loaded")
                 if isinstance(loaded_model, str) and _model_ids_match(
