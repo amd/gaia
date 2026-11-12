@@ -61,13 +61,13 @@ For comprehensive documentation including:
 - Session management
 - Performance tuning
 
-See: **[docs/chat.md](../../../docs/chat.md)**
+See: **[docs/sdk/sdks/chat.mdx](../../../docs/sdk/sdks/chat.mdx)**
 
 ## Testing
 
 ```bash
 # Run chat SDK tests
-pytest tests/test_chat_sdk.py -v
+pytest tests/test_agent_sdk.py -v
 ```
 
 ## License

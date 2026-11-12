@@ -2,7 +2,7 @@
   "name": "agent-ui",
   "displayName": "GAIA Agent UI",
   "version": "0.1.0",
-  "description": "Privacy-first agentic AI interface with document Q&A - runs 100% locally on AMD Ryzen AI",
+  "description": "Privacy-first agentic AI interface with document Q&A - local and private by default on AMD Ryzen AI, cloud models when you choose them",
   "author": "AMD AI Group",
   "license": "MIT",
   "window": {

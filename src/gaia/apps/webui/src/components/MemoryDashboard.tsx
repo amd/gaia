@@ -9,6 +9,7 @@ import {
     Zap, GitMerge, Circle, User, Cpu, Sparkles, Target, ListChecks,
 } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
+import { useGoalHealthStore } from '../stores/goalHealthStore';
 import { useEscapeToClose } from '../hooks/useEscapeToClose';
 import { useFocusTrap } from '../hooks/useFocusTrap';
 import * as memoryApi from '../services/memoryApi';
@@ -397,6 +398,7 @@ export function MemoryDashboard() {
     const [goals, setGoals] = useState<Goal[]>([]);
     const [goalStats, setGoalStats] = useState<GoalStats | null>(null);
     const [goalsLoading, setGoalsLoading] = useState(false);
+    const goalStoreError = useGoalHealthStore((s) => s.error);
     const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
     const [confirmGoalDeleteId, setConfirmGoalDeleteId] = useState<string | null>(null);
     const [showAddGoalForm, setShowAddGoalForm] = useState(false);
@@ -590,6 +592,7 @@ export function MemoryDashboard() {
 
     const loadGoals = useCallback(async () => {
         setGoalsLoading(true);
+        void useGoalHealthStore.getState().check();
         try {
             const [goalsRes, statsRes] = await Promise.all([
                 memoryApi.listGoals(),
@@ -2611,6 +2614,11 @@ export function MemoryDashboard() {
                     {/* ── Goals Tab ──────────────────────────────────────── */}
                     {activeTab === 'goals' && (
                         <div className="mem-goals-tab">
+                            {goalStoreError && (
+                                <div className="mem-advanced-error" role="alert">
+                                    <AlertTriangle size={14} /> {t('mem.goals.storeError')}: <bdi>{goalStoreError}</bdi>
+                                </div>
+                            )}
                             {/* Header stat row */}
                             <div className="mem-goals-stats-row">
                                 {(['queued','in_progress','completed','failed'] as const).map(s => (

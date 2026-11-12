@@ -40,7 +40,8 @@ from gaia.agents.tools._email.outgoing import (
     require_recipient,
 )
 from gaia.agents.tools._email.scopes import OPERATION_DRAFT, OPERATION_SEND
-from gaia.agents.tools.email_tools import EmailToolsMixin
+from gaia.agents.tools.connect_card import agent_surface, with_connect_card
+from gaia.agents.tools.email_tools import EMAIL_AGENT_ID, EmailToolsMixin
 from gaia.logger import get_logger
 from gaia.skills.context import current
 
@@ -109,6 +110,13 @@ def _fail(exc: Any, action: str, **extra: Any) -> str:
     logger.warning("email tool failed during %s: %s", action, exc)
     payload = {"error": str(exc), "action": action, "success": False}
     payload.update(extra)
+    if getattr(exc, "connect", ()):
+        with_connect_card(
+            payload,
+            exc,
+            agent_id=EMAIL_AGENT_ID,
+            surface=agent_surface(current().agent),
+        )
     return json.dumps(payload, indent=2)
 
 
@@ -155,7 +163,12 @@ class _MailPreflight:
         try:
             mailer = _mailer()
         except RuntimeError as exc:
-            return {"status": "error", "error": str(exc)}
+            return with_connect_card(
+                {"status": "error", "error": str(exc)},
+                exc,
+                agent_id=EMAIL_AGENT_ID,
+                surface=agent_surface(call.agent),
+            )
         if self._preapproved(mailer) and not a_person_can_answer(
             getattr(mailer, "console", None)
         ):
@@ -167,7 +180,12 @@ class _MailPreflight:
             message = dataclasses.replace(message, sender=mailer._email_account_label())
         except Exception as exc:  # surfaced to the model instead of a prompt
             logger.warning("email: %s refused: %s", self._tool_name, exc)
-            return {"status": "error", "error": str(exc)}
+            return with_connect_card(
+                {"status": "error", "error": str(exc)},
+                exc,
+                agent_id=EMAIL_AGENT_ID,
+                surface=agent_surface(call.agent),
+            )
         mailer._email_prepared[_call_key(self._tool_name, args)] = message
         return None
 
