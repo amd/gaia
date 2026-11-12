@@ -12,6 +12,8 @@ a whole sentence or a phrase that reads correctly after the swap.
 the Agent UI's setup log swaps for the app's own.
 """
 
+from gaia.llm.local_only import SETTINGS_HINT as CLI_LOCAL_ONLY_HINT
+
 #: How a TUI user picks another model.
 TUI_MODEL_SWITCH_HINT = "Pick another model with /model in the TUI."
 AGENT_UI_MODEL_SWITCH_HINT = (
@@ -136,8 +138,15 @@ AGENT_UI_VISION_DOWNLOAD_STEP = (
     "ask again."
 )
 
+#: How an Agent UI user lets cloud models back in; the CLI's command is
+#: ``local_only.SETTINGS_HINT``.
+AGENT_UI_LOCAL_ONLY_HINT = (
+    "To allow cloud models again, turn off Local only under Settings > Privacy."
+)
+
 _SWAPS = {
     "agent_ui": (
+        (CLI_LOCAL_ONLY_HINT, AGENT_UI_LOCAL_ONLY_HINT),
         (CLI_VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_HINT),
         (VISION_DOWNLOAD_HINT, AGENT_UI_VISION_DOWNLOAD_STEP),
         (TUI_SERVER_RESTART_HINT, AGENT_UI_SERVER_RESTART_HINT),

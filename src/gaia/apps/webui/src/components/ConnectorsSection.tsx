@@ -352,7 +352,7 @@ export function ConnectorsSection() {
                     {connectors.length === 0 && !error && <p className="settings-hint">{t('settings.connectors.none')}</p>}
                     {q && shown.length === 0 && <p className="settings-hint">{t('settings.connectors.noMatch')}</p>}
                     {unavailable.length > 0 && (
-                        <SettingsDisclosure title={t('settings.connectors.unavailable')} hint={t('settings.connectors.unavailableHint')} count={unavailable.length} defaultOpen forceOpen={!!q}>
+                        <SettingsDisclosure title={t('settings.connectors.unavailable')} hint={unavailableHint(unavailable, t)} count={unavailable.length} defaultOpen forceOpen={!!q}>
                             <div className="connectors-list">
                                 {unavailable.map((c) => <UnavailableTile key={c.id} connector={c} />)}
                             </div>
@@ -386,6 +386,12 @@ export function ConnectorsSection() {
             )}
         </section>
     );
+}
+
+function unavailableHint(rows: UnavailableConnectorRow[], t: Translate): string {
+    const ledger = rows.find((c) => c.reason === 'activations_unreadable' && c.path);
+    if (!ledger?.path) return t('settings.connectors.unavailableHint');
+    return t('settings.connectors.activationsUnreadableHint', { path: ltrIn(t.locale, ledger.path) });
 }
 
 // ── UnavailableTile ──────────────────────────────────────────────────────────

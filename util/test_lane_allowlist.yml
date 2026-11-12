@@ -126,6 +126,7 @@ module_skips:
       - tests/unit/test_tool_loader_token_budget.py
       - tests/unit/test_tool_list_invariants.py
       - tests/unit/test_warm_up.py
+      - tests/unit/test_flagship_tool_labels.py
       - tests/unit/eval/test_harness_flagship_target.py
       - tests/unit/agents/test_engine_down_query_start.py
 
