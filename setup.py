@@ -75,6 +75,7 @@ setup(
         "gaia.factory.harvest",
         "gaia.sd",
         "gaia.vlm",
+        "gaia.voice",
         "gaia.api",
         "gaia.filesystem",
         "gaia.scratchpad",

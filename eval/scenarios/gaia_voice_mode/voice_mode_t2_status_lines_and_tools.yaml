@@ -5,7 +5,7 @@ id: voice_mode_t2_status_lines_and_tools
 name: "Voice mode — Status Line Before the Tool, Summary From the Result"
 category: gaia_voice_mode
 severity: high
-tags: [t2_intermediate]
+tags: [t2_compound]
 description: |
   In voice mode the agent writes one short line before each tool call saying
   what it is about to do (it is spoken while the tool runs), never claims a
