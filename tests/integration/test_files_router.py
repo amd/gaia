@@ -1438,3 +1438,21 @@ class TestPreviewEdgeCases:
         # min(max(0, 1), 200) = 1
         data = resp.json()
         assert len(data["preview_lines"]) == 1
+
+
+def test_preview_reads_the_file_off_the_event_loop(client, sample_text_file):
+    import asyncio
+
+    calls = []
+    real_to_thread = asyncio.to_thread
+
+    async def recording_to_thread(func, *args, **kwargs):
+        calls.append(func.__name__)
+        return await real_to_thread(func, *args, **kwargs)
+
+    with patch("gaia.ui.routers.files.asyncio.to_thread", recording_to_thread):
+        resp = client.get("/api/files/preview", params={"path": str(sample_text_file)})
+
+    assert resp.status_code == 200
+    assert resp.json()["is_text"] is True
+    assert calls == ["read_text_preview"]

@@ -102,7 +102,7 @@ def invalidate_cached_tokens(provider_id: str) -> None:
     Called when the stored connection changes (connect, disconnect), so a new
     account or scope set is never answered with the previous grant's token.
     """
-    for key in [k for k in _cache if k[0] == provider_id]:
+    for key in [k for k in list(_cache) if k[0] == provider_id]:
         _cache.pop(key, None)
 
 

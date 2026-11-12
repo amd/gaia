@@ -820,47 +820,52 @@ async def preview_file(path: str, lines: int = 50):
         "encoding": None,
     }
 
-    # Try to read as text
-    if ext in TEXT_EXTENSIONS or stat.st_size < 1_000_000:  # Try text for < 1MB
-        for encoding in ("utf-8", "latin-1", "cp1252"):
-            try:
-                import itertools
+    def read_text_preview() -> None:
+        if ext in TEXT_EXTENSIONS or stat.st_size < 1_000_000:  # Try text for < 1MB
+            for encoding in ("utf-8", "latin-1", "cp1252"):
+                try:
+                    import itertools
 
-                preview = []
-                total_lines = 0
-                with open(resolved, "r", encoding=encoding) as f:
-                    # Read only the first N lines for preview
-                    for line in itertools.islice(f, lines):
-                        preview.append(line.rstrip("\n\r")[:500])
-                    # Count remaining lines without loading into memory
-                    total_lines = len(preview)
-                    for _ in f:
-                        total_lines += 1
-                result["is_text"] = True
-                result["encoding"] = encoding
-                result["total_lines"] = total_lines
-                result["preview_lines"] = preview
+                    preview = []
+                    total_lines = 0
+                    with open(resolved, "r", encoding=encoding) as f:
+                        # Read only the first N lines for preview
+                        for line in itertools.islice(f, lines):
+                            preview.append(line.rstrip("\n\r")[:500])
+                        # Count remaining lines without loading into memory
+                        total_lines = len(preview)
+                        for _ in f:
+                            total_lines += 1
+                    result["is_text"] = True
+                    result["encoding"] = encoding
+                    result["total_lines"] = total_lines
+                    result["preview_lines"] = preview
 
-                # CSV/TSV specific info
-                if ext in (".csv", ".tsv"):
-                    import csv as csv_mod
+                    # CSV/TSV specific info
+                    if ext in (".csv", ".tsv"):
+                        import csv as csv_mod
 
-                    delimiter = "\t" if ext == ".tsv" else ","
-                    try:
-                        with open(resolved, "r", encoding=encoding) as cf:
-                            reader = csv_mod.reader(cf, delimiter=delimiter)
-                            header = next(reader, None)
-                            if header:
-                                result["columns"] = header
-                                row_count = sum(1 for _ in reader)
-                                result["row_count"] = row_count
-                    except (OSError, csv_mod.Error, UnicodeError) as exc:
-                        logger.warning(
-                            "CSV preview of %s has no column info: %s", resolved, exc
-                        )
-                break
-            except (UnicodeDecodeError, UnicodeError):
-                continue
+                        delimiter = "\t" if ext == ".tsv" else ","
+                        try:
+                            with open(resolved, "r", encoding=encoding) as cf:
+                                reader = csv_mod.reader(cf, delimiter=delimiter)
+                                header = next(reader, None)
+                                if header:
+                                    result["columns"] = header
+                                    row_count = sum(1 for _ in reader)
+                                    result["row_count"] = row_count
+                        except (OSError, csv_mod.Error, UnicodeError) as exc:
+                            logger.warning(
+                                "CSV preview of %s has no column info: %s",
+                                resolved,
+                                exc,
+                            )
+                    break
+                except (UnicodeDecodeError, UnicodeError):
+                    continue
+
+    # Counting lines reads the whole file; keep that off the event loop.
+    await asyncio.to_thread(read_text_preview)
 
     return FilePreviewResponse(**result)
 
