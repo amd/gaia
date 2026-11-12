@@ -55,6 +55,28 @@ def test_a_failed_turn_that_reported_usage_still_counts(db):
     assert report["total_usd"] > 0
 
 
+@pytest.mark.parametrize(
+    "stats, counted",
+    [
+        # The prompt reached the provider, so its input was billed.
+        ({"input_tokens": 1_000, "output_tokens": 0}, True),
+        # Half a usage report can't be priced, and nothing says it was billed.
+        ({"input_tokens": None, "output_tokens": 50}, False),
+        ({"input_tokens": "1000", "output_tokens": "5"}, False),
+    ],
+)
+def test_a_failed_turn_counts_only_on_a_full_nonzero_usage_report(db, stats, counted):
+    spending.record_turn(db, FLASH, stats, failed=True)
+    assert _month(db)["turns"] == (1 if counted else 0)
+
+
+def test_a_failed_local_turn_records_nothing(db):
+    spending.record_turn(
+        db, "Gemma-4-E4B-it-GGUF", {"input_tokens": 9, "output_tokens": 9}, failed=True
+    )
+    assert _month(db)["turns"] == 0
+
+
 def test_a_stopped_turn_with_no_usage_is_still_counted_apart(db):
     spending.record_turn(db, FLASH, {})
     assert _month(db)["unreported_turns"] == 1
