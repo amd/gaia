@@ -11,6 +11,7 @@ import { LogsDialog } from './components/LogsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { buildPersonalizePrompt, PERSONALIZE_EVENT, type PersonalizeRequest } from './utils/connectorPersonalize';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
@@ -619,10 +620,27 @@ function App() {
     }, [newChat]);
     useTrayBridge({ openChat: openChatFromTray, newChat: newChatFromTray, refreshStatus: () => void checkSystemStatus() });
 
+    // The prompt waits in the box, so the user sees what goes to the model and sends it.
     const useSkill = useCallback((name: string) => {
+        const store = useChatStore.getState();
+        const unsent = store.pendingPrompt?.sessionId === store.currentSessionId ? store.pendingPrompt?.text : null;
         newChat();
-        startChat(`Load the \`${name}\` skill, then tell me briefly what it lets you do.`)
-            .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+        const prompt = t.bare('settings.skills.tryPrompt', { name });
+        setDraftText(unsent ? `${unsent}
+
+${prompt}` : prompt);
+    }, [newChat, t]);
+
+    useEffect(() => {
+        const onPersonalize = (e: Event) => {
+            const req = (e as CustomEvent<PersonalizeRequest>).detail;
+            useChatStore.getState().closeSettings();
+            newChat();
+            startChat(buildPersonalizePrompt(req))
+                .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+        };
+        window.addEventListener(PERSONALIZE_EVENT, onPersonalize);
+        return () => window.removeEventListener(PERSONALIZE_EVENT, onPersonalize);
     }, [newChat, startChat]);
 
     const finishSetup = useCallback((first?: StartCard) => {

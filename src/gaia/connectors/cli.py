@@ -266,7 +266,10 @@ def handle(args: argparse.Namespace) -> int:
 
 def _handle_list(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-    from gaia.connectors.mcp_server import is_mcp_server_configured
+    from gaia.connectors.mcp_server import (
+        is_mcp_server_configured,
+        is_mcp_server_enabled,
+    )
     from gaia.connectors.registry import REGISTRY
     from gaia.connectors.store import peek_connection
 
@@ -289,6 +292,7 @@ def _handle_list(args: argparse.Namespace) -> int:
     rows = []
     for spec in specs:
         configured = False
+        enabled = True
         account_id = None
         scopes: list = []
         if spec.type == "oauth_pkce":
@@ -299,6 +303,7 @@ def _handle_list(args: argparse.Namespace) -> int:
                 scopes = list(blob.get("scopes", []))
         elif spec.type == "mcp_server":
             configured = is_mcp_server_configured(spec.id)
+            enabled = is_mcp_server_enabled(spec.id)
 
         rows.append(
             {
@@ -308,6 +313,7 @@ def _handle_list(args: argparse.Namespace) -> int:
                 "category": spec.category,
                 "tier": spec.tier,
                 "configured": configured,
+                "enabled": enabled,
                 "account_id": account_id,
                 "scopes": scopes,
             }

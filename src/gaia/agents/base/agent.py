@@ -3346,6 +3346,7 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     # Before the prompt is composed: it decides the tool format.
                     LemonadeManager.learn_tool_calling(probe_client, model_id)
+                    LemonadeManager.learn_reasoning(probe_client, model_id)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -4259,8 +4260,8 @@ Do NOT wrap conversational replies in JSON.
             if cloud_model_provider(model_id):
                 # A cloud reasoning model can spend its whole budget thinking
                 # about one dense page; copying quotes needs little reasoning.
-                effort = cloud_lowest_reasoning_effort(model_id)
-                sampling = {"reasoning_effort": effort} if effort else {}
+                # None: no configured cloud_reasoning_effort is added either.
+                sampling = {"reasoning_effort": cloud_lowest_reasoning_effort(model_id)}
             else:
                 # Local anti-repetition penalties fight verbatim quote copying.
                 sampling = {
@@ -4712,12 +4713,18 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        skills = self.skill_manager.discover()
         catalog = render_catalog(
-            {n: s for n, s in skills.items() if not _withheld_skill_tools(self, s)},
-            list_project=self._lists_project_skills(),
+            self._catalog_skills(), list_project=self._lists_project_skills()
         )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _catalog_skills(self) -> Dict[str, Any]:
+        """Installed skills this model can load: the pool the catalogue lists from."""
+        return {
+            n: s
+            for n, s in self.skill_manager.discover().items()
+            if not _withheld_skill_tools(self, s)
+        }
 
     def _lists_project_skills(self) -> bool:
         """Whether the catalogue lists the project's ``.claude/skills``.

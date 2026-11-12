@@ -167,10 +167,15 @@
     align-items: center;
     gap: 2px;
     flex-shrink: 0;
-    opacity: 0;
+    /* Muted at rest so a row still shows it has actions, for keyboard and touch too. */
+    opacity: 0.6;
     transition: opacity var(--duration-fast) var(--ease);
 }
-.doc-row:hover .doc-row-actions { opacity: 1; }
+.doc-row:hover .doc-row-actions,
+.doc-row-actions:focus-within { opacity: 1; }
+@media (hover: none) {
+    .doc-row-actions { opacity: 1; }
+}
 
 .doc-open-folder { color: var(--text-muted); }
 .doc-open-folder:hover { color: var(--accent-blue); }
@@ -260,6 +265,19 @@
 }
 .doc-folder-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .doc-action-error { color: var(--danger); background: var(--danger-dim); }
+.doc-removed-notice { align-items: center; }
+.doc-undo {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--accent);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.doc-undo:hover { background: var(--bg-hover); }
 .doc-load-error { color: var(--danger); }
 .doc-load-error p { overflow-wrap: anywhere; }
 .doc-load-error button { margin-top: 12px; }

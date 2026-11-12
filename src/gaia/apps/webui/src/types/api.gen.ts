@@ -117,6 +117,8 @@ export interface ApiSchemas {
   SettingsResponse: SettingsResponse;
   SettingsUpdateRequest: SettingsUpdateRequest;
   SetupRunRequest: SetupRunRequest;
+  SkillLinkAddRequest: SkillLinkAddRequest;
+  SkillLinkRequest: SkillLinkRequest;
   SkipModelRequest: SkipModelRequest;
   SourceInfo: SourceInfo;
   SpeakRequest: SpeakRequest;
@@ -1347,6 +1349,16 @@ export interface SetupRunRequest {
   server_only?: boolean;
   skip_chat_model?: boolean;
   upgrade_embedded?: boolean;
+}
+export interface SkillLinkAddRequest {
+  allow_code?: boolean;
+  force?: boolean;
+  names?: string[] | null;
+  pin: string;
+  url: string;
+}
+export interface SkillLinkRequest {
+  url: string;
 }
 export interface SkipModelRequest {
   model_id: string;

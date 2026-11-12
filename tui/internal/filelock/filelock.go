@@ -187,3 +187,25 @@ func renameRetrying(src, dst string) error {
 		time.Sleep(pollEvery)
 	}
 }
+
+// Held reports whether another process holds the lock on path: the first
+// byte, as TryLock and Python's msvcrt.locking/flock take it. A missing file is
+// not held. The probe takes and drops the lock when it is free.
+func Held(path string) (bool, error) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0) // #nosec G304 -- caller-supplied lock path
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("cannot open %s to see whether it is in use: %w", path, err)
+	}
+	defer f.Close()
+	ok, err := TryLock(f)
+	if err != nil {
+		return false, fmt.Errorf("cannot test the lock on %s: %w", path, err)
+	}
+	if ok {
+		Unlock(f)
+	}
+	return !ok, nil
+}

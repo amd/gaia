@@ -24,10 +24,11 @@ import * as api from '../services/api';
 import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
 import { useChatStore } from '../stores/chatStore';
 import { useConnectorsSSE } from '../hooks/useConnectorsSSE';
-import type { MessageKey } from '../i18n/registry';
+import { ref, type MessageKey } from '../i18n/registry';
 import { translator, useT, type Translate } from '../i18n/useT';
 import type { AgentMcpServer, ConnectorListEntry, ConnectorRow, UnavailableConnectorRow } from '../types';
 import { connectorDescription, connectorDescriptionBare, fieldHelp, fieldLabel, missingFieldsMessage } from '../utils/connectorText';
+import { personalizeSourceKind, requestPersonalize } from '../utils/connectorPersonalize';
 import { ConnectorTileMenu } from './ConnectorTileMenu';
 import { SettingsDisclosure } from './settings/SettingsDisclosure';
 import { ltrIn } from './setup/format';
@@ -64,10 +65,86 @@ function scopeLabel(scope: string, t: Translate): string {
 
 const SEARCH_ABOVE = 6;
 
+// Words people search by that a connector's name and description never say.
+const MAIL_ACCOUNT_KEYWORDS = ['email', 'e-mail', 'inbox', 'calendar'];
+const SEARCH_KEYWORDS: Record<string, string[]> = {
+    google: MAIL_ACCOUNT_KEYWORDS,
+    microsoft: MAIL_ACCOUNT_KEYWORDS,
+    microsoft_work: MAIL_ACCOUNT_KEYWORDS,
+};
+
 // Canonical scope for MCP-server grants. Agents that consume MCP servers
 // dynamically declare no scopes of their own, so one-click activation
 // auto-grants this when no prior grant exists.
 const MCP_DEFAULT_GRANT_SCOPES = ['use'];
+
+// The agent a personalization chat runs on.
+const FLAGSHIP_AGENT_ID = 'gaia';
+
+type Agents = ReturnType<typeof useChatStore.getState>['agents'];
+
+/** What the personalization pass reads, as a message param ("your recent Slack channels..."). */
+function personalizeSourceRef(connector: ConnectorRow) {
+    const kind = personalizeSourceKind(connector.id);
+    return kind
+        ? ref(`settings.connectors.personalize.source.${kind}`)
+        : ref('settings.connectors.personalize.source.other', { name: connector.display_name });
+}
+
+/**
+ * Start the personalization pass. An MCP server's tools stay hidden from an
+ * agent until it is activated for it, so activate the flagship first;
+ * otherwise the pass runs with nothing to read.
+ */
+async function startPersonalize(t: Translate, connector: ConnectorRow, agents: Agents): Promise<void> {
+    if (connector.type === 'mcp_server') {
+        const flagship = agents.find((a) => a.id === FLAGSHIP_AGENT_ID)?.namespaced_agent_id;
+        if (!flagship) {
+            throw new Error(t('settings.connectors.personalize.noAgent', { name: connector.display_name }));
+        }
+        if (!connector.activations?.[flagship]) {
+            await api.activateConnectorAgent(connector.id, flagship, MCP_DEFAULT_GRANT_SCOPES);
+        }
+    }
+    requestPersonalize({ connectorId: connector.id, displayName: connector.display_name });
+}
+
+function PersonalizeButton({ connector, primary, onStarted }: {
+    connector: ConnectorRow;
+    primary?: boolean;
+    onStarted?: () => void;
+}) {
+    const t = useT();
+    const { agents } = useChatStore();
+    const [busy, setBusy] = useState(false);
+    const [err, setErr] = useState<string | null>(null);
+    const run = async () => {
+        setBusy(true);
+        setErr(null);
+        try {
+            await startPersonalize(t, connector, agents);
+            onStarted?.();
+        } catch (e) {
+            setErr(t('settings.connectors.personalize.failed', { error: e instanceof Error ? e.message : String(e) }));
+        } finally {
+            setBusy(false);
+        }
+    };
+    return (
+        <>
+            <button
+                type="button"
+                className={primary ? 'btn-primary' : 'btn-secondary'}
+                onClick={() => void run()}
+                disabled={busy}
+            >
+                {busy && <Loader2 size={12} className="spin" />}
+                {t('settings.connectors.personalize.button')}
+            </button>
+            {err && <span className="connector-personalize-error" role="alert">{err}</span>}
+        </>
+    );
+}
 
 // ── ConnectorsSection ────────────────────────────────────────────────────────
 
@@ -106,6 +183,10 @@ export function ConnectorsSection() {
     const [disconnectNotice, setDisconnectNotice] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<string | null>(null);
     const [query, setQuery] = useState('');
+    // Set when a refresh shows a connector going from not connected to connected.
+    const [justConnected, setJustConnected] = useState<ConnectorRow | null>(null);
+    const connectorsRef = useRef<ConnectorListEntry[]>([]);
+    connectorsRef.current = connectors;
     // Kept here, not in the tile: a first save moves the tile into "Connected" and remounts it.
     const [checks, setChecks] = useState<Record<string, McpCheck | null>>({});
     // Bumped per connector so a check that a newer check or a toggle replaced can't repaint.
@@ -160,6 +241,13 @@ export function ConnectorsSection() {
         // Refresh only the changed connector to avoid full reload.
         try {
             const row = await api.getConnector(id);
+            const before = connectorsRef.current.find((c) => c.id === id);
+            if (before && 'configured' in before && !before.configured && row.configured) {
+                setJustConnected(row);
+            } else if (!row.configured || row.enabled === false) {
+                // A disconnect or disable takes back the offer made for that connector.
+                setJustConnected((prev) => (prev?.id === id ? null : prev));
+            }
             setConnectors((prev) => prev.map((c) => (c.id === id ? row : c)));
         } catch {
             void load();
@@ -192,7 +280,9 @@ export function ConnectorsSection() {
 
     const q = query.trim().toLowerCase();
     const searchText = (c: ConnectorListEntry) =>
-        'error' in c ? [c.display_name] : [c.display_name, c.description, connectorDescriptionBare(t, c)];
+        'error' in c
+            ? [c.display_name]
+            : [c.display_name, c.description, connectorDescriptionBare(t, c), ...(SEARCH_KEYWORDS[c.id] ?? [])];
     const shown = connectors.filter((c) => !q || searchText(c).some((s) => s.toLowerCase().includes(q)));
     const unavailable = shown.filter((c): c is UnavailableConnectorRow => 'error' in c);
     const available = shown.filter((c): c is ConnectorRow => !('error' in c));
@@ -237,6 +327,19 @@ export function ConnectorsSection() {
                 >
                     <AlertCircle size={14} />
                     <span>{disconnectNotice}</span>
+                </div>
+            )}
+
+            {justConnected && (
+                <div className="connector-personalize connector-personalize--offer" role="status">
+                    <p>
+                        <strong>{t('settings.connectors.personalize.connected', { name: justConnected.display_name })}</strong>{' '}
+                        {t('settings.connectors.personalize.offer', { source: personalizeSourceRef(justConnected) })}
+                    </p>
+                    <PersonalizeButton connector={justConnected} primary onStarted={() => setJustConnected(null)} />
+                    <button type="button" className="btn-secondary" onClick={() => setJustConnected(null)}>
+                        {t('settings.connectors.personalize.notNow')}
+                    </button>
                 </div>
             )}
 
@@ -395,6 +498,12 @@ function ConnectorTile({
                             onRunCheck={onRunCheck}
                             onClearCheck={onClearCheck}
                         />
+                    )}
+                    {connector.configured && connector.enabled !== false && (
+                        <div className="connector-personalize">
+                            <p>{t('settings.connectors.personalize.tile', { source: personalizeSourceRef(connector) })}</p>
+                            <PersonalizeButton connector={connector} />
+                        </div>
                     )}
                     {connector.configured && (
                         <ConnectorAgentGrants

@@ -722,6 +722,66 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** The Connect card a mail tool sends when no account is usable. */
+const CONNECT_CARD = { kind: 'connect_account', providers: ['google', 'microsoft'], agent_id: 'installed:gaia', success: false, status: 'error', display_message: 'Needs a connected account' };
+
+async function withConnectCard(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Did my landlord email me about the lease?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        // No marker and no command: the button comes from the tool result alone.
+                        content: "I can't check yet because no mail account is connected. Use the Connect button above, then ask me again.",
+                        agent_steps: [
+                            { id: 1, type: 'tool', tool: 'list_inbox', active: false, success: false, render: 'connect_account', data: CONNECT_CARD },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a tool with no account shows the Connect card (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withConnectCard);
+        const card = page.locator('.render-connect');
+        await expect(card.locator('.render-connect__button')).toHaveCount(2);
+        await expect(card.locator('.render-connect__button').first()).toContainText('Google');
+        await expect(card).not.toContainText('gaia connectors');
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`connect-card-${locale}.png`) });
+        await shot(page, `connect-card-${locale}`);
+    });
+
+    test(`the Connect card says which account is already connected (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => { await withConnectCard(p); await withConnectors(p); });
+        const card = page.locator('.render-connect');
+        await expect(card.locator('.render-connect__connected')).toHaveCount(1);
+        await expect(card.locator('.render-connect__button--quiet')).toHaveCount(1);
+        // Returning with the account connected offers to run the question again.
+        await expect(page.locator('.connector-retry-banner')).toBeVisible();
+        expect(await audit(page)).toEqual([]);
+        await card.screenshot({ path: info.outputPath(`connect-card-connected-${locale}.png`) });
+        await shot(page, `connect-card-connected-${locale}`);
+    });
+}
+
+test('the Connect card fits a phone', async ({ page }, info) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withConnectCard);
+    await expect(page.locator('.render-connect__button')).toHaveCount(2);
+    // The closed sidebar drawer waits off screen at this width; judge the card.
+    const problems = (await audit(page)).filter((p) => p.includes('render-connect') || p.includes('scrolls sideways'));
+    expect(problems).toEqual([]);
+    await page.locator('.render-connect').screenshot({ path: info.outputPath('connect-card-phone.png') });
+    await shot(page, 'connect-card-phone');
+});
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';
@@ -1020,8 +1080,16 @@ for (const locale of ['ar', 'en']) {
 
         listable = true;
         await page.locator('.doc-load-error button').click();
+        // Row actions used to be invisible until hover, even with keyboard focus on them.
+        const actions = page.locator('.doc-row-actions').first();
+        expect(Number(await actions.evaluate((el) => getComputedStyle(el).opacity))).toBeGreaterThanOrEqual(0.5);
+        await page.locator('.doc-delete').focus();
+        await expect(actions).toHaveCSS('opacity', '1');
         await page.locator('.doc-delete').click();
-        await expect(page.locator('.doc-action-error')).toBeVisible();
+        await expect(page.locator('.doc-removed-notice')).toBeVisible();
+        await shot(page, `documents-${locale}-removed-undo`);
+        expect(await audit(page)).toEqual([]);
+        await expect(page.locator('.doc-action-error')).toBeVisible({ timeout: 10_000 });
         await shot(page, `documents-${locale}-remove-failed`);
         expect(await audit(page)).toEqual([]);
     });
@@ -1610,13 +1678,38 @@ for (const locale of ['ar', 'en']) {
         const dialog = page.getByRole('dialog');
         await dialog.locator('[data-section="privacy"]').click();
         const toggle = page.getByRole('switch');
-        await expect(toggle).toHaveAttribute('aria-checked', 'false');
+        await expect(toggle).not.toBeChecked();
+        // Drawn as a slider like every other Settings switch, not the bare word "Off" (#7404).
+        const track = page.locator('.toggle-switch', { has: toggle }).locator('.toggle-track');
+        const box = await track.boundingBox();
+        expect(box && box.width >= 24 && box.height >= 14).toBe(true);
         await shot(page, `privacy-local-only-${locale}-off`);
-        await toggle.click();
-        await expect(toggle).toHaveAttribute('aria-checked', 'true');
+        await track.click();
+        await expect(toggle).toBeChecked();
         await expect(page.locator('.settings-ok[role="status"]')).toBeVisible();
         await shot(page, `privacy-local-only-${locale}-on-notice`);
         expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a Setup row lands on its setting, with a way back (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, MODEL_LIST, SETUP_PLAN);
+            await p.route('**/api/onboarding/preflight', (route) => route.fulfill({ json: { gpu_name: 'Radeon 8060S', npu_detected: true, ram_gb: 128 } }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const dialog = page.getByRole('dialog');
+        await dialog.locator('[data-section="setup"]').click();
+        await dialog.locator('.settings-setup-row').filter({ hasText: /Context window|نافذة السياق/ }).click();
+        // The setting itself, not the top of the Model tab (#7403).
+        await expect(page.locator('#ctx-size')).toBeFocused();
+        await expect(page.locator('#ctx-size')).toBeInViewport();
+        const back = dialog.locator('.settings-back');
+        await expect(back).toBeVisible();
+        await shot(page, `setup-row-jump-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        await back.click();
+        await expect(dialog.locator('[data-section="setup"]')).toHaveAttribute('aria-current', 'page');
+        await expect(back).toHaveCount(0);
     });
 
     test(`Local only blocks cloud model picker (${locale})`, async ({ page }) => {
@@ -1718,6 +1811,34 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.oauth-setup-form').scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-setup`);
             await expect(page.locator('button button')).toHaveCount(0);
+            expect(await audit(page)).toEqual([]);
+        });
+
+        test('a connected tile offers Personalize, and connecting a server offers it in a banner', async ({ page }) => {
+            const brave = { id: 'brave-search', display_name: 'Brave Search', type: 'mcp_server', icon: null, category: 'general',
+                tier: 'core', description: 'Lets GAIA work with Brave Search on your behalf.', configurable: true, enabled: true,
+                account_id: null, default_scopes: [], available_scopes: [], mcp_env_keys: ['BRAVE_API_KEY'], oauth_setup_fields: [] };
+            await openConnectors(page, undefined, {
+                'POST /connectors/brave-search/configure': {},
+                'POST /connectors/brave-search/test': { ok: true, detail: '' },
+                'GET /connectors/brave-search': { ...brave, configured: true },
+            });
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            const row = page.locator('.connector-detail .connector-personalize');
+            await expect(row).toBeVisible();
+            await row.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-personalize-tile`);
+            expect(await audit(page)).toEqual([]);
+
+            await page.locator('.connector-tile-header', { hasText: 'Google' }).click();
+            await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+            await page.locator('.connector-tile-header', { hasText: 'Brave Search' }).click();
+            await page.locator('.mcp-key-input').fill('BSA-not-a-real-key');
+            await page.locator('.btn-model-save').click();
+            const offer = page.locator('.connector-personalize--offer');
+            await expect(offer).toBeVisible();
+            await offer.scrollIntoViewIfNeeded();
+            await shot(page, `connectors-${locale}-personalize-offer`);
             expect(await audit(page)).toEqual([]);
         });
 
@@ -3581,6 +3702,35 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'about');
         });
 
+        // The add field once had the browser's own inset border and no padding, and Undo was link blue.
+        test('about you, the add field and a forgotten memory', async ({ page }) => {
+            await openMemory(page, locale);
+            await page.route('**/api/memory/knowledge/*', (route) =>
+                route.request().method() === 'DELETE' ? route.fulfill({ json: { deleted: true } }) : route.fallback());
+            const field = page.locator('.mem-about-add .mem-input');
+            const look = await field.evaluate((el) => {
+                const s = getComputedStyle(el);
+                return { pad: parseFloat(s.paddingInlineStart), radius: parseFloat(s.borderTopLeftRadius), border: s.borderTopStyle, width: parseFloat(s.borderTopWidth) };
+            });
+            expect(look.pad).toBeGreaterThanOrEqual(8);
+            expect(look.radius).toBeGreaterThan(0);
+            expect(look).toMatchObject({ border: 'solid', width: 1 });
+            const item = page.locator('.mem-about-item', { hasText: 'Lives in Calgary' });
+            await item.locator('.mem-about-btn-remove').click();
+            const undo = page.locator('.mem-about-forgotten .mem-about-link');
+            await expect(undo).toBeVisible();
+            const [undoColor, accent] = await undo.evaluate((el) => {
+                const probe = document.createElement('span');
+                probe.style.color = 'var(--accent)';
+                el.parentElement!.appendChild(probe);
+                const want = getComputedStyle(probe).color;
+                probe.remove();
+                return [getComputedStyle(el).color, want];
+            });
+            expect(undoColor).toBe(accent);
+            await checkMemory(page, locale, 'about-forgotten');
+        });
+
         test('about you, editing a memory', async ({ page }) => {
             await openMemory(page, locale);
             const item = page.locator('.mem-about-item', { hasText: 'Lives in Calgary' });
@@ -3649,6 +3799,19 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'advanced');
             await page.locator('.memory-dashboard-body').evaluate((el) => { el.scrollTop = el.scrollHeight; });
             await checkMemory(page, locale, 'advanced-end');
+        });
+
+        // The page once read as a developer console: monospace tabs and spaced capitals.
+        test('advanced, in the app\'s own type', async ({ page }) => {
+            await openMemory(page, locale);
+            await memoryTab(page, /Advanced/);
+            await expect(page.getByText('run_shell')).toBeVisible();
+            const looks = await page.evaluate(() => [...document.querySelectorAll('.mem-tab-btn, .mem-section-title, .mem-knowledge-table th, .mem-stat-sub')]
+                .map((el) => ({ cls: el.className, font: getComputedStyle(el).fontFamily, transform: getComputedStyle(el).textTransform })));
+            expect(looks.length).toBeGreaterThan(8);
+            expect(looks.filter((l) => /JetBrains|monospace/.test(l.font) || l.transform === 'uppercase')).toEqual([]);
+            const cards = await page.locator('.mem-stat-card').evaluateAll((els) => new Set(els.map((el) => Math.round(el.getBoundingClientRect().top))).size);
+            expect(cards).toBe(1);
         });
 
         test('advanced, a tool-recorded error next to one the user wrote', async ({ page }) => {
@@ -3878,4 +4041,86 @@ for (const locale of ['ar', 'en']) {
             await page.screenshot({ path: info.outputPath(`crashed-${placement}-${locale}.png`) });
         });
     }
+}
+
+
+const SKILL_LINK = 'https://github.com/michael-denyer/pstack-claude';
+const SKILL_LINK_PIN = `commit:${'4f2a9c1e'.repeat(5)}`;
+const linkSkill = (name: string, description: string, over: Record<string, unknown> = {}) => ({
+    name, description, path: `skills/${name}`, has_code: false, permissions: [], permissions_unreadable: false, verdict: 'ALLOW',
+    findings: [], installed: false, update: false, error: null, ...over,
+});
+const SKILL_LINK_PREVIEW = {
+    link: SKILL_LINK,
+    source: 'michael-denyer/pstack-claude',
+    pin: SKILL_LINK_PIN,
+    warning: 'Skills from a link are written by someone else. A skill\'s instructions steer what GAIA does with your files, shell, and accounts, and a skill that ships code (tools.py or scripts/) runs that code on this PC. GAIA audits each skill and refuses anything the audit blocks, but an audit is not a guarantee. Only add skills from people you trust, and read what they do first.',
+    skills: [
+        linkSkill('design-review', 'Review a design doc for gaps before any code is written.'),
+        linkSkill('docs-lookup', 'Look up library documentation and cite the page it came from.', {
+            permissions: [{ grant: 'network:read:*.readthedocs.io', text: 'Read pages and data from sites matching *.readthedocs.io' }],
+            verdict: 'REVIEW',
+            findings: ['[REVIEW] network: fetches remote content — check what it sends'],
+        }),
+        linkSkill('ملخص-الاجتماع', 'يلخص محضر الاجتماع ويستخرج المهام.', { permissions: [{ grant: 'scratch:write', text: 'Write files in a temporary folder that is emptied after each use' }] }),
+        linkSkill('ci-fix', 'Reproduce a red CI job locally and fix the cause.', {
+            has_code: true,
+            permissions: [{ grant: 'scratch:write', text: 'Write files in a temporary folder that is emptied after each use' }],
+        }),
+        linkSkill('pr-hygiene', 'Tidy a pull request before review.', { installed: true, update: true }),
+        linkSkill('release-notes', 'Draft release notes from merged pull requests.', { installed: true }),
+        linkSkill('gh-triage', 'Label and triage GitHub issues.', {
+            permissions: [{ grant: 'shell:execute:gh', text: 'Run the \'gh\' command: GitHub CLI — reads issues, pull requests, releases, and runs; comments, pull requests, and labels only with your per-command approval.' }],
+            error: 'Skill \'gh-triage\' declares permission(s) above the \'experimental\' ceiling: shell:execute. Install a copy signed at \'community\' or higher from the hub instead.',
+        }),
+    ],
+};
+const SKILL_LINK_RESULT = {
+    added: [
+        { name: 'design-review', updated: false, verdict: 'ALLOW', has_code: false, findings: [] },
+        { name: 'docs-lookup', updated: false, verdict: 'REVIEW', has_code: false, findings: [] },
+        { name: 'pr-hygiene', updated: true, verdict: 'ALLOW', has_code: false, findings: [] },
+    ],
+    failed: { 'ملخص-الاجتماع': 'A skill with this name is already installed from somewhere else. Remove it first, or pass --force to replace it.' },
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`add skills from a link: preview and result (${locale})`, async ({ page }) => {
+        const posted: Array<Record<string, unknown>> = [];
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/skills/link/*', async (route) => {
+                const body = route.request().postDataJSON() as Record<string, unknown>;
+                posted.push(body);
+                await route.fulfill({ json: route.request().url().endsWith('/preview') ? SKILL_LINK_PREVIEW : SKILL_LINK_RESULT });
+            });
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        const field = page.locator('.skill-link-form input');
+        await field.fill(SKILL_LINK);
+        await field.press('Enter');
+
+        const preview = page.locator('.skill-link-preview');
+        await expect(preview).toBeVisible();
+        await expect(preview.locator('.skill-link-perms')).toHaveCount(SKILL_LINK_PREVIEW.skills.length);
+        await expect(preview.locator('.skill-link-perms code', { hasText: 'network:read:*.readthedocs.io' })).toBeVisible();
+        await preview.locator('details:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await preview.scrollIntoViewIfNeeded();
+        await shot(page, `skills-link-preview-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.skill-link-preview')).toEqual([]);
+        await scrollPane(page, 'bottom');
+        await shot(page, `skills-link-preview-${locale}-bottom`);
+
+        await preview.locator('.skill-link-actions .btn-primary').click();
+        const result = page.locator('.skill-link-result');
+        await expect(result).toBeVisible();
+        expect(posted[posted.length - 1]).toMatchObject({ url: SKILL_LINK, pin: SKILL_LINK_PIN });
+        await result.locator('details:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
+        await result.scrollIntoViewIfNeeded();
+        await shot(page, `skills-link-result-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
+    });
 }
