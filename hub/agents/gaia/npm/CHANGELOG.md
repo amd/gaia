@@ -15,6 +15,12 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   event that warns the user now carries `level: "warning"`, and a server that
   could not start is named with its error and where it is set up: Settings >
   Connectors for a connector, the `mcp_servers.json` file for one added by hand.
+- **The default step limit is now 1000, up from 150.** Long multi-part tasks
+  reached 150 steps and were cut off before their last part. The limit is now
+  only a backstop for a turn that never finishes; the repeated-call and
+  repeated-failure guards still end a stuck turn early. An omitted `/query`
+  `max_steps` runs up to 1000 steps. Pass `max_steps`, or set
+  `GAIA_AGENT_MAX_STEPS`, to choose a lower limit.
 
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's
@@ -25,9 +31,20 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `/model` switch the agent stops sending it, so a new model never receives
   another model's reasoning.
 
+- **The agent reserves about 0.3 GB of memory instead of about 5 GB.** The
+  OpenBLAS that numpy and FAISS bundle reserved memory for every CPU thread when
+  it loaded, so a dozen GAIA processes could run a 32-thread Windows PC out of
+  memory. Each process now gives it 2 threads unless `OPENBLAS_NUM_THREADS`,
+  `GOTO_NUM_THREADS` or `OMP_NUM_THREADS` is set. Search speed is unchanged.
+
 - **The terminal header recognizes cloud models with custom IDs.** After a
   `/model` switch, the status uses the live client’s catalog provider, matching
   the switch notice instead of reporting a custom-prefixed cloud model as local.
+
+- **A turn that ends in an error still reports the tools it ran.** When a turn
+  stopped on an error without printing an answer, its `usage` block left out
+  `tools_used`, so `gaia -p` without `--verbose` recorded 0 tool calls for it.
+  The count now comes from that turn's own tool results.
 
 ### Added
 
@@ -87,6 +104,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   before", so every later chat started with it in its prompt. It, and the new
   `search_tools` cap, are now marked as not run, like a permission refusal, and
   memory skips them.
+- **The package description and integration guide no longer say nothing leaves the
+  machine.** Local inference is still the default; both now say a cloud provider
+  receives the conversation when you pick one.
 - **A Python snippet that fails on a missing library says how to retry with
   the standard library, and teaches the next chat what worked instead.** The
   Python tools list only the libraries this install can import.
