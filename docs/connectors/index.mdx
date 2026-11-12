@@ -29,7 +29,8 @@ never writes a token to a plaintext file.
 ## How to set up a connector
 
 1. Launch the Agent UI: `gaia chat --ui`.
-2. Click **Settings** (gear icon) → **Connectors**.
+2. Click **Connectors** in the sidebar (also under Settings → Connectors).
+   In the TUI, type `/connectors` to see what's connected.
 3. Find the connector you want and click its tile to expand it.
 4. Either click **Connect** (OAuth) or fill in the credentials form
    (MCP). Step-by-step instructions for the most common ones below.
@@ -61,7 +62,22 @@ never writes a token to a plaintext file.
   <Card title="Discord" icon="discord" href="/connectors/discord">
     Read and send messages in the Discord servers your bot has joined.
   </Card>
+  <Card title="Notion" icon="book" href="/connectors/notion">
+    Search, read and edit the Notion pages you share with GAIA.
+  </Card>
+  <Card title="Brave Search" icon="magnifying-glass" href="/connectors/brave-search">
+    Web and local search through the Brave Search API.
+  </Card>
 </CardGroup>
+
+## Personalize GAIA
+
+Once a connector is connected, GAIA offers **Personalize GAIA** (TUI:
+`/connectors personalize <id>`). It's optional. GAIA reads your recent
+activity there (for Google, the last two weeks of Gmail and Calendar), saves
+the lasting facts to [memory](/guides/memory), and suggests up to five
+automations you could schedule. It only reads, and it creates no schedules
+until you pick which ones you want.
 
 Run `gaia connectors list` to see every connector the catalog currently
 ships — it is the source of truth for what you can configure today.
@@ -74,9 +90,9 @@ yet. Track progress and request priorities at
 [issue #937](https://github.com/amd/gaia/issues/937):
 
 - **Email & calendar** — dedicated Gmail / Outlook / SendGrid servers
-- **Productivity** — Notion, Linear, Jira
+- **Productivity** — Linear, Jira
 - **Developer tools** — Postgres, Playwright
-- **Web** — Brave Search, Context7
+- **Web** — Context7
 
 ## Check your setup
 

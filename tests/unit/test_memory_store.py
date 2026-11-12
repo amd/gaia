@@ -1961,9 +1961,18 @@ class TestHelperFunctions:
         """Partial overlap returns correct Szymkiewicz-Simpson coefficient."""
         from gaia.agents.base.memory_store import _word_overlap
 
-        # intersection = {"the", "quick"} = 2, min(4, 4) = 4 → 0.5
-        result = _word_overlap("the quick brown fox", "the quick red cat")
+        # intersection = {"one", "quick"} = 2, min(4, 4) = 4 → 0.5
+        result = _word_overlap("one quick brown fox", "one quick red cat")
         assert result == pytest.approx(0.5)
+
+    def test_word_overlap_ignores_filler(self):
+        """ "I am" and "User is" say nothing, so they don't lower the overlap."""
+        from gaia.agents.base.memory_store import _word_overlap
+
+        assert (
+            _word_overlap("I am allergic to mango.", "User is allergic to mango.")
+            == 1.0
+        )
 
     def test_word_overlap_empty(self):
         """Empty strings return 0.0."""

@@ -47,7 +47,9 @@ function baseName(path: string): string {
 
 export function EnvironmentSection({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     const t = useT();
-    const { env } = useSessionEnvironment(sessionId);
+    const { env, refresh } = useSessionEnvironment(sessionId);
+    // A turn can add a document or folder to what the chat reaches.
+    useTurnEnd(busy, () => { void refresh(); });
     const summary = env && !env.internet ? t('env.offline') : null;
     return (
         <PanelSection id="environment" title={t('env.title')} summary={summary}>
