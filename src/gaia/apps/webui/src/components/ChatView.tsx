@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
 import { Activity, Edit3, Download, Upload, ArrowDown, FolderSearch, Clock } from 'lucide-react';
+import { TurnAnnouncer } from './TurnAnnouncer';
 import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
@@ -1633,6 +1634,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDragLeave={handleDragLeave}
             aria-label={session?.title || 'Chat'}
         >
+            <TurnAnnouncer busy={busy} />
             <header className="task-header">
                 <div className="task-header-left">
                     {editingTitle ? (
