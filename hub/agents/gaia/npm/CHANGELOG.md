@@ -8,6 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **`/init` says a missing model once.** On a PC with no Lemonade client, the
+  `hint` read "The model X is not downloaded. X is not downloaded, and no
+  Lemonade client CLI was found …, then re-check." It is now the one sentence.
+
 - **One MCP server with a bad repeat-call declaration no longer takes the
   others down.** An MCP server tool can name the arguments the repeat-call
   guard compares, in its `_meta` under `ai.amd-gaia/dedup_key`. A server whose

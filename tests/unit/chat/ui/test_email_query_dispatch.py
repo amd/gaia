@@ -211,6 +211,51 @@ class TestDispatchEmailQuery:
         assert "lemonade server not reachable" in content
         assert relay_calls == []
 
+    @pytest.mark.parametrize("local_only", [True, False])
+    def test_a_missing_local_model_is_said_once_with_the_in_app_fix(
+        self, monkeypatch, tmp_path, local_only
+    ):
+        """It was the sidecar's CLI hint, said twice, inside "isn't ready yet"."""
+        from gaia.llm import local_only as policy
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        policy.set_policy("local_ai_only" if local_only else "cloud_allowed")
+        model = "Gemma-4-E4B-it-GGUF"
+        sidecar_hint = (
+            f"The model {model} is not downloaded. {model} is not downloaded, and "
+            "no Lemonade client CLI was found to do it — see "
+            "https://lemonade-server.ai, then re-check."
+        )
+        fake_handle = _FakeHandle(
+            api_version="2.4",
+            init_result=(
+                503,
+                {
+                    "ready": False,
+                    "hint": sidecar_hint,
+                    "lemonade": {"reachable": True, "compatible": True},
+                    "model": {"id": model, "present": False},
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            daemon_client_module, "acquire_handle", lambda agent_id="email": fake_handle
+        )
+        monkeypatch.setattr(relay_module, "relay_query", lambda *a, **k: None)
+
+        handler = _FakeSSEHandler()
+        _dispatch_sidecar_query(handler, _make_request(), [], model, "email")
+
+        [event] = handler.events
+        content = event["content"]
+        assert event["type"] == "agent_error"
+        assert content.count("downloaded") == 1
+        assert "Settings > Model" in content
+        assert ("Local only is on" in content) is local_only
+        assert ("Settings > Privacy" in content) is local_only
+        for developer_word in ("CLI", "agent card", "re-check", "lemonade-server.ai"):
+            assert developer_word not in content
+
     def test_cancelled_before_relay_short_circuits_no_relay_call(self, monkeypatch):
         fake_handle = _FakeHandle(api_version="2.4")
         monkeypatch.setattr(
