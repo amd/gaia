@@ -712,6 +712,9 @@ class SSEOutputHandler(OutputHandler):
         self._raw_line_start = True
         self._call_progress_next = 0.0
         self._reply_saw_think = False
+        # A reply cut off inside <think> must not turn the next one into reasoning.
+        self._in_thinking = False
+        self._thinking_streamed = False
 
     def _elapsed(self) -> float:
         if self._start_time is None:

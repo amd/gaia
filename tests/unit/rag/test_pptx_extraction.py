@@ -612,3 +612,32 @@ class TestPptxStop:
             with pytest.raises(IndexingStopped):
                 rag._extract_text_from_pptx(str(pptx_path))
         assert len(beats) == 2
+
+
+def test_a_deck_that_cannot_be_converted_leaves_no_temp_directory(
+    rag, tmp_path, monkeypatch
+):
+    import tempfile
+
+    made = []
+    real_mkdtemp = tempfile.mkdtemp
+
+    def recording_mkdtemp(*args, **kwargs):
+        path = real_mkdtemp(*args, dir=str(tmp_path), **kwargs)
+        made.append(Path(path))
+        return path
+
+    monkeypatch.setattr(tempfile, "mkdtemp", recording_mkdtemp)
+    pptx_path = tmp_path / "plain.pptx"
+    _create_pptx(pptx_path, [{"title": "Slide", "body": "Body"}])
+
+    with patch("gaia.rag.pptx_utils.convert_pptx_to_pdf", return_value=None):
+        rag._extract_text_from_pptx(str(pptx_path))
+
+    assert made, "the conversion step should have asked for a temp directory"
+    assert not [p for p in made if p.exists()]
+
+
+def test_no_overlap_carries_nothing_into_the_next_chunk(rag):
+    assert rag._get_last_n_tokens("one two three four", 0) == ""
+    assert rag._get_last_n_tokens("one two three four", 1) == "four"

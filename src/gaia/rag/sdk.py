@@ -2152,6 +2152,11 @@ class RAGSDK:
             except Exception as conv_err:
                 self.log.debug("PPTX→PDF conversion not available: %s", conv_err)
 
+            if tmp_dir and not pdf_conversion_path:
+                import shutil
+
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
             if pdf_conversion_path:
                 try:
                     if self.config.show_stats:
@@ -3481,6 +3486,9 @@ These positions indicate where to split the text."""
 
     def _get_last_n_tokens(self, text: str, n_tokens: int) -> str:
         """Get approximately the last n tokens from text."""
+        # text[-0:] is the whole string, so no overlap must return nothing.
+        if n_tokens <= 0:
+            return ""
         # Rough estimate: 1 token ≈ 4 characters
         target_chars = n_tokens * 4
         if len(text) <= target_chars:
