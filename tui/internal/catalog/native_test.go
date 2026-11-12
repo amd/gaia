@@ -382,11 +382,14 @@ func TestIsNativeAgentBinary(t *testing.T) {
 		"gaiacpp.exe":                        true,
 		"GAIACPP.EXE":                        true,
 		"/opt/gaia/gaiacpp-linux-x64":        true,
-		`C:\tools\gaiacpp-windows-x64.exe`:   true,
 		"gaia-agent":                         false,
 		"gaia-agent.exe":                     false,
 		"gaiacppish":                         false,
 		filepath.Join("gaiacpp", "gaia-tui"): false,
+	}
+	// A backslash separates folders only on Windows.
+	if runtime.GOOS == "windows" {
+		cases[`C:\tools\gaiacpp-windows-x64.exe`] = true
 	}
 	for path, want := range cases {
 		if got := IsNativeAgentBinary(path); got != want {

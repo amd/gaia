@@ -28,9 +28,9 @@ def _python_table() -> list[tuple[str, bool]]:
     seen: dict[str, bool] = {}
     for requirement in MODELS.values():
         known = seen.setdefault(requirement.model_id, requirement.tool_calling)
-        assert known == requirement.tool_calling, (
-            f"MODELS lists {requirement.model_id} with two tool_calling values"
-        )
+        assert (
+            known == requirement.tool_calling
+        ), f"MODELS lists {requirement.model_id} with two tool_calling values"
     return list(seen.items())
 
 
