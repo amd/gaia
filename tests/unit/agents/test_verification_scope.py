@@ -591,6 +591,114 @@ def test_a_trimmed_rerun_that_still_fails_is_not_verified(agent):
     assert result["verification"]["state"] != "verified"
 
 
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        # rc18 round 3: the verifying rerun added one traceback flag.
+        ("python -m pytest -q 2>&1 | tail -40", "python -m pytest -q --tb=short 2>&1"),
+        ("pytest", "pytest --tb short"),
+        ("pytest", "pytest -q"),
+        ("pytest -q", "pytest -vv"),
+        ("pytest tests/", "pytest --verbose tests/ --no-header"),
+        ("pytest tests/", "pytest tests/ -rA"),
+        ("pytest tests/", "pytest -r fE tests/"),
+        ("pytest", "pytest --color=yes --durations=10 --durations-min=0.5"),
+        ("pytest", "pytest --color no --durations 5"),
+        ("pytest", "pytest -p no:cacheprovider"),
+        ("pytest", "pytest -pno:cacheprovider -l --showlocals"),
+        ("pytest", "pytest --no-summary --show-capture=no --verbosity=2"),
+        ("pytest", "pytest --disable-warnings --code-highlight=no --full-trace"),
+        ("pytest -x", "pytest -xq"),
+        ("pytest -x", "pytest -qx --tb=line"),
+        ("pytest -k cart", "pytest -q -k cart -v"),
+        ("cd repo && pytest -q", "cd repo && pytest --tb=short -v | tail -5"),
+        (".venv/Scripts/pytest.exe -q", ".venv/Scripts/pytest.exe --tb=long"),
+        ("uv run pytest", "uv run pytest -q"),
+    ],
+)
+def test_a_flag_that_only_changes_the_report_is_the_same_check(before, after):
+    assert verification_check_target(
+        "run_shell_command", {"command": before}
+    ) == verification_check_target("run_shell_command", {"command": after})
+
+
+@pytest.mark.parametrize(
+    "narrower",
+    [
+        "pytest -q -k cart",
+        "pytest -q -m slow",
+        "pytest -q tests/test_cart.py",
+        "pytest -q tests/test_cart.py::test_total",
+        "pytest -q -x",
+        "pytest -q --lf",
+        "pytest -q --deselect tests/test_cart.py::test_total",
+        "pytest -q --ignore=tests/e2e",
+        "pytest -q -p no:randomly",
+        "pytest -q -W error",
+        "pytest -q -s",
+        # A flag's value is not a flag: "-k -v" selects tests named "-v".
+        "pytest -q -k -v",
+        "pytest -q -kv",
+        'pytest -q -k "cart and -v"',
+        # After "--" every word is a path.
+        "pytest -q -- -v",
+    ],
+)
+def test_a_flag_that_changes_what_runs_is_a_different_check(narrower):
+    full = verification_check_target("run_shell_command", {"command": "pytest -q"})
+    assert verification_check_target("run_shell_command", {"command": narrower}) != full
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        # Only pytest's own flags are read; another program's "-v" is its own.
+        ("ruff check . -q", "ruff check ."),
+        ("pytest -q && mypy -v src", "pytest -q && mypy src"),
+        ("pytest -q; ls -l", "pytest -q; ls"),
+        ('pytest -k "a -v b"', 'pytest -k "a b"'),
+    ],
+)
+def test_report_flags_are_only_dropped_from_pytest(first, second):
+    assert verification_check_target(
+        "run_shell_command", {"command": first}
+    ) != verification_check_target("run_shell_command", {"command": second})
+
+
+def test_loop_says_nothing_when_the_fixed_rerun_adds_a_report_flag(agent):
+    """rc18 round 3: "1 of 2 pytest runs didn't pass" after "5 passed"."""
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "success", "return_code": 0, "stdout": "5 passed"},
+            "python -m pytest -q --tb=short 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] == "verified"
+    _assert_no_note(result["result"])
+
+
+def test_loop_keeps_the_failed_suite_after_a_filtered_rerun_with_report_flags(agent):
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "success", "return_code": 0, "stdout": "1 passed"},
+            "python -m pytest -q --tb=short -k cart 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] != "verified"
+
+
 def test_a_named_check_tool_is_targeted_by_its_arguments():
     assert verification_check_target(
         "run_tests", {"path": "tests/"}

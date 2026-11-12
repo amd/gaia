@@ -428,13 +428,114 @@ _OUTPUT_TRIM_RE = re.compile(
 )
 
 
+#: A word of shell text, quoted spans kept whole.
+_SHELL_WORD_RE = re.compile(r"(?:\"[^\"]*\"|'[^']*'|\S)+")
+_SHELL_OPERATOR_RE = re.compile(r"[|&;]+")
+# pytest options that change how results are reported, never which tests run
+# or whether they pass.
+_PYTEST_REPORT_FLAGS: FrozenSet[str] = frozenset(
+    {
+        "--quiet",
+        "--verbose",
+        "--no-header",
+        "--no-summary",
+        "--showlocals",
+        "--no-showlocals",
+        "--full-trace",
+        "--disable-warnings",
+        "--disable-pytest-warnings",
+    }
+)
+_PYTEST_REPORT_VALUE_FLAGS: FrozenSet[str] = frozenset(
+    {
+        "--tb",
+        "--color",
+        "--durations",
+        "--durations-min",
+        "--verbosity",
+        "--show-capture",
+        "--code-highlight",
+    }
+)
+#: Short pytest flags that only change the report (``-q``, ``-v``, ``-l``).
+_PYTEST_REPORT_LETTERS = "qvl"
+#: Short pytest flags with no value that may share a cluster (``-xq``).
+_PYTEST_BARE_LETTERS = "xs"
+#: Options whose next word is a value, never a flag (``-k -v``).
+_PYTEST_VALUE_FLAGS: FrozenSet[str] = frozenset(
+    {"-k", "-m", "-o", "-c", "-n", "-W", "--deselect", "--ignore", "--rootdir"}
+)
+
+
+def _is_pytest_word(word: str) -> bool:
+    return _program_name(word.strip("\"'")) in ("pytest", "py.test")
+
+
+def _without_pytest_report_flags(command: str) -> str:
+    """*command* minus the flags that only change how pytest reports results.
+
+    Read between the word ``pytest`` and the next shell operator, so another
+    program's ``-v`` stays. Flags that pick tests (``-k``, ``-m``, a path,
+    ``-x``, ``--lf``) stay too: a narrower rerun is a different check.
+    """
+    words = _SHELL_WORD_RE.findall(command)
+    if not any(_is_pytest_word(word) for word in words):
+        return command
+    kept: List[str] = []
+    in_pytest = False
+    i = 0
+    while i < len(words):
+        word = words[i]
+        i += 1
+        if not in_pytest:
+            in_pytest = _is_pytest_word(word)
+            kept.append(word)
+            continue
+        if _SHELL_OPERATOR_RE.fullmatch(word) or word.endswith(";") or word == "--":
+            in_pytest = False
+            kept.append(word)
+            continue
+        if word in _PYTEST_VALUE_FLAGS:
+            kept.extend(words[i - 1 : i + 1])
+            i += 1
+            continue
+        if word in ("-p", "-pno:cacheprovider"):
+            if word == "-p" and i < len(words) and words[i] != "no:cacheprovider":
+                kept.extend(words[i - 1 : i + 1])
+            i += word == "-p"
+            continue
+        if word in _PYTEST_REPORT_FLAGS:
+            continue
+        name, has_value, _ = word.partition("=")
+        if name in _PYTEST_REPORT_VALUE_FLAGS:
+            i += not has_value
+            continue
+        if re.fullmatch(r"-[A-Za-z]+", word):
+            letters = ""
+            for j, letter in enumerate(word[1:], start=1):
+                if letter in _PYTEST_REPORT_LETTERS:
+                    continue
+                if letter == "r":
+                    i += j == len(word) - 1
+                    break
+                if letter not in _PYTEST_BARE_LETTERS:
+                    letters += word[j:]
+                    break
+                letters += letter
+            if letters:
+                kept.append("-" + letters)
+            continue
+        kept.append(word)
+    return " ".join(kept)
+
+
 def command_check_target(command: str) -> str:
-    """What a shell check ran: *command* without its trailing output trimming."""
+    """What a shell check ran: *command* without output trimming or report flags."""
     command = " ".join(command.split())
     while True:
         trimmed = _OUTPUT_TRIM_RE.sub("", command)
         if trimmed == command or not trimmed:
-            return command
+            return _without_pytest_report_flags(command)
         command = trimmed
 
 
