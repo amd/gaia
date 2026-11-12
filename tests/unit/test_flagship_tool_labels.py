@@ -15,9 +15,21 @@ import re
 from pathlib import Path
 
 import pytest
-from gaia_agent.tool_bundles import FULL_BUNDLES, FULL_CORE_TOOLS, FULL_OPTIONAL_TOOLS
 
-from gaia.ui.event_narration import _NARRATION_OVERRIDES, _VERB_FORMS, derive_narration
+# test_unit.yml has no flagship wheel; test_gaia_agent.yml runs this file.
+pytest.importorskip("gaia_agent")
+
+from gaia_agent.tool_bundles import (  # noqa: E402
+    FULL_BUNDLES,
+    FULL_CORE_TOOLS,
+    FULL_OPTIONAL_TOOLS,
+)
+
+from gaia.ui.event_narration import (  # noqa: E402
+    _NARRATION_OVERRIDES,
+    _VERB_FORMS,
+    derive_narration,
+)
 
 LOCALES = Path(__file__).resolve().parents[2] / "src/gaia/apps/webui/src/i18n/locales"
 

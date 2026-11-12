@@ -38,6 +38,8 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
+      # test_flagship_tool_labels.py reads the UI's tool labels.
+      - 'src/gaia/apps/webui/src/i18n/locales/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
@@ -63,6 +65,7 @@ on:
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
       - 'tests/unit/test_warm_up.py'
+      - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
@@ -100,6 +103,8 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
+      # test_flagship_tool_labels.py reads the UI's tool labels.
+      - 'src/gaia/apps/webui/src/i18n/locales/**'
       - 'docs/guides/building-skills.mdx'
       - 'docs/guides/starter-skills.mdx'
       # The tests this workflow names, and their conftests.
@@ -125,6 +130,7 @@ on:
       - 'tests/unit/test_tool_loader_token_budget.py'
       - 'tests/unit/test_tool_list_invariants.py'
       - 'tests/unit/test_warm_up.py'
+      - 'tests/unit/test_flagship_tool_labels.py'
       - 'tests/unit/eval/test_harness_flagship_target.py'
       - 'tests/unit/eval/conftest.py'
       - 'src/gaia/eval/tool_cost.py'
@@ -240,6 +246,7 @@ jobs:
             tests/unit/test_tool_loader_token_budget.py \
             tests/unit/test_tool_list_invariants.py \
             tests/unit/test_warm_up.py \
+            tests/unit/test_flagship_tool_labels.py \
             tests/unit/eval/test_harness_flagship_target.py \
             -v --tb=short
 
