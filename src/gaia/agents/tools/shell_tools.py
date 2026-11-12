@@ -8,6 +8,7 @@ Provides shell command execution capabilities for file operations and system que
 
 import base64
 import binascii
+import ipaddress
 import logging
 import os
 import re
@@ -21,7 +22,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import (
     DESTRUCTIVE,
@@ -626,6 +627,122 @@ def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
             "they decline, do not reach the same result another way."
         ),
     }
+
+
+#: A web address anywhere on a line, a script's strings included.
+_URL_HOST = re.compile(
+    r"\b(?:https?|ftp|wss?)://(?:[^@/\s'\"]*@)?(\[[0-9A-Fa-f:.]+\]|[^/\s:'\"?#]+)",
+    re.IGNORECASE,
+)
+
+#: Programs whose bare operand is an address: ``curl 127.0.0.1:8000/x``.
+_FETCHERS = frozenset(
+    {"curl", "wget", "invoke-webrequest", "iwr", "invoke-restmethod", "irm"}
+)
+
+#: Name endings only a local network uses.
+_LOCAL_NAME_ENDINGS = (".local", ".lan", ".internal", ".home.arpa")
+
+
+def _numeric_ipv4(name: str) -> Optional[ipaddress.IPv4Address]:
+    """``2130706433`` or ``0x7f000001``, which curl reads as an address."""
+    try:
+        value = int(name, 16) if name.startswith("0x") else int(name)
+    except ValueError:
+        return None
+    return ipaddress.IPv4Address(value) if 0 <= value < 2**32 else None
+
+
+def private_destination(host: str) -> str:
+    """Where *host* is, when the web tools would refuse to fetch it; else "".
+
+    Judged from the text alone: an address, ``localhost``, or a name only a local
+    network uses. A public-looking name is not looked up.
+    """
+    from gaia.web.client import _is_blocked_ip
+
+    name = host.strip("[]").rstrip(".").lower()
+    if name == "localhost" or name.endswith(".localhost"):
+        return "this PC"
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        ip = _numeric_ipv4(name)
+    if ip is None:
+        return "your local network" if name.endswith(_LOCAL_NAME_ENDINGS) else ""
+    carried = getattr(ip, "ipv4_mapped", None) or ip
+    if carried.is_loopback or carried.is_unspecified:
+        return "this PC"
+    return "your local network" if _is_blocked_ip(ip) else ""
+
+
+#: Programs that can open a connection to an address on their line.
+_NETWORK_PROGRAMS = _FETCHERS | frozenset(
+    {
+        "python",
+        "py",
+        "node",
+        "perl",
+        "ruby",
+        "powershell",
+        "cmd",
+        "sh",
+        "bash",
+        "zsh",
+        "git",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "nc",
+        "ncat",
+        "telnet",
+        "ftp",
+    }
+)
+
+
+def _private_hosts(
+    command: str, steps: list, whole_line: bool
+) -> List[Tuple[str, str]]:
+    """``(host, where)`` for each local or private address *command* reaches.
+
+    With *whole_line*, every address on the line counts; otherwise only those
+    handed to a program that can connect, so ``grep http://localhost f`` is not
+    turned into a prompt it never needed.
+    """
+    hosts = (
+        [match.group(1) for match in _URL_HOST.finditer(command)] if whole_line else []
+    )
+    for step in steps:
+        for segment in step.segments:
+            program = _interpreter_name(segment[0])
+            if program not in _NETWORK_PROGRAMS:
+                continue
+            hosts.extend(m.group(1) for m in _URL_HOST.finditer(" ".join(segment)))
+            if program not in _FETCHERS:
+                continue
+            for token in segment[1:]:
+                if token.startswith("-") or "://" in token:
+                    continue
+                address = re.split(r"[/?#]", token, maxsplit=1)[0]
+                if not address.startswith("["):
+                    address = address.rsplit(":", 1)[0]
+                # A bare number is a flag's value ('--retry 3'), not an address.
+                if "." in address or ":" in address or "localhost" in address:
+                    hosts.append(address)
+    found = []
+    for host in dict.fromkeys(hosts):
+        where = private_destination(host)
+        if where:
+            found.append((host, where))
+    return found
+
+
+def private_fetch_note(found: List[Tuple[str, str]]) -> str:
+    """The card's line for a command that reaches the addresses in *found*."""
+    host, where = found[0]
+    return f"Reaches {host} on {where}, an address GAIA's web tools refuse to fetch."
 
 
 def _not_approvable(error: Dict[str, Any]) -> Dict[str, Any]:
@@ -3762,6 +3879,20 @@ class ShellToolsMixin:
                 },
                 command,
             )
+        # A line that already asks names every such address; one that wouldn't
+        # asks only when a program on it can connect.
+        private = _private_hosts(command, steps, whole_line=error is not None)
+        if private:
+            note = private_fetch_note(private)
+            if error is not None and error.get("tier") == TIER_CONFIRM_ONCE:
+                error = {**error, "risk_note": f"{error['risk_note']} {note}"}
+            else:
+                block = error or {
+                    "status": "error",
+                    "error": "This command reaches a local or private network address.",
+                    "has_errors": True,
+                }
+                error = {**_confirm_once(block, note), **NOT_EXECUTED}
         if error is None or error.get("tier") != TIER_CONFIRM_ONCE:
             return error, steps
         # A one-time line runs as raw shell text, which no grant exempts from
