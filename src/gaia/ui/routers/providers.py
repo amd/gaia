@@ -599,19 +599,57 @@ def provider_of(model_id: str) -> str:
     return prefix if prefix in (FIREWORKS, AMD) else LOCAL
 
 
-def model_label(model_id: str) -> str:
+def cloud_provider_name(model_id: str) -> Optional[str]:
+    """Who answers cloud *model_id*, or None for a local one.
+
+    Also names a provider GAIA only learned from Lemonade's model list.
+    """
+    from .._chat_helpers import _ui_cloud_provider
+
     provider = provider_of(model_id)
-    name = (
-        model_id.split(".", 1)[1].rsplit("/", 1)[-1] if provider != LOCAL else model_id
+    if provider != LOCAL:
+        return _NAMES[provider]
+    return _ui_cloud_provider(model_id)
+
+
+def _learn_cloud_models(model_id: str) -> None:
+    """Read Lemonade's catalog when only it can say whether *model_id* is cloud.
+
+    Right after a restart nothing has taught the in-memory cloud check yet.
+    """
+    from gaia.llm.lemonade_client import (
+        find_model_requirement,
+        may_be_cloud_model,
+        record_cloud_models,
     )
-    return f"{name} · {'local' if provider == LOCAL else _NAMES[provider]}"
+
+    if (
+        cloud_provider_name(model_id) is not None
+        or not may_be_cloud_model(model_id)
+        or find_model_requirement(model_id) is not None
+    ):
+        return
+    try:
+        status, body = _lemonade("GET", "models?show_all=true")
+    except ProviderError as e:
+        logger.info("Could not tell whether %s is a cloud model: %s", model_id, e)
+        return
+    if status < 400:
+        record_cloud_models(body)
+
+
+def model_label(model_id: str) -> str:
+    cloud = cloud_provider_name(model_id)
+    if cloud is None:
+        return f"{model_id} · local"
+    return f"{model_id.split('.', 1)[1].rsplit('/', 1)[-1]} · {cloud}"
 
 
 def display_name(model_id: str) -> str:
     """The name a person reads: friendly for local models, bare for cloud ones."""
     from ..local_models import friendly_name
 
-    if provider_of(model_id) == LOCAL:
+    if cloud_provider_name(model_id) is None:
         return friendly_name(model_id)
     return model_id.split(".", 1)[1].rsplit("/", 1)[-1]
 
@@ -633,16 +671,20 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
             "display_name": None,
             "label": None,
             "remote": False,
+            "provider_name": None,
             "is_default": True,
             "config_error": str(e),
         }
-    provider = provider_of(model)
+    _learn_cloud_models(model)
+    cloud = cloud_provider_name(model)
     return {
-        "provider": provider,
+        # The provider tab; ``local`` for a cloud provider GAIA has no tab for.
+        "provider": provider_of(model),
         "model": model,
         "display_name": display_name(model),
         "label": model_label(model),
-        "remote": provider != LOCAL,
+        "remote": cloud is not None,
+        "provider_name": cloud,
         "is_default": not chosen,
         "config_error": None,
         **_new_chat_location(model, chosen or None),
@@ -711,6 +753,21 @@ def _key_still_settling(provider: str) -> bool:
     return time.monotonic() - started < KEY_SETTLE_SECONDS
 
 
+def _listed_as_cloud(model_id: str) -> bool:
+    """True when the model server's own list has *model_id* as a cloud model.
+
+    Reads the list, which also teaches the in-memory cloud check every other
+    part of the UI classifies by.
+    """
+    from gaia.llm.lemonade_client import is_cloud_model, record_cloud_models
+
+    status, body = _lemonade("GET", "models?show_all=true")
+    if status >= 400:
+        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+    record_cloud_models(body)
+    return is_cloud_model(model_id)
+
+
 def _check_model_available(model_id: str) -> Optional[str]:
     """None when *model_id* can run now, else why not.
 
@@ -742,6 +799,11 @@ def _check_model_available(model_id: str) -> Optional[str]:
         models = _list_models(provider)
         found = _listed(models, model_id)
         if found is None:
+            # The local list leaves out cloud entries from a provider with no tab.
+            if provider == LOCAL and _listed_as_cloud(model_id):
+                if cloud_blocked():
+                    return "Local only is on, so cloud models can't run"
+                return None
             return "the model is no longer listed"
         if provider != LOCAL:
             return None
@@ -1379,14 +1441,7 @@ def select_model(
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
-    if provider_of(model_id) != LOCAL and cloud_blocked():
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"Can't switch to {model_label(model_id)}: Local only is on. "
-                f"{SETTINGS_HINT}"
-            ),
-        )
+    refuse_blocked_cloud_model(model_id)
     from gaia.config import GaiaConfigError
     from gaia.connectors.credential_wait import CredentialStoreWaiting
 
@@ -1415,11 +1470,27 @@ def select_model(
 
         # Load it now: nothing else would until the next message is sent.
         warmup.request_warm_up("model pick", fresh=True)
-    # A choice made now supersedes this run's restore notice.
+    clear_restore_notice()
+    return _active_view(db)
+
+
+def clear_restore_notice() -> None:
+    """A model the user picks now supersedes this run's restore notice."""
     global _restore_result
     with _restore_lock:
         _restore_result = {"status": "none", "message": None}
-    return _active_view(db)
+
+
+def refuse_blocked_cloud_model(model_id: str) -> None:
+    """Raise 409 when *model_id* is a cloud model and Local only is on."""
+    if provider_of(model_id) != LOCAL and cloud_blocked():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_label(model_id)}: Local only is on. "
+                f"{SETTINGS_HINT}"
+            ),
+        )
 
 
 # ── Context size (#5213) ───────────────────────────────────────────────────

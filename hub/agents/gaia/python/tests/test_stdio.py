@@ -700,6 +700,102 @@ def test_a_returned_answer_with_no_counts_invents_none():
     assert "usage" not in events[-1]
 
 
+class _ErrorWithToolsAgent(_FakeAgent):
+    """Simulates a turn that ran tools and returned an error without printing."""
+
+    def process_query(self, query):
+        self.queries.append(query)
+        self.console.print_tool_usage("read_file")
+        self.console.print_tool_usage("run_shell")
+        return {
+            "status": "failed",
+            "result": "Language model unreachable at step 3",
+            "steps_taken": 3,
+            "input_tokens": 1200,
+            "output_tokens": 0,
+            "conversation": [
+                {"role": "user", "content": query},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "read_file"}}],
+                },
+                {"role": "tool", "name": "read_file", "content": "ok"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "run_shell"}}],
+                },
+                {"role": "tool", "name": "run_shell", "content": "ok"},
+            ],
+        }
+
+
+def test_a_returned_answer_after_tools_reports_tools_used():
+    """#7262: non-verbose callers rely on usage.tools_used on error exits."""
+    events = [json.loads(line) for line in _lines(_run(_ErrorWithToolsAgent(), "go"))]
+
+    assert events[-1] == {
+        "type": "final",
+        "answer": "Language model unreachable at step 3",
+        "usage": {
+            "steps": 3,
+            "tools_used": 2,
+            "input_tokens": 1200,
+        },
+    }
+
+
+def test_a_returned_answer_falls_back_to_handler_tool_count():
+    """When process_query omits conversation/tools_used, handler count survives."""
+
+    class _StreamedToolThenErrorAgent(_FakeAgent):
+        def process_query(self, query):
+            self.queries.append(query)
+            self.console.print_tool_usage("read_file")
+            return {"result": "failed after tool", "steps_taken": 1}
+
+    events = [
+        json.loads(line) for line in _lines(_run(_StreamedToolThenErrorAgent(), "go"))
+    ]
+
+    assert events[-1]["usage"] == {"steps": 1, "tools_used": 1}
+
+
+def test_usage_from_result_tool_count_variants():
+    assert stdio._usage_from_result({"tools_used": 3, "steps_taken": 2}) == {
+        "steps": 2,
+        "tools_used": 3,
+    }
+    assert (
+        stdio._usage_from_result(
+            {"tools_used": 0, "conversation": [{"role": "tool", "name": "x"}]},
+            tool_count=2,
+        )
+        == {}
+    )
+    assert stdio._usage_from_result({"tools_used": True}) == {}
+    assert stdio._usage_from_result("raw string", tool_count=2) == {"tools_used": 2}
+    assert stdio._usage_from_result({"tools_used": -1}, tool_count=2) == {}
+    assert stdio._usage_from_result({"conversation": []}, tool_count=2) == {}
+    assert stdio._usage_from_result(
+        {"conversation": [None, "tool", {"role": "assistant"}, {"role": "tool"}]}
+    ) == {"tools_used": 1}
+
+
+def test_earlier_turns_tool_results_are_not_counted():
+    """model_messages replays the session's history, so its tool results span
+    earlier turns; the handler's count for this turn wins over it."""
+    history = [
+        {"role": "user", "content": "earlier"},
+        {"role": "tool", "name": "read_file", "content": "ok"},
+        {"role": "tool", "name": "run_shell", "content": "ok"},
+        {"role": "user", "content": "now"},
+    ]
+    assert stdio._usage_from_result({"model_messages": history}, tool_count=1) == {
+        "tools_used": 1
+    }
+    assert stdio._usage_from_result({"model_messages": history}) == {}
+
+
 def test_a_turn_that_ended_in_an_error_event_is_not_recorded():
     """Replaying a failure as if it were an answer teaches the model that the
     failure is what it said."""
