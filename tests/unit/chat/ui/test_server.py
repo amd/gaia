@@ -1239,6 +1239,29 @@ class TestCustomModelIsTheChosenModel:
         assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
         assert db.get_setting("custom_model") is None
 
+    def test_a_listed_cloud_model_retyped_in_another_case_is_refused_under_local_only(
+        self, client, db, monkeypatch, tmp_path
+    ):
+        from gaia.llm import lemonade_client, local_only
+        from gaia.ui.routers import providers
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        local_only.set_policy("local_ai_only")
+        listed = {"id": "othercloud.big-model", "recipe": "cloud"}
+        monkeypatch.setattr(
+            providers, "_lemonade", lambda *a, **k: (200, {"data": [listed]})
+        )
+        try:
+            resp = client.put(
+                "/api/settings", json={"custom_model": "user.OtherCloud.Big-Model"}
+            )
+        finally:
+            lemonade_client.record_cloud_models({"data": []})
+
+        assert resp.status_code == 409
+        assert "Local only is on" in resp.json()["detail"]
+        assert db.get_setting("custom_model") is None
+
     def test_a_local_model_is_saved_under_local_only_without_asking_the_server(
         self, client, db, monkeypatch, tmp_path
     ):

@@ -2537,3 +2537,61 @@ def test_local_only_key_refusal_names_the_app_setting(
     resp = client.post("/api/providers/fireworks/connect", json={"api_key": KEY})
     assert "Settings > Privacy" in resp.json()["detail"]
     assert "gaia config" not in resp.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    "typed",
+    [
+        "OtherCloud.big-model",
+        "OTHERCLOUD.BIG-MODEL",
+        "user.othercloud.big-model",
+        "USER.OtherCloud.Big-Model",
+    ],
+)
+def test_local_only_refuses_a_listed_cloud_model_typed_another_way(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models, typed
+):
+    # The model server matches names ignoring case and a user. prefix, so each
+    # of these reaches the cloud model.
+    lemonade.models = [_OTHER_CLOUD_LISTED]
+    resp = client.post("/api/providers/select", json={"model": typed})
+    assert resp.status_code == 409, resp.json()
+    assert "Local only is on" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+@pytest.mark.parametrize("typed", ["AMD.big-model", "Fireworks.big-model"])
+def test_local_only_refuses_a_known_gateway_typed_in_another_case(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models, typed
+):
+    listed = typed.lower()
+    lemonade.models = [{"id": listed, "recipe": "cloud", "labels": []}]
+    resp = client.post("/api/providers/select", json={"model": typed})
+    assert resp.status_code == 409, resp.json()
+    assert "Local only is on" in resp.json()["detail"]
+    assert db.get_setting("custom_model") is None
+
+
+def test_local_only_still_saves_a_local_model_whose_name_differs_only_in_case(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    lemonade.models = [
+        _OTHER_CLOUD_LISTED,
+        {"id": "my.local-model-GGUF", "recipe": "llamacpp", "downloaded": True},
+    ]
+    resp = client.post("/api/providers/select", json={"model": "My.Local-Model-GGUF"})
+    assert "Local only" not in str(resp.json().get("detail", ""))
+
+
+def test_local_only_names_a_next_step_when_the_model_list_errors(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models, monkeypatch
+):
+    from gaia.ui.routers import providers
+
+    monkeypatch.setattr(providers, "_lemonade", lambda *a, **k: (500, {}))
+    resp = client.post("/api/providers/select", json={"model": _OTHER_CLOUD})
+    assert resp.status_code == 503
+    detail = resp.json()["detail"]
+    assert "HTTP 500" in detail
+    assert "close GAIA and open it again" in detail
+    assert db.get_setting("custom_model") is None

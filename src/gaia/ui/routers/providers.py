@@ -758,13 +758,26 @@ def _listed_as_cloud(model_id: str) -> bool:
     Reads the list, which also teaches the in-memory cloud check every other
     part of the UI classifies by.
     """
-    from gaia.llm.lemonade_client import is_cloud_model, record_cloud_models
+    from gaia.llm.lemonade_client import (
+        CLOUD_RECIPE,
+        _model_ids_match,
+        record_cloud_models,
+    )
 
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
-        raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
+        raise ProviderError(
+            f"Lemonade answered /models with HTTP {status}. {APP_RESTART_HINT}"
+        )
     record_cloud_models(body)
-    return is_cloud_model(model_id)
+    # Match as the server does (case, ``user.`` prefix), or a retyped id slips by.
+    entries = body.get("data") if isinstance(body, dict) else None
+    return any(
+        isinstance(e, dict)
+        and e.get("recipe") == CLOUD_RECIPE
+        and _model_ids_match(e.get("id"), model_id)
+        for e in entries or []
+    )
 
 
 def _check_model_available(model_id: str) -> Optional[str]:
