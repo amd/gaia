@@ -6,6 +6,7 @@ import { AlertCircle, CheckCircle2, FileText, X } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { middleTruncate } from '../utils/format';
 import { useT } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 
@@ -84,7 +85,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
                         {failed
                             ? <AlertCircle size={9} className="doc-pill-icon" aria-hidden="true" />
                             : <FileText size={9} className="doc-pill-icon" aria-hidden="true" />}
-                        <span className="doc-pill-name" dir="auto">{d.filename}</span>
+                        <span className="doc-pill-name" dir="auto">{middleTruncate(d.filename, 24)}</span>
                         <button
                             className="doc-pill-remove"
                             onClick={(e) => handleRemoveDocument(e, d.id)}
