@@ -162,19 +162,27 @@ scripts/testing/upload-evidence.sh pr-1234 chat.png run.log
   (`pr-1234`, `issue-2369`); `<run-id>` is the UTC time plus 4 random hex digits,
   so a rerun never overwrites earlier evidence. File names must be letters,
   digits, `.`, `_` or `-`.
-- **Secret scan:** every file except images and video must be UTF-8 text, and is
-  checked against the patterns GAIA redacts from failure records
-  (`_NAMED_SECRET_PATTERNS` in `src/gaia/llm/failure_record.py`: bearer tokens,
-  `sk-`/`ghp_`-style keys, `NAME_API_KEY=` assignments, PEM private keys,
-  passwords in URLs). A file that isn't UTF-8 text — a `.zip`, a `.gz`, a UTF-16
-  log such as Windows PowerShell 5.1's `>` writes — can't be scanned, so it is
-  refused: upload it unpacked or re-saved as UTF-8. One hit or refusal uploads
-  nothing and names the file and pattern. There is no skip flag: fix the file and
-  rerun. Add a pattern there and both the scan and redaction get it.
-- **Images and video** (recognised by their content, not just the extension, so a
-  log renamed `.png` is still scanned) are not scanned. The helper names each one
-  so you check it by eye for keys, tokens, emails, and personal data. Each URL
-  prints as soon as its file is uploaded.
+- **Secret scan:** each file is copied to a private temp folder, and that copy
+  is what gets scanned and uploaded, so a log still being written can't change
+  after the scan. Every file, its name, and the ref are checked against the
+  patterns GAIA redacts from failure records (`_NAMED_SECRET_PATTERNS` in
+  `src/gaia/llm/failure_record.py`: bearer tokens, `sk-`/`ghp_`/`github_pat_`/
+  `hf_`/`AIza` keys, AWS/R2-style access keys and secret assignments, JWTs,
+  `NAME_API_KEY=` assignments, auth headers and cookies in JSON or HAR files,
+  PEM private keys (JSON-escaped too), passwords in URLs). A file that isn't
+  UTF-8 text — a `.zip`, a `.gz`, a `.pdf`, a UTF-16 log such as Windows
+  PowerShell 5.1's `>` writes — can't be scanned, so it is refused: upload it
+  unpacked or re-saved as UTF-8. Symlinks are refused too. One hit or refusal
+  uploads nothing and names the file and pattern, never the secret. There is no
+  skip flag: fix the file and rerun. Add a pattern there and both the scan and
+  redaction get it.
+- **Images and video** are recognised by their content, not just the extension,
+  so a log renamed `.png` is scanned as text. Their bytes are scanned too, so a
+  key in EXIF, a PNG text chunk (compressed ones are unpacked) or data tacked on
+  after the image is caught; a PNG that is truncated or has data after its end is
+  refused. Pixels can't be scanned, so the helper names each image for you to
+  check by eye for keys, tokens, emails, and personal data. Each URL prints as
+  soon as its file is uploaded.
 - **Needs** rclone with the `gaia` remote above (or set `R2_REMOTE`), and this
   repo's Python environment for the scan. Credentials stay in your rclone config;
   CI does not use this helper.

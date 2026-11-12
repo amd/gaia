@@ -60,6 +60,8 @@ _SECRET_KEY_RE = re.compile(
     r"|auth(?:orization)?|credentials?|cookie)$",
     re.IGNORECASE,
 )
+#: A line break, raw or JSON-escaped (``\n`` as two characters).
+_NL = r"(?:\r?\n|(?:\\r)?\\n)"
 _NAMED_SECRET_PATTERNS = (
     (
         "bearer/basic auth header",
@@ -68,24 +70,45 @@ _NAMED_SECRET_PATTERNS = (
     (
         "key/token/password assignment",
         re.compile(
-            r"(?i)\b((?:[a-z]+[_-])?(?:api[_-]?key|token|secret|password|passwd))"
+            r"(?i)\b((?:[a-z]+[_-])?(?:api[_-]?key|token|password|passwd"
+            r"|secret(?:[_-]?access[_-]?key)?|access[_-]?key(?:[_-]?id)?))"
             r"([\"']?\s*[:=]\s*[\"']?)[^\s\"',;&]+"
         ),
     ),
     (
         "provider key prefix (sk-, ghp_, xoxb-...)",
-        re.compile(r"\b(?:sk|pk|ghp|gho|ghs|xox[abp])[-_][A-Za-z0-9_-]{12,}"),
+        re.compile(
+            r"\b(?:sk|pk|ghp|gho|ghs|ghu|ghr|github_pat|xox[abp])[-_]"
+            r"[A-Za-z0-9_-]{12,}"
+        ),
     ),
     ("Fireworks key", re.compile(r"\bfw_[A-Za-z0-9]{16,}")),
+    ("Hugging Face token", re.compile(r"\bhf_[A-Za-z0-9]{30,}")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}")),
+    ("AWS/R2-style access key ID", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    (
+        "JSON web token",
+        re.compile(r"\beyJ[\w-]{8,}\.eyJ[\w-]{8,}\.[\w-]{8,}"),
+    ),
+    # A JSON field, or a HAR/trace {"name": ..., "value": ...} header.
+    (
+        "auth header or cookie in JSON",
+        re.compile(
+            r'(?i)("(?:proxy-)?authorization"|"(?:set-)?cookie"|"x-api-key"'
+            r'|"name"\s*:\s*"(?:(?:proxy-)?authorization|(?:set-)?cookie|x-api-key)"'
+            r'\s*,\s*"value")(\s*:\s*")(?!\[redacted\])[^"]{8,}'
+        ),
+    ),
     ("password in a URL", re.compile(r"(?<=://)[^/\s:@]+:[^/\s@]+(?=@)")),
     # Needs a base64 line after the header, so a message quoting only the
     # header isn't wiped; runs to the END line or, if truncated, the text's end.
+    # Line breaks may be JSON-escaped (a service-account key) and lines indented.
     (
         "PEM private key",
         re.compile(
-            r"-----BEGIN [A-Z ]*PRIVATE KEY-----[ \t]*\r?\n"
-            r"(?:[\w-]+:[^\r\n]*\r?\n|[ \t]*\r?\n)*"
-            r"[A-Za-z0-9+/]{16,}={0,2}[ \t]*(?:\r?\n|\Z)[\s\S]*?"
+            rf"-----BEGIN [A-Z ]*PRIVATE KEY-----[ \t]*{_NL}"
+            rf"(?:[ \t]*(?:[\w-]+:[^\r\n\\]*)?{_NL})*"
+            rf"[ \t]*[A-Za-z0-9+/]{{16,}}={{0,2}}[ \t]*(?:{_NL}|\Z)[\s\S]*?"
             r"(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)"
         ),
     ),
