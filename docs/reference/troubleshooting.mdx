@@ -758,6 +758,15 @@ error. To run the chat model in the cloud instead, see
     reach safe mode.
   </Accordion>
 
+  <Accordion title="GAIA's window stopped working" icon="window-restore">
+    When only the window fails (its page crashes, often because the PC ran out
+    of memory), GAIA itself keeps running, along with any answer or folder
+    index in progress. **Reload window** brings the window back; **Quit GAIA**
+    quits, and asks first if work is still running. The details go to
+    `~/.gaia/electron-main.log` as a `RENDER_PROCESS_GONE` line. If it keeps
+    happening, close other apps to free memory, then restart GAIA.
+  </Accordion>
+
   <Accordion title="GAIA's assistant stopped and is restarting" icon="rotate">
     The desktop app restarts its assistant when it stops on its own. The banner
     shows how long it has been restarting, and your chats are saved. GAIA tries

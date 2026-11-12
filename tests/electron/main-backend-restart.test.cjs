@@ -203,3 +203,17 @@ test("with no quit under way, a restart adopts the new backend", async () => {
   expect(h.context.backendProcess).toBe(h.child);
   expect(h.portManager.killBackend).not.toHaveBeenCalled();
 });
+
+test("a crashed window is offered a reload; GAIA keeps running", () => {
+  const net = main.slice(main.indexOf("installSafetyNet({"), main.indexOf("} catch (err) {", main.indexOf("installSafetyNet({")));
+  expect(net).toMatch(/onRendererGone: \(contents, details\) => \{[\s\S]{0,80}handleRendererGone\(contents, details\)/);
+  const handler = main.slice(main.indexOf("async function handleRendererGone("));
+  const body = handler.slice(0, handler.indexOf("\n}\n"));
+  // Only GAIA's own window is reloaded; anything else stays fatal.
+  expect(body).toMatch(/contents !== mainWindow\.webContents[\s\S]{0,200}_fatalHandler\(/);
+  // Reload builds the URL afresh, so a backend restarted on a new port is reached.
+  expect(body).toMatch(/choice === "reload"[\s\S]{0,120}await loadApp\(\)/);
+  // Quit goes through the quit guard, which asks about work still running.
+  expect(body).toMatch(/app\.quit\(\)/);
+  expect(body).not.toMatch(/fatalQuitting = true/);
+});
