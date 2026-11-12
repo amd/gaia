@@ -7134,6 +7134,13 @@ def handle_api_command(args):
     log = get_logger(__name__)
 
     if args.subcommand == "start":
+        from gaia.api.flagship import api_unavailable_reason
+
+        reason = api_unavailable_reason()
+        if reason:
+            print(f"❌ {reason}", file=sys.stderr)
+            sys.exit(1)
+
         # Initialize Lemonade with mcp profile (unless --no-lemonade-check)
         if not getattr(args, "no_lemonade_check", False):
             success, _ = initialize_lemonade_for_agent(
