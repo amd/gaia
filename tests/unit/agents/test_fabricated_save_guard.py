@@ -356,6 +356,83 @@ def test_claim_backed_by_a_write_without_readback_is_incomplete(clear_tool_regis
     _assert_kept_with_caveat(result)
 
 
+def test_repeating_the_edits_backup_line_is_not_an_unbacked_save(
+    clear_tool_registry, tmp_path
+):
+    """rc18, DeepSeek: the answer quoted edit_file's backup path and was footered."""
+    todo = tmp_path / "todo.txt"
+    backup = tmp_path / "backups" / "C" / "todo.txt.20261111_143048_506821.bak"
+
+    class _EditingAgent(_DummyAgent):
+        def _register_tools(self):
+            @tool
+            def edit_file(file_path: str, old_content: str, new_content: str) -> dict:
+                """Edit a file."""
+                return {
+                    "status": "success",
+                    "file_path": file_path,
+                    "backup_path": str(backup),
+                }
+
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        agent = _EditingAgent(silent_mode=True, skip_lemonade=True)
+    agent.streaming = False
+    agent._tool_requires_confirmation = lambda *_args, **_kwargs: False
+    answer = (
+        "Changed milk to oat milk in todo.txt. A backup was written to "
+        f"`{tmp_path}\\backups\\...\\{backup.name}`."
+    )
+    sent = []
+
+    def _send(messages, *_, **__):
+        resp = MagicMock()
+        resp.stats = {}
+        resp.text = json.dumps(
+            {
+                "thought": "",
+                "tool": "edit_file",
+                "tool_args": {
+                    "file_path": str(todo),
+                    "old_content": "milk",
+                    "new_content": "oat milk",
+                },
+            }
+            if not sent
+            else {"thought": "", "answer": answer}
+        )
+        sent.append(messages)
+        return resp
+
+    agent.chat = MagicMock()
+    agent.chat.send_messages = MagicMock(side_effect=_send)
+
+    result = agent.process_query(f"In {todo} change milk to oat milk.", max_steps=10)
+
+    assert len(sent) == 2
+    assert result["status"] == "success"
+    assert "I couldn't confirm" not in result["result"]
+
+    # rc18 round 2: the next turn repeats that path and makes no tool call.
+    reminder = f"A backup of todo.txt was written to `{backup}`."
+    answer = reminder
+    result = agent.process_query(
+        "Thanks. Remind me in one sentence where the backup went. Do not use "
+        "any tools.",
+        max_steps=10,
+    )
+
+    assert len(sent) == 3
+    assert result["status"] == "success"
+    assert _final_text(result) == reminder
+
+    # A backup no tool ever reported is still an unbacked save.
+    answer = "A backup was written to `todo.txt.20260101_000000_000000.bak`."
+    result = agent.process_query("And the one before it?", max_steps=10)
+
+    assert len(sent) > 4
+    assert "todo.txt.20260101_000000_000000.bak" in result["result"]
+
+
 def _run_turn_with_other_tool(
     tool_name,
     mark_requires_confirmation=False,
