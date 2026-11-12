@@ -154,6 +154,17 @@ icon: "bug"
     keychain itself and asks again after each update.
   </Accordion>
 
+  <Accordion title="The model list says the OS key store is locked" icon="lock">
+    You closed the system prompt that unlocks your key store (on Linux, GNOME's
+    "Unlock keyring" or "Choose password for new keyring"), so GAIA can't read a
+    saved key. GAIA waits five minutes before asking again, so the prompt doesn't
+    keep coming back. To use a saved key sooner, choose **Try again** in the
+    model list or under **Settings → Model**, then unlock or create the keyring
+    in the prompt that opens. Connecting or testing a connector asks again too.
+    Until then a connector reads as unavailable and the new-chat inbox card stays
+    hidden.
+  </Accordion>
+
   <Accordion title="Use GAIA's own says GAIA's server is not installed" icon="box-open">
     Switching back from your Lemonade needs GAIA's own server, and on this PC it was
     never installed (or only partly). The switch is refused and GAIA keeps using
@@ -768,6 +779,15 @@ error. To run the chat model in the cloud instead, see
     reach safe mode.
   </Accordion>
 
+  <Accordion title="GAIA's window stopped working" icon="window-restore">
+    When only the window fails (its page crashes, often because the PC ran out
+    of memory), GAIA itself keeps running, along with any answer or folder
+    index in progress. **Reload window** brings the window back; **Quit GAIA**
+    quits, and asks first if work is still running. The details go to
+    `~/.gaia/electron-main.log` as a `RENDER_PROCESS_GONE` line. If it keeps
+    happening, close other apps to free memory, then restart GAIA.
+  </Accordion>
+
   <Accordion title="GAIA's assistant stopped and is restarting" icon="rotate">
     The desktop app restarts its assistant when it stops on its own. The banner
     shows how long it has been restarting, and your chats are saved. GAIA tries
@@ -854,6 +874,19 @@ error. To run the chat model in the cloud instead, see
     ```
 
     Builds before this check stop without a message in the same situation.
+  </Accordion>
+
+  <Accordion title="Cloud models and downloads fail: the certificate store has no ca-certificates.crt" icon="certificate">
+    **Cause:** the model server inside GAIA trusts HTTPS sites through exactly
+    one file, `/etc/ssl/certs/ca-certificates.crt`. The `ca-certificates`
+    package Fedora 44 first shipped leaves that file out, so every cloud model
+    and every model download fails. GAIA says so in setup's cloud step and in
+    a failed download, and `~/.gaia/lemonade/lemond.log` shows
+    `Problem with the SSL CA cert`. Your key is not the problem.
+
+    **Fix:** install your system's updates (GNOME Software, or
+    `sudo dnf upgrade ca-certificates`); the updated package adds the file.
+    Then restart GAIA.
   </Accordion>
 
   <Accordion title="Chromium sandbox / --no-sandbox on Ubuntu 24.04.1+" icon="shield-halved">

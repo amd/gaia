@@ -58,6 +58,7 @@ from gaia.llm.lemonade_launcher import (
     get_installed_version,
     resolve_lemonade,
 )
+from gaia.llm.lemonade_tls import explain_tls_failure
 from gaia.llm.local_only import guard_inference
 from gaia.llm.model_server_info import EMBEDDER_ON_CPU_WITH_ROCM, embedder_avoids_rocm
 from gaia.llm.retry import (
@@ -78,6 +79,7 @@ from gaia.llm.retry import (
     model_retry_notices,
     retry_state_of,
     sleep_unless_cancelled,
+    stopped_by_user,
     tag_http_failure,
 )
 from gaia.llm.stream_watchdog import (
@@ -7020,7 +7022,10 @@ class LemonadeClient:
             down = self._server_down_error(e, model)
             if down is not None:
                 raise down from e
-            self.log.error(f"Error using OpenAI client for streaming: {str(e)}")
+            if stopped_by_user(e):
+                self.log.info("Streaming stopped by the user: %s", e)
+            else:
+                self.log.error(f"Error using OpenAI client for streaming: {str(e)}")
             label = _endpoint_label(self.base_url)
             # An inner error from this client already names the server.
             where = "" if label and label in str(e) else self._from_server()
@@ -8006,7 +8011,7 @@ class LemonadeClient:
             self.log.info(f"Installed {model_name} successfully: response={response}")
             return response
         except Exception as e:
-            message = f"Failed to install {model_name}: {e}"
+            message = explain_tls_failure(f"Failed to install {model_name}: {e}")
             self.log.error(message)
             raise LemonadeClientError(message)
 
@@ -8044,7 +8049,9 @@ class LemonadeClient:
             self.log.info(f"Installed backend {spec}: {response}")
             return response
         except Exception as e:
-            raise LemonadeClientError(f"Failed to install backend {spec}: {e}") from e
+            raise LemonadeClientError(
+                explain_tls_failure(f"Failed to install backend {spec}: {e}")
+            ) from e
 
     def ensure_npu_backend(self, model_name: str) -> None:
         """Install the FLM backend *model_name* needs, if it is an FLM model.
@@ -8330,6 +8337,10 @@ class LemonadeClient:
                         try:
                             data = json.loads(data_str)
                             data["event"] = event_type or "progress"
+                            if event_type == "error" and isinstance(
+                                data.get("error"), str
+                            ):
+                                data["error"] = explain_tls_failure(data["error"])
 
                             # Yield all events - let the consumer handle throttling
                             yield data

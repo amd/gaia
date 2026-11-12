@@ -406,6 +406,8 @@
             "group": "Agent UI",
             "pages": [
               "plans/gaia-ui-redesign",
+              "plans/voice",
+              "plans/phone-calls",
               "plans/security-model",
               "plans/email-triage-skill",
               "plans/messaging-integrations-plan",
