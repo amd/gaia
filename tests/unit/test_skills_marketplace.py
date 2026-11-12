@@ -705,6 +705,73 @@ def test_private_key_is_written_owner_only(tmp_path):
     assert mode == 0o600
 
 
+def test_private_key_is_created_owner_only_not_chmod_after(tmp_path, monkeypatch):
+    """The key file is born 0600; a chmod afterwards leaves it readable first."""
+    import os
+    import stat
+
+    from gaia.skills import signing
+
+    real_open = os.open
+    created = []
+
+    def recording_open(path, flags, mode=0o777, *args, **kwargs):
+        if str(path).endswith("publisher.key"):
+            created.append((flags, mode))
+        return real_open(path, flags, mode, *args, **kwargs)
+
+    monkeypatch.setattr(signing.os, "open", recording_open)
+    root = tmp_path / "skills"
+    signing.generate_key(root)
+    signing.generate_key(root, force=True)
+
+    assert len(created) == 2
+    for flags, mode in created:
+        assert flags & os.O_CREAT and flags & os.O_EXCL
+        assert mode == stat.S_IRUSR | stat.S_IWUSR
+
+
+def test_forced_keygen_replaces_a_world_readable_key_with_an_owner_only_one(
+    tmp_path,
+):
+    import os
+    import stat
+    import sys
+
+    from gaia.skills.signing import generate_key, keys_dir, load_key
+
+    if sys.platform == "win32":
+        pytest.skip("POSIX permission bits are not meaningful on Windows")
+    root = tmp_path / "skills"
+    generate_key(root)
+    private = keys_dir(root) / "publisher.key"
+    os.chmod(private, 0o644)
+
+    second = generate_key(root, force=True)
+
+    assert stat.S_IMODE(os.stat(private).st_mode) == 0o600
+    assert load_key(root).key_id == second.key_id
+
+
+def test_keygen_refuses_loudly_when_the_key_file_cannot_be_created(
+    tmp_path, monkeypatch
+):
+    import os
+
+    from gaia.skills import signing
+
+    real_open = os.open
+
+    def failing_open(path, flags, *args, **kwargs):
+        if str(path).endswith("publisher.key"):
+            raise FileExistsError(17, "File exists", str(path))
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(signing.os, "open", failing_open)
+    with pytest.raises(signing.SkillSignatureError, match="gaia skill keygen"):
+        signing.generate_key(tmp_path / "skills")
+
+
 def test_load_key_names_keygen_when_missing(tmp_path):
     from gaia.skills.signing import SkillSignatureError, load_key
 

@@ -385,6 +385,14 @@ class BinaryPolicy:
             flag token must not be read as a short flag carrying an attached
             value. Getting this wrong is a bypass, not a cosmetic difference —
             see :func:`_split_flag`.
+        abbreviated_options: This CLI parses options the way git's
+            ``parse-options`` does: a unique prefix of a long option selects
+            it (``--ext`` is ``--ext-diff``), and boolean short options cluster
+            (``-an`` is ``-a -n``). Denied flags are then matched in both
+            spellings, not by exact name.
+        exact_options: Real option names of this CLI that are a strict prefix
+            of a denied flag (git's ``--text`` vs ``--textconv``). The CLI takes
+            an exact match over an abbreviation, so these are not read as one.
         confirm_summary: The clause a CONFIRM prompt uses when the rule does
             not override it — "writes to GitHub", "changes this repository".
             One line, and it must be true of every write the policy offers.
@@ -423,6 +431,8 @@ class BinaryPolicy:
     positional: Subcommand | None = None
     substitute: str = ""
     single_dash_long: bool = False
+    abbreviated_options: bool = False
+    exact_options: frozenset[str] = frozenset()
     confirm_summary: str = "writes"
     refuse_note: str = (
         "Anything that installs, opens a shell, or prints a credential is "
@@ -1594,6 +1604,8 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         # MORE contained, not less, by taking the configured pager (a program)
         # out of the run entirely.
         bare_flags=frozenset({"--version", "--help", "-h", "-P", "--no-pager"}),
+        abbreviated_options=True,
+        exact_options=frozenset({"--text", "--filter"}),
         # The read-only floor this binary had before it had a policy — see
         # BinaryPolicy.ungranted. Unchanged from the shell tool's old
         # SAFE_GIT_COMMANDS, so an agent with no skill loaded behaves as before.
@@ -2385,20 +2397,82 @@ def _split_flag(
     difference — ``-exec`` splits into an ``-e`` nothing denies, and ``go test
     -exec /bin/sh`` runs a shell. Both spellings normalise to one leading dash
     so a rule need list ``-exec`` only once.
+
+    A token that carries ``=`` returns its attached value even when it is empty
+    (``--jq=`` gives ``""``): the parser has already taken the value from this
+    token, so the next token is a flag or operand of its own, never this
+    flag's value. Only a token with nothing attached returns ``None``.
     """
     if single_dash_long and token.startswith("-"):
-        name, _, attached = token.lstrip("-").partition("=")
-        return f"-{name}", attached or None
+        name, sep, attached = token.lstrip("-").partition("=")
+        return f"-{name}", attached if sep else None
     if token.startswith("--"):
-        name, _, attached = token.partition("=")
-        return name, attached if attached else None
+        name, sep, attached = token.partition("=")
+        return name, attached if sep else None
     name, rest = token[:2], token[2:]
-    return name, rest.lstrip("=") or None
+    if rest.startswith("="):
+        return name, rest[1:]
+    return name, rest or None
 
 
 def _flag_name(token: str, *, single_dash_long: bool = False) -> str:
     """The flag's name, without any value attached to the same token."""
     return _split_flag(token, single_dash_long=single_dash_long)[0]
+
+
+def _long_flag_matches(name: str, full: str) -> bool:
+    """True when *name* is *full* or an abbreviation of it (``--ext`` → ``--ext-diff``)."""
+    return len(name) > 2 and full.startswith(name)
+
+
+def _value_taking_flags(rule: Subcommand) -> frozenset[str]:
+    return (
+        frozenset(rule.value_flags)
+        | frozenset(rule.flag_values)
+        | rule.path_value_flags
+        | rule.inline_value_flags
+        | frozenset(rule.flag_value_prefixes)
+    )
+
+
+def _spelled_denied_flag(
+    policy: BinaryPolicy, rule: Subcommand, token: str, name: str
+) -> str | None:
+    """The denied flag *token* spells, or None.
+
+    An exact name always counts. Under :attr:`BinaryPolicy.abbreviated_options`
+    so does a long-option abbreviation, and so does any letter of a short
+    cluster up to the first letter that takes a value (the rest is its value).
+    """
+    denied = rule.denied_flags
+    if name in denied:
+        return name
+    if not policy.abbreviated_options or policy.single_dash_long:
+        return None
+    if token.startswith("--"):
+        if name in policy.exact_options:
+            return None
+        return next(
+            (flag for flag in sorted(denied) if _long_flag_matches(name, flag)), None
+        )
+    value_taking = _value_taking_flags(rule)
+    for letter in token[1:]:
+        if letter == "=":
+            break
+        flag = f"-{letter}"
+        if flag in denied:
+            return flag
+        if flag in value_taking:
+            break
+    return None
+
+
+def _empty_value(spelled: str, name: str, *, attached_only: bool = False) -> str:
+    example = f"{name}=<value>" if attached_only else f"{name} <value>"
+    return (
+        f"'{spelled}' is not allowed: {name} needs a value, and nothing follows "
+        f"its '='. Pass the value itself, e.g. '{example}'."
+    )
 
 
 def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None:
@@ -2606,8 +2680,6 @@ def classify_invocation(
             "would run something other than what was checked."
         )
 
-    denied_flags = rule.denied_flags
-
     action: str | None = None
     cursor = 0
     while cursor < len(rest):
@@ -2631,13 +2703,19 @@ def classify_invocation(
         # Checked before the action is classified, so a denied flag refuses the
         # call outright — a confirmable write carrying one never reaches a
         # prompt, because the flag is the escalation, not the write.
-        if name in denied_flags:
+        denied = _spelled_denied_flag(policy, rule, token, name)
+        if denied is not None:
             reason = rule.denied_flag_reasons.get(
-                name,
+                denied,
                 "that flag sends a request body, which makes the call a write",
             )
+            read_as = (
+                "" if denied == name else f" ({policy.binary} reads it as {denied})"
+            )
             return _refuse(
-                f"'{policy.binary} {subcommand} {name}' is not allowed: {reason}."
+                f"'{policy.binary} {subcommand} "
+                f"{denied if denied == name else token}' is not allowed{read_as}: "
+                f"{reason}."
             )
 
         # A flag this rule only ever reviewed as VALUELESS must not arrive
@@ -2658,6 +2736,14 @@ def classify_invocation(
                     f"'{policy.binary} {subcommand} {name}' is not allowed "
                     f"spaced: write '{name}=<value>'. Spaced, the value cannot "
                     "be told apart from the operand this subcommand refuses."
+                )
+            if inline == "":
+                return _refuse(
+                    _empty_value(
+                        f"{policy.binary} {subcommand} {token}",
+                        name,
+                        attached_only=True,
+                    )
                 )
             denial = _denied_operand(rule, policy.binary, inline)
             if denial is not None:
@@ -2689,6 +2775,8 @@ def classify_invocation(
             or name in rule.value_flags
             or name in rule.path_value_flags
         )
+        if takes_value and inline == "":
+            return _refuse(_empty_value(f"{policy.binary} {subcommand} {token}", name))
         value = inline
         if takes_value and inline is None:
             value = rest[cursor] if cursor < len(rest) else None
@@ -2889,11 +2977,12 @@ def _classify_positional_invocation(
 
         name, inline = _split_flag(token, single_dash_long=policy.single_dash_long)
 
-        if name in rule.denied_flags:
+        denied = _spelled_denied_flag(policy, rule, token, name)
+        if denied is not None:
             reason = rule.denied_flag_reasons.get(
-                name, "it is outside this grant's read-only flag set"
+                denied, "it is outside this grant's read-only flag set"
             )
-            return _refuse(f"'{policy.binary} {name}' is not allowed: {reason}.")
+            return _refuse(f"'{policy.binary} {denied}' is not allowed: {reason}.")
 
         if name in rule.allowed_flags or name in policy.bare_flags:
             if inline is not None:
@@ -2919,6 +3008,8 @@ def _classify_positional_invocation(
                 f"covers a fixed set of flags: {', '.join(sorted(known_flags))}."
             )
 
+        if inline == "":
+            return _refuse(_empty_value(f"{policy.binary} {token}", name))
         value = inline
         if inline is None:
             value = tokens[cursor] if cursor < len(tokens) else None

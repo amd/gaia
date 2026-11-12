@@ -24,7 +24,9 @@ That split is what keeps the gate quiet about honest skills: a skill declaring
 from __future__ import annotations
 
 import ast
+import io
 import re
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -36,6 +38,7 @@ from gaia.skills.audit.findings import (
     Severity,
     python_sources,
     relative_path,
+    uninspectable_content,
 )
 
 log = get_logger(__name__)
@@ -1135,20 +1138,28 @@ def _exfiltration_findings(
 # ----------------------------------------------------------------------
 
 
-def analyze_source(source: str, *, filename: str) -> CodeAnalysis:
-    """Analyze one Python source file's text."""
+def analyze_source(source: str | bytes, *, filename: str) -> CodeAnalysis:
+    """Analyze one Python source file.
+
+    Pass the file's raw *bytes* where you have them: ``ast.parse`` then honours
+    a BOM and a PEP 263 coding declaration exactly as the interpreter does, so
+    the audit reads the same program that would run.
+    """
     try:
         tree = ast.parse(source, filename=filename)
-    except SyntaxError as exc:
+        text = _decode_source(source)
+    except (SyntaxError, ValueError) as exc:
+        message = exc.msg if isinstance(exc, SyntaxError) else str(exc)
+        line = (exc.lineno if isinstance(exc, SyntaxError) else None) or 1
         return CodeAnalysis(
             findings=(
                 Finding(
                     rule_id="code.unparseable",
                     severity="high",
                     category=CATEGORY_DANGEROUS_CALL,
-                    message=f"Is not valid Python and cannot be audited: {exc.msg}.",
+                    message=f"Is not valid Python and cannot be audited: {message}.",
                     file=filename,
-                    line=exc.lineno or 1,
+                    line=line,
                     remediation=(
                         "Fix the syntax error. The gate refuses to pass code it "
                         "could not read rather than assume it is harmless."
@@ -1161,7 +1172,7 @@ def analyze_source(source: str, *, filename: str) -> CodeAnalysis:
     analyzer = _Analyzer(filename)
     analyzer.visit(tree)
 
-    findings = analyzer.findings + _suppression_findings(source, filename)
+    findings = analyzer.findings + _suppression_findings(text, filename)
     findings += _exfiltration_findings(
         analyzer.findings, analyzer.domain_uses, filename
     )
@@ -1176,16 +1187,18 @@ def analyze_source(source: str, *, filename: str) -> CodeAnalysis:
 def analyze_code(directory: Path | str) -> CodeAnalysis:
     """Analyze every Python file in a skill directory.
 
-    Covers ``tools.py`` and ``scripts/`` — and any other ``*.py``, so a skill
-    cannot escape the scan by hiding the payload in ``helper.py``.
+    Covers ``tools.py`` and ``scripts/`` — and any other ``*.py`` / ``*.pyw``,
+    so a skill cannot escape the scan by hiding the payload in ``helper.py``.
+    Compiled modules, archives, ``__pycache__`` and ``node_modules`` cannot be
+    read as source, so each is reported as ``code.unreadable`` by path.
     """
     directory = Path(directory)
-    analysis = CodeAnalysis()
+    analysis = CodeAnalysis(findings=_uninspectable_findings(directory))
     for path in python_sources(directory):
         relative = relative_path(path, directory)
         try:
-            source = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
+            source = path.read_bytes()
+        except OSError as exc:
             analysis = analysis.merge(
                 CodeAnalysis(
                     findings=(
@@ -1193,12 +1206,12 @@ def analyze_code(directory: Path | str) -> CodeAnalysis:
                             rule_id="code.unreadable",
                             severity="high",
                             category=CATEGORY_DANGEROUS_CALL,
-                            message=f"Could not be read as UTF-8 text: {exc}.",
+                            message=f"Could not be read: {exc}.",
                             file=relative,
                             line=1,
                             remediation=(
-                                "Ship the file as UTF-8 Python source. The gate "
-                                "refuses to pass code it could not read."
+                                "Ship the file as readable Python source. The "
+                                "gate refuses to pass code it could not read."
                             ),
                         ),
                     )
@@ -1207,3 +1220,39 @@ def analyze_code(directory: Path | str) -> CodeAnalysis:
             continue
         analysis = analysis.merge(analyze_source(source, filename=relative))
     return analysis
+
+
+def _decode_source(source: str | bytes) -> str:
+    """*source* as text, decoded the way the interpreter decodes it."""
+    if isinstance(source, str):
+        return source
+    encoding, _ = tokenize.detect_encoding(io.BytesIO(source).readline)
+    return source.decode(encoding)
+
+
+def _uninspectable_findings(directory: Path) -> tuple[Finding, ...]:
+    """One ``code.unreadable`` finding per shipped path the analyzer cannot read."""
+    findings: list[Finding] = []
+    for relative in uninspectable_content(directory):
+        is_dir = relative.endswith("/")
+        findings.append(
+            Finding(
+                rule_id="code.unreadable",
+                severity="high",
+                category=CATEGORY_DANGEROUS_CALL,
+                message=(
+                    f"Ships {'a directory' if is_dir else 'compiled or archived content'}"
+                    " the audit cannot inspect as source, though it is installed "
+                    "with the skill and can be imported from it."
+                ),
+                file=relative,
+                line=0,
+                remediation=(
+                    f"Delete {relative} from the skill. Ship Python as .py source "
+                    "and declare packages in metadata.gaia.requirements instead "
+                    "of bundling them. The gate refuses to pass content it could "
+                    "not read."
+                ),
+            )
+        )
+    return tuple(findings)

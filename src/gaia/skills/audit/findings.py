@@ -49,8 +49,8 @@ CATEGORIES = (
     CATEGORY_TIER_CLAIM,
 )
 
-#: Directory / file names excluded from the digest and from analysis. Build
-#: caches must not invalidate an otherwise-valid audit report.
+#: Directories excluded from the digest. Loading a skill writes ``__pycache__``,
+#: which must not read as drift; the audit reports a shipped one instead.
 DIGEST_EXCLUDED_DIRS = frozenset(
     {
         "__pycache__",
@@ -58,10 +58,19 @@ DIGEST_EXCLUDED_DIRS = frozenset(
         ".mypy_cache",
         ".pytest_cache",
         ".ruff_cache",
-        "node_modules",
     }
 )
-DIGEST_EXCLUDED_SUFFIXES = frozenset({".pyc", ".pyo", ".so", ".zip"})
+
+#: Suffixes Python imports as source. ``.pyw`` is a source module on Windows.
+PYTHON_SOURCE_SUFFIXES = frozenset({".py", ".pyw"})
+
+#: Directories whose contents the analyzers cannot vouch for, though the whole
+#: bundle is copied on install and the skill directory is put on ``sys.path``.
+UNINSPECTABLE_DIRS = frozenset({"__pycache__", "node_modules"})
+
+#: Compiled or archived files Python can import or run without passing through
+#: the source analyzer.
+UNINSPECTABLE_SUFFIXES = frozenset({".pyc", ".pyo", ".pyd", ".so", ".zip"})
 
 
 def _utc_now_iso() -> str:
@@ -258,10 +267,11 @@ class AuditReport:
 
 
 def auditable_files(directory: Path | str) -> list[Path]:
-    """Every file the audit reads, sorted by relative POSIX path.
+    """Every file the content digest covers, sorted by relative POSIX path.
 
-    Build caches and binary artifacts are excluded so they can never
-    invalidate an otherwise-valid report.
+    Only VCS and tool caches (:data:`DIGEST_EXCLUDED_DIRS`) are left out.
+    Compiled modules, archives and ``node_modules`` ship with the skill and are
+    hashed; :func:`uninspectable_content` names them for the audit.
     """
     directory = Path(directory)
     files: list[Path] = []
@@ -271,10 +281,34 @@ def auditable_files(directory: Path | str) -> list[Path]:
         relative = path.relative_to(directory)
         if any(part in DIGEST_EXCLUDED_DIRS for part in relative.parts):
             continue
-        if path.suffix in DIGEST_EXCLUDED_SUFFIXES:
-            continue
         files.append(path)
     return sorted(files, key=lambda p: p.relative_to(directory).as_posix())
+
+
+def uninspectable_content(directory: Path | str) -> list[str]:
+    """Relative POSIX paths of shipped content the analyzers cannot read.
+
+    One entry per :data:`UNINSPECTABLE_DIRS` directory (the outermost one,
+    with a trailing ``/``) and one per :data:`UNINSPECTABLE_SUFFIXES` file
+    outside those directories, sorted.
+    """
+    directory = Path(directory)
+    entries: set[str] = set()
+    for path in directory.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        parts = path.relative_to(directory).parts
+        if any(part in DIGEST_EXCLUDED_DIRS - UNINSPECTABLE_DIRS for part in parts):
+            continue
+        inside = next(
+            (i for i, part in enumerate(parts[:-1]) if part in UNINSPECTABLE_DIRS),
+            None,
+        )
+        if inside is not None:
+            entries.add("/".join(parts[: inside + 1]) + "/")
+        elif path.suffix.lower() in UNINSPECTABLE_SUFFIXES:
+            entries.add("/".join(parts))
+    return sorted(entries)
 
 
 def content_digest(directory: Path | str) -> str:
@@ -319,11 +353,15 @@ def manifest_digest(skill_markdown: str) -> str:
 def python_sources(directory: Path | str) -> list[Path]:
     """The Python files the code analyzer inspects: ``tools.py`` + ``scripts/``.
 
-    Any other ``*.py`` in the skill directory is included too — a skill that
-    hides code in ``helper.py`` must not escape the scan.
+    Any other ``*.py`` / ``*.pyw`` in the skill directory is included too — a
+    skill that hides code in ``helper.py`` must not escape the scan.
     """
     directory = Path(directory)
-    return [p for p in auditable_files(directory) if p.suffix == ".py"]
+    return [
+        p
+        for p in auditable_files(directory)
+        if p.suffix.lower() in PYTHON_SOURCE_SUFFIXES
+    ]
 
 
 def relative_path(path: Path, directory: Path) -> str:
