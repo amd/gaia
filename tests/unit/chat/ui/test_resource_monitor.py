@@ -242,6 +242,72 @@ def test_a_repeating_failure_logs_its_traceback_once(caplog):
     assert sum("again" in r.getMessage() for r in caplog.records) == 2
 
 
+class MissingProbe(FakeProbe):
+    """Returns no data on the calls named in *missing*."""
+
+    def __init__(self, missing):
+        super().__init__()
+        self.missing = missing
+
+    def sample(self) -> rm.Sample:
+        self.calls += 1
+        if self.missing(self.calls):
+            raise rm.SampleMissed("CPU utility counter returned no data")
+        return sample(float(self.calls))
+
+
+def _wait_for_calls(probe, sampler, calls):
+    deadline = time.monotonic() + 5
+    while probe.calls < calls and time.monotonic() < deadline:
+        sampler.snapshot(wait_s=0)
+        time.sleep(0.01)
+
+
+def test_a_sample_with_no_data_is_skipped_and_logged_once_quietly(caplog):
+    caplog.set_level("DEBUG", logger=rm.logger.name)
+    probe = MissingProbe(lambda call: call in (3, 6))
+    sampler = rm.ResourceSampler(lambda: probe, interval_s=0.01)
+    try:
+        sampler.snapshot()
+        _wait_for_calls(probe, sampler, 8)
+        history = sampler.snapshot()["cpu"]["history"]
+    finally:
+        sampler.stop()
+    # One probe throughout: the history was never thrown away and restarted.
+    assert 3.0 not in history and 6.0 not in history
+    assert {1.0, 2.0, 4.0, 5.0, 7.0} <= set(history)
+    assert not [r for r in caplog.records if r.levelname in ("ERROR", "WARNING")]
+    assert not [r for r in caplog.records if r.exc_info]
+    assert sum("no data" in r.getMessage() for r in caplog.records) == 1
+
+
+def test_a_counter_that_keeps_returning_no_data_is_reported(caplog):
+    probe = MissingProbe(lambda call: call > 1)
+    sampler = rm.ResourceSampler(lambda: probe, interval_s=0.001)
+    sampler.snapshot()
+    assert probe.closed.wait(5)
+    assert probe.calls == 1 + rm.MAX_MISSED_SAMPLES
+    # The next read tries again and reports it, as any other failed sample.
+    with pytest.raises(rm.ResourceProbeError, match="returned no data"):
+        sampler.snapshot()
+    assert [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+def test_windows_cpu_counter_with_no_data_is_a_missed_sample():
+    class _NoData:
+        def collect(self):
+            pass
+
+        def value(self, _name):
+            return None
+
+    probe = rm.WindowsProbe.__new__(rm.WindowsProbe)
+    probe._query = _NoData()
+
+    with pytest.raises(rm.SampleMissed, match="CPU utility counter"):
+        probe.sample()
+
+
 # ── Linux sysfs ──────────────────────────────────────────────────────────────
 
 

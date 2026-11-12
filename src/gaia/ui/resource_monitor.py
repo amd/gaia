@@ -49,10 +49,16 @@ logger = get_logger(__name__)
 INTERVAL_S = 1.0
 HISTORY_LEN = 60
 IDLE_STOP_S = 15.0
+#: Readings in a row with no data before the monitor says it cannot read.
+MAX_MISSED_SAMPLES = 5
 
 
 class ResourceProbeError(RuntimeError):
     """A counter source could not be opened or read."""
+
+
+class SampleMissed(ResourceProbeError):
+    """A counter had no data for one reading; a busy PC does this now and then."""
 
 
 @dataclass
@@ -558,7 +564,7 @@ class WindowsProbe:
         self._query.collect()
         cpu = self._query.value("cpu")
         if cpu is None:
-            raise ResourceProbeError("CPU utility counter returned no data")
+            raise SampleMissed("CPU utility counter returned no data")
         perf = self._query.value("perf")
         freq_mhz = self._query.value("freq")
         ghz = perf * freq_mhz / 100 / 1000 if perf is not None and freq_mhz else None
@@ -944,13 +950,25 @@ class ResourceSampler:
         except Exception as e:  # reported through snapshot(), not swallowed
             self._fail("could not start", e)
             return
+        missed = 0
+        noted_a_miss = False
         try:
             while not self._stop.wait(self._interval):
                 try:
                     sample = probe.sample()
+                except SampleMissed as e:
+                    missed += 1
+                    if missed >= MAX_MISSED_SAMPLES:
+                        self._fail(f"had no data {missed} readings in a row", e)
+                        return
+                    if not noted_a_miss:
+                        logger.info("Resource monitor skipped a reading: %s", e)
+                        noted_a_miss = True
+                    continue
                 except Exception as e:  # reported through snapshot()
                     self._fail("sample failed", e)
                     return
+                missed = 0
                 with self._lock:
                     self._history.append(sample)
                     self._error = None
