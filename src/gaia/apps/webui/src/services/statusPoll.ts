@@ -75,7 +75,7 @@ export function createStatusPoller(onOutcome: (outcome: StatusOutcome) => void):
     // A boot ends within seconds; a status still saying so must not outlive it.
     const followBoot = () => {
         if (running || !booting || bootTimer) return;
-        bootTimer = setTimeout(() => { bootTimer = null; void check(); }, STATUS_POLL_MS);
+        bootTimer = setTimeout(() => { bootTimer = null; void check(); }, nextDelay());
     };
     // A stopped poll's probe still in flight must not reschedule.
     let generation = 0;

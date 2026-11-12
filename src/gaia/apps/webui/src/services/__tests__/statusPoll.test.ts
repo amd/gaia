@@ -135,4 +135,16 @@ describe('createStatusPoller', () => {
         await vi.advanceTimersByTimeAsync(STATUS_POLL_MS * 4);
         expect(mocked.getSystemStatus).toHaveBeenCalledTimes(2);
     });
+
+    it('backs off while a hidden window follows a boot that keeps failing', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const starting = { init_state: 'initializing', init_tasks: [{ name: 'Loading AI model', status: 'running' }] };
+        mocked.getSystemStatus
+            .mockResolvedValueOnce(starting as never)
+            .mockRejectedValue(new api.ApiError('HTTP 500', 500, 'boom', null));
+        await createStatusPoller(vi.fn()).check();
+        await vi.advanceTimersByTimeAsync(60_000);
+        // 5 s, then 10 s and 20 s: three re-reads in a minute, not twelve.
+        expect(mocked.getSystemStatus).toHaveBeenCalledTimes(4);
+    });
 });

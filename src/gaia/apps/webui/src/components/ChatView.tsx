@@ -1363,7 +1363,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         removeMessagesFrom(message.id);
         // Its old turn is gone from the server: if it can't go now, it waits in line, never vanishes.
-        if (!(await sendMessageRef.current(text))) setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
+        let sent = false;
+        try {
+            sent = await sendMessageRef.current(text);
+        } catch (err) {
+            log.chat.error(`Could not resend message ${message.id} in session=${sessionId}; queued it`, err);
+        }
+        if (!sent) setQueue((q) => messageQueue.enqueue(q, text, 'queued'));
     }, [sessionId, isStreaming, removeMessagesFrom, setMessages, setQueue, isStale, addNotification, t]);
 
     // This view sends its chat's queue while open; the background dispatcher does it otherwise.

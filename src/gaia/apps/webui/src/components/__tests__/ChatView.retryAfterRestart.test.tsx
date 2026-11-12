@@ -120,4 +120,15 @@ describe('Try again after the backend restarted', () => {
         expect(sends).toEqual([]);
         expect(useChatStore.getState().messages.map((m) => m.content)).toEqual([QUESTION, CUT_OFF]);
     });
+
+    it('queues the question when the send throws after its old turn was deleted', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(READY);
+        mockedApi.sendMessageStream.mockImplementation(() => { throw new Error('stream setup failed'); });
+        await tryAgain();
+
+        await waitFor(() => expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledWith(SESSION.id, 322));
+        await waitFor(() => expect(
+            (useChatStore.getState().messageQueues[SESSION.id] ?? []).map((m) => m.text),
+        ).toEqual([QUESTION]));
+    });
 });
