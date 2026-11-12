@@ -4851,11 +4851,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         from gaia.agents.base.project_map import resolve_project_root
         from gaia.agents.tools.search_scope import path_validator_of
+        from gaia.agents.tools.workspace_paths import _workspace_default
 
-        # Same explicit config ProjectMapMixin passes, so lessons and the
-        # project map can never describe two different trees.
+        # Same explicit config and start folder ProjectMapMixin passes, so
+        # lessons and the project map can never describe two different trees.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
-        root = resolve_project_root(explicit)
+        root = resolve_project_root(explicit, start=_workspace_default(self))
         if root:
             return root
         validator = path_validator_of(self)
