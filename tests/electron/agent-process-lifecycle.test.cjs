@@ -31,7 +31,6 @@ jest.mock("child_process", () => {
 });
 
 const AgentProcessManager = require("../../src/gaia/apps/webui/services/agent-process-manager.cjs");
-const { ipcMain, BrowserWindow } = require("electron");
 
 jest.setTimeout(45000);
 
@@ -57,8 +56,7 @@ async function waitFor(pred, ms = 8000) {
 }
 
 function makeManager(agents = { a: {}, b: {} }) {
-  ipcMain._handlers.clear();
-  const manager = new AgentProcessManager(new BrowserWindow());
+  const manager = new AgentProcessManager();
   manager.manifest = {
     manifest_version: 1,
     agents: Object.keys(agents).map((id) => ({ id, name: id, binaries: {} })),
@@ -125,9 +123,9 @@ describe("a write to an agent that can no longer read", () => {
 
   function watchCrashes(manager) {
     const crashed = [];
-    manager._sendToRenderer = (channel, data) => {
-      if (channel === "agent:crashed") crashed.push(data);
-    };
+    manager.on("status-change", (e) => {
+      if (e.status === "stopped") crashed.push(e);
+    });
     return crashed;
   }
 

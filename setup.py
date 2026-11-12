@@ -12,8 +12,6 @@ with open("src/gaia/version.py", encoding="utf-8") as fp:
         raise ValueError("Unable to find version string in version.py")
     gaia_version = version_match.group(1)
 
-tkml_version = "5.0.4"
-
 # Standalone AMD agent wheels ('gaia-agent-<id>'), read statically by
 # util/list_agent_packages.py for build_agent_package.yml and
 # util/publish_agents_to_hub.py. Deliberately NOT an extras_require entry: the
@@ -21,7 +19,6 @@ tkml_version = "5.0.4"
 # silently downgrade amd-gaia to the newest release without the extra (#2240).
 AGENT_WHEEL_PACKAGES = [
     "gaia-agent-email",
-    "gaia-agent-chat",
     "gaia-agent-gaia",
 ]
 
@@ -71,9 +68,8 @@ setup(
         "gaia.agents",
         "gaia.agents.base",
         "gaia.agents.tools",
+        "gaia.agents.tools._calendar",
         "gaia.agents.tools._email",
-        "gaia.agents.code_index",
-        "gaia.agents.code_index.tools",
         "gaia.governance",
         "gaia.factory",
         "gaia.factory.harvest",
@@ -96,14 +92,6 @@ setup(
     ],
     package_data={
         "gaia.eval.memory": ["scenarios/*.yaml"],
-        "gaia.eval": [
-            "webapp/*.json",
-            "webapp/*.js",
-            "webapp/*.md",
-            "webapp/public/*.html",
-            "webapp/public/*.css",
-            "webapp/public/*.js",
-        ],
         # Browser-mode Agent UI bundle. Recursive globs in package_data are
         # unreliable across setuptools versions, so we list shallow patterns
         # here and back them up with `recursive-include` in MANIFEST.in. The
@@ -144,6 +132,7 @@ setup(
         # <1.0: openai checks any imported httpx for httpx.Timeout, which the
         # 1.0 pre-releases removed, so `pip install --pre` broke every chat turn.
         "httpx>=0.27.0,<1.0",
+        "idna>=3.0",
         # HTTPS trusts the OS certificate store (gaia.tls), so a corporate
         # TLS-inspecting proxy's root works as it does for pip. 0.10 also
         # honours CA files loaded on top (certifi), so nothing stops verifying.
@@ -267,11 +256,9 @@ setup(
         "dev": [
             "pytest",
             "pytest-cov",
-            "pytest-benchmark",
             "pytest-mock",
             "pytest-asyncio",
             "pytest-xdist",
-            "pytest-rerunfailures",
             "pyfakefs",
             "matplotlib",
             "black",
@@ -319,6 +306,12 @@ setup(
             # WebSocket transport for the Lemonade Realtime transcription work
             # tracked in #372; #382 stages the packaging dependency first.
             "websockets",
+        ],
+        # The scheduler's Windows notification sink (`--sink notification`).
+        # Without it the sink shows a message box that waits for a click.
+        # No win32 marker: `gaia init` refuses a platform marker on an extra.
+        "notify": [
+            "plyer>=2.1.0,<3",
         ],
         "youtube": [
             "llama-index-readers-youtube-transcript",

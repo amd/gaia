@@ -246,7 +246,6 @@ def test_failing_tag_run_files_an_issue_but_a_skipped_one_does_not():
 
 EVAL_WORKFLOW_FILES = {
     "test_gaia_agent_eval.yml",
-    "test_email_agent_eval.yml",
     "eval_flagship.yml",
 }
 

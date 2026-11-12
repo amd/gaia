@@ -317,6 +317,7 @@ class ChatDatabase:
         enable_wal(self._conn)
         self._schema_migration_active = False
         self._init_schema()
+        self._migrate_legacy_agent_mode()
         logger.info("Chat database initialized: %s", db_path)
 
     def _schema_is_current(self) -> bool:
@@ -420,6 +421,31 @@ class ChatDatabase:
                 self._conn.execute("BEGIN")
                 migrate_messages_table()
         logger.info("Migrated messages table: enabled autonomous history")
+
+    def _migrate_legacy_agent_mode(self) -> None:
+        """Rewrite a stored agent_mode 'autonomous' to 'goal_driven', once.
+
+        'autonomous' never had its own behaviour (#2005) and is refused on
+        write, so 'goal_driven' is what such a database already ran as.
+        """
+        # Read first: reopening a current database must take no write lock.
+        legacy = self._conn.execute(
+            "SELECT 1 FROM settings WHERE key = 'agent_mode' AND value = 'autonomous'"
+        ).fetchone()
+        if legacy is None:
+            return
+        with self._transaction():
+            changed = self._conn.execute(
+                "UPDATE settings SET value = 'goal_driven' "
+                "WHERE key = 'agent_mode' AND value = 'autonomous'"
+            ).rowcount
+        if changed:
+            logger.warning(
+                "Migrated stored agent_mode 'autonomous' to 'goal_driven': "
+                "'autonomous' is not implemented "
+                "(https://github.com/amd/gaia/issues/2005) and always ran as "
+                "'goal_driven'."
+            )
 
     def _ensure_settings_table(self):
         """Create the settings key-value table if it doesn't exist."""
@@ -935,14 +961,6 @@ class ChatDatabase:
             deleted = cursor.rowcount > 0
         return deleted
 
-    def touch_session(self, session_id: str):
-        """Update the session's updated_at timestamp."""
-        with self._transaction():
-            self._conn.execute(
-                "UPDATE sessions SET updated_at = ? WHERE id = ?",
-                (self._now(), session_id),
-            )
-
     # ── Messages ────────────────────────────────────────────────────────
 
     def add_message(
@@ -1097,20 +1115,6 @@ class ChatDatabase:
                 (session_id, limit, offset),
             ).fetchall()
 
-        return self._decode_messages(rows)
-
-    def get_recent_messages(
-        self, session_id: str, limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """Get the newest messages in chronological order for agent context."""
-        with self._lock:
-            rows = self._conn.execute(
-                """SELECT * FROM (
-                       SELECT * FROM messages WHERE session_id = ?
-                       ORDER BY created_at DESC, id DESC LIMIT ?
-                   ) ORDER BY created_at ASC, id ASC""",
-                (session_id, limit),
-            ).fetchall()
         return self._decode_messages(rows)
 
     @staticmethod
@@ -1996,12 +2000,6 @@ class ChatDatabase:
                     "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
                     (key, value),
                 )
-
-    def get_all_settings(self) -> Dict[str, str]:
-        """Get all settings as a dict."""
-        with self._lock:
-            rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
-            return {row["key"]: row["value"] for row in rows}
 
     # ── Scheduled tasks ─────────────────────────────────────────────────
 

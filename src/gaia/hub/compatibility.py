@@ -37,12 +37,25 @@ logger = get_logger(__name__)
 
 _BYTES_PER_GB = 1024**3
 
-# Headroom multiplier applied to an artifact's download size to estimate the
-# on-disk install footprint (extraction + pip-resolved dependencies). A wheel
-# typically expands to several times its compressed size once dependencies are
-# installed; 3x is a deliberately conservative floor so we block *before* a
-# half-finished install fills the disk rather than after.
-_INSTALL_SIZE_HEADROOM = 3.0
+# Multiplier on an artifact's download size that estimates its on-disk install
+# footprint, by artifact kind (the installer's ``ARTIFACT_KIND_*`` values). Set
+# high enough to block *before* a half-finished install fills the disk.
+_INSTALL_SIZE_HEADROOM = {
+    # Written to a temp dir, then pip installs it and its dependencies.
+    "wheel": 3.0,
+    # Written to a temp dir, then extracted next to it.
+    "cpp": 3.0,
+    # Written once, from memory, straight over the old executable; the 10%
+    # covers the agent manifest, the sentinel and filesystem block rounding.
+    "binary": 1.1,
+}
+
+
+def _format_disk_gb(gb: float) -> str:
+    """Render a disk size in GB, switching to MB below 1 GB."""
+    if round(gb * 1024) < 1024:
+        return f"{gb * 1024:.0f} MB"
+    return f"{gb:.1f} GB"
 
 
 @dataclass
@@ -188,6 +201,7 @@ def check_compatibility(
     detected_gpu_vram_gb: Optional[float] = None,
     npu_probe_error: Optional[str] = None,
     subject: str = "This agent",
+    artifact_kind: str = "wheel",
 ) -> CompatibilityReport:
     """Check whether the current machine satisfies *requirements*.
 
@@ -195,8 +209,8 @@ def check_compatibility(
         requirements: A :class:`Requirements` or the catalog index entry's
             ``requirements`` mapping (must at least carry ``platforms``).
         download_size_bytes: Size of the artifact to be downloaded; used with a
-            headroom multiplier to estimate required free disk when the manifest
-            declares no explicit ``min_disk_gb``.
+            headroom multiplier to estimate required free disk. The check
+            needs the larger of that estimate and ``min_disk_gb``.
         install_dir: Where the agent will be installed; the disk check probes
             this volume. Defaults to ``<gaia_home>/agents``.
         detected_npu: Whether an NPU was actually detected by the caller's
@@ -214,11 +228,19 @@ def check_compatibility(
             ``"This agent"`` for the hub-install path; the onboarding preflight
             passes its own phrase (e.g. ``"The recommended model"``) so first-run
             setup never claims an agent is involved when none has been chosen.
+        artifact_kind: How the artifact installs (``"wheel"``, ``"cpp"`` or
+            ``"binary"``); picks the headroom multiplier for
+            *download_size_bytes*.
 
     Returns:
         A :class:`CompatibilityReport`. ``compatible`` is ``True`` only when no
         blockers were found.
     """
+    if artifact_kind not in _INSTALL_SIZE_HEADROOM:
+        raise ValueError(
+            f"Unknown artifact kind '{artifact_kind}'; expected one of "
+            f"{', '.join(sorted(_INSTALL_SIZE_HEADROOM))}."
+        )
     reqs = _coerce_requirements(requirements)
     install_dir = install_dir or gaia_agents_dir()
 
@@ -265,24 +287,25 @@ def check_compatibility(
 
     # --- disk (hard) ---
     free_disk = detect_free_disk_gb(install_dir)
-    if reqs.min_disk_gb is not None:
-        required_disk_gb = float(reqs.min_disk_gb)
-    else:
-        required_disk_gb = (
-            download_size_bytes * _INSTALL_SIZE_HEADROOM
-        ) / _BYTES_PER_GB
+    # The hub writes min_disk_gb: 0 when an agent declares none, so a declared
+    # minimum can raise the size-based estimate but never switch it off.
+    estimated_disk_gb = (
+        download_size_bytes * _INSTALL_SIZE_HEADROOM[artifact_kind]
+    ) / _BYTES_PER_GB
+    required_disk_gb = max(float(reqs.min_disk_gb or 0), estimated_disk_gb)
     disk_ok = True
     if required_disk_gb > 0:
         if free_disk is None:
             warnings.append(
                 "Could not determine free disk space; install needs about "
-                f"{required_disk_gb:.1f} GB."
+                f"{_format_disk_gb(required_disk_gb)}."
             )
         elif free_disk < required_disk_gb:
             disk_ok = False
             blockers.append(
-                f"Not enough disk space: install needs ~{required_disk_gb:.1f} GB "
-                f"but only {free_disk:.1f} GB is free on {install_dir}."
+                "Not enough disk space: install needs "
+                f"~{_format_disk_gb(required_disk_gb)} but only "
+                f"{_format_disk_gb(free_disk)} is free on {install_dir}."
             )
 
     # --- NPU / GPU (advisory) ---

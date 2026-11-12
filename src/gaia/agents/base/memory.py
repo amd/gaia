@@ -61,6 +61,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Set,
     Tuple,
 )
 from uuid import uuid4
@@ -80,6 +81,7 @@ from gaia.agents.base.memory_store import (
     MemoryContentError,
     MemoryScrubError,
     content_stems,
+    fact_words,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.agents.base.tool_outcome import (
@@ -98,6 +100,7 @@ from gaia.llm.lemonade_client import (
     backend_crash_remedy,
     configured_lemonade_url,
     find_model_requirement,
+    reasoning_headroom,
 )
 from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
@@ -439,9 +442,9 @@ def _forget_shared(words: set, content: str) -> set:
     }
 
 
-def _forget_text(item: Dict) -> str:
-    """*item*'s words in order, for telling copies of one memory apart."""
-    return " ".join(re.findall(r"[a-z0-9]+", str(item.get("content", "")).lower()))
+def _forget_text(item: Dict) -> Tuple[str, ...]:
+    """*item*'s words bar filler, for telling copies of one memory apart."""
+    return fact_words(str(item.get("content", "")))
 
 
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
@@ -579,6 +582,77 @@ _STORAGE_REQUEST = re.compile(
     r"|log\s+(?:it|this|that)|add\b[^.?!]{0,40}\bmemory)\b",
     re.IGNORECASE,
 )
+#: The storage requests that mean "keep this in memory", not a file or a reminder.
+_KEEP_IN_MEMORY = re.compile(
+    r"remember|memori[sz]e|don'?t\s+forget"
+    r"|keep\s+(?:(?:it|this|that|them)\s+)?in\s+mind"
+    r"|(?:save|store|add)\b[^.?!\n]{0,40}\bmemory\b"
+    r"|make\s+a\s+note(?![^.?!\n]{0,60}?(?:\w\.[a-z0-9]{2,5}\b"
+    r"|\b(?:files?|readme|folder|document)\b))|learn\s+about\s+me",
+    re.IGNORECASE,
+)
+#: After the verb, what makes it a recall question ("remember what I said"), a
+#: reminder ("remember to call") or a login option ("remember me"), not a fact.
+_NOT_A_FACT = re.compile(
+    r"\s+(?:what|which|when|where|who|whom|whether|if|how|why|to|me)\b",
+    re.IGNORECASE,
+)
+#: How much of a paragraph is read for a request; a long paste is material.
+_REQUEST_SCAN_CHARS = 500
+#: Sent once when a turn that was asked to keep something ends without saving it.
+SAVE_WHEN_ASKED_PROMPT = (
+    "The user asked you to remember this, but no remember call ran, so nothing "
+    "was saved. Call `remember` now with what they asked you to keep, then give "
+    "your answer."
+)
+
+
+def _own_words(text: str) -> List[str]:
+    """The paragraphs where a user gives instructions: the first, and the last
+    unless the first introduces what follows ("Translate this letter:")."""
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(paragraphs) > 1:
+        introduces = paragraphs[0].endswith(":")
+        paragraphs = paragraphs[:1] if introduces else [paragraphs[0], paragraphs[-1]]
+    return [p[:_REQUEST_SCAN_CHARS] for p in paragraphs]
+
+
+_SENTENCE_END = re.compile(r"[.?!\n]|$")
+
+
+def _is_material(part: str, start: int) -> bool:
+    """True when the words at *start* are text the user is handing over, not
+    saying: after a colon ("Explain this quote: Remember that…") or in quotes."""
+    before = part[:start]
+    return (
+        part[start] == ":"
+        or before.count('"') % 2 == 1
+        or before.count("\N{LEFT DOUBLE QUOTATION MARK}")
+        > before.count("\N{RIGHT DOUBLE QUOTATION MARK}")
+    )
+
+
+def asks_to_keep_in_memory(text: str) -> bool:
+    """True when *text* asks the agent to remember something it says."""
+    for part in _own_words(text or ""):
+        for request in _STORAGE_REQUEST.finditer(part):
+            end = _SENTENCE_END.search(part, request.end())
+            verb = _KEEP_IN_MEMORY.search(part, request.start())
+            if (
+                verb
+                and verb.start() < request.end()
+                and not _is_material(part, request.start())
+                and not _NOT_A_FACT.match(part, verb.end())
+                # "Can you remember my dog's name?" asks; "…remember that I…?" tells.
+                and (
+                    part[end.start() : end.end()] != "?"
+                    or re.match(r"\s+(?:that|this)\b", part[verb.end() :], re.I)
+                )
+            ):
+                return True
+    return False
+
+
 #: A short yes, which confirms a save the agent was refused and asked about.
 _AFFIRMATIVE = re.compile(
     r"^\W*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|please do|fine"
@@ -1481,7 +1555,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             return None
         try:
             last_update = datetime.fromisoformat(newest_updated).replace(tzinfo=None)
-        except Exception:
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                "System context memory %s has an unreadable updated_at %r: %s",
+                existing[0].get("id"),
+                newest_updated,
+                e,
+            )
             return None
         age_days = (datetime.now() - last_update).days
         if age_days >= _SYSTEM_CONTEXT_REFRESH_DAYS:
@@ -3355,7 +3435,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                 item_map[item["id"]] = item
                 vectors.append(vec)
                 ids.append(item["id"])
-            except Exception:
+            except Exception as e:
+                logger.warning(
+                    "Skipping memory %s in reconciliation: corrupt embedding: %s",
+                    item.get("id"),
+                    e,
+                )
                 continue
 
         if len(vectors) < 2:
@@ -3431,7 +3516,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     messages=[{"role": "user", "content": prompt}],
                     system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
                     temperature=0.1,
-                    max_tokens=256,
+                    max_tokens=256
+                    + reasoning_headroom(getattr(self.chat, "effective_model", None)),
                     **self._side_request_kwargs(),
                 )
 
@@ -3508,11 +3594,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                         e,
                     )
 
-            except json.JSONDecodeError:
-                logger.debug(
-                    "[MemoryMixin] reconciliation JSON parse failed for pair %s/%s",
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "[MemoryMixin] reconciliation reply for pair %s/%s was not JSON "
+                    "(%s) — it will be re-checked next startup",
                     id_a[:8],
                     id_b[:8],
+                    e,
                 )
             except Exception as e:
                 logger.debug(
@@ -4556,6 +4644,23 @@ class MemoryMixin(ProceduralMemoryMixin):
             cursor = end
         masked.append(text[cursor:])
         return "".join(masked)
+
+    def _unsaved_memory_request(self, tools_called: Set[str]) -> Optional[str]:
+        """The nudge to save, when the user asked to remember and nothing was saved."""
+        # A private chat saves nothing: remember would only refuse.
+        if getattr(self, "_incognito", False):
+            return None
+        # A scheduled or background prompt repeats: only a live request counts.
+        if getattr(getattr(self, "console", None), "background_mode", False):
+            return None
+        if "remember" not in getattr(self, "_tools_registry", {}):
+            return None
+        if tools_called & {"remember", "update_memory"}:
+            return None
+        text = getattr(self, "_original_user_input", None) or ""
+        if not asks_to_keep_in_memory(text) or self._looks_like_credential(text):
+            return None
+        return SAVE_WHEN_ASKED_PROMPT
 
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:
@@ -6085,15 +6190,18 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Remove one memory: its ID from recall, or the user's words for it (e.g. 'allergic to shellfish'). Words erase only the one memory they clearly match; otherwise nothing is erased and the matching IDs come back. To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
+            ctx = mixin._memory_context
+            contexts = None if ctx == "global" else (ctx, "global")
             try:
                 # forget(), not delete(): extraction must not learn it again.
-                removed = mixin._memory_store.forget(knowledge_id)
+                erased_ids = mixin._memory_store.forget_with_copies(
+                    knowledge_id, contexts
+                )
             except ValueError as exc:
                 return {"status": "error", "message": str(exc)}
             matches: List[Dict] = []
             candidates: List[Dict] = []
-            erased_ids = [knowledge_id] if removed else []
-            if not removed:
+            if not erased_ids:
                 description = knowledge_id
                 try:
                     matches, candidates = mixin._forget_lookup(description)
@@ -6109,8 +6217,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "display_message": "Couldn't search memory, so nothing was erased",
                     }
                 for item in matches:
-                    if mixin._memory_store.forget(item["id"]):
-                        erased_ids.append(item["id"])
+                    if item["id"] not in erased_ids:
+                        erased_ids += mixin._memory_store.forget_with_copies(
+                            item["id"], contexts
+                        )
             if erased_ids:
                 for kid in erased_ids:
                     mixin._faiss_remove(kid)

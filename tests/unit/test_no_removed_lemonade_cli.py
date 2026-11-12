@@ -2,14 +2,16 @@
 # SPDX-License-Identifier: MIT
 """No runtime string may tell a user to run the removed ``lemonade-server`` CLI.
 
-Lemonade 10.7/10.8 removed ``lemonade-server serve`` and ``lemonade-server
-pull``, so a hard-coded copy sends users to a command their machine does not
-have (#4216). Start hints come from ``describe_start_hint()`` and pull hints
+Lemonade 10.7/10.8 removed the ``lemonade-server`` CLI (``serve``, ``pull``,
+``stop`` and the rest), so a hard-coded copy sends users to a command their
+machine does not have (#4216). Comments and docstrings may still name it.
+Start hints come from ``describe_start_hint()`` and pull hints
 from ``describe_client_hint()``, which only name the legacy CLI when a legacy
 install was actually resolved. The TUI resolves its own through the preflight
 launcher.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -27,7 +29,11 @@ _SCAN_EXTENSIONS = {
     ".md",
 }
 _SKIP_DIRS = {"node_modules", "dist", "build", ".turbo", "tests", "test", "__tests__"}
-_REMOVED_CLI = re.compile(r"lemonade-server\s+(serve|pull)\b")
+# The removed CLI's subcommands, as prose (`lemonade-server serve`) or as an
+# argv list (["lemonade-server", "stop"]).
+_REMOVED_CLI = re.compile(
+    r"lemonade-server[\"'`]?\s*,?\s*[\"'`]?(serve|pull|stop|list|status|run|delete)\b"
+)
 
 # Files that may name the legacy CLI on purpose.
 _ALLOWED = {
@@ -35,15 +41,6 @@ _ALLOWED = {
     "src/gaia/llm/lemonade_launcher.py",
     # Detects the stale hint from an older agent package and replaces it.
     "src/gaia/ui/_chat_helpers.py",
-}
-
-# Still name the removed CLI on main, with a fix in flight. Delete an entry
-# when its fix lands; do NOT add to this set.
-_PENDING = {
-    # #3122
-    "src/gaia/agents/base/readiness.py",
-    "src/gaia/llm/providers/lemonade.py",
-    "tui/internal/ui/chat/modelcmd.go",
 }
 
 
@@ -64,6 +61,24 @@ def _is_comment(line: str, suffix: str) -> bool:
     return line.lstrip().startswith(markers)
 
 
+def _docstring_lines(text: str) -> set:
+    """Line numbers inside Python docstrings, which explain history, not instruct."""
+    lines = set()
+    for node in ast.walk(ast.parse(text)):
+        if not isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            continue
+        first = node.body[0] if node.body else None
+        if (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            lines.update(range(first.lineno, first.end_lineno + 1))
+    return lines
+
+
 def _runtime_files():
     for root in _SCAN_ROOTS:
         for path in sorted((_REPO / root).rglob("*")):
@@ -81,29 +96,22 @@ def test_no_runtime_string_names_the_removed_lemonade_cli():
     offenders = []
     for path in _runtime_files():
         rel = path.relative_to(_REPO).as_posix()
-        if rel in _ALLOWED or rel in _PENDING:
+        if rel in _ALLOWED:
             continue
         try:
             text = path.read_text(encoding="utf-8")
         except UnicodeDecodeError:
             continue
+        skip = _docstring_lines(text) if path.suffix == ".py" else set()
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if _REMOVED_CLI.search(line) and not _is_comment(line, path.suffix):
+            if lineno in skip or _is_comment(line, path.suffix):
+                continue
+            if _REMOVED_CLI.search(line):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
 
     assert not offenders, (
-        "These name `lemonade-server serve`/`pull`, which current Lemonade "
-        "installs don't have. Use describe_start_hint() / describe_client_hint() "
+        "These name a `lemonade-server` command, which current Lemonade installs "
+        "don't have. Use describe_start_hint() / describe_client_hint() "
         "from gaia.llm.lemonade_launcher (or the TUI preflight resolver):\n  "
         + "\n  ".join(offenders)
     )
-
-
-def test_pending_entries_still_need_their_fix():
-    """Once a pending file is fixed, its entry must go, or it hides a regression."""
-    for rel in _PENDING:
-        path = _REPO / rel
-        assert path.exists(), f"{rel} no longer exists — remove it from _PENDING."
-        assert _REMOVED_CLI.search(
-            path.read_text(encoding="utf-8")
-        ), f"{rel} no longer names the removed CLI — remove it from _PENDING."

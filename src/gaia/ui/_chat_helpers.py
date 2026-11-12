@@ -799,8 +799,8 @@ async def _generate_session_title(
         LemonadeClient,
         LemonadeClientError,
         _model_ids_match,
-        find_model_requirement,
         no_thinking_kwargs,
+        reasoning_headroom,
     )
 
     # As the turn starts there is no answer yet: the question alone names it.
@@ -822,7 +822,6 @@ async def _generate_session_title(
         )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
-        mr = find_model_requirement(model_id)
         local = not _ui_cloud_provider(model_id)
         if local and not kwargs and model_id.upper().endswith("GGUF"):
             # Gemma 4 registers no switch, yet reasons on a short question ("hi");
@@ -830,11 +829,9 @@ async def _generate_session_title(
             kwargs = {"chat_template_kwargs": {"enable_thinking": False}}
         if not local:
             max_tokens = _CLOUD_TITLE_MAX_TOKENS
-        elif mr is not None and mr.reasoning_effort:
-            # It reasons even at "low"; leave room for the title after that.
-            max_tokens = 96
         else:
-            max_tokens = 24
+            # A model that reasons even at its least needs room for the title after it.
+            max_tokens = 24 + reasoning_headroom(model_id)
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()
@@ -2598,10 +2595,10 @@ def _dispatch_sidecar_query(
     a sidecar connection error as a Lemonade error and show the wrong remedy.
     """
     from gaia.config import GaiaConfigError
+    from gaia.daemon.sidecars.errors import SidecarError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
     from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.errors import SidecarError
     from gaia.ui.email_sidecar.relay import relay_query
 
     profile = profile_for(agent_type)
@@ -4818,7 +4815,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     last_tool_args = {}
                 elif event_type == "tool_args" and isinstance(event.get("args"), dict):
                     last_tool_args = event["args"]
-                elif event_type == "tool_result" and not event.get("render"):
+                elif event_type == "tool_result" and (
+                    not event.get("render") or event["render"] == "media"
+                ):
+                    if event.get("render") == "media":
+                        # "media" is the terminal's card, as on the relay path;
+                        # the Agent UI draws its own image/audio card below.
+                        event = {
+                            k: v
+                            for k, v in event.items()
+                            if k not in ("render", "data")
+                        }
                     card = media_card(event, last_tool_args)
                     if card is not None:
                         # A relayed result's summary-view ``data`` gives way to

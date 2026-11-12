@@ -537,7 +537,7 @@ export interface Settings {
     dynamic_tools: boolean;
     /** True when GAIA_DYNAMIC_TOOLS locks the value — the toggle reflects the effective value and disables. */
     dynamic_tools_locked: boolean;
-    /** Background agent behaviour; a legacy stored "autonomous" is reported as "goal_driven". */
+    /** Background agent behaviour; a legacy stored "autonomous" is migrated to "goal_driven". */
     agent_mode: 'manual' | 'goal_driven';
     /** Shared network policy controlling cloud AI use. */
     network_policy: 'cloud_allowed' | 'local_ai_only';
@@ -1228,4 +1228,6 @@ export interface ResourceUsage {
     devices_error?: string | null;
     /** Why network adapters can't be read, when CPU and memory still can. */
     networks_error?: string | null;
+    /** Why NPUs can't be read, where they're read apart from GPUs (Linux). */
+    npus_error?: string | null;
 }

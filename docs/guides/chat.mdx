@@ -285,7 +285,13 @@ print(result)
   </Accordion>
 
   <Accordion title="Performance Tuning">
+    `enable_rag` is on `AgentSDK`, not `SimpleChat`. Pick one of the settings below:
+
     ```python
+    from gaia.chat.sdk import AgentSDK, AgentConfig
+
+    chat = AgentSDK(AgentConfig())
+
     # Faster processing
     chat.enable_rag(documents=["doc.pdf"], chunk_size=300, max_chunks=2)
 
@@ -306,15 +312,16 @@ print(result)
 </Note>
 
 A local model has to read every tool's description before it can answer, which is most
-of the wait on a first reply. With dynamic tool loading a chat starts on the 27 tools people
+of the wait on a first reply. With dynamic tool loading a chat starts on the 29 tools people
 use most, in short form (name, one sentence, and parameters). On a Radeon 8060S with
 Qwen3.6-35B-A3B that cut what a cold first turn reads from about 21,300 tokens to about
-8,900, and the time to read it from 37.5 s to 18.7 s.
+9,500, and roughly halved the time to read it.
 
 When a turn needs something else, the session moves to the full list once, and the list
 then stays put. The full list is kept ready beside the short one, so a first task starts
 as quickly as a first "hello". That move happens before the model is asked, when your
-message names a tool or a recalled procedure needs one, or when a tool outside the list is
+message names a tool, a picture or a recording, when a recalled procedure needs a tool, or
+when a tool outside the list is
 a clearly better match than every tool on it. If the agent still lacks something, it calls
 `search_tools`, which finds tools and installed skills by what they do.
 
@@ -330,8 +337,7 @@ keep every tool in full. If the embedder is unreachable, the session offers ever
 and logs a warning. Precedence is `GAIA_DYNAMIC_TOOLS`, then an explicit
 `GaiaAgentConfig(dynamic_tools=...)`, then `dynamic_tools` in `~/.gaia/config.json`. A
 plain `ChatAgent` stays off unless you set it. When the environment variable is set, the
-Settings toggle shows the effective value and disables itself. See the
-[Dynamic Tool Loader plan](/plans/tool-loader) for the design.
+Settings toggle shows the effective value and disables itself.
 
 The environment variable is read by the process that runs the agent. `gaia eval agent`
 drives the agent through the Agent UI backend, so for an eval run set it on the backend,

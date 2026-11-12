@@ -17,13 +17,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
-from gaia.ui.server import (
-    _compute_file_hash,
-    _sanitize_document_path,
-    _sanitize_static_path,
-    _validate_file_path,
-    create_app,
-)
+from gaia.ui.server import _sanitize_static_path, create_app
+from gaia.ui.utils import compute_file_hash as _compute_file_hash
+from gaia.ui.utils import sanitize_document_path as _sanitize_document_path
+from gaia.ui.utils import validate_file_path as _validate_file_path
 
 logger = logging.getLogger(__name__)
 
@@ -1299,12 +1296,6 @@ class TestAgentModeSetting:
         resp = client.put("/api/settings", json={"agent_mode": "bogus"})
         assert resp.status_code == 400
         assert "goal_driven" in resp.json()["detail"]
-
-    def test_legacy_stored_autonomous_reported_as_goal_driven(self, client, db):
-        """A DB written before #2005 may hold 'autonomous'; GET must report the
-        effective mode, not the no-op label."""
-        db.set_setting("agent_mode", "autonomous")
-        assert client.get("/api/settings").json()["agent_mode"] == "goal_driven"
 
 
 class TestSessionEndpoints:

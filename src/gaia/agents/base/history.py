@@ -554,7 +554,9 @@ def history_budget(agent: Any, query: str) -> int:
     """Reserve prompt, tools, output and safety margin for any transport."""
     ctx = context_window(agent)
     prompt = getattr(agent, "system_prompt", "")
-    tools = getattr(agent, "_openai_tools", [])
+    # Looked up on the class so a test double's auto-attributes don't count.
+    budgeted = getattr(type(agent), "_history_tool_schemas", None)
+    tools = budgeted(agent) if budgeted else getattr(agent, "_openai_tools", [])
     overhead = count_tokens(json.dumps([prompt, tools, query], ensure_ascii=False))
     return _budget_in_window(ctx, overhead, _reply_reserve(agent))
 
@@ -590,6 +592,24 @@ def fit_pushed_history(
     return select_history(pushed_turns(messages), history_budget(agent, query), on_cut)
 
 
+def fit_history_to_turn(
+    agent: Any, messages: list[dict[str, Any]], query: str
+) -> list[dict[str, Any]]:
+    """Admitted history re-fit once this turn's own inputs are known.
+
+    Transports budget before the turn starts; the memory context framed into
+    *query* and this turn's skills and tool filter are only resolved inside
+    ``process_query``, so older turns they no longer leave room for drop here.
+    """
+    if not messages:
+        return messages
+    turns = pushed_turns(messages)
+    budget = history_budget(agent, query)
+    if sum(_turn_cost(turn) for turn in turns) <= budget:
+        return messages
+    return select_history(turns, budget)
+
+
 def pushed_turns(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     """Group a flat message list into turns: each user message starts one."""
     turns: list[list[dict[str, Any]]] = []
@@ -614,7 +634,6 @@ DOCUMENT_TOOLS = frozenset(
         "summarize_document",
         "dump_document",
         "read_file",
-        "read_document",
     }
 )
 
