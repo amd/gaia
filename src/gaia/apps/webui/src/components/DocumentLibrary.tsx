@@ -16,6 +16,7 @@ import { examplePath } from '../utils/platform';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
 import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
+import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
 import './DocumentLibrary.css';
 
@@ -27,23 +28,25 @@ function splitFailureReason(lastError: string): { summary: string; more: string 
 }
 
 /** One sentence on what folder indexing added, skipped and couldn't read. */
-function describeFolderResult(folderName: string, result: IndexFolderResponse): string {
+function describeFolderResult(t: Translate, folderName: string, result: IndexFolderResponse): string {
     const skipped = result.skipped ?? 0;
-    const parts: string[] = [];
-    if (result.indexed > 0) {
-        parts.push(`Indexed ${result.indexed} file${result.indexed !== 1 ? 's' : ''} from "${folderName}".`);
-    } else if (result.failed === 0) {
-        parts.push(`"${folderName}" has no documents GAIA can index.`);
-    }
-    if (skipped > 0) {
-        parts.push(`Skipped ${skipped} file${skipped !== 1 ? 's' : ''} of a type GAIA doesn't index.`);
-    }
-    if (result.failed > 0) {
-        const first = result.errors[0] ? ` ${result.errors[0].split('\n')[0]}` : '';
-        parts.push(`${result.failed} file${result.failed !== 1 ? 's' : ''} couldn't be indexed.${first}`);
-    }
-    parts.push('Subfolders aren\'t included.');
-    return parts.join(' ');
+    return t.compose((say) => {
+        const parts: string[] = [];
+        if (result.indexed > 0) {
+            parts.push(say(pluralKey('docs.folder.indexed', result.indexed), { n: result.indexed, name: folderName }));
+        } else if (result.failed === 0) {
+            parts.push(say('docs.folder.none', { name: folderName }));
+        }
+        if (skipped > 0) {
+            parts.push(say(pluralKey('docs.folder.skipped', skipped), { n: skipped }));
+        }
+        if (result.failed > 0) {
+            parts.push(say(pluralKey('docs.folder.failed', result.failed), { n: result.failed }));
+            if (result.errors[0]) parts.push(result.errors[0].split('\n')[0]);
+        }
+        parts.push(say('docs.folder.noSubfolders'));
+        return parts.join(' ');
+    });
 }
 
 /** How often an indexing document's status (and progress) is asked for. */
@@ -394,7 +397,7 @@ export function DocumentLibrary() {
             // Top level only: a typed path like a home folder would otherwise index everything below it.
             const result = await api.indexFolder(folder, false);
             await attachIndexed(result.documents.map((d) => d.id).filter(Boolean), folderName);
-            setFolderNotice(describeFolderResult(folderName, result));
+            setFolderNotice(describeFolderResult(t, folderName, result));
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
         } catch (err) {

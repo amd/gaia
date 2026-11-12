@@ -145,7 +145,7 @@ describe('UploadErrorToast', () => {
         );
 
         expect(screen.getByText(`"missing.pdf" doesn't exist`)).toBeInTheDocument();
-        expect(screen.getByText(/there is no file at .*Check the path/)).toBeInTheDocument();
+        expect(screen.getByText('Check the path for typos, then add it again.')).toBeInTheDocument();
         expect(screen.queryByRole('link')).toBeNull();
     });
 

@@ -491,3 +491,53 @@ describe('DocumentLibrary dates follow the interface language', () => {
         }
     });
 });
+
+describe('DocumentLibrary notices follow the interface language', () => {
+    afterEach(resetUiLocale);
+    const emptyList = { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 };
+
+    function submitPath(container: HTMLElement, path: string) {
+        const input = container.querySelector('.path-input') as HTMLInputElement;
+        fireEvent.change(input, { target: { value: path } });
+        fireEvent.submit(input.form!);
+    }
+
+    it('says in Arabic what a folder added and skipped', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 2, failed: 0, skipped: 1, errors: [],
+            documents: [COMPLETE_DOC, { ...COMPLETE_DOC, id: 'doc-ok-2', filename: 'b.md' }],
+        });
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/trip');
+
+        const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
+        expect(text).toContain('الملفات المفهرسة من «trip»: 2.');
+        expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يفهرس نوعها: 1.');
+        expect(text).toContain('لا تُضمَّن المجلدات الفرعية.');
+        expect(text.indexOf('الملفات المفهرسة')).toBe(0);
+    });
+
+    it('says in Arabic that a mistyped path does not exist', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('File not found: there is no file at /home/me/tirp.pdf. Check the path for typos.'), {
+                httpStatus: 404, reason: null,
+            }),
+        );
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/tirp.pdf');
+
+        const text = stripIsolates((await screen.findByRole('alert')).textContent ?? '');
+        expect(text).toContain('«tirp.pdf» غير موجود');
+        expect(text).toContain('تحقّق من المسار');
+        expect(text).not.toContain('there is no file');
+    });
+});

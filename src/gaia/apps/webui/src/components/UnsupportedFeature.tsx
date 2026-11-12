@@ -4,6 +4,7 @@
 import { useEffect, useRef } from 'react';
 import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
+import { useT } from '../i18n/useT';
 import './UnsupportedFeature.css';
 
 const GITHUB_NEW_ISSUE_URL = 'https://github.com/amd/gaia/issues/new';
@@ -244,6 +245,7 @@ interface UploadErrorToastProps {
  * Parses the backend error to show helpful context and a GitHub link.
  */
 export function UploadErrorToast({ filename, error, status, kind, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
+    const t = useT();
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -283,8 +285,8 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         issueUrl = null;
         Icon = AlertTriangle;
     } else if (status === 404) {
-        title = `"${filename}" doesn't exist`;
-        detail = stripPrefix(error, 'File not found:');
+        title = t('docs.notFound', { name: filename });
+        detail = t('docs.notFoundDetail');
         issueUrl = null;
         Icon = AlertTriangle;
     } else if (status === 403) {
