@@ -69,6 +69,8 @@ const messages: Messages = {
     'modelStatus.pillAria.stopped': '{text}، النموذج متوقف',
     'modelStatus.sentTo': 'يُرسَل سجل المحادثة إلى {name}',
     'modelStatus.runsHere': 'يعمل على هذا الجهاز',
+    'modelStatus.local': 'محلي',
+    'modelStatus.localNotice': 'يستخدم {model} على هذا الجهاز. لا يرسل GAIA هذه المحادثة إلى أي مزوّد سحابي.',
     'modelStatus.label': 'حالة النموذج',
     'modelStatus.checking': 'جارٍ التحقق من النموذج…',
     'modelStatus.state.loaded': 'محمّل',

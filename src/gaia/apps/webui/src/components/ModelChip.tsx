@@ -406,7 +406,7 @@ export function ModelChip() {
                         ? UNKNOWN_PLACE_TITLE
                         // The server writes the model name as Markdown code; a tooltip shows backticks literally.
                         : place.description?.replace(/`/g, '')
-                            ?? (place.remote ? `Runs on ${place.label} — chat history leaves this PC` : 'Runs on this PC');
+                            ?? (place.remote ? `Runs on ${place.label} — chat history leaves this PC` : t('modelStatus.runsHere'));
 
     return (
         <div className="composer-chip-wrap">
