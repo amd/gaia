@@ -4,6 +4,7 @@
 #include "gaia/agent.h"
 #include "gaia/http_client.h"
 #include "gaia/model_registry.h"
+#include "gaia/process.h"
 #include "gaia/security.h"
 
 #include <algorithm>
@@ -996,7 +997,14 @@ std::optional<std::string> toolFailure(const json& r);  // defined with the loop
 
 json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
     const auto started = std::chrono::steady_clock::now();
-    json result = tools_.executeTool(toolName, toolArgs);
+    json result;
+    // Whatever a tool or its checks throw is the tool's result, so the model
+    // hears about it and the turn goes on.
+    try {
+        result = tools_.executeTool(toolName, toolArgs);
+    } catch (const std::exception& e) {
+        result = json{{"status", "error"}, {"error", std::string("Tool '") + toolName + "' failed: " + e.what()}};
+    }
     const double wall =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     const std::string resolved = tools_.resolveName(toolName);
@@ -1513,6 +1521,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
     // Re-entrancy guard (RAII — releases on any exit path incl. exceptions).
     InFlightGuard guard(inFlight_);
+    // A cancel ends a shell command a tool is running, not only the next step.
+    CommandCancelScope stopCommands([this] { return cancelRequested(); });
     turnToolCalls_.clear();
     turnStep_ = 0;
 

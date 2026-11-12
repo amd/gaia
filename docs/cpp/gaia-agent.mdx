@@ -244,7 +244,7 @@ printf '%s\n' '{"gaia_query": "What is in this folder?"}' | gaiacpp --stdio -m Q
 | `tool_decision` | `decision` (`allow`, `deny`, `always`, `timeout`), `confirm_id` | Answers the open approval. An answer for another `confirm_id`, or with nothing waiting, is dropped and the tool does not run. Without a `confirm_id` it answers the open approval |
 | `full_access` | `enabled` | Approval prompts off or on, from the next tool call |
 | `accept_edits` | `enabled` | File edits inside the working directory run without asking |
-| `cancel` | | Stops the running turn, which still ends with its one terminal event. A query that was read but hasn't started ends at once with an empty `final`. `/model` and the sentinel queries run to completion once started. The process and the conversation stay |
+| `cancel` | | Stops the running turn, which still ends with its one terminal event. A shell command in flight is ended with everything it started, and a streamed reply stops at its next chunk. A query that was read but hasn't started ends at once with an empty `final`. `/model` and the sentinel queries run to completion once started. The process and the conversation stay |
 | `clear_history` | | Forgets the conversation after the running turn |
 
 A control with a field of the wrong type is rejected with a line on stderr and changes nothing, except that an unreadable `tool_decision` denies the approval it was meant for.
@@ -252,7 +252,7 @@ A control with a field of the wrong type is rejected with a line on stderr and c
 **What it writes.** Only these event types: `status`, `token`, `tool_call`, `tool_result`, `needs_confirmation`, `final` and `error`. Every query ends with exactly one `final` or `error`, and nothing follows it until the next query.
 
 - The first line, and the line before the `final` of a successful `/model <id>`, is a `status` naming the model: `model_id`, `model_display`, `model_backend` (`lemonade`, or `fireworks` / `amd` for a cloud model), `model_remote`, `lemonade_reachable`, `lemonade_base_url`, `lemonade_version` when the server reports one, `agent_version` and `gaia_version`. It is sent even when no model server answers, after waiting a few seconds at most.
-- `token` events carry the answer as it streams, when the model calls tools natively. Otherwise the answer arrives whole in `final`. Reasoning inside `<think>` tags is left out.
+- `token` events carry the answer as it streams, when the model calls tools natively. Otherwise the answer arrives whole in `final`. Reasoning inside `<think>` tags is left out. A `delta` may hold several tokens: they are sent in batches about 30 ms apart.
 - `needs_confirmation` carries `run_id`, `action` (the tool), `summary`, `confirm_id`, `risk` (`read`, `write` or `execute`) and, for a shell command only, `always_scope` (what an `always` answer would cover). Without `always_scope`, "always" isn't on offer, and an `always` answer allows that one call.
 - A turn the model server could not answer ends in `error`. A cancelled turn ends in a `final` with an empty answer.
 
@@ -261,7 +261,7 @@ A control with a field of the wrong type is rejected with a line on stderr and c
 | Query | `final` answer |
 |---|---|
 | `"\u0000gaia:clear_conversation\u0000"` | `conversation_cleared`, with the history forgotten |
-| `"\u0000gaia:memory_dump\u0000"` | The stored memories as a JSON string: `available`, `stats`, `contexts`, `shown`, `total`, `items`. With `--no-memory`, `available` is false and `reason` says why |
+| `"\u0000gaia:memory_dump\u0000"` | The stored memories as a JSON string: `available`, `stats`, `contexts`, `shown`, `total`, `items`. The store keeps no confidence score or last-use time, so `confidence`, `avg_confidence` and `last_used` are left out. With `--no-memory`, `available` is false and `reason` says why |
 | `"\u0000gaia:warm_up\u0000"` | `warmed_up` once a local model is loaded, `warm_up_skipped` for a cloud model. A model that can't be loaded ends in `error` |
 
 **Approvals.** A shell command that changes something, a file write or edit, a web fetch and an MCP tool that isn't known to be read-only ask first. `always` is offered for shell commands only and remembered until the process exits: the program for single-purpose commands (`mkdir`), program and subcommand for tools such as `git` and `npm`, and the exact command otherwise. Every other tool asks each time, so approving one file write never approves the next. With "accept edits" on, `file_write` and `file_edit` run without asking when the file is inside the working directory. They still ask for anything under `.git`, a dotfile or dot-folder, a folder on `PATH`, and on Windows a file `cmd.exe` would run in place of a program on `PATH`; a home folder or a drive root never counts as the working directory. 

@@ -617,6 +617,226 @@ TEST_F(ShellSessionTest, TimeoutKillsTheWholeProcessTree) {
     }
     EXPECT_FALSE(alive) << "orphaned child " << child << " survived the timeout";
 #else
-    GTEST_SKIP() << "Windows needs a Job Object for tree kill (not implemented)";
+    GTEST_SKIP() << "POSIX form of the check; ProcessRunnerTest.TimeoutKillsWhatTheCommandStarted covers Windows";
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Cancel, non-ASCII folders, the shell's own environment, temp files
+// ---------------------------------------------------------------------------
+
+#include <atomic>
+#include <fstream>
+#include <functional>
+#include <nlohmann/json.hpp>
+
+#include "../agents/bash/bash_tools.h"
+
+namespace {
+
+fs::path freshDir(const std::string& stem) {
+    static std::atomic<int> n{0};
+    const fs::path dir = fs::temp_directory_path() /
+                         fs::u8path(stem + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                                    "-" + std::to_string(n++));
+    fs::create_directories(dir);
+    return dir;
+}
+
+// The shells a session can run on this machine: the default one, and on
+// Windows the POSIX shell bash_execute prefers when one is installed.
+std::vector<std::string> sessionShells() {
+    std::vector<std::string> shells = {""};
+#ifdef _WIN32
+    const std::string bash = BashTools::detectShell();
+    if (!bash.empty()) shells.push_back(bash);
+#endif
+    return shells;
+}
+
+bool posixSyntax(const std::string& shell) {
+#ifdef _WIN32
+    return !shell.empty();
+#else
+    (void)shell;
+    return true;
+#endif
+}
+
+// Files this process's sessions have in the temp folder right now.
+size_t ownSessionTempFiles() {
+#ifdef _WIN32
+    const std::string prefix = "gaia_shell_" + std::to_string(GetCurrentProcessId()) + "_";
+#else
+    const std::string prefix = "gaia_shell_" + std::to_string(getpid()) + "_";
+#endif
+    size_t count = 0;
+    for (const auto& e : fs::directory_iterator(fs::temp_directory_path())) {
+        count += e.path().filename().u8string().rfind(prefix, 0) == 0 ? 1 : 0;
+    }
+    return count;
+}
+
+// True once nothing holds `held` open any more (Windows), or `pidFile`'s process is gone (POSIX).
+bool treeIsGone(const fs::path& dir) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < deadline) {
+#ifdef _WIN32
+        std::error_code ec;
+        fs::remove(dir / "held.txt", ec);
+        if (!ec) return true;
+#else
+        long pid = 0;
+        std::ifstream(dir / "pid.txt") >> pid;
+        if (pid > 0 && kill(static_cast<pid_t>(pid), 0) != 0) return true;
+#endif
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return false;
+}
+
+#ifdef _WIN32
+const char* kStartThenSleep = "echo x>started.txt & cmd /c ping -n 60 127.0.0.1 >held.txt";
+#else
+const char* kStartThenSleep = "echo x > started.txt; sleep 60 & echo $! > pid.txt; wait";
+#endif
+
+}  // namespace
+
+TEST(ProcessRunnerTest, ACancelEndsTheCommandAndWhatItStarted) {
+    const fs::path dir = freshDir("gaia-cancel-");
+    const auto started = std::chrono::steady_clock::now();
+    ProcessResult result;
+    {
+        // Cancelled as soon as the command has demonstrably started.
+        CommandCancelScope scope([&] { return fs::exists(dir / "started.txt"); });
+        result = ProcessRunner::run(kStartThenSleep, 60000, dir.u8string());
+    }
+    EXPECT_TRUE(result.cancelled);
+    EXPECT_FALSE(result.timedOut);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(20));
+    EXPECT_TRUE(treeIsGone(dir)) << "what the command started outlived the cancel";
+
+    // Outside the scope nothing is cancelled.
+    const auto after = ProcessRunner::run(ECHO_HELLO, 10000, dir.u8string());
+    EXPECT_FALSE(after.cancelled);
+    EXPECT_EQ(after.exitCode, 0);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_F(ShellSessionTest, ACancelEndsTheSessionCommandAndLeavesNoTempFiles) {
+    for (const std::string& shell : sessionShells()) {
+        const fs::path dir = freshDir("gaia-session-cancel-");
+        ShellSession session(dir.u8string(), shell);
+        ASSERT_EQ(session.run(posixSyntax(shell) ? "true" : "rem", 30000).exitCode, 0) << shell;
+        const size_t before = ownSessionTempFiles();
+        const std::string command = posixSyntax(shell) ? "echo x > started.txt; sleep 60"
+                                                        : "echo x>started.txt & ping -n 60 127.0.0.1 >nul";
+        const auto started = std::chrono::steady_clock::now();
+        ProcessResult result;
+        {
+            CommandCancelScope scope([&] { return fs::exists(dir / "started.txt"); });
+            result = session.run(command, 60000);
+        }
+        EXPECT_TRUE(result.cancelled) << shell;
+        EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(20)) << shell;
+        EXPECT_EQ(ownSessionTempFiles(), before) << "a cancelled command left its script files: " << shell;
+
+        const auto timedOut = session.run(posixSyntax(shell) ? "sleep 60" : "ping -n 60 127.0.0.1 >nul", 500);
+        EXPECT_TRUE(timedOut.timedOut) << shell;
+        EXPECT_EQ(ownSessionTempFiles(), before) << "a timed-out command left its script files: " << shell;
+
+        // The session still works afterwards.
+        EXPECT_EQ(session.run(posixSyntax(shell) ? "true" : "rem", 30000).exitCode, 0) << shell;
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+}
+
+TEST_F(ShellSessionTest, CommandsRunInFoldersWithNonAsciiNames) {
+    for (const std::string& shell : sessionShells()) {
+        const fs::path base = freshDir("gaia-utf8-");
+        const std::string cafe = "caf\xc3\xa9 notes", nihon = "\xe6\x97\xa5\xe6\x9c\xac data";
+        fs::create_directories(base / fs::u8path(cafe));
+        fs::create_directories(base / fs::u8path(nihon));
+        std::ofstream(base / fs::u8path(cafe) / "note.txt") << "remember the milk";
+        const bool posix = posixSyntax(shell);
+
+        ShellSession session((base / fs::u8path(cafe)).u8string(), shell);
+        const auto where = session.run(posix ? "pwd" : "cd", 30000);
+        ASSERT_EQ(where.exitCode, 0) << shell << ": " << where.stderr_output;
+        EXPECT_NE(where.stdout_output.find(cafe), std::string::npos) << shell << ": " << where.stdout_output;
+        EXPECT_NO_THROW(nlohmann::json(where.stdout_output).dump()) << "the folder is reported in UTF-8";
+        EXPECT_NE(session.cwd().find(cafe), std::string::npos) << session.cwd();
+
+        const auto read = session.run(posix ? "cat note.txt" : "type note.txt", 30000);
+        EXPECT_EQ(read.exitCode, 0) << shell << ": " << read.stderr_output;
+        EXPECT_NE(read.stdout_output.find("remember the milk"), std::string::npos) << shell;
+
+        const auto moved = session.run("cd \"../" + nihon + "\"", 30000);
+        EXPECT_EQ(moved.exitCode, 0) << shell << ": " << moved.stderr_output;
+        EXPECT_NE(session.cwd().find(nihon), std::string::npos) << shell << ": " << session.cwd();
+        const auto there = session.run(posix ? "pwd" : "cd", 30000);
+        EXPECT_NE(there.stdout_output.find(nihon), std::string::npos) << shell << ": " << there.stdout_output;
+
+        const auto back = session.run("cd \"../" + cafe + "\"", 30000);
+        EXPECT_EQ(back.exitCode, 0) << shell << ": " << back.stderr_output;
+        EXPECT_NE(session.cwd().find(cafe), std::string::npos) << shell << ": " << session.cwd();
+        const auto again = session.run(posix ? "cat note.txt" : "type note.txt", 30000);
+        EXPECT_NE(again.stdout_output.find("remember the milk"), std::string::npos) << shell;
+
+        EXPECT_TRUE(session.setCwd((base / fs::u8path(nihon)).u8string()));
+        EXPECT_NE(session.cwd().find(nihon), std::string::npos);
+        std::error_code ec;
+        fs::remove_all(base, ec);
+    }
+}
+
+// A shell rewrites the environment it inherits (Git Bash turns PATH into its
+// own form). Only what a command changed counts as the session's.
+TEST_F(ShellSessionTest, EnvironmentHoldsOnlyWhatACommandChanged) {
+    for (const std::string& shell : sessionShells()) {
+        const bool posix = posixSyntax(shell);
+        ShellSession session("", shell);
+        ASSERT_EQ(session.run("echo hello", 30000).exitCode, 0) << shell;
+        std::string names;
+        for (const auto& [name, value] : session.environment()) names += name + " ";
+        EXPECT_TRUE(session.environment().empty()) << shell << " reports: " << names;
+
+        ASSERT_EQ(session.run(posix ? "export GAIA_ONE=1" : "set GAIA_ONE=1", 30000).exitCode, 0);
+        const auto env = session.environment();
+        EXPECT_EQ(env.size(), 1u) << shell;
+        EXPECT_EQ(env.count("GAIA_ONE"), 1u) << shell;
+        const auto echoed = session.run(posix ? "echo $GAIA_ONE" : "echo %GAIA_ONE%", 30000);
+        EXPECT_NE(echoed.stdout_output.find("1"), std::string::npos);
+    }
+}
+
+TEST(ShellSessionTempFiles, LeftoversOfDeadProcessesAreRemovedAndNothingElse) {
+    const fs::path tmp = fs::temp_directory_path();
+#ifdef _WIN32
+    const std::string mine = std::to_string(GetCurrentProcessId());
+#else
+    const std::string mine = std::to_string(getpid());
+#endif
+    // 2147483646 is not a running process on any system this runs on.
+    const std::vector<std::string> stale = {"gaia_shell_2147483646_7.sh", "gaia_shell_2147483646_8.cmd",
+                                            "gaia_shell_2147483646_9.state", "gaia_shell_2147483646_aB3xYz"};
+    const std::vector<std::string> kept = {"gaia_shell_" + mine + "_999999.state",  // this process is alive
+                                           "gaia_shell_2147483646_7.txt",           // not a session file type
+                                           "gaia_shell_notes.txt",                  // no process id
+                                           "gaia_shell_99999999999999_1.sh",        // not a process id
+                                           "my_gaia_shell_2147483646_1.sh"};        // another program's name
+    for (const auto& name : stale) std::ofstream(tmp / name) << "x";
+    for (const auto& name : kept) std::ofstream(tmp / name) << "x";
+
+    const size_t removed = ShellSession::removeStaleTempFiles();
+    EXPECT_GE(removed, stale.size());
+    for (const auto& name : stale) EXPECT_FALSE(fs::exists(tmp / name)) << name;
+    for (const auto& name : kept) {
+        EXPECT_TRUE(fs::exists(tmp / name)) << name;
+        std::error_code ec;
+        fs::remove(tmp / name, ec);
+    }
 }

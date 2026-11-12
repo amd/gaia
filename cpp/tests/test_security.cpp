@@ -5,9 +5,14 @@
 #include <gaia/security.h>
 #include <gaia/tool_registry.h>
 
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+
+#include <gaia/memory_store.h>
+#include <gaia/session.h>
 
 using namespace gaia;
 namespace fs = std::filesystem;
@@ -373,4 +378,44 @@ TEST(ReadOnlyShellCommandTest, NeedsConfirmSkipsTheQuestion) {
     EXPECT_EQ(asked, 0);
     EXPECT_EQ(reg.executeTool("sh", json{{"command", "rm -rf build"}})["status"], "error");
     EXPECT_EQ(asked, 1);
+}
+
+// GAIA_HOME moves every per-user file, not only some of them.
+TEST(GaiaHomeTest, ApprovalsSessionsAndMemoryAllFollowGaiaHome) {
+    const std::filesystem::path home =
+        std::filesystem::temp_directory_path() /
+        ("gaia-home-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(home);
+    const char* was = std::getenv("GAIA_HOME");
+    const std::string saved = was ? was : "";
+#ifdef _WIN32
+    _putenv_s("GAIA_HOME", home.string().c_str());
+#else
+    setenv("GAIA_HOME", home.string().c_str(), 1);
+#endif
+    const std::string resolved = gaiaHome();
+    bool approvals = false, sessions = false;
+    std::string memory;
+    {
+        AllowedToolsStore store;
+        store.addAlwaysAllowed("some_tool");
+        approvals = std::filesystem::exists(home / "security" / "allowed_tools.json");
+        SessionStore chats;
+        chats.save("first", {});
+        sessions = std::filesystem::exists(home / "sessions") && !std::filesystem::is_empty(home / "sessions");
+        memory = MemoryStore::defaultPath();
+    }
+#ifdef _WIN32
+    _putenv_s("GAIA_HOME", saved.c_str());
+#else
+    if (was) setenv("GAIA_HOME", saved.c_str(), 1);
+    else unsetenv("GAIA_HOME");
+#endif
+    EXPECT_EQ(resolved, home.string());
+    EXPECT_TRUE(approvals) << "saved approvals went somewhere else";
+    EXPECT_TRUE(sessions) << "saved sessions went somewhere else";
+    EXPECT_EQ(std::filesystem::path(memory).parent_path(), home);
+    EXPECT_NE(gaiaHome(), home.string()) << "and without GAIA_HOME it is the home folder's .gaia again";
+    std::error_code ec;
+    std::filesystem::remove_all(home, ec);
 }

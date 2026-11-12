@@ -283,6 +283,57 @@ struct Release {
     ~Release() { now(); }
 };
 
+// A model server whose reply streams a token every few milliseconds for half a
+// minute, so a test can cancel in the middle of it.
+class SlowStreamServer {
+public:
+    SlowStreamServer() {
+        server_.Get("/api/v1/health", [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(bench::kHealthOk, "application/json");
+        });
+        server_.Get("/api/v1/models", [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(bench::kModelsList, "application/json");
+        });
+        server_.Post("/api/v1/load", [](const httplib::Request&, httplib::Response& res) {
+            res.set_content(bench::kLoadOk, "application/json");
+        });
+        server_.Post("/api/v1/chat/completions", [this](const httplib::Request&, httplib::Response& res) {
+            res.set_chunked_content_provider("text/event-stream", [this](size_t, httplib::DataSink& sink) {
+                if (sent_ >= 6000) {
+                    sink.done();
+                    return true;
+                }
+                static const std::string event = "data: {\"choices\":[{\"delta\":{\"content\":\"tok \"}}]}\n\n";
+                if (!sink.write(event.data(), event.size())) return false;
+                ++sent_;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                return true;
+            });
+        });
+        port_ = server_.bind_to_any_port("127.0.0.1");
+        thread_ = std::thread([this] { server_.listen_after_bind(); });
+        server_.wait_until_ready();
+    }
+    ~SlowStreamServer() {
+        server_.stop();
+        if (thread_.joinable()) thread_.join();
+    }
+    std::string baseUrl() const { return "http://127.0.0.1:" + std::to_string(port_); }
+    int sent() const { return sent_.load(); }
+
+private:
+    httplib::Server server_;
+    std::thread thread_;
+    int port_ = 0;
+    std::atomic<int> sent_{0};
+};
+
+size_t countTokens(const std::vector<std::string>& lines) {
+    size_t n = 0;
+    for (const auto& e : parseEvents(lines)) n += e.is_object() && e.value("type", "") == "token" ? 1 : 0;
+    return n;
+}
+
 struct Start {
     std::string baseUrl;  // empty = the fixture's mock
     std::string model = "mock-model";
@@ -892,6 +943,91 @@ TEST_F(GaiacppStdio, CancelWithNoTurnRunningChangesNothing) {
     EXPECT_TRUE(logBuf_.contains("nothing to stop"));
 }
 
+TEST_F(GaiacppStdio, CancelEndsARunningShellCommand) {
+    const bool posix = !BashTools::detectShell().empty();
+    const std::string command = posix ? "echo x > started.txt; sleep 60"
+                                      : "echo x>started.txt & ping -n 60 127.0.0.1 >nul";
+    mock_.pushResponse(toolCall("bash_execute", {{"command", command}, {"timeout_ms", 60000}}));
+    Start s;
+    s.shell = true;
+    s.fullAccess = true;
+    start(s);
+    ask("wait a minute");
+    const auto deadline = std::chrono::steady_clock::now() + kWait;
+    while (!fs::exists(work_ / "started.txt") && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+    }
+    ASSERT_TRUE(fs::exists(work_ / "started.txt")) << "the command never started";
+    const auto cancelledAt = std::chrono::steady_clock::now();
+    control({{"gaia_control", "cancel"}});
+    const json terminal = waitTerminal(1);
+    ASSERT_TRUE(terminal.is_object()) << "a cancel must end the turn while a command runs";
+    EXPECT_LT(std::chrono::steady_clock::now() - cancelledAt, std::chrono::seconds(10));
+    EXPECT_EQ(terminal["type"], "final");
+    EXPECT_EQ(terminal["answer"], "");
+    const json result = waitFor("tool_result");
+    ASSERT_TRUE(result.is_object()) << "the cancelled command still reports its result";
+    EXPECT_EQ(result["data"].value("cancelled", false), true) << result.dump();
+    EXPECT_EQ(mock_.requestCount(), 1);
+
+    mock_.pushResponse(answer("Still here."));
+    ask("are you there?");
+    const json next = waitTerminal(2);
+    ASSERT_TRUE(next.is_object());
+    EXPECT_EQ(next["answer"], "Still here.");
+}
+
+TEST_F(GaiacppStdio, CancelStopsAStreamedReplyAtOnce) {
+    SlowStreamServer slow;
+    Start s;
+    s.baseUrl = slow.baseUrl();
+    s.streaming = true;
+    start(s);
+    ask("talk for a long time");
+    ASSERT_TRUE(outBuf_.waitUntil([](const std::vector<std::string>& lines) { return countTokens(lines) >= 5; }));
+    const auto cancelledAt = std::chrono::steady_clock::now();
+    control({{"gaia_control", "cancel"}});
+    ASSERT_TRUE(logBuf_.waitForText("stopping the running turn"));
+    const size_t atCancel = countTokens(outBuf_.lines());
+    const json terminal = waitTerminal(1);
+    ASSERT_TRUE(terminal.is_object());
+    EXPECT_LT(std::chrono::steady_clock::now() - cancelledAt, std::chrono::seconds(3));
+    EXPECT_EQ(terminal["type"], "final") << terminal.dump();
+    EXPECT_LE(countTokens(outBuf_.lines()), atCancel + 20) << "tokens kept arriving after the cancel";
+    EXPECT_LT(slow.sent(), 3000) << "the request was not dropped";
+    // Tokens travel in batches, so a slow reader never has hundreds queued.
+    EXPECT_LT(countTokens(outBuf_.lines()), static_cast<size_t>(slow.sent()) / 2 + 5);
+    std::string text;
+    for (const auto& e : events()) {
+        if (e.value("type", "") == "token") text += e["delta"].get<std::string>();
+    }
+    EXPECT_EQ(text.size() % 4, 0u) << "no token was split or lost: " << text.size();
+    finish();
+}
+
+TEST_F(GaiacppStdio, AToolWhoseChecksThrowStillGivesTheModelAResult) {
+    mock_.pushResponse(toolCall("fragile", {{"x", 1}}));
+    mock_.pushResponse(answer("It failed, and I heard why."));
+    start();
+    ASSERT_TRUE(waitFor("status").is_object());
+    ToolInfo fragile;
+    fragile.name = "fragile";
+    fragile.description = "throws before it runs";
+    fragile.policy = ToolPolicy::CONFIRM;
+    fragile.needsConfirm = [](const json&) -> bool { throw std::runtime_error("locale not supported"); };
+    fragile.callback = [](const json&) { return json{{"status", "success"}}; };
+    agent_->toolRegistry().registerTool(fragile);
+    ask("use the fragile tool");
+    const json final = waitTerminal(1);
+    ASSERT_TRUE(final.is_object());
+    EXPECT_EQ(final["type"], "final") << "one tool's failure must not end the turn: " << final.dump();
+    EXPECT_EQ(final["answer"], "It failed, and I heard why.");
+    const json result = waitFor("tool_result");
+    ASSERT_TRUE(result.is_object()) << "the model was told nothing";
+    EXPECT_NE(result["data"].dump().find("locale not supported"), std::string::npos) << result.dump();
+    EXPECT_EQ(mock_.requestCount(), 2);
+}
+
 // ---- sentinels ----
 
 TEST_F(GaiacppStdio, ClearConversationSentinelAndControlBothForgetTheHistory) {
@@ -924,7 +1060,7 @@ TEST_F(GaiacppStdio, MemoryDumpSentinelAnswersWithTheStoredMemories) {
     {
         MemoryStore store((work_ / "memory.db").string());
         store.remember("likes green tea", "preference");
-        store.remember("the build runs on ninja", "fact", "work");
+        store.remember("the build runs on ninja", "fact", "work", "ninja");
     }
     Start s;
     s.memory = true;
@@ -940,6 +1076,8 @@ TEST_F(GaiacppStdio, MemoryDumpSentinelAnswersWithTheStoredMemories) {
     EXPECT_EQ(dump["stats"]["total_knowledge"], 2);
     EXPECT_EQ(dump["stats"]["by_category"]["preference"], 1);
     EXPECT_EQ(dump["stats"]["by_context"]["work"], 1);
+    EXPECT_EQ(dump["stats"]["entity_count"], 1) << "counted from the store";
+    EXPECT_FALSE(dump["stats"].contains("avg_confidence")) << "the store keeps no confidence to report";
     ASSERT_TRUE(dump["contexts"].is_array());
     ASSERT_EQ(dump["items"].size(), 2u);
     for (const auto& item : dump["items"]) {
@@ -950,6 +1088,9 @@ TEST_F(GaiacppStdio, MemoryDumpSentinelAnswersWithTheStoredMemories) {
         EXPECT_TRUE(item["context"].is_string());
         EXPECT_TRUE(item["sensitive"].is_boolean());
         EXPECT_TRUE(item["created_at"].is_string());
+        EXPECT_FALSE(item.contains("confidence")) << "not tracked, so not sent as a number";
+        EXPECT_FALSE(item.contains("last_used"));
+        if (item.contains("entity")) EXPECT_EQ(item["entity"], "ninja");
     }
     EXPECT_EQ(mock_.requestCount(), 0);
 }
@@ -1702,9 +1843,6 @@ TEST_F(GaiacppStdioBinary, StdinClosingMidTurnStillAnswersWhileStdoutIsRead) {
     EXPECT_EQ(child->exitCode(), 0);
 }
 
-// On Windows the agent itself cannot run a turn in such a folder yet: its system
-// prompt names the folder in the ANSI code page, which is not valid UTF-8 JSON.
-#ifndef _WIN32
 TEST_F(GaiacppStdioBinary, AcceptEditsWorksInAFolderWithANonAsciiName) {
     const fs::path folder = dir_ / fs::u8path("w\xc3\xb6rk \xc3\xb1");
     fs::create_directories(folder);
@@ -1727,7 +1865,6 @@ TEST_F(GaiacppStdioBinary, AcceptEditsWorksInAFolderWithANonAsciiName) {
     child->closeStdin();
     EXPECT_TRUE(child->waitExit(kWait));
 }
-#endif
 
 // A process a tool leaves running must not keep the host's pipes open: the host
 // waits for end of file on them after the agent exits.
@@ -1753,4 +1890,84 @@ TEST_F(GaiacppStdioBinary, ABackgroundProcessDoesNotHoldTheHostsPipesOpen) {
     EXPECT_TRUE(eof) << "the background process kept the agent's stdout open";
     // Gone before the folder is removed.
     child->waitStdoutEof(std::chrono::seconds(10));
+}
+
+TEST_F(GaiacppStdioBinary, CancelStopsAStreamedReplyAtOnceOverPipes) {
+    SlowStreamServer slow;
+    auto child = spawn(slow.baseUrl());
+    child->send(json{{"gaia_query", "talk for a long time"}}.dump());
+    ASSERT_TRUE(child->out.waitUntil([](const std::vector<std::string>& lines) { return countTokens(lines) >= 5; }))
+        << seen(*child);
+    const auto cancelledAt = std::chrono::steady_clock::now();
+    const size_t atCancel = countTokens(child->out.lines());
+    child->send(json{{"gaia_control", "cancel"}}.dump());
+    const json terminal = waitEvent(child->out, isTerminal, 1);
+    ASSERT_TRUE(terminal.is_object()) << seen(*child);
+    EXPECT_LT(std::chrono::steady_clock::now() - cancelledAt, std::chrono::seconds(3));
+    EXPECT_EQ(terminal["type"], "final");
+    // A second or so of tokens at most, where the whole reply is 6000.
+    EXPECT_LE(countTokens(child->out.lines()), atCancel + 300);
+    child->closeStdin();
+    EXPECT_TRUE(child->waitExit(kWait));
+}
+
+TEST_F(GaiacppStdioBinary, CancelEndsARunningShellCommandOverPipes) {
+    bench::MockLlmServer mock;
+    const bool posix = !BashTools::detectShell().empty();
+    const std::string command = posix ? "echo x > started.txt; sleep 90"
+                                      : "echo x>started.txt & ping -n 90 127.0.0.1 >nul";
+    mock.pushResponse(toolCall("bash_execute", {{"command", command}, {"timeout_ms", 120000}}));
+    auto child = spawn(mock.baseUrl(), {"--full-access"});
+    child->send(json{{"gaia_query", "wait a while"}}.dump());
+    const fs::path started = dir_ / "work" / "started.txt";
+    const auto deadline = std::chrono::steady_clock::now() + kWait;
+    while (!fs::exists(started) && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+    ASSERT_TRUE(fs::exists(started)) << seen(*child);
+    const auto cancelledAt = std::chrono::steady_clock::now();
+    child->send(json{{"gaia_control", "cancel"}}.dump());
+    const json terminal = waitEvent(child->out, isTerminal, 1);
+    ASSERT_TRUE(terminal.is_object()) << "no terminal event after the cancel: " << seen(*child);
+    EXPECT_LT(std::chrono::steady_clock::now() - cancelledAt, std::chrono::seconds(10));
+    EXPECT_EQ(terminal["type"], "final");
+    child->closeStdin();
+    EXPECT_TRUE(child->waitExit(kWait));
+}
+
+TEST_F(GaiacppStdioBinary, ATurnInAFolderWithANonAsciiNameRunsShellCommandsAndReads) {
+    const std::string cafe = "caf\xc3\xa9 notes", nihon = "\xe6\x97\xa5\xe6\x9c\xac data";
+    const fs::path folder = dir_ / fs::u8path(cafe);
+    fs::create_directories(folder);
+    fs::create_directories(dir_ / fs::u8path(nihon));
+    std::ofstream(folder / "note.txt") << "remember the milk";
+    const bool posix = !BashTools::detectShell().empty();
+    const std::string pwd = posix ? "pwd" : "cd";
+    bench::MockLlmServer mock;
+    mock.pushResponse(toolCall("bash_execute", {{"command", pwd}}));
+    mock.pushResponse(toolCall("file_read", {{"path", "note.txt"}}));
+    mock.pushResponse(toolCall("bash_execute", {{"command", "cd \"../" + nihon + "\" && " + pwd}}));
+    mock.pushResponse(toolCall("bash_execute", {{"command", "cd \"../" + cafe + "\" && " + pwd}}));
+    mock.pushResponse(answer("All four worked."));
+    auto child = spawn(mock.baseUrl(), {"--full-access", "--allow-dir", ".."}, folder);
+    child->send(json{{"gaia_query", "look around"}}.dump());
+    const json final = waitEvent(child->out, isTerminal, 1);
+    ASSERT_TRUE(final.is_object()) << seen(*child);
+    EXPECT_EQ(final["type"], "final") << seen(*child);
+    EXPECT_EQ(final["answer"], "All four worked.") << seen(*child);
+
+    std::vector<json> results;
+    for (const auto& e : parseEvents(child->out.lines())) {
+        if (e.value("type", "") == "tool_result") results.push_back(e["data"]);
+    }
+    ASSERT_EQ(results.size(), 4u) << "every tool call reports a result: " << seen(*child);
+    EXPECT_EQ(results[0].value("exit_code", -1), 0) << results[0].dump();
+    EXPECT_NE(results[0].value("stdout", "").find(cafe), std::string::npos) << results[0].dump();
+    EXPECT_NE(results[0].value("cwd", "").find(cafe), std::string::npos) << results[0].dump();
+    EXPECT_NE(results[1].dump().find("remember the milk"), std::string::npos) << results[1].dump();
+    EXPECT_EQ(results[2].value("exit_code", -1), 0) << results[2].dump();
+    EXPECT_NE(results[2].value("stdout", "").find(nihon), std::string::npos) << results[2].dump();
+    EXPECT_NE(results[2].value("cwd", "").find(nihon), std::string::npos) << results[2].dump();
+    EXPECT_EQ(results[3].value("exit_code", -1), 0) << results[3].dump();
+    EXPECT_NE(results[3].value("cwd", "").find(cafe), std::string::npos) << results[3].dump();
+    child->closeStdin();
+    EXPECT_TRUE(child->waitExit(kWait));
 }

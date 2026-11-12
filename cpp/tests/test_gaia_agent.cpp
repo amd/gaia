@@ -180,6 +180,9 @@ TEST(GaiaAgentTest, ThePromptListsTheWorkingFolderTwoLevelsDeep) {
               std::string::npos)
         << system.substr(system.find("## Environment"));
     EXPECT_EQ(system.find(".secret"), std::string::npos);
+    // Which command starts Python is stated, so the model does not go looking.
+    EXPECT_NE(system.find("- Python: "), std::string::npos);
+    EXPECT_EQ(system.find("python3 -c"), std::string::npos);
     EXPECT_EQ(system.find("hidden-by-depth"), std::string::npos);
 }
 

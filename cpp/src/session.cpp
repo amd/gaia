@@ -3,6 +3,8 @@
 
 #include "gaia/session.h"
 
+#include "gaia/security.h"
+
 #include <algorithm>
 #include <chrono>
 #include <ctime>
@@ -68,15 +70,13 @@ std::string nowIdTimestamp() {
 // ---------------------------------------------------------------------------
 
 std::string SessionStore::defaultDir() {
-#ifdef _WIN32
-    const char* profile = std::getenv("USERPROFILE");
-    std::string home = profile ? profile : "C:\\Users\\Default";
-    return home + "\\.gaia\\sessions";
-#else
-    const char* home = std::getenv("HOME");  // NOLINT(concurrency-mt-unsafe)
-    std::string h = home ? home : "/tmp";
-    return h + "/.gaia/sessions";
-#endif
+    const std::string home = gaiaHome();
+    if (home.empty()) {
+        // A shared folder such as /tmp would let another account read saved chats.
+        throw std::runtime_error("Neither GAIA_HOME nor the home folder variable is set, so there is no private "
+                                 "folder for saved sessions. Set GAIA_HOME, or pass a folder to SessionStore.");
+    }
+    return (fs::path(home) / "sessions").string();
 }
 
 SessionStore::SessionStore()
