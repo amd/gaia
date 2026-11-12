@@ -167,5 +167,14 @@ describe('schedule dates follow the interface language, not the PC', () => {
         expect(text).toMatch(/Mon|Tue|Wed|Thu|Fri|Sat|Sun/);
         expect(text).not.toMatch(/[؀-ۿ]/);
     });
+
+    it('keeps the English gloss of the last run free of Arabic weekdays and times', () => {
+        useScheduleStore.setState({ schedules: [{ ...schedule, status: 'active', last_run_at: new Date(Date.now() - 3 * 86_400_000).toISOString() }] });
+        render(<ScheduleManager />);
+        const gloss = screen.getAllByText(/آخر تشغيل/)[0].querySelector('.i18n-gloss');
+        const text = stripIsolates(gloss?.textContent ?? '');
+        expect(text).toContain('Last:');
+        expect(text).not.toMatch(/[؀-ۿ]/);
+    });
 });
 

@@ -457,7 +457,7 @@ export function ScheduleManager() {
                                                 )}
                                                 {parsed.valid && parsed.next_run_at && (
                                                     <div className="schedule-parsed-next">
-                                                        {t('schedules.nextRun', { when: new Date(parsed.next_run_at).toLocaleString(dateLocale(t)) })}
+                                                        {t.compose((say, code) => say('schedules.nextRun', { when: new Date(parsed.next_run_at!).toLocaleString(dateLocale(translator(code))) }))}
                                                     </div>
                                                 )}
                                                 {parsed.valid && (
