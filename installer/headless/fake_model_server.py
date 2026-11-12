@@ -544,7 +544,10 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(_env_float("FAKE_LEMONADE_LOAD_SECONDS", 0))
         if path in ("/load", "/pull"):
             _remember(_catalog_id(model), body.get("ctx_size"))
+            # Logged before the reply, so a test reading the log right after sees it.
+            self._record(body, 200)
             self._json(200, {"status": "success", "message": f"{path[1:]}ed {model}"})
+            return
         elif path in ("/unload", "/delete"):
             with _lock:
                 _loaded.pop(_catalog_id(model), None)
