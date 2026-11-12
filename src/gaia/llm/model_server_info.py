@@ -167,15 +167,30 @@ def describe_loaded_model(
     return info
 
 
-def _chat_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """The loaded chat model: the root ``model_loaded`` if it is one, else the first."""
+def _model_key(name: Any) -> str:
+    """Lemonade lists a ``user.X`` model as ``X``; compare without the prefix."""
+    lowered = str(name or "").lower()
+    return lowered[len("user.") :] if lowered.startswith("user.") else lowered
+
+
+def _chat_entry(
+    health: Dict[str, Any], chat_model_id: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """The loaded chat model.
+
+    With ``chat_model_id`` (the model GAIA chats with), only that model, else
+    None: on a shared server the root ``model_loaded`` may be another app's.
+    Without it, the root ``model_loaded`` if it is a chat model, else the first.
+    """
     loaded = [
         m for m in health.get("all_models_loaded") or [] if is_chat_model_entry(m)
     ]
-    root = str(health.get("model_loaded") or "").lower()
+    wanted = _model_key(chat_model_id or health.get("model_loaded"))
     for m in loaded:
-        if root and str(m.get("model_name") or "").lower() == root:
+        if wanted and _model_key(m.get("model_name")) == wanted:
             return m
+    if chat_model_id:
+        return None
     return loaded[0] if loaded else None
 
 
@@ -186,9 +201,11 @@ def _embedder_entry(health: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _other_loaded_entries(health: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _other_loaded_entries(
+    health: Dict[str, Any], chat: Optional[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
     """Loaded models not already shown as the selected chat or embedding model."""
-    shown = (_chat_entry(health), _embedder_entry(health))
+    shown = (chat, _embedder_entry(health))
     return [
         m
         for m in health.get("all_models_loaded") or []
@@ -216,16 +233,19 @@ def describe_model_server(
     system_info: Optional[Dict[str, Any]],
     preferred_backend: Optional[str],
     is_cloud_model=lambda _name: False,
+    chat_model_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Everything the "Model server" panel and the TUI status line show.
 
     ``system_info`` is None when ``/system-info`` could not be read: the
     loaded models still show, and nothing is offered to choose.
+    ``chat_model_id`` is the model GAIA chats with; ``chat_model`` is None
+    while it is not loaded, and every other loaded model is listed apart.
     """
     parsed = urlparse(base_url)
-    chat = _chat_entry(health)
+    chat = _chat_entry(health, chat_model_id)
     embed = _embedder_entry(health)
-    other_loaded = _other_loaded_entries(health)
+    other_loaded = _other_loaded_entries(health, chat)
     sysinfo = system_info or {}
     version = health.get("version")
     default_backend = default_llamacpp_backend(sysinfo)
@@ -253,7 +273,12 @@ def describe_model_server(
         ),
         "embedding_model": describe_loaded_model(embed, sysinfo) if embed else None,
         "loaded_models": [
-            describe_loaded_model(entry, sysinfo) for entry in other_loaded
+            describe_loaded_model(
+                entry,
+                sysinfo,
+                is_cloud=bool(is_cloud_model(entry.get("model_name"))),
+            )
+            for entry in other_loaded
         ],
         "embedding_note": EMBEDDER_ON_CPU_WITH_ROCM if embedder_on_cpu else None,
         "default_backend": default_backend,

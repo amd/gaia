@@ -1308,10 +1308,11 @@ async def health(db: ChatDatabase = Depends(get_db)):
     }
 
 
-def _read_model_server() -> ModelServerInfo:
+def _read_model_server(custom_model: Optional[str]) -> ModelServerInfo:
     """Read Lemonade's /health and /system-info into the Model server panel.
 
     Unreachable is an answer, not an exception: the panel shows one line.
+    ``custom_model`` is the user's chat model override, if any.
     """
     from gaia.config import GaiaConfig
     from gaia.llm.lemonade_client import (
@@ -1351,6 +1352,7 @@ def _read_model_server() -> ModelServerInfo:
         system_info=system_info if isinstance(system_info, dict) else None,
         preferred_backend=preferred,
         is_cloud_model=cloud_model_provider,
+        chat_model_id=custom_model or _default_model_name(),
     )
     return ModelServerInfo(**info, system_info_error=system_info_error)
 
@@ -1360,18 +1362,22 @@ def _config_http_error(exc: Exception) -> HTTPException:
 
 
 @router.get("/api/system/model-server", response_model=ModelServerInfo)
-async def model_server():
+async def model_server(db: ChatDatabase = Depends(get_db)):
     """Which Lemonade GAIA uses, where, and what backend each loaded model runs on."""
     from gaia.config import GaiaConfigError
 
     try:
-        return await asyncio.to_thread(_read_model_server)
+        return await asyncio.to_thread(
+            _read_model_server, db.get_setting("custom_model")
+        )
     except GaiaConfigError as exc:
         raise _config_http_error(exc) from exc
 
 
 @router.put("/api/system/model-server/backend", response_model=ModelServerInfo)
-async def set_model_server_backend(body: ModelServerBackendRequest):
+async def set_model_server_backend(
+    body: ModelServerBackendRequest, db: ChatDatabase = Depends(get_db)
+):
     """Save the llama.cpp backend for chat models; it applies on the next load.
 
     Only a backend GAIA has tested and Lemonade can run on this machine is accepted.
@@ -1379,9 +1385,10 @@ async def set_model_server_backend(body: ModelServerBackendRequest):
     from gaia.config import GaiaConfig, GaiaConfigError
 
     choice = body.backend.strip().lower()
+    custom_model = db.get_setting("custom_model")
     try:
         if choice != "auto":
-            current = await asyncio.to_thread(_read_model_server)
+            current = await asyncio.to_thread(_read_model_server, custom_model)
             if not current.reachable:
                 raise HTTPException(status_code=503, detail=current.error)
             usable = sorted(b.name for b in current.available_backends)
@@ -1396,7 +1403,7 @@ async def set_model_server_backend(body: ModelServerBackendRequest):
                     ),
                 )
         await asyncio.to_thread(GaiaConfig.save_key, "llamacpp_backend", choice)
-        return await asyncio.to_thread(_read_model_server)
+        return await asyncio.to_thread(_read_model_server, custom_model)
     except GaiaConfigError as exc:
         raise _config_http_error(exc) from exc
 
