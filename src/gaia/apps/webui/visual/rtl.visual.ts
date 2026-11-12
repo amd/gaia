@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -1802,6 +1802,21 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`Mobile access without ngrok (${locale})`, async ({ page }) => {
+        const missing = { active: false, url: null, token: null, startedAt: null, publicIp: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
+        await open(page, '', locale, (p) => p.route('**/api/tunnel/start', (route) => route.fulfill({ json: missing })));
+        await page.locator('.sb-icon-btn').filter({ has: page.locator('.lucide-smartphone') }).click();
+        const dialog = page.locator('.mobile-modal');
+        await expect(dialog.locator('.tunnel-setup')).toBeVisible();
+        // Desktop text names what is needed and where to get it, never a command to run (#7415).
+        await expect(dialog).not.toContainText('choco');
+        // The status dot stays a dot; the setup screen's `.setup` class once stretched it into a bar.
+        const dot = await dialog.locator('.status-dot').boundingBox();
+        expect(dot && dot.width <= 10 && dot.height <= 10).toBe(true);
+        await shot(page, `mobile-access-ngrok-missing-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`a Setup row lands on its setting, with a way back (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
             await withModelPage(p, MODEL_LIST, SETUP_PLAN);
@@ -2056,6 +2071,44 @@ for (const locale of ['ar', 'en']) {
             await shot(page, `connectors-${locale}-phone`);
             expect(await audit(page)).toEqual([]);
         });
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    for (const [state, status] of Object.entries(DISCORD_STATES)) {
+        test(`settings messaging: discord ${state} (${locale})`, async ({ page }) => {
+            await open(page, '', locale, (p) => withDiscord(p, status));
+            await page.getByRole('button', { name: /Settings/ }).first().click();
+            await page.getByRole('dialog').locator('[data-section="messaging"]').click();
+            await expect(page.locator('.messaging-card')).toBeVisible();
+            await expect(page.locator('.settings-pane > .settings-hint .spin')).toHaveCount(0);
+            await shot(page, `messaging-${locale}-${state}`);
+            await scrollPane(page, 'bottom');
+            await shot(page, `messaging-${locale}-${state}-end`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+        });
+    }
+
+    test(`settings messaging: disconnect confirmation (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withDiscord(p, DISCORD_STATES.connected));
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="messaging"]').click();
+        await page.locator('.messaging-footer .btn-danger').click();
+        await expect(page.getByRole('alertdialog')).toBeVisible();
+        await shot(page, `messaging-${locale}-disconnect`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings messaging: phone width while pairing (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, (p) => withDiscord(p, DISCORD_STATES.pairing));
+        await page.getByRole('button', { name: /Open sidebar/ }).click();
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="messaging"]').click();
+        await page.locator('.messaging-code').scrollIntoViewIfNeeded();
+        await shot(page, `messaging-${locale}-phone`);
+        expect(await audit(page)).toEqual([]);
     });
 }
 

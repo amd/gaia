@@ -856,6 +856,8 @@ export interface AgentStep {
     success?: boolean;
     /** The user said no to this call, so it never ran (for type='tool'). */
     declined?: boolean;
+    /** Nobody answered its permission prompt in time, so it never ran (for type='tool'). */
+    timedOut?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */
