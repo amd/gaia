@@ -69,6 +69,7 @@ import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
+import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 import { useOpeningMessage } from '../hooks/useOpeningMessage';
 import { getT, useT } from '../i18n/useT';
 
@@ -569,6 +570,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (!(await ensureModel('chat')) || (hasImage && !(await ensureModel('vision')))) return false;
             } finally {
                 checkingModelRef.current = false;
+            }
+            // The user opened another chat during the check: this chat's queue sends it, out of that chat's view.
+            if (isStale()) {
+                const queued = takeDraft();
+                if (fromComposer && !session?.private) clearSavedDraft(chatDraftKey(sessionId));
+                setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
+                return true;
             }
         }
 
