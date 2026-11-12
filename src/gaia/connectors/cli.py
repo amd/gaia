@@ -396,7 +396,6 @@ def _handle_connect(args: argparse.Namespace) -> int:
         granted_agent_ids = sorted(list_agent_grants(args.connector_id).keys())
         if granted_agent_ids:
             from gaia.agents.registry import AgentRegistry
-            from gaia.connectors.registry import REGISTRY
             from gaia.hub.installer import register_installed_sidecars
 
             registry = AgentRegistry()
