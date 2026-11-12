@@ -119,7 +119,7 @@ first; without it the app says it is missing its backend:
 ```bash
 (cd src/gaia/apps/webui && npm ci && npm run build)    # the core serves this UI
 uv venv .venv-freeze --python 3.12
-uv pip install --python .venv-freeze -e ".[ui]" pyinstaller
+uv pip install --python .venv-freeze -e ".[ui,mcp,talk,notify]" pyinstaller
 .venv-freeze/Scripts/python installer/core/freeze.py      # bin/python off Windows
 .venv-freeze/Scripts/python installer/core/smoke_test.py installer/core/dist/gaia/gaia.exe
 rm -rf src/gaia/apps/webui/build/core && mkdir -p src/gaia/apps/webui/build/core
