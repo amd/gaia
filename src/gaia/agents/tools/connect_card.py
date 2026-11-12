@@ -21,6 +21,10 @@ CONNECT_CARD_KIND = "connect_account"
 #: Where a tool result carries the card.
 CONNECT_CARD_KEY = "connect_card"
 
+#: The accounts a card may offer. Any tool result can carry a card, so one
+#: naming anything else is dropped rather than drawn as a sign-in button.
+CONNECT_CARD_PROVIDERS = frozenset({"google", "microsoft", "microsoft_work"})
+
 #: The front-end that draws the card.
 AGENT_UI = "agent_ui"
 
@@ -86,6 +90,12 @@ def connect_card(
     names = list(dict.fromkeys(providers))
     if not names:
         raise ValueError("a connect card needs at least one provider")
+    unknown = [p for p in names if p not in CONNECT_CARD_PROVIDERS]
+    if unknown:
+        raise ValueError(
+            f"a connect card can offer only {sorted(CONNECT_CARD_PROVIDERS)}, "
+            f"not {unknown}"
+        )
     card = {"kind": CONNECT_CARD_KIND, "providers": names, "agent_id": agent_id}
     again = [p for p in names if p in set(reconnect)]
     if again:
@@ -161,6 +171,8 @@ def connect_card_in(result: Any) -> Optional[Dict[str, Any]]:
     providers = card.get("providers")
     if not isinstance(providers, list) or not providers:
         return None
-    if not all(isinstance(p, str) and p for p in providers):
+    if not all(isinstance(p, str) and p in CONNECT_CARD_PROVIDERS for p in providers):
+        return None
+    if not isinstance(card.get("agent_id", ""), str):
         return None
     return card
