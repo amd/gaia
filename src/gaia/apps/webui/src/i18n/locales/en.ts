@@ -965,6 +965,7 @@ export const enMessages = {
     'ctx.meter.exact': 'Counted with the model\'s tokenizer.',
     'ctx.meter.estimates': 'Estimates.',
     'ctx.meter.saved': 'Older turns stay saved and can be recalled.',
+    'ctx.meter.mostlySetup': "Most of this ({setup}) is GAIA's own instructions and tools, which every chat starts with. Your conversation uses {chat}.",
     'ctx.meter.details': 'Details: context & performance',
     'ctx.meter.warning.one': 'The conversation is filling the model\'s context. The oldest turn may drop out of the model\'s view next:',
     'ctx.meter.warning.other': 'The conversation is filling the model\'s context. The oldest {n} turns may drop out of the model\'s view next:',

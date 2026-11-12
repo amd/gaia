@@ -365,6 +365,22 @@ describe('ContextMeter entry point', () => {
         expect(screen.queryByText(/GAIA uses/)).not.toBeInTheDocument();
     });
 
+    it("says when most of a new chat's fill is GAIA's own set-up, without hiding it", () => {
+        render(<ContextMeter usage={usage({ system: 7700, tools: 16000, documents: 0, history: 300, query: 0, used: 24000 })} sessionId="s1" />);
+        const meter = screen.getByRole('button', { name: /^Context 37% full/ });
+        expect(meter.getAttribute('title')).toContain("Most of this (24K) is GAIA's own instructions and tools");
+        fireEvent.click(meter);
+        expect(screen.getByText(/Your conversation uses 300\./)).toBeInTheDocument();
+    });
+
+    it('shows a dash, not an empty bar, before anything is measured', () => {
+        const { container } = render(<ContextMeter usage={null} unavailable="Measured once GAIA has answered in this chat." />);
+        const meter = container.querySelector('.context-meter.is-empty')!;
+        expect(meter.querySelector('.context-meter-bar')).toBeNull();
+        expect(meter).toHaveTextContent('Context–');
+        expect(meter).toHaveAttribute('aria-label', 'Context: Measured once GAIA has answered in this chat.');
+    });
+
     it('hands Details to the session panel when the chat has one, opening no sheet', () => {
         const onDetails = vi.fn();
         render(<ContextMeter usage={usage()} sessionId="s1" onDetails={onDetails} />);
