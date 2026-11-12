@@ -773,6 +773,12 @@ def test_requests_not_to_act_are_recognised(request_text):
         "Don't touch anything, just read config.py and tell me what it sets",
         "Don't touch anything - open config.py and tell me what it sets",
         "Fix the bug in foo.py but don't touch anything.",
+        # "Touch" bars edits; the question before it still wants files read.
+        "Find out why test_foo.py fails. Don't touch anything.",
+        "Look into the crash in server.py and explain it. Do not touch anything!",
+        "Why is the build failing? Don't touch anything.",
+        "Review config.py for bugs; don't touch anything for now.",
+        "Explain what main.py does without touching anything.",
         "",
     ],
 )

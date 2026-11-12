@@ -1782,6 +1782,15 @@ _PLAN_THEN_ACT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# "Why does foo.py fail? Don't touch anything": "touch" bars edits, and the
+# question before it still wants the files read.
+_ASKED_FOR_WORK_PATTERN = re.compile(
+    rf"\?|\b(?:{_NO_ACTION_THEN_WORK}|find|investigate|explain|review|debug"
+    r"|diagnose|analy[sz]e|summari[sz]e|tell|show|figure|why|what|how|where"
+    r"|which)\b",
+    re.IGNORECASE,
+)
+
 
 def _no_action_requests(request: str) -> List[bool]:
     """Each way the user's own words this turn forbid acting; True for a plan ask.
@@ -1798,6 +1807,10 @@ def _no_action_requests(request: str) -> List[bool]:
                 continue
             narrative = match.group().lower().startswith(("without", "never"))
             if narrative and _NARRATED_PAST_PATTERN.search(text[: match.start()]):
+                continue
+            if "touch" in match.group().lower() and _ASKED_FOR_WORK_PATTERN.search(
+                text[: match.start()]
+            ):
                 continue
         elif _PLAN_THEN_ACT_PATTERN.search(after):
             continue

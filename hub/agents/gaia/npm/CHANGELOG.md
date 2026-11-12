@@ -200,8 +200,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   A ban the request lifts itself ("don't touch anything until you've read X",
   "only a plan, then do step 1") is not a request not to act, and neither is
   a ban that comes with the work ("fix foo.py but don't touch anything",
-  "don't touch anything, just read config.py") or "plan only" inside a
-  request to do work ("my plan only covers Postgres; extend it").
+  "don't touch anything, just read config.py", "why does foo.py fail? Don't
+  touch anything") or "plan only" inside a request to do work ("my plan only
+  covers Postgres; extend it").
 
 ## [0.3.5]
 
