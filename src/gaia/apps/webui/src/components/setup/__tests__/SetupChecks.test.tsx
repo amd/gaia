@@ -27,17 +27,24 @@ function show(over: { hardware?: PreflightReport | null; hardwareError?: string 
 describe('Checking this PC', () => {
     it('shows the server check as a question, not work, while it waits on the user', () => {
         show({ hardware: HARDWARE, plan: DOWN, awaitingChoice: true });
-        const server = row('AI engine');
+        const server = row('Model server');
         expect(server).toHaveClass('is-question');
         expect(server).toHaveTextContent('Choose below');
         expect(server.querySelector('.spin')).toBeNull();
+    });
+
+    it('says it waits for the user instead of a count that stops moving', () => {
+        show({ hardware: HARDWARE, plan: DOWN, awaitingChoice: true });
+        expect(screen.getByText('Waiting for your choice below')).toBeInTheDocument();
+        expect(screen.queryByText(/Checks done/)).toBeNull();
+        expect(screen.queryByText('40%')).toBeNull();
     });
 
     it('starts with the hardware being read and the server waiting its turn', () => {
         show();
         expect(row('Processor, GPU and NPU')).toHaveClass('is-active');
         expect(row('Memory for models')).toHaveClass('is-active');
-        expect(row('AI engine')).toHaveClass('is-waiting');
+        expect(row('Model server')).toHaveClass('is-waiting');
         expect(screen.getByText('Checks done: 0 of 5')).toBeInTheDocument();
     });
 
@@ -47,7 +54,7 @@ describe('Checking this PC', () => {
         expect(row('Memory for models')).toHaveClass('is-active');
         expect(row('Memory for models')).not.toHaveTextContent('GB');
         expect(row('Disk space')).toHaveTextContent('400 GB free');
-        expect(row('AI engine')).toHaveClass('is-active');
+        expect(row('Model server')).toHaveClass('is-active');
         expect(screen.getByText('Checks done: 2 of 5')).toBeInTheDocument();
         expect(screen.getByRole('progressbar', { name: 'Check this PC' })).toHaveAttribute('value', '40');
     });
@@ -67,8 +74,8 @@ describe('Checking this PC', () => {
         fireEvent.click(toggle);
         expect(toggle).toHaveAttribute('aria-expanded', 'true');
         expect(row('Disk space')).toHaveTextContent('400 GB free');
-        expect(row('AI engine')).not.toHaveTextContent('Running');
-        expect(row('AI engine')).toHaveTextContent("GAIA's own");
+        expect(row('Model server')).not.toHaveTextContent('Running');
+        expect(row('Model server')).toHaveTextContent("GAIA's own");
         expect(row('Models for this PC')).toHaveTextContent(/\d+ available, \d+ already here/);
     });
 
@@ -78,11 +85,11 @@ describe('Checking this PC', () => {
         }) as unknown as SetupPlan;
         const { unmount } = render(<SetupChecks hardware={HARDWARE} hardwareError={null} plan={plan('gaia')} serverRun={null} />);
         fireEvent.click(screen.getByRole('button', { name: 'All 5 checks passed' }));
-        expect(row('AI engine')).toHaveTextContent("Lemonade 2026.44.1 · GAIA's own");
+        expect(row('Model server')).toHaveTextContent("Lemonade 2026.44.1 · GAIA's own");
         unmount();
         render(<SetupChecks hardware={HARDWARE} hardwareError={null} plan={plan('external')} serverRun={null} />);
         fireEvent.click(screen.getByRole('button', { name: 'All 5 checks passed' }));
-        expect(row('AI engine')).toHaveTextContent('Lemonade 2026.44.1 · Yours');
+        expect(row('Model server')).toHaveTextContent('Lemonade 2026.44.1 · Yours');
     });
 
     it('shows the same model capacity as the next setup screen, not the OS-visible RAM', () => {
@@ -114,7 +121,7 @@ describe('Checking this PC', () => {
 
     it('marks the server failed when the server run did', () => {
         show({ hardware: HARDWARE, plan: DOWN, serverRun: { state: 'failed', server_only: true, steps: [] } });
-        expect(row('AI engine')).toHaveClass('is-failed');
+        expect(row('Model server')).toHaveClass('is-failed');
         expect(row('Models for this PC')).toHaveClass('is-waiting');
     });
 });

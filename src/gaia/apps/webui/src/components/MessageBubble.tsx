@@ -499,9 +499,10 @@ export function splitCutOff(content: string): CutOff | null {
 }
 
 /** How an assistant turn ended short of an answer, or undefined when it answered. */
-export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
+export function turnEnding(content: string, stopState: Message['stopState'], failed = false): TurnEnding | undefined {
     if (stopState) return 'stopped';
-    return splitCutOff(content) ? 'interrupted' : undefined;
+    if (splitCutOff(content)) return 'interrupted';
+    return failed ? 'failed' : undefined;
 }
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
@@ -753,7 +754,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState)} />
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError)} />
                         </div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (

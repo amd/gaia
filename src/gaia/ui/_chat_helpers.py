@@ -1654,7 +1654,13 @@ def _index_rag_with_progress(
     idx_start = _time.time()
     doc_stats = []
     total_chunks = 0
+    cancelled = getattr(sse_handler, "cancelled", None)
+    left = 0
     for i, fpath in enumerate(fpath_list, 1):
+        # Stop ends the loading here; what is left is picked up on the next turn.
+        if cancelled is not None and cancelled.is_set():
+            left = n - i + 1
+            break
         doc_name = Path(fpath).name
         sse_handler._emit(
             {
@@ -1706,8 +1712,13 @@ def _index_rag_with_progress(
                 }
             )
     idx_elapsed = round(_time.time() - idx_start, 1)
+    headline = (
+        f"Stopped: {left} of {n} {label} not loaded. They load with your next message."
+        if left
+        else f"Indexed {n} {label} in {idx_elapsed}s"
+    )
     summary_lines = [
-        f"Indexed {n} {label} in {idx_elapsed}s",
+        headline,
         f"Total: {total_chunks} chunks in index",
         "",
     ] + doc_stats
@@ -1716,7 +1727,7 @@ def _index_rag_with_progress(
             "type": "tool_result",
             "title": "Index Documents",
             "summary": "\n".join(summary_lines),
-            "success": True,
+            "success": not left,
         }
     )
 
