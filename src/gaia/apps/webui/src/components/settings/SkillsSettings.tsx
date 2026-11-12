@@ -59,7 +59,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                     onClick={() => onUseSkill(s.name)}
                     aria-label={t('settings.skills.useAria', { name: s.name })}
                 >
-                    {t('settings.model.use')}
+                    {t('settings.skills.try')}
                 </button>
             )}
         </li>

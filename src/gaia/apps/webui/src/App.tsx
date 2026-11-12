@@ -609,11 +609,16 @@ function App() {
     }, [newChat]);
     useTrayBridge({ openChat: openChatFromTray, newChat: newChatFromTray, refreshStatus: () => void checkSystemStatus() });
 
+    // The prompt waits in the box, so the user sees what goes to the model and sends it.
     const useSkill = useCallback((name: string) => {
+        const store = useChatStore.getState();
+        const unsent = store.pendingPrompt?.sessionId === store.currentSessionId ? store.pendingPrompt?.text : null;
         newChat();
-        startChat(`Load the \`${name}\` skill, then tell me briefly what it lets you do.`)
-            .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
-    }, [newChat, startChat]);
+        const prompt = t.bare('settings.skills.tryPrompt', { name });
+        setDraftText(unsent ? `${unsent}
+
+${prompt}` : prompt);
+    }, [newChat, t]);
 
     const finishSetup = useCallback((first?: StartCard) => {
         setSetup({ state: 'ready' });

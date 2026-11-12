@@ -39,7 +39,7 @@ describe('SkillsSettings', () => {
         const onUseSkill = vi.fn();
         render(<SkillsSettings onUseSkill={onUseSkill} />);
         const row = (await screen.findByText('pdf-forms')).closest('li')!;
-        fireEvent.click(within(row).getByRole('button', { name: 'Use pdf-forms in a new chat' }));
+        fireEvent.click(within(row).getByRole('button', { name: 'Try pdf-forms in a new chat' }));
         expect(onUseSkill).toHaveBeenCalledExactlyOnceWith('pdf-forms');
     });
 
@@ -57,7 +57,7 @@ describe('SkillsSettings', () => {
         expect(within(row).getByText('· Always on')).toBeInTheDocument();
         expect(within(row).queryByRole('button')).not.toBeInTheDocument();
         const selectableRow = screen.getByText('gh-cli').closest('li')!;
-        fireEvent.click(within(selectableRow).getByRole('button', { name: 'Use gh-cli in a new chat' }));
+        fireEvent.click(within(selectableRow).getByRole('button', { name: 'Try gh-cli in a new chat' }));
         expect(onUseSkill).toHaveBeenCalledExactlyOnceWith('gh-cli');
     });
 
