@@ -475,6 +475,26 @@ class _StubConfig:
         self.__dict__.update(kwargs)
 
 
+class _Catalog:
+    """Lemonade as print mode sees it: records every call, answers the catalog."""
+
+    calls: list = []
+    downloaded = True
+
+    def __init__(self, **kwargs):
+        _Catalog.calls.append(("__init__", kwargs))
+
+    def get_model_info(self, model):
+        _Catalog.calls.append(("get_model_info", model))
+        return {"id": model, "size_gb": 5.6, "downloaded": _Catalog.downloaded}
+
+    def __getattr__(self, name):
+        def record(*args, **kwargs):
+            _Catalog.calls.append((name, args, kwargs))
+
+        return record
+
+
 @pytest.fixture
 def stub_env(monkeypatch):
     """Serve _StubAgent as the flagship and stub out the model server."""
@@ -488,6 +508,9 @@ def stub_env(monkeypatch):
 
     init = MagicMock(return_value=(True, "http://detected:13305/api/v1"))
     monkeypatch.setattr("gaia.cli.initialize_lemonade_for_agent", init)
+    _Catalog.calls = []
+    _Catalog.downloaded = True
+    monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient", _Catalog)
 
     manager = MagicMock()
     monkeypatch.setattr("gaia.logger.configure", lambda *args, **kwargs: manager)
@@ -610,19 +633,72 @@ def test_server_is_started_quietly_for_the_chosen_model(stub_env):
     assert kwargs["model"] == "amd.DeepSeek-V4.1-Flash"
 
 
-def test_no_model_uses_config_default_model(stub_env, monkeypatch):
-    cfg = MagicMock(default_model="cfg-model")
+def _config(monkeypatch, *, default_model=None, last_model=None):
+    cfg = MagicMock(default_model=default_model, last_model=last_model)
+    cfg.resolve_model = (
+        lambda requested, fallback: requested or default_model or fallback
+    )
     monkeypatch.setattr("gaia.config.GaiaConfig.load", MagicMock(return_value=cfg))
+
+
+def test_no_model_uses_config_default_model(stub_env, monkeypatch):
+    _config(monkeypatch, default_model="cfg-model")
     print_mode.run("q")
     assert stub_env.call_args.kwargs["model"] == "cfg-model"
     assert _agent().config.model_id == "cfg-model"
 
 
-def test_no_model_and_no_config_default_leaves_it_to_the_agent(stub_env, monkeypatch):
-    cfg = MagicMock(default_model="")
-    monkeypatch.setattr("gaia.config.GaiaConfig.load", MagicMock(return_value=cfg))
-    print_mode.run("q")
-    assert _agent().config.model_id is None
+def test_no_model_runs_the_model_the_apps_reopen_on(stub_env, monkeypatch):
+    """A PC set up with a cloud model answers with it, as the apps do (#7734)."""
+    _config(monkeypatch, last_model="fireworks.deepseek-v4p1-flash")
+    assert print_mode.run("q") == 0
+    assert _agent().config.model_id == "fireworks.deepseek-v4p1-flash"
+    assert stub_env.call_args.kwargs["model"] == "fireworks.deepseek-v4p1-flash"
+    # A cloud model needs no catalog check and nothing on disk.
+    assert _Catalog.calls == []
+
+
+def test_no_model_and_no_config_falls_back_to_the_shipped_default(
+    stub_env, monkeypatch
+):
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    _config(monkeypatch)
+    assert print_mode.run("q") == 0
+    assert _agent().config.model_id == DEFAULT_MODEL_NAME
+
+
+def test_a_local_model_that_is_not_downloaded_is_refused_not_downloaded(
+    stub_env, monkeypatch, capsys
+):
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    _config(monkeypatch)
+    _Catalog.downloaded = False
+    assert print_mode.run("q") == 1
+    err = capsys.readouterr().err
+    assert f"{DEFAULT_MODEL_NAME} is not downloaded (5.6 GB)" in err
+    assert "--model" in err
+    assert _StubAgent.instances == []
+    # The server was only reached, never asked to load (or fetch) a model.
+    assert [c.kwargs["preload"] for c in stub_env.call_args_list] == [False]
+    assert [c[0] for c in _Catalog.calls] == ["__init__", "get_model_info"]
+
+
+def test_a_downloaded_local_model_is_checked_then_loaded(stub_env, monkeypatch):
+    _config(monkeypatch, default_model="cfg-model")
+    assert print_mode.run("q") == 0
+    assert [c.kwargs["preload"] for c in stub_env.call_args_list] == [False, True]
+    assert ("get_model_info", "cfg-model") in _Catalog.calls
+    assert _Catalog.calls[0][1]["base_url"] == "http://detected:13305/api/v1"
+
+
+def test_the_relayed_turn_refuses_a_missing_model_too(relay, monkeypatch, capsys):
+    _config(monkeypatch, default_model="cfg-model")
+    _Catalog.downloaded = False
+    assert print_mode.run("q") == 1
+    assert "cfg-model is not downloaded" in capsys.readouterr().err
+    assert list(relay) == []
 
 
 def test_run_returns_1_with_an_actionable_message_when_the_server_fails(
@@ -791,11 +867,12 @@ def test_a_relayed_final_with_no_usage_reports_zeros_not_a_crash(relay, capsys):
     assert record["cached_tokens"] == 0
 
 
-def test_a_relayed_turn_leaves_the_model_server_to_the_daemon(relay, stub_env):
-    """The daemon brings up the model server for its agent, as it does for the
-    Agent UI; starting one here would race it."""
+def test_a_relayed_turn_leaves_the_model_load_to_the_daemon(relay, stub_env):
+    """The daemon loads the model for its agent, as it does for the Agent UI;
+    loading one here would race it. Reaching the server to read its catalog
+    loads nothing."""
     assert print_mode.run("q", model="m") == 0
-    stub_env.assert_not_called()
+    assert [c.kwargs["preload"] for c in stub_env.call_args_list] == [False]
 
 
 def test_a_relayed_answer_reporting_a_failed_model_call_is_an_error(relay, capsys):
@@ -1070,7 +1147,10 @@ def _attempt_doubles(monkeypatch, tmp_path, final_raises=None):
     seen = {}
     scratch = tmp_path / "scratch"
     scratch.mkdir()
-    monkeypatch.setattr(print_mode, "_start_server", lambda m, b: None)
+    monkeypatch.setattr(print_mode, "_start_server", lambda m, b, preload=True: None)
+    _Catalog.calls = []
+    _Catalog.downloaded = True
+    monkeypatch.setattr("gaia.llm.lemonade_client.LemonadeClient", _Catalog)
 
     def fake_attempts(text, count, flags):
         seen.update(text=text, count=count, flags=flags)
@@ -1152,11 +1232,12 @@ def test_attempts_pass_flags_merge_in_place_and_sum_usage(
 
 def test_attempts_skip_permissions_only_when_asked(monkeypatch, tmp_path):
     seen, _ = _attempt_doubles(monkeypatch, tmp_path)
+    _config(monkeypatch, default_model="cfg-model")
     print_mode.run("t", attempts=2)
-    assert seen["flags"] == []
+    assert seen["flags"] == ["--model", "cfg-model"]
     (tmp_path / "scratch").mkdir()
     print_mode.run("t", attempts=2, skip_permissions=True)
-    assert seen["flags"] == ["--dangerously-skip-permissions"]
+    assert seen["flags"] == ["--model", "cfg-model", "--dangerously-skip-permissions"]
 
 
 def test_drafts_are_removed_even_when_the_final_turn_fails(

@@ -206,7 +206,7 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
     """Independent attempts in copies of the folder, then the combining turn here."""
     from gaia.attempts import run_attempts, try_remove
 
-    model = _resolve_model(turn["model"])
+    model = _model_on_disk(turn["model"], turn["base_url"])
     # Start the server once here, so parallel attempts don't race to start it.
     _start_server(model, turn["base_url"])
     flags: List[str] = []
@@ -235,21 +235,44 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
     return record
 
 
-def _resolve_model(model: Optional[str]) -> Optional[str]:
-    if model is None:
-        from gaia.config import GaiaConfig
+def _model_on_disk(model: Optional[str], base_url: Optional[str]) -> str:
+    """The model this run uses, refused unless it can answer without a download.
 
-        model = GaiaConfig.load().default_model or None
+    Unset means the model the Agent UI and TUI reopen on. A headless run never
+    downloads a model on its own: that is gigabytes nobody agreed to.
+    """
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        cloud_model_provider,
+        resolve_chat_model,
+    )
+
+    model = model or resolve_chat_model()
+    if cloud_model_provider(model):
+        return model
+    detected_base_url = _start_server(model, base_url, preload=False)
+    info = LemonadeClient(
+        base_url=base_url or detected_base_url, verbose=False
+    ).get_model_info(model)
+    if not info["downloaded"]:
+        raise RuntimeError(
+            f"{model} is not downloaded ({info['size_gb']:.1f} GB), and gaia -p "
+            "does not download models. Pick a model you have with --model, "
+            "download this one from the GAIA app's Settings > Model, or set "
+            "the default with `gaia config set default_model <id>`."
+        )
     return model
 
 
-def _start_server(model: Optional[str], base_url: Optional[str]) -> Optional[str]:
+def _start_server(
+    model: Optional[str], base_url: Optional[str], preload: bool = True
+) -> Optional[str]:
     """Start (or reach) the model server; return the base URL it reported."""
     from gaia.cli import initialize_lemonade_for_agent
 
     # quiet: stdout is the answer alone, so start-up progress must not reach it.
     success, detected_base_url = initialize_lemonade_for_agent(
-        "chat", quiet=True, base_url=base_url, model=model
+        "chat", quiet=True, base_url=base_url, model=model, preload=preload
     )
     if not success:
         raise RuntimeError(
@@ -276,7 +299,7 @@ def _run_turn(
     log_manager = configure()
     log_manager.configure_agent_console(debug=False)
 
-    model = _resolve_model(model)
+    model = _model_on_disk(model, base_url)
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
     except ImportError:
