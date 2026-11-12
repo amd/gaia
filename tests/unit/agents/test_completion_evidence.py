@@ -1561,6 +1561,7 @@ def test_a_bare_output_is_not_looked_for_in_a_folder_nobody_named(tmp_path):
     [
         "Here's what I would have written, read from `{src}`:",
         "This is what I'd have saved, taken from `{src}`.",
+        "Here’s what I’d have saved, taken from `{src}`.",
         "Had it been allowed, I would have written the totals from `{src}`.",
     ],
 )
@@ -1602,13 +1603,19 @@ def test_a_write_that_did_happen_is_still_a_claim(tmp_path):
     assert any("notes.txt" in g for g in found)
 
 
-def test_a_real_save_after_a_would_have_clause_is_still_a_claim(tmp_path):
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "I would have written it to a.txt, but I saved it to `{other}`.",
+        "I would have written it to a.txt but I saved it to `{other}`.",
+        "I’d have written it to a.txt but then I saved it to `{other}`.",
+    ],
+)
+def test_a_real_save_after_a_would_have_clause_is_still_a_claim(tmp_path, sentence):
     other = tmp_path / "b.txt"
     ledger = CompletionEvidence("Write the totals to a file.", str(tmp_path))
 
-    found = gaps(
-        ledger, f"I would have written it to a.txt, but I saved it to `{other}`."
-    )
+    found = gaps(ledger, sentence.format(other=other))
 
     assert any("b.txt" in g for g in found)
     assert not [g for g in found if "a.txt" in g]

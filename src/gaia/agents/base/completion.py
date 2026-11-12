@@ -142,9 +142,9 @@ _FIRST_PERSON = re.compile(
 # "What I would have written, from x.xlsx": a write that did not happen is
 # not a claim. Only that clause goes; "..., but I saved y.md" still counts.
 _COUNTERFACTUAL = re.compile(
-    r"(?:\b(?:would|could|should|might)(?:n't|\s+not)?|\b(?:I|we)'d)\s+have\s+"
+    r"(?:\b(?:would|could|should|might)(?:n['’]t|\s+not)?|\b(?:I|we)['’]d)\s+have\s+"
     r"(?:\w+\s+)?(?:saved|written|stored|exported|created|put|generated|made|copied)"
-    r"\b[^,;]*",
+    r"\b(?:(?!\bbut\b)[^,;])*",
     re.I,
 )
 _EARLIER = re.compile(
