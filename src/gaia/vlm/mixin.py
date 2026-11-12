@@ -28,7 +28,7 @@ Example:
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from gaia.agents.tools.path_access import read_access_error
+from gaia.agents.tools.path_access import image_file_error, read_access_error
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -44,20 +44,6 @@ _FOCUS_PROMPTS = {
     "all": "Provide a detailed description of this image including composition, colors, mood, style, and interesting elements.",
 }
 IMAGE_ANALYSIS_FOCUSES = frozenset(_FOCUS_PROMPTS)
-
-
-def _image_file_error(path: Path, image_path: str) -> Optional[Dict[str, Any]]:
-    """Tool error when *path* is not an existing file, or None when it is."""
-    if path.is_file():
-        return None
-    if path.is_dir():
-        return {
-            "status": "error",
-            "error": f"Not an image file: {image_path} is a directory",
-        }
-    if path.exists():
-        return {"status": "error", "error": f"Not an image file: {image_path}"}
-    return {"status": "error", "error": f"Image not found: {image_path}"}
 
 
 class VLMToolsMixin:
@@ -186,7 +172,7 @@ class VLMToolsMixin:
         denied = read_access_error(self, path)
         if denied:
             return denied
-        not_a_file = _image_file_error(path, image_path)
+        not_a_file = image_file_error(path, image_path)
         if not_a_file:
             return not_a_file
 
@@ -235,7 +221,7 @@ class VLMToolsMixin:
         denied = read_access_error(self, path)
         if denied:
             return denied
-        not_a_file = _image_file_error(path, image_path)
+        not_a_file = image_file_error(path, image_path)
         if not_a_file:
             return not_a_file
 

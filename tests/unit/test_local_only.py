@@ -363,6 +363,18 @@ def test_image_variation_checks_the_requested_model(
         client.create_image_variation(source, model="fireworks.glm-5p3-flash")
 
 
+def test_image_edit_and_upscale_check_the_requested_model(
+    local_only_on, client, no_network, tmp_path
+):
+    source = tmp_path / "source.png"
+    source.write_bytes(b"png")
+
+    with pytest.raises(CloudDisabledError, match="fireworks.glm-5p3-flash"):
+        client.edit_image(source, "change it", model="fireworks.glm-5p3-flash")
+    with pytest.raises(CloudDisabledError, match="fireworks.glm-5p3-flash"):
+        client.upscale_image(source, model="fireworks.glm-5p3-flash")
+
+
 @pytest.fixture
 def lease_entered(monkeypatch):
     def lease(self, model, request_timeout=None):

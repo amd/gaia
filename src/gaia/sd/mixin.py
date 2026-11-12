@@ -93,6 +93,8 @@ class SDToolsMixin:
     - get_generation_history: Get recent generations from this session
     - create_image_variation: Vary an existing PNG (opt-in,
       ``init_sd(enable_variation_tools=True)``)
+    - edit_image / upscale_image: Edit a PNG or JPEG, or upscale a PNG
+      (opt-in, ``init_sd(enable_edit_tools=True)``)
 
     Attributes:
         sd_client: LemonadeClient instance for API calls
@@ -134,6 +136,7 @@ class SDToolsMixin:
         default_cfg: Optional[float] = None,
         enable_3d_tools: bool = False,
         enable_variation_tools: bool = False,
+        enable_edit_tools: bool = False,
     ) -> None:
         """
         Initialize SD tools and register them with the agent.
@@ -152,6 +155,8 @@ class SDToolsMixin:
             enable_3d_tools: Register the opt-in image-to-3D tool.
             enable_variation_tools: Register the opt-in
                 ``create_image_variation`` tool.
+            enable_edit_tools: Register the opt-in ``edit_image`` and
+                ``upscale_image`` tools.
 
         Example:
             # Fast generation with defaults (SDXL-Turbo)
@@ -185,6 +190,7 @@ class SDToolsMixin:
         self.sd_generations = []  # Instance-level list for session history
         self.sd_enable_3d_tools = enable_3d_tools
         self.sd_enable_variation_tools = enable_variation_tools
+        self.sd_enable_edit_tools = enable_edit_tools
 
         logger.debug(
             f"SD tools initialized: endpoint={self.sd_client.base_url}/images/generations, output={self.sd_output_dir}"
@@ -228,6 +234,26 @@ class SDToolsMixin:
                 {"status": "error", "error": str}.
             """
             return self._generate_image(prompt, model, size, steps, cfg_scale, seed)
+
+        if self.sd_enable_edit_tools:
+
+            @tool(atomic=True, timeout=900)
+            def edit_image(
+                image_path: str,
+                prompt: str,
+                model: Optional[str] = None,
+                size: Optional[str] = None,
+                n: int = 1,
+            ) -> Dict[str, Any]:
+                """Edit a local PNG or JPEG with a text prompt using Lemonade."""
+                return self._edit_image(image_path, prompt, model, size, n)
+
+            @tool(atomic=True, timeout=900)
+            def upscale_image(
+                image_path: str, model: Optional[str] = None
+            ) -> Dict[str, Any]:
+                """Upscale a local PNG with Lemonade's image-upscale endpoint."""
+                return self._upscale_image(image_path, model)
 
         @tool(atomic=True)
         def list_sd_models() -> Dict[str, Any]:
@@ -383,6 +409,152 @@ class SDToolsMixin:
                 return self._create_image_variation(image_path, model, size, n)
 
         # Tools are automatically registered by the @tool decorator above.
+
+    def _image_source_or_error(
+        self, image_path: str
+    ) -> tuple[Optional[Path], Optional[Dict[str, Any]]]:
+        """Check read scope and resolve one local source image."""
+        from gaia.agents.tools.path_access import image_file_error, read_access_error
+
+        path = Path(image_path).expanduser()
+        denied = read_access_error(self, path)
+        if denied:
+            return None, denied
+        invalid = image_file_error(path, image_path)
+        if invalid:
+            return None, invalid
+        try:
+            return path.resolve(strict=True), None
+        except OSError as exc:
+            return None, {"status": "error", "error": f"Cannot read image: {exc}"}
+
+    def _image_model_missing(self, model: str, action: str) -> Optional[Dict[str, Any]]:
+        """Refuse a model that is not downloaded, so a call never starts a download."""
+        if action == "edit" and model in self.SD_MODELS:
+            return None
+        try:
+            downloaded = {m.get("id") for m in self.sd_client.list_sd_models()}
+        except LemonadeClientError as exc:
+            return {"status": "error", "error": str(exc)}
+        if model in downloaded:
+            return None
+        return {
+            "status": "error",
+            "error": f"The {action} model '{model}' is not downloaded in Lemonade. "
+            f"Download it ({describe_client_hint('pull', model).instruction}) "
+            "or call list_sd_models() to pick a downloaded model.",
+        }
+
+    def _save_image_reply(
+        self, response: Any, *, prefix: str, source: Path, model: str
+    ) -> tuple[Optional[List[str]], Optional[str]]:
+        """Validate every returned image before saving any of them."""
+        data = response.get("data") if isinstance(response, dict) else None
+        if not isinstance(data, list) or not data:
+            return None, "Lemonade returned no image data."
+        images: List[bytes] = []
+        for index, item in enumerate(data, start=1):
+            image_bytes, problem = decode_image_response({"data": [item]})
+            if problem is None:
+                problem = image_problem(image_bytes)
+            if problem is not None:
+                return None, f"Lemonade returned an unusable image {index}: {problem}"
+            images.append(image_bytes)
+        try:
+            paths = [
+                str(
+                    self._save_image(
+                        f"{prefix}_{index}_{source.stem}", image_bytes, model
+                    )
+                )
+                for index, image_bytes in enumerate(images, start=1)
+            ]
+        except (OSError, SnapshotError) as exc:
+            return None, f"Could not save image output: {exc}"
+        return paths, None
+
+    def _edit_image(
+        self,
+        image_path: str,
+        prompt: str,
+        model: Optional[str] = None,
+        size: Optional[str] = None,
+        n: int = 1,
+    ) -> Dict[str, Any]:
+        """Edit an approved source image and save the returned PNGs."""
+        source, error = self._image_source_or_error(image_path)
+        if error:
+            return error
+        selected_model = model or LemonadeClient.IMAGE_EDIT_DEFAULT_MODEL
+        missing = self._image_model_missing(selected_model, "edit")
+        if missing:
+            return missing
+        legacy_sd = selected_model in self.SD_MODELS
+        try:
+            self.sd_client.load_model(
+                selected_model, auto_download=legacy_sd, prompt=False, timeout=600
+            )
+            response = self.sd_client.edit_image(
+                source,
+                prompt,
+                model=selected_model,
+                size=size,
+                n=n,
+                timeout=900,
+            )
+        except LemonadeClientError as exc:
+            return {"status": "error", "error": str(exc)}
+        paths, error = self._save_image_reply(
+            response, prefix="edited", source=source, model=selected_model
+        )
+        if error:
+            return {"status": "error", "error": error}
+        result = {
+            "status": "success",
+            "image_path": paths[0],
+            "image_paths": paths,
+            "source_image": str(source),
+            "prompt": prompt,
+            "model": selected_model,
+            "count": len(paths),
+            "display_message": "Saved " + ", ".join(paths),
+        }
+        self.sd_generations.append({**result, "created_at": datetime.now().isoformat()})
+        return result
+
+    def _upscale_image(
+        self, image_path: str, model: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Upscale an approved PNG source image and save the returned PNGs."""
+        source, error = self._image_source_or_error(image_path)
+        if error:
+            return error
+        selected_model = model or LemonadeClient.IMAGE_UPSCALE_DEFAULT_MODEL
+        missing = self._image_model_missing(selected_model, "upscale")
+        if missing:
+            return missing
+        try:
+            response = self.sd_client.upscale_image(
+                source, model=selected_model, timeout=900
+            )
+        except LemonadeClientError as exc:
+            return {"status": "error", "error": str(exc)}
+        paths, error = self._save_image_reply(
+            response, prefix="upscaled", source=source, model=selected_model
+        )
+        if error:
+            return {"status": "error", "error": error}
+        result = {
+            "status": "success",
+            "image_path": paths[0],
+            "image_paths": paths,
+            "source_image": str(source),
+            "model": selected_model,
+            "count": len(paths),
+            "display_message": "Saved " + ", ".join(paths),
+        }
+        self.sd_generations.append({**result, "created_at": datetime.now().isoformat()})
+        return result
 
     def _create_image_variation(
         self,
