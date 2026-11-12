@@ -388,6 +388,18 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: toGpu,
     },
     {
+        // The split already runs the default model: keeping it is picked, and the main button keeps it.
+        name: 'gpu-keep',
+        answers: { gpu: { ...GPU, recommended_setting_gb: null, models: [{ id: QWEN_ID, size_gb: 23.3, need_gb: 26.8, default: true, fits_now: true, fits_at_setting_gb: null }] } },
+        reach: async (page) => {
+            await toGpu(page);
+            await expect(page.locator('.gpu-preset').first()).toHaveClass(/is-active/);
+            await expect(page.locator('.gpu-preset.is-active')).toHaveCount(1);
+            await expect(page.locator('.setup-footer .btn-primary')).toHaveCount(1);
+            await expect(page.locator('.gpu-unlock:not(.is-keep)')).toHaveCount(0);
+        },
+    },
+    {
         // Max picked, with its warning; the split already runs the default model, so keeping it is the advice.
         name: 'gpu-max',
         answers: { gpu: { ...GPU, recommended_setting_gb: null, models: [{ id: QWEN_ID, size_gb: 23.3, need_gb: 26.8, default: true, fits_now: true, fits_at_setting_gb: null }] } },
