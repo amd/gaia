@@ -99,18 +99,22 @@ function SplitBar({ status, targetGpuGb }: { status: GpuMemoryStatus; targetGpuG
 
 interface PresetPickerProps {
     presets: GpuMemoryPreset[];
+    /** null is keeping the GPU's share as it is. */
     value: number | null;
-    onChange: (settingGb: number) => void;
+    onChange: (settingGb: number | null) => void;
     recommended: number | null;
     max: number | null;
+    /** The GPU's share now, offered first as the choice to change nothing; null hides it. */
+    keepGb: number | null;
     disabled?: boolean;
 }
 
-/** A radiogroup of safe sizes; arrow keys move between them. */
-function PresetPicker({ presets, value, onChange, recommended, max, disabled }: PresetPickerProps) {
+/** A radiogroup of safe sizes, after keeping the current one; arrow keys move between them. */
+function PresetPicker({ presets, value, onChange, recommended, max, keepGb, disabled }: PresetPickerProps) {
     const t = useT();
     const refs = useRef<Array<HTMLButtonElement | null>>([]);
-    const at = Math.max(0, presets.findIndex((p) => p.setting_gb === value));
+    const choices: Array<number | null> = [...(keepGb != null ? [null] : []), ...presets.map((p) => p.setting_gb)];
+    const at = Math.max(0, choices.indexOf(value));
     const onKey = (e: KeyboardEvent) => {
         const delta = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
         if (!delta) return;
@@ -118,20 +122,35 @@ function PresetPicker({ presets, value, onChange, recommended, max, disabled }: 
         const rtl = getComputedStyle(e.currentTarget).direction === 'rtl';
         const horizontal = e.key === 'ArrowRight' || e.key === 'ArrowLeft';
         const step = horizontal && rtl ? -delta : delta;
-        const next = (at + step + presets.length) % presets.length;
-        onChange(presets[next].setting_gb);
+        const next = (at + step + choices.length) % choices.length;
+        onChange(choices[next]);
         refs.current[next]?.focus();
     };
+    const offset = keepGb != null ? 1 : 0;
     return (
         <div className="gpu-presets" role="radiogroup" aria-label={t('gpu.presets.label')} onKeyDown={onKey}>
+            {keepGb != null && (
+                <button
+                    ref={(el) => { refs.current[0] = el; }}
+                    type="button"
+                    role="radio"
+                    aria-checked={value === null}
+                    tabIndex={at === 0 ? 0 : -1}
+                    className={`gpu-preset${value === null ? ' is-active' : ''}`}
+                    disabled={disabled}
+                    onClick={() => onChange(null)}
+                >
+                    <bdi>{t('gpu.presets.keep', { gb: formatSize(keepGb) })}</bdi>
+                </button>
+            )}
             {presets.map((p, i) => (
                 <button
                     key={p.setting_gb}
-                    ref={(el) => { refs.current[i] = el; }}
+                    ref={(el) => { refs.current[i + offset] = el; }}
                     type="button"
                     role="radio"
                     aria-checked={p.setting_gb === value}
-                    tabIndex={i === at ? 0 : -1}
+                    tabIndex={i + offset === at ? 0 : -1}
                     className={`gpu-preset${p.setting_gb === value ? ' is-active' : ''}`}
                     disabled={disabled}
                     onClick={() => onChange(p.setting_gb)}
@@ -177,7 +196,8 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
     }, [mode, focusHeading]);
     const stepsId = useId();
     const presets = status.presets ?? [];
-    const [target, setTarget] = useState<number | null>(status.recommended_setting_gb ?? presets[0]?.setting_gb ?? null);
+    // Nothing to gain from a change: keeping the current share is what's picked.
+    const [target, setTarget] = useState<number | null>(status.recommended_setting_gb ?? (status.gpu_gb != null ? null : presets[0]?.setting_gb ?? null));
     const [guided, setGuided] = useState(false);
     const [guidedSteps, setGuidedSteps] = useState<string[] | null>(null);
     const [guidedValue, setGuidedValue] = useState<string | null | undefined>(undefined);
@@ -332,7 +352,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                             <Check size={13} aria-hidden="true" /> {t('gpu.keepRecommended', { model: names[fitsNow.id] ?? fitsNow.id })}
                         </p>
                     )}
-                    <PresetPicker presets={presets} value={target} onChange={setTarget} recommended={recommended} max={max} disabled={busy !== null} />
+                    <PresetPicker presets={presets} value={target} onChange={setTarget} recommended={recommended} max={max} keepGb={status.gpu_gb ?? null} disabled={busy !== null} />
                     {preset && (
                         <p className="gpu-unlock">
                             {unlocks.length > 0
@@ -409,7 +429,7 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                     </button>
                 );
                 const showMe = !restartPending && presets.length > 0 && canGuide && (
-                    <button type="button" className={canApply ? 'btn-secondary' : 'btn-primary'} onClick={() => void showSteps()} disabled={busy !== null}>
+                    <button type="button" className={canApply ? 'btn-secondary' : 'btn-primary'} onClick={() => void showSteps()} disabled={busy !== null || target == null}>
                         {t('gpu.showMe')}
                     </button>
                 );
@@ -420,7 +440,9 @@ export function GpuMemoryPanel({ status, onStatus, mode, names, onSkip, onContin
                             {onBack && <button type="button" className="btn-secondary" onClick={onBack}>{t('setup.back')}</button>}
                             {restartPending
                                 ? onContinue && <button type="button" className="btn-primary" onClick={onContinue} autoFocus>{t('setup.continue')}</button>
-                                : <>
+                                : target == null && presets.length > 0
+                                    ? (onSkip ?? onContinue) && <button type="button" className="btn-primary" onClick={onSkip ?? onContinue} disabled={busy !== null}>{t('gpu.keepAsIs')}</button>
+                                    : <>
                                     {onSkip && <button type="button" className="btn-secondary" onClick={onSkip} disabled={busy !== null}>{t('gpu.skip')}</button>}
                                     {canApply ? <>{showMe}{apply}</> : showMe}
                                 </>}

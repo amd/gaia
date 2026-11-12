@@ -2311,15 +2311,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return
         try:
             self._mcp_manager.load_from_config()
-            self._print_mcp_load_summary()
             # Servers activated for this agent (#1005); every connected one
             # for an agent with no registry identity.
             active = self._active_mcp_servers(self._mcp_manager)
-            tool_counts = {
-                srv: len(client.list_tools())
+            # Refuse bad servers before the count, so their tools don't count.
+            admitted = {
+                srv: converted
                 for srv in active
-                if (client := self._mcp_manager.get_client(srv)) is not None
+                if (converted := self._admit_mcp_server(srv)) is not None
             }
+            # After admission, so a refused server shows as failed.
+            self._print_mcp_load_summary()
+            tool_counts = {srv: len(converted) for srv, converted in admitted.items()}
             total = sum(tool_counts.values())
             limit = self.config.mcp_tool_limit
             if total > limit:
@@ -2335,10 +2338,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 )
                 return
             before = len(_TOOL_REGISTRY)
-            for srv in active:
-                client = self._mcp_manager.get_client(srv)
-                if client:
-                    self._register_mcp_tools(client)
+            for srv, converted in admitted.items():
+                self._register_mcp_tools(self._mcp_manager.get_client(srv), converted)
             added = len(_TOOL_REGISTRY) - before
             if added > 0:
                 logger.info("Loaded %d MCP tool(s)", added)

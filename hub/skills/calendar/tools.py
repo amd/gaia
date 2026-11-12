@@ -70,6 +70,13 @@ from gaia.agents.tools._email.phishing import (
     strip_untrusted_field_markers,
     wrap_untrusted_field,
 )
+from gaia.agents.tools.connect_card import (
+    CONNECTORS_SETTINGS,
+    agent_surface,
+    in_app,
+    token_fault,
+    with_connect_card,
+)
 from gaia.agents.tools.email_tools import EMAIL_AGENT_ID
 from gaia.logger import get_logger
 from gaia.skills.context import current
@@ -141,12 +148,76 @@ _BUSY_MESSAGE = (
 )
 
 
-def _classify_calendar(provider: str) -> Tuple[bool, bool, str]:
+def _connect_targets() -> Tuple[List[str], List[str]]:
+    """``(targets, connected)``: the calendars signing in fixes (no account, or
+    no calendar scope), and those of them connected already.
+
+    None while a connected one needs a different fix (a grant, a setup fault):
+    offering another account would point away from it.
+    """
+    from gaia.connectors.api import get_connection
+
+    targets, connected = [], []
+    for provider in CALENDAR_PROVIDERS:
+        conn = get_connection(provider)
+        if not conn:
+            targets.append(provider)
+            continue
+        if conn.get("error") or CALENDAR_SCOPES[provider] in (conn.get("scopes") or []):
+            return [], []
+        targets.append(provider)
+        connected.append(provider)
+    return targets, connected
+
+
+def _classify_in_app(provider: str) -> Tuple[bool, bool, str]:
+    """``_classify_calendar`` for the apps: a button or a setting, never a command."""
+    from gaia.connectors.api import get_connection
+    from gaia.connectors.grants import list_agent_grants
+
+    scope = CALENDAR_SCOPES[provider]
+    conn = get_connection(provider)
+    if not conn:
+        return (
+            False,
+            False,
+            f"not connected. It is connected under {CONNECTORS_SETTINGS}",
+        )
+    if conn.get("error") == "busy":
+        return False, True, _BUSY_MESSAGE
+    if conn.get("error") == "configuration":
+        return (
+            False,
+            False,
+            "connected, but GAIA's sign-in setup for it is no longer configured. "
+            f"Reconnect it under {CONNECTORS_SETTINGS}",
+        )
+    if scope not in (conn.get("scopes") or []):
+        return (
+            False,
+            False,
+            "connected, but without calendar access; mail keeps working. It "
+            "needs reconnecting, with calendar access left ticked on the consent "
+            "screen",
+        )
+    if scope not in list_agent_grants(provider).get(EMAIL_AGENT_ID, []):
+        return (
+            False,
+            False,
+            "connected with calendar access, but GAIA has not been given access "
+            f"to the calendar. Turn it on for GAIA under {CONNECTORS_SETTINGS}",
+        )
+    return True, False, "ready"
+
+
+def _classify_calendar(provider: str, app: bool = False) -> Tuple[bool, bool, str]:
     """``(usable, busy, explanation)`` for one provider.
 
     Two stores can lack the scope and each remedy replaces rather than adds, so
     every command names the full union, keeping mail access intact.
     """
+    if app:
+        return _classify_in_app(provider)
     from gaia.connectors.api import get_connection
     from gaia.connectors.grants import list_agent_grants
 
@@ -347,14 +418,24 @@ def _start_matches(event: CalendarEvent, expected: str) -> bool:
     return parse_instant(expected, "expected_start") == parse_instant(event.start)
 
 
-def _refusal(action: str, error: str, **extra: Any) -> Dict[str, Any]:
-    return {
+def _refusal(action: str, error: Any, **extra: Any) -> Dict[str, Any]:
+    """A failed call's result. An error that signing in fixes brings how to
+    connect with it, worded for the front-end asking."""
+    result = {
         "status": "error",
         "success": False,
         "action": action,
-        "error": error,
+        "error": str(error),
         **extra,
     }
+    if not getattr(error, "connect", ()):
+        return result
+    return with_connect_card(
+        result,
+        error,
+        agent_id=EMAIL_AGENT_ID,
+        surface=agent_surface(current().agent),
+    )
 
 
 def _write_unreadable_result(account: str, notified: List[str]) -> str:
@@ -512,7 +593,8 @@ class _CalendarOps:
         import gaia.connectors.api as connectors_api
         from gaia.connectors.errors import ConnectorsError
 
-        states = {p: _classify_calendar(p) for p in CALENDAR_PROVIDERS}
+        app = in_app(self)
+        states = {p: _classify_calendar(p, app) for p in CALENDAR_PROVIDERS}
         provider = None
         for candidate, (usable, busy, why) in states.items():
             # A busy provider ranked first may win once saved, so don't skip past it.
@@ -522,7 +604,11 @@ class _CalendarOps:
                 provider = candidate
                 break
         if provider is None:
-            raise CalendarError(_no_calendar_error(states))
+            # A terminal caller's remedy is already in each line of the error.
+            targets, connected = _connect_targets() if app else ((), ())
+            raise CalendarError(
+                _no_calendar_error(states), connect=targets, reconnect=connected
+            )
 
         def _token() -> str:
             try:
@@ -532,7 +618,12 @@ class _CalendarOps:
                     agent_id=EMAIL_AGENT_ID,
                 )
             except ConnectorsError as exc:
-                raise CalendarAuthError(str(exc)) from exc
+                if not app:
+                    raise CalendarAuthError(str(exc)) from exc
+                logger.warning("calendar: no %s token: %s", provider, exc)
+                message, reconnect = token_fault(provider.capitalize(), exc)
+                fix = (provider,) if reconnect else ()
+                raise CalendarAuthError(message, connect=fix, reconnect=fix) from exc
 
         from gaia.agents.tools._calendar import (
             GoogleCalendarBackend,
@@ -637,7 +728,7 @@ class _CalendarOps:
             )
         except Exception as exc:  # surfaced, not swallowed
             logger.warning("calendar: %s could not check its target: %s", action, exc)
-            return None, _refusal(action, str(exc))
+            return None, _refusal(action, exc)
 
         actual = _event_payload(event)
         told_shown = [_shown_address(a) for a in told]
@@ -694,7 +785,7 @@ def _ops() -> _CalendarOps:
 
 def _fail(exc: Exception, action: str) -> str:
     logger.warning("calendar tool failed during %s: %s", action, exc)
-    return json.dumps(_refusal(action, str(exc)), indent=2)
+    return json.dumps(_refusal(action, exc), indent=2)
 
 
 def _check_create(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -706,13 +797,13 @@ def _check_create(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         _check_shown_length(args.get("location"), "location", _MAX_LINE_CHARS)
         _check_description(args.get("description"))
     except CalendarError as exc:
-        return _refusal("create_calendar_event", str(exc))
+        return _refusal("create_calendar_event", exc)
     if not _plain(args.get("title")):
         return _refusal("create_calendar_event", "title is required.")
     try:
         account = mixin._calendar_run(lambda _: mixin._calendar_account())
     except CalendarError as exc:
-        return _refusal("create_calendar_event", str(exc))
+        return _refusal("create_calendar_event", exc)
     stated = str(args.get("calendar_account") or "").strip()
     if stated.casefold() != account.casefold():
         return _refusal(
@@ -753,7 +844,7 @@ def _check_update(args: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     try:
         _patch_from(args)
     except CalendarError as exc:
-        return _refusal("update_calendar_event", str(exc))
+        return _refusal("update_calendar_event", exc)
     return _checked_target(args, "update_calendar_event", cancelling=False)
 
 

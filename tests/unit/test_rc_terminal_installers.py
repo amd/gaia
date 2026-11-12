@@ -340,6 +340,10 @@ def _workspace(
     tui.mkdir(parents=True)
     for f in ("artifacts.py", "fetch_sidecar.py"):
         shutil.copy(REPO_ROOT / "installer" / "tui" / f, tui / f)
+    # The attach runs gh through the API-budget wrapper.
+    (ws / "util").mkdir()
+    for f in ("gh_retry.py", "github_release_retry.py"):
+        shutil.copy(REPO_ROOT / "util" / f, ws / "util" / f)
     # A final reads which platforms have an agent from the committed lock.
     lock = json.loads((REPO_ROOT / LOCK).read_text(encoding="utf-8"))
     if drop_lock_platform:

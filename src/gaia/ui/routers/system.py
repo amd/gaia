@@ -1020,13 +1020,17 @@ async def get_warm_up():
 
 
 async def _check_model_status(model_name: str) -> ModelStatus:
-    """Check if a model is found, downloaded, and loaded on Lemonade server."""
+    """Check if a model is found, downloaded, and loaded on Lemonade server.
+
+    ``checked`` stays False when the model list couldn't be read, so "not
+    found" is never claimed for a server that didn't answer.
+    """
     status = ModelStatus()
     if not model_name:
         return status
-    try:
-        import httpx
+    import httpx
 
+    try:
         base_url = resolve_lemonade_base_url()
         _auth = lemonade_auth_headers(resolve_lemonade_api_key(base_url=base_url))
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -1036,41 +1040,55 @@ async def _check_model_status(model_name: str) -> ModelStatus:
                 params={"show_all": "true"},
                 headers=_auth,
             )
+            listed: Optional[List[Dict[str, Any]]] = None
             if models_resp.status_code == 200:
+                try:
+                    listed = _catalog_entries(models_resp.json())
+                except ValueError as e:
+                    logger.info("Model list for %s unreadable: %s", model_name, e)
+            if listed is not None:
+                status.checked = True
                 model_name_lower = model_name.lower()
-                for m in models_resp.json().get("data", []):
-                    mid = m.get("id", "").lower()
-                    mname = m.get("name", "").lower()
-                    if model_name_lower in (mid, mname):
+                for m in listed:
+                    mid = str(m.get("id") or "")
+                    mname = str(m.get("name") or "").lower()
+                    if _model_ids_match(mid, model_name) or model_name_lower == mname:
                         status.found = True
-                        status.downloaded = m.get("downloaded", False)
+                        status.downloaded = bool(m.get("downloaded", False))
                         break
 
             # Check health: is model currently loaded?
             health_resp = await client.get(f"{base_url}/health", headers=_auth)
-            if health_resp.status_code == 200:
-                health_data = health_resp.json()
-                loaded_model = health_data.get("model_loaded", "")
-                if loaded_model and loaded_model.lower() == model_name.lower():
+            health_data = health_resp.json() if health_resp.status_code == 200 else None
+            if isinstance(health_data, dict):
+                loaded_model = health_data.get("model_loaded")
+                if isinstance(loaded_model, str) and _model_ids_match(
+                    loaded_model, model_name
+                ):
                     status.found = True
                     status.downloaded = True
                     status.loaded = True
                 # Also check all_models_loaded list
-                for m in health_data.get("all_models_loaded", []):
-                    if m.get("model_name", "").lower() == model_name.lower():
+                loaded_list = health_data.get("all_models_loaded")
+                for m in loaded_list if isinstance(loaded_list, list) else []:
+                    if isinstance(m, dict) and _model_ids_match(
+                        str(m.get("model_name") or ""), model_name
+                    ):
                         status.found = True
                         status.downloaded = True
                         status.loaded = True
                         break
-    except Exception as e:
-        logger.debug("Model status check failed for %s: %s", model_name, e)
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as e:
+        # Unchecked, which Settings says in words; InvalidURL isn't an HTTPError.
+        logger.info("Could not check model %s on the model server: %s", model_name, e)
 
     logger.debug(
-        "Model status for %s: found=%s, downloaded=%s, loaded=%s",
+        "Model status for %s: found=%s, downloaded=%s, loaded=%s, checked=%s",
         model_name,
         status.found,
         status.downloaded,
         status.loaded,
+        status.checked,
     )
     return status
 

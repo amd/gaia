@@ -29,6 +29,8 @@ import {
     Link,
     AudioLines,
     Captions,
+    Image as ImageIcon,
+    Ban,
     type LucideIcon,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
@@ -70,6 +72,13 @@ const TOOL_ICON: Record<string, LucideIcon> = {
     analyze_data_file: BarChart3,
     // Shell & code
     run_shell_command: Terminal,
+    run_python: Terminal,
+    execute_python_file: Terminal,
+    // Images
+    analyze_image: ImageIcon,
+    answer_question_about_image: ImageIcon,
+    generate_image: ImageIcon,
+    take_screenshot: ImageIcon,
     // RAG & documents
     query_documents: BookOpen,
     query_specific_file: BookOpen,
@@ -153,11 +162,11 @@ function getToolMeta(toolName?: string, mcp?: McpIdentity): ToolMeta {
         // Saved turns from before the server named the connector.
         return { label: ref('tool.mcp.done'), activeLabel: ref('tool.mcp.active'), icon: Globe };
     }
-    if (Object.prototype.hasOwnProperty.call(TOOL_ICON, toolName)) {
+    if (isMessageKey(`tool.${toolName}.done`) && isMessageKey(`tool.${toolName}.active`)) {
         return {
             label: ref(`tool.${toolName}.done` as MessageKey),
             activeLabel: ref(`tool.${toolName}.active` as MessageKey),
-            icon: TOOL_ICON[toolName],
+            icon: Object.prototype.hasOwnProperty.call(TOOL_ICON, toolName) ? TOOL_ICON[toolName] : Wrench,
         };
     }
     // A tool with no entry still says what it was, not a bare "Used tool".
@@ -172,6 +181,7 @@ function toolFallbackLabel(step: AgentStep, t: Translate): string {
     const unfinished = step.success == null && !step.result;
     return step.active
         ? say(t, meta.activeLabel)
+        : step.declined ? t('tool.declined', { label: meta.activeLabel })
         : step.success === false ? t('tool.failed', { label: meta.activeLabel })
         : unfinished ? t('tool.unfinished', { label: meta.activeLabel }) : say(t, meta.label);
 }
@@ -182,6 +192,8 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
     // GAIA writes this row itself, so it can say it in the UI's language.
     if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
+    // A present-tense narration would read as if the call you declined ran.
+    if (step.declined && !step.active) return toolFallbackLabel(step, t);
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
 }
 
@@ -226,6 +238,35 @@ export interface ActivityRow extends AgentStep {
     count?: number;
     /** Per-plan-step status, parallel to planSteps (plan rows with a known current step). */
     planStatuses?: PlanItemStatus[];
+    /** The finished reasoning that led to this call, opened from the call's row. */
+    thought?: ActivityRow;
+}
+
+/**
+ * Fold each finished thought into the call it led to, so the list reads as steps
+ * instead of "Thought" between every one. A thought still streaming, or one that
+ * led to a note, a plan or the answer, keeps its own row.
+ */
+export function foldThoughts(rows: ActivityRow[]): ActivityRow[] {
+    const out: ActivityRow[] = [];
+    let pending: ActivityRow | undefined;
+    for (const row of rows) {
+        if (row.type === 'thinking' && !row.active && (row.detail || '').trim()) {
+            if (pending) out.push(pending);
+            pending = row;
+            continue;
+        }
+        if (pending && row.type === 'tool') {
+            out.push({ ...row, thought: pending });
+            pending = undefined;
+            continue;
+        }
+        if (pending) out.push(pending);
+        pending = undefined;
+        out.push(row);
+    }
+    if (pending) out.push(pending);
+    return out;
 }
 
 /** The agent's own bookkeeping lines while it walks a plan; the checklist already says this. */
@@ -402,7 +443,8 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
     for (const row of rows) {
         let label: MessageRef;
         let failedLabel: MessageRef | undefined;
-        if (row.type === 'tool') {
+        if (row.type === 'tool' && row.declined) label = ref('activity.youDeclined');
+        else if (row.type === 'tool') {
             const meta = getToolMeta(row.tool, row);
             const skill = skillName(row);
             label = skill ? ref('activity.usedSkill', { name: skill }) : meta.label;
@@ -536,7 +578,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const renderRow = (step: ActivityRow) => {
         if (step.type === 'thinking') {
-            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} />;
+            return <FlowThought key={step.id} step={step} live={running && !!step.active} durationMs={durations.get(step.id)} now={now} />;
         }
         if (step.type === 'tool') {
             return (
@@ -544,6 +586,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                     key={step.id}
                     step={step}
                     isExpanded={expandedTools.has(step.id)}
+                    thoughtMs={step.thought ? durations.get(step.thought.id) : undefined}
                     now={now}
                     awaitingUser={running && awaitingUser}
                     status={step.id === statusRowId ? toolStatus : null}
@@ -567,7 +610,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const lastIndex = timeline.length - 1;
     const visibleRows = (rows: ActivityRow[]) =>
-        rows.filter((r) => (shownWhenDone(r) || isWarning(r)) && !isPlanShownLive(r, livePlan));
+        foldThoughts(rows.filter((r) => (shownWhenDone(r) || isWarning(r)) && !isPlanShownLive(r, livePlan)));
     // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
     const openCalls = timeline.reduce((n, item, i) => {
         if (item.kind !== 'steps') return n;
@@ -683,25 +726,25 @@ function FlowNote({ text }: { text: string }) {
 
 // ── Flow: Reasoning (collapsed unless it is streaming right now) ──────────
 
-/** "Thought for 8s" once reasoning is over and its length is known. */
+/** Live reasoning shorter than this needs no clock. */
+const THINKING_ELAPSED_MIN_MS = 3000;
+
+/** "Thinking · 4s" while it runs, "Thought for 8s" once it is over and its length is known. */
 export function thoughtLabel(live: boolean, durationMs?: number, t: Translate = tEn): string {
-    if (live) return t('activity.thinking');
+    if (live) {
+        return durationMs != null && durationMs >= THINKING_ELAPSED_MIN_MS
+            ? t('activity.thinkingFor', { time: formatElapsed(durationMs / 1000) })
+            : t('activity.thinking');
+    }
     if (durationMs == null || durationMs < 1000) return t('activity.thought');
     return t('activity.thoughtFor', { time: formatElapsed(durationMs / 1000) });
 }
 
-function FlowThought({ step, live, durationMs }: { step: AgentStep; live: boolean; durationMs?: number }) {
+/** Reasoning stays one line, live or done, until the user opens it. */
+function FlowThought({ step, live, durationMs, now }: { step: AgentStep; live: boolean; durationMs?: number; now: number }) {
     const t = useT();
     const text = (step.detail || '').trim();
     const [open, setOpen] = useState(false);
-    const containerRef = useRef<HTMLDivElement>(null);
-
-    // Keep the newest reasoning in view as it streams.
-    useEffect(() => {
-        if (live && containerRef.current) {
-            containerRef.current.scrollTop = containerRef.current.scrollHeight;
-        }
-    }, [text, live]);
 
     if (!text) return null;
 
@@ -713,15 +756,10 @@ function FlowThought({ step, live, durationMs }: { step: AgentStep; live: boolea
                 aria-expanded={open}
             >
                 {live ? <Loader2 size={13} className="flow-tool-spinner" /> : <Brain size={13} className="flow-tool-icon" />}
-                <span>{thoughtLabel(live, durationMs, t)}</span>
+                <span>{thoughtLabel(live, live ? now - step.timestamp : durationMs, t)}</span>
                 <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
             </button>
-            {(open || live) && (
-                <div ref={containerRef} className={`flow-thought-hacker ${open ? '' : 'peek'}`}>
-                    <span>{text}</span>
-                    {live && <span className="flow-thought-cursor" />}
-                </div>
-            )}
+            {open && <div className="flow-thought-hacker">{text}</div>}
         </div>
     );
 }
@@ -828,9 +866,11 @@ interface FlowToolCardProps {
     awaitingUser?: boolean;
     /** Live line from this running call's own model calls; replaces its label. */
     status?: string | null;
+    /** How long the reasoning folded into this call ran. */
+    thoughtMs?: number;
 }
 
-function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null }: FlowToolCardProps) {
+function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, status = null, thoughtMs }: FlowToolCardProps) {
     const t = useT();
     const Icon = getToolMeta(step.tool, step).icon;
     // A call held for the user's answer hasn't started, so it neither runs nor times.
@@ -839,7 +879,8 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
-    const failure = step.success === false && step.result ? step.result : '';
+    const declined = !!step.declined && !step.active;
+    const failure = step.success === false && step.result && !declined ? step.result : '';
     const timing = waiting
         ? ''
         : step.active
@@ -847,7 +888,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
         : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
     return (
-        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false ? 'error' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
+        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false && !declined ? 'error' : ''} ${declined ? 'declined' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
             <button
                 className="flow-tool-header"
                 onClick={onToggle}
@@ -862,18 +903,26 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     {/* What the step did, not whether it worked: only a running or failed step says otherwise. */}
                     {step.active && !waiting ? (
                         <Loader2 size={13} className="flow-tool-spinner" />
+                    ) : declined ? (
+                        <Ban size={13} className="flow-tool-icon" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
                     ) : (
                         <Icon size={13} className="flow-tool-icon" />
                     )}
-                    <span className="flow-tool-label">{line}</span>
+                    {/* The model's narration is English in every UI language; it truncates at its own end. */}
+                    <span className="flow-tool-label" dir="auto">{line}</span>
                     {count > 1 && (
                         <span className="flow-tool-count" aria-label={t('activity.identicalCalls', { n: count })}>{'×'}{count}</span>
                     )}
-                    {failure && <span className="flow-tool-failure">{failure}</span>}
+                    {failure && <span className="flow-tool-failure" dir="auto">{failure}</span>}
                 </div>
                 <div className="flow-tool-right">
+                    {step.thought && (
+                        <span className="flow-tool-thought-mark" title={t('activity.thoughtFirst')} aria-hidden="true">
+                            <Brain size={11} />
+                        </span>
+                    )}
                     {timing && <span className="flow-tool-latency">{timing}</span>}
                     <span className={`flow-tool-chevron ${isExpanded ? 'expanded' : ''}`}>
                         <ChevronRight size={12} />
@@ -883,6 +932,12 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
 
             {isExpanded && (
                 <div className="flow-tool-detail">
+                    {step.thought?.detail && (
+                        <div className="flow-tool-thought">
+                            <span className="detail-section-label">{thoughtLabel(false, thoughtMs, t)}</span>
+                            <div className="flow-thought-hacker">{step.thought.detail.trim()}</div>
+                        </div>
+                    )}
                     <div className="flow-tool-raw">
                         <span className="detail-section-label">{t('activity.detail.tool')}</span>
                         <code className="flow-tool-badge">{step.tool || 'unknown'}</code>

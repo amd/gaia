@@ -59,6 +59,14 @@ from gaia.agents.tools._email.waiting import (
     MAX_INBOX_SCAN_CAP,
     detect_waiting_on_you,
 )
+from gaia.agents.tools.connect_card import (
+    CONNECTORS_SETTINGS,
+    agent_surface,
+    in_app,
+    token_fault,
+    with_connect_card,
+    with_connect_remedy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -221,27 +229,58 @@ def _thread_key(message: Dict) -> str:
     return message.get("thread_id") or message.get("id") or ""
 
 
-def _not_connected(provider: str) -> str:
+def _not_connected(provider: str, app: bool = False) -> str:
+    if app:
+        return f"not connected. It is connected under {CONNECTORS_SETTINGS}"
     return f"not connected. Run `gaia connectors connect {provider}`"
 
 
-def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
+def _connect_targets() -> Tuple[List[str], List[str]]:
+    """``(targets, connected)``: the mailboxes signing in fixes (no account, or
+    no mail scope), and those of them connected already.
+
+    None while a connected one needs a different fix (a grant, a setup fault):
+    offering another account would point away from it.
+    """
+    from gaia.connectors.api import get_connection
+
+    targets, connected = [], []
+    for provider in MAILBOX_PROVIDERS:
+        conn = get_connection(provider)
+        if not conn:
+            targets.append(provider)
+            continue
+        scopes = conn.get("scopes") or []
+        if conn.get("error") or any(s in scopes for s in READ_CAPABLE_SCOPES[provider]):
+            return [], []
+        targets.append(provider)
+        connected.append(provider)
+    return targets, connected
+
+
+def _classify_mailbox(provider: str, app: bool = False) -> Tuple[Optional[str], str]:
     """``(resolved_scope, explanation)`` for one provider.
 
     A ``None`` scope means unusable, and the explanation names *that
     provider's own* state and remedy — "grant it" is the wrong advice for a
-    mailbox that is not connected at all.
+    mailbox that is not connected at all. In an app (``app``) the remedy is a
+    button or a setting, never a command.
     """
     from gaia.connectors.api import get_connection
     from gaia.connectors.grants import list_agent_grants
 
     conn = get_connection(provider)
     if not conn:
-        return None, _not_connected(provider)
+        return None, _not_connected(provider, app)
     if conn.get("error") == "busy":
         return None, (
             "being saved by another GAIA operation right now, so its state can't "
             "be read yet. Retry in a moment"
+        )
+    if conn.get("error") == "configuration" and app:
+        return None, (
+            "connected, but GAIA's sign-in setup for it is no longer configured. "
+            f"Reconnect it under {CONNECTORS_SETTINGS}"
         )
     if conn.get("error") == "configuration":
         return None, (
@@ -251,6 +290,11 @@ def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
 
     conn_scopes = list(conn.get("scopes") or [])
     capable = [s for s in READ_CAPABLE_SCOPES[provider] if s in conn_scopes]
+    if not capable and app:
+        return None, (
+            "connected, but without permission to read mail. It needs "
+            "reconnecting, with mail access left ticked on the consent screen"
+        )
     if not capable:
         # `--scopes` REPLACES a connection's scopes, so the remedy must name
         # granted ∪ needed. Naming only the gap would strip what it already had.
@@ -265,6 +309,11 @@ def _classify_mailbox(provider: str) -> Tuple[Optional[str], str]:
     scope = resolve_request_scope(
         provider, connection_scopes=conn_scopes, granted_scopes=granted
     )
+    if scope is None and app:
+        return None, (
+            "connected and readable, but GAIA has not been given access to it. "
+            f"Turn GAIA's access on for it under {CONNECTORS_SETTINGS}"
+        )
     if scope is None:
         # A grant replaces, so naming only mail would strip a calendar grant.
         union = sorted(set(granted) | {capable[0]})
@@ -285,7 +334,7 @@ def _no_mailbox_error(states: Dict[str, Tuple[Optional[str], str]]) -> str:
     )
 
 
-def _write_scopes(provider: str, operation: str) -> Tuple[str, ...]:
+def _write_scopes(provider: str, operation: str, app: bool = False) -> Tuple[str, ...]:
     """The scopes this write requests, or raise naming how to get them.
 
     The grant ledger matches exact strings, so a read-only connection and a
@@ -300,6 +349,15 @@ def _write_scopes(provider: str, operation: str) -> Tuple[str, ...]:
     name = _PROVIDER_NAMES[provider]
     conn_scopes = list((get_connection(provider) or {}).get("scopes") or [])
     missing = missing_write_scopes(provider, operation, held_scopes=conn_scopes)
+    if missing and app:
+        raise MailboxError(
+            f"This {name} connection lacks {' '.join(missing)}, which GAIA needs "
+            f"to {'send' if operation == OPERATION_SEND else 'draft'} mail. Nothing "
+            f"was changed. Reconnecting {name} with reading, composing and sending "
+            f"mail left ticked on {name}'s consent screen fixes it.",
+            connect=(provider,),
+            reconnect=(provider,),
+        )
     if missing:
         union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
         raise MailboxError(
@@ -312,6 +370,11 @@ def _write_scopes(provider: str, operation: str) -> Tuple[str, ...]:
         )
     needed = WRITE_SCOPES[provider][operation]
     granted = list_agent_grants(provider).get(EMAIL_AGENT_ID, [])
+    if missing_write_scopes(provider, operation, held_scopes=granted) and app:
+        raise MailboxError(
+            f"The {name} connection can write mail, but GAIA has not been given "
+            f"that access. Turn it on for GAIA under {CONNECTORS_SETTINGS}."
+        )
     if missing_write_scopes(provider, operation, held_scopes=granted):
         raise MailboxError(
             f"The {name} connection can write mail, but this agent holds no grant "
@@ -384,11 +447,16 @@ class EmailToolsMixin:
         """``(provider, scope, source, alternatives)``, or raise naming why not."""
         from gaia.agents.tools._email import MailboxError
 
-        states = {p: _classify_mailbox(p) for p in MAILBOX_PROVIDERS}
+        app = in_app(self)
+        states = {p: _classify_mailbox(p, app) for p in MAILBOX_PROVIDERS}
         usable = [p for p, (scope, _) in states.items() if scope]
 
         if not usable:
-            raise MailboxError(_no_mailbox_error(states))
+            # A terminal caller's remedy is already in each line above.
+            targets, connected = _connect_targets() if app else ((), ())
+            raise MailboxError(
+                _no_mailbox_error(states), connect=targets, reconnect=connected
+            )
 
         chosen = usable[0]
         source = "only-granted" if len(usable) == 1 else "precedence"
@@ -402,10 +470,12 @@ class EmailToolsMixin:
         if eval_mailbox:
             # Eval only: never consult connectors, so no real mailbox can leak in.
             if not fixture.is_attached():
+                app = in_app(self)
                 raise MailboxError(
                     _no_mailbox_error(
-                        {p: (None, _not_connected(p)) for p in MAILBOX_PROVIDERS}
-                    )
+                        {p: (None, _not_connected(p, app)) for p in MAILBOX_PROVIDERS}
+                    ),
+                    connect=MAILBOX_PROVIDERS if app else (),
                 )
             backend = fixture.build_fixture_backend(eval_mailbox)
             self._email_provider = GOOGLE_CONNECTOR_ID
@@ -414,7 +484,7 @@ class EmailToolsMixin:
             return backend
 
         try:
-            import gaia.connectors.api as connectors_api
+            import gaia.connectors.api  # noqa: F401  pylint: disable=unused-import
         except ImportError as exc:  # pragma: no cover - packaging guard
             raise MailboxError(
                 "The connectors framework is unavailable, so no mailbox can be "
@@ -425,9 +495,7 @@ class EmailToolsMixin:
         provider, scope, source, alternatives = self._resolve_mailbox()
 
         def _token() -> str:
-            return connectors_api.get_access_token_sync(
-                provider=provider, scopes=[scope], agent_id=EMAIL_AGENT_ID
-            )
+            return self._mint_token(provider, [scope])
 
         if provider == GOOGLE_CONNECTOR_ID:
             from gaia.agents.tools._email.gmail import GmailReadBackend
@@ -496,17 +564,31 @@ class EmailToolsMixin:
         if fixture.fixture_path():
             return self._email()
 
-        import gaia.connectors.api as connectors_api
-
         provider = self._resolve_mailbox()[0]
-        scopes = list(_write_scopes(provider, operation))
+        scopes = list(_write_scopes(provider, operation, in_app(self)))
 
         def _token() -> str:
+            return self._mint_token(provider, scopes)
+
+        return self._new_write_backend(provider, _token)
+
+    def _mint_token(self, provider: str, scopes: List[str]) -> str:
+        """An access token, or in an app an error that names no command."""
+        import gaia.connectors.api as connectors_api
+        from gaia.agents.tools._email import MailboxError
+        from gaia.connectors.errors import ConnectorsError
+
+        try:
             return connectors_api.get_access_token_sync(
                 provider=provider, scopes=scopes, agent_id=EMAIL_AGENT_ID
             )
-
-        return self._new_write_backend(provider, _token)
+        except ConnectorsError as exc:
+            if not in_app(self):
+                raise
+            logger.warning("email: no %s token: %s", provider, exc)
+            message, reconnect = token_fault(_PROVIDER_NAMES[provider], exc)
+            fix = (provider,) if reconnect else ()
+            raise MailboxError(message, connect=fix, reconnect=fix) from exc
 
     def _email_account_label(self) -> str:
         """The account a write goes through, as its prompt names it."""
@@ -546,7 +628,9 @@ class EmailToolsMixin:
                         "connected": live,
                         "account_email": fixture.FIXTURE_ADDRESS if live else None,
                         "usable": live,
-                        "status": "ready" if live else _not_connected(provider),
+                        "status": (
+                            "ready" if live else _not_connected(provider, in_app(self))
+                        ),
                     }
                 )
             return states
@@ -557,7 +641,7 @@ class EmailToolsMixin:
         states = []
         for provider in MAILBOX_PROVIDERS:
             conn = get_connection(provider) or {}
-            scope, why = _classify_mailbox(provider)
+            scope, why = _classify_mailbox(provider, in_app(self))
             email = conn.get("account_email") or None
             states.append(
                 {
@@ -594,6 +678,9 @@ class EmailToolsMixin:
                 # A per-turn budget, not a mailbox fault: memory must not learn it.
                 payload.update(NOT_EXECUTED)
             payload.update(extra)
+            with_connect_card(
+                payload, exc, agent_id=EMAIL_AGENT_ID, surface=agent_surface(mixin)
+            )
             return json.dumps(payload, indent=2)
 
         def _clamp(limit: int) -> int:
@@ -607,8 +694,8 @@ class EmailToolsMixin:
             unsure a mailbox is set up, or after an email tool fails.
 
             `alternatives` non-empty means another usable mailbox lost on
-            precedence; switching needs `gaia connectors grants revoke
-            <provider> installed:gaia`.
+            precedence; the user switches by removing GAIA's access to the
+            active one under Settings > Connectors.
 
             Returns the address and folder counts, or an error naming what
             to fix.
@@ -998,7 +1085,7 @@ class EmailToolsMixin:
             ago shows. Makes no network call.
 
             `active` is the mailbox the other mail tools read; each `status`
-            says what to run to make that mailbox usable.
+            says what makes that mailbox usable.
             """
             try:
                 states = mixin._mailbox_states()
@@ -1009,7 +1096,17 @@ class EmailToolsMixin:
                     "active": usable[0] if usable else None,
                     "mailboxes": states,
                 }
-                if not payload["connected"]:
+                if not payload["connected"] and in_app(mixin):
+                    payload["message"] = "No mailbox is connected."
+                    with_connect_remedy(
+                        payload,
+                        MAILBOX_PROVIDERS,
+                        agent_id=EMAIL_AGENT_ID,
+                        surface=agent_surface(mixin),
+                        field="message",
+                    )
+                    payload["message"] += f" See {_EMAIL_DOCS_URL}"
+                elif not payload["connected"]:
                     payload["message"] = (
                         "No mailbox is connected. Run `gaia connectors connect "
                         "google` or `gaia connectors connect microsoft`, or use "

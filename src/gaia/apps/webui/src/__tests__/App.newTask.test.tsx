@@ -179,7 +179,7 @@ describe('a new chat', () => {
         await sendFirstMessage('hello there');
 
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
-        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ title: 'New Task', agent_type: 'gaia' });
+        expect(mocked.createSession.mock.calls[0][0]).toMatchObject({ title: 'New chat', agent_type: 'gaia' });
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
         expect(mocked.sendMessageStream.mock.calls[0].slice(0, 2)).toEqual(['sess-new-0001', 'hello there']);
     });
@@ -543,10 +543,10 @@ describe('first-run setup', () => {
     }
 
     it('a first task picked at the end of setup starts the first chat', async () => {
-        await finishSetupWith({ skill: 'check-in', title: 'Check in', note: '', prompt: 'Good morning. Let us check in.', needs_input: false });
+        await finishSetupWith({ skill: 'coding', title: 'Work on code', note: '', prompt: 'Look around w and tell me what this project does.', needs_input: false });
         await waitFor(() => expect(mocked.createSession).toHaveBeenCalledOnce());
         await waitFor(() => expect(mocked.sendMessageStream).toHaveBeenCalled());
-        expect(mocked.sendMessageStream.mock.calls[0][1]).toBe('Good morning. Let us check in.');
+        expect(mocked.sendMessageStream.mock.calls[0][1]).toBe('Look around w and tell me what this project does.');
     });
 
     it('a first task that needs a subject opens a new chat with it typed in', async () => {
@@ -579,7 +579,7 @@ describe('first-run setup', () => {
 
         expect(await screen.findByRole('heading', { name: /^(Checking this PC|This PC is checked)$/ })).toBeInTheDocument();
         // Setup reads as progress: the check's reason is not shown as a problem.
-        expect(screen.getByText('This takes a few seconds. Nothing downloads yet.')).toBeInTheDocument();
+        expect(screen.getByText('This takes a few seconds. No models download yet.')).toBeInTheDocument();
         expect(screen.queryByText('The local model server is not installed.')).not.toBeInTheDocument();
         expect(screen.queryByLabelText('Message')).not.toBeInTheDocument();
     });
@@ -667,7 +667,9 @@ describe('New chat right after sending a first message', () => {
         await sendFirstMessage('Reply with exactly: RACE-LOST-1');
         await waitFor(() => expect(useChatStore.getState().pendingPrompt?.sessionId).toBe('sess-new-0001'));
 
-        await userEvent.click(await screen.findByRole('button', { name: 'New chat' }));
+        // The untitled chat is called "New chat" too, in its row and header.
+        const buttons = await screen.findAllByRole('button', { name: 'New chat' });
+        await userEvent.click(buttons.find((b) => b.classList.contains('sb-nav-item'))!);
 
         expect(useChatStore.getState().currentSessionId).toBeNull();
         expect(useChatStore.getState().pendingPrompt).toBeNull();

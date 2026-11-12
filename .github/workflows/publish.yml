@@ -1265,7 +1265,8 @@ jobs:
       needs.github-release.result == 'success' &&
       needs.tui-installers-complete.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # gh_retry.py may wait up to an hour for the shared API budget to reset.
+    timeout-minutes: 80
     permissions:
       contents: write
     steps:
@@ -1339,7 +1340,8 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t files < files.txt
-          gh release upload "${TAG}" "${files[@]/#/dist/}" dist/gaia-installers-SHA256SUMS.txt \
+          python3 util/gh_retry.py --max-wait-seconds 3600 -- \
+            gh release upload "${TAG}" "${files[@]/#/dist/}" dist/gaia-installers-SHA256SUMS.txt \
             --repo "${GITHUB_REPOSITORY}" --clobber
           echo "✓ attached ${#files[@]} terminal installers and their checksums to ${TAG}"
 
@@ -1353,7 +1355,7 @@ jobs:
       !cancelled() &&
       needs.github-release.result == 'success'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v7
 
@@ -1374,7 +1376,8 @@ jobs:
             args+=(--skip-windows-setup)
           fi
           python3 -m pip install --quiet pyyaml
-          python3 util/check_release_assets.py --repo "${GITHUB_REPOSITORY}" --tag "${TAG_NAME}" "${args[@]}"
+          python3 util/gh_retry.py --max-wait-seconds 3600 -- \
+            python3 util/check_release_assets.py --repo "${GITHUB_REPOSITORY}" --tag "${TAG_NAME}" "${args[@]}"
 
   # ── Published vs verified (#6611) ───────────────────────────────────
   # Report only. Each asset on the release against the SHA-256 the release-train
@@ -1439,12 +1442,18 @@ jobs:
       !cancelled() &&
       needs.github-release.result == 'success'
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     permissions:
+      contents: read
       actions: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: util
+
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # --repo: this job has no checkout, so gh cannot infer the repository.
-          gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
+          python3 util/gh_retry.py --max-wait-seconds 3600 -- \
+            gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
           echo "Requested website redeploy (deploy_website.yml on main)"

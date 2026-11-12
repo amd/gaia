@@ -312,6 +312,17 @@
         ],
         "title": "Decision"
       },
+      "declined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Declined"
+      },
       "detail": {
         "anyOf": [
           {
@@ -3200,6 +3211,11 @@
   "ModelStatus": {
     "description": "Status of a custom model on the Lemonade server.",
     "properties": {
+      "checked": {
+        "default": false,
+        "title": "Checked",
+        "type": "boolean"
+      },
       "downloaded": {
         "default": false,
         "title": "Downloaded",

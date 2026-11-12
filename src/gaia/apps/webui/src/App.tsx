@@ -11,6 +11,7 @@ import { LogsDialog } from './components/LogsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { buildPersonalizePrompt, PERSONALIZE_EVENT, type PersonalizeRequest } from './utils/connectorPersonalize';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
@@ -58,6 +59,8 @@ type SetupGate =
     | { state: 'upgrading' }
     | { state: 'ready' }
     | { state: 'needed'; check: SetupCheck }
+    /** Set up before, but its model server isn't answering: the app, with a notice. */
+    | { state: 'serverDown' }
     | { state: 'addingLocal' }
     /** `upgradeFailed`: the check answered, but updating GAIA's own model server failed. */
     | { state: 'unknown'; error: string; upgradeFailed?: boolean };
@@ -211,7 +214,9 @@ function App() {
                 // Read status and chats before showing the app, so it never flashes "lost connection" or "no chats".
                 if (waited > 0) await Promise.all([refreshStatus.current(), reloadSessions.current()]);
                 setNoAgentBuild(!!check.no_agent_build);
-                setSetup(check.ready ? { state: 'ready' } : { state: 'needed', check });
+                // Seen ready before: an unreachable server is an outage, not a first run.
+                const serverDown = !check.ready && check.stage === 'server' && !!check.initialized;
+                setSetup(check.ready ? { state: 'ready' } : serverDown ? { state: 'serverDown' } : { state: 'needed', check });
                 return;
             }
         } catch (err) {
@@ -226,6 +231,12 @@ function App() {
             setSetup({ state: 'unknown', error });
         }
     }, []);
+
+    // The status poll sees the model server again: ask whether GAIA is ready now.
+    const lemonadeRunning = useChatStore((s) => s.systemStatus?.lemonade_running === true);
+    useEffect(() => {
+        if (setup.state === 'serverDown' && lemonadeRunning) void checkSetup(true);
+    }, [setup.state, lemonadeRunning, checkSetup]);
 
     // Only the latest read may set the list; an older one in flight predates whatever setup installed.
     const agentsReadSeq = useRef(0);
@@ -523,7 +534,7 @@ function App() {
         let session;
         try {
             session = await api.createSession({
-                title: 'New Task',
+                title: 'New chat',
                 agent_type: FLAGSHIP_AGENT_ID,
                 document_ids: store.draftDocumentIds,
                 private: store.draftPrivate,
@@ -613,6 +624,18 @@ function App() {
         newChat();
         startChat(`Load the \`${name}\` skill, then tell me briefly what it lets you do.`)
             .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+    }, [newChat, startChat]);
+
+    useEffect(() => {
+        const onPersonalize = (e: Event) => {
+            const req = (e as CustomEvent<PersonalizeRequest>).detail;
+            useChatStore.getState().closeSettings();
+            newChat();
+            startChat(buildPersonalizePrompt(req))
+                .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+        };
+        window.addEventListener(PERSONALIZE_EVENT, onPersonalize);
+        return () => window.removeEventListener(PERSONALIZE_EVENT, onPersonalize);
     }, [newChat, startChat]);
 
     const finishSetup = useCallback((first?: StartCard) => {
@@ -798,6 +821,13 @@ function App() {
 
             <div className="main-content">
                 {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
+                {setup.state === 'serverDown' && (
+                    <div className="app-notice is-warning" role="status">
+                        <span>{t('setup.serverDown.notice')}</span>
+                        <button type="button" className="link-btn" onClick={() => void checkSetup(true)}>{t('setup.unknown.retry')}</button>
+                        <button type="button" className="link-btn" onClick={() => runSetupAgain(true)}>{t('setup.serverDown.setup')}</button>
+                    </div>
+                )}
                 {setup.state === 'unknown' && (setup.upgradeFailed ? (
                     <div className="app-notice is-warning" role="status">
                         <span>{t('setup.upgrading.failed', { error: setup.error })}</span>

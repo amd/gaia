@@ -1756,8 +1756,9 @@ def test_cloud_extraction_sends_only_an_effort_the_model_accepts(
     assert result.get("status") != "error", result
     assert sent
     for kwargs in sent:
-        assert kwargs.get("reasoning_effort") == effort
-        assert ("reasoning_effort" in kwargs) == (effort is not None)
+        # Always present: None keeps a configured cloud_reasoning_effort off too.
+        assert "reasoning_effort" in kwargs
+        assert kwargs["reasoning_effort"] == effort
         assert "repeat_penalty" not in kwargs
 
 
@@ -1817,8 +1818,8 @@ def test_a_cloud_page_that_exhausts_its_budget_fails_without_a_swapped_effort(
     assert sent
     expected = cloud_lowest_reasoning_effort(model_id)
     for kwargs in sent:
-        assert kwargs.get("reasoning_effort") == expected
-        assert ("reasoning_effort" in kwargs) == (expected is not None)
+        assert "reasoning_effort" in kwargs
+        assert kwargs["reasoning_effort"] == expected
 
 
 def test_a_gateway_rejection_surfaces_instead_of_retrying_another_effort(

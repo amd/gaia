@@ -9,6 +9,7 @@ the user was told it succeeded while nothing reached disk.
 
 import json
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -525,6 +526,8 @@ def test_repeating_the_edits_backup_line_is_not_an_unbacked_save(
             @tool
             def edit_file(file_path: str, old_content: str, new_content: str) -> dict:
                 """Edit a file."""
+                # A real write, so the post-edit read-back finds the file.
+                Path(file_path).write_text("oat milk\n", encoding="utf-8")
                 return {
                     "status": "success",
                     "file_path": file_path,
