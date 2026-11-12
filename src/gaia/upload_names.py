@@ -60,12 +60,9 @@ def place_copy(directory: Path, stem: str, ext: str, content: bytes) -> Path:
     so attaching one file to many chats keeps one copy with the plain name.
     """
     plain = directory / f"{stem}{ext}"
-    try:
-        if plain.is_file() and plain.read_bytes() == content:
-            os.utime(plain)  # keep the age-based media prune from taking it
-            return plain
-    except OSError:
-        pass
+    if plain.is_file() and plain.read_bytes() == content:
+        os.utime(plain)  # keep the age-based media prune from taking it
+        return plain
     path = reserve_copy_path(directory, stem, ext)
     try:
         path.write_bytes(content)
