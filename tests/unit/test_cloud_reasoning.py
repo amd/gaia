@@ -192,6 +192,15 @@ def test_an_explicit_effort_wins(monkeypatch):
 
 
 @pytest.mark.parametrize("stream", [False, True])
+def test_an_explicit_none_keeps_the_configured_effort_off(monkeypatch, stream):
+    """Document extraction passes None for a model with no known lowest effort."""
+    lc._CLOUD_REASONING.record(FLASH, True)
+    _effort()
+    (body,) = _sent(monkeypatch, FLASH, stream, reasoning_effort=None)
+    assert "reasoning_effort" not in body
+
+
+@pytest.mark.parametrize("stream", [False, True])
 def test_a_side_call_leaves_the_model_in_its_own_mode(monkeypatch, stream):
     """A few-hundred-token JSON side call must not spend its budget reasoning."""
     lc._CLOUD_REASONING.record(FLASH, True)
@@ -422,6 +431,48 @@ def test_setting_a_level_probes_at_the_next_start():
         _effort("low")
         LemonadeManager.learn_reasoning(client, FLASH)
         probe.assert_called_once()
+
+
+@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+def test_the_manager_probes_at_the_configured_level(effort):
+    from gaia.llm.lemonade_manager import LemonadeManager
+
+    _effort(effort)
+    client = MagicMock()
+    with patch(
+        "gaia.llm.lemonade_client.probe_cloud_reasoning", return_value=True
+    ) as probe:
+        LemonadeManager.learn_reasoning(client, FLASH)
+    assert probe.call_args.args == (client, FLASH, effort)
+
+
+def test_a_model_that_rejects_high_still_reasons_at_low(monkeypatch):
+    """Probing at ``high`` would record "no" for a user who chose ``low``."""
+    client = _client(monkeypatch)
+    sent = []
+
+    def handle(request):
+        body = json.loads(request.body)
+        sent.append(body["reasoning_effort"])
+        if body["reasoning_effort"] == "high":
+            return 400, {}, json.dumps({"error": {"message": "Unexpected effort"}})
+        reply = {"content": "391", "reasoning_content": "17*23 is..."}
+        return (
+            200,
+            {},
+            json.dumps(
+                {"choices": [{"message": reply, "finish_reason": "stop", "index": 0}]}
+            ),
+        )
+
+    with responses.RequestsMock() as mock:
+        mock.add_callback(
+            responses.POST, f"{client.base_url}/chat/completions", callback=handle
+        )
+        assert lc.probe_cloud_reasoning(client, FLASH, "low") is True
+
+    assert sent == ["low"]
+    assert lc.learned_reasoning(FLASH) is True
 
 
 def test_the_manager_probes_a_cloud_model_once():

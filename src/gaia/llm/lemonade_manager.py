@@ -1414,7 +1414,8 @@ class LemonadeManager:
 
         if cloud_model_info(model) is None or learned_reasoning(model) is not None:
             return
-        if GaiaConfig.load().cloud_reasoning_effort == "off":
+        effort = GaiaConfig.load().cloud_reasoning_effort
+        if effort == "off":
             return
         retry_in = f"{PROBE_RETRY_AFTER_S // 60} minutes"
         if reasoning_probe_recently_failed(model):
@@ -1437,7 +1438,7 @@ class LemonadeManager:
             )
             return
         try:
-            supported = probe_cloud_reasoning(client, model)
+            supported = probe_cloud_reasoning(client, model, effort)
         except CloudProbeStopped as e:
             cls._log.info("%s; it is probed again at the next start.", e)
             return

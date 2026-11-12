@@ -3307,7 +3307,7 @@ _CLOUD_REASONING = _LearnedCapability(
     "reasoning", "reasoning_models", "no_reasoning_models", "reasoning_probe_failures"
 )
 
-#: Effort the reasoning probe asks for; any effort shows whether it reasons.
+#: Effort the reasoning probe asks for when no level is given.
 _REASONING_PROBE_EFFORT = "high"
 
 
@@ -3316,8 +3316,13 @@ def learned_reasoning(model_id: Optional[str]) -> Optional[bool]:
     return _CLOUD_REASONING.get(model_id)
 
 
-def probe_cloud_reasoning(client: "LemonadeClient", model_id: str) -> Optional[bool]:
-    """Ask *model_id* to reason once; record and return whether it did.
+def probe_cloud_reasoning(
+    client: "LemonadeClient", model_id: str, effort: str = _REASONING_PROBE_EFFORT
+) -> Optional[bool]:
+    """Ask *model_id* to reason once at *effort*; record and return whether it did.
+
+    Probe at the level GAIA will send: a provider may accept one effort and
+    reject another.
 
     True when the reply carries ``reasoning_content``. False when it answers
     cleanly without any, or the provider rejects the request (HTTP 400/422):
@@ -3337,7 +3342,7 @@ def probe_cloud_reasoning(client: "LemonadeClient", model_id: str) -> Optional[b
                 }
             ],
             max_tokens=1024,
-            reasoning_effort=_REASONING_PROBE_EFFORT,
+            reasoning_effort=effort,
         )
     except CloudProbeStopped:
         raise
@@ -3346,8 +3351,8 @@ def probe_cloud_reasoning(client: "LemonadeClient", model_id: str) -> Optional[b
         if status not in (400, 422):
             raise
         log.warning(
-            f"{model_id} rejected reasoning_effort (HTTP {status}), so GAIA will "
-            "not ask it to reason. Remove it from no_reasoning_models in "
+            f"{model_id} rejected reasoning_effort={effort} (HTTP {status}), so "
+            "GAIA will not ask it to reason. Remove it from no_reasoning_models in "
             "~/.gaia/gateway.json to probe it again."
         )
         _CLOUD_REASONING.record(model_id, False)
