@@ -4246,6 +4246,19 @@ def _prompt_user_for_repair(model_name: str) -> bool:
                 print("Please enter 'y' or 'n'")
 
 
+def model_cache_dirs() -> Tuple[str, str]:
+    """Where this OS keeps Lemonade's and Hugging Face's downloaded models."""
+    if sys.platform == "win32":
+        return (
+            os.path.expandvars("%LOCALAPPDATA%\\lemonade\\"),
+            os.path.expandvars("%USERPROFILE%\\.cache\\huggingface\\hub\\"),
+        )
+    return (
+        os.path.expanduser("~/.local/share/lemonade/"),
+        os.path.expanduser("~/.cache/huggingface/hub/"),
+    )
+
+
 def _prompt_user_for_delete(model_name: str) -> bool:
     """
     Prompt user for confirmation to delete a model and re-download from scratch.
@@ -4264,13 +4277,7 @@ def _prompt_user_for_delete(model_name: str) -> bool:
         # Non-interactive environment - auto-proceed with the recovery.
         return True
 
-    # Get model storage paths
-    if sys.platform == "win32":
-        lemonade_cache = os.path.expandvars("%LOCALAPPDATA%\\lemonade\\")
-        hf_cache = os.path.expandvars("%USERPROFILE%\\.cache\\huggingface\\hub\\")
-    else:
-        lemonade_cache = os.path.expanduser("~/.local/share/lemonade/")
-        hf_cache = os.path.expanduser("~/.cache/huggingface/hub/")
+    lemonade_cache, hf_cache = model_cache_dirs()
 
     try:
         from rich.console import Console

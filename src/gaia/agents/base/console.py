@@ -62,12 +62,8 @@ MAX_DISPLAY_LINE_LENGTH = 120
 ANSI_RESET = "\033[0m"
 ANSI_BOLD = "\033[1m"
 ANSI_DIM = "\033[90m"  # Dark Gray
-ANSI_RED = "\033[91m"
 ANSI_GREEN = "\033[92m"
-ANSI_YELLOW = "\033[93m"
 ANSI_BLUE = "\033[94m"
-ANSI_MAGENTA = "\033[95m"
-ANSI_CYAN = "\033[96m"
 
 
 # === Confirmation-gated tools ===
@@ -1405,39 +1401,6 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
                     print(f"  {i+1}. ► {step_text} ◄ (current step)")
                 else:
                     print(f"  {i+1}. {step_text}")
-
-    def print_plan_progress(
-        self, current_step: int, total_steps: int, completed_steps: int = None
-    ):
-        """
-        Print progress in plan execution
-
-        Args:
-            current_step: Current step being executed (1-based)
-            total_steps: Total number of steps in the plan
-            completed_steps: Optional number of already completed steps
-        """
-        if completed_steps is None:
-            completed_steps = current_step - 1
-
-        progress_str = f"[Step {current_step}/{total_steps}]"
-        progress_bar = ""
-
-        # Create a simple progress bar
-        if total_steps > 0:
-            bar_width = 20
-            completed_chars = int((completed_steps / total_steps) * bar_width)
-            current_char = 1 if current_step <= total_steps else 0
-            remaining_chars = bar_width - completed_chars - current_char
-
-            progress_bar = (
-                "█" * completed_chars + "▶" * current_char + "░" * remaining_chars
-            )
-
-        if self.rich_available:
-            self.rprint(f"[cyan]{progress_str}[/cyan] {progress_bar}")
-        else:
-            print(f"{progress_str} {progress_bar}")
 
     def print_checklist(self, items: List[Any], current_idx: int) -> None:
         """Print the checklist with current item highlighted.

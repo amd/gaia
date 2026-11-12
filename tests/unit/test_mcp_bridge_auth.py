@@ -423,6 +423,26 @@ class TestConfigurationContract:
 
         assert captured["auth_token"] == "from-env"
 
+    def test_banner_curl_example_uses_the_real_address(self, monkeypatch, capsys):
+        import sys
+
+        import gaia.mcp.mcp_bridge as bridge_mod
+
+        monkeypatch.setattr(sys, "platform", "linux")
+
+        class FakeServer:
+            def serve_forever(self):
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr(bridge_mod, "GAIAMCPBridge", lambda *_a, **_k: StubBridge())
+        monkeypatch.setattr(bridge_mod, "create_server", lambda *_a: FakeServer())
+
+        bridge_mod.start_server(host="127.0.0.1", port=9911)
+
+        curl = [line for line in capsys.readouterr().out.splitlines() if "curl" in line]
+        assert curl and "http://127.0.0.1:9911/chat" in curl[0]
+        assert "8765" not in curl[0]
+
 
 @pytest.mark.parametrize(
     "origin", [None, "https://foreign.example", "http://localhost:4200"]

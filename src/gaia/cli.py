@@ -31,6 +31,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
     _get_lemonade_config,
+    model_cache_dirs,
     resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
@@ -5553,11 +5554,10 @@ Let me know your answer!
                     )
                     print("   3. Run: gaia download --clear-cache")
                     print()
+                    lemonade_cache, hf_cache = model_cache_dirs()
                     print("   Or manually delete the model cache folders:")
-                    print("   - Lemonade cache: %LOCALAPPDATA%\\lemonade\\")
-                    print(
-                        "   - HuggingFace cache: %USERPROFILE%\\.cache\\huggingface\\hub\\"
-                    )
+                    print(f"   - Lemonade cache: {lemonade_cache}")
+                    print(f"   - HuggingFace cache: {hf_cache}")
 
                 return
 
@@ -5974,7 +5974,7 @@ Let me know your answer!
             if not Path(control).is_file():
                 raise FileNotFoundError(
                     f"No running TUI found at {control}. Start one with "
-                    "`gaia-drive run gaia --control-port 8817`, or pass --control."
+                    "`gaia-tui run gaia --control-port 8817`, or pass --control."
                 )
 
             out_dir = Path(
@@ -6055,7 +6055,7 @@ Let me know your answer!
             if not Path(control).is_file():
                 raise FileNotFoundError(
                     f"No running TUI found at {control}. Start one with "
-                    "`gaia-drive run gaia --control-port 8817`, or pass "
+                    "`gaia-tui run gaia --control-port 8817`, or pass "
                     "--control <path to its control.json>."
                 )
 
@@ -10855,6 +10855,8 @@ def _print_embedded_status(manager):
 # tests/unit/test_mcp_bridge_auth.py — duplicated here so the client-side
 # `mcp status` / `mcp test` paths don't have to import the heavy bridge module.
 MCP_AUTH_TOKEN_ENV = "GAIA_MCP_AUTH_TOKEN"
+#: How long `mcp start --background` watches the child for an immediate crash.
+MCP_STARTUP_CHECK_SECONDS = 3.0
 
 
 def _mcp_auth_headers(args):
@@ -10868,17 +10870,6 @@ def handle_mcp_start(args):
     log = get_logger(__name__)
 
     try:
-        # Check if MCP dependencies are available (HTTP-native, no websockets needed)
-        try:
-            import aiohttp  # noqa: F401  # pylint: disable=unused-import
-        except ImportError as e:
-            log.error(f"MCP dependencies not installed: {e}")
-            print("❌ Error: MCP dependencies not installed.")
-            print("")
-            print("To fix this, install the MCP dependencies:")
-            print('  uv pip install -e ".[mcp]"')
-            sys.exit(1)
-
         # Import and start the HTTP-native MCP bridge
         from gaia.mcp.mcp_bridge import start_server as start_mcp_http
 
@@ -10997,6 +10988,16 @@ def handle_mcp_start(args):
             except Exception:
                 log_handle.close()
                 raise
+
+            try:
+                exit_code = process.wait(timeout=MCP_STARTUP_CHECK_SECONDS)
+            except subprocess.TimeoutExpired:
+                exit_code = None
+            if exit_code is not None:
+                log_handle.close()
+                print(f"❌ MCP bridge exited during startup (exit code {exit_code})")
+                print(f"📄 See {log_file_path} for the error")
+                sys.exit(1)
 
             # Write PID to dedicated PID file
             pid_file_path = os.path.abspath("gaia.mcp.pid")

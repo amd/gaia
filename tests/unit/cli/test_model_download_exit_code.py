@@ -65,6 +65,60 @@ def test_download_list_exits_nonzero_when_the_server_is_unreachable(
     assert "⬜" not in captured.out
 
 
+def test_clear_cache_names_this_oss_cache_folders_for_a_loaded_model(
+    gaia_home, monkeypatch, capsys
+):
+    from gaia.llm.lemonade_client import LemonadeClientError
+    from gaia.llm.lemonade_launcher import StartHint
+
+    monkeypatch.setattr(cli, "check_lemonade_health", lambda *a, **k: True)
+    monkeypatch.setattr(
+        cli, "describe_start_hint", lambda: StartHint(instruction="hint", command=None)
+    )
+    monkeypatch.setattr(
+        cli, "model_cache_dirs", lambda: ("/lemonade/cache/", "/hf/cache/")
+    )
+    monkeypatch.setattr(
+        cli.LemonadeClient, "get_required_models", lambda self, agent: ["m"]
+    )
+
+    def in_use(self, model_id):
+        raise LemonadeClientError("file is being used by another process")
+
+    monkeypatch.setattr(cli.LemonadeClient, "delete_model", in_use)
+    monkeypatch.setattr(sys, "argv", ["gaia", "download", "--clear-cache"])
+    try:
+        cli.main()
+    except SystemExit:
+        pass
+
+    out = capsys.readouterr().out
+    assert "Lemonade cache: /lemonade/cache/" in out
+    assert "HuggingFace cache: /hf/cache/" in out
+    assert "%LOCALAPPDATA%" not in out
+
+
+@pytest.mark.parametrize(
+    "platform, lemonade_part",
+    [("win32", "lemonade"), ("linux", ".local/share/lemonade")],
+)
+def test_model_cache_dirs_follow_the_platform(monkeypatch, platform, lemonade_part):
+    import os
+
+    from gaia.llm import lemonade_client
+
+    if platform == "win32" and os.name != "nt":
+        pytest.skip("%VAR% expansion only happens on Windows")
+    monkeypatch.setenv("LOCALAPPDATA", "LAD")
+    monkeypatch.setattr(lemonade_client.sys, "platform", platform)
+    lemonade_cache, hf_cache = lemonade_client.model_cache_dirs()
+
+    assert lemonade_part in lemonade_cache.replace("\\", "/")
+    assert "huggingface" in hf_cache
+    assert "%" not in lemonade_cache + hf_cache
+    assert lemonade_cache.startswith("LAD") == (platform == "win32")
+
+
 def test_download_list_names_an_unknown_agent_before_the_server_check(
     gaia_home, monkeypatch, capsys
 ):

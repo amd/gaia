@@ -277,7 +277,10 @@ def message_to_response(msg: dict) -> MessageResponse:
             if isinstance(raw_stats, str):
                 raw_stats = json.loads(raw_stats)
             stats = InferenceStatsResponse(**raw_stats)
-        except Exception:
+        except (TypeError, ValueError) as e:
+            logger.warning(
+                "Message %s has unreadable inference_stats: %s", msg.get("id"), e
+            )
             stats = None
 
     turn_summary = None

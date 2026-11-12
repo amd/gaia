@@ -949,7 +949,8 @@ def start_server(
     print(f"  POST http://{host}:{port}/llm        - Direct LLM (no context)")
     print("\n🔧 Usage Examples:")
     print(
-        '  Chat: curl -X POST http://localhost:8765/chat -d \'{"query":"Hello GAIA!"}\''
+        f"  Chat: curl -X POST http://{host}:{port}/chat "
+        '-d \'{"query":"Hello GAIA!"}\''
     )
     print('  n8n: HTTP Request → POST /chat → {"query": "..."}')
     print("  MCP: JSON-RPC to / with method: tools/call")

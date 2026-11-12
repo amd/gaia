@@ -2323,31 +2323,6 @@ class InitCommand:
 
         return f"Read {EmbeddedLemonade().log_path} for the server's own error."
 
-    def _verify_model(self, client, model_id: str) -> tuple:
-        """
-        Verify a model is available (downloaded) on the server.
-
-        Note: We only check if the model exists in the server's model list.
-        Running inference to verify would require loading each model, which is
-        slow and can cause server issues. If a model is corrupted, the error
-        will surface when the user tries to use it.
-
-        Args:
-            client: LemonadeClient instance
-            model_id: Model ID to verify
-
-        Returns:
-            Tuple of (success: bool, error_type: str or None)
-        """
-        try:
-            # Check if model is in the available models list
-            if client.check_model_available(model_id):
-                return (True, None)
-            return (False, "not_found")
-        except Exception as e:
-            log.debug(f"Model verification failed for {model_id}: {e}")
-            return (False, "server_error")
-
     def _check_device_available(self) -> bool:
         """Check that the required hardware device is available.
 
@@ -3304,7 +3279,7 @@ class InitCommand:
             True if verification passes, False on failure
         """
         try:
-            from gaia.llm.lemonade_client import LemonadeClient
+            from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 
             client = LemonadeClient(verbose=self.verbose)
 
@@ -3319,9 +3294,10 @@ class InitCommand:
                     self._print_error("Server not responding")
                     self._emit_test("server", None, "failed", "Server not responding")
                     return False
-            except Exception:
-                self._print_error("Server not responding")
-                self._emit_test("server", None, "failed", "Server not responding")
+            except LemonadeClientError as e:
+                detail = f"Server not responding: {e}"
+                self._print_error(detail)
+                self._emit_test("server", None, "failed", detail)
                 return False
 
             # Ensure proper context size for this profile

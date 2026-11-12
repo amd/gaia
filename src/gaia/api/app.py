@@ -26,6 +26,9 @@ from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
 logger = logging.getLogger(__name__)
 
+#: How long a background start watches the child for an immediate crash.
+STARTUP_CHECK_SECONDS = 3.0
+
 
 def start_server(
     host: str = "localhost",
@@ -87,6 +90,14 @@ def start_server(
                 stdout=f,
                 stderr=f,
             )
+        try:
+            exit_code = proc.wait(timeout=STARTUP_CHECK_SECONDS)
+        except subprocess.TimeoutExpired:
+            exit_code = None
+        if exit_code is not None:
+            print(f"❌ GAIA API server exited during startup (exit code {exit_code}).")
+            print(f"📝 See {log_file.resolve()} for the error.")
+            sys.exit(1)
         print(f"✅ GAIA API server started in background (PID: {proc.pid})")
         print(f"📝 Logs: {log_file}")
         print(f"🌐 URL: http://{host}:{port}")

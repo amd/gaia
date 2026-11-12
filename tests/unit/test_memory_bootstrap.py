@@ -528,6 +528,32 @@ def test_embedding_failure_raises_runtime_error_naming_the_stored_row(store):
     assert "User's name is Alex" in _contents(store)
 
 
+def test_embedding_failure_remedy_comes_from_the_machines_start_hint(
+    store, monkeypatch
+):
+    from gaia.llm import lemonade_launcher
+
+    monkeypatch.setattr(
+        lemonade_launcher,
+        "describe_start_hint",
+        lambda: lemonade_launcher.StartHint(instruction="Open the tray.", command=None),
+    )
+
+    def _broken_hook(knowledge_id, content):  # pylint: disable=unused-argument
+        raise ConnectionError("embedder unreachable")
+
+    io = ScriptedIO(["Alex"])
+
+    with pytest.raises(RuntimeError) as excinfo:
+        run_bootstrap_conversation(
+            store, prompt_fn=io.prompt, output_fn=io.out, on_stored=_broken_hook
+        )
+
+    message = str(excinfo.value)
+    assert "Open the tray." in message
+    assert "lemonade-server" not in message
+
+
 # ---------------------------------------------------------------------------
 # 12. The MemoryMixin wrapper
 # ---------------------------------------------------------------------------

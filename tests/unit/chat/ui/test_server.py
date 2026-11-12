@@ -18,8 +18,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from gaia.ui.server import _sanitize_static_path, create_app
+from gaia.ui.utils import ALLOWED_EXTENSIONS
 from gaia.ui.utils import compute_file_hash as _compute_file_hash
-from gaia.ui.utils import ALLOWED_EXTENSIONS, unsupported_type_message
+from gaia.ui.utils import unsupported_type_message
 
 logger = logging.getLogger(__name__)
 

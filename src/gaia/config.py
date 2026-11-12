@@ -372,7 +372,8 @@ class GaiaConfig:
         if word not in cls.LLAMACPP_BACKEND_CHOICES:
             raise GaiaConfigError(
                 f"{where}: 'llamacpp_backend' must be one of "
-                f"{', '.join(cls.LLAMACPP_BACKEND_CHOICES)}, but it is {value!r}. "
+                f"{', '.join((*cls.TESTED_LLAMACPP_BACKENDS, 'auto'))}, "
+                f"but it is {value!r}. "
                 "Run `gaia config set llamacpp_backend auto` to let Lemonade choose."
             )
         return word

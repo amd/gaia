@@ -394,6 +394,16 @@ def test_a_bad_backend_on_disk_fails_loudly(config_file):
         config_mod.GaiaConfig.load()
 
 
+def test_an_unknown_backend_error_offers_only_choosable_values(config_file):
+    cfg = config_mod.GaiaConfig()
+    with pytest.raises(config_mod.GaiaConfigError) as excinfo:
+        cfg.set("llamacpp_backend", "cuda")
+    message = str(excinfo.value)
+    assert "must be one of vulkan, auto" in message
+    for untested in ("rocm", "metal", "cpu"):
+        assert untested not in message
+
+
 def test_save_key_keeps_keys_this_version_does_not_know(config_file):
     config_file.write_text(
         json.dumps({"lemonade": {"mode": "existing"}, "profile": "npu"})

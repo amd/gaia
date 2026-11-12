@@ -404,11 +404,14 @@ class AudioClient:
             animation_counter = 0
             self.is_speaking = False  # Initialize speaking state
             no_audio_warning_shown = False
+            speech_heard = False
             session_start_time = time.time()
 
             while self.whisper_asr and self.whisper_asr.is_recording:
                 try:
                     text = self.transcription_queue.get(timeout=0.1)
+                    if text.strip():
+                        speech_heard = True
 
                     current_time = time.time()
                     time_since_last = current_time - last_transcription_time
@@ -490,7 +493,7 @@ class AudioClient:
                     # Warn if no speech detected after 10 seconds
                     if (
                         not no_audio_warning_shown
-                        and not accumulated_text
+                        and not speech_heard
                         and (time.time() - session_start_time) > 10
                     ):
                         no_audio_warning_shown = True
