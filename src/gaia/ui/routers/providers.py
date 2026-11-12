@@ -106,11 +106,10 @@ def _is_local_url(base_url: str) -> bool:
 
 def _server_owner(base_url: str) -> str:
     """``gaia`` for GAIA's own Lemonade, ``user`` for another local one, ``remote``."""
-    from gaia.llm.lemonade_client import _read_embedded_lemonade_state
+    from gaia.llm.lemonade_client import gaia_lemonade_port
     from gaia.llm.model_server_info import server_owner
 
-    state = _read_embedded_lemonade_state()
-    return server_owner(base_url, state.get("port") if state else None)
+    return server_owner(base_url, gaia_lemonade_port())
 
 
 def _require_loopback(base_url: str) -> None:
