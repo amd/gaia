@@ -426,7 +426,7 @@ export function ModelChip() {
                 {autoSwitchError && <AlertCircle size={12} aria-label="Model switch failed" />}
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
-            <Popover open={open} onClose={close} anchor={anchor} label={t('modelMenu.label')} align="end">
+            <Popover open={open} onClose={close} anchor={anchor} label={t('modelMenu.label')} align="end" className="model-menu">
                 {turnRunning && (
                     <div className="popover-message" role="status">
                         {chipModel
