@@ -68,6 +68,9 @@ public:
     /// Files the answer says were created or saved, as written in it.
     static std::vector<std::string> claimedFiles(const std::string& answer);
 
+    /// Whether the user's own words this turn forbid acting ("use no tools", "plan only").
+    static bool asksForNoAction(const std::string& request);
+
 private:
     /// OS, working directory and date, appended to the system prompt.
     std::string systemContext() const;

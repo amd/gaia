@@ -61,7 +61,8 @@ protected:
     }
 
     gaia::ProcessResult run(const bench::MockLlmServer& mock, const std::string& turnLog,
-                            const std::string& extraArgs = "") {
+                            const std::string& extraArgs = "",
+                            const std::map<std::string, std::string>& extraEnv = {}) {
         std::string bin = GAIACPP_BIN;
         if (bin.find(' ') != std::string::npos) bin = "\"" + bin + "\"";
         const std::string cmd = bin + " -p hi -m mock-model --base-url " + mock.baseUrl() +
@@ -71,6 +72,7 @@ protected:
         std::map<std::string, std::string> env = {
             {"GAIA_TURN_LOG", turnLog},
             {"GAIACPP_CONFIG", (dir_ / "no-config.json").string()}};
+        env.insert(extraEnv.begin(), extraEnv.end());
         return gaia::ProcessRunner::run(cmd, 60000, (dir_ / "work").string(), env);
     }
 
@@ -176,6 +178,46 @@ TEST_F(GaiacppCli, AnUnreachableMcpServerStopsTheRunUnlessMarkedOptional) {
     EXPECT_NE(started.stderr_output.find("'tools-that-are-down'"), std::string::npos) << started.stderr_output;
     EXPECT_NE(started.stderr_output.find("marked optional"), std::string::npos) << started.stderr_output;
     EXPECT_EQ(lenient.requestCount(), 1);
+}
+
+// `steps` reads of distinct files, then an answer (also what a closing call gets).
+void pushReads(bench::MockLlmServer& mock, const fs::path& work, int steps) {
+    for (int i = 0; i < steps; ++i) {
+        const std::string name = "f" + std::to_string(i) + ".txt";
+        std::ofstream(work / name) << i;
+        mock.pushResponse(withUsage(toolCall("file_read", json{{"path", name}}.dump()), 100, 0, 5));
+    }
+    mock.pushResponse(withUsage(finalAnswer("all read"), 100, 0, 5));
+}
+
+TEST_F(GaiacppCli, TheDefaultStepLimitIsABackstopNotABudget) {
+    bench::MockLlmServer mock;
+    pushReads(mock, dir_ / "work", 60);
+    const gaia::ProcessResult r = run(mock, "");
+    ASSERT_EQ(r.exitCode, 0) << r.stderr_output;
+    const json out = json::parse(r.stdout_output);
+    EXPECT_EQ(out["status"], "success") << "stopped short of the work: " << out.dump();
+    EXPECT_EQ(out["num_steps"], 61);
+    for (const auto& body : mock.receivedBodies()) {
+        EXPECT_EQ(body.find("Step budget:"), std::string::npos) << "61 of 1000 steps is nowhere near the limit";
+    }
+}
+
+TEST_F(GaiacppCli, EitherStepLimitVariableIsHonouredAndTheFlagWins) {
+    // The model wants one more read than the limit allows, so only the limit ends the turn there.
+    const auto stopsAt = [this](int limit, const std::map<std::string, std::string>& env, const std::string& args) {
+        bench::MockLlmServer mock;
+        pushReads(mock, dir_ / "work", limit);
+        mock.pushResponse(withUsage(finalAnswer("never asked for"), 100, 0, 5));
+        const gaia::ProcessResult r = run(mock, "", args, env);
+        const json out = json::parse(r.stdout_output);
+        return out["num_steps"] == limit && out["status"] == "error" && out["result"] == "all read";
+    };
+    EXPECT_TRUE(stopsAt(3, {{"GAIA_AGENT_MAX_STEPS", "3"}}, ""));
+    EXPECT_TRUE(stopsAt(4, {{"GAIA_MAX_STEPS", "4"}}, ""));
+    EXPECT_TRUE(stopsAt(4, {{"GAIA_AGENT_MAX_STEPS", "3"}, {"GAIA_MAX_STEPS", "4"}}, ""))
+        << "GAIA_MAX_STEPS wins when both are set";
+    EXPECT_TRUE(stopsAt(5, {{"GAIA_AGENT_MAX_STEPS", "3"}, {"GAIA_MAX_STEPS", "4"}}, " --max-steps 5"));
 }
 
 TEST_F(GaiacppCli, UnwritableTurnLogStopsBeforeAnyModelRequest) {

@@ -414,8 +414,14 @@ protected:
         std::string name;
         json args;
         bool succeeded = false;
+        int step = 0;
+        double wallSeconds = 0.0;
+        std::filesystem::file_time_type started;  // when the call began
     };
     const std::vector<ToolCallRecord>& turnToolCalls() const;
+
+    // The user's request for the query in progress, as text.
+    const std::string& turnRequest() const;
 
     void init();  // call at end of subclass constructor
 };

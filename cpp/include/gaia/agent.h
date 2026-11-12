@@ -14,6 +14,7 @@
 #pragma once
 
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -327,10 +328,15 @@ protected:
         bool succeeded = false;
         int step = 0;
         double wallSeconds = 0.0;
+        /// When the call began, on the clock file timestamps use.
+        std::filesystem::file_time_type started{};
     };
 
     /// Every tool call of the query in progress, in order (for answer review).
     const std::vector<ToolCallRecord>& turnToolCalls() const { return turnToolCalls_; }
+
+    /// The user's request for the query in progress, as text (for answer review).
+    const std::string& turnRequest() const { return turnRequest_; }
 
 private:
     /// Unified entry point for all processQuery overloads. Owns the full
@@ -436,6 +442,7 @@ private:
 
     std::vector<std::string> errorHistory_;
     std::vector<ToolCallRecord> turnToolCalls_;
+    std::string turnRequest_;
     std::map<std::string, bool> serverToolCalling_;  // base URL + model id -> label seen
     int turnStep_ = 0;
     std::vector<Message> conversationHistory_;

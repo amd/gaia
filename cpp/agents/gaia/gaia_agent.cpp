@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <iterator>
 #include <regex>
 #include <set>
 #include <sstream>
@@ -434,20 +435,257 @@ void GaiaAgent::registerVisionTool(std::shared_ptr<const Workspace> ws) {
     toolRegistry().registerTool(std::move(info));
 }
 
+namespace {
+
+const std::string kWriteVerbs = "(?:saved|wrote|written|created|exported|generated|produced)";
+
+// Curly apostrophes become ' and long dashes become `dash`, so the patterns stay ASCII.
+std::string plainPunctuation(const std::string& text, const char* dash) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text.compare(i, 3, "\xE2\x80\x99") == 0) {
+            out += '\'';
+            i += 2;
+        } else if (text.compare(i, 3, "\xE2\x80\x94") == 0 || text.compare(i, 3, "\xE2\x80\x93") == 0) {
+            out += dash;
+            i += 2;
+        } else {
+            out += text[i];
+        }
+    }
+    return out;
+}
+
+bool endsSentence(const std::string& text, size_t i) {
+    if (text[i] == '\n') return true;
+    return (text[i] == '.' || text[i] == '!' || text[i] == '?') &&
+           (i + 1 == text.size() || std::isspace(static_cast<unsigned char>(text[i + 1])));
+}
+
+// "What I would have written, from x.xlsx": a write that did not happen is not
+// a claim. Only that clause goes: it ends at punctuation, a conjunction or the
+// next write verb, so "... and then saved y.md" still counts.
+std::string dropCounterfactual(const std::string& text) {
+    static const std::regex modal(
+        R"((?:\b(?:would|could|should|might)(?:n't|\s+not)?|\b(?:I|we)'d)\s+have\s+(?:\w+\s+)?)" +
+            kWriteVerbs + R"(\b)",
+        std::regex::icase);
+    static const std::regex clauseEnd(
+        R"(\b(?:but|and|so|then|instead|or|yet|while|whereas|though|although)\b|\b)" + kWriteVerbs +
+            R"(\b|\s-\s)",
+        std::regex::icase);
+    std::string out;
+    size_t pos = 0;
+    std::smatch m;
+    while (pos < text.size() &&
+           std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(pos), text.end(), m, modal,
+                             pos ? std::regex_constants::match_prev_avail
+                                 : std::regex_constants::match_default)) {
+        const size_t start = pos + static_cast<size_t>(m.position(0));
+        size_t end = start + static_cast<size_t>(m.length(0));
+        for (; end < text.size(); ++end) {
+            const char c = text[end];
+            if (c == ',' || c == ';' || c == ':' || c == '\n') break;
+            if (endsSentence(text, end)) {
+                ++end;
+                break;
+            }
+            if (std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(end), text.end(), clauseEnd,
+                                  std::regex_constants::match_continuous |
+                                      std::regex_constants::match_prev_avail)) {
+                break;
+            }
+        }
+        out.append(text, pos, start - pos);
+        pos = end;
+    }
+    out.append(text, pos, std::string::npos);
+    return out;
+}
+
+const std::string kNegatedOutput =
+    R"((?:nothing|none(?:\s+of\s+(?:them|(?:the|these|those|your|my)\s+[\w-]+))?)"
+    R"(|no\s+(?:[\w-]+\s+)?(?:files?|outputs?|changes|data|cop(?:y|ies)|backups?|documents?|reports?)))";
+const std::string kSaveException = R"((?:except|besides|other\s+than|apart\s+from|aside\s+from|save\s+for))";
+
+// "Nothing was written to notes.md", "I wrote no file": the write verb at
+// [verb, verbEnd) says nothing was saved. "No files besides notes.md" names a save.
+bool isDeniedWrite(const std::string& text, size_t verb, size_t verbEnd) {
+    static const std::regex negatedSubject(
+        R"((?:[\s\S]*[^\w'-])?(?:)" + kNegatedOutput +
+            R"(\s+(?:(?:has|have|had|was|were|is|are)\s+)?|(?:not|never)\s+))"
+            R"((?:(?:been|just|now|already|successfully)\s+)*)",
+        std::regex::icase);
+    static const std::regex saveException(R"(\b)" + kSaveException + R"(\b)", std::regex::icase);
+    static const std::regex negatedObject(
+        R"(\s+)" + kNegatedOutput + R"(\b(?!\s+(?:but|)" + kSaveException + R"()\b))", std::regex::icase);
+
+    constexpr size_t kReach = 160;  // a negation sits next to its verb
+    size_t start = verb;
+    while (start > 0 && verb - start < kReach && !endsSentence(text, start - 1)) --start;
+    size_t end = verbEnd;
+    while (end < text.size() && end - verbEnd < kReach && !endsSentence(text, end)) ++end;
+
+    const std::string before = text.substr(start, verb - start);
+    const std::string after = text.substr(verbEnd, end - verbEnd);
+    if (std::regex_match(before, negatedSubject) && !std::regex_search(after, saveException)) return true;
+    return std::regex_search(after, negatedObject, std::regex_constants::match_continuous);
+}
+
+// Absolute paths the request names: C:\dir\in.md, /home/me/in.md.
+std::vector<std::string> requestPaths(const std::string& request) {
+    static const std::regex path(R"((?:^|[\s`'"(])((?:[A-Za-z]:[\\/]|/)[^\s`'"*<>|,;()]+))");
+    std::vector<std::string> out;
+    for (auto it = std::sregex_iterator(request.begin(), request.end(), path);
+         it != std::sregex_iterator(); ++it) {
+        std::string p = (*it)[1].str();
+        while (!p.empty() && (p.back() == '.' || p.back() == ':' || p.back() == '!' || p.back() == '?')) {
+            p.pop_back();
+        }
+        if (!p.empty()) out.push_back(p);
+    }
+    return out;
+}
+
+}  // namespace
+
 std::vector<std::string> GaiaAgent::claimedFiles(const std::string& answer) {
     static const std::regex claim(
-        R"(\b(saved|wrote|written|created|exported|generated|produced)\b[^\n]{0,80}?)"
+        R"(\b)" + kWriteVerbs + R"(\b[^\n]{0,80}?)"
         R"(([A-Za-z]:[\\/][^\s`'"*<>|]+|[A-Za-z0-9_~./\\-]*[A-Za-z0-9_-]\.)"
         R"((md|csv|tsv|xlsx|xls|docx|pptx|txt|json|html|py|pdf|png|jpg|svg|yaml|yml|sh|ics|xml))\b)",
         std::regex::icase);
+    static const std::regex verbEnd(kWriteVerbs, std::regex::icase);
+    const std::string prose = dropCounterfactual(plainPunctuation(answer, ";"));
     std::vector<std::string> out;
-    for (auto it = std::sregex_iterator(answer.begin(), answer.end(), claim);
-         it != std::sregex_iterator(); ++it) {
-        std::string p = (*it)[2].str();
+    size_t pos = 0;
+    std::smatch m;
+    while (pos < prose.size() &&
+           std::regex_search(prose.begin() + static_cast<std::ptrdiff_t>(pos), prose.end(), m, claim,
+                             pos ? std::regex_constants::match_prev_avail
+                                 : std::regex_constants::match_default)) {
+        const size_t verb = pos + static_cast<size_t>(m.position(0));
+        std::smatch v;
+        std::regex_search(prose.begin() + static_cast<std::ptrdiff_t>(verb), prose.end(), v, verbEnd,
+                          std::regex_constants::match_continuous);
+        const size_t afterVerb = verb + static_cast<size_t>(v.length(0));
+        if (isDeniedWrite(prose, verb, afterVerb)) {
+            pos = afterVerb;  // a later verb in the same span may still claim a save
+            continue;
+        }
+        std::string p = m[1].str();
         while (!p.empty() && (p.back() == '.' || p.back() == ',')) p.pop_back();
         if (std::find(out.begin(), out.end(), p) == out.end()) out.push_back(p);
+        pos = verb + static_cast<size_t>(m.length(0));
     }
     return out;
+}
+
+bool GaiaAgent::asksForNoAction(const std::string& request) {
+    static const std::regex::flag_type icase = std::regex::icase;
+    static const std::string thenWork =
+        "(?:read|open|look|check|inspect|run|execute|fix|edit|write|update|change|create|save"
+        "|delete|remove|move|install|search|grep|list|modify|apply)";
+    static const std::string ban = R"(\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?)";
+    static const std::string atEnd = R"((?![\s\S]))";
+    static const std::string banEnd =
+        R"((?![\s,;:-]*(?:(?:just|only|but|and|then)\s+)?)" + thenWork + R"(\b))"
+        R"((?=\s*(?:)" + atEnd + R"(|[.,;:!?)\]-]|(?:in\s+this\s+turn|yet|now|for\s+now|until)"
+        R"(|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b)))";
+    // "Don't run anything yet" forbids running, not writing the files asked for.
+    static const std::regex banTools(
+        ban + R"((?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing)))"
+              R"(\s+(?:any\s+tools?|tools))" + banEnd,
+        icase);
+    static const std::regex banAnything(
+        ban + R"((?:do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+(?:anything|any\s+files?))" + banEnd,
+        icase);
+    static const std::regex planOnly[] = {
+        std::regex(R"(\b(?:answer|reply|respond)\s+(?:only|just)\s+with\s+(?:a|an|the|your)\s+)"
+                   R"((?:[\w-]+\s+){0,3}plan\b)",
+                   icase),
+        std::regex(R"(\b(?:only|just)\s+(?:give|write|show|send|outline)\s+(?:me\s+)?)"
+                   R"((?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}plan\b)",
+                   icase),
+        // "Plan only." stands as its own clause, not "the plan only covers X".
+        std::regex(R"((?:^|[.;:!?(]\s*|\b(?:give|send|show)\s+me\s+)(?:(?:a|the|your)\s+)?)"
+                   R"(plan\s+only\b(?=\s*(?:)" + atEnd + R"(|[.,;:!?)]|please\b)))",
+                   icase),
+        std::regex(R"(\b(not\s)?only\s+(?:a|the)\s+plan\b)"
+                   R"((?=\s*(?:)" + atEnd + R"(|[.,;:!?)]|please\b|for\s+now\b|then\b)))",
+                   icase),
+    };
+    static const std::regex noTools(R"(\b(?:use|call|run)\s+no\s+tools\b)", icase);
+    // "... until you've read X", "... except config.yaml": the ban has a way out.
+    static const std::regex exception(
+        R"(\s*,?\s*(?:(?:until|till|before|unless)\s+you\b)"
+        R"(|(?:except|besides|other\s+than|apart\s+from)\b)"
+        R"(|but\s+(?:for\s+)?(?:that|this|the|those|these)\b))",
+        icase);
+    // "Last time you answered without reading any files": a report, not a ban.
+    static const std::regex narratedPast(
+        R"(\b(?:you|we|i|it|they)\s+(?:\w+\s+)?(?:\w+ed|did|got|gave|wrote|said|ran|went|made)\b)", icase);
+    // "... then do step 1": the plan is only the start.
+    static const std::regex planThenAct(
+        R"(\b(?:then|after\s+that|afterwards?|next)\s*,?\s+(?:you\s+(?:can|should|may)\s+)?)"
+        R"((?:do|carry|execute|run|go|start|implement|apply|proceed|make|create)"
+        R"(|write|perform|begin|continue|follow)\b)",
+        icase);
+
+    const std::string text = plainPunctuation(request, "-");
+    auto endsWithWord = [&text](size_t at, const char* word) {
+        const size_t n = std::strlen(word);
+        if (at < n + 1 || !std::isspace(static_cast<unsigned char>(text[at - 1]))) return false;
+        for (size_t i = 0; i < n; ++i) {
+            if (std::tolower(static_cast<unsigned char>(text[at - 1 - n + i])) != word[i]) return false;
+        }
+        return at == n + 1 || !(std::isalnum(static_cast<unsigned char>(text[at - 2 - n])) || text[at - 2 - n] == '_');
+    };
+    auto forbids = [&](const std::regex& ban, bool limitsWork) {
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), ban); it != std::sregex_iterator(); ++it) {
+            const size_t at = static_cast<size_t>(it->position(0));
+            const size_t end = at + static_cast<size_t>(it->length(0));
+            // "Fix foo.py but don't touch anything" limits the work; it does not stop it.
+            if (limitsWork && (endsWithWord(at, "but") || endsWithWord(at, "and") || endsWithWord(at, "then"))) {
+                continue;
+            }
+            if (std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(end), text.end(), exception,
+                                  std::regex_constants::match_continuous)) {
+                continue;
+            }
+            const char first = static_cast<char>(std::tolower(static_cast<unsigned char>(text[at])));
+            if (first == 'w' || first == 'n') {
+                size_t from = at;
+                while (from > 0 && at - from < 400 && text[from - 1] != '.' && text[from - 1] != '!' &&
+                       text[from - 1] != '?' && text[from - 1] != '\n') {
+                    --from;
+                }
+                if (std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(from),
+                                      text.begin() + static_cast<std::ptrdiff_t>(at), narratedPast)) {
+                    continue;
+                }
+            }
+            return true;
+        }
+        return false;
+    };
+    if (forbids(banTools, false) || forbids(banAnything, true)) return true;
+
+    auto asks = [&](const std::regex& ask, bool notGuarded) {
+        for (auto it = std::sregex_iterator(text.begin(), text.end(), ask); it != std::sregex_iterator(); ++it) {
+            if (notGuarded && (*it)[1].matched) continue;  // "not only a plan"
+            const size_t end = static_cast<size_t>(it->position(0) + it->length(0));
+            if (!std::regex_search(text.begin() + static_cast<std::ptrdiff_t>(end), text.end(), planThenAct)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (size_t i = 0; i < std::size(planOnly); ++i) {
+        if (asks(planOnly[i], i == 3)) return true;
+    }
+    return asks(noTools, false);
 }
 
 std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answer) {
@@ -456,7 +694,9 @@ std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answe
     for (const auto& r : options_.workspaceRoots) roots.emplace_back(fs::u8path(r));
     if (roots.empty()) roots.push_back(fs::current_path(ec));
 
-    auto exists = [&](std::string p) {
+    const auto& calls = turnToolCalls();
+
+    auto native = [](std::string p) {
 #ifndef _WIN32
         // Under WSL a Windows path the user wrote lives under /mnt/<drive>.
         if (p.size() > 2 && std::isalpha(static_cast<unsigned char>(p[0])) && p[1] == ':') {
@@ -465,6 +705,29 @@ std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answe
             p = mapped;
         }
 #endif
+        return p;
+    };
+
+    // A script's bare-named output lands beside the input the request named.
+    auto writtenBesideNamedInput = [&](const fs::path& name) {
+        const auto run = std::find_if(calls.begin(), calls.end(), [](const ToolCallRecord& c) {
+            return c.name == "bash_execute" && c.succeeded;
+        });
+        if (run == calls.end()) return false;
+        for (const auto& named : requestPaths(turnRequest())) {
+            const fs::path input = fs::u8path(native(named));
+            for (const fs::path& folder : {input, input.parent_path()}) {
+                const fs::path candidate = folder / name;
+                if (!fs::is_regular_file(candidate, ec)) continue;
+                const auto written = fs::last_write_time(candidate, ec);
+                if (!ec && written >= run->started) return true;
+            }
+        }
+        return false;
+    };
+
+    auto exists = [&](std::string p) {
+        p = native(std::move(p));
         const fs::path path(p);
         if (path.is_absolute()) return fs::exists(path, ec);
         const std::string name = path.filename().string();
@@ -478,7 +741,7 @@ std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answe
                 if (it->path().filename() == name) return true;
             }
         }
-        return false;
+        return !path.has_parent_path() && writtenBesideNamedInput(path);
     };
 
     std::vector<std::string> notes;
@@ -496,7 +759,6 @@ std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answe
                         " now, or correct the answer so it doesn't claim work that wasn't done.");
     }
 
-    const auto& calls = turnToolCalls();
     auto called = [&calls](std::initializer_list<const char*> names, bool mustSucceed) {
         return std::any_of(calls.begin(), calls.end(), [&](const ToolCallRecord& c) {
             if (mustSucceed && !c.succeeded) return false;
@@ -520,7 +782,8 @@ std::optional<std::string> GaiaAgent::reviewFinalAnswer(const std::string& answe
         R"(\b(does(n't| not) exist|do(n't| not) exist|is(n't| not) (there|present|in the folder)|)"
         R"(could(n't| not) find|no such file|not found|is missing|are missing)\b)",
         std::regex::icase);
-    if (std::regex_search(answer, absentClaim) &&
+    // "Use no tools": the user's own words win over the nudge to look first.
+    if (std::regex_search(answer, absentClaim) && !asksForNoAction(turnRequest()) &&
         !called({"file_search", "file_read", "bash_execute", "list_skills", "query_documents",
                  "index_document", "read_mcp_resource", "list_mcp_resources", "web_fetch",
                  "recall"},

@@ -793,6 +793,7 @@ json StdioServer::runTurn(const std::string& query) {
         }
         if (u.value("completion_tokens", 0) > 0) usage["tokens"] = u["completion_tokens"];
     }
+    if (result.value("tool_calls", 0) > 0) usage["tools_used"] = result["tool_calls"];
     if (!usage.empty()) terminal["usage"] = usage;
     return terminal;
 }

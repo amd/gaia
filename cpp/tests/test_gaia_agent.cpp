@@ -268,6 +268,231 @@ TEST(GaiaAgentTest, PlainAnswersAreNotSentBack) {
     EXPECT_EQ(mock.receivedBodies().size(), 1u);
 }
 
+TEST(GaiaAgentTest, ADenialIsNotAClaimThatAFileWasSaved) {
+    for (const char* denial : {"Nothing was written to `notes.md`.",
+                               "Nothing saved to out.md.",
+                               "Not saved to out.md.",
+                               "The report was never written to out.md.",
+                               "No file was written this turn, so report.md is unchanged.",
+                               "No files were saved to out/report.md.",
+                               "None of the files were written, not even totals.csv.",
+                               "I have created no files; notes.md is as it was.",
+                               "I saved nothing to notes.md.",
+                               "To be clear: I wrote no file this turn, and `pwned.txt` is not there."}) {
+        EXPECT_TRUE(GaiaAgent::claimedFiles(denial).empty()) << denial;
+    }
+}
+
+TEST(GaiaAgentTest, AWriteThatWouldHaveHappenedNamesNoFile) {
+    for (const char* counterfactual :
+         {"Had it been allowed, I would have written the totals to totals.csv.",
+          "Here's what I would have written, read from `pivot_q_region.xlsx`:",
+          "This is what I'd have saved, taken from `pivot_q_region.xlsx`.",
+          "Here\xE2\x80\x99s what I\xE2\x80\x99""d have saved, taken from `pivot_q_region.xlsx`.",
+          "I could not have written notes.txt without approval."}) {
+        EXPECT_TRUE(GaiaAgent::claimedFiles(counterfactual).empty()) << counterfactual;
+    }
+}
+
+TEST(GaiaAgentTest, ASaveBesideADenialOrACounterfactualIsStillAClaim) {
+    using Files = std::vector<std::string>;
+    EXPECT_EQ(GaiaAgent::claimedFiles("I wrote no files except `summary.md`."), Files{"summary.md"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Nothing was saved besides notes.md."), Files{"notes.md"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I would have written it to a.txt, but I saved it to `b.txt`."),
+              Files{"b.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I would have written a.txt and then saved b.txt instead."),
+              Files{"b.txt"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("I wrote no draft file, but saved the notes to x.md."), Files{"x.md"});
+    EXPECT_EQ(GaiaAgent::claimedFiles("Nothing was written to a.md. I saved the rest to `b.md`."), Files{"b.md"});
+}
+
+TEST(GaiaAgentTest, ADeclinedWriteReportedHonestlyIsNotSentBack) {
+    Workdir w;
+    for (const char* honest : {"The write was declined. Nothing was written to `notes.md`.",
+                               "Had it been allowed, I would have written the totals to totals.csv."}) {
+        bench::MockLlmServer mock;
+        mock.pushResponse(answer(honest));
+        GaiaAgent agent(cfgFor(mock), optionsFor(w));
+        json r = agent.processQuery("write the totals to a file");
+        EXPECT_EQ(r["result"], honest);
+        EXPECT_EQ(mock.receivedBodies().size(), 1u) << "told to 'Create it now' after: " << honest;
+    }
+}
+
+TEST(GaiaAgentTest, RequestsNotToActAreRecognised) {
+    for (const char* request :
+         {"I want net revenue by region for a sales CSV I will attach later. Do NOT run anything in this "
+          "turn. Answer only with a five-step numbered plan in the first person, each step of the form 'I "
+          "will use the `run_python` tool to ...', and close with the sentence: This should give you the "
+          "exact breakdown you asked for.",
+          "Don't use any tools, just tell me how you'd do it.",
+          "Without using any tools, explain it.",
+          "do not call any tools to answer this",
+          "Don\xE2\x80\x99t run any tools yet.",
+          "Don't open any files.",
+          "Don't do anything yet.",
+          "Just give me the plan for migrating the DB.",
+          "Answer only with a short plan.",
+          "Plan only, please.",
+          "Use no tools for this one.",
+          "Don't touch anything until I say so.",
+          "Don't do anything before I confirm.",
+          "Don't use any tools, but explain how you would do it.",
+          "Explain the bug without opening any files.",
+          "Give me only a plan, then wait for my go-ahead.",
+          "Just give me a plan. I'll decide later whether to run it.",
+          "Answer only with a short plan and close with a one-line summary.",
+          "I want only a plan.",
+          "Give me the plan only.",
+          "Show the sales trend, but don't use any tools yet."}) {
+        EXPECT_TRUE(GaiaAgent::asksForNoAction(request)) << request;
+    }
+}
+
+TEST(GaiaAgentTest, RequestsThatLimitTheWorkAreNotRequestsNotToAct) {
+    for (const char* request :
+         {"What is the net revenue excluding returned orders, broken down by region?",
+          "In ~/gaia-eval/resilience/ create totals.py and test_totals.py. Don't run anything yet.",
+          "For orders.csv I want net revenue by region. Do NOT run anything in this turn.",
+          "Without running anything, how would you clean this CSV?",
+          "Fix foo.py and don't do anything else.",
+          "Clean up the folder but don't touch anything else in it.",
+          "Don't run anything destructive.",
+          "Don't use pandas.",
+          "Write a script but don't run it.",
+          "Does config.yaml set debug? Answer only yes or no.",
+          "Run the tests and don't open any other files.",
+          "Don't read anything into it, just summarize report.md.",
+          "Last time you answered without reading any files and got it wrong. What is the total gross in "
+          "C:/x/orders.csv?",
+          "Don't touch anything until you've read C:/x/orders.csv, then tell me the total.",
+          "Don't do anything before you check the README.",
+          "What is in C:/x/notes.txt? Don't open any files but that one.",
+          "Don't open any files except config.yaml.",
+          "Don't touch anything other than todo.txt.",
+          "Give me only a plan for the migration, then do step 1.",
+          "Just give me a plan and then carry it out.",
+          "Plan only at first, and then run step 1 once it reads well.",
+          "Answer only with a short plan. After that, execute it.",
+          "My migration plan only covers Postgres; extend it to MySQL.",
+          "Write not only a plan but the code too.",
+          "Update the plan only for step 3 and save it to plan.md",
+          "Don't touch anything \xE2\x80\x94 just read config.py and tell me what it sets",
+          "Don't touch anything, just read config.py and tell me what it sets",
+          "Don't touch anything - open config.py and tell me what it sets",
+          "Fix the bug in foo.py but don't touch anything.",
+          ""}) {
+        EXPECT_FALSE(GaiaAgent::asksForNoAction(request)) << request;
+    }
+}
+
+TEST(GaiaAgentTest, ARequestToUseNoToolsSwitchesOffTheNudgeToLook) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("config.yaml was not found."));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    json r = agent.processQuery("Use no tools for this one. Does config.yaml set debug?");
+    EXPECT_EQ(r["result"], "config.yaml was not found.");
+    EXPECT_EQ(mock.receivedBodies().size(), 1u) << "the user said not to look";
+}
+
+TEST(GaiaAgentTest, ForbiddingOnlyARunStillChecksTheAnswer) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("config.yaml was not found."));
+    mock.pushResponse(answer("I looked: there is no config.yaml here."));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    json r = agent.processQuery("In this folder create totals.py and test_totals.py from config.yaml. "
+                                "Don't run anything yet.");
+    EXPECT_EQ(r["result"], "I looked: there is no config.yaml here.");
+    ASSERT_EQ(mock.receivedBodies().size(), 2u);
+    EXPECT_NE(mock.receivedBodies()[1].find("you didn't look"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, AFalseSaveClaimIsStillSentBackWhenToolsWereForbidden) {
+    Workdir w;
+    bench::MockLlmServer mock;
+    mock.pushResponse(answer("I saved the plan to plan.md."));
+    mock.pushResponse(answer("Here is the plan; nothing was saved."));
+    GaiaAgent agent(cfgFor(mock), optionsFor(w));
+    json r = agent.processQuery("Use no tools. Give me a plan.");
+    EXPECT_EQ(r["result"], "Here is the plan; nothing was saved.");
+    EXPECT_EQ(mock.receivedBodies().size(), 2u);
+}
+
+namespace {
+
+std::string shellCall(const std::string& command) {
+    json args = json{{"command", command}}.dump();
+    return json{{"choices",
+                 json::array({{{"message",
+                                {{"role", "assistant"},
+                                 {"content", nullptr},
+                                 {"tool_calls",
+                                  json::array({{{"id", "c1"},
+                                                {"type", "function"},
+                                                {"function", {{"name", "bash_execute"}, {"arguments", args}}}}})}}}}})}}
+        .dump();
+}
+
+// An agent that may write anywhere, so a script can put its output beside an input outside the folder.
+struct UnconfinedRun {
+    Workdir work, elsewhere;
+    fs::path kx;
+    bench::MockLlmServer mock;
+    UnconfinedRun() : kx(elsewhere.path / "kx") {
+        fs::create_directories(kx);
+        std::ofstream(kx / "reconciliation.md") << "# Recon\n";
+    }
+    json run(const std::string& request) {
+        GaiaAgent::Options o = optionsFor(work);
+        o.fullAccess = true;
+        GaiaAgent agent(cfgFor(mock), o);
+        agent.toolRegistry().setConfirmCallback(
+            [](const std::string&, const json&) { return ToolConfirmResult::ALLOW_ONCE; });
+        return agent.processQuery(request);
+    }
+};
+
+}  // namespace
+
+TEST(GaiaAgentTest, ABareOutputAScriptWroteBesideTheNamedInputIsFound) {
+    UnconfinedRun t;
+    const fs::path xlsx = t.kx / "recon_tables.xlsx";
+    t.mock.pushResponse(shellCall("echo PK > \"" + xlsx.generic_string() + "\""));
+    t.mock.pushResponse(answer("Both files are in kx: I created recon_tables.xlsx."));
+    json r = t.run("Turn " + (t.kx / "reconciliation.md").string() +
+                   " into a Word document. Also make recon_tables.xlsx with one sheet per category.");
+    ASSERT_TRUE(fs::exists(xlsx)) << "the shell did not write the file: " << r.dump();
+    EXPECT_EQ(r["result"], "Both files are in kx: I created recon_tables.xlsx.");
+    EXPECT_EQ(t.mock.receivedBodies().size(), 2u) << "a file on disk was reported missing";
+}
+
+TEST(GaiaAgentTest, ABareOutputNoRunWroteIsStillMissing) {
+    UnconfinedRun t;
+    const fs::path old = t.kx / "recon_tables.xlsx";
+    std::ofstream(old) << "PK";
+    fs::last_write_time(old, fs::last_write_time(old) - std::chrono::hours(1));
+    t.mock.pushResponse(shellCall("echo done"));
+    t.mock.pushResponse(answer("Done: I created recon_tables.xlsx."));
+    t.mock.pushResponse(answer("I did not create recon_tables.xlsx."));
+    json r = t.run("Read " + (t.kx / "reconciliation.md").string() + " and make recon_tables.xlsx from it.");
+    EXPECT_EQ(r["result"], "I did not create recon_tables.xlsx.");
+    ASSERT_EQ(t.mock.receivedBodies().size(), 3u);
+    EXPECT_NE(t.mock.receivedBodies()[2].find("no such file exists"), std::string::npos);
+}
+
+TEST(GaiaAgentTest, ABareOutputIsNotLookedForInAFolderNobodyNamed) {
+    UnconfinedRun t;
+    const fs::path stray = t.kx / "recon_tables.xlsx";
+    t.mock.pushResponse(shellCall("echo PK > \"" + stray.generic_string() + "\""));
+    t.mock.pushResponse(answer("Done: I created recon_tables.xlsx."));
+    t.mock.pushResponse(answer("It went to another folder."));
+    json r = t.run("Make recon_tables.xlsx.");
+    ASSERT_TRUE(fs::exists(stray)) << r.dump();
+    EXPECT_EQ(t.mock.receivedBodies().size(), 3u);
+}
+
 TEST(GaiaAgentTest, CodeSearchHonorsGitignoreAndFindsCode) {
     Workdir w;
     fs::create_directories(w.path / "src");

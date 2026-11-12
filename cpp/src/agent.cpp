@@ -13,6 +13,8 @@
 #include <thread>
 #include <deque>
 #include <iostream>
+#include <iterator>
+#include <limits>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -997,6 +999,7 @@ std::optional<std::string> toolFailure(const json& r);  // defined with the loop
 
 json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
     const auto started = std::chrono::steady_clock::now();
+    const auto startedOnDisk = std::filesystem::file_time_type::clock::now();
     json result;
     // Whatever a tool or its checks throw is the tool's result, so the model
     // hears about it and the turn goes on.
@@ -1009,7 +1012,7 @@ json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     const std::string resolved = tools_.resolveName(toolName);
     turnToolCalls_.push_back({resolved.empty() ? toolName : resolved, toolArgs,
-                              !toolFailure(result).has_value(), turnStep_, wall});
+                              !toolFailure(result).has_value(), turnStep_, wall, startedOnDisk});
     return result;
 }
 
@@ -1349,31 +1352,52 @@ std::string summarizeUserInput(const std::vector<Message>& userMessages) {
 
 using ToolCallWindow = std::deque<std::pair<std::string, json>>;
 
-// Loop detection: true when the previous (maxConsecutiveRepeats - 1) calls were
-// all this exact tool+args, making the pending one the Nth identical call.
-bool isRepeatedToolCall(const ToolCallWindow& history,
-                        const std::string& toolName, const json& toolArgs,
-                        int maxConsecutiveRepeats) {
-    const int repeatThreshold = maxConsecutiveRepeats - 1;
-    // A threshold of 0 vacuously matches — preserved from the inline version
-    // this replaced. AgentConfig::validate() requires maxConsecutiveRepeats >= 2,
-    // so it is only reachable from an unvalidated hand-built config.
-    if (static_cast<int>(history.size()) < repeatThreshold) return false;
-    for (size_t i = history.size() - static_cast<size_t>(repeatThreshold);
-         i < history.size(); ++i) {
-        if (history[i].first != toolName || history[i].second != toolArgs) {
-            return false;
+// Longest repeating cycle of calls the loop guard recognises (A, B, A, B, ...).
+constexpr int kMaxLoopPeriod = 3;
+
+// Loop detection: the length of the cycle the pending call would close for the
+// maxConsecutiveRepeats-th time back to back (1 = the same call over and over),
+// or 0 when it is not a loop. A model alternating a search with a read never
+// repeats a call twice in a row, so period 1 alone lets it run on.
+int loopPeriod(const ToolCallWindow& history,
+               const std::string& toolName, const json& toolArgs,
+               int maxConsecutiveRepeats) {
+    const int n = static_cast<int>(history.size()) + 1;  // the pending call is the last
+    auto same = [&](int i, int j) {
+        const std::string& nameI = i == n - 1 ? toolName : history[static_cast<size_t>(i)].first;
+        const std::string& nameJ = j == n - 1 ? toolName : history[static_cast<size_t>(j)].first;
+        if (nameI != nameJ) return false;
+        const json& argsI = i == n - 1 ? toolArgs : history[static_cast<size_t>(i)].second;
+        const json& argsJ = j == n - 1 ? toolArgs : history[static_cast<size_t>(j)].second;
+        return argsI == argsJ;
+    };
+    for (int period = 1; period <= kMaxLoopPeriod && period <= n; ++period) {
+        bool shorter = false;  // a repeat inside the block is a shorter period
+        for (int i = n - period; i < n && !shorter; ++i) {
+            for (int j = i + 1; j < n && !shorter; ++j) shorter = same(i, j);
         }
+        if (shorter) continue;
+        int repeats = 1;
+        while (n - (repeats + 1) * period >= 0) {
+            bool equal = true;
+            for (int k = 0; k < period && equal; ++k) {
+                equal = same(n - (repeats + 1) * period + k, n - period + k);
+            }
+            if (!equal) break;
+            ++repeats;
+        }
+        if (repeats >= maxConsecutiveRepeats) return period;
     }
-    return true;
+    return 0;
 }
 
-// Keeps only the calls isRepeatedToolCall() reads, so a long query's history
+// Keeps only the calls loopPeriod() reads, so a long query's history
 // does not hold every tool's arguments for its whole lifetime.
 void recordToolCall(ToolCallWindow& history, const std::string& toolName,
                     const json& toolArgs, int maxConsecutiveRepeats) {
     history.emplace_back(toolName, toolArgs);
-    const size_t keep = static_cast<size_t>(std::max(maxConsecutiveRepeats - 1, 0));
+    const size_t keep =
+        static_cast<size_t>(std::max(kMaxLoopPeriod * maxConsecutiveRepeats - 1, 0));
     while (history.size() > keep) history.pop_front();
 }
 
@@ -1404,7 +1428,50 @@ std::optional<std::string> toolFailure(const json& r) {
     return std::nullopt;
 }
 
-std::string loopNudge(const std::string& toolName, int repeats) {
+// Steps-left levels at which the model hears about its budget. The fraction
+// keeps a level from firing early on a budget too small to hold it.
+struct BudgetLevel {
+    int stepsLeft;
+    double fractionLeft;
+};
+constexpr BudgetLevel kBudgetLevels[] = {{20, 0.50}, {10, 0.25}, {5, 0.10}};
+
+// Below this many steps there is no room to act on a notice.
+constexpr int kMinStepsForBudgetNotices = 8;
+
+std::string budgetNotice(int level, int used, int total, int left) {
+    const std::string l = std::to_string(left), t = std::to_string(total);
+    if (level == 20) {
+        return "Step budget: " + std::to_string(used) + " of " + t + " used, " + l +
+               " left. Stop gathering context. If the task asks for files or other "
+               "deliverables, start producing them now from what you already have, and mark "
+               "any value you could not verify as unverified. If the part of this task that "
+               "changes something has not started yet, start it now.";
+    }
+    if (level == 10) {
+        return "Step budget: " + l + " of " + t +
+               " steps left. Write the requested deliverables now with what you have, marking "
+               "unverified values as unverified. A finished deliverable with its gaps flagged "
+               "is worth more than a better one never written; refine afterwards if there is "
+               "room.";
+    }
+    return "Step budget: " + l + " of " + t +
+           " steps left. Do not research further. Write anything requested that does not "
+           "exist yet, then answer with your findings and what is still missing. After the "
+           "last step no tool can be called and anything not already written is lost.";
+}
+
+std::string loopNudge(const std::string& toolName, int repeats, int period) {
+    if (period > 1) {
+        return json{{"status", "error"},
+                    {"error", "Not run: you have called " + toolName + " " +
+                                  std::to_string(repeats - 1) +
+                                  " times with the same arguments, in a repeating cycle of " +
+                                  std::to_string(period) +
+                                  " calls, and it returned no new progress. Do not repeat it — "
+                                  "try a different approach, or give your final answer."}}
+            .dump();
+    }
     return json{{"status", "error"},
                 {"error", "Not run: this is the " + std::to_string(repeats) +
                               "th identical call to " + toolName +
@@ -1564,6 +1631,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     const std::string userInput = summarizeUserInput(userMessages);
+    turnRequest_ = userInput;
 
     console_->printProcessingStart(userInput, stepsLimit, cfg.modelId);
 
@@ -1584,7 +1652,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     std::string lastError;
     ToolCallWindow toolCallHistory; // recent (name, args) for loop detection
     UsageStats totalUsage;
-    bool budgetNoticeSent = false;
+    int budgetLevelSent = std::numeric_limits<int>::max();  // this level and every higher one was sent
+    std::vector<std::string> budgetNotices;
     bool failed = false;
     bool loopWarned = false;
     bool emptyNudged = false;
@@ -1644,17 +1713,20 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         const std::string turnSystemPrompt = composeSystemPromptFor(cfg);
 
         const int stepsLeft = stepsLimit - stepsTaken + 1;
-        if (cfg.stepBudgetNotices && !budgetNoticeSent && stepsLimit >= 6 &&
-            stepsLeft == std::max(3, stepsLimit / 10)) {
-            budgetNoticeSent = true;
-            Message notice;
-            notice.role = MessageRole::USER;
-            notice.content =
-                "[Step budget] " + std::to_string(stepsLeft) +
-                " steps remain for this request, including your answer. Finish only the "
-                "essential work, save anything you were asked to produce, then give your "
-                "final answer.";
-            messages.push_back(notice);
+        if (cfg.stepBudgetNotices && stepsTaken > 1 && stepsLimit >= kMinStepsForBudgetNotices) {
+            // Most urgent level first, so crossing two at once sends the one true now.
+            for (auto level = std::rbegin(kBudgetLevels); level != std::rend(kBudgetLevels); ++level) {
+                const int trigger = std::min(
+                    level->stepsLeft, std::max(1, static_cast<int>(level->fractionLeft * stepsLimit)));
+                if (level->stepsLeft >= budgetLevelSent || stepsLeft > trigger) continue;
+                budgetLevelSent = level->stepsLeft;
+                Message notice;
+                notice.role = MessageRole::USER;
+                notice.content = budgetNotice(level->stepsLeft, stepsTaken - 1, stepsLimit, stepsLeft);
+                budgetNotices.push_back(notice.content);
+                messages.push_back(notice);
+                break;
+            }
         }
 
         // Skip progress spinner when streaming — tokens serve as live progress.
@@ -1757,8 +1829,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
 
                 const json& toolArgs = decodedArgs[i];
 
-                if (isRepeatedToolCall(toolCallHistory, tc.name, toolArgs,
-                                       cfg.maxConsecutiveRepeats)) {
+                if (const int period = loopPeriod(toolCallHistory, tc.name, toolArgs,
+                                                  cfg.maxConsecutiveRepeats)) {
                     if (loopWarned) {
                         console_->printWarning("Detected repeated tool call loop. Breaking out.");
                         loopDetected = true;
@@ -1771,7 +1843,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                     reply.role = MessageRole::TOOL;
                     reply.name = tc.name;
                     reply.toolCallId = tc.id;
-                    reply.content = loopNudge(tc.name, cfg.maxConsecutiveRepeats);
+                    reply.content = loopNudge(tc.name, cfg.maxConsecutiveRepeats, period);
                     messages.push_back(reply);
                     toolCallHistory.clear();
                     continue;
@@ -1890,9 +1962,9 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             json toolArgs = parsed.toolArgs.value_or(json::object());
             if (toolArgs.is_null()) toolArgs = json::object();
 
-            // Loop detection — same tool+args repeated maxConsecutiveRepeats times
-            if (isRepeatedToolCall(toolCallHistory, toolName, toolArgs,
-                                   cfg.maxConsecutiveRepeats)) {
+            // Loop detection — a call, or a short cycle of calls, repeated maxConsecutiveRepeats times
+            if (const int period = loopPeriod(toolCallHistory, toolName, toolArgs,
+                                              cfg.maxConsecutiveRepeats)) {
                 if (loopWarned) {
                     console_->printWarning("Detected repeated tool call loop. Breaking out.");
                     stopReason = "loop";
@@ -1903,7 +1975,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 Message nudge;
                 nudge.role = MessageRole::TOOL;
                 nudge.name = toolName;
-                nudge.content = loopNudge(toolName, cfg.maxConsecutiveRepeats);
+                nudge.content = loopNudge(toolName, cfg.maxConsecutiveRepeats, period);
                 messages.push_back(nudge);
                 toolCallHistory.clear();
                 continue;
@@ -2006,6 +2078,15 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     }
 
     console_->printCompletion(stepsTaken, stepsLimit);
+
+    // A budget notice is this turn's guidance; saved, the next turn opens with a stale "5 steps left".
+    messages.erase(std::remove_if(messages.begin(), messages.end(),
+                                  [&budgetNotices](const Message& m) {
+                                      return m.role == MessageRole::USER &&
+                                             std::find(budgetNotices.begin(), budgetNotices.end(),
+                                                       m.content) != budgetNotices.end();
+                                  }),
+                   messages.end());
 
     // Store conversation history for session persistence.
     // Prompt-JSON tool results are converted to USER messages so the LLM server
