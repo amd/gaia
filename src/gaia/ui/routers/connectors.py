@@ -47,7 +47,11 @@ from pydantic import BaseModel, Field
 
 import gaia.connectors as connections
 import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
-from gaia.connectors.activations import list_agent_activations
+from gaia.connectors.activations import (
+    ActivationsLedgerCorrupt,
+    list_agent_activations,
+    load_activations,
+)
 from gaia.connectors.api import activate as activate_connector_for_agent
 from gaia.connectors.api import deactivate as deactivate_connector_for_agent
 from gaia.connectors.api import resolve_declared_scopes
@@ -60,6 +64,7 @@ from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowInProgressError,
     FlowTimeoutError,
+    InvalidConfigValueError,
     NoDeclaredScopesError,
     ScopeMismatchError,
     ScopeNotAllowedError,
@@ -85,7 +90,12 @@ from gaia.connectors.mcp_server import (
     is_mcp_server_configured,
 )
 from gaia.connectors.registry import REGISTRY
-from gaia.connectors.store import peek_connection, peek_provider_credentials
+from gaia.connectors.spec import ConfigField
+from gaia.connectors.store import (
+    peek_connection,
+    peek_provider_credentials,
+    retry_keyring,
+)
 
 from ..security import require_ui_header as _require_ui_header
 
@@ -268,6 +278,8 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
         )
     if isinstance(exc, ConfigurationError):
         return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, InvalidConfigValueError):
+        return HTTPException(status_code=400, detail=str(exc))
     if isinstance(exc, ScopeNotAllowedError):
         return HTTPException(
             status_code=400,
@@ -325,7 +337,11 @@ def _raise_http_for(exc: ConnectorsError) -> HTTPException:
 
 
 def _resolve_grant_scopes(
-    request: Request, connector_id: str, agent_ids: List[str]
+    request: Request,
+    connector_id: str,
+    agent_ids: List[str],
+    *,
+    enforced_only: bool = False,
 ) -> Dict[str, List[str]]:
     """Resolve ``[namespaced_agent_id]`` → ``{agent_id: required_scopes}`` (#2117).
 
@@ -346,7 +362,9 @@ def _resolve_grant_scopes(
         raise HTTPException(status_code=503, detail="Agent registry not initialized")
 
     try:
-        return resolve_declared_scopes(registry, connector_id, agent_ids)
+        return resolve_declared_scopes(
+            registry, connector_id, agent_ids, enforced_only=enforced_only
+        )
     except UnknownAgentError as e:
         raise HTTPException(
             status_code=404,
@@ -519,6 +537,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "description": spec.description,
         "product_url": spec.product_url,
         "docs_url": spec.docs_url,
+        "setup_url": spec.setup_url,
         "configured": configured,
         "configurable": configurable,
         "config_error": config_error,
@@ -535,17 +554,21 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "supports_device_code": spec.supports_device_code,
         # OAuth setup form (e.g. Google client_id/client_secret) — empty
         # tuple for connectors that don't need first-time provider creds.
-        "oauth_setup_fields": [
-            {
-                "key": f.key,
-                "label": f.label,
-                "kind": f.kind,
-                "required": f.required,
-                "placeholder": f.placeholder,
-                "help_md": f.help_md,
-            }
-            for f in spec.oauth_setup_fields
-        ],
+        "oauth_setup_fields": [_field_summary(f) for f in spec.oauth_setup_fields],
+        # Label, example and help for each ``mcp_env_keys`` entry.
+        "config_fields": [_field_summary(f) for f in spec.config_schema],
+    }
+
+
+def _field_summary(f: ConfigField) -> Dict[str, Any]:
+    return {
+        "key": f.key,
+        "label": f.label,
+        "kind": f.kind,
+        "required": f.required,
+        "placeholder": f.placeholder,
+        "help_md": f.help_md,
+        "prefix": f.prefix,
     }
 
 
@@ -559,6 +582,16 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
 async def list_connectors() -> Dict[str, Any]:
     """Return catalog specs merged with live state for all connectors."""
     specs = REGISTRY.all()
+    # Every summary reads the same ledger; a corrupt one is fixed by deleting it, so name it.
+    ledger_cause: Dict[str, Any] = {}
+    try:
+        load_activations()
+    except ActivationsLedgerCorrupt as exc:
+        logger.warning("connectors-list: %s", exc)
+        ledger_cause = {"reason": "activations_unreadable", "path": str(exc.path)}
+    except ConnectorsError as exc:
+        # Unreadable but not corrupt (e.g. permissions): deleting it is the wrong advice.
+        logger.warning("connectors-list: %s", exc)
     summaries: List[Dict[str, Any]] = []
     for s in specs:
         try:
@@ -567,7 +600,14 @@ async def list_connectors() -> Dict[str, Any]:
             logger.warning(
                 "connectors-list: summary failed for %s (%s)", s.id, type(exc).__name__
             )
-            summaries.append({"id": s.id, "error": "unavailable"})
+            summaries.append(
+                {
+                    "id": s.id,
+                    "display_name": s.display_name,
+                    "error": "unavailable",
+                    **ledger_cause,
+                }
+            )
     return {"connectors": summaries}
 
 
@@ -798,6 +838,8 @@ async def configure_connector(
     the mailbox is granted to those agents when the flow completes (#2117) — the
     same behaviour as the plain ``authorize`` path.
     """
+    # Connecting needs the key store, so it may ask the OS to unlock it again.
+    retry_keyring()
     config = dict(body.config)
     raw_grant_agents = config.get("grant_agents")
     if raw_grant_agents:
@@ -823,6 +865,7 @@ async def configure_connector(
 @router.post("/{connector_id}/test", dependencies=[Depends(_require_ui_header)])
 async def test_connector(connector_id: str) -> Dict[str, Any]:
     """Run the health check for a connector."""
+    retry_keyring()
     try:
         result = await health_check(connector_id)
     except KeyError:
@@ -941,6 +984,7 @@ async def authorize(
     in the same flow (#2117). Scope resolution happens up front so an unknown
     or non-declaring agent fails the request before any browser step.
     """
+    retry_keyring()
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         return await connections.start_authorization(
@@ -976,6 +1020,7 @@ async def authorize_device(
     The ``device_code`` is intentionally NOT returned — it is a bearer-equivalent
     for polling and the server owns the poll loop.
     """
+    retry_keyring()
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         info = await connections.start_device_flow(
@@ -1184,7 +1229,10 @@ async def forward_connection(
     requirement for ``provider`` is rejected with 400 ``agent_declares_no_scopes``
     rather than silently granting it zero required scopes.
     """
-    grant_map = _resolve_grant_scopes(request, provider, body.grant_agents)
+    # A host that forwards mail only must keep working without calendar scope.
+    grant_map = _resolve_grant_scopes(
+        request, provider, body.grant_agents, enforced_only=True
+    )
     required: set[str] = set()
     for scopes in grant_map.values():
         required.update(scopes)

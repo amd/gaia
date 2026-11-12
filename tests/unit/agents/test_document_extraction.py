@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from gaia.agents.base.agent import Agent
+from gaia.agents.base.extraction import MAX_TOKENS as EXTRACTION_MAX_TOKENS
 from gaia.agents.base.extraction import (
     PAGE_CHARS,
     Entry,
@@ -22,6 +23,7 @@ from gaia.agents.base.extraction import (
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+from gaia.llm.lemonade_client import cloud_lowest_reasoning_effort
 from gaia.security import PathValidator
 
 
@@ -1684,14 +1686,318 @@ def test_extraction_tool_reports_a_missing_source_without_asking(
     missing = tmp_path.parent / f"{tmp_path.name}-outside" / "minutes.txt"
     asked = []
     agent.path_validator.set_access_prompt(lambda path: asked.append(path) or True)
+    # Named when the turn began, gone by the time the tool runs.
+    missing.parent.mkdir()
+    missing.write_text("x", encoding="utf-8")
     agent._extraction_ledger = ExtractionLedger(
         f"List every item in {missing}", str(tmp_path)
     )
+    assert agent._extraction_ledger.offered
     agent._tool_reported_usage = []
     agent._register_extraction_tool()
+    missing.unlink()
 
     result = agent._tools_registry["extract_document_items"]["function"](str(missing))
 
     assert result["status"] == "error"
     assert "not found" in result["error"].lower(), result
     assert asked == []
+
+
+def test_extraction_tool_refuses_a_turn_that_is_not_a_listing_request(agent, tmp_path):
+    """A thin list keeps the tool once offered, so a later turn can still call it."""
+    source = tmp_path / "minutes.txt"
+    source.write_text("Item one\n", encoding="utf-8")
+    agent._extraction_ledger = ExtractionLedger(
+        f"List every item in {source}", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+    agent._extraction_ledger = ExtractionLedger("What day is it?", str(tmp_path))
+    assert not agent._extraction_ledger.offered
+
+    result = agent._tools_registry["extract_document_items"]["function"](str(source))
+
+    assert result == {
+        "status": "error",
+        "error": "extract_document_items is only for requests to list every item "
+        "in a document. Read the document instead.",
+    }
+
+
+@pytest.mark.parametrize(
+    "model_id, effort",
+    [
+        ("amd.Qwen3.8-Flash-Next", "low"),
+        # Rejects "none"; its accepted values are unknown, so none is sent.
+        ("amd.gpt-5.3-chat", None),
+        ("amd.Claude-Opus-5.5", "none"),
+        ("amd.DeepSeek-V4.1-Flash", "none"),
+        ("fireworks.gemma-4-31b-it", None),
+    ],
+)
+def test_cloud_extraction_sends_only_an_effort_the_model_accepts(
+    agent, tmp_path, model_id, effort
+):
+    (tmp_path / "minutes.txt").write_text("alpha")
+    agent.model_id = model_id
+    agent._extraction_ledger = ExtractionLedger(
+        "List every item in minutes.txt", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+    sent = []
+    agent.chat.send_messages.side_effect = lambda **kw: sent.append(kw) or MagicMock(
+        text=reply("alpha"), usage={"total_tokens": 10}, stats={}
+    )
+
+    result = agent._tools_registry["extract_document_items"]["function"]("minutes.txt")
+
+    assert result.get("status") != "error", result
+    assert sent
+    for kwargs in sent:
+        # Always present: None keeps a configured cloud_reasoning_effort off too.
+        assert "reasoning_effort" in kwargs
+        assert kwargs["reasoning_effort"] == effort
+        assert "repeat_penalty" not in kwargs
+
+
+def _extract_with(agent, tmp_path, model_id, respond):
+    (tmp_path / "minutes.txt").write_text("alpha")
+    agent.model_id = model_id
+    agent._extraction_ledger = ExtractionLedger(
+        "List every item in minutes.txt", str(tmp_path)
+    )
+    agent._tool_reported_usage = []
+    agent._register_extraction_tool()
+    sent = []
+
+    def send(**kw):
+        sent.append(kw)
+        return respond(kw)
+
+    agent.chat.send_messages.side_effect = send
+    result = agent._tools_registry["extract_document_items"]["function"]("minutes.txt")
+    return result, sent
+
+
+def test_local_model_named_like_a_cloud_family_gets_no_reasoning_effort(
+    agent, tmp_path
+):
+    result, sent = _extract_with(
+        agent,
+        tmp_path,
+        "user.Qwen3.8-Flash-Next-GGUF",
+        lambda kw: MagicMock(text=reply("alpha"), usage={"total_tokens": 10}, stats={}),
+    )
+    assert result.get("status") != "error", result
+    assert sent
+    for kwargs in sent:
+        assert "reasoning_effort" not in kwargs
+        assert kwargs["repeat_penalty"] == 1.0
+
+
+@pytest.mark.parametrize("model_id", ["amd.Qwen3.8-Flash-Next", "amd.gpt-5.3-chat"])
+def test_a_cloud_page_that_exhausts_its_budget_fails_without_a_swapped_effort(
+    agent, tmp_path, model_id
+):
+    result, sent = _extract_with(
+        agent,
+        tmp_path,
+        model_id,
+        lambda kw: MagicMock(
+            text="",
+            finish_reason="length",
+            usage={"completion_tokens": EXTRACTION_MAX_TOKENS},
+            stats={},
+        ),
+    )
+    assert result["status"] == "error", result
+    assert "budget" in result["error"], result
+    # The page's own re-asks keep the effort; none of them swaps in "none".
+    assert sent
+    expected = cloud_lowest_reasoning_effort(model_id)
+    for kwargs in sent:
+        assert "reasoning_effort" in kwargs
+        assert kwargs["reasoning_effort"] == expected
+
+
+def test_a_gateway_rejection_surfaces_instead_of_retrying_another_effort(
+    agent, tmp_path
+):
+    def reject(kw):
+        raise RuntimeError(
+            "400 Unexpected reasoning effort low. Supported types are xhigh, medium."
+        )
+
+    result, sent = _extract_with(agent, tmp_path, "amd.Qwen3.8-Flash-Next", reject)
+    assert result["status"] == "error", result
+    assert "reasoning effort" in result["error"], result
+    assert [kw.get("reasoning_effort") for kw in sent] == ["low"]
+
+
+def plant_manual():
+    """A ~37 KB, 10-page manual where one section names a code."""
+    filler = "Inspect the conveyor belts and log the shift handover.\n"
+    sections = []
+    for number in range(1, 41):
+        body = filler * 17
+        if number == 23:
+            body = filler * 7 + "Reset the press if it shows code E-417.\n" + body
+        sections.append(f"## Section {number}\n\n{body}")
+    return "\n".join(sections)
+
+
+def counting_ask(calls):
+    def ask(system, payload):
+        data = json.loads(payload)
+        calls.append(data)
+        found = "Reset the press if it shows code E-417."
+        if found in data["source_page"] and not data.get("already_found"):
+            return reply(found)
+        return reply()
+
+    return ask
+
+
+def test_terms_send_only_matching_pages_to_the_model(tmp_path):
+    source = plant_manual()
+    query = "List every section of plant_manual.md that mentions a code"
+    unscreened, screened = [], []
+    full = ExtractionLedger(query, str(tmp_path)).run(
+        "plant_manual.md", lambda p: source, counting_ask(unscreened), lambda: None
+    )
+    state = ExtractionLedger(query, str(tmp_path))
+    result = state.run(
+        "plant_manual.md",
+        lambda p: source,
+        counting_ask(screened),
+        lambda: None,
+        terms=["code"],
+    )
+    assert full["pages"] == 10 and len(unscreened) == 20
+    assert result["pages"] == 1 and len(screened) == 2
+    assert full["items"] == result["items"] == 1
+    assert "1 of 10 pages" in result["coverage"]
+    assert 'mentions "code"' in state.render()
+    assert not state.gaps()
+
+
+def test_terms_match_across_case_and_line_breaks():
+    source = " " * (PAGE_CHARS * 2) + "Error\nCode E-417" + " " * (PAGE_CHARS * 2)
+    calls = []
+    entries, pages = extract_pages(
+        source,
+        "List every code",
+        lambda s, p: calls.append(p) or reply("Code E-417"),
+        lambda: None,
+        terms=("error code",),
+    )
+    assert pages == len(calls) // 2 >= 1
+    assert [e.text for e in entries] == ["Code E-417"]
+
+
+def test_terms_with_no_matching_page_send_nothing():
+    calls = []
+    entries, pages = extract_pages(
+        "nothing relevant here",
+        "List every code",
+        lambda *a: calls.append(a) or reply(),
+        lambda: None,
+        terms=("code",),
+    )
+    assert (entries, pages, calls) == ([], 0, [])
+
+
+def test_changed_terms_rerun_instead_of_reusing_a_screened_inventory(tmp_path):
+    state = ExtractionLedger("List every code in a.md", str(tmp_path))
+    calls = []
+    ask = counting_ask(calls)
+    source = plant_manual()
+    state.run("a.md", lambda p: source, ask, lambda: None, terms=["code"])
+    state.run("a.md", lambda p: source, ask, lambda: None, terms=["code"])
+    assert len(calls) == 2
+    state.run("a.md", lambda p: source, ask, lambda: None)
+    assert len(calls) == 22
+    assert 'mentions "code"' not in state.render()
+
+
+@pytest.mark.parametrize("terms", ["code", [""], [7], ["x" * 81], ["t"] * 21])
+def test_malformed_terms_fail_without_calling_the_model(terms, tmp_path):
+    state = ExtractionLedger("List every code in a.md", str(tmp_path))
+    calls = []
+    result = state.run(
+        "a.md", lambda p: "code", counting_ask(calls), lambda: None, terms=terms
+    )
+    assert result["status"] == "error" and "terms" in result["error"]
+    assert not calls
+
+
+def test_agent_tool_passes_terms_to_the_page_reader(agent, tmp_path):
+    (tmp_path / "plant_manual.md").write_text(plant_manual())
+    pages_seen = []
+    turns = iter(
+        [
+            {
+                "tool": "extract_document_items",
+                "tool_args": {"file_path": "plant_manual.md", "terms": ["code"]},
+            },
+            {"answer": "Section 23 mentions code E-417."},
+        ]
+    )
+
+    def send(messages, system_prompt=None, tools=None, **kwargs):
+        if system_prompt and system_prompt.startswith("Extract every requested"):
+            payload = json.loads(messages[0]["content"])
+            pages_seen.append(payload)
+            found = "Reset the press if it shows code E-417."
+            hit = found in payload["source_page"] and not payload.get("already_found")
+            return MagicMock(text=reply(found) if hit else reply(), stats={})
+        return MagicMock(text=json.dumps(next(turns)), stats={})
+
+    agent.chat.send_messages.side_effect = send
+    result = agent.process_query(
+        "List every section of plant_manual.md that mentions a code, with the code",
+        max_steps=5,
+    )
+    assert result["status"] == "success"
+    assert len(pages_seen) == 2
+    assert "E-417" in result["result"]
+
+
+def test_terms_no_page_mentions_is_an_incomplete_extraction(tmp_path):
+    state = ExtractionLedger("List every code in a.md", str(tmp_path))
+    calls = []
+    result = state.run(
+        "a.md",
+        lambda p: plant_manual(),
+        counting_ask(calls),
+        lambda: None,
+        terms=["fault"],
+    )
+    assert result["status"] == "error" and "without terms" in result["error"]
+    assert not calls and not state.results and state.gaps()
+
+
+def test_reordered_or_recased_terms_reuse_the_screened_inventory(tmp_path):
+    state = ExtractionLedger("List every code in a.md", str(tmp_path))
+    calls = []
+    ask = counting_ask(calls)
+    source = plant_manual()
+    state.run("a.md", lambda p: source, ask, lambda: None, terms=["code", "E-417"])
+    state.run("a.md", lambda p: source, ask, lambda: None, terms=["e-417", " CODE"])
+    assert len(calls) == 2
+
+
+def test_screened_progress_names_the_page_s_place_in_the_document():
+    seen = []
+    extract_pages(
+        plant_manual(),
+        "List every code",
+        counting_ask([]),
+        lambda: None,
+        progress=lambda page, total: seen.append((page, total)),
+        terms=("code",),
+    )
+    assert len(seen) == 2 and seen[0] == seen[1]
+    assert seen[0][1] == 10 and seen[0][0] > 1

@@ -43,7 +43,6 @@ import ntpath
 import os
 import posixpath
 import re
-import shutil
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -54,6 +53,11 @@ from gaia.agents.base.command_facts import (
     effective_argv,
     line_words,
     read_command,
+)
+from gaia.agents.base.write_safety import (
+    has_hidden_part,
+    is_too_broad_folder,
+    lands_where_code_runs,
 )
 
 #: Binaries whose name bounds nothing: they run whatever they are handed, so
@@ -200,7 +204,7 @@ _MAX_SHELL_SCOPE_WORDS = 2
 #: ``wait_for_condition`` belongs here because its ``command`` is a shell
 #: command like any other — scoping the grant to it keeps "always" from becoming
 #: "any command, as long as you poll with it".
-_SHELL_TOOLS = frozenset({"run_shell_command", "run_cli_command", "wait_for_condition"})
+_SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 
 #: Tools whose blast radius is one path. A prompt for a file inside a named
 #: folder may offer a chat-scoped folder grant; a bare filename stays exact so
@@ -237,7 +241,14 @@ _SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
 #: become "always allow any path" — each new path is asked about on its own.
 PATH_ACCESS_PROMPT_TOOL = "allow_path_access"
 
-_UNGRANTABLE_TOOLS = frozenset({"capture_skill", PATH_ACCESS_PROMPT_TOOL})
+#: The prompt asking whether to read a project folder's CLAUDE.md, AGENTS.md and
+#: skills (:mod:`gaia.project_trust`). Not a registered tool, and ungrantable: the
+#: answer is kept per folder in the trust store, never as an "always" grant.
+PROJECT_TRUST_PROMPT_TOOL = "trust_project_folder"
+
+_UNGRANTABLE_TOOLS = frozenset(
+    {"capture_skill", PATH_ACCESS_PROMPT_TOOL, PROJECT_TRUST_PROMPT_TOOL}
+)
 
 #: Prompt argument set by the agent (never the model) when a script it runs sits
 #: in its own scratch folder. Such a call is never offered "always".
@@ -646,13 +657,9 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     raw = path_argument(args)
     if not raw:
         return None
-    # Normalised for matching, never resolved: this must stay a pure function of
-    # the arguments, so it cannot depend on the filesystem or the process's cwd.
+    # The key is built from the arguments; only whether a folder grant may cover
+    # the file reads the filesystem, so a link out of the folder keeps asking.
     normalised = posixpath.normpath(raw.replace("\\", "/"))
-    # A resolved path has no working-directory ambiguity, so its parent can
-    # describe a folder grant only when the existing edit safety rules also
-    # allow silent edits in that folder. Home/drive roots, hidden paths, PATH
-    # directories, and Windows program shadows must keep prompting.
     resolved_target = ""
     resolved = args.get(RESOLVED_PATH_ARG)
     if isinstance(resolved, str):
@@ -680,30 +687,33 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
 
 
 def _folder_grant_is_safe(target: str, parent: str) -> bool:
-    """Keep folder grants aligned with the edit auto-accept exclusions."""
+    """True when a grant on *parent* may cover writes to *target* unasked.
+
+    The write rules apply to where the file really lands as well as to the
+    folder that was asked about. A file whose resolved location is in another
+    folder, or that shares its content with another name, is asked about on
+    its own: a grant names one folder and covers nothing outside it.
+    """
     try:
-        real_parent = os.path.normcase(os.path.realpath(parent))
-        real_target = os.path.normcase(os.path.realpath(target))
+        real_target = os.path.realpath(target)
+        real_parent = os.path.realpath(parent)
     except (OSError, ValueError):
         return False
-    home = os.path.normcase(os.path.realpath(os.path.expanduser("~")))
-    if real_parent == home or os.path.dirname(real_parent) == real_parent:
+    if os.path.normcase(os.path.dirname(real_target)) != os.path.normcase(real_parent):
         return False
-    parts = {part.lower() for part in real_target.replace("\\", "/").split("/")}
-    if ".git" in parts or any(
-        part.startswith(".") and part not in (".", "..") for part in parts
-    ):
+    if is_too_broad_folder(parent) or is_too_broad_folder(real_parent):
         return False
-    if any(
-        entry and os.path.normcase(os.path.realpath(entry)) == real_parent
-        for entry in os.environ.get("PATH", "").split(os.pathsep)
-    ):
-        return False
-    if os.name == "nt":
-        stem, ext = os.path.splitext(os.path.basename(real_target))
-        pathext = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").lower().split(";")
-        if ext.lower() in pathext and shutil.which(stem) is not None:
+    for path in (target, real_target):
+        if has_hidden_part(path.replace("\\", "/").split("/")):
             return False
+        if lands_where_code_runs(path):
+            return False
+    # Writes go into the file in place, so another name for it changes too.
+    try:
+        if os.path.isfile(real_target) and os.stat(real_target).st_nlink > 1:
+            return False
+    except OSError:
+        return False
     return True
 
 
@@ -722,6 +732,7 @@ __all__ = [
     "GrantScope",
     "PATH_ACCESS_PROMPT_TOOL",
     "PATH_TOOLS",
+    "PROJECT_TRUST_PROMPT_TOOL",
     "RISK_NOTE_ARG",
     "SCRATCH_ARG",
     "command_reaches_folder",

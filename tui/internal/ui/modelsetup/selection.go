@@ -28,11 +28,23 @@ type rowEntry struct {
 	leftGB      *float64 // still to download; nil when unknown
 	fullGB      float64
 	fits        *bool
+	fitCode     *string // "npu" hard-blocks: nothing can download it
+	fitReason   *string // the backend's words, for display
 	needGB      *float64
 	haveGB      *float64
 	// installed puts the row in the "already in Lemonade" group: on disk, not
-	// one of setup's own models. It can be the chat model; it has no tick.
+	// one of GAIA's own models. It can be the chat model; it has no tick.
 	installed bool
+	gaiaModel bool
+	// support is "verified", "untested" or "" for an optional model.
+	support     string
+	readsImages bool
+	// compact is a chat model that can't take image creation.
+	compact bool
+	// optional is the extra's role: speech, voice or image creation.
+	optional string
+	source   string
+	purpose  string
 }
 
 func entryFrom(e setupapi.CatalogEntry) rowEntry {
@@ -52,47 +64,45 @@ func entryFrom(e setupapi.CatalogEntry) rowEntry {
 		partialGB:   e.PartialGB,
 		leftGB:      e.SizeGB,
 		fits:        e.Fits,
+		fitCode:     e.FitCode,
+		fitReason:   e.FitReason,
 		needGB:      e.NeedGB,
 		haveGB:      e.CapacityGB,
+		gaiaModel:   e.GaiaModel,
+		readsImages: e.ReadsImages,
+		compact:     e.FeatureTier == setupapi.TierCompact,
+		purpose:     e.Purpose,
 	}
 	if e.FullSizeGB != nil {
 		r.fullGB = *e.FullSizeGB
 	}
+	if e.Support != nil {
+		r.support = *e.Support
+	}
+	if e.Source != nil {
+		r.source = *e.Source
+	}
+	for _, role := range []string{setupapi.RoleSpeech, setupapi.RoleVoice, setupapi.RoleImageCreation} {
+		if e.HasRole(role) {
+			r.optional = role
+		}
+	}
 	// The vision and documents models stay in the main list even when setup
 	// no longer plans them (a saved chat model replaces Gemma in the plan):
 	// they are what those features load by name.
-	r.installed = r.downloaded && !r.planned && !r.vision && !r.embedding
+	r.installed = r.downloaded && !r.planned && !r.vision && !r.embedding && !r.gaiaModel && r.optional == ""
 	return r
 }
 
-// purposeText is the fixed vocabulary: Chat, Vision, Documents. The vision
-// model reads Chat only while it is the chat model.
-func (r rowEntry) purposeText(short, isChat bool) string {
-	var parts []string
-	add := func(long, letter string) {
-		if short {
-			parts = append(parts, letter)
-		} else {
-			parts = append(parts, long)
-		}
+// supportText is the row's label, in the Agent UI's words.
+func (r rowEntry) supportText() string {
+	switch r.support {
+	case setupapi.SupportVerified:
+		return labelVerified
+	case setupapi.SupportUntested:
+		return labelUntested
 	}
-	if r.embedding {
-		add("Documents", "D")
-	}
-	if r.chatable && (!r.vision || isChat) {
-		add("Chat", "C")
-	}
-	if r.vision {
-		add("Vision", "V")
-	}
-	out := ""
-	for i, p := range parts {
-		if i > 0 && !short {
-			out += "+"
-		}
-		out += p
-	}
-	return out
+	return ""
 }
 
 // needsDownload is a ticked model that isn't on disk yet.
@@ -120,13 +130,24 @@ type selection struct {
 	chatChosen bool
 	// cloud is a chat that runs on a cloud provider: only the embedder matters.
 	cloud bool
+	// vision is the model that reads images: "" is GAIA's choice, visionNone
+	// none for now, anything else the user's pick.
+	vision string
+	// recommended is the chat model the backend recommends for this PC.
+	recommended string
 }
+
+// visionNone is the user skipping the vision model for now.
+const visionNone = "none"
 
 // newSelection lays the plan out as rows and starts from the backend's own
 // selection: recommended models ticked, skipped ones not.
 func newSelection(p setupapi.Plan, cloud bool) selection {
 	s := selection{ticked: map[string]bool{}, initial: map[string]bool{}, unticked: map[string]bool{},
 		chatChosen: p.ChatModel.UserSet, cloud: cloud}
+	if p.RecommendedModel != nil {
+		s.recommended = *p.RecommendedModel
+	}
 	for _, e := range p.Catalog {
 		r := entryFrom(e)
 		if cloud && !(r.embedding && r.planned) {
@@ -148,8 +169,139 @@ func newSelection(p setupapi.Plan, cloud bool) selection {
 		if !s.canChat(s.chat) {
 			s.chat = s.fallbackChat()
 		}
+		if p.VisionModel != nil {
+			s.vision = *p.VisionModel
+		} else if s.visionSkipped() {
+			s.vision = visionNone
+		}
+		s.applyVision()
 	}
 	return s
+}
+
+// visionSkipped reports whether an earlier setup skipped the vision model the
+// chat model depends on.
+func (s selection) visionSkipped() bool {
+	if r, ok := s.find(s.chat); ok && r.readsImages {
+		return false
+	}
+	for _, r := range s.rows {
+		if r.vision && r.gaiaModel && r.skipped {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveVision is the model that reads images for this selection: the user's,
+// else the chat model when it can, else GAIA's vision model. "" when skipped.
+func (s selection) resolveVision() string {
+	if s.vision == visionNone {
+		return ""
+	}
+	if s.vision != "" {
+		return s.vision
+	}
+	if r, ok := s.find(s.chat); ok && r.readsImages {
+		return r.id
+	}
+	for _, r := range s.rows {
+		if r.vision && r.gaiaModel {
+			return r.id
+		}
+	}
+	return ""
+}
+
+// savedVision is what to save as vision_model: "" when GAIA's own choice does
+// the job, so a later change of chat model keeps following it.
+func (s selection) savedVision() string {
+	if s.vision == visionNone {
+		return ""
+	}
+	pick := s.resolveVision()
+	gaia := s
+	gaia.vision = ""
+	if sameID(pick, gaia.resolveVision()) {
+		return ""
+	}
+	return pick
+}
+
+// applyVision makes the ticks follow the vision pick, so a model nothing uses
+// is never downloaded.
+func (s *selection) applyVision() {
+	if s.cloud {
+		return
+	}
+	pick := s.resolveVision()
+	for _, r := range s.rows {
+		if !r.vision || sameID(r.id, s.chat) {
+			continue
+		}
+		if sameID(r.id, pick) {
+			s.ticked[r.id] = true
+			delete(s.unticked, r.id)
+		} else if !r.downloaded {
+			s.ticked[r.id] = false
+			s.unticked[r.id] = true
+		}
+	}
+}
+
+// pickChat makes id the chat model. The one it replaces stops downloading, and
+// the jobs that depend on it follow: a chat model that reads images needs no
+// separate vision model, otherwise GAIA's is ticked again, and a compact model
+// can't take image creation. A model nothing here can run is refused.
+func (s *selection) pickChat(id string) {
+	r, ok := s.find(id)
+	if !ok || r.npuBlocked() {
+		return
+	}
+	if prev, ok := s.find(s.chat); ok && !prev.downloaded && !sameID(prev.id, r.id) {
+		s.ticked[prev.id] = false
+	}
+	if !r.downloaded {
+		s.ticked[r.id] = true
+		delete(s.unticked, r.id)
+	}
+	if r.compact {
+		for _, e := range s.rows {
+			if e.optional == setupapi.RoleImageCreation {
+				s.ticked[e.id] = false
+			}
+		}
+	}
+	s.chat, s.chatChosen, s.vision = r.id, true, ""
+	s.applyVision()
+}
+
+// pickVision chooses the model that reads images: an id, visionNone, or "" for
+// GAIA's choice.
+func (s *selection) pickVision(id string) {
+	s.vision = id
+	s.applyVision()
+}
+
+// imagesBlocked is the chat model's name when it can't take image creation.
+func (s selection) imagesBlocked() (string, bool) {
+	r, ok := s.find(s.chat)
+	return r.name, ok && r.compact
+}
+
+// extraModels are ticked models setup doesn't plan and that aren't on disk:
+// pulled and tested beside the plan's.
+func (s selection) extraModels() []string {
+	var out []string
+	if s.cloud {
+		return nil
+	}
+	for _, r := range s.rows {
+		if s.ticked[r.id] && !r.planned && !r.downloaded && !r.installed {
+			out = append(out, r.id)
+		}
+	}
+	return out
 }
 
 func rank(r rowEntry) int {
@@ -175,7 +327,7 @@ func (s selection) find(id string) (rowEntry, bool) {
 // that is ticked, or one already in Lemonade.
 func (s selection) canChat(id string) bool {
 	r, ok := s.find(id)
-	if !ok || !r.chatable {
+	if !ok || !r.chatable || r.npuBlocked() {
 		return false
 	}
 	return r.installed || s.ticked[r.id]
@@ -221,6 +373,12 @@ func (s selection) fallbackChat() string {
 // skip to save for it, so its tick can't change anything.
 func (r rowEntry) kept() bool { return r.downloaded && !r.planned && !r.installed }
 
+// npuBlocked is a model the NPU can't run yet, so nothing on this PC can
+// download it: ensure_npu_backend refuses before the pull starts.
+func (r rowEntry) npuBlocked() bool {
+	return r.fits != nil && !*r.fits && r.fitCode != nil && *r.fitCode == "npu"
+}
+
 // toggle ticks or unticks a row, moving the chat model if it was unticked.
 // On a row already in Lemonade it makes that model the chat model instead.
 // It reports false when the row's tick can't change (a kept model).
@@ -230,13 +388,18 @@ func (s *selection) toggle(id string) bool {
 		return false
 	}
 	if r.installed {
-		if r.chatable {
+		if r.chatable && !r.npuBlocked() {
 			s.chat = r.id
 			s.chatChosen = true
 		}
 		return true
 	}
 	if r.kept() {
+		return false
+	}
+	// Nothing on this PC can download it, so its tick can only queue a pull
+	// that fails; leaving it ticked would keep it in the pending set.
+	if r.npuBlocked() {
 		return false
 	}
 	s.ticked[r.id] = !s.ticked[r.id]
@@ -262,8 +425,9 @@ func (s *selection) resetToRecommended(chat string) {
 	s.ticked = map[string]bool{}
 	s.unticked = map[string]bool{}
 	s.chatChosen = false
+	s.vision = ""
 	for _, r := range s.rows {
-		if !r.installed && r.recommended {
+		if !r.installed && (r.recommended || r.kept()) {
 			s.ticked[r.id] = true
 		}
 	}
@@ -274,6 +438,7 @@ func (s *selection) resetToRecommended(chat string) {
 	if !s.canChat(s.chat) {
 		s.chat = s.fallbackChat()
 	}
+	s.applyVision()
 }
 
 // pending are the ticked models still to download, in the order the app
@@ -281,7 +446,7 @@ func (s *selection) resetToRecommended(chat string) {
 func (s selection) pending() []rowEntry {
 	var out []rowEntry
 	for _, r := range s.rows {
-		if !r.installed && s.ticked[r.id] && r.needsDownload() {
+		if !r.installed && s.ticked[r.id] && r.needsDownload() && !r.npuBlocked() {
 			out = append(out, r)
 		}
 	}
@@ -376,6 +541,9 @@ func (s selection) dirty(p setupapi.Plan) bool {
 	if !s.cloud && !sameID(s.chat, p.ChatModel.ID) {
 		return true
 	}
+	if !s.cloud && !sameID(s.savedVision(), strOf(p.VisionModel)) {
+		return true
+	}
 	for _, r := range s.rows {
 		if r.installed || r.kept() {
 			continue
@@ -385,6 +553,14 @@ func (s selection) dirty(p setupapi.Plan) bool {
 		}
 	}
 	return false
+}
+
+// strOf is a string the backend may leave out, "" when it did.
+func strOf(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // displayName is the name the backend gives a model, the one the Agent UI

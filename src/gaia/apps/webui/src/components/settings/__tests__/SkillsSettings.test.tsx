@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { fireEvent, render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SkillsSettings } from '../SkillsSettings';
 import * as api from '../../../services/api';
+import { useChatStore } from '../../../stores/chatStore';
 import type { SkillInfo, SkillSource } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -17,11 +18,14 @@ function skill(name: string, description: string, version: string | null = null,
 
 beforeEach(() => {
     vi.clearAllMocks();
+    mockedApi.listFeaturedSkillLibraries.mockResolvedValue({ libraries: [] });
     mockedApi.listSkills.mockResolvedValue({
         skills: [skill('gh-cli', 'Work with GitHub from the terminal', '1.2.0'), skill('pdf-forms', 'Fill PDF forms')],
         invalid: {},
     });
 });
+
+afterEach(() => useChatStore.setState({ locale: 'en' }));
 
 describe('SkillsSettings', () => {
     it('lists the installed skills', async () => {
@@ -129,5 +133,29 @@ describe('SkillsSettings', () => {
         render(<SkillsSettings onUseSkill={vi.fn()} />);
         expect(await screen.findByText('legacy')).toBeInTheDocument();
         expect(screen.queryByRole('region')).not.toBeInTheDocument();
+    });
+
+    it('keeps the skills folder left to right in Arabic', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listSkills.mockResolvedValue({ skills: [skill('web-research', 'Research', null, 'agent-bundled')], invalid: {} });
+        const { container } = render(<SkillsSettings onUseSkill={vi.fn()} />);
+        await screen.findByRole('region', { name: /مهاراتك/ });
+        const text = container.textContent ?? '';
+        const raw = text.split('~/.gaia/skills').length - 1;
+        const isolated = text.split('\u2068~/.gaia/skills\u2069').length - 1;
+        expect(raw).toBeGreaterThanOrEqual(3);
+        expect(isolated).toBe(raw);
+    });
+
+    it('keeps the project skills folder left to right in Arabic', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listSkills.mockResolvedValue({ skills: [skill('deploy-helper', 'Deploy', null, 'claude-project')], invalid: {} });
+        const { container } = render(<SkillsSettings onUseSkill={vi.fn()} />);
+        await screen.findByText('deploy-helper');
+        const text = container.textContent ?? '';
+        const raw = text.split('.claude/skills').length - 1;
+        const isolated = text.split('\u2068.claude/skills\u2069').length - 1;
+        expect(raw).toBe(2);
+        expect(isolated).toBe(raw);
     });
 });

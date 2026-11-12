@@ -13,7 +13,6 @@ import functools
 
 import pytest
 import test_prompt_prefix_stability as stability
-from test_prompt_prefix_stability import flagship  # noqa: F401 - fixture
 
 
 @pytest.fixture

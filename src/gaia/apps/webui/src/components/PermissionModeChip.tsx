@@ -9,6 +9,7 @@ import { useChatStore } from '../stores/chatStore';
 import type { PermissionMode } from '../types';
 import { ref, type MessageKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
+import { requestErrorText } from '../utils/requestErrors';
 import { announcePermissionMode, usePermissionModeEvents } from '../utils/permissionModeEvents';
 
 export const MODES: Array<{ mode: PermissionMode; label: MessageKey; note: MessageKey }> = [
@@ -38,7 +39,7 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
         let cancelled = false;
         api.getPermissions(sessionId)
             .then((p) => { if (!cancelled) setMode(p.mode); })
-            .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); });
+            .catch((err) => { if (!cancelled) setError(requestErrorText(err)); });
         return () => { cancelled = true; };
     }, [sessionId, draftMode]);
 
@@ -61,12 +62,12 @@ export function PermissionModeChip({ sessionId, disabled }: { sessionId: string 
             }
             setOpen(false);
         } catch (err) {
-            setError(err instanceof Error ? err.message : String(err));
+            setError(requestErrorText(err));
             // The mode can be saved even though a running relayed agent couldn't be told.
             if (sessionId) {
                 api.getPermissions(sessionId)
                     .then((p) => setMode(p.mode))
-                    .catch((e) => setError((prev) => `${prev ?? ''} Couldn't re-read the saved mode: ${e instanceof Error ? e.message : String(e)}`.trim()));
+                    .catch((e) => setError((prev) => `${prev ?? ''} Couldn't re-read the saved mode: ${requestErrorText(e)}`.trim()));
             }
         } finally {
             setConfirming(false);

@@ -113,6 +113,7 @@ func (m FlagshipModel) preflightOptions() preflight.Options {
 	if opts.Logf == nil {
 		opts.Logf = m.logf
 	}
+	opts.OfferUpdate = m.updateCheck && m.chat == nil
 	return opts
 }
 
@@ -157,7 +158,7 @@ func (m FlagshipModel) proceedFromGate() (tea.Model, tea.Cmd) {
 	// of the session before the record of them is gone.
 	m.suppressHalted()
 	m.closeGate()
-	return m.launchAgent(agent, verified)
+	return m.launchOrPick(agent, verified)
 }
 
 func (m FlagshipModel) noteTerminalUpdate(coreVersion string) FlagshipModel {

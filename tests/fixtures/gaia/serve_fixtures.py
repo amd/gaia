@@ -16,14 +16,18 @@ Default mode serves the ROUTED layout the scenario corpus assumes
     /tiers_skills_web/... → tests/fixtures/gaia/tiers_skills_web/...
                           (skills/web/tool-selection tier fixtures)
 
-Eval runs bind **port 8765** — scenarios hardcode http://127.0.0.1:8765 —
+CI eval runs bind **port 8765** — scenarios name http://127.0.0.1:8765 —
 with GAIA_HUB_URL=http://127.0.0.1:8765/fixture_hub:
 
     python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root <agent skills root>
     python tests/fixtures/gaia/serve_fixtures.py --port 8765
 
-Unit tests keep the default ``--port 0`` (ephemeral, printed as
-``SERVING <url>``) so they never collide. Never 4001/4200/8141/13305.
+``util/run_eval_lane.py`` and unit tests keep the default ``--port 0``
+(ephemeral, printed as ``SERVING <url>``) so two runs never collide; the lane
+runner passes the real port on as ``GAIA_EVAL_FIXTURE_PORT`` and the runner
+rewrites the scenarios to it (``gaia.eval.fixture_env``). ``--hub-dir`` serves
+a run's own prepared hub instead of the checkout's shared ``_prepared``.
+Never 4001/4200/8141/13305.
 
 ``--dir`` switches to PLAIN single-directory serving (no routing) — used by
 tests that serve one prepared hub directly.
@@ -39,15 +43,21 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 FIXTURES_ROOT = Path(__file__).resolve().parent
+DEFAULT_HUB_DIR = FIXTURES_ROOT / "fixture_hub" / "_prepared"
 
-#: (url-prefix, directory) — first match wins; "" is the web-root catch-all.
-ROUTES: tuple[tuple[str, Path], ...] = (
-    ("/rss", FIXTURES_ROOT / "rss"),
-    ("/fixture_hub", FIXTURES_ROOT / "fixture_hub" / "_prepared"),
-    ("/capture", FIXTURES_ROOT / "capture"),
-    ("/tiers_skills_web", FIXTURES_ROOT / "tiers_skills_web"),
-    ("", FIXTURES_ROOT / "web"),
-)
+
+def routes(hub_dir: Path = DEFAULT_HUB_DIR) -> tuple[tuple[str, Path], ...]:
+    """(url-prefix, directory) pairs — first match wins; "" is the web root."""
+    return (
+        ("/rss", FIXTURES_ROOT / "rss"),
+        ("/fixture_hub", hub_dir),
+        ("/capture", FIXTURES_ROOT / "capture"),
+        ("/tiers_skills_web", FIXTURES_ROOT / "tiers_skills_web"),
+        ("", FIXTURES_ROOT / "web"),
+    )
+
+
+ROUTES = routes()
 
 _HTTP_ERRORS = FIXTURES_ROOT / "tiers_resilience" / "http"
 
@@ -82,6 +92,10 @@ class _QuietHandler(SimpleHTTPRequestHandler):
 class _RoutedHandler(_QuietHandler):
     """Map the contract's root-relative URL layout onto the fixture dirs."""
 
+    def __init__(self, *args, routes=ROUTES, **kwargs):
+        self.routes = routes
+        super().__init__(*args, **kwargs)
+
     def send_head(self):
         clean = self.path.split("?", 1)[0].split("#", 1)[0]
         route = STATUS_ROUTES.get(clean)
@@ -99,7 +113,7 @@ class _RoutedHandler(_QuietHandler):
 
     def translate_path(self, path: str) -> str:
         clean = path.split("?", 1)[0].split("#", 1)[0]
-        for prefix, directory in ROUTES:
+        for prefix, directory in self.routes:
             if not prefix or clean == prefix or clean.startswith(prefix + "/"):
                 self.directory = str(directory)
                 remainder = clean[len(prefix) :] or "/"
@@ -107,14 +121,21 @@ class _RoutedHandler(_QuietHandler):
         return super().translate_path(clean)  # unreachable: "" always matches
 
 
-def make_server(port: int, directory: Path | None = None) -> ThreadingHTTPServer:
+def make_server(
+    port: int, directory: Path | None = None, hub_dir: Path | None = None
+) -> ThreadingHTTPServer:
     """Build (but do not start) the server; caller owns serve/shutdown.
 
-    ``directory=None`` (the default) serves the routed fixture layout above;
-    a path serves that single directory plainly.
+    ``directory=None`` (the default) serves the routed fixture layout above,
+    with ``/fixture_hub`` from *hub_dir* when given; a path serves that single
+    directory plainly.
     """
     if directory is None:
-        handler = partial(_RoutedHandler, directory=str(FIXTURES_ROOT / "web"))
+        handler = partial(
+            _RoutedHandler,
+            directory=str(FIXTURES_ROOT / "web"),
+            routes=routes(hub_dir) if hub_dir is not None else ROUTES,
+        )
     else:
         if not directory.is_dir():
             raise NotADirectoryError(
@@ -132,8 +153,8 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         default=0,
         help=(
-            "Port to bind on 127.0.0.1. Default 0 = ephemeral (printed). Eval "
-            "runs pass --port 8765 (the base URL scenarios hardcode)."
+            "Port to bind on 127.0.0.1. Default 0 = ephemeral (printed). CI "
+            "eval runs pass --port 8765 (the base URL scenarios name)."
         ),
     )
     parser.add_argument(
@@ -145,17 +166,25 @@ def main(argv: list[str] | None = None) -> int:
             "(web at /, rss at /rss, prepared hub at /fixture_hub)."
         ),
     )
+    parser.add_argument(
+        "--hub-dir",
+        type=Path,
+        default=None,
+        help="Serve /fixture_hub from this prepared hub (prepare_fixture_hub.py "
+        "--out) instead of fixture_hub/_prepared.",
+    )
     args = parser.parse_args(argv)
 
     directory = args.dir.resolve() if args.dir is not None else None
-    if directory is None and not (FIXTURES_ROOT / "fixture_hub" / "_prepared").is_dir():
+    hub_dir = args.hub_dir.resolve() if args.hub_dir is not None else None
+    if directory is None and not (hub_dir or DEFAULT_HUB_DIR).is_dir():
         print(
-            "WARNING: fixture_hub/_prepared does not exist — /fixture_hub/* will "
-            "404. Run prepare_fixture_hub.py first if this run needs the hub.",
+            f"WARNING: {hub_dir or DEFAULT_HUB_DIR} does not exist — /fixture_hub/* "
+            "will 404. Run prepare_fixture_hub.py first if this run needs the hub.",
             file=sys.stderr,
         )
 
-    server = make_server(args.port, directory)
+    server = make_server(args.port, directory, hub_dir)
     host, port = server.server_address[0], server.server_address[1]
     served = directory if directory is not None else f"routed layout ({FIXTURES_ROOT})"
     print(f"SERVING http://{host}:{port}/ from {served}", flush=True)

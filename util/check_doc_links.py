@@ -273,13 +273,16 @@ def check_external_link(url: str, timeout: int = 15) -> Tuple[str, str]:
                         return "ok", f"HTTP {code} (GET fallback)"
                     return "broken", f"HTTP {code}"
             except urllib.error.HTTPError as e2:
-                if e2.code in (403, 429) or e2.code >= 500:
+                if e2.code in (403, 408, 429) or e2.code >= 500:
                     return "warning", f"HTTP {e2.code} (may require auth or be rate limited)"
                 return "broken", f"HTTP {e2.code}"
             except (OSError, http.client.HTTPException) as e2:
                 return "warning", f"connection error on GET fallback: {e2}"
             except Exception as e2:
                 return "broken", str(e2)
+        # 408 is the server timing out on us (shields.io under CI load).
+        if e.code == 408:
+            return "warning", "HTTP 408 (server timed out)"
         if e.code == 429:
             return "warning", "HTTP 429 (rate limited)"
         if e.code >= 500:

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """
 CLI for ``gaia skill
-{list|info|create|import|export|migrate|audit|search|install|remove|lock|publish|keygen|trust}``.
+{list|info|create|import|add|export|migrate|audit|search|install|remove|lock|publish|keygen|trust}``.
 
 Three groups of verbs, all real:
 
@@ -31,7 +31,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
@@ -79,6 +79,30 @@ _DEFAULT_DESCRIPTION = (
 )
 
 
+def _agent_skills_dir(value: str) -> Path:
+    """Map ``--agent-dir`` to the ``skills/`` folder that agent package ships."""
+    skills = Path(value).expanduser() / "skills"
+    if not skills.is_dir():
+        raise argparse.ArgumentTypeError(
+            f"no skills/ folder at {skills}. Pass the agent package directory, "
+            "the one that holds agent.py and its skills/ folder."
+        )
+    return skills
+
+
+def _add_agent_dir_argument(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--agent-dir",
+        action="append",
+        type=_agent_skills_dir,
+        dest="agent_skill_dirs",
+        metavar="DIR",
+        default=None,
+        help="Also discover the skills bundled in this agent package's skills/ "
+        "folder, at agent-bundled precedence. Repeatable.",
+    )
+
+
 def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     """Register ``gaia skill`` and its subcommands."""
     p = subparsers.add_parser(
@@ -108,6 +132,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Only show skills from this discovery root "
         "(agent-bundled | user | claude-project | claude-import)",
     )
+    _add_agent_dir_argument(p_list)
 
     p_info = sub.add_parser("info", help="Show one skill's manifest in detail")
     p_info.add_argument("name", help="Skill name (== its directory name)")
@@ -117,6 +142,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_info.add_argument(
         "--body", action="store_true", help="Also print the Markdown instructions"
     )
+    _add_agent_dir_argument(p_info)
 
     # Adaptive skills (#2674): inspect/approve/revert the learned overlay.
     from gaia.skills.deltas_cli import add_deltas_parser
@@ -163,6 +189,39 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help=f"Required to import a skill that ships code ({SKILL_TOOLS_FILENAME} "
         "or scripts/); that code runs in your agent's process",
     )
+
+    p_add = sub.add_parser(
+        "add",
+        help="Add one skill or a whole skills library from a link (GitHub repo or "
+        "folder, owner/repo, skills.sh, or an https .zip)",
+    )
+    p_add.add_argument("link", help="The link to the skill or skills library")
+    p_add.add_argument(
+        "--skill",
+        action="append",
+        dest="skills",
+        default=None,
+        help="Add only this skill (repeatable). Default: every skill behind the link",
+    )
+    p_add.add_argument(
+        "--list",
+        action="store_true",
+        dest="list_only",
+        help="Show the skills behind the link and their audit results; add nothing",
+    )
+    p_add.add_argument(
+        "--allow-code",
+        action="store_true",
+        help=f"Also add skills that ship code ({SKILL_TOOLS_FILENAME} or scripts/); "
+        "that code runs on this PC",
+    )
+    p_add.add_argument(
+        "--force", action="store_true", help="Replace skills already installed"
+    )
+    p_add.add_argument(
+        "--yes", action="store_true", help="Skip the confirmation prompt"
+    )
+    p_add.add_argument("--json", action="store_true", dest="as_json")
 
     p_export = sub.add_parser("export", help="Export a skill to a .zip bundle")
     p_export.add_argument("name", help="Skill name to export")
@@ -470,6 +529,7 @@ def handle(args: argparse.Namespace) -> int:
         "deltas": _handle_deltas,
         "create": _handle_create,
         "import": _handle_import,
+        "add": _handle_add,
         "export": _handle_export,
         "migrate": _handle_migrate,
         # Pre-publish security gate (#2468)
@@ -513,10 +573,20 @@ def _manager() -> SkillManager:
     return SkillManager(project_dir=default_project_dir())
 
 
+def _manager_for(args: argparse.Namespace) -> SkillManager:
+    """The CLI manager, plus any agent-bundled roots named by ``--agent-dir``."""
+    agent_skill_dirs = getattr(args, "agent_skill_dirs", None)
+    if not agent_skill_dirs:
+        return _manager()
+    return SkillManager(
+        project_dir=default_project_dir(), agent_skill_dirs=agent_skill_dirs
+    )
+
+
 def _handle_list(args: argparse.Namespace) -> int:
     from gaia.skills.drift import DRIFT_UNRECORDED, DRIFT_UNTRACKED, check_drift
 
-    manager = _manager()
+    manager = _manager_for(args)
     skills = manager.list_skills()
     if args.root:
         skills = [s for s in skills if s.root == args.root]
@@ -623,7 +693,7 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 
 def _handle_info(args: argparse.Namespace) -> int:
-    manager = _manager()
+    manager = _manager_for(args)
     skill = manager.load(args.name)
 
     if getattr(args, "as_json", False):
@@ -753,6 +823,69 @@ def _handle_import(args: argparse.Namespace) -> int:
         )
     print(f"   Inspect it with: gaia skill info {result.name}")
     return EXIT_OK
+
+
+def _handle_add(args: argparse.Namespace) -> int:
+    from gaia.skills.link import SECURITY_WARNING, add_from_link, preview_link
+
+    preview = preview_link(args.link, manager=_manager())
+    if args.as_json and args.list_only:
+        print(json.dumps(preview.to_dict(), indent=2))
+        return EXIT_OK
+    if not args.as_json:
+        print(f"Skills at {preview.source}:")
+        for s in preview.skills:
+            mark = "✗" if s.error else ("⚙" if s.has_code else "•")
+            note = s.error or ("ships code" if s.has_code else "")
+            if s.installed and not s.error:
+                state = "will update" if s.update else "installed from elsewhere"
+                note = (note + ", " if note else "") + state
+            print(f"  {mark} {s.name}" + (f"  ({note})" if note else ""))
+            if s.description:
+                print(f"      {s.description}")
+            if s.permissions:
+                print("      permissions :")
+                for grant in s.permissions:
+                    print(f"        - {grant['text']} ({grant['grant']})")
+            elif s.permissions_unreadable:
+                print("      permissions : could not be read")
+            else:
+                print("      permissions : none declared")
+            for finding in s.findings:
+                print(f"      audit       : {finding}")
+        print(f"\n⚠️  {SECURITY_WARNING}")
+    if args.list_only:
+        return EXIT_OK
+
+    if not args.yes:
+        if not sys.stdin.isatty():
+            sys.stderr.write(
+                "❌ Refusing to add skills without confirmation. Re-run with --yes "
+                "once you have reviewed them.\n"
+            )
+            return EXIT_USAGE
+        count = len(args.skills) if args.skills else "these"
+        answer = input(f"Add {count} skill(s)? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("Nothing was added.")
+            return EXIT_OK
+
+    result = add_from_link(
+        args.link,
+        args.skills,
+        allow_code=args.allow_code,
+        force=args.force,
+        pin=preview.pin,
+        manager=_manager(),
+    )
+    if args.as_json:
+        print(json.dumps(result.to_dict(), indent=2))
+    else:
+        for added in result.added:
+            print(f"✅ Added '{added['name']}'")
+        for name, why in result.failed.items():
+            print(f"❌ {name}: {why}")
+    return EXIT_OK if result.added or not result.failed else EXIT_INVALID
 
 
 def _handle_export(args: argparse.Namespace) -> int:
@@ -1485,8 +1618,3 @@ def example_tool(text: str) -> dict:
     """Replace this with what your tool does."""
     return {"echo": text}
 '''
-
-
-def resolve_manager(agent_skill_dirs: Optional[list] = None) -> SkillManager:
-    """Build a manager for embedders that need the CLI's root configuration."""
-    return SkillManager(agent_skill_dirs=agent_skill_dirs or [])

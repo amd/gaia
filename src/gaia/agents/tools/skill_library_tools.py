@@ -660,6 +660,7 @@ class SkillLibraryToolsMixin:
             activate = getattr(agent, "_activate_extraction_skills", None)
             if callable(activate):
                 activate(skill_name)
+            agent._announce_skill(skill.name, "model")
 
             # Captured-but-unpromoted code never registered (gaia.skills.capture)
             # — report that honestly instead of listing tools that do not exist.

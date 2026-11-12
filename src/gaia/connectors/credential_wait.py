@@ -13,6 +13,12 @@ If the read is still blocked it raises :class:`CredentialStoreWaiting`, which
 callers report as its own state — never as "no key". Each slot has at most one
 read in flight: later calls wait on the same read and take its result once the
 user answers, so polling never piles up threads or dialogs.
+
+Once the user closes an unlock prompt, every read raises
+:class:`CredentialStoreLocked` without touching the store for
+:data:`gaia.connectors.store.HOLD_SECONDS`, or until something the user did
+lifts it (:func:`gaia.connectors.store.retry_keyring`): a poll that read again
+would put a new prompt up at once.
 """
 
 from __future__ import annotations
@@ -38,6 +44,20 @@ _in_flight: Dict[str, "Future[object]"] = {}
 
 class CredentialStoreWaiting(Exception):
     """The OS has not answered a credential-store read; it is likely asking the user."""
+
+
+class CredentialStoreLocked(CredentialStoreWaiting):
+    """The user closed the store's unlock prompt, so GAIA stopped reading it.
+
+    A wait, to callers that only know the wait: the key is unknown, not absent.
+    Unlike a wait, asking again on a timer would only reopen the prompt.
+    """
+
+
+def _refusal() -> Optional[str]:
+    from gaia.connectors.store import keyring_refusal
+
+    return keyring_refusal()
 
 
 def waiting_message(what: str, platform: str = "") -> str:
@@ -73,6 +93,9 @@ def read_within(
     *timeout* defaults to :data:`WAIT_SECONDS`.
     """
     timeout = WAIT_SECONDS if timeout is None else timeout
+    refusal = _refusal()
+    if refusal:
+        raise CredentialStoreLocked(refusal)
     with _lock:
         future = _in_flight.get(slot)
         started = future is None
@@ -102,6 +125,10 @@ def read_within(
             with _lock:
                 if _in_flight.get(slot) is future:
                     del _in_flight[slot]
+    # Callers such as recall_key read a refused store as "no key"; it is not.
+    refusal = _refusal() if result is None else None
+    if refusal:
+        raise CredentialStoreLocked(refusal)
     return result  # type: ignore[return-value]
 
 
@@ -122,6 +149,7 @@ def in_flight_count() -> int:
 
 
 __all__ = [
+    "CredentialStoreLocked",
     "CredentialStoreWaiting",
     "WAIT_SECONDS",
     "discard",

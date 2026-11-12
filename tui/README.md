@@ -1,7 +1,7 @@
 # GAIA Terminal UI
 
-Chat with GAIA in your terminal — no browser, no account, nothing you type
-leaves your machine.
+Chat with GAIA in your terminal — no browser, no account. Chats run on your
+machine by default, and nothing you type leaves it unless you pick a cloud model.
 
 `gaia-tui` boots straight into the flagship `gaia` agent: conversation,
 documents, data, web research, memory, skills. There is nothing to browse and
@@ -78,7 +78,7 @@ For working on the TUI itself. Needs `git`, [Go](https://go.dev/dl/), and
 ```bash
 git clone https://github.com/amd/gaia.git
 cd gaia && uv venv && uv pip install -e .
-cd tui && make build                # -> tui/bin/gaia-tui
+cd tui && make build                # -> tui/bin/gaia-tui (.exe on Windows)
 cp bin/gaia-tui ~/.local/bin/       # somewhere on your PATH
 ```
 
@@ -185,7 +185,7 @@ fine.
 
 ## Choosing an AI provider
 
-Press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
+With the flagship agent, press **p** during setup, or enter **`/provider`** in chat, to choose **Local**,
 **Fireworks AI**, or **AMD LLM Gateway** through Lemonade 11.8.1+. Paste a key into
 the masked field; once it connects it is kept in the OS credential store and
 handed back to Lemonade after a restart. Provider settings are shared with

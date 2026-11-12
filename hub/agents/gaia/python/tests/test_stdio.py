@@ -13,12 +13,15 @@ import json
 import logging
 import os
 import queue
+import re
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from gaia_agent import stdio
 
+from gaia.agents.base.history import HIDDEN_TURNS_NOTE
 from gaia.llm.lemonade_launcher import StartHint
 
 
@@ -362,24 +365,40 @@ def test_an_agent_exception_becomes_a_terminal_error():
     assert "tool exploded" in terminals[0]["detail"]
 
 
-def test_unreachable_lemonade_gets_actionable_copy(monkeypatch):
-    """The raw urllib3 repr tells a user nothing; name the fix instead."""
+@pytest.mark.parametrize("gaias_own", [True, False])
+def test_unreachable_lemonade_gets_actionable_copy(monkeypatch, gaias_own):
+    """The raw urllib3 repr tells a user nothing; name the problem instead."""
     monkeypatch.setattr(
         "gaia.llm.lemonade_launcher.describe_start_hint",
         lambda *a, **k: StartHint(instruction="Run: lemond --port 13305"),
+    )
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *a: gaias_own
     )
     detail = stdio._terminal_error(
         ConnectionError("Max retries exceeded ... Connection refused")
     )["detail"]
 
-    assert "Lemonade" in detail
-    # A real next step, not a specific launch command. Pinning a literal here
-    # is how `lemonade-server serve` stayed asserted-as-real for releases after
-    # Lemonade 10.7 removed it (CLAUDE.md, "Never hardcode how Lemonade is
-    # started") — the manual fallback is resolved per machine, so there is no
-    # single launch string to assert.
-    assert "gaia daemon start" in detail
-    assert "lemonade-server serve" not in detail
+    assert "local LLM" in detail
+    assert "Max retries" not in detail
+    # The daemon restarts GAIA's own server; one the user runs is theirs to start.
+    assert ("Run: lemond --port 13305" in detail) is not gaias_own
+
+
+def test_gaias_engine_that_cannot_start_names_the_setup_fix():
+    from gaia.llm.lemonade_client import GaiaLemonadeStartError
+    from gaia.llm.surface_hints import TUI_SETUP_HINT
+
+    failed = GaiaLemonadeStartError(
+        "Could not start GAIA's Lemonade Server: start failed",
+        reason="lemond.exe is missing",
+        log_file=None,
+    )
+    wrapped = RuntimeError("agent build failed")
+    wrapped.__cause__ = failed
+    detail = stdio._terminal_error(wrapped)["detail"]
+    assert detail.startswith("GAIA's AI engine couldn't start: lemond.exe is missing")
+    assert TUI_SETUP_HINT in detail
 
 
 def test_an_anthropic_outage_is_not_blamed_on_lemonade():
@@ -553,7 +572,7 @@ def test_history_is_trimmed_in_whole_turns(monkeypatch):
     window = list(agent.conversation_history)
     assert len(window) == 12
     assert [m["role"] for m in window] == ["user", "assistant"] * 6
-    assert window[0]["content"] == "q12"
+    assert window[0]["content"] == f"{HIDDEN_TURNS_NOTE}\n\nq12"
     assert window[-1]["content"] == "a17"
 
 
@@ -682,6 +701,102 @@ def test_a_returned_answer_with_no_counts_invents_none():
     assert "usage" not in events[-1]
 
 
+class _ErrorWithToolsAgent(_FakeAgent):
+    """Simulates a turn that ran tools and returned an error without printing."""
+
+    def process_query(self, query):
+        self.queries.append(query)
+        self.console.print_tool_usage("read_file")
+        self.console.print_tool_usage("run_shell")
+        return {
+            "status": "failed",
+            "result": "Language model unreachable at step 3",
+            "steps_taken": 3,
+            "input_tokens": 1200,
+            "output_tokens": 0,
+            "conversation": [
+                {"role": "user", "content": query},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "read_file"}}],
+                },
+                {"role": "tool", "name": "read_file", "content": "ok"},
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "run_shell"}}],
+                },
+                {"role": "tool", "name": "run_shell", "content": "ok"},
+            ],
+        }
+
+
+def test_a_returned_answer_after_tools_reports_tools_used():
+    """#7262: non-verbose callers rely on usage.tools_used on error exits."""
+    events = [json.loads(line) for line in _lines(_run(_ErrorWithToolsAgent(), "go"))]
+
+    assert events[-1] == {
+        "type": "final",
+        "answer": "Language model unreachable at step 3",
+        "usage": {
+            "steps": 3,
+            "tools_used": 2,
+            "input_tokens": 1200,
+        },
+    }
+
+
+def test_a_returned_answer_falls_back_to_handler_tool_count():
+    """When process_query omits conversation/tools_used, handler count survives."""
+
+    class _StreamedToolThenErrorAgent(_FakeAgent):
+        def process_query(self, query):
+            self.queries.append(query)
+            self.console.print_tool_usage("read_file")
+            return {"result": "failed after tool", "steps_taken": 1}
+
+    events = [
+        json.loads(line) for line in _lines(_run(_StreamedToolThenErrorAgent(), "go"))
+    ]
+
+    assert events[-1]["usage"] == {"steps": 1, "tools_used": 1}
+
+
+def test_usage_from_result_tool_count_variants():
+    assert stdio._usage_from_result({"tools_used": 3, "steps_taken": 2}) == {
+        "steps": 2,
+        "tools_used": 3,
+    }
+    assert (
+        stdio._usage_from_result(
+            {"tools_used": 0, "conversation": [{"role": "tool", "name": "x"}]},
+            tool_count=2,
+        )
+        == {}
+    )
+    assert stdio._usage_from_result({"tools_used": True}) == {}
+    assert stdio._usage_from_result("raw string", tool_count=2) == {"tools_used": 2}
+    assert stdio._usage_from_result({"tools_used": -1}, tool_count=2) == {}
+    assert stdio._usage_from_result({"conversation": []}, tool_count=2) == {}
+    assert stdio._usage_from_result(
+        {"conversation": [None, "tool", {"role": "assistant"}, {"role": "tool"}]}
+    ) == {"tools_used": 1}
+
+
+def test_earlier_turns_tool_results_are_not_counted():
+    """model_messages replays the session's history, so its tool results span
+    earlier turns; the handler's count for this turn wins over it."""
+    history = [
+        {"role": "user", "content": "earlier"},
+        {"role": "tool", "name": "read_file", "content": "ok"},
+        {"role": "tool", "name": "run_shell", "content": "ok"},
+        {"role": "user", "content": "now"},
+    ]
+    assert stdio._usage_from_result({"model_messages": history}, tool_count=1) == {
+        "tools_used": 1
+    }
+    assert stdio._usage_from_result({"model_messages": history}) == {}
+
+
 def test_a_turn_that_ended_in_an_error_event_is_not_recorded():
     """Replaying a failure as if it were an answer teaches the model that the
     failure is what it said."""
@@ -785,6 +900,11 @@ class _ModelSwitchAgent(_FakeAgent):
         self.rebuild_count += 1
 
 
+def _listed(*model_ids):
+    """What ``_lemonade_models`` returns: each id mapped to its catalog entry."""
+    return {model_id: {"id": model_id} for model_id in model_ids}
+
+
 def _model_run(agent, query):
     out = io.StringIO()
     stdio.run_model_command(agent, query, out)
@@ -867,7 +987,9 @@ def test_model_switch_to_local_succeeds(monkeypatch, stub_lemonade):
 
     sentinel_client = object()
     monkeypatch.setattr(
-        stdio_mod, "_lemonade_models", lambda base_url: ["Qwen3-4B-Instruct-2507-GGUF"]
+        stdio_mod,
+        "_lemonade_models",
+        lambda base_url: _listed("Qwen3-4B-Instruct-2507-GGUF"),
     )
     monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: sentinel_client)
     agent = _ModelSwitchAgent()
@@ -898,7 +1020,7 @@ def test_model_switch_to_a_custom_model_uses_the_name_lemonade_lists(
     monkeypatch.setattr(
         stdio_mod,
         "_lemonade_models",
-        lambda base_url: ["Gemma-4-E4B-it-GGUF", "Qwen3-0.6B-Q4_K_M-GGUF"],
+        lambda base_url: _listed("Gemma-4-E4B-it-GGUF", "Qwen3-0.6B-Q4_K_M-GGUF"),
     )
     monkeypatch.setattr(
         stdio_mod, "create_client", lambda **kwargs: built.append(kwargs) or object()
@@ -962,7 +1084,7 @@ def test_missing_cloud_model_is_listed_again_after_its_key_is_replayed(monkeypat
     from gaia_agent import stdio as stdio_mod
 
     model = "amd.gpt-4.1"
-    listings = [["Gemma-4-E4B-it-GGUF"], ["Gemma-4-E4B-it-GGUF", model]]
+    listings = [_listed("Gemma-4-E4B-it-GGUF"), _listed("Gemma-4-E4B-it-GGUF", model)]
     monkeypatch.setattr(stdio_mod, "_lemonade_models", lambda base_url: listings.pop(0))
     probed = []
     monkeypatch.setattr(
@@ -1096,7 +1218,7 @@ def test_model_switch_after_a_lemonade_restart_uses_the_new_port(
     monkeypatch.setattr(
         stdio_mod,
         "_lemonade_models",
-        lambda base_url: listed.append(base_url) or ["amd.DeepSeek-V4.1-Flash"],
+        lambda base_url: listed.append(base_url) or _listed("amd.DeepSeek-V4.1-Flash"),
     )
     monkeypatch.setattr(
         stdio_mod, "create_client", lambda **kwargs: built.append(kwargs) or object()
@@ -1321,7 +1443,9 @@ def test_the_rollback_restores_an_absent_model_id(monkeypatch, stub_lemonade):
     from gaia_agent import stdio as stdio_mod
 
     monkeypatch.setattr(
-        stdio_mod, "_lemonade_models", lambda base_url: ["Qwen3-4B-Instruct-2507-GGUF"]
+        stdio_mod,
+        "_lemonade_models",
+        lambda base_url: _listed("Qwen3-4B-Instruct-2507-GGUF"),
     )
     monkeypatch.setattr(stdio_mod, "create_client", lambda **kwargs: object())
     agent = _ModelSwitchAgent()
@@ -1402,7 +1526,8 @@ def test_lemonade_models_excludes_embedding_and_image_and_not_downloaded(monkeyp
 
     models = stdio_mod._lemonade_models("http://127.0.0.1:13305/api/v1")
 
-    assert models == ["Gemma-4-E4B-it-GGUF", "Phi-4-mini-instruct-GGUF"]
+    assert list(models) == ["Gemma-4-E4B-it-GGUF", "Phi-4-mini-instruct-GGUF"]
+    assert models["Phi-4-mini-instruct-GGUF"] is fake.catalog["data"][4]
 
 
 def test_lemonade_models_unreachable_names_url_and_fix(monkeypatch):
@@ -1467,27 +1592,119 @@ def test_cloud_model_switch_preserves_session_and_reports_remote(
     assert agent._use_claude is False
 
 
-def test_switch_message_classifies_from_the_client_not_the_id_prefix(
+@pytest.fixture
+def lemonade_http(monkeypatch):
+    """The real Lemonade client, with only its HTTP call stubbed.
+
+    Returns the list of ``/models`` URLs requested. The process-wide cloud
+    catalog that ``list_models`` rebuilds is restored afterwards.
+    """
+    from gaia.llm import lemonade_client
+
+    model = "custom.gemma-4-31b-it"
+    catalog = {
+        "data": [
+            {"id": "Gemma-4-E4B-it-GGUF", "downloaded": True, "labels": []},
+            {
+                "id": model,
+                "recipe": "cloud",
+                "cloud_provider": "fireworks",
+                "downloaded": False,
+            },
+        ]
+    }
+    fetched = []
+
+    def _send_request(self, method, url, data=None, timeout=None):
+        assert method == "get" and "/models" in url, f"unexpected {method} {url}"
+        fetched.append(url)
+        return catalog
+
+    monkeypatch.setattr(lemonade_client, "_CLOUD_MODELS", {})
+    monkeypatch.setattr(lemonade_client, "_CLOUD_PROVIDERS", frozenset())
+    monkeypatch.setattr(lemonade_client.LemonadeClient, "_send_request", _send_request)
+    monkeypatch.setattr(stdio, "_lemonade_health", lambda url: {})
+    monkeypatch.setattr(stdio, "running_embedded_lemonade_url", lambda: None)
+    return fetched
+
+
+def test_switch_reads_the_catalog_once_and_names_a_discovered_provider(lemonade_http):
+    """``custom.gemma-4-31b-it`` is a Fireworks model only the catalog says is
+    one: its id prefix is not a provider GAIA knows.
+
+    The switch lists the catalog to validate the id, then builds a new client
+    that the switch message (and the system prompt rebuilt with it) ask which
+    provider serves the model. That client must answer from the catalog
+    already read, not fetch it again, and not call the model local.
+    """
+    agent = _ModelSwitchAgent()
+
+    events = _events(_model_run(agent, "/model custom.gemma-4-31b-it"))
+
+    assert len(lemonade_http) == 1, lemonade_http
+    assert agent.chat.llm_client.cloud_model_provider() == "fireworks"
+    answer = events[-1]["answer"]
+    assert "Fireworks AI (cloud)" in answer
+    assert "not sending this conversation to any cloud provider" not in answer
+
+
+def test_model_status_tracks_cloud_and_local_switches(lemonade_http):
+    """The wire status and switch notice agree through repeated switches."""
+    agent = _ModelSwitchAgent()
+    for model, backend, remote in [
+        ("custom.gemma-4-31b-it", "fireworks", True),
+        ("Gemma-4-E4B-it-GGUF", "lemonade", False),
+        ("custom.gemma-4-31b-it", "fireworks", True),
+    ]:
+        events = _events(_model_run(agent, f"/model {model}"))
+        status = next(event for event in events if "model_id" in event)
+        assert status["model_id"] == model
+        assert status["model_backend"] == backend
+        assert status["model_remote"] is remote
+        assert ("(cloud)" in events[-1]["answer"]) is remote
+    assert len(lemonade_http) == 3
+
+
+@pytest.mark.parametrize(
+    "model, metadata, backend, remote",
+    [
+        (
+            "custom.gemma",
+            {"recipe": "cloud", "cloud_provider": "fireworks"},
+            "fireworks",
+            True,
+        ),
+        ("custom.gemma", {"recipe": "cloud", "cloud_provider": "amd"}, "amd", True),
+        ("custom.gemma", {"recipe": "llamacpp", "downloaded": True}, "lemonade", False),
+        ("Gemma-4-E4B-it-GGUF", {"downloaded": True}, "lemonade", False),
+        ("fireworks.gemma", {}, "fireworks", True),
+        ("amd.gemma", {}, "amd", True),
+    ],
+)
+def test_model_status_uses_live_catalog(
+    model, metadata, backend, remote, lemonade_http
+):
+    from gaia.llm.providers.lemonade import LemonadeProvider
+
+    agent = _ModelSwitchAgent()
+    agent.chat.config.model = model
+    agent.chat.llm_client = LemonadeProvider(
+        model=model, model_metadata=[{"id": model, **metadata}]
+    )
+    event = stdio._model_state_event(agent)
+    assert event["model_backend"] == backend
+    assert event["model_remote"] is remote
+    assert lemonade_http == []
+
+
+def test_a_client_that_cannot_classify_still_completes_the_switch(
     monkeypatch, stub_lemonade
 ):
-    """A cloud model whose id prefix is not a known provider must not be
-    announced as local.
+    """A client that knows nothing of the catalog must not break ``/model``.
 
-    The switchable-model filter calls ``cloud_model_provider(id, metadata)``,
-    which honours the catalog's own ``cloud_provider`` field — so a model can
-    be switchable under any prefix. The switch message called the one-argument
-    form, which knows only the ``fireworks.``/``amd.`` prefixes and returns
-    None for anything else, so this model was described with the LOCAL
-    sentence: an affirmative "not sending this conversation to any cloud
-    provider" about a cloud model, contradicting the system prompt, which does
-    consult the client.
-
-    The stub starts COLD, like the real ``LemonadeProvider`` create_client
-    just built: ``cloud_model_provider`` answers from empty metadata until
-    ``refresh_model_catalog`` — the warm-up ``_apply_local_switch`` now runs
-    right after construction — has read the catalog. A stub that answers
-    correctly from birth (the pre-fix version of this test) can't fail even
-    when the production code forgets to warm the client.
+    Asserts only that the switch completes: what it says about where the
+    conversation goes is whatever the client answers, and a client that
+    can't classify has no right answer to pin.
     """
     model = "custom.gemma-4-31b-it"
     stub_lemonade.catalog = {
@@ -1501,77 +1718,15 @@ def test_switch_message_classifies_from_the_client_not_the_id_prefix(
         ]
     }
 
-    class _CatalogAwareClient:
-        """Mirrors LemonadeProvider: classifies a discovered cloud model only
-        after refresh_model_catalog (== list_models) has run."""
-
-        def __init__(self):
-            self._metadata = {}
-            self.refresh_calls = 0
-
-        def refresh_model_catalog(self, show_all=True):
-            self.refresh_calls += 1
-            assert show_all is True, "labels/downloaded are only in the full catalog"
-            for entry in stub_lemonade.catalog.get("data", []):
-                if entry.get("id"):
-                    self._metadata.setdefault(entry["id"], {}).update(entry)
-
-        def cloud_model_provider(self, model_id):
-            meta = self._metadata.get(model_id)
-            if meta is None:
-                return None
-            return meta.get("cloud_provider")
-
-    created = []
-
-    def _fake_create_client(**_kwargs):
-        client = _CatalogAwareClient()
-        created.append(client)
-        return client
-
-    monkeypatch.setattr(stdio, "create_client", _fake_create_client)
-
-    answer = _events(_model_run(_ModelSwitchAgent(), f"/model {model}"))[-1]["answer"]
-
-    assert created[0].refresh_calls == 1
-    assert "Fireworks AI (cloud)" in answer
-    assert "not sending this conversation to any cloud provider" not in answer
-
-
-def test_switch_message_falls_back_to_prefix_rule_without_refresh_model_catalog(
-    monkeypatch, stub_lemonade
-):
-    """A client with no ``refresh_model_catalog`` (a fake without the new
-    method, or a future non-Lemonade backend) must not crash the switch —
-    ``_apply_local_switch`` just skips the warm-up, same as before this fix
-    existed, and the message falls back to the id-prefix rule."""
-    model = "custom.gemma-4-31b-it"
-    stub_lemonade.catalog = {
-        "data": [
-            {
-                "id": model,
-                "recipe": "cloud",
-                "cloud_provider": "fireworks",
-                "downloaded": False,
-            }
-        ]
-    }
-
-    class _UnwarmableClient:
-        """Has the classifier but no way to populate it — represents any
-        future backend that never learns catalog metadata."""
-
+    class _UnclassifyingClient:
         def cloud_model_provider(self, model_id):
             return None
 
-    monkeypatch.setattr(stdio, "create_client", lambda **kwargs: _UnwarmableClient())
+    monkeypatch.setattr(stdio, "create_client", lambda **kwargs: _UnclassifyingClient())
 
     answer = _events(_model_run(_ModelSwitchAgent(), f"/model {model}"))[-1]["answer"]
 
-    # No catalog metadata available: falls back to the id-prefix rule, which
-    # does not know "custom." — described as local, the pre-existing (and
-    # documented) fallback behaviour.
-    assert "not sending this conversation to any cloud provider" in answer
+    assert "Switched to" in answer
 
 
 def test_model_list_groups_discovered_cloud_without_downloads(stub_lemonade):
@@ -1821,8 +1976,48 @@ def test_the_pump_queues_the_sentinel_even_when_stdin_itself_raises(monkeypatch)
 # ---------------------------------------------------------------------------
 #
 # tui/internal/client/factory.go pins these spellings as literal Go string
-# constants and the catalog appends --json-events. A rename passes every other
+# constants and the catalog appends --dev. A rename passes every other
 # Python test here and fails at spawn as a generic "exited (code 2)".
+
+#: tests/ -> python/ -> gaia/ -> agents/ -> hub/ -> repo root
+_TUI = Path(__file__).resolve().parents[5] / "tui" / "internal"
+
+
+def _go_flags_passed_to_the_flagship() -> dict:
+    """Every argv flag the Go TUI can hand the flagship, keyed by source file."""
+    factory = (_TUI / "client" / "factory.go").read_text(encoding="utf-8")
+    subprocess_go = (_TUI / "client" / "subprocess.go").read_text(encoding="utf-8")
+    catalog = (_TUI / "catalog" / "catalog.go").read_text(encoding="utf-8")
+    appended = r'append\([^\n]*?"(--[\w-]+)"'
+    return {
+        "factory.go consts": re.findall(
+            r'^const \w+Flag = "(--[\w-]+)"', factory, re.MULTILINE
+        ),
+        "factory.go appends": re.findall(appended, factory),
+        "subprocess.go appends": re.findall(appended, subprocess_go),
+        "catalog.go args": [
+            flag
+            for group in re.findall(
+                r"(?:BinaryArgs|DevArgs):\s*\[\]string\{([^}]*)\}", catalog
+            )
+            for flag in re.findall(r'"(--[\w-]+)"', group)
+        ],
+    }
+
+
+def test_the_parser_declares_every_flag_the_go_side_passes():
+    by_source = _go_flags_passed_to_the_flagship()
+    empty = [source for source, flags in by_source.items() if not flags]
+    assert not empty, f"no flags found in {empty}; the Go source moved"
+
+    parser = stdio.build_parser()
+    declared = {opt for action in parser._actions for opt in action.option_strings}
+    unknown = {
+        source: sorted(set(flags) - declared)
+        for source, flags in by_source.items()
+        if set(flags) - declared
+    }
+    assert not unknown, f"the Go TUI passes flags gaia_agent.stdio rejects: {unknown}"
 
 
 def test_the_parser_accepts_the_spellings_the_go_side_pins():
@@ -2193,7 +2388,7 @@ def test_context_eviction_does_not_delete_tui_archive(tmp_path, monkeypatch):
     monkeypatch.setattr(history, "count_tokens", lambda *args: 10)
     for i in range(12):
         stdio._record_turn(agent, f"q{i}", f"a{i}")
-    assert agent.conversation_history[0]["content"] == "q6"
+    assert agent.conversation_history[0]["content"] == f"{HIDDEN_TURNS_NOTE}\n\nq6"
     monkeypatch.setattr(history, "history_budget", lambda *args: 1000)
     agent.conversation_history.prepare(agent, "all evidence")
     assert len(agent.conversation_history) == 24
@@ -2373,7 +2568,7 @@ def test_model_list_offers_only_models_that_chat(monkeypatch):
             return {"data": catalog}
 
     monkeypatch.setattr(stdio, "LemonadeClient", _Client)
-    assert stdio._lemonade_models(None) == [
+    assert list(stdio._lemonade_models(None)) == [
         "Gemma-4-E4B-it-GGUF",
         "Qwen2.5-Omni-3B-GGUF",
         "Qwen3.6-35B-A3B-GGUF",

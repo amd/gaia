@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pytest
 
+from gaia.agents.base.agent import _skill_tool_names
 from gaia.agents.base.model_features import COMPACT, TIERS, withheld_tools
 from gaia.skills import parse_skill_file
 from gaia.skills.errors import SkillUnavailableError
@@ -29,7 +30,7 @@ SKILL_DIRS = sorted(d for d in HUB_SKILLS.iterdir() if (d / "SKILL.md").is_file(
 #: Hub skills each tier cannot run. Change this only with the tier or the skill.
 UNAVAILABLE = {
     "full": set(),
-    "compact": {"data-explore", "image-gen", "inbox-triage"},
+    "compact": {"calendar", "data-explore", "image-gen", "inbox-triage", "send-email"},
 }
 
 
@@ -38,7 +39,7 @@ def _unavailable(tier: str) -> set[str]:
     return {
         d.name
         for d in SKILL_DIRS
-        if set(parse_skill_file(d).gaia.tools_required) & withheld
+        if set(_skill_tool_names(parse_skill_file(d))) & withheld
     }
 
 

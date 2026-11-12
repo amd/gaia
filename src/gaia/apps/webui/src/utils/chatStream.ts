@@ -83,6 +83,8 @@ export function fromApiMessages(raw: unknown[] | undefined): Message[] {
             cards: m.cards || cardsFromSteps(agentSteps),
             stats: m.stats || m.inference_stats || undefined,
             turnSummary: m.turnSummary || m.turn_summary || undefined,
+            libraryNotices: m.libraryNotices || m.library_notices || undefined,
+            stopState: m.stopState ?? (m.stopped ? 'stopped' : undefined),
         };
     });
 }
@@ -119,12 +121,32 @@ export function isSavedFailure(row: Message | undefined, reply: Message): boolea
 
 /**
  * Whether Try again may replace *question* on the server: nothing follows it
- * there but the saved copy of *reply*'s failure. Anything else is an answer
- * written since (another window, or a run that finished after the view lost it).
+ * there but *reply* itself (a cut-off answer the server saved) or the saved
+ * copy of its failure. Anything else is an answer written since (another
+ * window, or a run that finished after the view lost it).
  */
 export function onlyFailureAfter(server: Message[], question: Message, reply: Message): boolean {
     const after = server.slice(server.findIndex((m) => m.id === question.id) + 1);
-    return after.length === 0 || (after.length === 1 && isSavedFailure(after[0], reply));
+    return after.length === 0
+        || (after.length === 1 && (after[0].id === reply.id || isSavedFailure(after[0], reply)));
+}
+
+/**
+ * Give each server row that replaces a shown message under a new id (a sent
+ * message's temporary id) that message's render key, so its bubble is kept
+ * instead of drawn again.
+ */
+export function carryMessageKeys(shown: Message[], server: Message[], keys: Map<number, number>): void {
+    const serverIds = new Set(server.map((m) => m.id));
+    const shownIds = new Set(shown.map((m) => m.id));
+    const replaced = shown.filter((m) => !serverIds.has(m.id));
+    for (const row of server) {
+        if (shownIds.has(row.id) || keys.has(row.id)) continue;
+        const at = replaced.findIndex((m) => m.role === row.role && m.content.trim() === row.content.trim());
+        if (at < 0) continue;
+        const [twin] = replaced.splice(at, 1);
+        keys.set(row.id, keys.get(twin.id) ?? twin.id);
+    }
 }
 
 /** The server's rows, keeping Try again only on the server's copy of a failed reply. */

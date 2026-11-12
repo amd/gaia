@@ -22,8 +22,6 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
-      - '!src/gaia/apps/*/webui/**'
-      - '!src/gaia/electron/**'
       - 'tests/test_rag.py'
       - 'tests/test_lemonade_client.py'
   pull_request:
@@ -41,8 +39,6 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
-      - '!src/gaia/apps/*/webui/**'
-      - '!src/gaia/electron/**'
       - 'tests/test_rag.py'
       - 'tests/test_lemonade_client.py'
   merge_group:
@@ -83,9 +79,8 @@ jobs:
       - name: Install Lemonade Server (PPA)
         run: |
           echo "=== Installing Lemonade Server from the Launchpad PPA ==="
-          # Mirrors LemonadeInstaller._install_via_ppa()
-          # (src/gaia/installer/lemonade_installer.py) -- GAIA's real Linux
-          # install path. lemonade-sdk was removed from PyPI.
+          # This runner tests against a system Lemonade from the PPA.
+          # lemonade-sdk was removed from PyPI.
           # pipefail so `| tee` cannot swallow add-apt-repository's exit code.
           # Its status is deferred, not discarded: the diagnosis below turns a
           # Launchpad outage into a named error first, and the raw failure is
@@ -277,7 +272,7 @@ jobs:
           import json, sys
           sys.path.insert(0, 'src')
           from gaia.llm.lemonade_launcher import build_start_command, resolve_lemonade
-          spec = build_start_command(resolve_lemonade(), None)
+          spec = build_start_command(resolve_lemonade())
           print(json.dumps({'argv': spec.argv, 'env': spec.env}))
           ")
           echo "build_start_command() resolved: $STARTSPEC"

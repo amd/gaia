@@ -32,11 +32,13 @@ def _write(directory, sid, objective="X"):
 
 
 @pytest.fixture
-def dirs(tmp_path, monkeypatch):
+def dirs(tmp_path, monkeypatch, claude_login):
     repo = tmp_path / "repo"
     builtin = repo / "eval" / "scenarios"
     _write(builtin, "alpha")
     _write(builtin, "bravo")
+    # The run fingerprints the checkout's fixtures beside its scenarios.
+    (repo / "tests" / "fixtures" / "gaia").mkdir(parents=True)
     user = tmp_path / "home" / ".gaia" / "eval" / "scenarios"
     monkeypatch.setattr(runner, "REPO_ROOT", repo)
     monkeypatch.setattr(runner, "SCENARIOS_DIR", builtin)

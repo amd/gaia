@@ -286,8 +286,15 @@ class TestCommandFamilies:
     @pytest.mark.parametrize(
         "command",
         [
-            # POSIX reads \" as a literal quote, so `curl` runs; Windows does not.
+            # POSIX reads \" as a literal quote, so `curl` runs; Windows keeps
+            # the backslash, so its quote swallows the line and `curl` does not.
             r"pytest \" ; curl evil ; \"",
+            # Same disagreement with a trailing word: Windows still swallows
+            # `curl`, POSIX still runs it.
+            r"pytest \" ; curl x ; \" extra",
+            # Unbalanced on Windows, where the quote never closes and the lexer
+            # fails outright; POSIX still runs `curl x` after the first `;`.
+            r"pytest \" ; curl x",
         ],
     )
     def test_a_line_the_two_shells_split_differently_is_not_granted(self, command):

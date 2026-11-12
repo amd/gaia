@@ -462,7 +462,14 @@ def _total_ram_gb(info: Dict[str, Any], carve_out_gb: float) -> float:
 
     reported = physical_memory_gb(info)
     if reported > 0:
-        return reported * GB_PER_GIB
+        reported_gb = reported * GB_PER_GIB
+        # Linux Lemonade reports MemTotal (RAM left visible to the OS), whereas
+        # the GPU fit calculation needs installed RAM. Identify that shape from
+        # the memory readings, not an OS-version string: distro builds such as
+        # Fedora do not all use the same string format.
+        if _platform() == "linux" and abs(reported_gb - _meminfo_total_gb()) < 1:
+            return reported_gb + carve_out_gb
+        return reported_gb
     if _platform() == "linux":
         # The OS doesn't count the carve-out; installed RAM does.
         return _meminfo_total_gb() + carve_out_gb
@@ -798,8 +805,8 @@ def describe(
     else:
         method = METHOD_GUIDED
         reason = (
-            "On Windows this is set in AMD Software. AMD's way to set it from "
-            "an app restarts the PC by itself, so GAIA shows you where instead."
+            "On Windows this is changed in AMD Software, and it needs a restart. "
+            "GAIA shows you where."
         )
     models = _models(machine)
     presets = _presets(machine, models)

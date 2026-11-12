@@ -24,13 +24,17 @@ SKILL_DIRS = sorted(
 
 #: Plain queries per skill; the skill must rank in the top 3 for each.
 QUERIES: dict[str, list[str]] = {
+    "analyze-recording": ["youtube video", "podcast chapters"],
+    "calculators": ["tip calculator", "mortgage payment"],
+    "calendar": ["what is on my calendar", "schedule a meeting"],
     "check-in": ["check in", "what was I working on"],
     "coding": ["fix a bug", "refactor code", "make a test pass"],
     "daily-brief": ["morning briefing", "what do I need to know today"],
     "data-explore": ["csv totals", "spreadsheet breakdown"],
     "document-brief": ["contract", "what does this PDF say"],
-    "file-ops": ["edit a file", "rename file"],
+    "file-ops": ["edit a file", "create a new file"],
     "github-triage": ["github issues", "github notifications"],
+    "guides": ["packing list", "workout"],
     "image-gen": ["draw a picture", "generate an image"],
     "inbox-triage": ["inbox", "unread mail"],
     "music-gen": ["music", "sound effects"],
@@ -38,6 +42,7 @@ QUERIES: dict[str, list[str]] = {
     "recommendations": ["what to watch", "book recommendations"],
     "research-report": ["research report with sources", "literature scan"],
     "rss-digest": ["summarizing RSS feeds", "atom feed"],
+    "send-email": ["send an email", "draft an email"],
     "source-watch": ["monitor a website", "watch a URL for changes"],
     "summarize": ["summarize a pdf", "key decisions"],
     "transcribe-meeting": ["meeting notes", "transcribe a recording"],

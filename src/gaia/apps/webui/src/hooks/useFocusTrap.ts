@@ -49,7 +49,7 @@ function isShown(el: HTMLElement, container: HTMLElement): boolean {
 }
 
 /** The elements Tab visits inside `container`, in DOM order. */
-function tabbableIn(container: HTMLElement): HTMLElement[] {
+export function tabbableIn(container: HTMLElement): HTMLElement[] {
     const items = Array.from(container.querySelectorAll<HTMLElement>(CANDIDATES)).filter((el) => {
         const tabindex = el.getAttribute('tabindex');
         if (tabindex !== null && Number(tabindex) < 0) return false;

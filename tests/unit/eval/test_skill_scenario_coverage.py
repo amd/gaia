@@ -42,7 +42,25 @@ import skill_eval_scenarios as ses  # noqa: E402  (path set above)
 MIN_SCENARIOS_PER_SKILL = 2
 
 #: Skills with no scenarios yet, each with the reason it can wait.
-DEFERRED: dict[str, str] = {}
+DEFERRED: dict[str, str] = {
+    "analyze-recording": "Requires audio input; belongs with the audio tests.",
+    "calculators": (
+        "The card does the math in the client; a skill scenario needs a judge "
+        "that reads the card payload rather than the short reply."
+    ),
+    "calendar": (
+        "Requires a Google or Outlook calendar connection; the eval mailbox "
+        "fixture has no calendar, and every change needs a person to approve."
+    ),
+    "guides": (
+        "The answer is a card the client draws; a skill scenario needs a judge "
+        "that reads the card payload rather than the short reply."
+    ),
+    "send-email": (
+        "Every send needs a person to approve the exact message; the email eval "
+        "lane's fixture mailbox covers its tools once a scenario drives them."
+    ),
+}
 
 
 def _skill_names() -> list[str]:

@@ -386,34 +386,74 @@ jobs:
       # or promote a tier: publishing still runs the same gate server-side
       # (`assertAuditGate`), which refuses a REVIEW verdict regardless of what
       # any label says. See the note printed below.
+      #
+      # DISTINGUISHING "NEVER RAN" FROM "SAID NO" (#4107): every test below runs
+      # only after the audit step is proven complete, and its counts proven
+      # present. A job that dies upstream (a rate-limited GITHUB_TOKEN, a broken
+      # install) leaves the counts unset, and `${COUNT:-0}` used to read that as
+      # a clean pass, so a zeroed result was published as a verdict from a run
+      # that audited nothing. That now fails under its own INFRA error title,
+      # so a reviewer can tell "the gate never got to run" apart from "the gate
+      # ran and said no" without opening the log. It stays a failure either way:
+      # the check is required, and an unrun gate must not look green.
+      # `always()` is load-bearing, not defensive: without a status function
+      # Actions wraps the condition in an implicit `success()`, so a failed
+      # install or audit skips this step and the infrastructure verdict below
+      # never runs. That was the original #4107 hole. A failed `detect` leaves
+      # `skills` empty, `'' != '[]'` is true, so the step still runs and reports
+      # the missing outcome instead of vanishing.
       - name: Enforce verdict
-        if: steps.detect.outputs.skills != '[]'
+        if: always() && steps.detect.outputs.skills != '[]'
         env:
+          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
           BLOCK_COUNT: ${{ steps.audit.outputs.block_count }}
           REVIEW_COUNT: ${{ steps.audit.outputs.review_count }}
           HUB_REVIEW_COUNT: ${{ steps.audit.outputs.hub_review_count }}
           INVALID_COUNT: ${{ steps.audit.outputs.invalid_count }}
+          ALLOW_COUNT: ${{ steps.audit.outputs.allow_count }}
           SIGNED_OFF: ${{ contains(github.event.pull_request.labels.*.name, 'skill-audit-reviewed') }}
         run: |
           set -euo pipefail
           failed=0
 
-          if [ "${INVALID_COUNT:-0}" -gt 0 ]; then
+          # Infrastructure first: if the audit did not run to completion, no
+          # count below is meaningful and none of them may be read as zero.
+          infra=""
+          if [ "${AUDIT_OUTCOME}" != "success" ]; then
+            infra="the audit step did not complete (outcome: '${AUDIT_OUTCOME:-unset}')"
+          else
+            for name in BLOCK_COUNT REVIEW_COUNT HUB_REVIEW_COUNT INVALID_COUNT ALLOW_COUNT; do
+              # `${!name-}` keeps `set -u` quiet for an unset output while still
+              # yielding "" rather than a zero, so the regex below rejects it.
+              value="${!name-}"
+              if ! [[ "$value" =~ ^(0|[1-9][0-9]*)$ ]]; then
+                infra="required output $name was '${value}', not a count"
+                break
+              fi
+            done
+          fi
+
+          if [ -n "$infra" ]; then
+            echo "::error title=Skill audit (infrastructure)::This check never ran an audit: $infra. Nothing was evaluated, so this is not a verdict on any skill. Re-run the job; if it fails the same way, treat it as a CI fault, not a finding. Do not merge on this result."
+            exit 1
+          fi
+
+          if [ "${INVALID_COUNT}" -gt 0 ]; then
             echo "::error title=Skill audit::$INVALID_COUNT skill(s) could not be parsed. A skill the audit cannot read cannot be cleared, and no label overrides that."
             failed=1
           fi
 
-          if [ "${BLOCK_COUNT:-0}" -gt 0 ]; then
+          if [ "${BLOCK_COUNT}" -gt 0 ]; then
             echo "::error title=Skill audit::$BLOCK_COUNT skill(s) BLOCKED. Fix the findings and push again — sign-off does not override a BLOCK. Findings are in the Security > Code scanning tab."
             failed=1
           fi
 
-          if [ "${HUB_REVIEW_COUNT:-0}" -gt 0 ]; then
+          if [ "${HUB_REVIEW_COUNT}" -gt 0 ]; then
             echo "::error title=Skill audit::$HUB_REVIEW_COUNT skill(s) under hub/skills/ returned REVIEW. Skills there are published on release, which accepts only ALLOW, so sign-off does not override this. Fix the findings and push again. Findings are in the Security > Code scanning tab."
             failed=1
           fi
 
-          if [ "${REVIEW_COUNT:-0}" -gt 0 ]; then
+          if [ "${REVIEW_COUNT}" -gt 0 ]; then
             if [ "${SIGNED_OFF}" = "true" ]; then
               echo "::notice title=Skill audit::$REVIEW_COUNT skill(s) returned REVIEW and a maintainer applied 'skill-audit-reviewed'. Merge is unblocked."
               echo "NOTE: sign-off unblocks this PR only. The verdict on record is still REVIEW, so publishing this skill remains refused until it earns ALLOW (or the quarantine lane, issue #2675, ships). Merging is not a tier promotion."
@@ -529,7 +569,7 @@ jobs:
         id: claude
         if: steps.claude_account.outcome == 'success'
         continue-on-error: true   # advisory: a crash here must not gate the merge
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         with:
           anthropic_api_key: ${{ steps.claude_account.outputs.account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ steps.claude_account.outputs.account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}

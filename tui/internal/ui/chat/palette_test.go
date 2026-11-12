@@ -368,6 +368,7 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	// isModelCommand before the switch above and never appears as a case
 	// literal there (see modelcmd.go) — assert it directly, mirroring how
 	// TestChatHelpNamesEveryChatBinding checks it against chatHelpText.
+	seen["/skills"] = true // dispatched by isSkillsCommand, like /model
 	seen["/model"] = true
 	if !known["/model"] {
 		t.Error("paletteCommands does not offer /model")
@@ -377,6 +378,13 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	seen["/update"] = true
 	if !known["/update"] {
 		t.Error("paletteCommands does not offer /update")
+	}
+	// /read-aloud and /voice take arguments too (readaloud.go).
+	for _, cmd := range []string{"/read-aloud", "/voice"} {
+		seen[cmd] = true
+		if !known[cmd] {
+			t.Errorf("paletteCommands does not offer %s", cmd)
+		}
 	}
 
 	// The other direction: an entry nobody dispatches is a stale row that

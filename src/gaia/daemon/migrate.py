@@ -1,52 +1,21 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""One-time, versioned migration of pre-v2 ``~/.gaia`` state into host custody
-(design §0.10 step 0; breakdown item V2-13).
+"""Versioned schema stamp for the daemon's ``host/custody/`` state.
 
-Before Agent UI v2 the single Agent-UI process owned everything in-process and
-wrote its stores flat under ``~/.gaia`` — sessions at ``~/.gaia/chat/gaia_chat.db``
-and memory at ``~/.gaia/memory.db`` — with no agent tag and no on-disk schema
-version. Under v2 the always-on daemon is the custody owner (§0.9): stores live
-under ``~/.gaia/host/custody/`` and every row is scoped to an agent. Without a
-migration, an upgrader either loses past chats or leaks memory cross-agent.
+:func:`run_migrations` runs at every daemon start (wired in ``server.run``). It
+reads the on-disk version from ``host/custody/schema.json`` (absent = version 0),
+runs any pending steps, and stamps the result. An already-current install is a
+no-op; a version newer than this build understands is refused loudly, so a
+downgraded binary never touches state written by a newer one.
 
-This module supplies that migration and the schema-version stamp that gates it:
-
-* :func:`run_migrations` runs at every daemon start (wired in ``server.run``).
-* The on-disk schema version is read from ``host/custody/schema.json``. Absent =
-  version 0 = a pre-v2 install that has never been migrated.
-* Older-than-current → ordered migration steps run, then the version is stamped.
-* Current → no-op (this is what makes a second run idempotent).
-* Newer-than-current → **loud refusal** (a downgraded binary must not touch state
-  written by a newer one), never a silent proceed.
-
-Invariants (CLAUDE.md — critical for a migration):
-
-* **Non-destructive.** Legacy stores are *copied*, never moved or deleted, so the
-  original data is always recoverable even if the daemon is later rolled back.
-* **WAL-aware.** The legacy stores run in WAL mode, so committed-but-not-yet-
-  checkpointed transactions live in the ``-wal`` sidecar, not the main ``.db``.
-  A raw byte copy of the main file would silently drop them — losing the newest
-  sessions/memory of a user whose old process crashed or is still writing. The
-  copy therefore goes through ``sqlite3``'s online-backup API
-  (:func:`_atomic_sqlite_snapshot`), which reads through the engine and captures
-  a transaction-consistent snapshot including the WAL.
-* **Atomic.** Each snapshot is written to a temp file then ``os.replace``-d into
-  place, so a crash mid-copy never leaves a half-written database in custody.
-* **Fail loud.** Any step that cannot complete raises :class:`MigrationError`
-  (originals intact, version left un-stamped so the next start retries) — never a
-  partial success that swallows the error.
-
-The custody target paths below are what a pre-#2153 daemon writes; #2153 (the
-``/host/v1`` custody API, V2-12) reads from the same layout. They are centralized
-here so a rebase onto #2153's final scoping repoints one place, not the logic.
+Version 1 once copied ``gaia_chat.db`` and ``memory.db`` into ``host/custody/``,
+but nothing reads those copies (custody lives in ``host/custody.db``), so the
+step now only stamps. Copies already written are left on disk.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import sqlite3
 import time
 from pathlib import Path
 from typing import Callable, List
@@ -61,33 +30,12 @@ logger = get_logger(__name__)
 # and register the step in ``_MIGRATIONS`` keyed by the version it produces.
 SCHEMA_VERSION = 1
 
-# Pre-v2 state predates per-agent scoping, so it all belongs to one agent: the
-# host chat agent that owned the single Agent-UI process. #2153 may repoint this.
-DEFAULT_HOST_AGENT_ID = "chat"
-
 
 class MigrationState:
     """String constants for the ``status`` field of :func:`run_migrations`."""
 
     CURRENT = "current"  # on-disk == SCHEMA_VERSION; nothing to do
     MIGRATED = "migrated"  # ran one or more steps and stamped the new version
-
-
-# ---------------------------------------------------------------------------
-# Path helpers (centralized so a #2153 rebase repoints here, not the logic)
-# ---------------------------------------------------------------------------
-
-
-def legacy_gaia_dir() -> Path:
-    """The pre-v2 root holding the flat legacy stores: this GAIA home's own.
-
-    Resolved like every other GAIA path (``GAIA_HOME``, then ``GAIA_CONFIG_DIR``,
-    then ``~/.gaia``). Reading ``~/.gaia`` under ``GAIA_HOME`` copied the default
-    home's memory and chats into an isolated one's custody.
-    """
-    from gaia.config import gaia_home
-
-    return gaia_home()
 
 
 def custody_dir() -> Path:
@@ -98,26 +46,6 @@ def custody_dir() -> Path:
 def schema_stamp_path() -> Path:
     """The on-disk schema-version stamp (also the migration journal)."""
     return custody_dir() / "schema.json"
-
-
-def legacy_sessions_db() -> Path:
-    """Pre-v2 Agent-UI sessions DB (``~/.gaia/chat/gaia_chat.db``)."""
-    return legacy_gaia_dir() / "chat" / "gaia_chat.db"
-
-
-def legacy_memory_db() -> Path:
-    """Pre-v2 agent memory DB (``~/.gaia/memory.db``)."""
-    return legacy_gaia_dir() / "memory.db"
-
-
-def custody_sessions_db() -> Path:
-    """Sessions in custody, tagged to the default host agent (host index)."""
-    return custody_dir() / "agents" / DEFAULT_HOST_AGENT_ID / "sessions.db"
-
-
-def custody_memory_db() -> Path:
-    """Memory in custody, user-scope (single owner across the host's agents)."""
-    return custody_dir() / "memory" / "user" / "memory.db"
 
 
 # ---------------------------------------------------------------------------
@@ -171,95 +99,13 @@ def _stamp_schema_version(version: int, applied: List[str]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# WAL-aware, atomic SQLite copy
-# ---------------------------------------------------------------------------
-
-
-def _atomic_sqlite_snapshot(src: Path, dst: Path, mode: int = 0o600) -> None:
-    """Copy the SQLite database *src* to *dst* as a consistent, WAL-aware snapshot.
-
-    The legacy stores run in WAL mode (``PRAGMA journal_mode = WAL``), so a
-    committed transaction that has not yet been checkpointed lives in the ``-wal``
-    sidecar file, not the main ``.db``. A raw byte copy of the main file would
-    silently omit it — losing the newest sessions/memory of any user whose old
-    process is still running or crashed before a checkpoint. ``sqlite3``'s
-    online-backup API reads *through* the engine, so the snapshot is
-    transaction-consistent and includes the WAL, even against a live writer.
-
-    The source is opened for reading only — ``backup`` never writes to it, so the
-    migration stays non-destructive. (A literal read-only handle,
-    ``file:...?mode=ro``, cannot be used: SQLite cannot open a WAL database
-    read-only once its writer has exited, because it may not create the ``-shm``
-    wal-index — which is exactly the common upgrade case.) The snapshot is written
-    to a temp file and atomically ``os.replace``-d over *dst*, so a crash
-    mid-backup never leaves a half-written database in custody.
-    """
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    tmp = dst.parent / f".{dst.name}.{os.getpid()}.tmp"
-    if tmp.exists():
-        tmp.unlink()
-    # A generous busy_timeout so a brief lock held by a live legacy writer is
-    # waited out rather than surfaced as a spurious "database is locked" failure.
-    src_conn = sqlite3.connect(str(src), timeout=30.0)
-    try:
-        src_conn.execute("PRAGMA busy_timeout=30000")
-        dst_conn = sqlite3.connect(str(tmp))
-        try:
-            src_conn.backup(dst_conn)
-        finally:
-            dst_conn.close()
-    except BaseException:
-        try:
-            tmp.unlink()
-        except OSError:
-            pass
-        raise
-    finally:
-        src_conn.close()
-    os.replace(str(tmp), str(dst))
-    try:
-        os.chmod(str(dst), mode)
-    except OSError:
-        pass
-
-
-# ---------------------------------------------------------------------------
 # Migration steps — each keyed by the version it PRODUCES
 # ---------------------------------------------------------------------------
 
 
 def _migrate_v0_to_v1() -> List[str]:
-    """Relocate flat pre-v2 stores into the v2 custody layout.
-
-    Sessions → the host index tagged with the default agent; memory → user-scope.
-    Each store is copied atomically and only if the legacy file exists (a fresh
-    install has neither — the cold-state path — and simply gets stamped at v1).
-    Re-copying is safe: the source is preserved, so a retry after a partial
-    failure overwrites any half-migrated target with the authoritative original.
-    """
-    applied: List[str] = []
-
-    relocations = (
-        ("sessions", legacy_sessions_db(), custody_sessions_db()),
-        ("memory", legacy_memory_db(), custody_memory_db()),
-    )
-    for name, src, dst in relocations:
-        if not src.exists():
-            logger.info("migrate: no legacy %s at %s; skipping", name, src)
-            continue
-        try:
-            _atomic_sqlite_snapshot(src, dst)
-        except (OSError, sqlite3.Error) as e:
-            raise MigrationError(
-                f"failed to migrate legacy {name} from {src} to {dst}: {e}. The "
-                f"original at {src} is untouched; free up disk space / fix "
-                "permissions on the custody directory and restart the daemon to "
-                "retry. No data was lost."
-            ) from e
-        logger.info("migrate: snapshotted legacy %s %s -> %s", name, src, dst)
-        applied.append(f"{name}:{src.name}")
-
-    return applied
+    """Stamp-only: version 1's database copy was retired because nothing read it."""
+    return []
 
 
 # Ordered registry: index i upgrades version i -> i+1. Extend, don't rewrite.

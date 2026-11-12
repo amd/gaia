@@ -5,7 +5,7 @@
 A host sets ``Agent.internet_off``; every tool call is checked here before it
 can ask for confirmation, so a toggle takes effect on the agent's next step.
 Refused: the web tools, the in-app browser, connector (MCP) tools — GAIA can't
-tell which of those stay on this PC — the mailbox and Agent Hub tools, and any
+tell which of those stay on this PC — the mailbox, calendar and Agent Hub tools, and any
 call whose arguments or shell command reach a host other than this PC.
 
 "This PC" means ``localhost`` exactly or a loopback IP literal (127.0.0.0/8,
@@ -21,11 +21,11 @@ import re
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlparse
 
+from gaia.agents.base.command_wrappers import OFFLINE_WRAPPERS as _WRAPPERS
 from gaia.agents.base.denied_effects import (
     _ASSIGNMENT_RE,
     _SHELL_COMMAND_FLAGS,
     _SHELLS,
-    _WRAPPERS,
     NETWORK,
     _program,
     _split_segments,
@@ -45,9 +45,14 @@ WEB_TOOLS = frozenset(
     }
 )
 
-#: Tools that always call an online service: the user's mailbox or the Agent Hub.
+#: Tools that always call an online service: mailbox, calendar or the Agent Hub.
 ONLINE_SERVICE_TOOLS = frozenset(
     {
+        "calendar/cancel_calendar_event",
+        "calendar/check_calendar_availability",
+        "calendar/create_calendar_event",
+        "calendar/list_calendar_events",
+        "calendar/update_calendar_event",
         "check_mailbox_access",
         "get_thread",
         "list_inbox",
@@ -55,6 +60,14 @@ ONLINE_SERVICE_TOOLS = frozenset(
         "list_waiting_on_you",
         "read_email",
         "search_email",
+        "send-email/create_draft",
+        "send-email/discard_draft",
+        "send-email/forward_message",
+        "send-email/list_drafts",
+        "send-email/reply_to_message",
+        "send-email/send_draft",
+        "send-email/send_now",
+        "send-email/update_draft",
         "search_skill_hub",
         "install_skill",
     }
@@ -397,6 +410,10 @@ def offline_refusal(
     elif name.startswith("browser_"):
         if not url_is_local:
             what = "the browser"
+    elif name == "transcribe_media":
+        hosts = _remote_hosts(args)
+        if hosts:
+            what = f"{name} (it would download from {hosts[0]})"
     elif registry_entry is not None and registry_entry.get("_mcp_server"):
         what = f"the {registry_entry['_mcp_server']} connector"
     else:

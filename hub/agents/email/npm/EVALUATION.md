@@ -3,7 +3,7 @@
 Short version: we measure how reliably the agent sorts email into the right
 priority, using a fixed set of labeled emails and comparing its answer to the
 correct one. The current result is on the
-[**Scorecard**](https://github.com/amd/gaia/blob/agent-pkg-email-v0.6.0/hub/agents/email/npm/SCORECARD.md)
+[**Scorecard**](https://github.com/amd/gaia/blob/agent-pkg-email-0.6.0/hub/agents/email/npm/SCORECARD.md)
 tab. This page explains what that number means and how it's measured — in plain
 terms first, with the technical recipe at the end.
 
@@ -57,7 +57,7 @@ changes.
 You need a source checkout of [amd/gaia](https://github.com/amd/gaia) and **AMD
 Ryzen AI hardware** (the npm package ships neither the test corpus nor the eval
 harness). The exact, version-stamped command lives in the
-[Scorecard's *Reproduction* section](https://github.com/amd/gaia/blob/agent-pkg-email-v0.6.0/hub/agents/email/npm/SCORECARD.md#reproduction)
+[Scorecard's *Reproduction* section](https://github.com/amd/gaia/blob/agent-pkg-email-0.6.0/hub/agents/email/npm/SCORECARD.md#reproduction)
 — it's auto-generated so it always matches the published number. Run that block;
 it installs the eval tools, starts a local model server, rebuilds the test emails
 from the committed seed, and runs the benchmark (~17 minutes on a 4B model).
@@ -82,10 +82,12 @@ from the committed seed, and runs the benchmark (~17 minutes on a 4B model).
   long tool call); run evals **serially** (two `gaia eval` runs against one
   Lemonade server race-evict each other's model); use `--experiments 3` for
   run-to-run variance (mean/stdev/95% CI).
-- **CI:** `test_email_agent_eval.yml` (nightly, report-mode on the self-hosted AMD
-  `stx` pool) and `email_scorecard_refresh.yml` (manual dispatch only; a full-corpus
-  run regenerates `SCORECARD.md`, a subset run smoke-tests the pipeline without
-  committing). The drafting eval needs a Claude judge — `ANTHROPIC_API_KEY` (takes precedence),
-  or a subscription through the `claude` CLI (`CLAUDE_CODE_OAUTH_TOKEN`, or the CLI's own login).
-  With none it exits non-zero and fails the build; never a skip, never a pass.
+- **CI:** `email_scorecard_refresh.yml` only — the scheduled email eval was
+  removed while the email agent moves into the core agent (#3329), so
+  `SCORECARD.md` is not refreshed automatically. It runs on manual dispatch
+  only; a full-corpus run regenerates `SCORECARD.md`, a subset run
+  smoke-tests the pipeline without committing. The drafting eval needs a Claude
+  judge — a subscription through the `claude` CLI (`CLAUDE_CODE_OAUTH_TOKEN`,
+  or the CLI's own login) first, then `ANTHROPIC_API_KEY`. With none it exits
+  non-zero and fails the build; never a skip, never a pass.
 </details>

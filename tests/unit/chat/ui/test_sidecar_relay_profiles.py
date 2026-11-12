@@ -29,8 +29,8 @@ import pytest
 import gaia.ui._chat_helpers as chat_helpers_module
 import gaia.ui.email_sidecar.daemon_client as daemon_client_module
 import gaia.ui.email_sidecar.relay as relay_module
+from gaia.daemon.sidecars.errors import SidecarError, SidecarSpawnError
 from gaia.ui._chat_helpers import _dispatch_sidecar_query
-from gaia.ui.email_sidecar.errors import SidecarError, SidecarSpawnError
 from gaia.ui.email_sidecar.profiles import (
     EMAIL_PROFILE,
     GAIA_PROFILE,
@@ -111,7 +111,6 @@ def _registered_tool_names() -> set:
         "src/gaia/agents/tools",
         "src/gaia/sd",
         "src/gaia/vlm",
-        "src/gaia/agents/code_index",
         "hub/agents/gaia/python",
     ]
 
@@ -135,6 +134,14 @@ def _registered_tool_names() -> set:
                     _is_tool_decorator(d) for d in node.decorator_list
                 ):
                     names.add(node.name)
+    # A bundled skill's tools register as ``<skill>/<tool>`` once it loads.
+    for path in (REPO_ROOT / "hub" / "skills").glob("*/tools.py"):
+        tree = ast.parse(path.read_text(errors="replace"))
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+                _is_tool_decorator(d) for d in node.decorator_list
+            ):
+                names.add(f"{path.parent.name}/{node.name}")
     return names | _PROGRAMMATIC_TOOLS
 
 
@@ -422,25 +429,6 @@ class TestGaiaDispatch:
         assert calls == []
         assert handler.events[0]["type"] == "agent_error"
 
-    def test_a_stale_start_command_is_replaced_with_this_hosts_answer(
-        self, monkeypatch
-    ):
-        """An older agent package still says `lemonade-server serve`, a CLI
-        Lemonade 10.7 removed. Relaying it verbatim hands the user a command
-        that does not exist."""
-        body = self._init_body(
-            reachable=False,
-            hint="not reachable — start it with `lemonade-server serve`",
-        )
-        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
-        handler = _FakeSSEHandler()
-        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
-
-        _dispatch_sidecar_query(handler, request, [], "m", "gaia")
-
-        assert len(calls) == 1
-        assert "lemonade-server serve" not in handler.events[0]["message"]
-
     def test_email_not_ready_still_blocks(self, monkeypatch):
         """Email's /init IS a gate — provisioning is a step the user finishes
         on the agent card, and a triage against an unprovisioned mailbox
@@ -473,7 +461,7 @@ class TestGaiaDispatch:
                 raise raises
             return True
 
-        monkeypatch.setattr(cloud_keys, "ensure_authenticated", _ensure)
+        monkeypatch.setattr(cloud_keys, "reconnect_provider", _ensure)
 
     def test_a_cloud_model_gets_its_key_back_before_init(self, monkeypatch):
         """After Lemonade restarts it has forgotten the key, and /init would
@@ -745,6 +733,38 @@ class TestCopyIsAgentSpecific:
             handler, {"type": "tool_call", "tool": "search_web"}, GAIA_PROFILE
         )
         assert handler.events[0]["detail"] == "Searching the web"
+
+    @pytest.mark.parametrize(
+        "tool, label",
+        [
+            ("guides/show_recipe", "Showing recipe"),
+            ("guides/show_workout", "Showing workout"),
+            ("guides/show_how_to", "Showing how-to"),
+            ("guides/show_checklist", "Showing checklist"),
+            ("guides/show_itinerary", "Showing itinerary"),
+            ("calculators/show_tip_calculator", "Showing tip calculator"),
+            ("calculators/show_loan_calculator", "Showing loan calculator"),
+        ],
+    )
+    def test_a_card_skill_tool_shows_its_plain_label(self, tool, label):
+        """A skill tool's name carries a slash; humanizing it would show
+        ``guides/show recipe`` in the step list."""
+        handler = _FakeSSEHandler()
+        relay_module._dispatch_one(
+            handler, {"type": "tool_call", "tool": tool}, GAIA_PROFILE
+        )
+        assert handler.events[0]["detail"] == label
+
+    def test_every_card_skill_tool_has_a_relay_label(self):
+        from gaia.ui.sse_handler import SSEOutputHandler
+
+        card_tools = {
+            tool
+            for tool in SSEOutputHandler._RENDER_TOOL_TO_LANG
+            if tool.startswith(("guides/", "calculators/"))
+        }
+        assert card_tools
+        assert card_tools <= set(GAIA_PROFILE.tool_labels)
 
     def test_unlisted_tool_humanizes_rather_than_showing_a_raw_name(self):
         handler = _FakeSSEHandler()

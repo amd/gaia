@@ -85,4 +85,27 @@ def test_the_email_feature_names_every_email_tool():
         and any("tool" in ast.unparse(d) for d in node.decorator_list)
     }
     assert registered, "found no @tool functions in register_email_tools"
-    assert registered == FEATURE_TOOLS["email"]
+    assert registered == {t for t in FEATURE_TOOLS["email"] if "/" not in t}
+
+
+def test_compact_withholds_every_registered_email_tool():
+    assert FEATURE_TOOLS["email"] == frozenset(
+        {
+            "check_mailbox_access",
+            "list_inbox",
+            "search_email",
+            "read_email",
+            "list_mail_folders",
+            "get_thread",
+            "list_connected_mailboxes",
+            "list_waiting_on_you",
+            "send-email/list_drafts",
+            "send-email/create_draft",
+            "send-email/update_draft",
+            "send-email/discard_draft",
+            "send-email/send_draft",
+            "send-email/send_now",
+            "send-email/reply_to_message",
+            "send-email/forward_message",
+        }
+    )
