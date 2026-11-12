@@ -68,7 +68,8 @@ describe('streamed text cannot inject markup', () => {
             <AgentActivity steps={[thought(1, `Plan ${payload}`), call(2), call(3)]} isActive={false} running={false} />,
         );
         for (const btn of screen.getAllByRole('button')) fireEvent.click(btn);
-        for (const btn of screen.queryAllByRole('button', { name: /thought/i })) fireEvent.click(btn);
+        // The thought folds into the call it led to, and opens with that call.
+        for (const btn of screen.getAllByRole('button', { name: /reading file/i })) fireEvent.click(btn);
         expect(container.textContent).toContain('<script>');
         expect(container.querySelector('img, script, iframe')).toBeNull();
     });

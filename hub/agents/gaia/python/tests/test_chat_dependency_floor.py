@@ -36,6 +36,9 @@ REASONING_TOOLS_FLOOR = (0, 25, 1)
 # First core release shipping gaia.utils.file_lock.held_by_another_program.
 FILE_LOCK_HELD_FLOOR = (0, 25, 1)
 
+# First core release shipping MCPClientMixin._admit_mcp_server (#3746).
+ADMIT_MCP_SERVER_FLOOR = (0, 26, 0)
+
 # First core release shipping gaia.rag.sdk.RAGSDK.document_scripts (#6165).
 DOCUMENT_SCRIPTS_FLOOR = (0, 25, 4)
 
@@ -167,6 +170,34 @@ def test_held_by_another_program_guard_fails_a_release_that_forgets_the_bump(
     monkeypatch.setitem(globals(), "_core_release", lambda: (0, 25, 1))
     with pytest.raises(AssertionError, match="held_by_another_program"):
         test_chat_floor_rises_with_the_core_that_ships_held_by_another_program(stale)
+
+
+@pytest.mark.parametrize("pyproject", [FLAGSHIP_ROOT / "pyproject.toml"], ids=["gaia"])
+def test_chat_floor_rises_with_the_core_that_ships_admit_mcp_server(pyproject):
+    """ChatAgent calls MCPClientMixin._admit_mcp_server while loading MCP
+    servers, which no core before 0.26.0 ships."""
+    from gaia.mcp.mixin import MCPClientMixin
+
+    assert callable(getattr(MCPClientMixin, "_admit_mcp_server", None))
+    match = re.search(_AMD_GAIA_FLOOR_RE, pyproject.read_text(encoding="utf-8"))
+    assert match, f"{pyproject} must declare an amd-gaia>=X.Y.Z floor"
+    floor = _floor_tuple(match.group(1))
+    if _core_release() >= ADMIT_MCP_SERVER_FLOOR:
+        assert floor >= ADMIT_MCP_SERVER_FLOOR, (
+            f"core is now {_core_release()}, but the flagship's amd-gaia floor "
+            f"is still {match.group(1)}; raise it (and min_gaia_version) to "
+            "0.26.0, the first core with MCPClientMixin._admit_mcp_server"
+        )
+
+
+def test_admit_mcp_server_guard_fails_a_release_that_forgets_the_bump(
+    monkeypatch, tmp_path
+):
+    stale = tmp_path / "pyproject.toml"
+    stale.write_text('dependencies = ["amd-gaia>=0.25.4"]', encoding="utf-8")
+    monkeypatch.setitem(globals(), "_core_release", lambda: (0, 26, 0))
+    with pytest.raises(AssertionError, match="_admit_mcp_server"):
+        test_chat_floor_rises_with_the_core_that_ships_admit_mcp_server(stale)
 
 
 @pytest.mark.parametrize("pyproject", [FLAGSHIP_ROOT / "pyproject.toml"], ids=["gaia"])

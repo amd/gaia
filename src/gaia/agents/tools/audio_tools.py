@@ -769,6 +769,7 @@ class AudioToolsMixin:
             raise_if_cancelled()
             self._report_stage("decode", "Audio ready", state=STAGE_DONE)
             client = LemonadeASRClient(model=model or DEFAULT_ASR_MODEL)
+            self._download_speech_model(client)
             expected = media_seconds / REALTIME_FACTOR
             self._report_stage(
                 "transcribe",
@@ -1627,6 +1628,31 @@ class AudioToolsMixin:
         if lemonade_error:
             result["lemonade_error"] = lemonade_error
         return result
+
+    def _download_speech_model(self, client) -> None:
+        """Download a missing speech model as its own visible step.
+
+        Lemonade would otherwise pull it inside the first transcription
+        request, behind a "Transcribing" line that knows nothing of it.
+        """
+        from gaia.agents.base.tools import raise_if_cancelled
+
+        line = [""]
+
+        def say(message: str) -> None:
+            size = re.search(r"\(~[\d.]+ GB\)", message)
+            line[0] = (
+                f"Downloading the speech model {client.model}"
+                + (f" {size.group(0)}" if size else "")
+                + ", one time"
+            )
+            self._report_progress(line[0])
+
+        def on_percent(percent: int) -> None:
+            raise_if_cancelled()
+            self._report_progress(f"{line[0]} — {percent}%")
+
+        client.ensure_model(say=say, on_percent=on_percent)
 
     def _report_download(self, message: str) -> None:
         """Turn the downloader's progress lines into the download stage."""
