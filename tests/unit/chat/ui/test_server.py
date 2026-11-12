@@ -1053,10 +1053,13 @@ class TestSystemStatus:
         assert status["lemonade_running"] is True
         assert status["lemonade_probe"] == "ok"
         assert status["lemonade_error"] is None
-        assert any(
-            "model list came back in an unexpected shape" in w
+        shape_warnings = [
+            w
             for w in status["probe_warnings"]
-        )
+            if "model list came back in an unexpected shape" in w
+        ]
+        # One fault, one warning: the download check reads the same list.
+        assert len(shape_warnings) == 1, status["probe_warnings"]
         assert not any("gaia init" in w for w in status["probe_warnings"])
 
     _EMBEDDER = {

@@ -652,6 +652,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
 
                 # Catalog for size and labels; its ctx_size is the saved option,
                 # not the loaded window.
+                model_list_malformed = False
                 try:
                     models_resp = await client.get(f"{base_url}/models", headers=_auth)
                     if models_resp.status_code == 200:
@@ -670,6 +671,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                             f"HTTP {models_resp.status_code}.",
                         )
                 except probe_errors as exc:
+                    model_list_malformed = isinstance(exc, ValueError)
                     _probe_failed(
                         status, "models", f"Could not read Lemonade's model list: {exc}"
                     )
@@ -704,7 +706,8 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                 # When the expected model isn't loaded, check if it is downloaded.
                 # Respects the custom_model override.
                 # Uses show_all=true to see models that are in the catalog but not
-                # yet pulled to disk.
+                # yet pulled to disk. A list already named malformed above
+                # would only warn twice.
                 expected_missing = (
                     not status.model_loaded or not status.expected_model_loaded
                 )
@@ -712,6 +715,7 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
                     expected_missing
                     and status.default_model_name
                     and not status.default_model_is_cloud
+                    and not model_list_malformed
                 ):
                     _target = status.default_model_name
                     try:
