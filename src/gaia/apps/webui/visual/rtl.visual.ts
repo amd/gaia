@@ -1906,6 +1906,31 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const MONTH_SPENDING = {
+    month: '2026-10', total_usd: 3.42, turns: 37, unpriced_turns: 4, unreported_turns: 5,
+    limit_usd: 20, state: 'ok', by_model: [], price_source: 'list price',
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`monthly spending headline leaves out unpriced and unreported turns (${locale})`, async ({ page }) => {
+        await openModelPage(page, locale);
+        await page.route((url) => url.pathname === '/api/spending', (route) => route.fulfill({ json: MONTH_SPENDING }));
+        await page.getByRole('radio', { name: /Fireworks AI/ }).click();
+        const spending = page.locator('section.spending');
+        await expect(spending.locator('.spending-total')).toContainText('$3.42');
+        await expect(spending.locator('.spending-total')).toContainText('$20');
+        await expect(spending.locator('.spending-total')).toContainText(locale === 'ar' ? 'أدوار المحادثة السحابية: 28' : /28 cloud chat turns/);
+        await expect(spending.locator('p.settings-hint')).toHaveCount(2);
+        await expect(spending.locator('p.settings-hint').nth(0)).toContainText(locale === 'ar' ? '(4)' : 'Plus 4 turns on models with an unknown price');
+        await expect(spending.locator('p.settings-hint').nth(1)).toContainText(locale === 'ar' ? '(5)' : 'Plus 5 turns whose usage wasn’t reported');
+        await spending.scrollIntoViewIfNeeded();
+        await scrollPane(page, 'bottom');
+        await shot(page, `spending-month-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, 'section.spending')).toEqual([]);
+    });
+}
+
 test('no spending chip on a model on this PC', async ({ page }) => {
     await open(page, `#${ANSWER_SESSION}`, 'en');
     await expect(page.getByText('Action items from Aug 28')).toBeVisible();
