@@ -192,6 +192,11 @@ def test_a_plain_no_leaves_a_remember_unflagged(store, said):
         "Salary is 92,000 euros. Confidential.",
         "Takes lithium; keep it private",
         "Has a stoma (do not share)",
+        "This is confidential: salary is 95,000 euros",
+        "Sensitive: allergic to mango",
+        "Allergic to mango, marked sensitive",
+        "Salary is 92,000 euros and it's sensitive",
+        "Takes lithium - this is private information",
     ],
 )
 @pytest.mark.parametrize("source", ["llm_extract", "consolidation", "tool", "user"])
@@ -200,13 +205,47 @@ def test_a_memory_that_calls_itself_sensitive_is_stored_flagged(store, content, 
     assert _flags(store) == [(content, 1)]
 
 
-@pytest.mark.parametrize(
-    "content",
-    ["User prefers case-sensitive search", "User works at a private school"],
-)
-def test_a_word_with_another_meaning_does_not_flag(store, content):
-    store.store(category="fact", content=content, source="llm_extract")
+# The word is part of what the memory states, not a note about the memory.
+DESCRIBES = [
+    "User prefers case-sensitive search",
+    "User works at a private school",
+    "User has sensitive skin",
+    "Prefers a sensitive, gentle tone",
+    "Works on confidential projects",
+    "User works on confidential projects at AMD",
+    "User wants case sensitive search",
+    "Debugging a secret data store migration",
+    "Skin type: sensitive",
+    "Skin is dry, sensitive",
+    "User has sensitive, dry skin",
+    "User is sensitive",
+    "Eyes are sensitive to light",
+]
+
+
+@pytest.mark.parametrize("content", DESCRIBES)
+@pytest.mark.parametrize("source", ["llm_extract", "tool", "user"])
+def test_a_word_with_another_meaning_does_not_flag(store, content, source):
+    store.store(category="fact", content=content, source=source)
     assert _flags(store) == [(content, 0)]
+
+
+@pytest.mark.parametrize("content", DESCRIBES)
+def test_clearing_the_flag_on_a_memory_that_only_uses_the_word_sticks(store, content):
+    """Stored flagged by hand or by an older build; the Memory page clears it."""
+    kid = store.store(category="fact", content=content, sensitive=True)
+
+    store.update(kid, sensitive=False)
+    assert store.get_item(kid)["sensitive"] is False
+
+    store.update(kid, content=content + " and likes tea")
+    assert store.get_item(kid)["sensitive"] is False
+
+
+def test_editing_a_memory_that_only_uses_the_word_leaves_it_plain(store):
+    kid = store.store(category="preference", content="Prefers a gentle tone")
+    store.update(kid, content="Prefers a sensitive, gentle tone")
+    assert store.get_item(kid)["sensitive"] is False
 
 
 def test_editing_a_memory_to_call_itself_sensitive_flags_it(store):
@@ -234,6 +273,29 @@ def test_opening_an_older_database_flags_rows_that_call_themselves_sensitive(
         assert db.get_item(kid)["sensitive"] is True
         assert db.get_item(other)["sensitive"] is False
         assert db.store(category="fact", content="Likes hiking")
+    finally:
+        db.close()
+
+
+def test_opening_an_older_database_leaves_rows_that_only_use_the_word(tmp_path):
+    path = tmp_path / "old.db"
+    old = MemoryStore(db_path=path)
+    plain = [old.store(category="preference", content=content) for content in DESCRIBES]
+    labelled = old.store(category="fact", content="Allergic to mango")
+    old._conn.execute(
+        "UPDATE knowledge SET content = ? WHERE id = ?", (LABELLED, labelled)
+    )
+    old._conn.execute("UPDATE knowledge SET sensitive = 0")
+    old._conn.execute("DROP INDEX idx_knowledge_fact")
+    old._conn.execute("ALTER TABLE knowledge DROP COLUMN fact_id")
+    old._conn.execute("UPDATE schema_version SET version = 8")
+    old._conn.commit()
+    old.close()
+
+    db = MemoryStore(db_path=path)
+    try:
+        assert [db.get_item(kid)["sensitive"] for kid in plain] == [False] * len(plain)
+        assert db.get_item(labelled)["sensitive"] is True
     finally:
         db.close()
 

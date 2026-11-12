@@ -349,6 +349,23 @@ class TestKnowledgeCRUD:
         flags = test_store._conn.execute("SELECT sensitive FROM knowledge").fetchall()
         assert flags == [(1,), (1,)]
 
+    def test_clearing_the_flag_on_a_memory_that_uses_the_word_sticks(
+        self, client, test_store
+    ):
+        """ "sensitive skin" states something; it is not a privacy label."""
+        kid = test_store.store(
+            category="fact", content="User has sensitive skin", sensitive=True
+        )
+
+        resp = client.put(f"/api/memory/knowledge/{kid}", json={"sensitive": False})
+        assert resp.status_code == 200
+        client.put(
+            f"/api/memory/knowledge/{kid}",
+            json={"content": "User has sensitive, dry skin"},
+        )
+
+        assert test_store.get_item(kid)["sensitive"] is False
+
     def test_delete_takes_every_copy_of_the_fact(self, client, test_store):
         """A copy saved under another context must not keep the fact alive."""
         kid = test_store.store(

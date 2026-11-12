@@ -440,9 +440,9 @@ def _negates(text: str, shared: set) -> bool:
     return False
 
 
-#: A memory that calls itself sensitive ("(private health info, marked
+#: Words that can label a memory sensitive ("(private health info, marked
 #: sensitive)"). Compounds such as "case-sensitive" are not that.
-_SAYS_SENSITIVE_RE = re.compile(
+_SENSITIVE_WORDS_RE = re.compile(
     r"""
     (?<![\w-])(?:sensitive|confidential)(?![\w-])(?!\s+to\b)
     | \b(?:private|secret)\s+(?:\w+\s+){0,2}(?:info|information|data|details?|matter)\b
@@ -458,22 +458,62 @@ _SAYS_SENSITIVE_RE = re.compile(
 _CLAUSE_SPLIT_RE = re.compile(r"[()\[\];:,]|[.!?](?=\s|$)|\s[-–—]+\s|[–—]")
 
 
-def says_sensitive(text: str) -> bool:
-    """Whether *text* itself says it is sensitive or private."""
-    return bool(_SAYS_SENSITIVE_RE.search(text))
-
-
 #: Stems a clause may hold and still be only a note that the memory is sensitive.
 _NOTE_STEMS = frozenset(
     "sens conf priv secr info data deta medi heal fina pers mark flag trea "
     "keep kept hand care shar matt".split()
 )
 
+#: A clause that ends by calling what came before it sensitive ("... and it's
+#: sensitive"); "it's sensitive to light" states something instead.
+_PRONOUN_NOTE_RE = re.compile(
+    r"""
+    \b(?:it|this|that)(?:['’]s|\s+is)\s+(?:\w+\s+)?
+    (?:sensitive|confidential|private|secret)
+    (?:\s+(?:info|information|data|details?|matter))?\s*$
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+_BARE_NOTES = frozenset({"sensitive", "confidential"})
+_BARE_STEMS = frozenset(word[:4] for word in _BARE_NOTES)
+
+_BRACKETED_RE = re.compile(r"\([^()]*\)")
+
 
 def _is_sensitivity_note(clause: str) -> bool:
     """Whether *clause* only says the memory is sensitive ("private health
     info"), unlike one that also states something ("sensitive skin")."""
-    return says_sensitive(clause) and content_stems(clause) <= _NOTE_STEMS
+    return (
+        bool(_SENSITIVE_WORDS_RE.search(clause))
+        and content_stems(clause) <= _NOTE_STEMS
+    )
+
+
+def says_sensitive(text: str) -> bool:
+    """Whether *text* carries a note that the memory is sensitive or private.
+
+    The word must be about the memory ("marked sensitive", "(private health
+    info)", "Confidential: ..."), not part of what it states ("sensitive
+    skin", "confidential projects").
+    """
+    if any(_is_sensitivity_note(m.group()) for m in _BRACKETED_RE.finditer(text)):
+        return True
+    start, listed = 0, False
+    for split in [*_CLAUSE_SPLIT_RE.finditer(text), None]:
+        clause = text[start : split.start() if split else len(text)]
+        if _PRONOUN_NOTE_RE.search(clause):
+            return True
+        if _is_sensitivity_note(clause):
+            # The word alone is a note only as its own clause, outside a
+            # list: "Confidential." yes; "has sensitive", "dry, sensitive" no.
+            if not content_stems(clause) <= _BARE_STEMS:
+                return True
+            if not listed and clause.strip().lower() in _BARE_NOTES:
+                return True
+        if split:
+            start, listed = split.end(), split.group() in (",", ":")
+    return False
 
 
 def _without_sensitivity_notes(text: str) -> str:
@@ -483,10 +523,8 @@ def _without_sensitivity_notes(text: str) -> str:
     "Allergic to mango". A text that is one such clause is returned whole.
     """
     # A bracketed aside that says so goes whole: "(health, sensitive)".
-    plain = re.sub(
-        r"\([^()]*\)",
-        lambda m: " " if _is_sensitivity_note(m.group()) else m.group(),
-        text,
+    plain = _BRACKETED_RE.sub(
+        lambda m: " " if _is_sensitivity_note(m.group()) else m.group(), text
     )
     spans = [m.span() for m in _CLAUSE_SPLIT_RE.finditer(plain)]
     edges = [0, *[edge for span in spans for edge in span], len(plain)]
