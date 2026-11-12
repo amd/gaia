@@ -2887,6 +2887,22 @@ test('composer chips stay whole at phone width', async ({ page }) => {
     expect(sorted.filter((box, i) => i > 0 && box.left < sorted[i - 1].right - 1)).toEqual([]);
 });
 
+for (const locale of ['en', 'ar']) {
+    test(`a narrow window keeps the model name readable in the composer (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 820, height: 640 });
+        await open(page, `#${ANSWER_SESSION}`, locale, withMeasuredContext);
+        await expect(page.locator('button.context-meter')).toBeVisible();
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        await shot(page, `composer-narrow-${locale}`);
+        // The day's spend and the context bar give way before the model name is cut.
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 test('the library path row fits a phone', async ({ page }) => {
     await open(page);
     await page.locator('.sb').getByRole('button', { name: /المستندات/ }).click();
