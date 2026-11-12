@@ -279,8 +279,9 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 		contractAtLeast(payload.APIVersion, surfaceContractMajor, surfaceContractMinor)
 	supportsWorkingDirectory := s.agentID == surfaceAgentID &&
 		contractAtLeast(payload.APIVersion, workingDirectoryContractMajor, workingDirectoryContractMinor)
-	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t)",
-		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp, supportsDecision)
+	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t, mid-run follow-ups: %t, tool decisions: %t, surface: %t, launch folder: %t)",
+		s.agentID, payload.APIVersion, supports, supportsSession, supportsFollowUp, supportsDecision,
+		supportsSurface, supportsWorkingDirectory)
 	agentVersion := payload.Version
 	if agentVersion == "" {
 		agentVersion = payload.AgentVersion
