@@ -251,7 +251,10 @@ export async function withSetup(page: Page, { status = { state: 'idle' }, plan =
         'GET /gpu-memory': gpu,
         'GET /onboarding/preflight': hardware,
         'GET /onboarding/start': {
-            cards: [{ skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false }],
+            cards: [
+                { skill: 'research-report', title: 'Research a topic', note: 'A cited report from the web', prompt: 'Research: ', needs_input: true },
+                { skill: 'check-in', title: 'Check in', note: 'Pick up where you left off', prompt: 'Good morning.', needs_input: false },
+            ],
             working_folder: { path: '/home/you', name: 'you', gaia_folder: false, choosable: true },
         },
         'GET /lemonade/target': theirs ? THEIRS_TARGET : { mode: 'gaia', saved_mode: 'gaia', source: 'saved', base_url: null, saved_base_url: null, api_key_stored: false, offer: false, what_gaia_does: '' },
@@ -319,6 +322,29 @@ export const SETUP_SCENES: SetupScene[] = [
         reach: (page) => expect(page.locator('.found')).toBeVisible(),
     },
     {
+        // Logs open: the page grows past the window, and the scrollbar belongs at the window's edge.
+        name: 'check-help-open',
+        reach: async (page) => {
+            await expect(page.locator('.found')).toBeVisible();
+            await page.locator('.setup-help-toggle').click();
+            await expect(page.locator('#setup-help')).toBeVisible();
+            await page.locator('#setup-help .setup-log-toggle').first().click();
+            const edges = await page.evaluate(() => {
+                const pane = document.querySelector('.setup-pane')!.getBoundingClientRect();
+                const scroller = document.querySelector('.setup-scroll')!;
+                const inner = document.querySelector('.setup-inner')!;
+                return {
+                    gap: Math.abs(pane.right - scroller.getBoundingClientRect().right) + Math.abs(pane.left - scroller.getBoundingClientRect().left),
+                    innerScrolls: getComputedStyle(inner).overflowY !== 'visible',
+                    gutter: getComputedStyle(scroller).scrollbarGutter,
+                };
+            });
+            expect(edges.gap).toBeLessThan(1);
+            expect(edges.innerScrolls).toBe(false);
+            expect(edges.gutter).toContain('stable');
+        },
+    },
+    {
         name: 'check-failed',
         answers: { plan: PLAN_COLD, status: SERVER_FAILED },
         reach: (page) => expect(page.locator('.setup-result.is-failed')).toBeVisible(),
@@ -329,6 +355,19 @@ export const SETUP_SCENES: SetupScene[] = [
             await toPlan(page);
             await page.locator('.setup-disclosure summary').click();
             await expect(page.locator('.setup-contents')).toBeVisible();
+        },
+    },
+    {
+        // Moving on focuses the new step's title for screen readers, without drawing a box round it.
+        name: 'plan-title-focused',
+        reach: async (page) => {
+            await toPlan(page);
+            const title = page.locator('#setup-title');
+            await expect(title).toBeFocused();
+            expect(await title.evaluate((el) => getComputedStyle(el).outlineStyle)).toBe('none');
+            // Its focus mark spans the words, not the whole column.
+            const [titleWidth, columnWidth] = await title.evaluate((el) => [el.getBoundingClientRect().width, el.parentElement!.getBoundingClientRect().width]);
+            expect(titleWidth).toBeLessThan(columnWidth / 2);
         },
     },
     {
@@ -548,7 +587,11 @@ export const SETUP_SCENES: SetupScene[] = [
     {
         name: 'ready',
         answers: { status: RUN_READY, plan: PLAN_DONE },
-        reach: (page) => expect(page.locator('.setup-done')).toBeVisible(),
+        reach: async (page) => {
+            await expect(page.locator('.setup-done')).toBeVisible();
+            // A first run has nothing to pick up: the other tasks show, Check in waits.
+            await expect(page.locator('.start-card')).toHaveCount(1);
+        },
     },
 ];
 
