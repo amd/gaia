@@ -16,12 +16,15 @@ import {
 
 const SEARCH_ABOVE = 6;
 
-/** "Chat", "Vision", "Documents": what a model is for, in fixed words. */
+/** "Chat", "Images", "Speech": what a model is for, in fixed words. */
 function purposeChips(e: SetupCatalogEntry, t: Translate): string[] {
     const chips: string[] = [];
     if (e.chat_choice && !isEmbedding(e)) chips.push(t('setup.models.purpose.chat'));
     if (isVision(e)) chips.push(t('setup.models.purpose.vision'));
     if (isEmbedding(e)) chips.push(t('setup.models.purpose.documents'));
+    if (e.roles.includes('speech')) chips.push(t('setup.models.purpose.speech'));
+    if (e.roles.includes('voice')) chips.push(t('setup.models.purpose.voice'));
+    if (e.roles.includes('image_creation')) chips.push(t('setup.models.purpose.imageCreation'));
     return chips;
 }
 
@@ -29,6 +32,9 @@ function purposeChips(e: SetupCatalogEntry, t: Translate): string[] {
 function purposeLine(e: SetupCatalogEntry, t: Say): string {
     if (isEmbedding(e)) return t('setup.models.line.documents');
     if (isVision(e)) return t('setup.models.line.vision');
+    if (e.roles.includes('speech')) return t('setup.models.line.speech');
+    if (e.roles.includes('voice')) return t('setup.models.line.voice');
+    if (e.roles.includes('image_creation')) return t('setup.models.line.imageCreation');
     return t('setup.models.line.chat');
 }
 

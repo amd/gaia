@@ -9,7 +9,7 @@ import { useModelStore } from '../../../stores/modelStore';
 import { resetSetupDownloads, scopedStatus, useSetupDownloads } from '../../../stores/setupDownloadsStore';
 import { NO_GPU_SPLIT } from '../../../test/setupApiMocks';
 import { DownloadChip } from '../../setup/DownloadChip';
-import { EMBED, GEMMA, GPT_OSS, QWEN, gpuStatus, plan, progress, runStatus } from '../../setup/__tests__/fixtures';
+import { EMBED, GEMMA, GPT_OSS, KOKORO, QWEN, SDXL, WHISPER, gpuStatus, plan, progress, runStatus } from '../../setup/__tests__/fixtures';
 import { LocalModelsSections } from '../LocalModelsSections';
 
 vi.mock('../../../services/api', async (importOriginal) => {
@@ -56,6 +56,22 @@ describe('Settings > Models on this PC', () => {
         await waitFor(() => expect(mocked.skipSetupModel).toHaveBeenCalledExactlyOnceWith(GEMMA.id, false));
         await waitFor(() => expect(mocked.downloadSetupModel).toHaveBeenCalledWith(GEMMA.id, expect.objectContaining({ acknowledgeLowDisk: true })));
         expect(await screen.findByText('Saved.')).toBeInTheDocument();
+    });
+
+    it('says what the image, speech and voice models do, not that they answer chats', async () => {
+        mocked.getSetupPlan.mockResolvedValue(plan([on(QWEN), on(EMBED), SDXL, WHISPER, KOKORO]));
+        render(<LocalModelsSections />);
+        await screen.findByRole('group', { name: 'Models on this PC' });
+        const item = (name: string) => row(name).closest('li')!;
+        expect(item('SDXL Turbo')).toHaveTextContent('Image creation');
+        expect(item('SDXL Turbo')).toHaveTextContent('Creates pictures from a description.');
+        expect(item('Whisper Large v3 Turbo')).toHaveTextContent('Speech to text');
+        expect(item('Whisper Large v3 Turbo')).toHaveTextContent('Turns speech and recordings into text.');
+        expect(item('Kokoro')).toHaveTextContent('Read aloud');
+        expect(item('Kokoro')).toHaveTextContent('Reads answers aloud.');
+        for (const name of ['SDXL Turbo', 'Whisper Large v3 Turbo', 'Kokoro']) {
+            expect(item(name)).not.toHaveTextContent('Answers your chats.');
+        }
     });
 
     it('asks before downloading a model too big for memory, as setup does', async () => {
