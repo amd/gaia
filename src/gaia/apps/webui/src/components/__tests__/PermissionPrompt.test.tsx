@@ -82,6 +82,21 @@ describe('PermissionPrompt', () => {
         expect(screen.queryByRole('button', { name: /Show all/ })).not.toBeInTheDocument();
     });
 
+    it.each(['run_python', 'execute_python_file'])('says what a %s card cannot vouch for', (tool) => {
+        const toolArgs = tool === 'run_python' ? { code: 'print(1)' } : { file_path: 'C:\\p\\job.py' };
+        useNotificationStore.getState().addNotification(request({ tool, toolArgs }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.getByTestId('perm-code-risk')).toHaveTextContent(
+            "Can run any code with your permissions. GAIA checks the code's text, not what it does when it runs.",
+        );
+    });
+
+    it('shows no code note on a shell card, which carries its own', () => {
+        useNotificationStore.getState().addNotification(request({ toolArgs: { command: 'git status' } }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        expect(screen.queryByTestId('perm-code-risk')).not.toBeInTheDocument();
+    });
+
     it('collapses long code and shows every line on "Show all"', () => {
         const code = Array.from({ length: 30 }, (_, i) => `line_${i + 1} = ${i + 1}`).join('\n');
         useNotificationStore.getState().addNotification(request({

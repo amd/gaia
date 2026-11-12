@@ -560,8 +560,14 @@ for arg in cmd_parts[1:]:
         if candidate_path.startswith(("http://", "https://", "git://")):
             continue
 
-        # Resolve and validate path
-        resolved_path = str(Path(cwd).joinpath(candidate_path).resolve())
+        # Judge the canonical spelling the file tools use; a share on another
+        # computer or a device path is refused outright
+        try:
+            resolved_path = canonical_path(
+                join_under(cwd, candidate_path), for_comparison=True
+            )
+        except UncheckablePathError as exc:
+            return {"status": "error", "error": f"Access denied: {exc}"}
         if not self.path_validator.is_path_allowed(resolved_path):
             return {
                 "status": "error",

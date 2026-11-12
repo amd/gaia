@@ -41,9 +41,15 @@ Every agent tool that takes a path checks it with `validate_read` or
 `validate_write`: reading, listing a folder, searching inside one, indexing it,
 watching it, and the files a tool saves (screenshots, transcripts, speech,
 exports). Out-of-scope paths go through the same approval prompt as `read_file`.
-The validator expands `~` and resolves `..` and symlinks before it decides, and a
-folder walk skips any entry that leads outside the scope. Tools build on these
-checks through `gaia.agents.tools.path_access` rather than adding their own.
+The validator judges every path by one canonical spelling
+(`gaia.canonical_path.canonical_path`), and the tools open that same spelling: `~`,
+`..`, symlinks, junctions and 8.3 short names are resolved, and on Windows a
+device-prefixed path or one through this PC's own drive share is the drive path it
+names, so a protected folder is refused however it is spelled. A path that
+is not a file on this PC (another computer's share, a device or volume path, a
+named NTFS stream) is refused outright, never offered for approval. A folder walk
+skips any entry that leads outside the scope. Tools build on these checks through
+`gaia.agents.tools.path_access` rather than adding their own.
 
 Three things are wider on purpose:
 
@@ -109,6 +115,21 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
   command can still open any file the OS user can read. Real isolation needs OS-level
   separation: a separate user account, a container, or a VM.
 </Warning>
+
+### Code that names a protected path
+
+`run_python`, `execute_python_file` (the script and the arguments it is handed) and a
+shell line that hands code to an interpreter (`python -c`, `powershell -Command`,
+`node -e`) are screened before the approval card: code whose text names a credential
+folder, a credential file (`.env`, `id_rsa`, `*.pem`, …) or, when it may write, GAIA's
+own settings is refused outright, and an earlier "Always allow" does not cover it.
+Paths are judged in the canonical form above, after folding the plain ways of building
+one (`os.path.join`, `Path(...) / x`, `+`, f-strings, `"".join`, `$HOME`). The screen is
+in `gaia.agents.base.code_path_screen`.
+
+It reads the code's text, so it is not a sandbox: code that works a path out while it
+runs (from characters, base64, a file or the network) is not caught. The card for a
+code tool says so.
 
 ---
 

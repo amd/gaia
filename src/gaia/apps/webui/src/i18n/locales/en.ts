@@ -831,6 +831,7 @@ export const enMessages = {
     'prompt.scriptUnreadable.not_text': "This file isn't text, so its code can't be shown.",
     'prompt.scriptUnreadable.too_large': 'This file is too large to show here. Open it to read what will run.',
     'prompt.scriptUnreadable.unreadable': "GAIA couldn't read this file, so its code isn't shown.",
+    'prompt.codeRisk': "Can run any code with your permissions. GAIA checks the code's text, not what it does when it runs.",
     'prompt.timer': 'Denied automatically when the time runs out',
     'prompt.expired': 'No answer in time, so GAIA was told no.',
     'prompt.repeated.one': "You've allowed this once already.",

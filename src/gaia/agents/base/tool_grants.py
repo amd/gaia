@@ -59,6 +59,7 @@ from gaia.agents.base.write_safety import (
     is_too_broad_folder,
     lands_where_code_runs,
 )
+from gaia.canonical_path import canonical_path
 
 #: Binaries whose name bounds nothing: they run whatever they are handed, so
 #: "allow `bash` this session" is "allow everything this session" wearing a
@@ -312,18 +313,20 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
 def is_inside_folder(path: str, folder: str) -> bool:
     """True when *path* resolves to something strictly inside *folder*.
 
-    Both sides go through ``realpath``, so a symlink, junction, 8.3 name or
-    ``..`` is judged by where it really lands, never by how it is spelled. A
-    spelling ``realpath`` leaves distinct (``\\\\?\\``, a UNC share, a case
-    variant on macOS) is caught by file identity. A path that cannot be
-    resolved counts as inside: the caller then asks instead of trusting it.
+    Both sides go through :func:`~gaia.canonical_path.canonical_path`, so a
+    symlink, junction, 8.3 name, ``..``, ``\\\\?\\`` prefix or this PC's ``C$``
+    share is judged by where it really lands, never by how it is spelled. A
+    spelling that still differs (a case variant on macOS) is caught by file
+    identity. A path that cannot be resolved, or names another computer's share
+    or a device, counts as inside: the caller then asks instead of trusting it.
     """
     if not path or not folder:
         return False
     try:
-        real_path = os.path.realpath(path)
-        real_folder = os.path.realpath(folder)
+        real_path = canonical_path(path, for_comparison=True)
+        real_folder = canonical_path(folder, for_comparison=True)
     except (OSError, ValueError):
+        # UncheckablePathError included: a share or device path is never trusted.
         return True
     case_path, case_folder = os.path.normcase(real_path), os.path.normcase(real_folder)
     try:

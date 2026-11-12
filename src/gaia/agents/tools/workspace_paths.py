@@ -3,19 +3,29 @@
 from pathlib import Path
 from typing import Any, Optional
 
+from gaia.canonical_path import UncheckablePathError, canonical_path, join_under
+
 
 def _resolve_target(
     file_path: str,
     project_dir: Optional[str] = None,
     default_dir: Optional[str] = None,
 ) -> Path:
-    """Resolve a path using an explicit project or session workspace base."""
+    """Resolve a path using an explicit project or session workspace base.
+
+    Returns the canonical form (see :func:`gaia.canonical_path.canonical_path`),
+    so a tool opens the very path its checks judged.
+    """
     path = Path(file_path).expanduser()
     if not path.is_absolute():
         base = project_dir or default_dir
         if base:
-            path = Path(base).resolve() / path
-    return path.resolve()
+            path = Path(join_under(Path(base).resolve(), path))
+    try:
+        return Path(canonical_path(path))
+    except UncheckablePathError:
+        # Left as given, unopened: the path validator refuses it, with the reason.
+        return path
 
 
 def _workspace_default(host: Any) -> Optional[str]:

@@ -345,12 +345,21 @@ _PLAIN_NOTES = {
 }
 
 
+#: The line a code prompt shows (``run_python``, ``execute_python_file``). The
+#: Agent UI shows the same words as ``prompt.codeRisk``.
+CODE_RISK_NOTE = (
+    "Can run any code with your permissions. GAIA checks the code's text, not "
+    "what it does when it runs."
+)
+
+
 def plain_risk_note(risk: Optional[str]) -> str:
     """One plain sentence for *risk* on a command prompt, or "" when none is due."""
     return _PLAIN_NOTES.get(risk or "", "")
 
 
 __all__ = [
+    "CODE_RISK_NOTE",
     "DESTRUCTIVE",
     "EXECUTE",
     "EXACT_TEXT_ARG",

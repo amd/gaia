@@ -8,6 +8,14 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Code that names a credential folder or file is refused before it runs.**
+  `run_python`, `execute_python_file` (the script and its arguments) and a shell
+  line that hands code to an interpreter could open `.env` or files inside
+  `~/.ssh` after one approval, though the file tools refuse them outright. Such
+  code is now refused before the prompt, whatever "always" was granted, and the
+  prompt for a code tool says GAIA checks the code's text, not what it does when
+  it runs.
+
 - **Follow-up turns after a tool call stay cached on Qwen3.6.** The agent
   dropped its earlier reasoning when the next message arrived, while the model's
   chat template had shown it. So every turn after a tool call re-read the whole

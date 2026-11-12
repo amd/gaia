@@ -831,6 +831,7 @@ const messages: Messages = {
     'prompt.scriptUnreadable.not_text': 'هذا الملف ليس نصًّا، لذا لا يمكن عرض شيفرته.',
     'prompt.scriptUnreadable.too_large': 'هذا الملف أكبر من أن يُعرض هنا. افتحه لقراءة ما سيُشغَّل.',
     'prompt.scriptUnreadable.unreadable': 'تعذَّر على GAIA قراءة هذا الملف، لذا لا تُعرض شيفرته.',
+    'prompt.codeRisk': 'يمكنه تشغيل أي تعليمات برمجية بصلاحياتك. يتحقق GAIA من نص التعليمات البرمجية، لا مما تفعله عند تشغيلها.',
     'prompt.timer': 'يُرفض تلقائيًا عند انتهاء الوقت',
     'prompt.expired': 'لم تُجب في الوقت المحدد، فأُبلغ GAIA بالرفض.',
     'prompt.repeated.one': 'سبق أن سمحت بهذا مرة واحدة.',
