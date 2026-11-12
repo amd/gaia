@@ -582,6 +582,20 @@ def test_a_path_that_is_not_plain_is_refused(checker, path):
         checker.check_allowed(REPO_ROOT, [path], rules)
 
 
+def test_a_git_call_that_hangs_rejects_the_bump(checker, monkeypatch):
+    """A hung git must stop the check as a rejection, never stall it or let it pass."""
+    seen = {}
+
+    def hang(*args, **kwargs):
+        seen["timeout"] = kwargs.get("timeout")
+        raise subprocess.TimeoutExpired(args[0], kwargs.get("timeout"))
+
+    monkeypatch.setattr(checker.subprocess, "run", hang)
+    with pytest.raises(checker.BumpRejected, match="git apply --check did not finish"):
+        checker._git(REPO_ROOT, "apply", "--check")
+    assert seen["timeout"] == checker.GIT_TIMEOUT_SECONDS > 0
+
+
 def test_a_pin_assigned_twice_is_refused(checker):
     source = b'LEMONADE_VERSION = "1.2.3"\nLEMONADE_VERSION = "1.2.4"\n'
     with pytest.raises(checker.BumpRejected, match="assigns LEMONADE_VERSION twice"):

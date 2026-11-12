@@ -83,8 +83,22 @@ class BumpRejected(Exception):
     """The patch does something a Lemonade version bump never does."""
 
 
+GIT_TIMEOUT_SECONDS = 120
+
+
 def _git_bytes(repo: Path, *args: str) -> bytes:
-    result = subprocess.run(["git", *args], cwd=repo, capture_output=True, check=False)
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo,
+            capture_output=True,
+            check=False,
+            timeout=GIT_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise BumpRejected(
+            f"git {' '.join(args)} did not finish in {GIT_TIMEOUT_SECONDS}s"
+        ) from e
     if result.returncode != 0:
         error = result.stderr.decode("utf-8", "replace").strip()
         raise BumpRejected(f"git {' '.join(args)} failed: {error}")
