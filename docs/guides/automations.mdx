@@ -54,13 +54,30 @@ Just ask:
 - "Check every hour instead."
 - "Stop the Rainier alert."
 
-GAIA finds the one you mean and confirms the change with you. There's no settings screen
-for automations: you manage them by asking.
+GAIA finds the one you mean and confirms the change with you.
+
+To see them all at once, open **Settings → Automations** in the GAIA app. Each one shows
+what kind it is, how often it runs and when it runs next. **Pause** stops it until you
+**Resume** it, and **Remove** deletes it after you confirm. These buttons take effect at
+once, because clicking them is already your decision. To add an automation or change
+what it does, ask GAIA in chat. GitHub watches you set up from Discord aren't on this
+screen; ask GAIA "what are you watching?" to see or stop them.
+
+In the terminal app, type `/automations` for the same numbered list. Then
+`/automations pause 2`, `/automations resume 2` or `/automations remove 2` changes the
+second one. Its name works in place of the number.
 
 ## Good to know
 
 - **Your PC has to be on.** Nothing runs while it's off or asleep. When it wakes, anything
   that came due runs once, not once for every time it missed.
+- **They run whenever GAIA does.** GAIA's background service runs them, so they keep going
+  while GAIA's Discord connection is stopped. What comes due then waits and reaches your
+  DM, marked late, as soon as the connection is back. A repeating one that came due
+  several times arrives once. "What are you watching?" lists anything still waiting, and
+  stopping or pausing an automation cancels what was waiting for it.
+- **Nothing is lost while Discord isn't set up.** Until it is connected, what comes due
+  just waits and runs once it is.
 - **Quiet hours wait.** A check due at night runs when the quiet hours end, so nothing
   wakes you at 3am.
 - **They still ask first.** If an automation needs to change something on your PC, you get

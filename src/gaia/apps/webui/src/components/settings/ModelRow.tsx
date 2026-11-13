@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { Check, ChevronDown, Loader2 } from 'lucide-react';
-import { useT } from '../../i18n/useT';
+import { useT, type Translate } from '../../i18n/useT';
+import type { MessageKey } from '../../i18n/registry';
 import { isDownloading } from '../modelMeta';
 import { NpuNotReady } from '../setup/NpuNotReady';
 import { formatPrice } from './cloudPrice';
@@ -25,6 +26,22 @@ interface Props {
     onNpuRecheck?: () => void;
 }
 
+// The backend's recommendation notes and evidence (gaia/llm/recommended_models.py), in English.
+const NOTES: Record<string, MessageKey> = {
+    'best overall, fastest': 'settings.model.note.bestFastest',
+    cheapest: 'settings.model.note.cheapest',
+    'most truthful': 'settings.model.note.mostTruthful',
+};
+const EVIDENCE = /^(\d+\/\d+) tasks · quality ([\d.]+\/5) · (\$[\d.]+) per (\d+)-task run$/;
+
+/** "Measured: …" in the chosen language; evidence worded differently from ours shows as sent. */
+function measuredText(t: Translate, evidence: string): string {
+    const parts = EVIDENCE.exec(evidence);
+    return t.compose((say) => say('settings.model.measured', {
+        evidence: parts ? say('settings.model.evidence', { tasks: parts[1], quality: parts[2], cost: parts[3], n: parts[4] }) : evidence,
+    }));
+}
+
 /** One model: its name and chips, with the long facts one click away. */
 export function ModelRow({ model: m, label, current, remote, busy, confirmingRemove, onUse, onDownload, onAskRemove, onKeep, onRemove, onNpuRecheck }: Props) {
     const t = useT();
@@ -44,7 +61,7 @@ export function ModelRow({ model: m, label, current, remote, busy, confirmingRem
                 <bdi className="model-row-name" title={m.id}>{label}</bdi>
                 <div className="model-chips">
                     {m.placement?.device && <span className="model-badge is-device">{m.placement.device.toUpperCase()}</span>}
-                    {m.rank && <span className="model-badge is-rank"><bdi dir="ltr">#{m.rank}</bdi> {m.note}</span>}
+                    {m.rank && <span className="model-badge is-rank"><bdi dir="ltr">#{m.rank}</bdi> {m.note && (NOTES[m.note] ? t(NOTES[m.note]) : <bdi>{m.note}</bdi>)}</span>}
                     {m.state === 'loaded' && <span className="model-badge is-loaded">{t('settings.model.loaded')}</span>}
                     {m.fits === true && m.available !== false && <span className="model-badge is-fit">{t('settings.model.fits')}</span>}
                     {m.custom && <span className="model-badge is-custom">{t('settings.model.custom')}</span>}
@@ -54,7 +71,7 @@ export function ModelRow({ model: m, label, current, remote, busy, confirmingRem
                             <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.model.details')}</summary>
                             {m.display_name && <span className="model-row-meta"><bdi>{m.id}</bdi></span>}
                             {facts && <span className="model-row-meta">{facts}</span>}
-                            {m.evidence && <span className="model-row-meta">{t('settings.model.measured', { evidence: m.evidence })}</span>}
+                            {m.evidence && <span className="model-row-meta">{measuredText(t, m.evidence)}</span>}
                             {m.custom && m.source_url && (
                                 <span className="model-row-meta">{t('settings.model.from', { url: m.source_url })}</span>
                             )}
