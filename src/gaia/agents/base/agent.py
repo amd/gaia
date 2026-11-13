@@ -423,10 +423,13 @@ def effective_skill_body(agent, skill) -> str:
                 len(resolved.applied),
                 resolved.token_delta,
             )
-            try:
-                store.touch_deltas(resolved.applied)
-            except Exception:  # noqa: BLE001 - telemetry must not break a turn
-                logger.debug("[SkillDeltas] touch_deltas failed", exc_info=True)
+            from gaia.agents.base.memory_privacy import memory_writes_refused
+
+            if not memory_writes_refused(agent):
+                try:
+                    store.touch_deltas(resolved.applied)
+                except Exception:  # noqa: BLE001 - telemetry must not break a turn
+                    logger.debug("[SkillDeltas] touch_deltas failed", exc_info=True)
 
         cache[key] = resolved.body
         return resolved.body
@@ -1371,10 +1374,12 @@ _CUT_OFF_CONTINUE_PROMPT = (
     "answer if the task is complete."
 )
 _CUT_OFF_FAILURE_ANSWER = (
-    "I could not finish this task: my replies kept getting cut off at the "
-    "model's output-token limit, so the work they described was never carried "
-    "out. Retry with a higher output-token limit (max_tokens) or a model that "
-    "reasons more briefly."
+    "I couldn't finish this: my reply kept growing longer than the model can "
+    "send at once, so it was cut off before I could carry out the next step."
+)
+_CUT_OFF_NEXT_STEP = (
+    "To get the rest done, ask for it in smaller parts, for example half of the "
+    "items at a time, so each reply stays short."
 )
 
 # Unfinished-answer guard: a "final answer" that is really a plan,
@@ -3316,6 +3321,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn.
         self._denied_effects = DeniedEffects()
+        # (turn, call) for each approval prompt nobody answered.
+        self._expired_calls: set = set()
         # (turn, path) for each access prompt declined or left unanswered.
         self._refused_paths: List[Tuple[int, Path]] = []
 
@@ -5691,6 +5698,13 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_incognito", False):
             return False
         return True
+
+    @staticmethod
+    def _prompted_call_key(tool_name: str, tool_args: Any) -> str:
+        """One call's identity: its tool and exact arguments."""
+        return json.dumps(
+            [tool_name, tool_args], sort_keys=True, default=str, ensure_ascii=False
+        )
 
     def _begin_turn_provenance(self) -> None:
         """Open a turn: only the user has spoken, unless a caller pushed content.
@@ -8384,6 +8398,29 @@ Do NOT wrap conversational replies in JSON.
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # Re-asking an unanswered prompt would hold the chat for another timeout.
+            call_key = (
+                getattr(self, "_turn_seq", 0),
+                self._prompted_call_key(tool_name, tool_args),
+            )
+            if call_key in getattr(self, "_expired_calls", ()):
+                # A draft prepared for this prompt must not outlive it.
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
+                return {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "timed_out": True,
+                    "error": (
+                        "Not asked, so it did not run: the approval request for "
+                        f"`{render_call(tool_name, tool_args)}` already went "
+                        "unanswered in this request. Don't ask again in this "
+                        "request. Tell the user you waited for their approval and "
+                        "stopped, and that they can ask you to try again."
+                    ),
+                }
             # A policy client matches on what the model sent, not what the prompt adds.
             noting = getattr(self.console, "note_call_args", None)
             if callable(noting) and isinstance(tool_args, dict):
@@ -8420,6 +8457,9 @@ Do NOT wrap conversational replies in JSON.
                 if self.console.confirmation_timed_out(tool_name) is True:
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
+                    if not hasattr(self, "_expired_calls"):
+                        self._expired_calls = set()
+                    self._expired_calls.add(call_key)
                 else:
                     if denied_error == user_denial_message(tool_name):
                         denied["hint"] = DECLINED_HINT
@@ -8650,6 +8690,20 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Informative message about what was accomplished
         """
+        message = (
+            f"I ran out of steps before I could finish — I used {steps_taken} "
+            f"of the {steps_limit} I get per request.\n\n"
+        )
+        message += self._work_done_so_far(conversation, findings=findings)
+        message += (
+            "Ask me to continue and I'll pick up from here. From the command "
+            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
+        )
+
+        return message
+
+    def _work_done_so_far(self, conversation: List[Dict], findings: bool) -> str:
+        """The tools this turn ran and, with *findings*, the model's latest write-up."""
         # Every executed call leaves one ``role: tool`` entry, whatever loop
         # path ran it; assistant entries also hold calls that never ran.
         tools_used = [
@@ -8657,29 +8711,26 @@ Do NOT wrap conversational replies in JSON.
             for msg in conversation
             if msg.get("role") == "tool" and msg.get("name")
         ]
-
-        message = (
-            f"I ran out of steps before I could finish — I used {steps_taken} "
-            f"of the {steps_limit} I get per request.\n\n"
-        )
+        text = ""
         if tools_used:
             from collections import Counter
 
-            message += "Here's what I ran:\n"
+            text += "Here's what I ran:\n"
             for tool, count in Counter(tools_used).most_common(10):
-                message += f"  - {tool}: {count}x\n"
-            message += "\n"
-
+                text += f"  - {tool}: {count}x\n"
+            text += "\n"
         latest = self._latest_findings(conversation) if findings else ""
         if latest:
-            message += f"Where I'd got to:\n\n{latest}\n\n"
+            text += f"Where I'd got to:\n\n{latest}\n\n"
+        return text
 
-        message += (
-            "Ask me to continue and I'll pick up from here. From the command "
-            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
+    def _cut_off_failure_answer(self, conversation: List[Dict]) -> str:
+        """What a turn the output-token limit kept cutting off tells the user."""
+        return (
+            f"{_CUT_OFF_FAILURE_ANSWER}\n\n"
+            f"{self._work_done_so_far(conversation, findings=True)}"
+            f"{_CUT_OFF_NEXT_STEP}"
         )
-
-        return message
 
     _LATEST_FINDINGS_CHARS = 4000
 
@@ -12706,7 +12757,10 @@ Do NOT wrap conversational replies in JSON.
                         steps_limit,
                     )
                     self._turn_model_retries["failed"] = True
-                    final_answer = _CUT_OFF_FAILURE_ANSWER
+                    final_answer = self._cut_off_failure_answer(conversation)
+                    # Printed like the other give-ups, so it carries the turn's
+                    # token counts and the UI can price it.
+                    loop_break_answer_unprinted = True
                     break
                 cut_off_continuations += 1
                 logger.info(

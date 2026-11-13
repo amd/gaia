@@ -1249,6 +1249,8 @@ export const enMessages = {
     'pick.showHidden': 'Show hidden',
     'pick.up': 'Up one level',
     'pick.use': 'Use this folder',
+    'pick.openFailed': "Couldn't open the folder picker: {error}",
+    'pick.checkFailed': "Couldn't check that folder, so it wasn't added: {error}",
     'ctx.sheetAria': 'Context and performance',
     'ctx.unknown': 'unknown',
     'ctx.tokens': '{n} tokens',
