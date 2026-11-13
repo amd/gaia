@@ -15,10 +15,8 @@ import concurrent.futures
 import datetime
 import logging
 import platform
-import re
 import shutil
 import threading
-import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -28,7 +26,7 @@ from starlette.requests import ClientDisconnect
 
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
 from gaia.env import child_env
-from gaia.upload_names import place_copy, upload_copy_stem
+from gaia.upload_names import place_copy, reserve_copy_path, upload_copy_stem
 from gaia.utils.user_folders import documents_dir
 
 from .. import generated_media
@@ -99,12 +97,6 @@ router = APIRouter(tags=["files"])
 # ── Upload ───────────────────────────────────────────────────────────────────
 
 
-def _media_file_name(original_name: str, ext: str) -> str:
-    """A safe name that keeps the recording's own, for the transcript it produces."""
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(original_name).stem).strip("._")
-    return f"{stem[:_MEDIA_NAME_CHARS] or 'recording'}-{uuid.uuid4().hex[:8]}{ext}"
-
-
 @router.post("/api/files/upload-media", response_model=FileUploadResponse)
 async def upload_media(request: Request, name: str = Query(..., min_length=1)):
     """Save a recording to the uploads folder, streamed straight to disk.
@@ -141,8 +133,9 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
             f"{upload_root} for this recording.",
         )
 
-    unique_name = _media_file_name(name, ext)
-    dest_path = upload_root / unique_name
+    stem = upload_copy_stem(name)[:_MEDIA_NAME_CHARS].rstrip("._-")
+    dest_path = reserve_copy_path(upload_root, stem, ext)
+    unique_name = dest_path.name
     file_size = 0
     try:
         with dest_path.open("wb") as out:

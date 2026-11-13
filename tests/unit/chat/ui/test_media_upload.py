@@ -122,7 +122,7 @@ def test_a_hostile_name_stays_a_plain_file_in_the_folder(client, tmp_path, name)
 def test_the_transcript_keeps_a_recognizable_name(client):
     saved = _upload(client, "Quarterly review.mp4").json()["filename"]
 
-    assert saved.startswith("Quarterly_review-")
+    assert saved == "Quarterly_review.mp4"
 
 
 def test_an_attached_recording_reaches_the_agent_by_path(client, tmp_path, monkeypatch):
