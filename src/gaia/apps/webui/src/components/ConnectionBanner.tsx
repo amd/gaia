@@ -412,8 +412,8 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
                         <span className="connection-banner__hint">{t('banner.finishSetup')}</span>
                     ) : startCommand ? (
                         <span className="connection-banner__hint">
-                            {unresponsive ? 'If it stays this way, restart it: ' : 'To start it by hand, run '}
-                            <code>{startCommand}</code>
+                            {t(unresponsive ? 'banner.restartHint' : 'banner.startHint')}{' '}
+                            <code dir="ltr">{startCommand}</code>
                         </span>
                     ) : startInstruction && (
                         <span className="connection-banner__hint">{startInstruction}</span>
