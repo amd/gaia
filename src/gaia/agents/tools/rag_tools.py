@@ -34,6 +34,7 @@ from gaia.rag.sdk import (
     folder_index_skip_reason,
     text_scripts,
 )
+from gaia.rag.text_units import count_units, split_by_units
 from gaia.tool_cancellation import raise_if_cancelled
 from gaia.upload_names import display_file_name
 
@@ -61,11 +62,9 @@ def _split_oversized_page(page: str, max_words: int) -> List[str]:
     Parts stay well under ``max_words`` because each section re-reads the
     previous part as overlap.
     """
-    words = page.split()
-    if len(words) <= max_words:
+    if count_units(page) <= max_words:
         return [page]
-    size = max(max_words // 4, 1)
-    return [" ".join(words[i : i + size]) for i in range(0, len(words), size)]
+    return split_by_units(page, max(max_words // 4, 1))
 
 
 def _summary_text(chat: Any, prompt: str) -> str:
@@ -2514,7 +2513,7 @@ class RAGToolsMixin:
                 overlap_pages = 1  # Number of pages to overlap between sections
 
                 for _page_idx, page in enumerate(pages):
-                    page_words = len(page.split())
+                    page_words = count_units(page)
 
                     if (
                         current_word_count + page_words > max_words_per_section
@@ -2529,7 +2528,7 @@ class RAGToolsMixin:
                         )
                         current_section_pages = current_section_pages[overlap_start:]
                         current_word_count = sum(
-                            len(p.split()) for p in current_section_pages
+                            count_units(p) for p in current_section_pages
                         )
 
                     # Add page to current section
@@ -2540,7 +2539,7 @@ class RAGToolsMixin:
                 if current_section_pages:
                     sections.append("\n\n".join(current_section_pages))
 
-                total_words = len(full_text.split())
+                total_words = count_units(full_text)
                 logger.info(
                     f"Document has {total_words} words, {len(pages)} pages, grouped into {len(sections)} sections"
                 )
@@ -2596,7 +2595,7 @@ heading/template that conflicts with the requested style.
                     # An abandoned summary must stop, not keep the model busy.
                     raise_if_cancelled()
                     logger.info(
-                        f"Summarizing section {section_num}/{num_sections} ({len(section_text.split())} words)"
+                        f"Summarizing section {section_num}/{num_sections} ({count_units(section_text)} words)"
                     )
 
                     # Generate summary for this section
