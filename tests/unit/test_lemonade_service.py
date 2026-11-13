@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 from gaia.llm import lemonade_service as service
+from gaia.llm.lemonade_choice import SWITCH_BACK_HINT
 from gaia.llm.lemonade_service import (
     LemonadeStartError,
     ensure_lemonade_running,
@@ -155,6 +156,45 @@ def test_no_daemon_is_a_loud_error_naming_how_to_start_it(monkeypatch, down_clie
 
     assert "background service" in str(e.value)
     assert APP_SERVICE_DOWN_HINT in str(e.value)
+
+
+def test_a_configured_server_that_is_down_is_never_replaced_by_gaia_own(
+    monkeypatch, down_client
+):
+    """#8088: an endpoint the user named is authoritative.
+
+    The daemon answered "not up" by starting GAIA's own on another port, so a
+    typo in LEMONADE_BASE_URL looked like a working setup while the server the
+    user chose was never consulted again. The failure must name the URL the
+    user set, and never ask the daemon to start anything.
+    """
+    url = "http://lemonade.example:9000"
+    monkeypatch.setenv("LEMONADE_BASE_URL", url)
+    monkeypatch.setattr(
+        service, "_post_start", lambda *a, **k: pytest.fail("asked the daemon")
+    )
+
+    with pytest.raises(LemonadeStartError) as e:
+        ensure_lemonade_running(ctx_size=65536)
+
+    assert url in str(e.value)
+    assert "not reachable" in str(e.value)
+    assert "unset LEMONADE_BASE_URL" in str(e.value)
+
+
+def test_a_pinned_server_that_is_down_is_named_in_the_error(monkeypatch, down_client):
+    """An explicitly passed base_url is the same choice as the env var, and
+    gets the same refusal: name the address, point at the saved setting."""
+    url = "http://192.0.2.10:8000"
+    monkeypatch.setattr(
+        service, "_post_start", lambda *a, **k: pytest.fail("asked the daemon")
+    )
+
+    with pytest.raises(LemonadeStartError) as e:
+        ensure_lemonade_running(ctx_size=65536, base_url=url)
+
+    assert url in str(e.value)
+    assert SWITCH_BACK_HINT in str(e.value)
 
 
 def test_no_daemon_tells_a_cli_user_to_start_it(monkeypatch, down_client):
