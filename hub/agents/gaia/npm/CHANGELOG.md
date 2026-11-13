@@ -8,6 +8,10 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Files a Python run writes are UTF-8.** `run_python` and
+  `execute_python_file` wrote a bare `open(path, "w")` in the Windows locale
+  codec, so a degree sign landed as the cp1252 byte `0xB0`. Scripts now run in
+  UTF-8 mode, in the packaged binary too.
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the
   `hint` read "The model X is not downloaded. X is not downloaded, and no
   Lemonade client CLI was found …, then re-check." It is now the one sentence.
