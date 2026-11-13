@@ -38,8 +38,10 @@ function formatDate(iso: string | null, t: Translate): string {
     const d = new Date(iso);
     const now = new Date();
     const diff = now.getTime() - d.getTime();
-    const hours = Math.floor(diff / 3600000);
-    if (hours < 1) return t('time.justNow');
+    if (diff < 60000) return t('time.justNow');
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return t('time.minutesAgo', { n: mins });
+    const hours = Math.floor(mins / 60);
     if (hours < 24) return t('time.hoursAgo', { n: hours });
     const days = Math.floor(hours / 24);
     if (days < 7) return t('time.daysAgo', { n: days });

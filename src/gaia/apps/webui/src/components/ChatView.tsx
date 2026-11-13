@@ -989,6 +989,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
                         useChatStore.getState().setLiveStatus(toolRowText(step, getT()), 'tool');
+                        // A relayed agent sends no skill_use for load_skill; the panel still re-reads.
+                        if (event.tool === 'load_skill') useChatStore.getState().addSkillStep(null);
                     }
                 }
             },

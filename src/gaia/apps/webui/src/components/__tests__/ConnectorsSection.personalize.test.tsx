@@ -132,21 +132,32 @@ describe('Personalize GAIA offer', () => {
         await waitFor(() => expect(screen.queryByText('Memory is connected.')).toBeNull());
     });
 
-    it('says on the tile that GAIA keeps access afterwards and where to turn it off', async () => {
+    it('says on the tile that GAIA keeps access only if you personalize, and where to turn it off', async () => {
         await openTile(mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true }));
         const tile = screen.getByText(/your recent Slack channels/);
-        expect(tile).toHaveTextContent('GAIA keeps access to Slack afterwards; you can turn that off below.');
+        expect(tile).toHaveTextContent('If you do, GAIA keeps access to Slack afterwards; you can turn that off below.');
         // The pass is only told to read; the copy must not promise more than that.
         expect(tile).not.toHaveTextContent(/only reads/i);
     });
 
-    it('says in the connect offer that GAIA keeps access afterwards and where to turn it off', async () => {
+    it('says in the connect offer that GAIA keeps access only if you personalize, and where to turn it off', async () => {
         mocked.getConnector.mockResolvedValue(mcpRow({ id: 'mcp-memory', display_name: 'Memory', configured: true }));
         await openTile(mcpRow({ id: 'mcp-memory', display_name: 'Memory' }));
         fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
         const banner = (await screen.findByText('Memory is connected.')).closest('.connector-personalize--offer');
-        expect(banner).toHaveTextContent('GAIA keeps access to Memory afterwards; you can turn that off anytime by opening Memory here.');
+        expect(banner).toHaveTextContent('If you do, GAIA keeps access to Memory afterwards; you can turn that off anytime by opening Memory here.');
         expect(banner).not.toHaveTextContent(/only reads/i);
+    });
+
+    it('offers personalization once, in the banner, right after connecting', async () => {
+        mocked.getConnector.mockResolvedValue(mcpRow({ id: 'mcp-memory', display_name: 'Memory', configured: true }));
+        await openTile(mcpRow({ id: 'mcp-memory', display_name: 'Memory' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+        expect(await screen.findByText('Memory is connected.')).toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Personalize GAIA' })).toHaveLength(1);
+        fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
+        expect(await screen.findByText(/If you do, GAIA keeps access to Memory afterwards; you can turn that off below/)).toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Personalize GAIA' })).toHaveLength(1);
     });
 
     it('is not offered before the connector is connected', async () => {
