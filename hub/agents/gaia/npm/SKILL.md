@@ -536,10 +536,11 @@ still run unasked. A run nobody can answer refuses it, as below.
 **A run nobody can answer is still refused.** With `can_answer_questions: false`,
 or with no `session_id`, the server emits `needs_confirmation`, follows it
 immediately with a terminal `final` saying it stopped before running the action,
-and cancels the run:
+and cancels the run. The `final` carries `failed: true`, since the request was
+not done, and the `usage` the turn spent before it stopped:
 
 ```
-data: {"type":"final","answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
+data: {"type":"final","failed":true,"usage":{"steps":1,"input_tokens":5120,"tokens":48},"answer":"I stopped before running 'write_file' because it needs your explicit approval, and this streaming surface cannot collect that yet. …"}
 ```
 
 That is deny-by-default, not an oversight: parking a batch run on a prompt

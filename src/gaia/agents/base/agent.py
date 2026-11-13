@@ -14491,12 +14491,18 @@ Do NOT wrap conversational replies in JSON.
         # non-empty "here's what I accomplished" message.
         if cancelled_by_console:
             logger.info("Agent run cancelled mid-generation via console.cancelled")
+            # A stopped turn was still billed for the model calls it made.
+            spent_in, spent_out = _sum_conversation_tokens(
+                conversation, self._tool_reported_usage
+            )
             self.last_result = {
                 "status": "cancelled",
                 "result": "",
                 "system_prompt": self.system_prompt,
                 "conversation": conversation,
                 "steps_taken": steps_taken,
+                "input_tokens": spent_in,
+                "output_tokens": spent_out,
                 "timing_summary": timing_summary,
                 "duration": time.time() - start_time,
                 "error_count": len(self._turn_errors()),
