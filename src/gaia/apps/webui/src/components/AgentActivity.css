@@ -272,7 +272,9 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    min-width: 0;
+    /* Takes only what the label leaves, so the page's site name is never the part that gets cut. */
+    flex: 1 1 0;
+    min-width: 12ch;
 }
 
 /* A step that needs a model offers it right under the row. */

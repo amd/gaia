@@ -116,6 +116,48 @@ def test_a_background_start_refuses_foreground_only_limits(capsys):
     assert "foreground only" in capsys.readouterr().err
 
 
+def _connected(autostart=True):
+    config = state.BridgeConfig(bot_id="9", owner_id="111", dm_channel_id="5")
+    config.autostart = autostart
+    state.save_config(config)
+
+
+def test_the_users_stop_keeps_the_apps_from_bringing_it_back(monkeypatch):
+    from gaia.messaging.discord import cli
+
+    _connected()
+    started = []
+    monkeypatch.setattr(cli, "start_detached", lambda **_: started.append(1) or 0)
+    assert cli.run_stop(emit=lambda _: None) == 0
+    assert state.load_config().autostart is False
+    assert cli.ensure_started() is None and started == []
+
+
+def test_a_stop_inside_a_restart_does_not_turn_autostart_off():
+    from gaia.messaging.discord import cli
+
+    _connected()
+    assert cli.stop()
+    assert state.load_config().autostart is True
+
+
+def test_a_start_turns_autostart_back_on(monkeypatch):
+    from gaia.messaging.discord import cli
+
+    _connected(autostart=False)
+    monkeypatch.setattr(cli, "_start_detached_locked", lambda **_: 0)
+    assert cli.start_detached(emit=lambda _: None) == 0
+    assert state.load_config().autostart is True
+
+
+def test_recovery_text_names_no_command():
+    from gaia.messaging.discord import adapter
+
+    assert "gaia discord" not in adapter.RESTART_HINT
+    assert "Stop, then Start" in adapter.RESTART_HINT
+    assert "never tell them to run a command" in adapter.DISCORD_REPLY_NOTE
+
+
 def test_setup_with_no_terminal_says_so_instead_of_a_traceback(monkeypatch):
     """`gaia discord setup` with stdin closed (a pipe, CI, a service) ended in
     an EOFError traceback from getpass."""
