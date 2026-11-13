@@ -81,9 +81,9 @@ _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
 )
-_TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
 _TEXT_TRIED_ENCODINGS = ", ".join(
-    dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
+    list(dict.fromkeys(e for _, e in _TEXT_BOM_ENCODINGS))
+    + ["utf-8", "cp1252", "detected legacy encodings (Windows-1256, Shift-JIS, GBK…)"]
 )
 
 
@@ -188,19 +188,32 @@ def folder_index_skip_reason(file_path) -> Optional[str]:
 
 
 def _decode_text_bytes(data: bytes) -> str:
-    """Decode text bytes without letting latin-1 hide Windows encodings."""
+    """Decode text bytes, detecting legacy encodings; raise when none fits."""
     for bom, encoding in _TEXT_BOM_ENCODINGS:
         if data.startswith(bom):
             return data.decode(encoding)
 
-    for encoding in _TEXT_FALLBACK_ENCODINGS:
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
 
-    # latin-1 never fails; only a corrupt BOM-tagged file raises (above).
-    raise UnicodeDecodeError("text", data, 0, len(data), "unsupported encoding")
+    from charset_normalizer import from_bytes
+
+    matches = from_bytes(data)
+    try:
+        cp1252_text = data.decode("cp1252")
+    except UnicodeDecodeError:
+        cp1252_text = None
+    # Short Western text scores as cp1250/cp775 too; keep cp1252 when it reads cleanly.
+    if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
+        return cp1252_text
+    best = matches.best()
+    if best is None:
+        raise UnicodeDecodeError(
+            "text", data, 0, len(data), "no text encoding fits these bytes"
+        )
+    return str(best)
 
 
 # --- PDF extraction errors ---------------------------------------------------
