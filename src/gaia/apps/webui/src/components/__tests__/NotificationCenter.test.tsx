@@ -103,7 +103,7 @@ describe('NotificationCenter permission prompts follow the interface language', 
     it('words a tool prompt in Arabic, the tool kept left to right', () => {
         setUiLocale('ar');
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         const title = container.querySelector('.notification-title')!;
@@ -130,7 +130,7 @@ describe('NotificationCenter permission prompts follow the interface language', 
 
     it('reads the same as before in English', () => {
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow editing file?');
