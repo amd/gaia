@@ -227,6 +227,95 @@ class TestTranscribeMedia:
         )
         assert last_download < first_transcribe
 
+    def test_a_first_load_is_shown_before_transcribing(self, tmp_path):
+        """Lemonade's load-time NPU cache download must not hide under "Transcribing"."""
+        source = tmp_path / "standup.wav"
+        source.write_bytes(b"stub")
+        shown, calls = [], []
+        host = Host()
+        host.console = type(
+            "Console",
+            (),
+            {
+                "start_progress": lambda self, msg: shown.append(("status", msg)),
+                "report_phase": lambda self, phase, msg, **f: shown.append(
+                    (RECORDING_STAGES[f["stage"]], msg)
+                ),
+            },
+        )()
+
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=14.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=source),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            asr = client.return_value
+            asr.model = "Whisper-Large-v3-Turbo"
+            asr.ensure_model.return_value = True
+            asr.is_loaded.return_value = False
+            asr.load.side_effect = lambda: calls.append("load")
+            asr.transcribe.side_effect = lambda *a, **k: (
+                calls.append("transcribe") or _transcript()
+            )
+            result = host._transcribe_media(
+                str(source), output_path=str(tmp_path / "standup.txt")
+            )
+
+        assert result["status"] == "success", result
+        assert calls == ["load", "transcribe"]
+        preparing = [
+            i for i, (_, msg) in enumerate(shown) if msg.startswith("Preparing")
+        ]
+        assert [shown[i][1] for i in preparing] == [
+            "Preparing the speech model Whisper-Large-v3-Turbo, one time — "
+            "this can download more files"
+        ]
+        first_transcribe = next(
+            i for i, (kind, _) in enumerate(shown) if kind == "transcribe"
+        )
+        assert preparing[0] < first_transcribe
+
+    def test_a_loaded_speech_model_is_not_loaded_again(self, tmp_path):
+        source = tmp_path / "standup.wav"
+        source.write_bytes(b"stub")
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=14.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=source),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.model = "Whisper-Large-v3-Turbo"
+            client.return_value.ensure_model.return_value = False
+            client.return_value.is_loaded.return_value = True
+            client.return_value.transcribe.return_value = _transcript()
+            result = Host()._transcribe_media(
+                str(source), output_path=str(tmp_path / "standup.txt")
+            )
+
+        assert result["status"] == "success", result
+        client.return_value.load.assert_not_called()
+
+    def test_a_failed_speech_model_load_is_the_tools_error(self, tmp_path):
+        source = tmp_path / "standup.wav"
+        source.write_bytes(b"stub")
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=14.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=source),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.model = "Whisper-Large-v3-Turbo"
+            client.return_value.is_loaded.return_value = False
+            client.return_value.load.side_effect = LemonadeASRError(
+                "Lemonade returned 500 for load of Whisper-Large-v3-Turbo"
+            )
+            result = Host()._transcribe_media(str(source))
+
+        assert result["status"] == "error"
+        assert "load of Whisper-Large-v3-Turbo" in result["error"]
+        client.return_value.transcribe.assert_not_called()
+
     def test_a_failed_speech_model_download_is_the_tools_error(self, tmp_path):
         source = tmp_path / "standup.wav"
         source.write_bytes(b"stub")

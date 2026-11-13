@@ -207,3 +207,142 @@ def test_post_release_api_calls_wait_out_the_budget(jobs, job, call):
         for s in jobs[job]["steps"]
     )
     assert has_checkout, f"{job} runs util/gh_retry.py with no checkout"
+
+
+# ── The Python API the release scripts import ───────────────────────────────
+
+
+def _run_command(results, resets, max_wait=3600):
+    clock = _Clock()
+    results, resets, kwargs = list(results), list(resets), []
+
+    def runner(cmd, **kw):
+        kwargs.append(kw)
+        return results.pop(0)
+
+    done = gh_retry.run_command(
+        CMD,
+        max_wait,
+        timeout=300,
+        runner=runner,
+        budget_reset=lambda: resets.pop(0),
+        sleep=clock.sleep,
+        monotonic=lambda: clock.t,
+        now=lambda: clock.t,
+    )
+    return done, kwargs, clock.sleeps
+
+
+def test_run_command_waits_and_keeps_stdout_for_the_caller(capsys):
+    done, kwargs, sleeps = _run_command(
+        [_done(1, err="API rate limit exceeded"), _done(0, out="ok")], [None]
+    )
+    assert (done.returncode, done.stdout, sleeps) == (0, "ok", [15])
+    assert all(kw["timeout"] == 300 for kw in kwargs)
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "  | API rate limit exceeded" in err
+
+
+def test_run_command_returns_a_real_failure_without_waiting():
+    done, kwargs, sleeps = _run_command([_done(1, err="HTTP 404: Not Found")], [None])
+    assert (done.returncode, len(kwargs), sleeps) == (1, 1, [])
+
+
+def test_run_command_raises_naming_the_rate_limit_past_the_bound():
+    with pytest.raises(gh_retry.RateLimitWaitExceeded) as exc:
+        _run_command([_done(1, err=NOT_FOUND)], [1_000.0 + 3_000], max_wait=600)
+    assert "rate limited" in str(exc.value)
+    assert "API budget is spent" in str(exc.value)
+    assert "release not found" in str(exc.value)
+
+
+def test_wait_out_rate_limit_lets_other_errors_through_at_once():
+    calls = []
+
+    def boom():
+        calls.append(1)
+        raise ValueError("HTTP 404")
+
+    with pytest.raises(ValueError):
+        gh_retry.wait_out_rate_limit(boom, 3600, label="x", sleep=pytest.fail)
+    assert calls == [1]
+
+
+def test_wait_out_rate_limit_prefers_retry_after_to_the_reset():
+    clock, results = _Clock(), [release_retry.RateLimited(reset=99_999, retry_after=7)]
+
+    def op():
+        if results:
+            raise results.pop(0)
+        return "ok"
+
+    got = gh_retry.wait_out_rate_limit(
+        op, 3600, label="x", sleep=clock.sleep, monotonic=lambda: clock.t
+    )
+    assert (got, clock.sleeps) == ("ok", [7])
+
+
+# ── Every GitHub API call in the release path waits out the budget ─────────
+
+RELEASE_WORKFLOWS = ("publish.yml", "release_train_dryrun.yml")
+# Imports the shared helper, so the workflow need not wrap it.
+SELF_WAITING = {
+    "check_release_ci.py",
+    "github_release_retry.py",
+    "release_promote.py",
+    "release_train.py",
+}
+_API_CALL = re.compile(r"""\[\s*"gh"|api\.github\.com""")
+
+
+def _run_lines(workflow: str):
+    data = yaml.safe_load((WORKFLOW.parent / workflow).read_text(encoding="utf-8"))
+    for name, job in data["jobs"].items():
+        for step in job.get("steps", []):
+            run = str(step.get("run", ""))
+            # Join continuations so the wrapper and its command read as one line.
+            for line in run.replace("\\\n", " ").splitlines():
+                line = line.strip()
+                if line and not line.startswith(("#", "echo")):
+                    yield name, line
+
+
+@pytest.mark.parametrize("workflow", RELEASE_WORKFLOWS)
+def test_release_api_calls_go_through_the_shared_helper(workflow):
+    unwrapped = []
+    for job, line in _run_lines(workflow):
+        wrapped = "util/gh_retry.py" in line
+        if re.search(r"(^|[\s|;&(])gh (api|release|run|workflow)\b", line):
+            if not wrapped:
+                unwrapped.append(f"{job}: {line}")
+        for script in re.findall(r"util/([a-z_]+\.py)", line):
+            source = (REPO_ROOT / "util" / script).read_text(encoding="utf-8")
+            if not _API_CALL.search(source) or script in SELF_WAITING or wrapped:
+                continue
+            # check_release_assets --dir reads files on disk, not the API.
+            if "--dir" not in line:
+                unwrapped.append(f"{job}: {line}")
+    assert not unwrapped, "GitHub API calls that die on a spent budget:\n" + (
+        "\n".join(unwrapped)
+    )
+
+
+@pytest.mark.parametrize("script", sorted(SELF_WAITING - {"github_release_retry.py"}))
+def test_self_waiting_scripts_use_the_shared_helper(script):
+    source = (REPO_ROOT / "util" / script).read_text(encoding="utf-8")
+    assert "from gh_retry import" in source
+
+
+@pytest.mark.parametrize(
+    ("workflow", "job", "minutes"),
+    [
+        # The final's 80-minute CI wait plus an hour of rate-limit wait.
+        ("publish.yml", "ci-green", 80 + 60),
+        ("publish.yml", "verified-build-report", 60),
+        ("release_train_dryrun.yml", "plan", 60),
+    ],
+)
+def test_jobs_outlast_the_rate_limit_wait(workflow, job, minutes):
+    data = yaml.safe_load((WORKFLOW.parent / workflow).read_text(encoding="utf-8"))
+    assert data["jobs"][job]["timeout-minutes"] > minutes

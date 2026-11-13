@@ -619,7 +619,11 @@ the answer set apart below:
 ```
 
 - **Paths** are shown relative to the folder you started GAIA in, or under `~`;
-  a path that is still long keeps its end.
+  a path that is still long keeps its end. The agent works in that folder too:
+  a file you name without a full path, such as `src/app.py`, is looked up
+  there, and the [project map](/guides/project-map) is of the project
+  that folder is in. Which folders the agent may read without asking does not
+  change.
 - **A failed step** keeps its reason under it, remedy included — that row is
   where a failure lives, not a separate error. While the turn is still running
   it reads `error` in amber, since the agent may fix it and try again. Once a
@@ -695,8 +699,10 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. Under Local, **Ctrl+A** adds a model from a Hugging Face link. With [Local only](/reference/cli#local-only) on, connecting a cloud provider is refused. See [AI providers](/guides/ai-providers) |
 | `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
 | `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
+| `/automations` | List the reminders, summaries, alerts and triggers GAIA runs on its own, numbered. `/automations pause 2`, `resume 2` or `remove 2` changes one; a name works too. See [Automations](/guides/automations) |
 | `/connectors` | List your connected apps (Gmail, Slack, GitHub…). Also a clickable entry in the status bar. See [Connectors](/connectors) |
-| `/connectors personalize <id>` | Optional: let GAIA read a connected app's recent activity, save what it learns to memory, and suggest automations. Read-only; creates no schedules |
+| `/connectors personalize <id>` | Optional: let GAIA read a connected app's recent activity, save what it learns to memory, and suggest automations. Told only to read; creates no schedules. GAIA keeps access to the app afterwards |
+| `/connectors revoke <id>` | Turn off GAIA's access to a tool-server connector (Slack, Notion…), such as the access Personalize leaves on |
 | `/full-access` | Explain full access; `/full-access confirm` then turns it on for this session (off by default) |
 | `/full-access off` | Turn full access off for this session |
 | `/full-access always` | Keep it on for every future session (writes `full_access` to `~/.gaia/config.json`) |
