@@ -342,6 +342,7 @@ describe('NewChat empty state', () => {
 
         it('picks the folder in the OS picker, starting from the working folder', async () => {
             pickFolder.mockResolvedValue('/home/u/site');
+            vi.mocked(api.browseFiles).mockResolvedValue({ current_path: '/home/u/site', parent_path: '/home/u', entries: [], quick_links: [] });
             render(<NewChat onSend={vi.fn()} />);
 
             fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
@@ -350,7 +351,22 @@ describe('NewChat empty state', () => {
             expect(pickFolder).toHaveBeenCalledWith('/home/u/my-project');
             expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-            expect(api.browseFiles).not.toHaveBeenCalled();
+            expect(api.browseFiles).toHaveBeenCalledWith('/home/u/site');
+        });
+
+        it('refuses the home folder as soon as it is picked, and says why', async () => {
+            const why = "GAIA can't be given /home/u: it is your home directory.";
+            pickFolder.mockResolvedValue('/home/u');
+            vi.mocked(api.browseFiles).mockResolvedValue({
+                current_path: '/home/u', parent_path: null, entries: [], quick_links: [], folder_refusal: why,
+            });
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            expect(await screen.findByText(why)).toBeInTheDocument();
+            expect(useChatStore.getState().draftFolder).toBeNull();
+            expect(screen.getByRole('button', { name: 'Add a folder' })).toBeInTheDocument();
         });
 
         it('keeps the folder as it was when the OS picker is cancelled', async () => {

@@ -3,6 +3,7 @@
 
 import { useState } from 'react';
 import { FolderPicker } from '../components/session-panel/FolderPicker';
+import * as api from '../services/api';
 
 /**
  * Pick a folder for a chat: the OS picker in the desktop app, GAIA's own popup in a browser.
@@ -20,9 +21,18 @@ export function useFolderPicker(onPick: (path: string) => void) {
             return;
         }
         native.pickFolder(defaultPath)
-            .then((path) => { if (path) onPick(path); })
-            .catch((err: unknown) =>
-                setError(`Couldn't open the folder picker: ${err instanceof Error ? err.message : String(err)}`));
+            .catch((err: unknown) => {
+                setError(`Couldn't open the folder picker: ${err instanceof Error ? err.message : String(err)}`);
+                return null;
+            })
+            .then(async (path) => {
+                if (!path) return;
+                // The OS dialog accepts any folder; ask the server, as GAIA's own picker does.
+                const listing = await api.browseFiles(path);
+                if (listing.folder_refusal) setError(listing.folder_refusal);
+                else onPick(path);
+            })
+            .catch((err: unknown) => setError(err instanceof api.ApiError ? err.detail || err.message : String(err)));
     };
 
     const picker = popupOpen

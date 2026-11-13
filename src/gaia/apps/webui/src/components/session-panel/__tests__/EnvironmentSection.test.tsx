@@ -149,12 +149,25 @@ describe('Can read and write', () => {
 
         it('adds the folder chosen in the OS picker, without GAIA\'s popup', async () => {
             pickFolder.mockResolvedValue('/Users/me/notes');
+            mocked.browseFiles.mockResolvedValue({ current_path: '/Users/me/notes', parent_path: '/Users/me', entries: [], quick_links: [] });
             mocked.addEnvironmentFolder.mockResolvedValue(ENV);
             render(<EnvironmentSection sessionId={SID} busy={false} />);
             fireEvent.click(await screen.findByRole('button', { name: /Add folder/ }));
             await waitFor(() => expect(mocked.addEnvironmentFolder).toHaveBeenCalledWith(SID, '/Users/me/notes'));
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-            expect(mocked.browseFiles).not.toHaveBeenCalled();
+            expect(mocked.browseFiles).toHaveBeenCalledWith('/Users/me/notes');
+        });
+
+        it('refuses the home folder as soon as it is picked in the OS picker', async () => {
+            const why = "GAIA can't be given /Users/me: it is your home directory.";
+            pickFolder.mockResolvedValue('/Users/me');
+            mocked.browseFiles.mockResolvedValue({
+                current_path: '/Users/me', parent_path: null, entries: [], quick_links: [], folder_refusal: why,
+            });
+            render(<EnvironmentSection sessionId={SID} busy={false} />);
+            fireEvent.click(await screen.findByRole('button', { name: /Add folder/ }));
+            expect(await screen.findByText(why)).toBeInTheDocument();
+            expect(mocked.addEnvironmentFolder).not.toHaveBeenCalled();
         });
 
         it('adds nothing when the OS picker is cancelled', async () => {
