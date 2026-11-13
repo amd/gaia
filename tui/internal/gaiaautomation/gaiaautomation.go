@@ -41,6 +41,10 @@ var Binary = func() (string, error) {
 // but which these commands do not change.
 const KindWatch = "watch"
 
+// KindWaiting is a message an automation already produced that waits for the
+// Discord bridge; it shares its automation's name, so it is left out too.
+const KindWaiting = "waiting"
+
 // Item is one row of `gaia automation list` (store.describe).
 type Item struct {
 	ID            string `json:"id"`
@@ -80,7 +84,7 @@ func run(ctx context.Context, args ...string) ([]byte, string, error) {
 	return out.Bytes(), lastMeaningfulLine(errBuf.String() + out.String()), runErr
 }
 
-// List reads every automation, the Discord watches left out.
+// List reads every automation, the Discord watches and waiting messages left out.
 func List(ctx context.Context) ([]Item, error) {
 	out, said, err := run(ctx, "list")
 	if err != nil {
@@ -99,7 +103,7 @@ func List(ctx context.Context) ([]Item, error) {
 	}
 	items := make([]Item, 0, len(all))
 	for _, it := range all {
-		if it.Kind != KindWatch {
+		if it.Kind != KindWatch && it.Kind != KindWaiting {
 			items = append(items, it)
 		}
 	}

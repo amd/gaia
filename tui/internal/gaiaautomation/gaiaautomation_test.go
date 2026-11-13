@@ -58,11 +58,15 @@ const listJSON = `some log line
    "next": "Fri 07 Nov 08:00", "every": "1 day", "prompt": "Summarize my inbox"},
   {"id": "e5f6a7b8", "name": "Heartbeat", "kind": "alert", "status": "paused",
    "next": "Fri 07 Nov 08:30", "every": "30 minutes", "failing_checks": 2},
-  {"id": "watch:amd/gaia", "name": "GitHub activity on amd/gaia", "kind": "watch", "status": "active"}
+  {"id": "watch:amd/gaia", "name": "GitHub activity on amd/gaia", "kind": "watch", "status": "active"},
+  {"id": "waiting:9f8e7d6c", "name": "Inbox digest", "kind": "waiting",
+   "status": "ran Fri 08:00; reaches your Discord DM when the Discord bridge runs"}
 ]
 `
 
-func TestListReadsAutomationsAndLeavesOutWatches(t *testing.T) {
+// A waiting message shares its automation's name; listed, it would take that
+// name's place, so "/automations pause Inbox digest" would reach the message.
+func TestListReadsAutomationsAndLeavesOutWatchesAndWaitingMessages(t *testing.T) {
 	args := stubGaia(t, listJSON, 0)
 	items, err := List(context.Background())
 	if err != nil {
@@ -72,7 +76,7 @@ func TestListReadsAutomationsAndLeavesOutWatches(t *testing.T) {
 		t.Errorf("argv = %q, want automation list", got)
 	}
 	if len(items) != 2 {
-		t.Fatalf("got %d items, want 2 (the watch left out): %+v", len(items), items)
+		t.Fatalf("got %d items, want 2 (the watch and the waiting message left out): %+v", len(items), items)
 	}
 	if items[0].Name != "Inbox digest" || items[0].Every != "1 day" || items[0].Paused() {
 		t.Errorf("first item = %+v", items[0])
