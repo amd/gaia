@@ -11025,7 +11025,7 @@ Do NOT wrap conversational replies in JSON.
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
         if unsupported:
             gaps.append(unsupported[1] + ".")
-        if answer and answer.strip():
+        if answer and answer.strip() and not model_failed:
             gaps.extend(p for p in self.answer_problems(answer) if p not in gaps)
         if gaps:
             report = incomplete_answer(gaps)
