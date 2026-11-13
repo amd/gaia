@@ -14,6 +14,12 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   so its cost read "Not reported". It now names the tools it ran and its last
   findings, suggests asking for the work in smaller parts, and carries the
   turn's token counts.
+- **A run stopped for an approval nobody can give reads as not done.** Its
+  `final` now carries `failed: true` and the `usage` spent before the stop, so
+  `gaia -p` reports `is_error: true` with real step and token counts instead of
+  a free, zero-step success. A stopped turn's result now carries
+  the tokens it spent too.
+
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
   directory now go in the session context at the start of the first user
