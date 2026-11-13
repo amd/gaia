@@ -24,6 +24,8 @@ from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from gaia.upload_names import reserve_copy_path
+
 from .._chat_helpers import UnreadableDocumentError, index_progress
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
@@ -62,17 +64,12 @@ MAX_DOCUMENT_UPLOAD_SIZE = 20 * 1024 * 1024  # 20 MB
 # Streaming chunk size for multipart blob upload.
 UPLOAD_CHUNK_SIZE = 64 * 1024  # 64 KB
 
-# Length of the random hex ID prefixed to managed document filenames.
-# 12 hex chars = 48 bits ≈ 2.8e14 possibilities; collision probability with
-# 1 million concurrent uploads is ~1 in 1.4e14 — effectively zero. Files are
-# also deduped by SHA-256 hash before writing, so identical-content collisions
-# are impossible. 12 chars keeps the on-disk basename well under Windows
-# MAX_PATH limits once combined with the original filename.
+# Length of the random hex ID in a partial upload's name.
 MANAGED_ID_LEN = 12
 
 
 def _short_id() -> str:
-    """Return a short random hex identifier for managed document filenames."""
+    """Return a short random hex identifier for partial upload names."""
     return uuid.uuid4().hex[:MANAGED_ID_LEN]
 
 
@@ -460,20 +457,19 @@ async def upload_document_blob(
             )
             return doc_to_response(existing)
 
-        # 6. Promote partial -> final (atomic rename). The on-disk filename
-        # embeds the sanitized original stem so that downstream consumers
-        # (RAG tools, the agent LLM) can recognize the document by its
-        # human-readable name — a pure-UUID filename causes the LLM to
-        # hallucinate paths when it needs to reference the file in a tool
-        # call. The UUID prefix still guarantees uniqueness. After this,
+        # 6. Promote partial -> final (atomic rename) under the sanitized
+        # original name, so the agent reads and quotes the name the person
+        # gave; an id is added only when that name is taken. After this,
         # `partial_path` is cleared so the finally block won't unlink our
         # now-final file.
         safe_stem = _sanitize_stem(Path(display_name).stem)
-        final_path = managed_dir / f"{_short_id()}_{safe_stem}{ext}"
         try:
+            final_path = reserve_copy_path(managed_dir, safe_stem, ext)
             os.replace(partial_path, final_path)
         except OSError as e:
             logger.error("Failed to promote %s -> %s: %s", partial_path, final_path, e)
+            if final_path is not None:
+                _cleanup_temp(final_path)
             raise HTTPException(status_code=500, detail="Failed to save uploaded file")
         partial_path = None  # ownership transferred
     finally:

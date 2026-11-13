@@ -89,11 +89,9 @@ def test_upload_blob_happy_path(client, mock_index_document, managed_docs_sandbo
     assert filepath.parent == managed_docs_sandbox
     assert filepath.read_bytes() == content
 
-    # The on-disk filename must embed the original stem so the agent LLM
-    # and RAG tools can recognize the file. Pattern: "<uuid>_<stem>.<ext>"
-    assert filepath.name.endswith(
-        "_report.txt"
-    ), f"Expected on-disk name to end with '_report.txt', got {filepath.name}"
+    # The agent and RAG tools quote the file's name, so it must be the one
+    # the person gave, not an id-prefixed copy name.
+    assert filepath.name == "report.txt"
 
     # Indexing was called exactly once with the final path
     mock_index_document.assert_awaited_once()
@@ -187,7 +185,6 @@ def test_upload_blob_repoints_a_document_whose_file_is_gone(
     doc2 = r2.json()
 
     assert doc2["id"] == doc1["id"]
-    assert doc2["filepath"] != doc1["filepath"]
     new_path = Path(doc2["filepath"])
     assert new_path.read_bytes() == content
     assert new_path.parent == managed_docs_sandbox

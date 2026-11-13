@@ -2,10 +2,12 @@
 # SPDX-License-Identifier: MIT
 """Names for the private copies of files attached to a chat.
 
-An attachment is stored as ``<id>_<name><ext>`` so the agent can recognize it,
-and answers cite ``<name><ext>``, the name the user knows it by.
+An attachment is stored as ``<name><ext>``, so the agent reads and quotes the
+name the user knows it by. Only when that name is already taken does the copy
+become ``<id>_<name><ext>``, and answers cite ``<name><ext>`` either way.
 """
 
+import os
 import re
 import uuid
 from pathlib import Path
@@ -17,8 +19,8 @@ _FALLBACK_NAME = "attachment"
 _COPY_NAME_RE = re.compile(rf"[0-9a-f]{{{_ID_CHARS}}}_(?P<name>.+)")
 
 
-def upload_copy_name(original_name: str, ext: str) -> str:
-    """Return a unique name to store an attachment under.
+def upload_copy_stem(original_name: str) -> str:
+    """Return the name, without extension, to store an attachment under.
 
     Keeps only characters an attachment link can carry: the chat's Markdown
     links end at a space or ``)``, and the web UI's ``UPLOAD_URL_RE`` serves
@@ -28,7 +30,46 @@ def upload_copy_name(original_name: str, ext: str) -> str:
     base = re.split(r"[\\/]", original_name)[-1]
     stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(base).stem)
     stem = stem.strip("._-")[:_NAME_CHARS].rstrip("._-")
-    return f"{uuid.uuid4().hex[:_ID_CHARS]}_{stem or _FALLBACK_NAME}{ext}"
+    return stem or _FALLBACK_NAME
+
+
+def reserve_copy_path(directory: Path, stem: str, ext: str) -> Path:
+    """Create an empty file for a new copy and return its path.
+
+    The file is ``<stem><ext>`` when that name is free, else ``<id>_<stem><ext>``.
+    Creating it exclusively means two uploads never share a name, even at once.
+    The caller writes to the path, and removes it if the write fails.
+    """
+    candidates = [f"{stem}{ext}"] + [
+        f"{uuid.uuid4().hex[:_ID_CHARS]}_{stem}{ext}" for _ in range(3)
+    ]
+    for name in candidates:
+        path = directory / name
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            continue
+        return path
+    raise FileExistsError(f"No free name for {stem}{ext} in {directory}")
+
+
+def place_copy(directory: Path, stem: str, ext: str, content: bytes) -> Path:
+    """Store *content* as a copy and return its path.
+
+    A file already stored under the plain name with the same bytes is reused,
+    so attaching one file to many chats keeps one copy with the plain name.
+    """
+    plain = directory / f"{stem}{ext}"
+    if plain.is_file() and plain.read_bytes() == content:
+        os.utime(plain)  # keep the age-based media prune from taking it
+        return plain
+    path = reserve_copy_path(directory, stem, ext)
+    try:
+        path.write_bytes(content)
+    except OSError:
+        path.unlink(missing_ok=True)
+        raise
+    return path
 
 
 def upload_original_name(file_path: str) -> Optional[str]:

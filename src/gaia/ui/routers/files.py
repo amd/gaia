@@ -15,10 +15,8 @@ import concurrent.futures
 import datetime
 import logging
 import platform
-import re
 import shutil
 import threading
-import uuid
 from pathlib import Path
 from typing import List, Optional
 
@@ -28,7 +26,7 @@ from starlette.requests import ClientDisconnect
 
 from gaia.audio.media import MEDIA_EXTENSIONS, prune_older_than
 from gaia.env import child_env
-from gaia.upload_names import upload_copy_name
+from gaia.upload_names import place_copy, reserve_copy_path, upload_copy_stem
 from gaia.utils.user_folders import documents_dir
 
 from .. import generated_media, session_environment
@@ -102,12 +100,6 @@ router = APIRouter(tags=["files"])
 # ── Upload ───────────────────────────────────────────────────────────────────
 
 
-def _media_file_name(original_name: str, ext: str) -> str:
-    """A safe name that keeps the recording's own, for the transcript it produces."""
-    stem = re.sub(r"[^A-Za-z0-9._-]+", "_", Path(original_name).stem).strip("._")
-    return f"{stem[:_MEDIA_NAME_CHARS] or 'recording'}-{uuid.uuid4().hex[:8]}{ext}"
-
-
 @router.post("/api/files/upload-media", response_model=FileUploadResponse)
 async def upload_media(request: Request, name: str = Query(..., min_length=1)):
     """Save a recording to the uploads folder, streamed straight to disk.
@@ -144,8 +136,9 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
             f"{upload_root} for this recording.",
         )
 
-    unique_name = _media_file_name(name, ext)
-    dest_path = upload_root / unique_name
+    stem = upload_copy_stem(name)[:_MEDIA_NAME_CHARS].rstrip("._-")
+    dest_path = reserve_copy_path(upload_root, stem, ext)
+    unique_name = dest_path.name
     file_size = 0
     try:
         with dest_path.open("wb") as out:
@@ -267,16 +260,15 @@ async def upload_file(file: UploadFile = File(...)):
     upload_root = uploads_dir()
     upload_root.mkdir(parents=True, exist_ok=True)
 
-    # Unique copy name: random ID, sanitized original name, original extension
-    unique_name = upload_copy_name(original_name, ext)
-    dest_path = upload_root / unique_name
-
-    # Write file to disk
+    # The copy keeps the sanitized original name; an id is added only if it is taken.
     try:
-        dest_path.write_bytes(content)
+        dest_path = place_copy(
+            upload_root, upload_copy_stem(original_name), ext, content
+        )
     except OSError as e:
-        logger.error("Failed to save uploaded file %s: %s", unique_name, e)
+        logger.error("Failed to save uploaded file %s: %s", original_name, e)
         raise HTTPException(status_code=500, detail="Failed to save uploaded file")
+    unique_name = dest_path.name
 
     # Determine content type
     content_type = file.content_type or "application/octet-stream"
