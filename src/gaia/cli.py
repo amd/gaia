@@ -276,6 +276,8 @@ class GaiaCliClient:
     # Where a failure record looks: Lemonade, unless this client talks to Claude.
     calls_lemonade = True
     lemonade_url: Optional[str] = None
+    # Set when a reply failed, so `gaia prompt` exits non-zero.
+    failed = False
 
     def __init__(
         self,
@@ -339,6 +341,7 @@ class GaiaCliClient:
             error_message = _cli_error_text(e, self.calls_lemonade, self.lemonade_url)
             self.log.error(error_message)
             print(error_message)
+            self.failed = True
             yield error_message
 
     def get_stats(self):
@@ -580,7 +583,7 @@ async def async_main(action, **kwargs):
             if stats:
                 for key, value in stats.items():
                     print(f"{key}: {value}")
-        return None
+        return 1 if client.failed else None
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)

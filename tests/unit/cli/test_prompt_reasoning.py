@@ -64,7 +64,7 @@ def test_an_answer_without_reasoning_prints_as_streamed(monkeypatch, capsys):
 
 def test_reasoning_only_reply_names_max_tokens(monkeypatch, capsys):
     """A budget spent entirely reasoning says so instead of printing a blank line."""
-    _prompt(monkeypatch, ["<think>", "still thinking"])
+    assert _prompt(monkeypatch, ["<think>", "still thinking"]) == 1
 
     out = capsys.readouterr().out
     assert "512-token budget" in out and "--max-tokens" in out
