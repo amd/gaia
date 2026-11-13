@@ -43,4 +43,12 @@ describe('turn announcements', () => {
         rerender(<TurnAnnouncer busy={false} />);
         expect(status()).toHaveTextContent('');
     });
+
+    it('says nothing when a refused send ends the turn on the previous reply', () => {
+        useChatStore.setState({ messages: [reply('Earlier answer.')] });
+        const { rerender } = render(<TurnAnnouncer busy={false} />);
+        rerender(<TurnAnnouncer busy />);
+        rerender(<TurnAnnouncer busy={false} />);
+        expect(status()).toHaveTextContent('');
+    });
 });
