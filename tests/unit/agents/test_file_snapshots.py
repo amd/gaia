@@ -435,6 +435,39 @@ class TestScriptMoves:
         with _record(root):
             assert fs.watch_script_folders([str(inbox)], "run_python") is None
 
+    def test_folders_share_one_bound(self, root, work, monkeypatch):
+        first = self._inbox(work)
+        second = work / "other"
+        second.mkdir()
+        (second / "a.txt").write_text("a")
+        monkeypatch.setattr(fs, "MAX_WATCH_FILES", 7)
+        with _record(root):
+            watch = fs.watch_script_folders([str(first), str(second)], "run_python")
+        assert watch.folders == [os.path.realpath(first)]
+
+    def test_a_file_that_cannot_be_copied_leaves_its_folder_out(
+        self, root, work, monkeypatch
+    ):
+        inbox = self._inbox(work)
+        other = work / "other"
+        other.mkdir()
+        (other / "a.txt").write_text("a")
+        real_copy = fs.shutil.copyfile
+
+        def locked(src, dst, *a, **k):
+            if os.path.basename(src) == "scan_3.pdf":
+                raise PermissionError(13, "locked by another app")
+            return real_copy(src, dst, *a, **k)
+
+        monkeypatch.setattr(fs.shutil, "copyfile", locked)
+        with _record(root) as rec:
+            watch = fs.watch_script_folders([str(inbox), str(other)], "run_python")
+            (other / "a.txt").write_text("changed")
+        assert watch.folders == [os.path.realpath(other)]
+        (turn,) = fs.list_turns(SID, root=root)
+        assert [f["path"] for f in turn["files"]] == [os.path.realpath(other / "a.txt")]
+        assert len(list((rec.dir / "blobs").glob("*.before"))) == 1
+
     def test_outside_a_turn_nothing_is_copied(self, root, work):
         inbox = self._inbox(work)
         assert fs.watch_script_folders([str(inbox)], "run_python") is None

@@ -358,6 +358,16 @@ def _python_run_result(
     return result
 
 
+def _record_folder_changes(watch) -> Optional[str]:
+    """Record what a script added to the folders it names; a note if that failed."""
+    try:
+        note_folder_changes(watch)
+    except SnapshotError as e:
+        logger.error("Could not record the files a script added: %s", e)
+        return f"Undo won't remove the files this added: {e}"
+    return None
+
+
 def _python_script_run_context(
     script: Path, project_dir: os.PathLike | str | None
 ) -> tuple[Path, Dict[str, str]]:
@@ -2624,9 +2634,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("execute_python_file", str(p))
+                        _record_folder_changes(named)
                         raise
-                    finally:
-                        note_folder_changes(named)
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2649,7 +2659,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
-                            finished_job_note(job),
+                            " ".join(
+                                n for n in (finished_job_note(job), undo_note) if n
+                            )
+                            or None,
                         ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
@@ -2836,9 +2849,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("run_python", detail)
+                        _record_folder_changes(named)
                         raise
-                    finally:
-                        note_folder_changes(named)
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2864,7 +2877,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         logger.warning(
                             "run_python: could not remove %s: %s", snippet_dir, e
                         )
-                notes = [finished_job_note(job)]
+                notes = [finished_job_note(job), undo_note]
                 if moved_from is not None:
                     notes.append(
                         f"The working folder {moved_from} no longer exists, so "

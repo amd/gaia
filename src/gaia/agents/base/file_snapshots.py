@@ -28,6 +28,7 @@ import contextvars
 import difflib
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -39,6 +40,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional
+
+logger = logging.getLogger(__name__)
 
 MANIFEST = "manifest.json"
 MANIFEST_VERSION = 1
@@ -196,17 +199,32 @@ class TurnRecorder:
             if target is not None:
                 self._save_or_raise(target)
 
-    def capture_folder_files(self, paths: Iterable[str], tool: str) -> None:
+    def capture_folder_files(self, paths: Iterable[str], tool: str) -> bool:
         """Save every file in *paths* before a script that may move them runs.
 
-        The copies of files still unchanged when the turn ends are dropped then.
+        All or none: when one file can't be copied (locked, unreadable), the
+        copies already made for *paths* are dropped and False is returned. The
+        copies of files still unchanged when the turn ends are dropped then.
         """
         with self._lock:
-            last = None
-            for path in paths:
-                last = self._capture_locked(path, tool, watched=True) or last
-            if last is not None:
-                self._save_or_raise(last)
+            added: List[Dict[str, Any]] = []
+            try:
+                for path in paths:
+                    if self._capture_locked(path, tool, watched=True) is not None:
+                        added.append(self._manifest["files"][-1])
+            except SnapshotError as e:
+                logger.warning("Undo won't cover a folder a script names: %s", e)
+                for entry in added:
+                    self._manifest["files"].remove(entry)
+                    self._index.pop(os.path.normcase(entry["path"]), None)
+                    if entry["before_blob"]:
+                        (self.dir / "blobs" / entry["before_blob"]).unlink(
+                            missing_ok=True
+                        )
+                return False
+            if added:
+                self._save_or_raise(Path(added[-1]["path"]))
+            return True
 
     def note_created(self, created: Iterable[tuple], tool: str) -> None:
         """Record each ``(path, created_dirs)`` as new since a watched script ran."""
@@ -467,11 +485,18 @@ class FolderWatch:
     tool: str
 
 
-def _walk_folder(folder: str, bounded: bool) -> Optional[tuple]:
-    """``(files, dirs)`` under *folder*, links not followed; None past the bounds."""
+def _walk_folder(
+    folder: str, max_files: Optional[int] = None, max_bytes: Optional[int] = None
+) -> Optional[tuple]:
+    """``(files, dirs, bytes)`` under *folder*, links not followed.
+
+    None when the folder holds more than *max_files* files or *max_bytes*
+    bytes, or a size can't be read; no limit when they are None.
+    """
     files: List[str] = []
     dirs: List[str] = [folder]
     total = 0
+    bounded = max_files is not None
     for current, dir_names, file_names in os.walk(folder):
         dir_names[:] = [
             d for d in dir_names if not os.path.islink(os.path.join(current, d))
@@ -488,20 +513,22 @@ def _walk_folder(folder: str, bounded: bool) -> Optional[tuple]:
                 total += os.stat(path).st_size
             except OSError:
                 return None
-            if len(files) > MAX_WATCH_FILES or total > MAX_WATCH_BYTES:
+            if len(files) > max_files or total > max_bytes:
                 return None
-    return files, dirs
+    return files, dirs, total
 
 
 def watch_script_folders(folders: Iterable[str], tool: str) -> Optional[FolderWatch]:
     """Copy the files in *folders* so a script that moves or renames them can
     be undone. Call :func:`note_folder_changes` once the script has run.
 
-    A folder over :data:`MAX_WATCH_FILES` / :data:`MAX_WATCH_BYTES` is left
-    out. Returns None outside a recorded turn or when no folder fits.
+    Folders are taken in order while together they stay within
+    :data:`MAX_WATCH_FILES` / :data:`MAX_WATCH_BYTES`; one that doesn't fit, or
+    has a file that can't be copied, is left out. Returns None outside a
+    recorded turn or when no folder is watched.
 
     Raises:
-        SnapshotError: a copy could not be saved; the script must not run.
+        SnapshotError: the undo record could not be saved; the script must not run.
     """
     recorder = _ACTIVE.get()
     if recorder is None:
@@ -509,19 +536,24 @@ def watch_script_folders(folders: Iterable[str], tool: str) -> Optional[FolderWa
     watched: List[str] = []
     files: List[str] = []
     dirs: List[str] = []
+    total = 0
     for folder in folders:
         folder = os.path.realpath(os.fspath(folder))
         if not os.path.isdir(folder):
             continue
-        listing = _walk_folder(folder, bounded=True)
+        listing = _walk_folder(
+            folder, MAX_WATCH_FILES - len(files), MAX_WATCH_BYTES - total
+        )
         if listing is None:
+            continue
+        if not recorder.capture_folder_files(listing[0], tool):
             continue
         watched.append(folder)
         files += listing[0]
         dirs += listing[1]
+        total += listing[2]
     if not watched:
         return None
-    recorder.capture_folder_files(files, tool)
     return FolderWatch(
         folders=watched,
         files={os.path.normcase(f) for f in files},
@@ -537,7 +569,7 @@ def note_folder_changes(watch: Optional[FolderWatch]) -> None:
         return
     created = []
     for folder in watch.folders:
-        files, _dirs = _walk_folder(folder, bounded=False)
+        files, _dirs, _size = _walk_folder(folder)
         for path in files:
             if os.path.normcase(path) in watch.files:
                 continue
