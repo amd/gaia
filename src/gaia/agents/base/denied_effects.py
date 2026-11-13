@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import ipaddress
 import logging
 import os
 import re
@@ -438,11 +439,90 @@ def _norm_path_abs(raw: str) -> Optional[str]:
     return _canonical(raw)
 
 
+def _legacy_ipv4(host: str) -> Optional[str]:
+    """*host* as dotted IPv4 when it is one in the forms URL clients accept.
+
+    ``2852039166``, ``0xA9FEA9FE``, ``0251.0376.0251.0376`` and ``169.254.43518``
+    all reach 169.254.169.254: each part is decimal, ``0x`` hex or ``0`` octal,
+    and the last part fills the bytes the others leave.
+    """
+    parts = host.split(".")
+    if not 1 <= len(parts) <= 4:
+        return None
+    numbers = []
+    for part in parts:
+        try:
+            if part.lower().startswith("0x"):
+                numbers.append(int(part[2:] or "0", 16))
+            elif len(part) > 1 and part.startswith("0"):
+                numbers.append(int(part, 8))
+            else:
+                numbers.append(int(part, 10))
+        except ValueError:
+            return None
+    *head, last = numbers
+    if any(n > 255 for n in head) or last >= 256 ** (4 - len(head)):
+        return None
+    value = last
+    for index, number in enumerate(head):
+        value |= number << (24 - 8 * index)
+    return str(ipaddress.IPv4Address(value))
+
+
+def canonical_host(host: str) -> str:
+    """One spelling per network target, so every way of writing an IP matches.
+
+    ``[::ffff:169.254.169.254]``, ``2852039166`` and ``0xa9fea9fe`` are all
+    ``169.254.169.254``; a name is lowercased without its trailing dot.
+    """
+    host = host.lower().strip("[]").rstrip(".")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return _legacy_ipv4(host) or host
+    mapped = getattr(address, "ipv4_mapped", None)
+    return str(mapped or address)
+
+
 def _hosts(text: str) -> Set[Effect]:
     return {
-        Effect(NETWORK, m.group(1).lower().strip("[]").rstrip("."))
+        Effect(NETWORK, canonical_host(m.group(1)))
         for m in _URL_RE.finditer(text or "")
     }
+
+
+#: A request target written without a scheme: ``curl 169.254.169.254/x``.
+_BARE_HOST_RE = re.compile(
+    r"^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*)(?::\d+)?(?:/|$)"
+)
+
+
+def _bare_hosts(args: Sequence[str]) -> Set[Effect]:
+    """Hosts a request client is given without ``http://`` in front of them."""
+    found: Set[Effect] = set()
+    for arg in args:
+        if arg.startswith("-") or "://" in arg:
+            continue
+        match = _BARE_HOST_RE.match(arg)
+        if match is None:
+            continue
+        written = match.group(1)
+        host = canonical_host(written)
+        # '--retry 5' is a count and 'out.json' a file: an address must look
+        # like one, and a name counts only with a path or port after it.
+        if _is_address(host) and (len(written) >= 7 or "." in written):
+            found.add(Effect(NETWORK, host))
+        elif arg[len(written) : len(written) + 1] in ("/", ":"):
+            found.add(Effect(NETWORK, host))
+    return found
+
+
+def _is_address(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------- shell
@@ -827,7 +907,7 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     if program in _NETWORK_PROGRAMS and (
         program != "git" or subcommand in _GIT_NETWORK_SUBCOMMANDS
     ):
-        hosts = _hosts(" ".join(rest))
+        hosts = _hosts(" ".join(rest)) | _bare_hosts(rest)
     if _PYTHON_RE.match(program):
         return _python_invocation(rest, cwd, depth)
     if program in _SHELLS:
@@ -1599,6 +1679,7 @@ class DeniedEffects:
         kinds: Optional[Set[str]] = None,
         refused: bool = False,
         paths: Optional[Sequence[str]] = None,
+        hosts: Optional[Sequence[str]] = None,
     ) -> Optional[Denial]:
         """Remember what this declined call would have done.
 
@@ -1606,10 +1687,14 @@ class DeniedEffects:
         records the host or path it targeted, not the whole command family.
         *refused* marks a policy refusal rather than a person's no. *paths*,
         when given, are the call's targets as the tool itself resolved them,
-        recorded instead of reading them off the arguments.
+        recorded instead of reading them off the arguments. *hosts* likewise:
+        the host a fetch was blocked at and the address it resolved to, which
+        after a redirect is not the host the URL argument names.
         """
         if paths is not None:
             found = {Effect(PATH, p) for p in map(_norm_path_abs, paths) if p}
+        elif hosts is not None:
+            found = {Effect(NETWORK, canonical_host(h)) for h in hosts if h}
         else:
             found = effects_of_call(tool_name, tool_args, self.cwd)
         effects = {
