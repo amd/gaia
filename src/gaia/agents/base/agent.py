@@ -14242,6 +14242,11 @@ Do NOT wrap conversational replies in JSON.
                     and final_test_claim[1] + "." not in completion_gaps
                 ):
                     completion_gaps.append(final_test_claim[1] + ".")
+                coverage_gap = self._completion_evidence.read_coverage_gap(
+                    answer_candidate
+                )
+                if coverage_gap and coverage_gap not in completion_gaps:
+                    completion_gaps.append(coverage_gap)
                 if completion_gaps:
                     # Never discard the work: keep it and name what is unconfirmed.
                     answer_candidate = caveated_answer(
