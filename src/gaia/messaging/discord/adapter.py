@@ -82,8 +82,10 @@ DISCORD_REPLY_NOTE = (
     "paths of your own working files. The "
     "user is likely on their phone: never tell them to run a command or paste "
     "one for them to run; name the GAIA app screen that does it, like Settings "
-    "→ Connectors, or say what you could not do and leave it there. Reminders, "
-    "alerts and watches have no screen: they change them by asking you here.)"
+    "→ Connectors, or say what you could not do and leave it there. On the "
+    "PC, Settings → Automations lists their reminders, alerts and triggers "
+    "and pauses, resumes or removes one; changing what one does, and GitHub "
+    "watches, happen by asking you here.)"
 )
 
 PAIRING_PROMPT = (

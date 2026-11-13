@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -2106,6 +2106,78 @@ for (const locale of ['ar', 'en']) {
         await page.getByRole('dialog').locator('[data-section="messaging"]').click();
         await page.locator('.messaging-code').scrollIntoViewIfNeeded();
         await shot(page, `messaging-${locale}-phone`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const openAutomations = async (page: Page) => {
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="automations"]').click();
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`settings automations: list (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS));
+        await openAutomations(page);
+        await expect(page.locator('.automation-card')).toHaveCount(AUTOMATIONS.length);
+        await shot(page, `automations-${locale}-list`);
+        await scrollPane(page, 'bottom');
+        await shot(page, `automations-${locale}-list-end`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: nothing delivers them (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS.slice(0, 2), false));
+        await openAutomations(page);
+        await expect(page.locator('.settings-warning')).toBeVisible();
+        await shot(page, `automations-${locale}-no-delivery`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: delivery not checked (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS.slice(0, 1), null));
+        await openAutomations(page);
+        await expect(page.locator('.automation-unchecked')).toBeVisible();
+        await shot(page, `automations-${locale}-unchecked`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: empty (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, []));
+        await openAutomations(page);
+        await expect(page.locator('.automation-empty')).toBeVisible();
+        await shot(page, `automations-${locale}-empty`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: load failed (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => { await p.route('**/api/automations', (route) => route.fulfill({ status: 500, json: { detail: 'automations.json is not usable: unexpected keyword. Delete it to clear your automations.' } })); });
+        await openAutomations(page);
+        await expect(page.locator('.settings-pane .settings-error')).toBeVisible();
+        await shot(page, `automations-${locale}-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings automations: remove confirmation (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS));
+        await openAutomations(page);
+        await page.locator('.automation-card').first().locator('.btn-danger').click();
+        await expect(page.getByRole('alertdialog')).toBeVisible();
+        await shot(page, `automations-${locale}-remove`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings automations: phone width (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS));
+        await page.getByRole('button', { name: /Open sidebar/ }).click();
+        await openAutomations(page);
+        await expect(page.locator('.automation-card').first()).toBeVisible();
+        await shot(page, `automations-${locale}-phone`);
         expect(await audit(page)).toEqual([]);
     });
 }
