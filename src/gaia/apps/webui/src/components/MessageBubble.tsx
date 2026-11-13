@@ -14,6 +14,7 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { plainAnswerText } from '../utils/plainText';
 import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
@@ -171,12 +172,16 @@ const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
  * error keeps the step, as does one ending with an error that isn't the
  * turn's last step.
  */
-export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): { steps: AgentStep[]; echoed: boolean } {
+export function dropErrorsEchoedInAnswer(
+    steps: AgentStep[],
+    content: string,
+): { steps: AgentStep[]; echoed: boolean; endedBy: string | null } {
     const answer = squash(content);
-    if (!answer) return { steps, echoed: false };
+    if (!answer) return { steps, echoed: false, endedBy: null };
     const tail = content.trimEnd();
     const last = steps[steps.length - 1];
     let echoed = false;
+    let endedBy: string | null = null;
     const kept = steps.filter((s) => {
         if (s.type !== 'error' || !s.detail?.trim()) return true;
         if (squash(s.detail) === answer) {
@@ -184,9 +189,11 @@ export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): {
             return false;
         }
         // The server appends the error that ended the turn as its own paragraph.
-        return s !== last || !tail.endsWith(`\n\n${s.detail.trim()}`);
+        if (s !== last || !tail.endsWith(`\n\n${s.detail.trim()}`)) return true;
+        endedBy = s.detail.trim();
+        return false;
     });
-    return { steps: kept, echoed };
+    return { steps: kept, echoed, endedBy };
 }
 
 /**
@@ -488,12 +495,14 @@ export function turnEnding(content: string, stopState: Message['stopState'], fai
 const EDITOR_MAX_HEIGHT = 320;
 
 /** A sent message opened for editing: Enter sends it again, Escape puts it back. */
-function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
+function MessageEditor({ original, draft, onDraft, onSend, onCancel, confirming = false }: {
     original: string;
     draft?: string | null;
     onDraft?: (text: string) => void;
     onSend: (text: string) => void;
     onCancel: () => void;
+    /** The delete-later-messages question is open and owns the buttons. */
+    confirming?: boolean;
 }) {
     const t = useT();
     // Attachments stay out of the text box and go back on when the edit is sent.
@@ -523,7 +532,7 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
             onCancel();
         } else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            if (changed) send();
+            if (changed && !confirming) send();
         }
     };
 
@@ -536,6 +545,7 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
                 onChange={(e) => { setText(e.target.value); onDraft?.(e.target.value); }}
                 onKeyDown={handleKeyDown}
                 aria-label={t('msg.editLabel')}
+                readOnly={confirming}
                 rows={1}
                 dir="auto"
                 {...CLAIMS_ESCAPE}
@@ -550,23 +560,27 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
                     ))}
                 </ul>
             )}
-            <div className="msg-edit-actions">
-                <button type="button" className="btn-secondary msg-edit-btn" onClick={onCancel}>{t('msg.editCancel')}</button>
-                <button type="button" className="btn-primary msg-edit-btn" onClick={send} disabled={!changed}>
-                    {t('msg.editSend')}
-                </button>
-            </div>
+            {!confirming && (
+                <div className="msg-edit-actions">
+                    <button type="button" className="btn-secondary msg-edit-btn" onClick={onCancel}>{t('msg.editCancel')}</button>
+                    <button type="button" className="btn-primary msg-edit-btn" onClick={send} disabled={!changed}>
+                        {t('msg.editSend')}
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
+
+const SCHEDULE_RUN_MARKER = /^\[schedule-run\] Run #(\d+) \u00b7 (.+)$/;
 
 export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, laterCount = 0, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(() => {
-        if (message.role !== 'assistant' || !agentSteps) return { steps: agentSteps, echoed: false };
+        if (message.role !== 'assistant' || !agentSteps) return { steps: agentSteps, echoed: false, endedBy: null };
         const steps = dropAnswerDrafts(agentSteps, message.content);
-        return isStreaming ? { steps, echoed: false } : dropErrorsEchoedInAnswer(steps, message.content);
+        return isStreaming ? { steps, echoed: false, endedBy: null } : dropErrorsEchoedInAnswer(steps, message.content);
     }, [agentSteps, message.content, message.role, isStreaming]);
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
     const place = useInferencePlace();
@@ -578,13 +592,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         () => (message.role === 'assistant' && !isStreaming ? splitCutOff(message.content) : null),
         [message.content, message.role, isStreaming],
     );
+    // The error that ended a partly written answer, shown apart from the answer.
+    const endedBy = cutOff ? null : echo.endedBy;
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
-        () => (message.role === 'user'
-            ? message.content
-            : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
-        [message.content, message.role, isStreaming, cutOff],
+        () => {
+            if (message.role === 'user') return message.content;
+            const body = cutOff
+                ? cutOff.body
+                : endedBy ? message.content.trimEnd().slice(0, -endedBy.length) : message.content;
+            return cleanToolCallContent(body, Boolean(isStreaming));
+        },
+        [message.content, message.role, isStreaming, cutOff, endedBy],
     );
     const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
@@ -619,12 +639,13 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     }, []);
 
     const handleCopy = useCallback(() => {
+        const text = message.role === 'assistant' ? plainAnswerText(cleanedContent) : message.content;
         if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(message.content).catch(() => {});
+            navigator.clipboard.writeText(text).catch(() => {});
         } else {
             // Fallback for non-HTTPS contexts (common for localhost)
             const textarea = document.createElement('textarea');
-            textarea.value = message.content;
+            textarea.value = text;
             textarea.style.position = 'fixed';
             textarea.style.opacity = '0';
             document.body.appendChild(textarea);
@@ -635,7 +656,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         setCopied(true);
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
         copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [message.content]);
+    }, [cleanedContent, message.content, message.role]);
 
     const handleDelete = useCallback(() => {
         if (!confirmDelete) {
@@ -667,6 +688,11 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const hoverTimestamp = message.created_at
         ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at, t) })
         : undefined;
+
+    const runMarker = message.role === 'system' ? SCHEDULE_RUN_MARKER.exec(message.content) : null;
+    if (runMarker) {
+        return <div className="msg-run-divider" role="separator">{t('msg.scheduledRun', { n: runMarker[1], time: runMarker[2] })}</div>;
+    }
 
     return (
         <div
@@ -775,6 +801,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             onDraft={onEditDraft}
                             onSend={(text) => askBeforeDropping(() => onEdit(message, text))}
                             onCancel={() => { setPendingDrop(null); onEditCancel?.(); }}
+                            confirming={pendingDrop !== null && !isStreaming}
                         />
                     ) : collapsibleUser ? (
                         <>
@@ -829,6 +856,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 : say(cutOff.notice)))}
                         </p>
                     )}
+                    {endedBy && (
+                        <p className="msg-cut-off" role="note" dir="auto">{endedBy}</p>
+                    )}
                     {onContinue && stopState && !isStreaming && cleanedContent.trim() && cleanedContent.trim() !== SERVER_CANCELLED_TEXT && (
                         <button type="button" className="msg-try-again" onClick={onContinue}>
                             <Play size={12} aria-hidden="true" />
@@ -866,7 +896,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError)} />
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError || Boolean(endedBy))} />
                         </div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
@@ -1279,12 +1309,12 @@ const MARKDOWN_COMPONENTS: Components = {
     hr() {
         return <hr className="md-hr" />;
     },
-    // Table cells
+    // Table cells set no dir: the table's dir="auto" skips any cell that has its own.
     td({ children }) {
-        return <td dir="auto"><Linkified>{children}</Linkified></td>;
+        return <td><Linkified>{children}</Linkified></td>;
     },
     th({ children }) {
-        return <th dir="auto"><Linkified>{children}</Linkified></th>;
+        return <th><Linkified>{children}</Linkified></th>;
     },
 };
 

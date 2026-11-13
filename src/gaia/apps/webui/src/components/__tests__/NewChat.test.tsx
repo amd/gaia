@@ -133,6 +133,33 @@ describe('NewChat try chips', () => {
         expect(screen.getByLabelText('Message')).toHaveFocus();
         expect(onSend).not.toHaveBeenCalled();
     });
+
+    it('keeps a question already typed and adds the example after it (#7594)', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'What should I cook this week?' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+
+        expect(screen.getByLabelText('Message')).toHaveValue('What should I cook this week?\n\nGive me a banana bread recipe');
+    });
+
+    it('swaps the earlier chip example for the next one, with and without a typed question', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+        const box = screen.getByLabelText('Message');
+
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('A 15-minute workout I can do at home');
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('A 15-minute workout I can do at home');
+
+        fireEvent.change(box, { target: { value: 'What should I do today?' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('What should I do today?\n\nA 15-minute workout I can do at home');
+    });
 });
 
 describe('NewChat while the chat is being created (#5712)', () => {
