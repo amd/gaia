@@ -1263,12 +1263,13 @@ const MARKDOWN_COMPONENTS: Components = {
     hr() {
         return <hr className="md-hr" />;
     },
+    // Cells set no dir: the table's dir="auto" ignores a cell that has its own.
     // Table cells
     td({ children }) {
-        return <td dir="auto"><Linkified>{children}</Linkified></td>;
+        return <td><Linkified>{children}</Linkified></td>;
     },
     th({ children }) {
-        return <th dir="auto"><Linkified>{children}</Linkified></th>;
+        return <th><Linkified>{children}</Linkified></th>;
     },
 };
 
