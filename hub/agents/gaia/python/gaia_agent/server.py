@@ -99,9 +99,12 @@ AGENT_ID = "gaia"
 #: 2.26 added ``GET``/``DELETE /sessions/{id}/grants`` to list and revoke a
 #: session's "always" answers, and ``/skills``' ``claude-project`` source.
 #: 2.27 added ``GET /sessions/{id}/tools``: the tools the session's agent has.
-API_VERSION = "2.27"
+#: 2.28 added the non-terminal ``context_usage`` event for a caller that sends
+#: ``turns``: the turn's first call is measured before the answer streams.
+API_VERSION = "2.28"
 
-#: How long ``final`` waits for the turn's context measurement before going without.
+#: How long the stream allows the turn's context measurement before naming the
+#: failure on ``final``, and how long the loop's own fallback measurement waits.
 _CONTEXT_WAIT_SECONDS = 15.0
 
 #: Budget for counting with the model's own tokenizer before the estimate stands in,
@@ -564,6 +567,11 @@ class _QueryRun:
         #: Why measuring failed, when it did.
         self.context_error: Optional[str] = None
         self.context_done = threading.Event()
+        #: This turn's question, and the history it was fitted to, so the stream
+        #: can measure the sealed record even if the loop is still storing memory.
+        self.query = ""
+        self.pushed: List[Dict[str, Any]] = []
+        self.received_turns: Optional[List[List[Dict[str, Any]]]] = None
 
 
 class DuplicateRunError(RuntimeError):
@@ -824,6 +832,32 @@ def _measure_turn_context(
             "so these are estimates."
         ),
     )
+
+
+def _context_timeout_message() -> str:
+    return (
+        "GAIA couldn't measure this chat's context: it did not finish within "
+        f"{_CONTEXT_WAIT_SECONDS:g}s."
+    )
+
+
+def _report_live_context(run: "_QueryRun") -> None:
+    """Stream what this turn's model call holds before the answer (contract 2.28).
+
+    The in-process path sends the same event at turn start, so a relayed chat's
+    composer fills during a long turn instead of reading "-" until ``final``.
+    The cheap estimate is deliberate: a live update must never hold up the turn.
+    """
+    from gaia.agents.base.history import context_usage
+
+    try:
+        usage = context_usage(run.agent, run.received_turns or [], run.query)
+    except Exception as exc:  # noqa: BLE001 - a meter must never fail the turn
+        logger.warning(
+            "live context measurement failed for run_id=%s: %s", run.run_id, exc
+        )
+        return
+    run.handler._emit({"type": "context_usage", **usage})
 
 
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
@@ -1369,9 +1403,10 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
         checked_out[0].run_lock.release()
 
 
-#: How long a ``final`` waits for the loop to return its turn record. The
-#: answer is already streamed; only the record for later turns waits on it.
-_TURN_RECORD_WAIT_SECONDS = 15.0
+#: How long a ``final`` from a caller that sent ``turns`` waits for the loop's
+#: timings. A caller that sent no ``turns`` does not wait: its measurement and
+#: record are sealed at the answer, and its timings stay best-effort as before.
+_RUN_RESULT_WAIT_SECONDS = 15.0
 
 
 def _as_model_turns(
@@ -1406,25 +1441,82 @@ async def _with_turn_record(
 
     Only a caller that sent ``turns`` (*wanted*) gets it: the record carries
     every tool result in full, so it can outgrow a reader's frame limit.
-    The answer streams before the loop returns, so this waits for the record.
+    The agent seals the record as it prints the answer, so it is read from the
+    console; only a run with no sealed record waits for the loop's own copy.
     """
     if not wanted or event.get("type") != "final":
         return event
-    await asyncio.to_thread(thread.join, _TURN_RECORD_WAIT_SECONDS)
-    if thread.is_alive():
-        logger.warning(
-            "run_id=%s: the run had not finished %.0fs after its answer; this "
-            "turn is sent without its tool record, so later turns see only its text",
-            run.run_id,
-            _TURN_RECORD_WAIT_SECONDS,
+    messages = getattr(run.handler, "staged_model_messages", None)
+    if messages is None:
+        await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
+        if thread.is_alive():
+            logger.warning(
+                "run_id=%s: the run had not finished %.0fs after its answer; this "
+                "turn is sent without its tool record, so later turns see only its "
+                "text",
+                run.run_id,
+                _RUN_RESULT_WAIT_SECONDS,
+            )
+            return event
+        messages = (
+            run.result.get("model_messages") if isinstance(run.result, dict) else None
         )
-        return event
-    messages = (
-        run.result.get("model_messages") if isinstance(run.result, dict) else None
-    )
     if messages is None:
         return event
     return {**event, "model_messages": messages}
+
+
+async def _final_context(
+    run: _QueryRun,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """The turn's measurement, or why it has none; never waits on the run tail.
+
+    With a record sealed at the answer, the measurement runs here, in the
+    stream's own time, over that record. Without one (a run that printed no
+    answer) the loop's own measurement is all there is, and its wait is the
+    only bound. A measurement that cannot finish is named in ``context_error``
+    rather than left blank, because a silent "-" is what made this look broken.
+    """
+    staged = getattr(run.handler, "staged_model_messages", None)
+    if staged is None:
+        deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
+        while not run.context_done.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.05)
+        if not run.context_done.is_set():
+            logger.warning(
+                "run_id=%s: no context measurement within %ss",
+                run.run_id,
+                _CONTEXT_WAIT_SECONDS,
+            )
+            return None, _context_timeout_message()
+        return run.context, run.context_error
+    sealed = {
+        "answer": getattr(run.handler, "staged_answer", "") or "",
+        "model_messages": staged,
+    }
+    try:
+        context = await asyncio.wait_for(
+            asyncio.to_thread(
+                _measure_turn_context,
+                run.agent,
+                run.pushed,
+                run.query,
+                sealed,
+                run.received_turns,
+            ),
+            timeout=_CONTEXT_WAIT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "run_id=%s: the context measurement did not finish within %ss",
+            run.run_id,
+            _CONTEXT_WAIT_SECONDS,
+        )
+        return None, _context_timeout_message()
+    except Exception as exc:
+        logger.exception("Context measurement failed for run_id=%s", run.run_id)
+        return None, f"GAIA couldn't measure this chat's context: {exc}"
+    return context, None
 
 
 async def _finish_changes(run: _QueryRun) -> List[Dict[str, Any]]:
@@ -1455,6 +1547,7 @@ _QUERY_SSE_RESPONSES = {
             "level?, phase?, queue?, retracts_answer?} | token {delta} | "
             "reasoning {delta, retracts_answer?} | "
             "tool_call {tool, args} | tool_result {tool, data, render?} | "
+            "context_usage {window, used, ...} | "
             "needs_confirmation {run_id, action, summary, confirm_id?, "
             "always_scope?, risk?, tool_label?, args?, args_truncated?, "
             "prompt_context?} | needs_input {run_id, request_id, question, "
@@ -1736,6 +1829,12 @@ async def query(request: QueryRequest):
             if request.turns is not None and hasattr(agent, "conversation_history")
             else None
         )
+        run.query = request.query
+        run.pushed = pushed
+        run.received_turns = received_turns
+        if received_turns is not None:
+            # Before the answer: the same live event an in-process turn streams.
+            _report_live_context(run)
         try:
             if request.max_steps is not None:
                 run.result = agent.process_query(
@@ -1743,13 +1842,19 @@ async def query(request: QueryRequest):
                 )
             else:
                 run.result = agent.process_query(request.query)
-            try:
-                run.context = _measure_turn_context(
-                    agent, pushed, request.query, run.result, received_turns
-                )
-            except Exception as exc:  # the answer stands; the meter says why it's blank
-                logger.exception("Context measurement failed for run_id=%s", run.run_id)
-                run.context_error = f"GAIA couldn't measure this chat's context: {exc}"
+            if getattr(handler, "staged_model_messages", None) is None:
+                # No record was sealed at the answer, so this is the only chance.
+                try:
+                    run.context = _measure_turn_context(
+                        agent, pushed, request.query, run.result, received_turns
+                    )
+                except Exception as exc:  # the answer stands; the meter says why
+                    logger.exception(
+                        "Context measurement failed for run_id=%s", run.run_id
+                    )
+                    run.context_error = (
+                        f"GAIA couldn't measure this chat's context: {exc}"
+                    )
         finally:
             run.context_done.set()
 
@@ -1852,25 +1957,24 @@ async def query(request: QueryRequest):
         """``final`` carrying the turn's context measurement (contract >= 2.21) and timings."""
         if final.get("type") != "final":
             return final
-        # ``final`` is printed inside process_query; the measurement follows it.
-        deadline = time.monotonic() + _CONTEXT_WAIT_SECONDS
-        while not run.context_done.is_set() and time.monotonic() < deadline:
-            await asyncio.sleep(0.05)
+        if run.result is None and thread.is_alive() and run.received_turns is not None:
+            # Timings are sealed only when the loop returns, and only a caller
+            # that sent ``turns`` is owed them: the TUI's final keeps its
+            # earlier bound, because the record and the measurement no longer
+            # wait on this tail either.
+            await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
         performance = turn_record(run.result)
         if performance is not None:
             final = {**final, "performance": performance}
-        if not run.context_done.is_set():
-            logger.warning(
-                "run_id=%s: no context measurement within %ss; final goes without it",
-                run.run_id,
-                _CONTEXT_WAIT_SECONDS,
-            )
+        if final.get("failed"):
+            # A failure notice is not a turn the next push carries.
             return final
-        if run.context_error is not None:
-            return {**final, "context_error": run.context_error}
-        if run.context is None:
+        context, error = await _final_context(run)
+        if error is not None:
+            return {**final, "context_error": error}
+        if context is None:
             return final
-        return {**final, "context": run.context}
+        return {**final, "context": context}
 
     async def _stream():
         translator = CanonicalTranslator(

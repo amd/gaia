@@ -817,7 +817,8 @@ don't cover that also deletes or discards work (`git push --force`, `git reset
 --hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
 end someone else's work (`gh issue close`, `gh pr merge`), and folders no
 approval can open (credential folders, the system temp folder, a whole drive or
-your home folder). The agent
+your home folder), and reading credential files (`.env`, private keys, `.npmrc`) even
+under full access. The agent
 says what it would have run, so you can run it yourself.
 
 | Key | What it does |
