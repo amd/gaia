@@ -1904,85 +1904,296 @@ _CONTENT_READERS = frozenset(
     }
 )
 
-#: grep's short flags that take a value, and the long ones that may take it apart.
-_GREP_VALUE_SHORT = frozenset("efmABCdD")
-_GREP_VALUE_LONG = frozenset(
-    {
-        "--regexp",
-        "--file",
-        "--max-count",
-        "--after-context",
-        "--before-context",
-        "--context",
-        "--directories",
-        "--devices",
-        "--include",
-        "--exclude",
-        "--exclude-dir",
-        "--exclude-from",
-        "--label",
-        "--binary-files",
-        "--group-separator",
-    }
-)
+#: grep's long options, and whether each takes a value. GNU grep also takes
+#: any unique prefix of one: ``--no-f`` is ``--no-filename``.
+_GREP_LONG = {
+    "after-context": True,
+    "before-context": True,
+    "context": True,
+    "binary-files": True,
+    "devices": True,
+    "directories": True,
+    "exclude": True,
+    "exclude-from": True,
+    "exclude-dir": True,
+    "file": True,
+    "include": True,
+    "label": True,
+    "max-count": True,
+    "regexp": True,
+    "group-separator": True,
+    "basic-regexp": False,
+    "binary": False,
+    "byte-offset": False,
+    "color": False,
+    "colour": False,
+    "count": False,
+    "dereference-recursive": False,
+    "extended-regexp": False,
+    "files-with-matches": False,
+    "files-without-match": False,
+    "fixed-strings": False,
+    "help": False,
+    "ignore-case": False,
+    "no-ignore-case": False,
+    "initial-tab": False,
+    "invert-match": False,
+    "line-buffered": False,
+    "line-number": False,
+    "line-regexp": False,
+    "no-filename": False,
+    "no-group-separator": False,
+    "no-messages": False,
+    "null": False,
+    "null-data": False,
+    "only-matching": False,
+    "perl-regexp": False,
+    "quiet": False,
+    "recursive": False,
+    "silent": False,
+    "text": False,
+    "version": False,
+    "with-filename": False,
+    "word-regexp": False,
+}
+
+#: ripgrep's long options. It takes no abbreviations.
+_RG_LONG = {
+    **{
+        name: True
+        for name in (
+            "regexp",
+            "file",
+            "glob",
+            "iglob",
+            "type",
+            "type-not",
+            "type-add",
+            "type-clear",
+            "after-context",
+            "before-context",
+            "context",
+            "max-count",
+            "max-columns",
+            "max-depth",
+            "max-filesize",
+            "threads",
+            "replace",
+            "encoding",
+            "pre",
+            "pre-glob",
+            "sort",
+            "sortr",
+            "colors",
+            "color",
+            "context-separator",
+            "field-match-separator",
+            "field-context-separator",
+            "path-separator",
+            "ignore-file",
+            "engine",
+            "dfa-size-limit",
+            "regex-size-limit",
+        )
+    },
+    **{
+        name: False
+        for name in (
+            "hidden",
+            "no-hidden",
+            "no-ignore",
+            "no-ignore-vcs",
+            "no-ignore-dot",
+            "no-ignore-global",
+            "no-ignore-parent",
+            "no-ignore-exclude",
+            "no-ignore-files",
+            "no-require-git",
+            "ignore-case",
+            "smart-case",
+            "case-sensitive",
+            "fixed-strings",
+            "word-regexp",
+            "line-regexp",
+            "invert-match",
+            "count",
+            "count-matches",
+            "files",
+            "files-with-matches",
+            "files-without-match",
+            "line-number",
+            "no-line-number",
+            "column",
+            "no-column",
+            "with-filename",
+            "no-filename",
+            "heading",
+            "no-heading",
+            "pretty",
+            "json",
+            "only-matching",
+            "multiline",
+            "multiline-dotall",
+            "follow",
+            "no-follow",
+            "text",
+            "binary",
+            "no-binary",
+            "search-zip",
+            "pcre2",
+            "auto-hybrid-regex",
+            "crlf",
+            "null",
+            "null-data",
+            "quiet",
+            "trim",
+            "no-messages",
+            "no-config",
+            "one-file-system",
+            "unrestricted",
+            "vimgrep",
+            "byte-offset",
+            "stats",
+            "passthru",
+            "no-unicode",
+            "max-columns-preview",
+            "line-buffered",
+            "block-buffered",
+            "sort-files",
+        )
+    },
+}
+
+#: ``git grep``'s long options; git takes a unique prefix of one too.
+_GIT_GREP_LONG = {
+    **{
+        name: True
+        for name in (
+            "after-context",
+            "before-context",
+            "context",
+            "max-depth",
+            "max-count",
+            "threads",
+        )
+    },
+    **{
+        name: False
+        for name in (
+            "cached",
+            "untracked",
+            "no-index",
+            "exclude-standard",
+            "no-exclude-standard",
+            "recurse-submodules",
+            "text",
+            "textconv",
+            "no-textconv",
+            "ignore-case",
+            "invert-match",
+            "word-regexp",
+            "full-name",
+            "extended-regexp",
+            "basic-regexp",
+            "perl-regexp",
+            "fixed-strings",
+            "line-number",
+            "column",
+            "files-with-matches",
+            "name-only",
+            "files-without-match",
+            "null",
+            "only-matching",
+            "count",
+            "color",
+            "no-color",
+            "break",
+            "heading",
+            "show-function",
+            "function-context",
+            "and",
+            "or",
+            "not",
+            "all-match",
+            "quiet",
+            "recursive",
+            "no-recursive",
+        )
+    },
+}
+
+#: How each search tool reads its flags.
+_SEARCH_FLAVORS = {
+    "grep": {
+        "long": _GREP_LONG,
+        "prefixes": True,
+        "value_short": "efmABCdD",
+        "known_short": "abcdefhilmnoqrsuvwxyzABCDEFGHILPRTUVZ0123456789",
+        "recursive_short": "rR",
+        "recursive_long": ("recursive", "dereference-recursive"),
+        "hidden_short": "hz",
+        "hidden_long": ("no-filename", "null-data"),
+        "always_recursive": False,
+    },
+    "rg": {
+        "long": _RG_LONG,
+        "prefixes": False,
+        "value_short": "efgtTABCmMjrEd",
+        "known_short": "0123456789aABcCdeEfFgHhiIjlLmMnNopqrsStTuUvVwxz.",
+        "recursive_short": "",
+        "recursive_long": (),
+        "hidden_short": "Ip",
+        "hidden_long": ("no-filename", "heading", "pretty", "json", "null-data"),
+        "always_recursive": True,
+    },
+    "git": {
+        "long": _GIT_GREP_LONG,
+        "prefixes": True,
+        "value_short": "efABCm",
+        "known_short": "aiIvwcElLnoqHhzefABCFGPWpOm0123456789",
+        "recursive_short": "",
+        "recursive_long": (),
+        "hidden_short": "h",
+        "hidden_long": ("heading",),
+        "always_recursive": True,
+    },
+}
+
+_LONG_ALIASES = {"colour": "color"}
+
+
+def _long_option(name: str, table: dict, prefixes: bool) -> Optional[str]:
+    """The long option *name* spells in *table*, allowing a unique prefix; else None."""
+    if name in table:
+        return _LONG_ALIASES.get(name, name)
+    if not prefixes or not name:
+        return None
+    matches = {_LONG_ALIASES.get(o, o) for o in table if o.startswith(name)}
+    return matches.pop() if len(matches) == 1 else None
+
 
 _COMMAND_BREAKS = frozenset({"|", "||", "&&", ";", "&"})
 
 _WILDCARD = re.compile(r"[*?\[]")
 
-
 _GREP_PROGRAMS = frozenset({"grep", "egrep", "fgrep"})
 
-#: ripgrep's flags that take a value; ``-r`` is ``--replace`` here.
-_RG_VALUE_SHORT = frozenset("efgtTABCmMjrE")
-_RG_VALUE_LONG = frozenset(
-    {
-        "--regexp",
-        "--file",
-        "--glob",
-        "--iglob",
-        "--type",
-        "--type-not",
-        "--type-add",
-        "--after-context",
-        "--before-context",
-        "--context",
-        "--max-count",
-        "--max-columns",
-        "--max-depth",
-        "--max-filesize",
-        "--threads",
-        "--replace",
-        "--encoding",
-        "--pre",
-        "--pre-glob",
-        "--sort",
-        "--sortr",
-        "--colors",
-        "--color",
-        "--context-separator",
-        "--field-match-separator",
-        "--path-separator",
-        "--ignore-file",
-        "--engine",
-    }
-)
 
-
-def _parse_grep(
-    args: list, value_short: frozenset = _GREP_VALUE_SHORT, value_long=None
-) -> dict:
+def _parse_grep(args: list, flavor: str = "grep") -> dict:
     """How a grep-style command reads *args*: its pattern, files and switches.
 
     ``files`` holds the operands searched; the pattern operand is not one, so
     ``grep .env .gitignore`` searches ``.gitignore`` only. ``pattern_files``
-    are the ``-f`` files the patterns come from.
+    are the ``-f`` files the patterns come from. ``unknown`` is set when an
+    option is one this check does not know, so what it does to the output
+    is unknown too.
     """
-    value_long = _GREP_VALUE_LONG if value_long is None else value_long
-    is_grep = value_short is _GREP_VALUE_SHORT
+    spec = _SEARCH_FLAVORS[flavor]
+    table = spec["long"]
     parsed: dict = {
-        "recursive": False,
+        "recursive": spec["always_recursive"],
         "names_hidden": False,
+        "unknown": False,
         "includes": [],
         "excludes": [],
         "pattern_files": [],
@@ -1998,30 +2209,40 @@ def _parse_grep(
             positional.extend(args[index:])
             break
         if arg.startswith("--"):
-            name, eq, value = arg.partition("=")
-            if name in ("--recursive", "--dereference-recursive"):
-                parsed["recursive"] = True
-            elif name in ("--no-filename", "--null-data"):
-                parsed["names_hidden"] = True
-            if name in value_long and not eq:
+            written, eq, value = arg[2:].partition("=")
+            name = _long_option(written, table, spec["prefixes"])
+            if name is None:
+                parsed["unknown"] = True
+                continue
+            if table.get(name) and not eq:
                 value = args[index] if index < len(args) else ""
                 index += 1
-            if name in ("--regexp", "--file"):
+            if name in spec["recursive_long"] or (
+                name == "directories" and value == "recurse"
+            ):
+                parsed["recursive"] = True
+            if name in spec["hidden_long"]:
+                parsed["names_hidden"] = True
+            if name in ("regexp", "file"):
                 pattern_given = True
-                if name == "--file":
+                if name == "file":
                     parsed["pattern_files"].append(value)
-            elif name == "--include":
+            elif name in ("glob", "iglob") and value.startswith("!"):
+                parsed["excludes"].append(value[1:])
+            elif name in ("include", "glob", "iglob"):
                 parsed["includes"].append(value)
-            elif name == "--exclude":
+            elif name == "exclude":
                 parsed["excludes"].append(value)
             continue
         if arg.startswith("-") and len(arg) > 1:
             for offset, flag in enumerate(arg[1:], start=1):
-                if is_grep and flag in "rR":
+                if flag not in spec["known_short"]:
+                    parsed["unknown"] = True
+                if flag in spec["recursive_short"]:
                     parsed["recursive"] = True
-                if is_grep and flag in "hz":
+                if flag in spec["hidden_short"]:
                     parsed["names_hidden"] = True
-                if flag in value_short:
+                if flag in spec["value_short"]:
                     pattern_given = pattern_given or flag in "ef"
                     value = arg[offset + 1 :]
                     if not value:
@@ -2029,6 +2250,13 @@ def _parse_grep(
                         index += 1
                     if flag == "f":
                         parsed["pattern_files"].append(value)
+                    elif flag == "d" and flavor == "grep" and value == "recurse":
+                        parsed["recursive"] = True
+                    elif flag == "g" and flavor == "rg":
+                        if value.startswith("!"):
+                            parsed["excludes"].append(value[1:])
+                        else:
+                            parsed["includes"].append(value)
                     break
             continue
         positional.append(arg)
@@ -2036,20 +2264,47 @@ def _parse_grep(
     return parsed
 
 
-def _grep_roots(args: list) -> Tuple[list, bool]:
-    """``(roots, names_shown)`` for a recursive ``grep``; no roots when not recursive.
+def _grep_roots(args: list, flavor: str = "grep") -> Tuple[list, bool]:
+    """``(roots, names_shown)`` for a recursive search; no roots when not recursive.
 
     Each root is ``(root, includes, excludes)``. *names_shown* is whether every
-    output line starts with the name of the file it came from.
+    output line is known to start with the name of the file it came from.
     """
-    parsed = _parse_grep(args)
+    parsed = _parse_grep(args, flavor)
     if not parsed["recursive"]:
         return [], True
     roots = [
         (root, parsed["includes"], parsed["excludes"])
         for root in parsed["files"] or ["."]
     ]
-    return roots, not parsed["names_hidden"]
+    return roots, not (parsed["names_hidden"] or parsed["unknown"])
+
+
+#: git's own options that take a value, before its subcommand.
+_GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+
+
+def _git_grep_roots(args: list) -> Tuple[list, bool]:
+    """:func:`_grep_roots` for ``git [options] grep ...``; no roots for another subcommand."""
+    base = ""
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg in _GIT_VALUE_OPTIONS:
+            if arg == "-C" and index < len(args):
+                base = os.path.join(base, args[index])
+            index += 1
+            continue
+        if arg.startswith("-"):
+            continue
+        if arg != "grep":
+            return [], True
+        roots, names_shown = _grep_roots(args[index:], "git")
+        if base:
+            roots = [(os.path.join(base, r), inc, exc) for r, inc, exc in roots]
+        return roots, names_shown
+    return [], True
 
 
 def _findstr_parse(args: list) -> Tuple[bool, list, list]:
@@ -2140,21 +2395,57 @@ def _redirects_stdout(command: list) -> bool:
     return any(re.match(r"1?>", word) is not None for word in command)
 
 
+#: head's and tail's long options; both take a unique prefix of one.
+_HEAD_TAIL_LONG = {
+    "bytes": True,
+    "lines": True,
+    "follow": False,
+    "retry": False,
+    "pid": True,
+    "sleep-interval": True,
+    "max-unchanged-stats": True,
+    "quiet": False,
+    "silent": False,
+    "verbose": False,
+    "zero-terminated": False,
+    "help": False,
+    "version": False,
+}
+
+
 def _keeps_lines(command: list) -> bool:
-    """Whether *command*, fed lines on stdin, prints each one whole or not at all."""
+    """Whether *command*, fed lines on stdin, prints each one whole or not at all.
+
+    An option this check does not know could change that, so it says no.
+    """
     if not command:
         return False
     program = _interpreter_name(command[0])
     if program not in _LINE_KEEPERS or _redirects_stdout(command):
         return False
-    for word in command[1:]:
-        lowered = word.lower()
-        if program == "tail" and lowered.startswith(("-c", "--bytes")):
+    args = command[1:]
+    if program in _GREP_PROGRAMS:
+        if _parse_grep(args)["unknown"]:
             return False
-        if program in _GREP_PROGRAMS and (
-            lowered == "--only-matching" or re.match(r"-[a-z]*o", lowered)
-        ):
-            return False
+        for arg in args:
+            if arg == "--":
+                break
+            if arg.startswith("--"):
+                written = arg[2:].partition("=")[0]
+                if _long_option(written, _GREP_LONG, True) == "only-matching":
+                    return False
+            elif arg.startswith("-") and "o" in re.split(r"[efmABCdD]", arg[1:])[0]:
+                return False
+        return True
+    if program in ("head", "tail"):
+        for arg in args:
+            if arg.startswith("--"):
+                written = arg[2:].partition("=")[0]
+                name = _long_option(written, _HEAD_TAIL_LONG, True)
+                if name is None or (program == "tail" and name == "bytes"):
+                    return False
+            elif program == "tail" and re.match(r"-[a-z]*c", arg):
+                return False
     return True
 
 
@@ -2189,6 +2480,10 @@ def _bulk_read_roots(words: list, shown: bool = False) -> list:
         program = _interpreter_name(command[0])
         if program in _GREP_PROGRAMS:
             found, names_shown = _grep_roots(command[1:])
+        elif program == "rg":
+            found, names_shown = _grep_roots(command[1:], "rg")
+        elif program == "git":
+            found, names_shown = _git_grep_roots(command[1:])
         elif program == "findstr":
             found, names_shown = _findstr_roots(command[1:]), True
         else:
@@ -2488,11 +2783,7 @@ def _reader_operands(command: list) -> list:
     if program in _COPIERS:
         return _copier_sources(program, args)
     if program in _GREP_PROGRAMS or program == "rg":
-        parsed = (
-            _parse_grep(args, _RG_VALUE_SHORT, _RG_VALUE_LONG)
-            if program == "rg"
-            else _parse_grep(args)
-        )
+        parsed = _parse_grep(args, "rg" if program == "rg" else "grep")
         return parsed["pattern_files"] + parsed["files"]
     if program == "findstr":
         _, files, lists = _findstr_parse(args)

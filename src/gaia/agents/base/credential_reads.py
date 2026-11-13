@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-from gaia.agents.base.denied_effects import python_file_reads
+from gaia.agents.base.denied_effects import PYTHON_READ_CALLS, python_file_reads
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.logger import get_logger
 
@@ -22,9 +22,9 @@ log = get_logger(__name__)
 #: Tools that run Python, and the argument carrying the code or the script.
 PYTHON_TOOLS = {"run_python": "code", "execute_python_file": "file_path"}
 
-#: Every call ``python_file_reads`` reports is spelled with one of these.
+#: Code that spells none of these names cannot make a read the check finds.
 _READ_CALLS = re.compile(
-    r"open|read_text|read_bytes|copy|move|system|popen|Popen|run|call|getoutput"
+    "|".join(re.escape(name) for name in sorted(PYTHON_READ_CALLS, key=len))
 )
 
 #: Past this size, code that names no credential file is not parsed. A link

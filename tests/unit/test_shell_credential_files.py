@@ -16,6 +16,9 @@ import pytest
 from gaia.agents.tools import shell_tools
 from gaia.agents.tools.shell_tools import TIER_REFUSE, ShellToolsMixin, _parse_line
 
+#: A '/x' switch is a Windows command's option there and a root path elsewhere.
+WINDOWS_ONLY = pytest.mark.skipif(os.name != "nt", reason="Windows command")
+
 
 class _Validator:
     """Allows everything under *root*; never prompts."""
@@ -198,7 +201,7 @@ def test_a_link_named_like_a_credential_is_refused_by_name(home):
         "grep -rn --include=*.py TOKEN .",
         "grep TOKEN env.txt",
         "findstr TOKEN env.txt",
-        "findstr /s TOKEN *.py",
+        pytest.param("findstr /s TOKEN *.py", marks=WINDOWS_ONLY),
         "getent passwd",
         "jq .data.key data.json",
         "echo .key",
@@ -317,7 +320,7 @@ def test_full_access_does_not_lift_the_refusal(home, run_shell, command):
         "scp -i id_rsa app.tar host:/srv/",
         "scp .env.example host:/srv/app/.env",
         "rsync -av --exclude .env src/ backup/",
-        "robocopy src backup /xf .env",
+        pytest.param("robocopy src backup /xf .env", marks=WINDOWS_ONLY),
         "openssl genrsa -out server.key 2048",
         "openssl req -new -nodes -newkey rsa:2048 -keyout server.key -out server.csr",
         "grep .env .gitignore",
@@ -328,7 +331,7 @@ def test_full_access_does_not_lift_the_refusal(home, run_shell, command):
         "rg .env .gitignore",
         "rg -n -g '!node_modules' secrets.json .gitignore",
         "findstr .env .gitignore",
-        "findstr /n /c:.env .gitignore",
+        pytest.param("findstr /n /c:.env .gitignore", marks=WINDOWS_ONLY),
         'powershell -Command "Select-String .env .gitignore"',
         'powershell -Command "Select-String -Pattern .env -Path .gitignore"',
         "sed -i s/abc/xyz/ .env",
@@ -369,7 +372,7 @@ def test_writing_or_naming_a_credential_file_still_runs(home, command):
         "grep -n '[.]env' .env",
         "rg TOKEN .env",
         "rg -e TOKEN secrets.json",
-        "findstr /c:TOKEN .env",
+        pytest.param("findstr /c:TOKEN .env", marks=WINDOWS_ONLY),
         'cmd /c "findstr /c:TOKEN .env"',
         'powershell -Command "Select-String TOKEN .env"',
         'powershell -Command "Select-String -Pattern TOKEN -Path .env"',
@@ -430,9 +433,9 @@ def test_a_backslash_escaped_grep_pattern_is_not_a_credential_read(home):
         "grep -rn TODO . | grep -v test",
         "grep -rn TODO . | wc -l",
         'bash -c "grep -rn TODO ."',
-        "findstr /s TOKEN *",
-        "findstr /S /I TOKEN *.*",
-        "findstr /s /c:TOKEN *",
+        pytest.param("findstr /s TOKEN *", marks=WINDOWS_ONLY),
+        pytest.param("findstr /S /I TOKEN *.*", marks=WINDOWS_ONLY),
+        pytest.param("findstr /s /c:TOKEN *", marks=WINDOWS_ONLY),
         'powershell -Command "Get-ChildItem . -Recurse | Select-String TOKEN"',
         'powershell -Command "gci -r | sls TOKEN"',
         'powershell -Command "Select-String -Path * -Pattern TOKEN -Recurse"',
@@ -486,3 +489,80 @@ def test_a_recursive_search_over_a_disguised_link_is_refused(home, monkeypatch):
         refusal = _refusal(command, proj, home)
         assert refusal is not None and refusal["executed"] is False, command
         assert "notes.txt" in refusal["error"]
+
+
+# ------------------------------------- every spelling of a search's options
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rn TODO .",
+        "grep --rec TODO .",
+        "grep --recursive --line-n TODO .",
+        "grep -d recurse TODO .",
+        "grep --directories=recurse TODO .",
+        "grep -rn TODO . | head --byt 2000",
+        "grep -rn TODO . | tail -n 5",
+        "grep -rn TODO . | tail --lines 5",
+        "grep -rn TODO . | grep --invert x",
+        "rg TODO",
+        "rg -n TODO src",
+        "rg --hidden TODO",
+        "rg -uu TODO",
+        "rg -n -g '!node_modules' TODO",
+        "git grep TODO",
+        "git grep -n TODO",
+        "git -C . grep --line-n TODO",
+        "grep --frobnicate TODO env.txt",
+    ],
+)
+def test_searches_whose_lines_keep_their_file_names_run(home, command):
+    assert _refusal(command, home / "proj", home) is None, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -r --no-f TOKEN .",
+        "grep -r --no-filename TOKEN .",
+        "grep -r --null-d TOKEN .",
+        "grep --rec -h TOKEN .",
+        "grep -d recurse -h TOKEN .",
+        "grep -drecurse --no-file TOKEN .",
+        "grep --directories=recurse -h TOKEN .",
+        "grep --dir=recurse -h TOKEN .",
+        "grep -r --frobnicate TOKEN .",
+        "grep -r --n TOKEN .",
+        "grep -rn TOKEN . | grep --only x",
+        "grep -rn TOKEN . | grep -o x",
+        "grep -rn TOKEN . | tail --byt 100",
+        "grep -rn TOKEN . | tail -c 100",
+        "grep -rn TOKEN . | head --frob",
+        "grep -rn TOKEN . | grep --frob x",
+        "rg -I TOKEN",
+        "rg --no-filename TOKEN",
+        "rg --heading TOKEN",
+        "rg -p TOKEN",
+        "rg --json TOKEN",
+        "rg --null-data TOKEN",
+        "rg --frobnicate TOKEN",
+        "rg --no-filen TOKEN",
+        "git grep -h TOKEN",
+        "git grep --head TOKEN",
+        "git grep --heading TOKEN",
+        "git -C . grep -h TOKEN",
+        "git grep --frobnicate TOKEN",
+    ],
+)
+def test_searches_that_may_drop_file_names_are_refused(home, command):
+    refusal = _refusal(command, home / "proj", home)
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+    assert "credentials" in refusal["error"]
+
+
+def test_an_unknown_option_on_a_plain_command_runs(home):
+    assert _refusal("grep --frobnicate TOKEN env.txt", home / "proj", home) is None
+    assert _refusal("rg --frobnicate TOKEN env.txt", home / "proj", home) is None

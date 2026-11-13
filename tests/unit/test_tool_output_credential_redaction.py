@@ -113,6 +113,8 @@ GREP_OUTPUT = (
         "sub/dir/.env.production:1:DB_PASSWORD=hunter2",
         "./config/.env.local-4-API_SECRET=s3cr3t",
         "certs/server.key:1:-----BEGIN PRIVATE KEY-----",
+        "certs/server.pem:-----BEGIN PRIVATE KEY-----",
+        "deploy/tls/site.KEY:-----BEGIN PRIVATE KEY-----",
         'proj\\secrets.json:2:  "token": "abc"',
         "> proj\\.env:1:DB_PASSWORD=hunter2",
         "  proj\\.env:2:API_SECRET=s3cr3t",

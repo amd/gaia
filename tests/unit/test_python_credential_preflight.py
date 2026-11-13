@@ -80,7 +80,10 @@ def agent(project):
 REFUSED_SNIPPETS = [
     "print(open('secrets.json').read())",
     "from pathlib import Path\nprint(Path('~/.npmrc').expanduser().read_text())",
-    "print(open(r'C:\\x\\.env').read())",
+    pytest.param(
+        "print(open(r'C:\\x\\.env').read())",
+        marks=pytest.mark.skipif(os.name != "nt", reason="a Windows path"),
+    ),
     "import os\nfd = os.open('x.pem', 0)",
     "print(open('.env').read())",
     "print(open('SECRETS.JSON').read())",
@@ -255,3 +258,35 @@ def test_large_code_without_a_read_is_not_parsed(project, monkeypatch):
     assert credential_in_python("x = 1\n" * 170000, [str(project)]) is None
     big_reader = "y = open('data.csv').read()\n" * 3000
     assert credential_in_python(big_reader, [str(project)]) is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess\nprint(subprocess.check_output(['cat', '.env']))",
+        "import subprocess\nprint(subprocess.getstatusoutput('cat .env'))",
+        "import subprocess\nprint(subprocess.getoutput('cat secrets.json'))",
+        "import subprocess\nsubprocess.check_call(['cat', '.env'])",
+        "from subprocess import check_output as co\nprint(co(['cat', '.env']))",
+    ],
+)
+def test_every_subprocess_read_is_refused(agent, code):
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result["executed"] is False, result
+    assert agent.ran == []
+
+
+def test_every_read_call_the_check_knows_trips_the_quick_skip():
+    from gaia.agents.base import credential_reads, denied_effects
+
+    names = (
+        denied_effects._SUBPROCESS_FUNCS
+        | denied_effects._PATH_READERS
+        | denied_effects._SHUTIL_READERS
+        | {"open", "system", "popen"}
+    )
+    assert names <= denied_effects.PYTHON_READ_CALLS
+    for name in names:
+        code = f"x.{name}('.env')"
+        assert credential_reads._may_read_credentials(code), name

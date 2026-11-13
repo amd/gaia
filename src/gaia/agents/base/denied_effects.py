@@ -1455,6 +1455,12 @@ _PATH_READERS = frozenset({"read_text", "read_bytes", "open"})
 _SHUTIL_READERS = frozenset({"copy", "copy2", "copyfile", "copytree", "move"})
 
 
+#: Every call name :func:`python_file_reads` can report a read through.
+PYTHON_READ_CALLS = frozenset(
+    {"open", "system", "popen"} | _PATH_READERS | _SHUTIL_READERS | _SUBPROCESS_FUNCS
+)
+
+
 def _mode_writes_only(mode: Optional[ast.AST]) -> bool:
     """Whether an ``open`` *mode* leaves nothing already in the file to read.
 
