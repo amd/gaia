@@ -709,6 +709,8 @@ export interface IndexFolderResponse {
     failed: number;
     /** Files in the folder of a type GAIA doesn't index. */
     skipped?: number;
+    /** Images in the folder; GAIA reads an image only when it is added on its own. */
+    skipped_images?: number;
     documents: Document[];
     errors: string[];
 }

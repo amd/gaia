@@ -85,6 +85,7 @@ export { QUEUE_BUSY_WAIT_MS } from '../services/queueDispatch';
 
 const NO_QUEUE: QueuedMessage[] = [];
 const NO_STEPS: AgentStep[] = [];
+const NO_CARDS: RenderCardData[] = [];
 
 /** Notices by server message id: a refetch replaces messages, so they cannot live on them alone. */
 const historyNotices = new Map<number, string>();
@@ -166,43 +167,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
     // A chat made by a retired agent (chat/doc/file/email) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
-    // Smooth streaming exit — snapshot last content so fade-out shows real text
-    const [streamEnding, setStreamEnding] = useState(false);
     const [liveHistoryNotice, setLiveHistoryNotice] = useState<string | null>(null);
-    const lastStreamContentRef = useRef('');
-    const lastAgentStepsRef = useRef<AgentStep[]>([]);
     // Render keys that outlive a message's temporary id, and answers already on screen as the live bubble.
     const messageKeysRef = useRef(new Map<number, number>());
     const settledIdsRef = useRef(new Set<number>());
-    const lastCardsRef = useRef<RenderCardData[]>([]);
-    const prevStreamingRef = useRef(false);
-    // Continuously snapshot the streaming state so we have it when streaming ends
-    useEffect(() => {
-        if (streamingContent) lastStreamContentRef.current = streamingContent;
-    }, [streamingContent]);
-    useEffect(() => {
-        if (agentSteps.length > 0) lastAgentStepsRef.current = agentSteps.map(s => ({ ...s, active: false }));
-    }, [agentSteps]);
-    useEffect(() => {
-        if (cards.length > 0) lastCardsRef.current = [...cards];
-    }, [cards]);
     // Auto-read needs the saved choice before the first reply finishes.
     useReadAloudSettings();
     // Leaving the chat ends its reading; the stop button lives only in this view.
     useEffect(() => () => useReadAloudStore.getState().stop(), []);
-    useEffect(() => {
-        if (!isStreaming && prevStreamingRef.current) {
-            setStreamEnding(true);
-            const timer = setTimeout(() => {
-                setStreamEnding(false);
-                lastStreamContentRef.current = '';
-                lastAgentStepsRef.current = [];
-                lastCardsRef.current = [];
-            }, 350);
-            return () => clearTimeout(timer);
-        }
-        prevStreamingRef.current = isStreaming;
-    }, [isStreaming]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const messagesScrollRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1712,19 +1684,14 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     )}
 
                     {rows.map((msg, idx) => {
-                        // The streaming bubble shows the just-finished answer while it fades out.
-                        const isStreamEndingMsg = streamEnding
-                            && msg.role === 'assistant'
-                            && idx === messages.length - 1;
-                        if (isStreamEndingMsg) return null;
                         const notice = msg.role === 'assistant'
                             ? msg.historyNotice ?? historyNotices.get(msg.id)
                             : undefined;
                         const cutOff = msg.role === 'assistant' && turnEnding(msg.content, msg.stopState) === 'interrupted';
                         const stopped = msg.role === 'assistant' && msg.stopState === 'stopped' && !msg.stopError;
-                        const canTryAgain = (msg.failed === true || cutOff || stopped) && !busy && !retiredAgent && !streamEnding
+                        const canTryAgain = (msg.failed === true || cutOff || stopped) && !busy && !retiredAgent
                             && idx === messages.length - 1;
-                        const canRetry = !canTryAgain && !busy && !comparison && !retiredAgent && !streamEnding
+                        const canRetry = !canTryAgain && !busy && !comparison && !retiredAgent
                             && msg.role === 'assistant' && idx === messages.length - 1
                             && !msg.stopState && !msg.failed && !isErrorContent(msg.content);
                         const latency = msg.stats?.seconds != null ? msg.stats.seconds * 1000 : latencyByMsgId.get(msg.id);
@@ -1782,23 +1749,24 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         );
                     })}
 
-                    {(isStreaming || streamEnding) && liveHistoryNotice && <HistoryNotice text={liveHistoryNotice} />}
+                    {isStreaming && liveHistoryNotice && <HistoryNotice text={liveHistoryNotice} />}
                     {isStreaming && <RecordingProgress />}
-                    {(isStreaming || streamEnding || !!openingShown) && (
-                        <div className={`streaming-bubble ${streamEnding ? 'stream-ending' : 'stream-active'}`}>
+                    {/* Gone the moment the finished answer is in the list, which takes its place as it stands. */}
+                    {(isStreaming || !!openingShown) && (
+                        <div className="streaming-bubble stream-active">
                             <MessageBubble
                                 message={{
                                     id: -1,
                                     session_id: sessionId,
                                     role: 'assistant',
-                                    content: (isStreaming ? streamingContent : lastStreamContentRef.current) || '',
+                                    content: (isStreaming && streamingContent) || '',
                                     created_at: '',
                                     rag_sources: null,
                                 }}
                                 isStreaming={isStreaming || !!openingShown}
-                                agentSteps={isStreaming ? agentSteps : openingShown ? NO_STEPS : lastAgentStepsRef.current}
+                                agentSteps={isStreaming ? agentSteps : NO_STEPS}
                                 agentStepsActive={isStreaming && agentSteps.some(s => s.active)}
-                                cards={isStreaming ? cards : lastCardsRef.current}
+                                cards={isStreaming ? cards : NO_CARDS}
                                 liveStatus={isStreaming ? liveStatus : null}
                                 toolStatus={isStreaming ? toolStatus : null}
                                 awaitingUser={isStreaming && (awaitingUser || hasLiveQuestion || hasOpenPrompt)}

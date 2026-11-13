@@ -87,6 +87,16 @@ class SkillLinkNotFoundError(SkillLinkError):
     """The download URL answered 404."""
 
 
+#: How a GAIA app user adds a skill they have a copy of: no terminal involved.
+APP_LOCAL_COPY_REMEDY = (
+    "If you have a copy of the skill, put its folder in the skills folder "
+    "inside .gaia in your home folder."
+)
+
+#: The same, for someone at the gaia command line.
+CLI_LOCAL_COPY_REMEDY = "Add it from a local copy with 'gaia skill import <folder>'."
+
+
 class SkillLinkChangedError(SkillLinkError):
     """What the link serves now is not what the user previewed."""
 
@@ -272,10 +282,10 @@ def _download(url: str, destination: Path) -> Path:
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else None
         if status == 404:
+            # Neutral: each surface adds the local-copy remedy its user can follow.
             raise SkillLinkNotFoundError(
                 f"Nothing found at {url}. Check the link — a private repository "
-                "can't be read without signing in, so add it from a local copy with "
-                "'gaia skill import <folder>'."
+                "can't be read without signing in."
             ) from exc
         raise SkillLinkError(f"Could not download {url}: {exc}.") from exc
     except (requests.RequestException, IOError) as exc:

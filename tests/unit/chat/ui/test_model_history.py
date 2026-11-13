@@ -236,7 +236,10 @@ def test_autonomous_execution_restores_and_persists_real_database(monkeypatch, f
     loop = AgentLoop()
     loop._db = db
     monkeypatch.setattr(loop, "_get_actionable_goals", lambda: [])
-    asyncio.run(loop._execute_tick(session["id"], session, []))
+    monkeypatch.setattr(loop, "_settle_goal", lambda *a: None)
+    monkeypatch.setattr(loop, "_fail_goals", lambda *a: None)
+    goal = SimpleNamespace(priority="high", title="t", description="")
+    asyncio.run(loop._execute_tick(session["id"], session, [goal]))
     assert captured == [_trace()]
     rows = db.get_context_messages(session["id"])
     assert rows[-1]["role"] == "autonomous"

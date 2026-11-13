@@ -92,10 +92,15 @@ def _loop_state_directive(args: Dict[str, Any]) -> Dict[str, Any]:
         wake = 0
     if state == "scheduled":
         wake = max(30, min(86400, wake))
+    from gaia.agents.base.goal_store import GOAL_OUTCOMES
+
+    outcome = str(args.get("goal_outcome") or "")
     return {
         "directive": state,
         "reason": str(args.get("reason") or ""),
         "wake_in_seconds": wake,
+        # An unknown outcome is the tool's refusal, so the goal is unfinished.
+        "goal_outcome": outcome if outcome in GOAL_OUTCOMES else "",
     }
 
 

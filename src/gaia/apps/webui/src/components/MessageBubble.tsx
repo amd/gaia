@@ -458,6 +458,9 @@ const CUT_OFF_NOTICES: ReadonlyArray<readonly [string, MessageKey]> = [
     ['This answer was interrupted when GAIA closed. Send again to retry.', 'msg.cutOff.interrupted'],
     ['This answer was interrupted before it finished. Send again to retry.', 'msg.cutOff.cancelled'],
     ['This answer ended before GAIA could save a reply. Send again to retry.', 'msg.cutOff.noReply'],
+    // gaia/ui/scheduler.py: a run its schedule's deletion or pause stopped.
+    ['This run was stopped because its schedule was deleted.', 'msg.cutOff.scheduleDeleted'],
+    ['This run was stopped because its schedule was paused.', 'msg.cutOff.schedulePaused'],
 ];
 
 /** restart_recovery.tools_ran_notice, the line the server puts just above a cut-off notice. */
