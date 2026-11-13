@@ -183,9 +183,9 @@ func TestExternalModeSendsTheSavedKey(t *testing.T) {
 // own server either.
 func TestDaemonRunnerStartsNothingInExternalMode(t *testing.T) {
 	externalSetup(t, externalDoc("http://localhost:8000"))
-	f := newFake().with("GET /v1/email/init", 503, initUnreachable)
+	f := newFake().with("GET /v1/gaia/init", 503, initUnreachable)
 
-	rep := Check(context.Background(), f, EmailConfig())
+	rep := Check(context.Background(), f, testConfig())
 
 	if f.called(http.MethodPost, "/daemon/v1/lemonade/start") {
 		t.Fatal("external mode asked the daemon to start Lemonade")

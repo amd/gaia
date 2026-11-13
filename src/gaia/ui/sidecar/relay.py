@@ -1,0 +1,944 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Relay the sidecar's canonical ``/query`` SSE loop into the UI's own SSE
+vocabulary (issue #2109).
+
+A sidecar's ``POST /v1/<agent>/query`` speaks a frozen, 8-event
+canonical vocabulary (spec #2015/#2016, ``needs_input`` added by #2595) —
+
+    status | token | tool_call | tool_result | needs_confirmation | needs_input
+    | final | error
+
+terminated by exactly one ``final`` or ``error``. The Agent UI's own SSE
+consumer (``gaia.ui._chat_helpers``'s streaming trunk) speaks a different,
+older vocabulary (``status`` / ``chunk`` / ``tool_start`` / ``tool_args`` /
+``tool_result`` / ``answer`` / ``agent_error`` / ...). This module is the
+translation layer between the two: it translates the canonical vocabulary
+back OUT to the UI's own wire.
+
+Events are emitted via direct, pinned ``handler._emit(...)`` shapes — NOT via
+``SSEOutputHandler.print_streaming_text`` / ``print_tool_usage`` /
+``pretty_print_json``, which add brace-buffering and tool-registry lookups
+meant for the in-process agent loop and would be label-dead here.
+
+Agent-agnostic: everything that differs between sidecars — the contract
+floor, the user-facing copy, tool labels, which tools mutate — lives in
+:mod:`gaia.ui.sidecar.profiles`.
+
+Cancellation: the relay registers the live (still-open) HTTP response on
+``handler.active_relay_response`` via ``query_stream``'s ``on_response`` hook
+so a cancel arriving on another thread (``routers/chat.py``'s
+``/api/chat/cancel``) can force a blocked socket read to error out by calling
+``.close()`` on it — a between-events ``handler.cancelled`` check alone cannot
+observe cancellation while parked in a blocking read. See Design 2 of the
+issue #2109 plan for the full rationale.
+"""
+
+from __future__ import annotations
+
+import re
+import time
+import uuid
+from typing import Any, Callable, ContextManager, Dict, List, Optional
+
+from gaia.agents.base.call_risk import RISK_NOTE_ARG
+from gaia.agents.base.tool_grants import (
+    PATH_ACCESS_PROMPT_TOOL,
+    PROJECT_TRUST_PROMPT_TOOL,
+)
+from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
+from gaia.logger import get_logger
+from gaia.ui.event_narration import derive_narration
+from gaia.ui.sidecar.profiles import GAIA_PROFILE, RelayProfile
+from gaia.ui.sse_handler import (
+    SSEOutputHandler,
+    _format_tool_args,
+    _strip_balanced_json_blobs,
+    _summarize_tool_result,
+    tool_result_failed,
+)
+from gaia.ui.sse_translation import MCP_TOOL_FIELDS, SUMMARY_VIEW_KEYS
+from gaia.ui.turn_insights import turn_record_problem
+
+logger = get_logger(__name__)
+
+#: ``source`` on the terminal ``error`` the daemon synthesizes when an agent's
+#: stream ends with no terminal event (``gaia.daemon.relay``).
+_DAEMON_RELAY_SOURCE = "daemon_relay"
+
+#: Connection/timeout-shaped fragments of requests/urllib3 error reprs.
+#: Deliberately narrow: a non-match passes through untouched.
+_CONNECTION_SHAPED_RE = re.compile(
+    r"connection\s+(?:refused|reset|aborted|error)"
+    r"|connectionerror"
+    r"|connectionpool"
+    r"|failed to establish a new connection"
+    r"|max retries exceeded"
+    r"|newconnectionerror"
+    r"|(?:read |connect(?:ion)? )?timed?\s*out"
+    r"|timeout",
+    re.IGNORECASE,
+)
+
+
+def _loop_state_directive(args: Dict[str, Any]) -> Dict[str, Any]:
+    """A relayed set_loop_state call as the agent loop reads it, checked as the tool checks it."""
+    state = str(args.get("state") or "")
+    if state not in ("idle", "scheduled", "paused"):
+        state = "idle"
+    try:
+        wake = int(args.get("wake_in_seconds") or 0)
+    except (TypeError, ValueError):
+        wake = 0
+    if state == "scheduled":
+        wake = max(30, min(86400, wake))
+    from gaia.agents.base.goal_store import GOAL_OUTCOMES
+
+    outcome = str(args.get("goal_outcome") or "")
+    return {
+        "directive": state,
+        "reason": str(args.get("reason") or ""),
+        "wake_in_seconds": wake,
+        # An unknown outcome is the tool's refusal, so the goal is unfinished.
+        "goal_outcome": outcome if outcome in GOAL_OUTCOMES else "",
+    }
+
+
+#: Wording of a message that already tells the user what to do next.
+_ALREADY_ADVISED_RE = re.compile(
+    r"send (?:the|your) message again|run setup again", re.IGNORECASE
+)
+
+
+def _augment_error_detail(detail: str, profile: RelayProfile = GAIA_PROFILE) -> str:
+    """Append (never substitute) an actionable hint to connection-shaped
+    error text — boundary translation, not a fallback: the original detail
+    is preserved verbatim at the front. Text that already names its next
+    step is left alone, so the user never reads two versions of it."""
+    if (
+        profile.lemonade_hint
+        and not _ALREADY_ADVISED_RE.search(detail)
+        and _CONNECTION_SHAPED_RE.search(detail)
+    ):
+        from gaia.llm.lemonade_launcher import server_down_advice
+
+        return f"{detail}{profile.lemonade_hint} {server_down_advice()}"
+    return detail
+
+
+#: ``final.usage`` fields copied onto the UI's ``answer`` event, under the
+#: names :meth:`SSEOutputHandler.print_final_answer` gives them.
+_ANSWER_USAGE_KEYS = (
+    "steps",
+    "tools_used",
+    "elapsed",
+    "tokens",
+    "ttft",
+    "tok_per_s",
+    "input_tokens",
+    "cached_tokens",
+    "metrics",
+)
+
+
+def _humanize_tool(tool: str) -> str:
+    return tool.replace("_", " ").strip() or "tool"
+
+
+def _tool_label(tool: str, profile: RelayProfile = GAIA_PROFILE) -> str:
+    return profile.tool_labels.get(tool) or _humanize_tool(tool)
+
+
+def _is_summary_view(data: Any) -> bool:
+    return (
+        isinstance(data, dict)
+        and isinstance(data.get("summary"), str)
+        and set(data) <= set(SUMMARY_VIEW_KEYS)
+    )
+
+
+def _derive_summary(tool: str, data: Any, profile: RelayProfile = GAIA_PROFILE) -> str:
+    """Short, human summary for a ``tool_result`` — never a bare "Done"."""
+    if _is_summary_view(data) and data["summary"]:
+        # The sidecar already summarized it; re-summarizing names its keys.
+        return data["summary"]
+    if isinstance(data, dict) and data:
+        return _summarize_tool_result(data)
+    return f"Ran {_tool_label(tool, profile).lower()}"
+
+
+def _derive_success(data: Any) -> bool:
+    """Whether the tool worked, by the same rule the in-process handler uses."""
+    if _is_summary_view(data) and isinstance(data.get("success"), bool):
+        return data["success"]
+    return not tool_result_failed(data)
+
+
+def _kind_re() -> "re.Pattern":
+    # Built from the shared render-map source so the echo-strip pattern stays
+    # in sync as render tools are added, without duplicating the map here.
+    langs = sorted(set(SSEOutputHandler._RENDER_TOOL_TO_LANG.values()))
+    alt = "|".join(re.escape(lang) for lang in langs)
+    return re.compile(rf'"kind"\s*:\s*"(?:{alt})"')
+
+
+#: Tools whose every call asks afresh, so "always" is never relayed for them:
+#: the Agent UI's ``requiresFreshConsent``, mirrored so no client can grant one.
+_FRESH_CONSENT_TOOLS = frozenset(
+    {
+        "share_engineering_context",
+        "append_engineering_context",
+        "approve_engineering_code",
+        "capture_skill",
+        PATH_ACCESS_PROMPT_TOOL,
+        PROJECT_TRUST_PROMPT_TOOL,
+    }
+)
+
+
+class _NobodyToApprove(Exception):
+    """An unattended run reached a step that needs a person's approval."""
+
+
+def _unattended_approval_text(tool: str, profile: RelayProfile) -> str:
+    return (
+        f'GAIA stopped this unattended run at "{_tool_label(tool, profile)}": '
+        "that step needs your approval, and nobody is there to give it. "
+        "Unattended runs, such as scheduled tasks and autonomous goals, "
+        "can't use steps that ask first, "
+        "such as writing files or running commands. Ask GAIA in a chat "
+        "instead, where you can approve it."
+    )
+
+
+def _is_query_route(path: str, profile: RelayProfile) -> bool:
+    return path.rstrip("/") == f"/v1/{profile.agent_id}/query"
+
+
+def _user_wait(event: Dict[str, Any], answers_confirmations: bool) -> Optional[str]:
+    """The prompt or question id the sidecar now waits on the user for, if any."""
+    etype = event.get("type")
+    if etype == "needs_input":
+        return str(event.get("request_id") or "") or None
+    if etype == "needs_confirmation" and answers_confirmations:
+        return str(event.get("confirm_id") or "") or None
+    return None
+
+
+def _dispatch_one(
+    handler: Any,
+    event: Dict[str, Any],
+    profile: RelayProfile = GAIA_PROFILE,
+    answers_confirmations: bool = False,
+    offers_always: bool = False,
+) -> bool:
+    """Emit one canonical event as a UI event. Returns True if terminal.
+
+    *answers_confirmations* says the sidecar waits on a ``needs_confirmation``
+    for an answer over ``tool_decision``; otherwise the prompt is a card only.
+    *offers_always* says the chat can list and revoke the sidecar's "always"
+    grants, so a prompt that carries a scope may offer one.
+    """
+    etype = event.get("type")
+    if answers_confirmations:
+        # Any event after a prompt means the sidecar has stopped waiting on it.
+        handler.set_relay_confirmation(None)
+    # Likewise for a question: the run is parked until it is answered.
+    handler.set_relay_question(None)
+
+    if etype == "needs_confirmation" and answers_confirmations:
+        confirm_id = str(event.get("confirm_id") or "")
+        if confirm_id:
+            tool = str(event.get("action", ""))
+            always_scope = (
+                str(event.get("always_scope") or "")
+                if offers_always and tool not in _FRESH_CONSENT_TOOLS
+                else ""
+            )
+            event_args = event.get("args")
+            path_access = (
+                event_args.get("path")
+                if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(event_args, dict)
+                else None
+            )
+            handler.set_relay_confirmation(
+                confirm_id,
+                always_scope or None,
+                path_access if isinstance(path_access, str) else None,
+            )
+            # The UI's own approval prompt.
+            request: Dict[str, Any] = {
+                "type": "permission_request",
+                "tool": tool,
+                "confirm_id": confirm_id,
+                "summary": str(event.get("summary", "")),
+            }
+            if always_scope:
+                request["always_scope"] = always_scope
+                if event.get("always_label"):
+                    request["always_label"] = str(event["always_label"])
+            if event.get("risk"):
+                request["risk"] = str(event["risk"])
+            if event.get("tool_label"):
+                request["tool_label"] = str(event["tool_label"])
+            # The whole call: the summary shortens code, and a path prompt is
+            # worded from the path's kind. The card reads GAIA's folder, risk note
+            # and resolved path from args, as in-process, so prompt_context goes
+            # back there.
+            args = dict(event["args"]) if isinstance(event.get("args"), dict) else {}
+            context = event.get("prompt_context")
+            if isinstance(context, dict):
+                if context.get("working_directory"):
+                    args["working_directory"] = str(context["working_directory"])
+                if context.get("risk_note"):
+                    args[RISK_NOTE_ARG] = str(context["risk_note"])
+                if context.get("file_path"):
+                    args["file_path"] = str(context["file_path"])
+                # What GAIA checked, in place of the model's own spelling.
+                if isinstance(context.get("shown_args"), dict):
+                    args.update(context["shown_args"])
+            if args:
+                request["args"] = args
+                if event.get("args_truncated"):
+                    request["args_truncated"] = True
+            timeout = getattr(handler, "confirm_timeout_seconds", None)
+            if isinstance(timeout, (int, float)) and timeout > 0:
+                request["timeout_seconds"] = timeout
+                request["expires_at"] = time.time() + timeout
+            if getattr(handler, "background_mode", False) is True:
+                # Unattended run (a schedule): nobody can answer, so end it here
+                # rather than race the sidecar, which ends a session-less run
+                # on its own and then 404s a deny.
+                raise _NobodyToApprove(_unattended_approval_text(tool, profile))
+            handler._emit(request)
+            return False
+
+    if etype == "status":
+        status: Dict[str, Any] = {
+            "type": "status",
+            "message": str(event.get("message", "")),
+        }
+        if event.get("level") == "warning":
+            status["status"] = "warning"
+        # The phase is what makes it the live line ("Reading your request").
+        for key in ("phase", "words", "chars", "queue"):
+            if key in event:
+                status[key] = event[key]
+        if event.get("retracts_answer"):
+            status["retracts_answer"] = True
+        handler._emit(status)
+
+    elif etype == "token":
+        delta = event.get("delta", "")
+        if delta:
+            handler._emit({"type": "chunk", "content": delta})
+
+    elif etype == "reasoning":
+        delta = event.get("delta", "")
+        if delta:
+            thinking = {"type": "thinking", "content": delta}
+            if event.get("retracts_answer"):
+                thinking["retracts_answer"] = True
+            handler._emit(thinking)
+
+    elif etype == "tool_call":
+        tool = str(event.get("tool") or "unknown")
+        args = event.get("args") or {}
+        label = _tool_label(tool, profile)
+        # The turn summary and the heartbeat read this state, not the events.
+        handler.record_tool_started(tool)
+        if isinstance(args, dict):
+            handler.record_tool_args(args)
+            if tool == "set_loop_state" and hasattr(handler, "loop_state_directive"):
+                # The tool sets this on the console in-process; relayed, here.
+                handler.loop_state_directive = _loop_state_directive(args)
+        # The call in plain words; a sidecar older than the field gets it derived here.
+        narration = str(
+            event.get("narration")
+            or derive_narration(tool, args if isinstance(args, dict) else {})
+        )
+        start: Dict[str, Any] = {
+            "type": "tool_start",
+            "tool": tool,
+            "detail": label,
+            "narration": narration,
+        }
+        start.update({k: event[k] for k in MCP_TOOL_FIELDS if event.get(k)})
+        handler._emit(start)
+        handler._emit(
+            {
+                "type": "tool_args",
+                "tool": tool,
+                "args": args,
+                "detail": _format_tool_args(tool, args) or label,
+                "narration": narration,
+            }
+        )
+        if tool in profile.mutating_tools:
+            handler._emit(
+                {
+                    "type": "status",
+                    "message": f"✎ {profile.change_noun}: {tool}",
+                }
+            )
+
+    elif etype == "tool_result":
+        tool = str(event.get("tool") or "unknown")
+        data = event.get("data")
+        success = _derive_success(data)
+        handler.record_tool_result(data, success)
+        out: Dict[str, Any] = {
+            "type": "tool_result",
+            "tool": tool,
+            "summary": _derive_summary(tool, data, profile),
+            "success": success,
+            "data": data if data is not None else {},
+        }
+        if isinstance(data, dict) and isinstance(data.get("mcp_output"), dict):
+            out["mcp_output"] = data["mcp_output"]
+        render = event.get("render")
+        # "media" is the terminal's card; the Agent UI draws generated media
+        # itself (``media_card``) from the path the payload carries.
+        if render and render != "media":
+            out["render"] = render
+        handler._emit(out)
+
+    elif etype == "needs_confirmation":
+        handler._emit(
+            {
+                "type": "needs_confirmation",
+                "action": str(event.get("action", "")),
+                "summary": str(event.get("summary", "")),
+            }
+        )
+
+    elif etype == "needs_input":
+        # Answerable, non-terminal (#2595) — unlike needs_confirmation this
+        # blocks the sidecar run until POST /api/chat/user-input delivers an
+        # answer, so every field the frontend needs to build and submit the
+        # prompt must cross this hop; run continues on the same stream.
+        options = event.get("options")
+        # Recorded so the chat list shows the chat as waiting on the user.
+        handler.set_relay_question(str(event.get("request_id") or "") or None)
+        handler._emit(
+            {
+                "type": "needs_input",
+                "request_id": str(event.get("request_id") or ""),
+                "question": str(event.get("question") or ""),
+                "options": options if isinstance(options, list) else [],
+                "allow_free_text": bool(event.get("allow_free_text", True)),
+                "sensitive": bool(event.get("sensitive", False)),
+                "timeout_seconds": event.get("timeout_seconds"),
+            }
+        )
+
+    elif etype == "context_usage":
+        # A live measurement from a sidecar on contract 2.28, streamed before
+        # the answer so the composer fills during a long turn. Its shape is the
+        # in-process one; the relay's own cuts are turns the sidecar never saw,
+        # so they are added here as they are on ``final``.
+        payload = {k: v for k, v in event.items() if k != "type"}
+        hidden = getattr(handler, "relay_hidden_turns", 0)
+        if hidden:
+            payload["turns_hidden"] = payload.get("turns_hidden", 0) + hidden
+        handler.relay_context = payload
+        handler._emit({"type": "context_usage", **payload})
+
+    elif etype == "final":
+        answer = str(event.get("answer", "") or "")
+        cleaned = _strip_balanced_json_blobs(answer, _kind_re()).strip()
+        out = {"type": "answer", "content": cleaned}
+        if event.get("failed") is True:
+            # The sidecar's turn ended on a model failure; the answer says so.
+            out["failed"] = True
+            if isinstance(event.get("failure"), str):
+                out["failure"] = event["failure"]
+            # A live pre-answer estimate is not this failed turn's usage, and
+            # ``final`` carries none: do not leave the meter showing the guess.
+            handler.relay_context = None
+        # Same top-level fields an in-process answer carries, so the turn's
+        # token counts and cost are recorded for a relayed turn too.
+        usage = event.get("usage")
+        if isinstance(usage, dict):
+            out.update({k: usage[k] for k in _ANSWER_USAGE_KEYS if k in usage})
+        context = event.get("context")
+        if isinstance(context, dict):
+            # Contract >= 2.21: the composer's meter, as an in-process turn streams it.
+            hidden = getattr(handler, "relay_hidden_turns", 0)
+            if hidden:
+                context = {
+                    **context,
+                    "turns_hidden": context.get("turns_hidden", 0) + hidden,
+                }
+            handler.relay_context = context
+            handler._emit({"type": "context_usage", **context})
+        elif isinstance(event.get("context_error"), str):
+            # A live pre-answer estimate is only a hint. When the measurement
+            # failed, the error is the turn's result and the estimate must not
+            # outrank it when the meter is recorded.
+            handler.relay_context = None
+            handler.relay_context_error = event["context_error"]
+        if isinstance(event.get("model_messages"), list):
+            # Saved with the reply so later turns replay its tool calls.
+            handler.relayed_model_messages = event["model_messages"]
+        performance = event.get("performance")
+        problem = None if performance is None else turn_record_problem(performance)
+        if performance is not None and problem is None:
+            # What summarize_turn reads, so Under the hood measures this turn.
+            handler.relay_performance = performance
+        elif problem is not None:
+            logger.warning(
+                "Sidecar's performance record refused because %s; "
+                "the turn shows as not measured",
+                problem,
+            )
+        handler._emit(out)
+        return True
+
+    elif etype == "error":
+        if event.get("source") == _DAEMON_RELAY_SOURCE:
+            # The daemon's crash frame is worded for API callers, not chat users.
+            logger.warning(
+                "%s relay: daemon reported the agent ended mid-run: %s",
+                profile.agent_id,
+                event.get("detail"),
+            )
+            content = profile.stream_ended_text()
+        else:
+            detail = (
+                event.get("detail")
+                or f"Unknown error from the {profile.display_name} agent."
+            )
+            content = _augment_error_detail(str(detail), profile)
+        handler._emit(
+            {
+                "type": "agent_error",
+                "content": content,
+                # Ends the turn, unlike an in-process tool's agent_error.
+                "fatal": True,
+            }
+        )
+        return True
+
+    else:
+        handler._emit(
+            {
+                "type": "status",
+                "message": f"[unsupported agent event: {etype}]",
+            }
+        )
+
+    return False
+
+
+def _full_access_error(
+    profile: RelayProfile, enabled: bool, exc: Exception
+) -> Dict[str, Any]:
+    """The terminal event for a turn stopped because its mode could not be set."""
+    action = "turn on" if enabled else "turn off"
+    return {
+        "type": "agent_error",
+        "content": (
+            f"Couldn't {action} Full access for the {profile.display_name} "
+            f"agent, so this turn was stopped: {exc}. Send the message again; "
+            "if it keeps failing, restart the agent from its card."
+        ),
+        "fatal": True,
+    }
+
+
+class _SettingNotSet(SidecarError):
+    """A chat setting could not be put on the session ``/query`` created."""
+
+    def __init__(self, event: Dict[str, Any]):
+        super().__init__(event["content"])
+        self.event = event
+
+
+def _send_internet_switch(
+    handler: SSEOutputHandler,
+    proxy: Any,
+    profile: RelayProfile,
+    session_id: str,
+    internet_off: bool,
+) -> None:
+    """Tell a turn that just started of a switch flipped while it was starting.
+
+    Raises:
+        _SettingNotSet: When it should be offline and couldn't be told.
+    """
+    try:
+        proxy.set_internet(session_id, internet_off)
+    except SidecarError as exc:
+        if internet_off:
+            raise _SettingNotSet(
+                {
+                    "type": "agent_error",
+                    "content": (
+                        f"Internet was turned off as this message started, but "
+                        f"the {profile.display_name} agent couldn't be told "
+                        f"({exc}), so the Agent UI ended this turn. Send the "
+                        "message again."
+                    ),
+                    "fatal": True,
+                }
+            ) from exc
+        handler.print_warning(
+            f"Internet was turned on as this message started, but the "
+            f"{profile.display_name} agent couldn't be told ({exc}), so this "
+            "turn stays offline. It is on from the next message."
+        )
+
+
+def _best_effort_cancel(proxy: Any, rid: str) -> None:
+    try:
+        proxy.cancel_query(rid)
+    except SidecarError as exc:
+        logger.info(
+            "%s relay: cancel_query for run_id=%s: %s",
+            getattr(proxy, "agent_id", "sidecar"),
+            rid,
+            exc,
+        )
+
+
+def relay_query(
+    handler: Any,
+    proxy: Any,
+    *,
+    query: str,
+    context: List[Dict[str, str]],
+    model_id: Optional[str] = None,
+    run_id: Optional[str] = None,
+    max_steps: Optional[int] = None,
+    read_timeout: float = 300.0,
+    full_access: Optional[bool] = None,
+    profile: RelayProfile = GAIA_PROFILE,
+    session_id: Optional[str] = None,
+    answers_confirmations: bool = False,
+    offers_always: bool = False,
+    documents: Optional[List[str]] = None,
+    allowed_paths: Optional[List[str]] = None,
+    working_directory: Optional[str] = None,
+    memory: Optional[str] = None,
+    internet_off: Optional[bool] = None,
+    hold_internet_off: Optional[Callable[[], ContextManager[bool]]] = None,
+    changes_turn_id: Optional[str] = None,
+    surface: Optional[str] = None,
+    turns: Optional[List[List[Dict[str, Any]]]] = None,
+    reasoning: bool = False,
+) -> None:
+    """Drive one ``/query`` run and relay it as UI-vocabulary SSE events.
+
+    *changes_turn_id* — the undo-history turn the sidecar records this run's
+    file changes under, for a sidecar the caller has established takes it
+    (``profiles.changes_supported``).
+
+    *allowed_paths* — the chat's file scope, for a sidecar the caller has
+    established takes it (``profiles.scope_supported``); ``None`` leaves the
+    sidecar on its own default.
+
+    *working_directory* — the chat workspace for relative file paths; sent only
+    when the sidecar contract advertises support.
+
+    *memory* — the chat's memory mode (``on`` / ``private`` / ``off``), for a
+    sidecar the caller has established takes it (``profiles.memory_supported``).
+
+    *internet_off* — whether the chat has the internet switched off, for a
+    sidecar the caller has established takes it (``profiles.internet_supported``).
+
+    *hold_internet_off* — enters a block holding the chat's switch still and
+    yields its saved value. Read once the sidecar has applied the turn's body, so
+    a switch flipped while the turn was starting reaches it; from then on a
+    switch reaches it through ``active_relay_internet_session``. ``None`` leaves
+    a running turn on *internet_off*.
+
+    *surface* — the front-end this turn comes from, for a sidecar the caller
+    has established takes it (``profiles.surface_supported``).
+
+    *turns* — the session's earlier turns as the model recorded them, for a
+    sidecar the caller has established takes them (``profiles.turns_supported``);
+    they replace *context*.
+    *reasoning* — ask the sidecar to stream the model's reasoning, for a
+    sidecar the caller has established takes it (``profiles.reasoning_supported``).
+
+    *documents* — absolute paths of the chat's attached files, for a sidecar
+    the caller has established takes them (``profiles.documents_supported``).
+
+    *answers_confirmations* — the caller has established that this sidecar
+    takes ``tool_decision`` answers (``profiles.confirmations_supported``), so
+    a ``needs_confirmation`` becomes an Allow once / Deny prompt.
+
+    *offers_always* — the caller has established that this sidecar lists and
+    revokes its "always" grants (``profiles.grants_supported``), so a prompt
+    with a scope also offers Always allow.
+
+    Runs synchronously on the caller's thread — the UI backend already runs
+    the whole per-turn producer off the event loop in a worker/daemon thread
+    (``_chat_helpers._run_agent``), so a blocking HTTP read here is safe.
+
+    Every exception this function's dependencies can raise (a dropped
+    connection, a read timeout, a malformed SSE line) is caught HERE and
+    translated into a terminal SSE event — nothing propagates to the caller.
+    This matters: the caller's surrounding retry/reload logic
+    (``_classify_chat_exception``) is tuned for local-Lemonade failure
+    substrings and would misclassify a sidecar connection error as a
+    Lemonade error and show the wrong remedy. Sidecar
+    exceptions must never reach it.
+
+    Never calls ``handler.signal_done()`` — the turn-level done sentinel is
+    owned by the caller (``_run_agent``'s outer ``finally``), exactly as for
+    every other agent branch. Relay-level signalling would push a second
+    ``None`` sentinel per turn, violating the queue's exactly-once contract.
+
+    *full_access* is the chat's permission mode, for a sidecar that takes it
+    (``profiles.full_access_supported``); ``None`` leaves the sidecar alone.
+    It is set on the sidecar session before the run starts, and a turn whose
+    mode could not be set is stopped rather than run on a mode the user did
+    not pick.
+    """
+    # A proxy pointed at one agent driven with another's profile would send
+    # that agent's body shape to the wrong /v1/<agent> prefix and label its
+    # tools with the wrong names. ``profile`` has a default, so check rather
+    # than trust it.
+    proxy_agent = getattr(proxy, "agent_id", None)
+    if proxy_agent is not None and proxy_agent != profile.agent_id:
+        raise ValueError(
+            f"relay_query got a '{proxy_agent}' proxy with the "
+            f"'{profile.agent_id}' profile; pass the profile that matches the "
+            "sidecar being relayed."
+        )
+
+    rid = run_id or str(uuid.uuid4())
+    # can_answer_questions=True (#2595): this relay DOES render needs_input
+    # and POST the answer back via POST /api/chat/user-input ->
+    # SidecarProxy.respond_query. Omitting it defaults to the sidecar's
+    # safe False (see query_routes.QueryRequest.can_answer_questions), which
+    # makes ask() refuse every question with "use the Agent UI" -- even
+    # though the Agent UI is the caller asking.
+    body: Dict[str, Any] = {
+        "query": query,
+        "run_id": rid,
+        "context": context,
+        "can_answer_questions": True,
+    }
+    if model_id:
+        body["model"] = model_id
+    if max_steps is not None:
+        body["max_steps"] = max_steps
+    if profile.min_session_id_api_version is not None and session_id:
+        # Without it the sidecar builds a fresh agent per turn, so what turn 1
+        # surfaced is gone by turn 2. The caller passes it only to a contract
+        # that takes it (profiles.session_id_supported); the request models
+        # are extra="forbid".
+        body["session_id"] = session_id
+    if documents:
+        body["documents"] = list(documents)
+    if allowed_paths is not None:
+        body["allowed_paths"] = list(allowed_paths)
+    if working_directory is not None:
+        body["working_directory"] = working_directory
+    if memory is not None:
+        body["memory"] = memory
+    if internet_off is not None:
+        body["internet_off"] = internet_off
+    if changes_turn_id is not None:
+        body["changes_turn_id"] = changes_turn_id
+    if surface is not None:
+        body["surface"] = surface
+    if turns is not None:
+        body["turns"] = turns
+        body["context"] = []
+    if reasoning:
+        body["reasoning"] = True
+
+    syncs_mode = full_access is not None and bool(session_id)
+    enable_after_start = False
+    if syncs_mode:
+        try:
+            proxy.set_bypass(session_id, full_access)
+        except SidecarHTTPError as exc:
+            if exc.status_code != 404:
+                handler._emit(_full_access_error(profile, full_access, exc))
+                return
+            # No sidecar session yet. /query creates it in ask, so only
+            # "on" has anything left to do.
+            enable_after_start = full_access
+        except SidecarError as exc:
+            handler._emit(_full_access_error(profile, full_access, exc))
+            return
+
+    # So a later POST /api/chat/user-input can find where to deliver the
+    # answer (#2595) — mirrors active_relay_response's lifetime exactly.
+    handler.active_relay_proxy = proxy
+    handler.active_relay_run_id = rid
+    # Lets a mid-run switch of the chat's mode reach this sidecar session too.
+    handler.active_relay_mode_session = session_id if syncs_mode else None
+    syncs_internet = (
+        internet_off is not None
+        and "session_id" in body
+        and hold_internet_off is not None
+    )
+
+    def _register_response(resp: Any) -> None:
+        handler.active_relay_response = resp
+        if handler.cancelled.is_set():
+            # A cancel raced ahead of this registration: the router's forced
+            # close was a no-op (active_relay_response was still None), so
+            # close the just-registered response HERE — otherwise the next
+            # socket read parks for the full read_timeout with nothing left
+            # to interrupt it.
+            try:
+                resp.close()
+            except Exception:  # noqa: BLE001 - best-effort, mirrors router close
+                logger.debug(
+                    "%s relay: failed to close raced-cancel response",
+                    profile.agent_id,
+                    exc_info=True,
+                )
+
+    terminated = False
+    crashed = False
+    crash_message = profile.stream_ended_text()
+    # Gave the chat's model slot up while the sidecar waits on the user.
+    stepped_away = False
+    asked = False
+    try:
+        events = proxy.query_stream(
+            body, read_timeout=read_timeout, on_response=_register_response
+        )
+        if enable_after_start:
+            # /query has created the sidecar session, so it can take the mode.
+            try:
+                proxy.set_bypass(session_id, True)
+            except SidecarError as exc:
+                raise _SettingNotSet(_full_access_error(profile, True, exc)) from exc
+        if syncs_internet:
+            # The sidecar answers only after applying the body, so a switch
+            # read from here on can no longer be overwritten by it.
+            with hold_internet_off() as internet_off_now:
+                if internet_off_now != internet_off:
+                    _send_internet_switch(
+                        handler, proxy, profile, session_id, internet_off_now
+                    )
+                handler.active_relay_internet_session = session_id
+        for event in events:
+            if handler.cancelled.is_set():
+                break
+            if asked:
+                # Any event after a question means the sidecar stopped waiting.
+                handler.set_relay_question(None)
+                asked = False
+            if stepped_away:
+                stepped_away = False
+                # The user answered or the sidecar's wait ended. A last event
+                # needs no model, so the turn ends without waiting in line.
+                if event.get("type") not in ("final", "error"):
+                    retake = handler.come_back_to_model()
+                    if retake is not True:
+                        # ``False`` means the handler emitted the named fatal
+                        # retake error; ``None`` is an ordinary user Stop. Keep
+                        # those terminal paths distinct (#6019).
+                        if retake is False:
+                            terminated = True
+                        break
+            if _dispatch_one(
+                handler, event, profile, answers_confirmations, offers_always
+            ):
+                terminated = True
+                break
+            waiting_on = _user_wait(event, answers_confirmations)
+            if waiting_on is not None:
+                if event.get("type") == "needs_input":
+                    handler.set_relay_question(waiting_on)
+                    asked = True
+                # The sidecar run stays parked; only this chat's slot is freed.
+                stepped_away = handler.step_away_from_model()
+    except _SettingNotSet as exc:
+        crashed = True
+        crash_message = exc.event["content"]
+        resp = handler.active_relay_response
+        if resp is not None:
+            resp.close()
+    except _NobodyToApprove as exc:
+        crashed = True
+        crash_message = str(exc)
+        logger.info(
+            "%s relay: unattended run_id=%s stopped at a step needing approval",
+            profile.agent_id,
+            rid,
+        )
+        resp = handler.active_relay_response
+        if resp is not None:
+            resp.close()
+    except SidecarHTTPError as exc:
+        if handler.cancelled.is_set():
+            logger.info(
+                "%s relay: stream closed for cancel (run_id=%s): %s",
+                profile.agent_id,
+                rid,
+                exc,
+            )
+        else:
+            crashed = True
+            detail = (exc.detail or "").strip()
+            if exc.status_code == 404 and _is_query_route(exc.path, profile):
+                # Backstop for the pre-flight version gate (#2109 Design 3):
+                # a pre-2.4 binary that somehow passed pre-flight (a stale or
+                # missing manager.api_version) 404s here instead — same
+                # actionable message either way. A 404 from any other route
+                # (a run that already ended) says nothing about the version.
+                crash_message = profile.version_upgrade_message
+            elif detail:
+                # Surface the sidecar's own actionable detail (e.g. the
+                # zero-connector 502) instead of masking it as a generic
+                # crash — #2419. Bodyless transport failures still fall
+                # through to profile.stream_ended_text().
+                crash_message = _augment_error_detail(detail, profile)
+            logger.warning(
+                "%s relay: stream failed for run_id=%s: %s",
+                profile.agent_id,
+                rid,
+                exc,
+            )
+    except Exception as exc:  # noqa: BLE001 - boundary: translate, never raise
+        if handler.cancelled.is_set():
+            logger.info(
+                "%s relay: stream closed for cancel (run_id=%s): %s",
+                profile.agent_id,
+                rid,
+                exc,
+            )
+        else:
+            crashed = True
+            logger.warning(
+                "%s relay: stream failed for run_id=%s: %s",
+                profile.agent_id,
+                rid,
+                exc,
+            )
+    finally:
+        if answers_confirmations:
+            handler.set_relay_confirmation(None)
+        handler.set_relay_question(None)
+        handler.active_relay_response = None
+        handler.active_relay_proxy = None
+        handler.active_relay_run_id = None
+        handler.active_relay_mode_session = None
+        handler.active_relay_internet_session = None
+
+    if handler.cancelled.is_set():
+        _best_effort_cancel(proxy, rid)
+        if not terminated:
+            handler._emit({"type": "status", "message": "Cancelled."})
+    elif crashed or not terminated:
+        # No terminal event arrived — the sidecar generation is still decoding
+        # on the single GPU slot; stop it or later queries death-spiral.
+        _best_effort_cancel(proxy, rid)
+        handler._emit({"type": "agent_error", "content": crash_message, "fatal": True})
+
+
+__all__ = [
+    "relay_query",
+    "RelayProfile",
+]

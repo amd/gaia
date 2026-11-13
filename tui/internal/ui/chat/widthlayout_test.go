@@ -479,7 +479,7 @@ func TestBlockquoteContinuationKeepsIndent(t *testing.T) {
 		t.Run(fmt.Sprintf("%dcols", width), func(t *testing.T) {
 			m := sizedChat(t, width, 40)
 			msg := &Message{Role: RoleAssistant, Content: quote, Rendered: components.RenderMarkdown(quote)}
-			rendered := ansi.Strip(m.renderMessage(msg, nil))
+			rendered := ansi.Strip(m.renderMessage(msg))
 
 			// Every non-blank rendered line belongs to the one blockquote
 			// paragraph, so every one of them — not merely the ones that

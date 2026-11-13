@@ -56,7 +56,9 @@ from gaia.stream_timeout import (
     STREAM_TIMEOUT_ENV,
     stream_timeout_from_env,
 )
-from gaia.ui.email_sidecar.profiles import (
+from gaia.ui.memory_settings import memory_enabled
+from gaia.ui.security import FLAGSHIP_AGENT_ID
+from gaia.ui.sidecar.profiles import (
     _NO_PROFILE,
     SIDECAR_AGENT_IDS,
     api_version_supported,
@@ -76,8 +78,6 @@ from gaia.ui.email_sidecar.profiles import (
     turns_supported,
     working_directory_supported,
 )
-from gaia.ui.memory_settings import memory_enabled
-from gaia.ui.security import FLAGSHIP_AGENT_ID
 from gaia.ui.turn_changes import TurnRecording
 from gaia.utils import awake_clock as _awake_clock
 from gaia.utils.awake_clock import AwakeClockError
@@ -187,13 +187,11 @@ def get_agent_registry():
 
 
 # Agent types served by an out-of-process sidecar with a dedicated dispatch
-# branch below. Since #2408, an installed sidecar IS registry-loadable (the
-# installer bridge registers it for the connectors grant flow), but its
-# factory always raises — chat dispatch must still go through the branch
-# below, never registry.create_agent(). Derived from the relay profiles so a
-# new sidecar cannot be half-wired: #4161 shipped the flagship as a binary
-# sidecar and left this set at {"email"}, which sent every flagship turn into
-# registry.create_agent() and surfaced the stub factory's RuntimeError.
+# branch below. An installed sidecar IS registry-loadable (the installer
+# bridge registers it for the connectors grant flow), but its factory always
+# raises — chat dispatch must still go through the branch below, never
+# registry.create_agent(). Derived from the relay profiles so a new sidecar
+# cannot be half-wired.
 _SIDECAR_AGENT_TYPES = SIDECAR_AGENT_IDS
 
 
@@ -227,12 +225,9 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     * a **wheel**/dev install registers a real factory and runs in-process,
       which is the path ``gaia eval agent`` and a source checkout use.
 
-    Email is the exception and says so on its profile: its in-process loop was
-    retired in #2109, so it relays even when the wheel is importable.
-
     The "no registration" branches below are defence in depth, not a live
-    path: ``_agent_type_unknown`` already rejects a non-always-relay sidecar
-    that does not resolve, so chat never reaches them today. They keep this
+    path: ``_agent_type_unknown`` already rejects a sidecar that does not
+    resolve, so chat never reaches them today. They keep this
     function correct on its own terms — a missing registration relays, unless
     the registry recorded an import failure, in which case that recorded
     reason is the answer the user needs and relaying would bury it.
@@ -240,8 +235,6 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     profile = profile_for(agent_type)
     if profile is None:
         return False
-    if profile.always_relay:
-        return True
     if registry is None:
         return True
     reg = registry.get(agent_type)
@@ -256,16 +249,11 @@ def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
 def _agent_type_unknown(agent_type: str, registry) -> bool:
     """True when *agent_type* must be rejected as unknown before dispatch.
 
-    Email is exempt: its relay does not need a registration to work.
-
-    Every other agent — ``chat`` and the flagship included — must resolve in
-    the registry. An agent that was never installed is worth saying so about:
+    Every agent — ``chat`` and the flagship included — must resolve in the
+    registry. An agent that was never installed is worth saying so about:
     "install it from the Hub" beats asking the daemon to start a sidecar that
     isn't there and surfacing whatever it says about the failure.
     """
-    profile = profile_for(agent_type)
-    if profile is not None and profile.always_relay:
-        return False
     if not registry or registry.get(agent_type):
         return False
     # Setup or `gaia hub install` may have added it after startup.
@@ -2164,10 +2152,10 @@ def _apply_memory_state(agent, session: dict, db) -> None:
 
 
 def _session_mail_provider(session: dict) -> str | None:
-    """Session mailbox FILTER for the email agent (#1596 / #1603 Phase 2).
+    """Session mailbox FILTER for the mail tools (#1596 / #1603 Phase 2).
 
     ``None`` (unset, null, or empty string from the frontend) means "every
-    connected mailbox" — the email agent scans all of them and fails loudly
+    connected mailbox" — the mail tools scan all of them and fails loudly
     when none is connected. An explicit ``"google"`` / ``"microsoft"``
     restricts to that provider. Never coerce a missing pick to "google":
     that silently triaged Gmail for sessions that never chose a provider
@@ -2177,7 +2165,7 @@ def _session_mail_provider(session: dict) -> str | None:
 
 
 # The per-agent /query contract floor and its upgrade copy live on the relay
-# profile (``gaia.ui.email_sidecar.profiles``); ``api_version_supported``
+# profile (``gaia.ui.sidecar.profiles``); ``api_version_supported``
 # applies it. The daemon's own gate only pins MAJOR (the spec's
 # expected_api_major), so a too-old Hub binary passes that handshake and then
 # 404s every /query call — the profile's finer MAJOR.MINOR check catches it
@@ -2763,8 +2751,8 @@ def _dispatch_sidecar_query(
     from gaia.daemon.sidecars.errors import SidecarError
     from gaia.llm.lemonade_client import LemonadeClientError
     from gaia.llm.model_fit import ModelFitError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar.relay import relay_query
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar.relay import relay_query
 
     profile = profile_for(agent_type)
     if profile is None:
@@ -2983,8 +2971,8 @@ def _dispatch_sidecar_query(
         )
         return
 
-    from gaia.ui.email_sidecar import grants as relayed_grants
-    from gaia.ui.email_sidecar.profiles import full_access_supported
+    from gaia.ui.sidecar import grants as relayed_grants
+    from gaia.ui.sidecar.profiles import full_access_supported
 
     answers_confirmations = confirmations_supported(profile, handle.api_version)
     offers_always = bool(
@@ -4223,8 +4211,8 @@ async def _get_chat_response(
                             memory_incognito=_memory_off(session, db),
                         ),
                         # Forwarded only here (not via _session_agent_kwargs, which
-                        # also feeds the strict ChatAgentConfig). Non-email factories
-                        # drop it via dataclasses.fields filtering. None = scan every
+                        # also feeds the strict ChatAgentConfig). Factories without
+                        # mail tools drop it via dataclasses.fields filtering. None = scan every
                         # connected mailbox (#1596).
                         mail_provider=_session_mail_provider(session),
                     )
@@ -4745,8 +4733,8 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     working_directory=working_directory,
                                     memory_incognito=_memory_off(session, db),
                                 ),
-                                # See the non-streaming path: email-only kwarg,
-                                # filtered out by non-email factories. None = scan
+                                # See the non-streaming path: mail-tools kwarg,
+                                # filtered out by factories without them. None = scan
                                 # every connected mailbox (#1596).
                                 mail_provider=_session_mail_provider(session),
                             )

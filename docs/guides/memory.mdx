@@ -67,8 +67,6 @@ curl http://localhost:4200/api/memory/settings
 # → {"memory_enabled": false, ...}
 ```
 
-The email agent supports private chats and memory-off turns when it advertises contract 2.16 or later. In those modes it suppresses memory reads and writes for the turn. An older email sidecar is rejected with an update prompt rather than silently saving a private turn. Use the GAIA agent if the email sidecar is not yet upgraded.
-
 While memory is off, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory page) are active -- sessions run in "incognito" mode, nothing is written to `~/.gaia/memory.db`, and the agent says memory is turned off when asked to remember something.
 
 <Note>

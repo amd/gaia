@@ -7,11 +7,8 @@ provider-neutral shapes, so neither the skill nor the model learns which mailbox
 is connected. Reads run under the narrowest scope the connection carries, so
 writes live in their own subclass, built only when a write is asked for.
 
-This is a reimplementation of ``gaia_agent_email.gmail_backend``, not a
-relocation of it: the flagship must not depend on the standalone email package
-it is meant to replace, and that backend returns raw Gmail resources — its
-flattening lives in the sidecar's tool layer, which does not come along. The
-wire contract (Gmail API v1) is the shared truth, not the Python.
+It flattens Gmail API v1 resources into that shape here, so the tools never
+handle raw Gmail payloads.
 """
 
 from __future__ import annotations

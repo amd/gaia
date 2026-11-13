@@ -29,7 +29,7 @@ from gaia.agents.tools.connect_card import (
     with_connect_remedy,
 )
 from gaia.agents.tools.email_tools import EmailToolsMixin
-from gaia.ui.email_sidecar import relay
+from gaia.ui.sidecar import relay
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 

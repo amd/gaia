@@ -351,10 +351,6 @@ const KNOWN_CODE_LANGS = new Set([
     'matlab', 'octave', 'fortran', 'cobol', 'pascal', 'delphi', 'ada',
     'assembly', 'asm', 'nasm', 'wasm', 'solidity', 'sol', 'verilog', 'vhdl',
     'text', 'txt', 'plaintext', 'diff', 'patch', 'log',
-    // Retired fence-payload tags (#2109 cutover): cards now arrive via
-    // tool_result.render, never fences. Kept ONLY so pre-cutover session
-    // history shows those payloads as fenced JSON code blocks, not bare prose.
-    'email_pre_scan', 'email-pre-scan',
 ]);
 
 /**
@@ -1234,9 +1230,6 @@ const MARKDOWN_COMPONENTS: Components = {
     code: InlineCode,
     // Fenced code blocks: react-markdown wraps them in <pre><code>.
     // Extract the language and code text, render as CodeBlock.
-    // (The fence→card mount for email_pre_scan was retired at the
-    // #2109 cutover — cards arrive via tool_result.render now;
-    // pre-cutover history renders those fences as code blocks.)
     pre({ children }) {
         // children is <code className="language-xxx">...</code>
         const codeChild = React.Children.toArray(children)[0];

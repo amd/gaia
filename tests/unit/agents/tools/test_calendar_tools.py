@@ -2201,8 +2201,8 @@ class TestThePromptShowsTheRealEvent:
         assert shown["calendar_account"] == ACCOUNT
 
     def test_a_relayed_card_gets_the_checked_values(self, make_agent):
-        from gaia.ui.email_sidecar import relay
-        from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+        from gaia.ui.sidecar import relay
+        from gaia.ui.sidecar.profiles import GAIA_PROFILE
         from gaia.ui.sse_translation import CanonicalTranslator
 
         lookalike = "ceo@\u0430pple.com"

@@ -3,20 +3,11 @@
 
 """Packaging + wiring guards for the [api] server (issues #1617, #2176).
 
-History: [api] used to auto-mount the gaia-agent-email REST router in-process
-(openai_server.py), whose import chain reached ``import keyring``, so #1617
-declared keyring in [api]. That in-process mount was the last one after the v2
-thin-host migration and has now been removed (#2176): the API server reaches
-every agent — email included — only through the daemon relay (/v1/<agent>/*).
-
-So this file now asserts the thin-host arrangement instead:
-
-* the API server no longer imports gaia_agent_email in-process (#2176);
-* keyring is still guaranteed for ``pip install 'amd-gaia[api]'`` because it is
-  a *core* install_requires dep (``gaia connectors`` needs it, #1621) — it does
-  not need to be re-declared per-agent in [api];
-* gaia-agent-email still depends on ``amd-gaia[api]`` so its sidecar gets the
-  REST-server deps (fastapi/uvicorn) automatically.
+The API server reaches every agent only through the daemon relay
+(/v1/<agent>/*), never in-process (#2176). keyring is still guaranteed for
+``pip install 'amd-gaia[api]'`` because it is a *core* install_requires dep
+(``gaia connectors`` needs it, #1621) — it does not need to be re-declared in
+[api].
 
 It also guards the daemon's dependency contract (#3056): the one-line installer
 installs exactly ``amd-gaia[api]``, and ``gaia daemon`` — which the terminal hub
@@ -37,8 +28,6 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SETUP_PY = REPO_ROOT / "setup.py"
-OPENAI_SERVER = REPO_ROOT / "src" / "gaia" / "api" / "openai_server.py"
-EMAIL_PYPROJECT = REPO_ROOT / "hub" / "agents" / "email" / "python" / "pyproject.toml"
 CLI_PY = REPO_ROOT / "src" / "gaia" / "cli.py"
 DAEMON_CLIENT_PY = REPO_ROOT / "src" / "gaia" / "daemon" / "client.py"
 
@@ -103,22 +92,6 @@ def _daemon_required_packages() -> list[str]:
     raise AssertionError("Could not find DAEMON_DEPS in gaia/daemon/client.py")
 
 
-def test_api_server_does_not_mount_email_in_process() -> None:
-    """The API server must not import/mount the email agent in-process (#2176).
-
-    After the thin-host migration the only path to any agent surface is the
-    daemon relay; a re-introduced ``import gaia_agent_email`` here would resurrect
-    the last in-process mount and force the API server to hold sidecar deps again.
-    """
-    src = OPENAI_SERVER.read_text(encoding="utf-8")
-    offending = re.findall(r"^\s*(?:import|from)\s+gaia_agent_email\b", src, re.M)
-    assert not offending, (
-        "openai_server.py must not import gaia_agent_email — the in-process "
-        "email mount was removed in #2176; agents are reached via the daemon "
-        f"relay (/v1/<agent>/*). Found: {offending}"
-    )
-
-
 def test_keyring_guaranteed_for_api_installs_via_core() -> None:
     """``pip install 'amd-gaia[api]'`` still gets keyring — from core, not [api].
 
@@ -181,20 +154,3 @@ def test_daemon_deps_error_names_an_extra_that_satisfies_it() -> None:
             f"cli.py::_check_daemon_deps tells the user to install [{extra}], "
             f"but that extra does not declare {sorted(required - declared)}."
         )
-
-
-def test_email_wheel_requires_amd_gaia_api_extra() -> None:
-    """gaia-agent-email must depend on ``amd-gaia[api]`` — see #1617.
-
-    A bare ``amd-gaia`` dependency let a consuming app's
-    ``pip install gaia-agent-email`` resolve core WITHOUT the [api] extra, so the
-    REST-server deps (fastapi/uvicorn) the email sidecar serves from were absent.
-    Requesting the [api] extra pulls them automatically (keyring rides along via
-    core install_requires, #1621).
-    """
-    deps = re.findall(r'"(amd-gaia[^"]*)"', EMAIL_PYPROJECT.read_text(encoding="utf-8"))
-    assert deps, f"no amd-gaia dependency found in {EMAIL_PYPROJECT}"
-    assert any("[api]" in d for d in deps), (
-        "gaia-agent-email must depend on amd-gaia[api] so the sidecar gets the "
-        f"REST-server deps automatically (got {deps})."
-    )

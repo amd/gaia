@@ -320,7 +320,7 @@ def test_a_relayed_agent_is_reported_unenforced_and_changes_are_refused(
 @pytest.fixture
 def relayed_gaia(monkeypatch):
     """The flagship runs as a daemon sidecar, as on an installed GAIA."""
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     monkeypatch.setattr(session_environment, "relayed", lambda _session: True)
     agent = SimpleNamespace(api_version="2.21", asked=[])
@@ -458,7 +458,7 @@ def test_a_relayed_agent_that_cannot_start_refuses_the_folder_and_says_why(
     client, folder, relayed_gaia, monkeypatch
 ):
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
+    from gaia.ui.sidecar import daemon_client
 
     def fail(_agent_id):
         raise SidecarError("sidecar crashed")
@@ -563,8 +563,8 @@ def test_a_path_allowed_at_a_relayed_prompt_is_listed(
     client, gaia_session_id, relayed_gaia, tmp_path, approved
 ):
     from gaia.ui import _chat_helpers as helpers
-    from gaia.ui.email_sidecar import relay
-    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sidecar import relay
+    from gaia.ui.sidecar.profiles import GAIA_PROFILE
     from gaia.ui.sse_handler import SSEOutputHandler
 
     target = tmp_path / "words.txt"

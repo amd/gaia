@@ -269,12 +269,12 @@ def test_missing_pywin32_aborts_the_spawn_instead_of_writing_a_loose_secret(
     monkeypatch.setattr(mgr, "os", _NTOs())
     monkeypatch.setattr(mgr.tempfile, "tempdir", str(tmp_path), raising=False)
 
-    m = mgr.AgentSidecarManager(builtin_specs()["email"])
+    m = mgr.AgentSidecarManager(builtin_specs()["gaia"])
     with pytest.raises(SidecarSpawnError, match="pywin32 is not installed"):
         m._write_secret_file()
 
     assert m._secret_path is None, "no secret path is recorded on failure"
-    leftovers = list(Path(tmp_path).glob("gaia-email-secret-*"))
+    leftovers = list(Path(tmp_path).glob("gaia-gaia-secret-*"))
     assert leftovers == [], f"secret dir left behind: {leftovers}"
 
 
@@ -285,7 +285,7 @@ def test_lockdown_is_wired_into_the_secret_write_path(monkeypatch, tmp_path):
     monkeypatch.setattr(mgr, "os", _NTOs())
     monkeypatch.setattr(mgr.tempfile, "tempdir", str(tmp_path), raising=False)
 
-    m = mgr.AgentSidecarManager(builtin_specs()["email"])
+    m = mgr.AgentSidecarManager(builtin_specs()["gaia"])
     path = m._write_secret_file()
 
     assert locked == [path.parent, path], (

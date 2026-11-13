@@ -44,8 +44,8 @@ func captureOneShot(t *testing.T, events ...interface{}) (OneShotResult, string,
 func TestRunOneShotSeparatesAnswerFromProgress(t *testing.T) {
 	res, out, errW := captureOneShot(t,
 		event.CanonicalStatusEvent{Type: "status", Message: "Scanning inbox"},
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
-		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox", Render: "email_pre_scan"},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "list_inbox", Render: "table"},
 		event.CanonicalFinalEvent{Type: "final", Answer: "3 urgent emails", Usage: []byte(`{"steps":2,"tools_used":1}`)},
 	)
 
@@ -58,7 +58,7 @@ func TestRunOneShotSeparatesAnswerFromProgress(t *testing.T) {
 	if strings.TrimSpace(out) != "3 urgent emails" {
 		t.Errorf("stdout must carry only the answer, got %q", out)
 	}
-	for _, want := range []string{"Scanning inbox", "pre_scan_inbox", "email_pre_scan"} {
+	for _, want := range []string{"Scanning inbox", "list_inbox", "table"} {
 		if !strings.Contains(errW, want) {
 			t.Errorf("stderr missing %q: %s", want, errW)
 		}

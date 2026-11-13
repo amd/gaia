@@ -411,9 +411,9 @@ jobs:
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
         run: |
           set -euo pipefail
-          # Explicit =<platform-key> on every artifact: the publisher's
-          # inference only special-cases email-agent-* filenames.
-          python hub/agents/email/python/packaging/publish_to_r2.py \
+          # Explicit =<platform-key> on every artifact: the publisher infers
+          # one only from <product>-agent-<platform> filenames.
+          python hub/components/terminal-hub/publish_to_r2.py \
             --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${TERMINAL_HUB_MANIFEST}" \
             --artifact "bin/gaia-linux-x64=linux-x64" \

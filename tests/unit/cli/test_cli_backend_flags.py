@@ -26,7 +26,6 @@ _NON_BACKEND_COMMANDS = [
     ["eval"],
     ["llm", "hi"],
     ["api", "status"],
-    ["email"],
 ]
 
 _CLAUDE_AND_LOOP_FLAGS = [
@@ -106,7 +105,6 @@ def test_agent_loop_flags_rejected_outside_chat(argv, capsys):
         ),
         (["talk", "--use-claude", "--model", "m"], {"use_claude": True, "model": "m"}),
         (["llm", "hi", "--model", "m", "--base-url", "u"], {"model": "m"}),
-        (["email", "--model", "m", "--base-url", "u", "--trace"], {"trace": True}),
         (["api", "start", "--base-url", "u"], {"base_url": "u"}),
         (["mcp", "start", "--base-url", "u"], {"base_url": "u"}),
         (["stats", "--base-url", "u"], {"base_url": "u"}),
@@ -162,7 +160,6 @@ _LLM_BACKEND_COMMANDS = [
     ["prompt", "hi"],
     ["talk"],
     ["llm", "hi"],
-    ["email"],
 ]
 
 

@@ -29,13 +29,13 @@ from gaia.daemon.sidecars import install as install_svc
 # Fixture hub origin
 # ---------------------------------------------------------------------------
 
-BINARY_BYTES = b"fake-frozen-email-agent-binary"
+BINARY_BYTES = b"fake-frozen-notes-agent-binary"
 BINARY_SHA = hashlib.sha256(BINARY_BYTES).hexdigest()
 PLATFORM_KEY = "darwin-arm64"
-ARTIFACT_NAME = f"email-agent-{PLATFORM_KEY}"
+ARTIFACT_NAME = f"notes-agent-{PLATFORM_KEY}"
 
 
-def _index(agent_ids=("email",)) -> dict:
+def _index(agent_ids=("notes",)) -> dict:
     return {
         "schema_version": 1,
         "generated_at": "2026-07-16T17:28:33.873Z",
@@ -54,7 +54,7 @@ def _index(agent_ids=("email",)) -> dict:
     }
 
 
-def _manifest(agent_id="email", sha=BINARY_SHA) -> dict:
+def _manifest(agent_id="notes", sha=BINARY_SHA) -> dict:
     return {
         "id": agent_id,
         "name": "Email Triage",
@@ -103,14 +103,14 @@ class _RecordingFetcher:
         raise RuntimeError(f"404 fixture-hub has no object for {url}")
 
 
-def _hub_files(*, agent_id="email", sha=BINARY_SHA, index_ids=("email",)) -> dict:
+def _hub_files(*, agent_id="notes", sha=BINARY_SHA, index_ids=("notes",)) -> dict:
     return {
         "/index.json": json.dumps(_index(index_ids)).encode(),
         f"/agents/{agent_id}/manifest.json": json.dumps(
             _manifest(agent_id, sha)
         ).encode(),
         f"/agents/{agent_id}/0.5.0/{ARTIFACT_NAME}": BINARY_BYTES,
-        f"/agents/{agent_id}/0.5.0/gaia-agent.yaml": b"id: email\nversion: 0.5.0\n",
+        f"/agents/{agent_id}/0.5.0/gaia-agent.yaml": b"id: notes\nversion: 0.5.0\n",
     }
 
 
@@ -123,7 +123,7 @@ class _FakeRegistry:
     """Sidecar registry stub mirroring the real ``hold_for_mutation`` contract:
     stop + verify on entry, ensure blocked for the body."""
 
-    def __init__(self, agent_ids=("email",), *, stop_error=None):
+    def __init__(self, agent_ids=("notes",), *, stop_error=None):
         self._agent_ids = list(agent_ids)
         self._stop_error = stop_error
         self.stop_calls: list = []
@@ -192,7 +192,7 @@ def _auth(token="secret-tok"):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _post_install(client, agent_id="email", *, trusted=True, **body):
+def _post_install(client, agent_id="notes", *, trusted=True, **body):
     """POST an install. Defaults to trusted=True because the fixture agent is
     in the ``experimental`` tier — the refusal path is asserted explicitly in its
     own tests."""
@@ -236,9 +236,9 @@ def _patch_hub(monkeypatch, fetcher):
     "method,url",
     [
         ("get", "/daemon/v1/catalog"),
-        ("post", "/daemon/v1/agents/email/install"),
-        ("get", "/daemon/v1/agents/email/install-status"),
-        ("delete", "/daemon/v1/agents/email"),
+        ("post", "/daemon/v1/agents/notes/install"),
+        ("get", "/daemon/v1/agents/notes/install-status"),
+        ("delete", "/daemon/v1/agents/notes"),
     ],
 )
 def test_hub_routes_require_a_token(method, url):
@@ -252,9 +252,9 @@ def test_hub_routes_require_a_token(method, url):
     "method,url",
     [
         ("get", "/daemon/v1/catalog"),
-        ("post", "/daemon/v1/agents/email/install"),
-        ("get", "/daemon/v1/agents/email/install-status"),
-        ("delete", "/daemon/v1/agents/email"),
+        ("post", "/daemon/v1/agents/notes/install"),
+        ("get", "/daemon/v1/agents/notes/install-status"),
+        ("delete", "/daemon/v1/agents/notes"),
     ],
 )
 def test_hub_routes_reject_a_wrong_token(method, url):
@@ -277,7 +277,7 @@ def test_catalog_returns_hub_agents_with_cold_installed_state(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     entry = body["agents"][0]
-    assert entry["id"] == "email"
+    assert entry["id"] == "notes"
     assert entry["installed"] is False
     assert entry["installed_version"] is None
     assert entry["supervised"] is True
@@ -293,7 +293,7 @@ def _hub_base():
 
 
 def test_catalog_reports_installed_version_from_the_sentinel(monkeypatch, install_root):
-    _write_sentinel(install_root, "email", "0.4.0")
+    _write_sentinel(install_root, "notes", "0.4.0")
     fetcher = _RecordingFetcher(_hub_files())
     _patch_hub(monkeypatch, fetcher)
     client = _client(_FakeRegistry())
@@ -305,31 +305,31 @@ def test_catalog_reports_installed_version_from_the_sentinel(monkeypatch, instal
 
 
 def test_catalog_filters_agents_the_daemon_cannot_supervise(monkeypatch):
-    fetcher = _RecordingFetcher(_hub_files(index_ids=("email", "spreadsheet")))
+    fetcher = _RecordingFetcher(_hub_files(index_ids=("notes", "spreadsheet")))
     _patch_hub(monkeypatch, fetcher)
-    client = _client(_FakeRegistry(agent_ids=("email",)))
+    client = _client(_FakeRegistry(agent_ids=("notes",)))
 
     body = client.get("/daemon/v1/catalog", headers=_auth()).json()
-    assert [a["id"] for a in body["agents"]] == ["email"]
+    assert [a["id"] for a in body["agents"]] == ["notes"]
     # Filtered, never silently: the client can say WHY it is missing.
     assert body["unsupervised_filtered"] == ["spreadsheet"]
 
 
 def test_catalog_include_unsupervised_shows_them_flagged(monkeypatch):
-    fetcher = _RecordingFetcher(_hub_files(index_ids=("email", "spreadsheet")))
+    fetcher = _RecordingFetcher(_hub_files(index_ids=("notes", "spreadsheet")))
     _patch_hub(monkeypatch, fetcher)
-    client = _client(_FakeRegistry(agent_ids=("email",)))
+    client = _client(_FakeRegistry(agent_ids=("notes",)))
 
     body = client.get(
         "/daemon/v1/catalog?include_unsupervised=true", headers=_auth()
     ).json()
     flags = {a["id"]: a["supervised"] for a in body["agents"]}
-    assert flags == {"email": True, "spreadsheet": False}
+    assert flags == {"notes": True, "spreadsheet": False}
 
 
 def test_catalog_hides_deprecated_agents_nobody_installed(monkeypatch, install_root):
-    files = _hub_files(index_ids=("email",))
-    index = _index(("email",))
+    files = _hub_files(index_ids=("notes",))
+    index = _index(("notes",))
     index["agents"][0]["deprecated"] = True
     files["/index.json"] = json.dumps(index).encode()
     _patch_hub(monkeypatch, _RecordingFetcher(files))
@@ -338,14 +338,14 @@ def test_catalog_hides_deprecated_agents_nobody_installed(monkeypatch, install_r
     assert client.get("/daemon/v1/catalog", headers=_auth()).json()["agents"] == []
 
     # An installed one stays visible so it can be seen and removed.
-    _write_sentinel(install_root, "email", "0.5.0")
+    _write_sentinel(install_root, "notes", "0.5.0")
     entry = client.get("/daemon/v1/catalog", headers=_auth()).json()["agents"][0]
-    assert entry["id"] == "email" and entry["installed"] is True
+    assert entry["id"] == "notes" and entry["installed"] is True
 
 
 def test_catalog_installed_only_answers_without_the_network(monkeypatch, install_root):
     """`gaia hub list --installed` is a local question and must not 503 offline."""
-    _write_sentinel(install_root, "email", "0.5.0")
+    _write_sentinel(install_root, "notes", "0.5.0")
 
     def _boom(url, timeout=10):
         raise AssertionError("installed_only must not touch the network")
@@ -355,7 +355,7 @@ def test_catalog_installed_only_answers_without_the_network(monkeypatch, install
 
     body = client.get("/daemon/v1/catalog?installed_only=true", headers=_auth()).json()
     assert body["source"] == "local"
-    assert [a["id"] for a in body["agents"]] == ["email"]
+    assert [a["id"] for a in body["agents"]] == ["notes"]
     assert body["agents"][0]["installed_version"] == "0.5.0"
     assert body["agents"][0]["supervised"] is True
 
@@ -392,7 +392,7 @@ def _write_sentinel(install_root: Path, agent_id: str, version: str) -> Path:
                 "installed_at": "2026-07-01T00:00:00+00:00",
                 "artifact_sha256": BINARY_SHA,
                 "artifact_kind": "binary",
-                "executable": "email-agent",
+                "executable": "notes-agent",
             }
         ),
         encoding="utf-8",
@@ -407,31 +407,31 @@ def test_install_queues_and_reaches_completed(monkeypatch, install_root):
 
     r = _post_install(client)
     assert r.status_code == 202
-    assert r.json()["agent_id"] == "email"
+    assert r.json()["agent_id"] == "notes"
     assert r.json()["status"] == "queued"
 
     status = client.get(
-        "/daemon/v1/agents/email/install-status", headers=_auth()
+        "/daemon/v1/agents/notes/install-status", headers=_auth()
     ).json()
-    assert status["agent_id"] == "email"
+    assert status["agent_id"] == "notes"
     assert status["status"] == "completed"
     assert status["version"] == "0.5.0"
     assert status["error"] is None
 
     # The on-disk layout the daemon re-verifies before every spawn.
-    sentinel = json.loads((install_root / "email" / ".installed").read_text())
+    sentinel = json.loads((install_root / "notes" / ".installed").read_text())
     assert sentinel["artifact_kind"] == "binary"
     assert sentinel["artifact_sha256"] == BINARY_SHA
-    assert sentinel["executable"] == "email-agent"
-    assert (install_root / "email" / "email-agent").read_bytes() == BINARY_BYTES
-    assert (install_root / "email" / "gaia-agent.yaml").exists()
+    assert sentinel["executable"] == "notes-agent"
+    assert (install_root / "notes" / "notes-agent").read_bytes() == BINARY_BYTES
+    assert (install_root / "notes" / "gaia-agent.yaml").exists()
 
     # Outgoing call shape: manifest, then the version's artifact path, then yaml.
     base = _hub_base()
     assert fetcher.calls == [
-        f"{base}/agents/email/manifest.json",
-        f"{base}/agents/email/0.5.0/{ARTIFACT_NAME}",
-        f"{base}/agents/email/0.5.0/gaia-agent.yaml",
+        f"{base}/agents/notes/manifest.json",
+        f"{base}/agents/notes/0.5.0/{ARTIFACT_NAME}",
+        f"{base}/agents/notes/0.5.0/gaia-agent.yaml",
     ]
 
 
@@ -446,7 +446,7 @@ def test_install_stops_a_running_sidecar_before_touching_the_dir(
     _post_install(client)
     # Once synchronously (so a survivor is a 500 on the request) and once around
     # the worker's mutation (so a mid-download ensure cannot respawn it).
-    assert registry.stop_calls == ["email", "email"]
+    assert registry.stop_calls == ["notes", "notes"]
     assert registry.held == []  # released again afterwards
 
 
@@ -463,7 +463,7 @@ def test_install_aborts_when_the_sidecar_pid_survives(monkeypatch, install_root)
     assert "4242" in r.json()["detail"]
     # Nothing downloaded, nothing written: the artifact was never requested.
     assert not any(ARTIFACT_NAME in c for c in fetcher.calls)
-    assert not (install_root / "email").exists()
+    assert not (install_root / "notes").exists()
 
 
 @pytest.mark.parametrize("bad_id", ["../evil", "..%2Fevil", "Email", "em ail"])
@@ -495,14 +495,14 @@ def test_worker_failure_always_reaches_a_terminal_status(monkeypatch, install_ro
 
     def _slot_taken(agent_id, **kwargs):
         raise install_svc._installer().InstallInProgressError(
-            "An install for 'email' is already in progress."
+            "An install for 'notes' is already in progress."
         )
 
     monkeypatch.setattr("gaia.hub.installer.install", _slot_taken)
     _post_install(client)
 
     status = client.get(
-        "/daemon/v1/agents/email/install-status", headers=_auth()
+        "/daemon/v1/agents/notes/install-status", headers=_auth()
     ).json()
     assert status["status"] == "failed"
     assert "already in progress" in status["error"]
@@ -526,11 +526,11 @@ def test_mutation_refuses_while_a_forgotten_process_runs_from_the_dir(
     if os.name == "nt":
         pytest.skip("POSIX shebang stand-in for the frozen sidecar binary")
 
-    _write_sentinel(install_root, "email", "0.5.0")
+    _write_sentinel(install_root, "notes", "0.5.0")
     # Stands in for the frozen sidecar: an executable INSIDE the install dir,
     # so the running process's argv[0] is that file (what psutil reports for
-    # the real email-agent binary).
-    stray = install_root / "email" / "email-agent"
+    # the real notes-agent binary).
+    stray = install_root / "notes" / "notes-agent"
     stray.write_text("#!/bin/sh\nsleep 120\n", encoding="utf-8")
     stray.chmod(0o755)
     # Own session, so the whole tree can be killed: /bin/sh forks `sleep`
@@ -542,10 +542,10 @@ def test_mutation_refuses_while_a_forgotten_process_runs_from_the_dir(
         client = _client(_FakeRegistry())
 
         # The registry reports a clean stop, yet the mutation is still refused.
-        r = client.delete("/daemon/v1/agents/email", headers=_auth())
+        r = client.delete("/daemon/v1/agents/notes", headers=_auth())
         assert r.status_code == 500
         assert str(proc.pid) in r.json()["detail"]
-        assert (install_root / "email" / ".installed").exists()
+        assert (install_root / "notes" / ".installed").exists()
 
         r = _post_install(client)
         assert r.status_code == 500
@@ -560,7 +560,7 @@ def test_mutation_refuses_while_a_forgotten_process_runs_from_the_dir(
     # With the stray gone, the same uninstall succeeds. Carry the refusal
     # detail into the message: a bare `500 == 200` names neither the pid that
     # blocked it nor which guard fired.
-    final = client.delete("/daemon/v1/agents/email", headers=_auth())
+    final = client.delete("/daemon/v1/agents/notes", headers=_auth())
     assert final.status_code == 200, final.json().get("detail")
 
 
@@ -576,13 +576,13 @@ def test_install_sha_mismatch_is_a_hard_failure_leaving_nothing_installed(
     assert r.status_code == 202
 
     status = client.get(
-        "/daemon/v1/agents/email/install-status", headers=_auth()
+        "/daemon/v1/agents/notes/install-status", headers=_auth()
     ).json()
     assert status["status"] == "failed"
     assert "checksum" in status["error"].lower()
     # No "use it anyway": no sentinel, no binary.
-    assert not (install_root / "email" / ".installed").exists()
-    assert not (install_root / "email" / "email-agent").exists()
+    assert not (install_root / "notes" / ".installed").exists()
+    assert not (install_root / "notes" / "notes-agent").exists()
 
 
 def test_install_without_trust_is_refused_with_403_naming_the_flag(
@@ -597,7 +597,7 @@ def test_install_without_trust_is_refused_with_403_naming_the_flag(
 
     bodies = [None, {}, {"trusted": False}, {"trusted": "yes"}, {"version": "0.5.0"}]
     for body in bodies:
-        r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json=body)
+        r = client.post("/daemon/v1/agents/notes/install", headers=_auth(), json=body)
         assert r.status_code == 403, f"body {body!r} must not authorize an install"
         detail = r.json()["detail"]
         assert "experimental" in detail
@@ -605,13 +605,13 @@ def test_install_without_trust_is_refused_with_403_naming_the_flag(
 
     # The gate runs before any download and leaves nothing behind.
     assert not any(ARTIFACT_NAME in c for c in fetcher.calls)
-    assert not (install_root / "email").exists()
-    assert install_svc.install_status("email") is None
+    assert not (install_root / "notes").exists()
+    assert install_svc.install_status("notes") is None
     assert install_svc._QUEUED == set()
 
     # ...and the same request WITH the opt-in completes.
     assert _post_install(client).status_code == 202
-    assert (install_root / "email" / ".installed").exists()
+    assert (install_root / "notes" / ".installed").exists()
 
 
 def test_verified_tier_agent_installs_without_a_trust_flag(monkeypatch, install_root):
@@ -619,14 +619,14 @@ def test_verified_tier_agent_installs_without_a_trust_flag(monkeypatch, install_
     files = _hub_files()
     manifest = _manifest()
     manifest["security_tier"] = "verified"
-    files["/agents/email/manifest.json"] = json.dumps(manifest).encode()
+    files["/agents/notes/manifest.json"] = json.dumps(manifest).encode()
     _patch_hub(monkeypatch, _RecordingFetcher(files))
     client = _client(_FakeRegistry())
 
-    r = client.post("/daemon/v1/agents/email/install", headers=_auth(), json={})
+    r = client.post("/daemon/v1/agents/notes/install", headers=_auth(), json={})
     assert r.status_code == 202
     status = client.get(
-        "/daemon/v1/agents/email/install-status", headers=_auth()
+        "/daemon/v1/agents/notes/install-status", headers=_auth()
     ).json()
     assert status["status"] == "completed"
 
@@ -636,7 +636,7 @@ def test_id_checks_run_before_the_trust_check(monkeypatch):
     would render 'Trust & Install' for an agent that cannot exist."""
     fetcher = _RecordingFetcher(_hub_files())
     _patch_hub(monkeypatch, fetcher)
-    client = _client(_FakeRegistry(agent_ids=("email",)))
+    client = _client(_FakeRegistry(agent_ids=("notes",)))
 
     assert _post_install(client, "nope", trusted=False).status_code == 404
     assert fetcher.calls == []  # never reached the hub
@@ -645,11 +645,11 @@ def test_id_checks_run_before_the_trust_check(monkeypatch):
 def test_install_unknown_agent_is_404_listing_installable_ids(monkeypatch):
     fetcher = _RecordingFetcher(_hub_files())
     _patch_hub(monkeypatch, fetcher)
-    client = _client(_FakeRegistry(agent_ids=("email",)))
+    client = _client(_FakeRegistry(agent_ids=("notes",)))
 
     r = client.post("/daemon/v1/agents/nope/install", headers=_auth(), json={})
     assert r.status_code == 404
-    assert "email" in r.json()["detail"]
+    assert "notes" in r.json()["detail"]
     # An unknown id must never reach the hub.
     assert fetcher.calls == []
 
@@ -661,7 +661,7 @@ def test_unknown_id_message_leads_with_the_actionable_clause(monkeypatch):
     internal symbol is a trailing developer note, not the headline.
     """
     _patch_hub(monkeypatch, _RecordingFetcher(_hub_files()))
-    client = _client(_FakeRegistry(agent_ids=("email",)))
+    client = _client(_FakeRegistry(agent_ids=("notes",)))
 
     detail = client.post(
         "/daemon/v1/agents/nope/install", headers=_auth(), json={}
@@ -669,7 +669,7 @@ def test_unknown_id_message_leads_with_the_actionable_clause(monkeypatch):
 
     assert detail.startswith("no installable agent 'nope'")
     # The useful clause is up front, not buried behind the internals.
-    assert detail.index("installable: email") < detail.index("builtin_specs")
+    assert detail.index("installable: notes") < detail.index("builtin_specs")
     assert "gaia hub list" in detail
     # The internal symbol survives only as an explicitly-labelled dev note.
     note = detail[detail.index("(Developer note:") :]
@@ -700,14 +700,14 @@ def test_a_real_agent_id_is_not_reported_as_a_typo(
         monkeypatch.setattr(
             install_svc, "_entry_point_agent_ids", lambda: {"chat", "bash"}
         )
-    client = _client(_FakeRegistry(agent_ids=("email",)))
+    client = _client(_FakeRegistry(agent_ids=("notes",)))
 
     detail = client.post(
         "/daemon/v1/agents/chat/install", headers=_auth(), json={}
     ).json()["detail"]
     assert expected_lead in detail
-    assert "installable: email" in detail
-    assert detail.index("installable: email") < detail.index("builtin_specs")
+    assert "installable: notes" in detail
+    assert detail.index("installable: notes") < detail.index("builtin_specs")
 
 
 def test_a_failing_classification_probe_still_refuses_loudly(monkeypatch, caplog):
@@ -721,20 +721,20 @@ def test_a_failing_classification_probe_still_refuses_loudly(monkeypatch, caplog
         "_entry_point_agent_ids",
         lambda: (_ for _ in ()).throw(RuntimeError("dist-info is corrupt")),
     )
-    client = _client(_FakeRegistry(agent_ids=("email",)))
+    client = _client(_FakeRegistry(agent_ids=("notes",)))
 
     caplog.set_level(logging.WARNING, logger="gaia")
     r = client.post("/daemon/v1/agents/chat/install", headers=_auth(), json={})
     assert r.status_code == 404
     assert r.json()["detail"].startswith("no installable agent 'chat'")
-    assert "installable: email" in r.json()["detail"]
+    assert "installable: notes" in r.json()["detail"]
     assert "dist-info is corrupt" in caplog.text
 
 
 def test_install_hub_manifest_failure_is_502(monkeypatch):
     # index.json resolves but the per-agent manifest 404s.
     files = _hub_files()
-    del files["/agents/email/manifest.json"]
+    del files["/agents/notes/manifest.json"]
     fetcher = _RecordingFetcher(files)
     _patch_hub(monkeypatch, fetcher)
     client = _client(_FakeRegistry())
@@ -746,7 +746,7 @@ def test_install_hub_manifest_failure_is_502(monkeypatch):
 
 def test_install_status_404_before_any_install_was_requested():
     client = _client(_FakeRegistry())
-    r = client.get("/daemon/v1/agents/email/install-status", headers=_auth())
+    r = client.get("/daemon/v1/agents/notes/install-status", headers=_auth())
     assert r.status_code == 404
     assert "install" in r.json()["detail"]
 
@@ -785,11 +785,11 @@ def test_concurrent_installs_of_the_same_id_serialize(monkeypatch, install_root)
     release.set()
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
-        state = install_svc.install_status("email")
+        state = install_svc.install_status("notes")
         if state and state["status"] in ("completed", "failed"):
             break
         time.sleep(0.05)
-    assert install_svc.install_status("email")["status"] == "completed"
+    assert install_svc.install_status("notes")["status"] == "completed"
     # Exactly one download happened.
     assert sum(1 for c in fetcher.calls if ARTIFACT_NAME in c) == 1
 
@@ -797,7 +797,7 @@ def test_concurrent_installs_of_the_same_id_serialize(monkeypatch, install_root)
 def test_install_arriving_during_an_uninstall_is_refused(monkeypatch, install_root):
     """Install and uninstall share the slot: a POST landing while a DELETE is
     removing the directory must 409, not queue a download into it."""
-    _write_sentinel(install_root, "email", "0.5.0")
+    _write_sentinel(install_root, "notes", "0.5.0")
     fetcher = _RecordingFetcher(_hub_files())
     _patch_hub(monkeypatch, fetcher)
     client = _client(_FakeRegistry())
@@ -815,7 +815,7 @@ def test_install_arriving_during_an_uninstall_is_refused(monkeypatch, install_ro
     result = {}
     t = threading.Thread(
         target=lambda: result.update(
-            code=client.delete("/daemon/v1/agents/email", headers=_auth()).status_code
+            code=client.delete("/daemon/v1/agents/notes", headers=_auth()).status_code
         ),
         daemon=True,
     )
@@ -853,7 +853,7 @@ def test_a_runner_that_cannot_start_releases_the_slot(monkeypatch, install_root)
     monkeypatch.setattr(install_svc, "_spawn_thread", lambda work: work())
     retry = _post_install(client)
     assert retry.status_code == 202
-    assert (install_root / "email" / ".installed").exists()
+    assert (install_root / "notes" / ".installed").exists()
 
 
 def test_install_held_by_another_process_is_409_and_keeps_the_sidecar(
@@ -869,7 +869,7 @@ def test_install_held_by_another_process_is_409_and_keeps_the_sidecar(
     taken, release = threading.Event(), threading.Event()
 
     def other_process():
-        with file_lock(install_root / ".email.install"):
+        with file_lock(install_root / ".notes.install"):
             taken.set()
             release.wait(30)
 
@@ -892,7 +892,7 @@ def test_install_held_by_another_process_is_409_and_keeps_the_sidecar(
     # Once the other install is done, this one goes through.
     retry = _post_install(client)
     assert retry.status_code == 202
-    assert (install_root / "email" / ".installed").exists()
+    assert (install_root / "notes" / ".installed").exists()
 
 
 def test_install_whose_slot_lock_cannot_be_made_is_500_naming_it(
@@ -908,7 +908,7 @@ def test_install_whose_slot_lock_cannot_be_made_is_500_naming_it(
 
     def unwritable(agent_id, install_root=None):
         raise FileLockError(
-            "Cannot create the lock file /x/.email.install.lock", Path("/x")
+            "Cannot create the lock file /x/.notes.install.lock", Path("/x")
         )
 
     monkeypatch.setattr(installer_mod, "claim_install_slot", unwritable)
@@ -1088,7 +1088,7 @@ def test_install_honours_an_explicit_version(monkeypatch, install_root):
     client = _client(_FakeRegistry())
 
     r = client.post(
-        "/daemon/v1/agents/email/install",
+        "/daemon/v1/agents/notes/install",
         headers=_auth(),
         json={"version": "0.5.0", "trusted": True},
     )
@@ -1096,12 +1096,12 @@ def test_install_honours_an_explicit_version(monkeypatch, install_root):
     assert r.json()["version"] == "0.5.0"
 
     r = client.post(
-        "/daemon/v1/agents/email/install",
+        "/daemon/v1/agents/notes/install",
         headers=_auth(),
         json={"version": "9.9.9", "trusted": True},
     )
     status = client.get(
-        "/daemon/v1/agents/email/install-status", headers=_auth()
+        "/daemon/v1/agents/notes/install-status", headers=_auth()
     ).json()
     assert status["status"] == "failed"
     assert "9.9.9" in status["error"]
@@ -1113,15 +1113,15 @@ def test_install_honours_an_explicit_version(monkeypatch, install_root):
 
 
 def test_uninstall_stops_the_sidecar_then_removes_the_dir(monkeypatch, install_root):
-    _write_sentinel(install_root, "email", "0.5.0")
+    _write_sentinel(install_root, "notes", "0.5.0")
     registry = _FakeRegistry()
     client = _client(registry)
 
-    r = client.delete("/daemon/v1/agents/email", headers=_auth())
+    r = client.delete("/daemon/v1/agents/notes", headers=_auth())
     assert r.status_code == 200
-    assert r.json() == {"agent_id": "email", "status": "uninstalled"}
-    assert registry.stop_calls == ["email"]
-    assert not (install_root / "email").exists()
+    assert r.json() == {"agent_id": "notes", "status": "uninstalled"}
+    assert registry.stop_calls == ["notes"]
+    assert not (install_root / "notes").exists()
 
 
 def test_uninstall_while_another_process_installs_is_409_and_keeps_the_sidecar(
@@ -1129,13 +1129,13 @@ def test_uninstall_while_another_process_installs_is_409_and_keeps_the_sidecar(
 ):
     from gaia.utils.file_lock import file_lock
 
-    _write_sentinel(install_root, "email", "0.5.0")
+    _write_sentinel(install_root, "notes", "0.5.0")
     registry = _FakeRegistry()
     client = _client(registry)
     taken, release = threading.Event(), threading.Event()
 
     def other_process():
-        with file_lock(install_root / ".email.install"):
+        with file_lock(install_root / ".notes.install"):
             taken.set()
             release.wait(30)
 
@@ -1143,13 +1143,13 @@ def test_uninstall_while_another_process_installs_is_409_and_keeps_the_sidecar(
     holder.start()
     assert taken.wait(10)
     try:
-        r = client.delete("/daemon/v1/agents/email", headers=_auth())
+        r = client.delete("/daemon/v1/agents/notes", headers=_auth())
     finally:
         release.set()
         holder.join()
     assert r.status_code == 409
     assert registry.stop_calls == []
-    assert (install_root / "email" / ".installed").exists()
+    assert (install_root / "notes" / ".installed").exists()
 
 
 def test_uninstall_whose_slot_lock_cannot_be_made_is_500_naming_it(
@@ -1158,22 +1158,22 @@ def test_uninstall_whose_slot_lock_cannot_be_made_is_500_naming_it(
     from gaia.hub import installer as installer_mod
     from gaia.utils.file_lock import FileLockError
 
-    _write_sentinel(install_root, "email", "0.5.0")
+    _write_sentinel(install_root, "notes", "0.5.0")
     registry = _FakeRegistry()
     client = _client(registry)
 
     def unwritable(agent_id, install_root=None):
         raise FileLockError(
-            "Cannot create the lock file /x/.email.install.lock", Path("/x")
+            "Cannot create the lock file /x/.notes.install.lock", Path("/x")
         )
 
     monkeypatch.setattr(installer_mod, "claim_install_slot", unwritable)
-    r = client.delete("/daemon/v1/agents/email", headers=_auth())
+    r = client.delete("/daemon/v1/agents/notes", headers=_auth())
     assert r.status_code == 500
     assert "Cannot create the lock file" in r.json()["detail"]
     assert registry.stop_calls == []
     assert install_svc._QUEUED == set()
-    assert (install_root / "email" / ".installed").exists()
+    assert (install_root / "notes" / ".installed").exists()
 
 
 def test_uninstall_aborts_when_the_pid_survives_and_keeps_the_install(
@@ -1181,20 +1181,20 @@ def test_uninstall_aborts_when_the_pid_survives_and_keeps_the_install(
 ):
     from gaia.daemon.sidecars.errors import StopFailedError
 
-    _write_sentinel(install_root, "email", "0.5.0")
+    _write_sentinel(install_root, "notes", "0.5.0")
     registry = _FakeRegistry(stop_error=StopFailedError("pid 4242 survived shutdown"))
     client = _client(registry)
 
-    r = client.delete("/daemon/v1/agents/email", headers=_auth())
+    r = client.delete("/daemon/v1/agents/notes", headers=_auth())
     assert r.status_code == 500
     assert "4242" in r.json()["detail"]
     # The live process's directory is untouched.
-    assert (install_root / "email" / ".installed").exists()
+    assert (install_root / "notes" / ".installed").exists()
 
 
 def test_uninstall_not_installed_is_404(install_root):
     client = _client(_FakeRegistry())
-    r = client.delete("/daemon/v1/agents/email", headers=_auth())
+    r = client.delete("/daemon/v1/agents/notes", headers=_auth())
     assert r.status_code == 404
     detail = r.json()["detail"]
     # Fail-loudly wants all three parts, and the installer's own message only
@@ -1207,7 +1207,7 @@ def test_uninstall_not_installed_is_404(install_root):
 def test_uninstall_of_an_unsupervised_but_installed_agent_still_works(install_root):
     """An agent with no sidecar spec has nothing to stop — removal proceeds."""
     _write_sentinel(install_root, "spreadsheet", "0.1.0")
-    registry = _FakeRegistry(agent_ids=("email",))
+    registry = _FakeRegistry(agent_ids=("notes",))
     client = _client(registry)
 
     r = client.delete("/daemon/v1/agents/spreadsheet", headers=_auth())
@@ -1216,13 +1216,13 @@ def test_uninstall_of_an_unsupervised_but_installed_agent_still_works(install_ro
 
 
 def test_uninstall_during_an_install_is_409(monkeypatch, install_root):
-    _write_sentinel(install_root, "email", "0.5.0")
-    install_svc._QUEUED.add("email")
+    _write_sentinel(install_root, "notes", "0.5.0")
+    install_svc._QUEUED.add("notes")
     client = _client(_FakeRegistry())
 
-    r = client.delete("/daemon/v1/agents/email", headers=_auth())
+    r = client.delete("/daemon/v1/agents/notes", headers=_auth())
     assert r.status_code == 409
-    assert (install_root / "email" / ".installed").exists()
+    assert (install_root / "notes" / ".installed").exists()
 
 
 # ===========================================================================
@@ -1243,12 +1243,12 @@ def test_installed_layout_is_what_the_sidecar_fetch_accepts(monkeypatch, install
     _post_install(client)
 
     result = fetchmod.fetch_binary(
-        out_dir=install_root / "email",
+        out_dir=install_root / "notes",
         platform_key=PLATFORM_KEY,
         lock_path=install_root / "no-such-lock.json",
-        agent_dir_name="email",
+        agent_dir_name="notes",
     )
-    assert Path(result.binary_path) == install_root / "email" / "email-agent"
+    assert Path(result.binary_path) == install_root / "notes" / "notes-agent"
     assert result.sha256 == BINARY_SHA
     assert result.version == "0.5.0"
 
@@ -1263,13 +1263,13 @@ def test_cold_fetch_without_an_install_names_the_hub_install_remedy(
 
     monkeypatch.setattr(
         "gaia.daemon.sidecars.platform.default_lock_path",
-        lambda agent_id="email": install_root / "missing" / "binaries.lock.json",
+        lambda agent_id="notes": install_root / "missing" / "binaries.lock.json",
     )
-    with pytest.raises(BinaryNotFoundError, match="gaia hub install email"):
+    with pytest.raises(BinaryNotFoundError, match="gaia hub install notes"):
         fetchmod.fetch_binary(
-            out_dir=install_root / "email",
+            out_dir=install_root / "notes",
             platform_key=PLATFORM_KEY,
-            agent_dir_name="email",
+            agent_dir_name="notes",
         )
 
 
@@ -1304,8 +1304,8 @@ def test_no_route_response_contains_a_token(monkeypatch, install_root, caplog):
         bodies = [
             client.get("/daemon/v1/catalog", headers=_auth()).text,
             _post_install(client).text,
-            client.get("/daemon/v1/agents/email/install-status", headers=_auth()).text,
-            client.delete("/daemon/v1/agents/email", headers=_auth()).text,
+            client.get("/daemon/v1/agents/notes/install-status", headers=_auth()).text,
+            client.delete("/daemon/v1/agents/notes", headers=_auth()).text,
         ]
 
     for body in bodies:
@@ -1326,16 +1326,16 @@ def test_cli_parses_the_hub_subcommands():
     listed = parser.parse_args(["hub", "list", "--installed"])
     assert (listed.action, listed.hub_action, listed.installed) == ("hub", "list", True)
 
-    inst = parser.parse_args(["hub", "install", "email", "--version", "0.5.0"])
+    inst = parser.parse_args(["hub", "install", "notes", "--version", "0.5.0"])
     assert (inst.action, inst.hub_action, inst.agent_id, inst.version) == (
         "hub",
         "install",
-        "email",
+        "notes",
         "0.5.0",
     )
 
-    rm = parser.parse_args(["hub", "uninstall", "email"])
-    assert (rm.action, rm.hub_action, rm.agent_id) == ("hub", "uninstall", "email")
+    rm = parser.parse_args(["hub", "uninstall", "notes"])
+    assert (rm.action, rm.hub_action, rm.agent_id) == ("hub", "uninstall", "notes")
 
 
 class _CannedResp:
@@ -1378,7 +1378,7 @@ def test_cli_install_polls_until_completed(monkeypatch, capsys):
     cli_mod, calls = _canned_cli(
         monkeypatch,
         [
-            _CannedResp(202, {"agent_id": "email", "status": "queued"}),
+            _CannedResp(202, {"agent_id": "notes", "status": "queued"}),
             _CannedResp(
                 200, {"status": "running", "phase": "downloading", "percent": 30}
             ),
@@ -1393,12 +1393,12 @@ def test_cli_install_polls_until_completed(monkeypatch, capsys):
             ),
         ],
     )
-    cli_mod._handle_hub_install(argparse.Namespace(agent_id="email", version=None))
+    cli_mod._handle_hub_install(argparse.Namespace(agent_id="notes", version=None))
 
     out = capsys.readouterr().out
     assert "installed" in out and "0.5.0" in out
-    assert calls[0] == ("POST", "/daemon/v1/agents/email/install")
-    assert calls[1] == ("GET", "/daemon/v1/agents/email/install-status")
+    assert calls[0] == ("POST", "/daemon/v1/agents/notes/install")
+    assert calls[1] == ("GET", "/daemon/v1/agents/notes/install-status")
 
 
 def test_cli_sends_trusted_only_when_the_flag_is_given(monkeypatch, capsys):
@@ -1408,30 +1408,30 @@ def test_cli_sends_trusted_only_when_the_flag_is_given(monkeypatch, capsys):
     cli_mod, calls = _canned_cli(
         monkeypatch,
         [
-            _CannedResp(202, {"agent_id": "email", "status": "queued"}),
+            _CannedResp(202, {"agent_id": "notes", "status": "queued"}),
             _CannedResp(
                 200, {"status": "completed", "phase": "completed", "version": "0.5.0"}
             ),
         ],
     )
     cli_mod._handle_hub_install(
-        argparse.Namespace(agent_id="email", version=None, trusted=True)
+        argparse.Namespace(agent_id="notes", version=None, trusted=True)
     )
     assert calls.bodies[0] == {"version": None, "trusted": True}
 
     cli_mod, calls = _canned_cli(
         monkeypatch,
-        [_CannedResp(403, {"detail": "'email' is a non-verified agent ... --trust"})],
+        [_CannedResp(403, {"detail": "'notes' is a non-verified agent ... --trust"})],
     )
     with pytest.raises(SystemExit) as exc:
         cli_mod._handle_hub_install(
-            argparse.Namespace(agent_id="email", version=None, trusted=False)
+            argparse.Namespace(agent_id="notes", version=None, trusted=False)
         )
     assert exc.value.code == 1
     assert calls.bodies[0] == {"version": None, "trusted": False}
     err = capsys.readouterr().err
     assert "non-verified" in err
-    assert "gaia hub install email --trust" in err  # names the exact remedy
+    assert "gaia hub install notes --trust" in err  # names the exact remedy
 
 
 def test_cli_install_failure_exits_1_with_the_reason(monkeypatch, capsys):
@@ -1440,7 +1440,7 @@ def test_cli_install_failure_exits_1_with_the_reason(monkeypatch, capsys):
     cli_mod, _ = _canned_cli(
         monkeypatch,
         [
-            _CannedResp(202, {"agent_id": "email", "status": "queued"}),
+            _CannedResp(202, {"agent_id": "notes", "status": "queued"}),
             _CannedResp(
                 200,
                 {
@@ -1453,7 +1453,7 @@ def test_cli_install_failure_exits_1_with_the_reason(monkeypatch, capsys):
         ],
     )
     with pytest.raises(SystemExit) as exc:
-        cli_mod._handle_hub_install(argparse.Namespace(agent_id="email", version=None))
+        cli_mod._handle_hub_install(argparse.Namespace(agent_id="notes", version=None))
     assert exc.value.code == 1
     assert "checksum mismatch" in capsys.readouterr().out
 
@@ -1465,10 +1465,10 @@ def test_cli_uninstall_reports_the_daemon_detail_and_exits_1(monkeypatch, capsys
         monkeypatch, [_CannedResp(500, {"detail": "pid 4242 survived the tree-kill"})]
     )
     with pytest.raises(SystemExit) as exc:
-        cli_mod._handle_hub_uninstall(argparse.Namespace(agent_id="email"))
+        cli_mod._handle_hub_uninstall(argparse.Namespace(agent_id="notes"))
     assert exc.value.code == 1
     assert "4242" in capsys.readouterr().out
-    assert calls == [("DELETE", "/daemon/v1/agents/email")]
+    assert calls == [("DELETE", "/daemon/v1/agents/notes")]
 
 
 def test_cli_list_installed_asks_the_daemon_for_local_state(monkeypatch, capsys):
@@ -1501,7 +1501,7 @@ def test_cli_list_never_prints_a_token_even_if_one_appears_in_the_body(
             return {
                 "agents": [
                     {
-                        "id": "email",
+                        "id": "notes",
                         "name": "Email Triage",
                         "latest_version": "0.5.0",
                         "installed": True,
@@ -1521,7 +1521,7 @@ def test_cli_list_never_prints_a_token_even_if_one_appears_in_the_body(
     cli_mod._handle_hub_list(argparse.Namespace(installed=False))
 
     out = capsys.readouterr().out
-    assert "email" in out and "0.5.0" in out
+    assert "notes" in out and "0.5.0" in out
     assert secret not in out
 
 
@@ -1531,7 +1531,7 @@ def test_cli_list_never_prints_a_token_even_if_one_appears_in_the_body(
 
 
 def _two_version_hub(newest_floor: str) -> dict:
-    """email 0.5.0 runs on any recent core; 0.6.0 needs *newest_floor*."""
+    """notes 0.5.0 runs on any recent core; 0.6.0 needs *newest_floor*."""
     files = _hub_files()
     manifest = _manifest()
     manifest["versions"]["0.5.0"]["min_gaia_version"] = "0.22.0"
@@ -1543,9 +1543,9 @@ def _two_version_hub(newest_floor: str) -> dict:
     manifest["versions"]["0.6.0"] = newest
     manifest["latest_version"] = "0.6.0"
     manifest["min_gaia_version"] = newest_floor
-    files["/agents/email/manifest.json"] = json.dumps(manifest).encode()
+    files["/agents/notes/manifest.json"] = json.dumps(manifest).encode()
 
-    index = _index(("email",))
+    index = _index(("notes",))
     index["agents"][0].update(
         latest_version="0.6.0",
         min_gaia_version=newest_floor,
@@ -1558,7 +1558,7 @@ def _two_version_hub(newest_floor: str) -> dict:
 def test_catalog_does_not_offer_an_update_this_core_cannot_run(
     monkeypatch, install_root
 ):
-    _write_sentinel(install_root, "email", "0.5.0")
+    _write_sentinel(install_root, "notes", "0.5.0")
     _patch_hub(monkeypatch, _RecordingFetcher(_two_version_hub("99.0.0")))
     client = _client(_FakeRegistry())
 
@@ -1576,7 +1576,7 @@ def test_install_takes_the_newest_version_this_core_runs(monkeypatch, install_ro
 
     assert _post_install(client).status_code == 202
     status = client.get(
-        "/daemon/v1/agents/email/install-status", headers=_auth()
+        "/daemon/v1/agents/notes/install-status", headers=_auth()
     ).json()
     assert status["status"] == "completed"
     assert status["version"] == "0.5.0"
@@ -1608,7 +1608,7 @@ def test_cold_fetch_of_the_flagship_names_gaia_init(monkeypatch, install_root):
 
     monkeypatch.setattr(
         "gaia.daemon.sidecars.platform.default_lock_path",
-        lambda agent_id="email": install_root / "missing" / "binaries.lock.json",
+        lambda agent_id="notes": install_root / "missing" / "binaries.lock.json",
     )
     with pytest.raises(BinaryNotFoundError) as exc_info:
         fetchmod.fetch_binary(
@@ -1623,7 +1623,7 @@ def test_cold_fetch_of_the_flagship_names_gaia_init(monkeypatch, install_root):
 
 @pytest.mark.parametrize(
     "agent_id, expected",
-    [("gaia", "gaia init"), ("email", "gaia hub install email")],
+    [("gaia", "gaia init"), ("notes", "gaia hub install notes")],
 )
 def test_install_command_names_init_only_for_the_flagship(agent_id, expected):
     from gaia.daemon.sidecars.fetch import install_command

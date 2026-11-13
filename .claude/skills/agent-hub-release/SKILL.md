@@ -1,210 +1,171 @@
 ---
 name: "agent-hub-release"
-description: "Cut or wire the frozen-binary + npm release of an agent GAIA itself ships (the email/flagship CI pipeline: freeze -> download-server Worker /publish -> npm OIDC). Use when releasing a sidecar agent under hub/agents/ or editing a release_agent_<id>.yml. Maintainer release tooling only — GAIA has no public agent catalog to publish into."
+description: "Cut or wire the frozen-binary + npm release of the flagship GAIA agent (release_agent_gaia.yml: freeze -> download-server Worker /publish -> npm OIDC -> lock PR). Use when releasing hub/agents/gaia/ or editing release_agent_gaia.yml. Maintainer release tooling only — GAIA has no public agent catalog to publish into."
 ---
 
-# Releasing a GAIA Sidecar Agent (frozen binary + npm)
+# Releasing the flagship GAIA agent (frozen binary + npm)
 
-How to ship a **sidecar agent** — a frozen, no-Python REST binary plus a thin npm
-client — to GAIA's download server (`hub.amd-gaia.ai`) and npm, via the tag-triggered CI release. The
-**email agent is the reference**: `hub/agents/email/python/` +
-`hub/agents/email/npm/` + `.github/workflows/release_agent_email.yml`.
+How the flagship agent — a frozen, no-Python REST sidecar plus the `@amd-gaia/gaia`
+npm launcher — reaches GAIA's download server (`hub.amd-gaia.ai`) and npm, via the
+tag-triggered CI release. The pieces: `hub/agents/gaia/python/` +
+`hub/agents/gaia/npm/` + `.github/workflows/release_agent_gaia.yml` (its header
+comments are the contract of record).
 
 This is a **phased process with one hard human gate** (the `agent-publish`
 environment). Stop and confirm before anything irreversible — pushing a release
 tag, approving the publish gate. Publishes are **immutable per filename**: a bad
 release is fixed by a new version, never an overwrite.
 
-> **Status — the email pipeline has not yet cut a real release.**
-> `hub/agents/email/npm/binaries.lock.json` still carries placeholder
-> `PENDING-1648` hashes and **#1648 is open**, so the freeze→publish→fetch-verify
-> path has never run end-to-end. Treat this skill as the design of record, not a
-> paved road, until the first real release lands and fills the lock. Likewise the
-> `agent-publish` environment + `GAIA_HUB_TOKEN` + hub vars are **maintainer
-> setup** (workflow header) — verify they exist before relying on them.
-
 ## Scope
 
 This is maintainer release tooling, not a user-facing product: GAIA ships one
 agent (the flagship) through two apps, the TUI and the Agent UI, and there is no
-public agent catalog to publish into. The pipeline below is how the agents GAIA
-itself ships (the flagship, and the email sidecar) reach the download server
-(`hub.amd-gaia.ai`) and npm.
+public agent catalog to publish into. The standalone email agent that once shared
+this pipeline was removed (#4825).
 
 ## Distribution model (the mental picture)
 
 ```
 freeze.py (PyInstaller, native per-OS, no cross-compile)
-   └─ email-agent-<platform>[.exe]   ← one-file binary, boots a FastAPI REST sidecar
+   └─ gaia-agent-<platform>[.exe]   ← one-file binary, boots the REST sidecar
         └─ POST /publish  →  download-server Worker (workers/agent-hub/) ── R2 bucket "gaia-hub"
-             • stores each object IMMUTABLY under agents/<id>/<ver>/<file>
+             • stores each object IMMUTABLY under agents/gaia/<ver>/<file>
              • computes SHA-256 server-side
              • rebuilds index.json (what `gaia init` and the daemon read)
-        download = plain public GET at hub.amd-gaia.ai/agents/<id>/<ver>/<file>
-   └─ @amd-gaia/agent-<id> (npm)  ← typed client + fetch CLI + sidecar lifecycle
-        • binaries.lock.json maps platform → {filename, sha256, size}; the SHA-256
-          is the integrity gate the fetch CLI enforces on download
+             • the Linux sidecar is past the Worker's body cap: PUT straight to R2,
+               then published by reference
+        download = plain public GET at hub.amd-gaia.ai/agents/gaia/<ver>/<file>
+   └─ terminal UI — CONSUMED, not built: the `terminal-hub` component that
+        release_components.yml publishes at agents/terminal-hub/<ver>/
+   └─ @amd-gaia/gaia (npm)  ← launcher: fetch + verify both binaries, start the TUI
+        • binaries.lock.json (schemaVersion 3.0) carries one lane per component,
+          each with its own version, baseUrl and per-platform sha256 + size
         • published via npm OIDC trusted publishing (provenance, NO npm token)
 ```
 
-The Worker fronts the bucket; **CI never touches R2 directly** — it POSTs to
-`/publish` so uploads are server-checksummed and the catalog is rebuilt atomically.
-The manifest + README ride along inside the publish.
+The Worker fronts the bucket; CI POSTs to `/publish` so uploads are
+server-checksummed and the catalog is rebuilt atomically. The manifest rides along
+inside the publish.
 
-## What a sidecar agent adds (email = reference)
-
-On top of the normal agent package (manifest + code + README + `pyproject.toml`,
-see the `gaia-build-agent` skill), a sidecar agent adds:
+## What the package carries
 
 | Path | Role |
 |------|------|
-| `hub/agents/<id>/python/packaging/` | `freeze.py`, `smoke_test.py`, `server.py`, `gen_binaries_lock.py`, `publish_to_r2.py`, `HUB-UPLOAD.md` (manual fallback) |
-| `hub/agents/<id>/npm/package.json` | ESM-only client; `exports` `.` (Node) and `./client` (browser-safe, client-only — landed in **#1773**) |
-| `hub/agents/<id>/npm/binaries.lock.json` | platform → artifact + **sha256** + size + `baseUrl` (placeholders until the first release) |
-| `hub/agents/<id>/npm/README.md` (+ `CHANGELOG.md`) | client docs; CHANGELOG is recommended (Keep a Changelog), **not** required by publish |
-| `hub/agents/<id>/npm/src/` | `client.ts`, `client-entry.ts` (browser entry, landed in #1773), `fetch.ts`, lifecycle, `types.ts`, `errors.ts`, `cli.ts` |
-| `.github/workflows/release_agent_<id>.yml` | the tag-triggered release (copy of `release_agent_email.yml`) |
+| `hub/agents/gaia/python/packaging/` | `freeze.py`, `smoke_test.py`, `server.py`, `gen_binaries_lock.py`, `publish_to_r2.py`, `stamp_version.py`, `gen_scorecard.py` |
+| `hub/agents/gaia/npm/package.json` | the `@amd-gaia/gaia` launcher |
+| `hub/agents/gaia/npm/binaries.lock.json` | two lanes (sidecar + terminal-hub) → artifact + **sha256** + size + `baseUrl` |
+| `hub/agents/gaia/npm/{README,SPEC,SKILL,CHANGELOG,SCORECARD}.md` | integrator docs, kept in sync per CLAUDE.md |
+| `.github/workflows/release_agent_gaia.yml` | the tag-triggered release |
+| `.github/workflows/build_flagship_sidecar.yml` | the per-platform freeze matrix, shared with `publish.yml` |
 
 Notes:
-- **The npm client is ESM-only** (`"type": "module"`). Node consumers use the `.`
-  entry (fetch + spawn); browser/Electron renderers use `./client` (client-only,
-  zero Node built-ins) — landed in **#1773**, documented by **#1776**.
-- **`binaries.lock.json` ships placeholder hashes** until the first real release.
-  While a hash is a placeholder the fetch CLI is **fail-loud** — a bad binary can
-  never be fetched. For local dev, point the lifecycle helpers at a locally-frozen
-  binary instead of `fetchBinary`.
-- **Manifest validation:** validate the author manifest with `gaia agent test
-  --lint`. Do **not** validate `gaia-agent.yaml` against
+- **Manifest validation:** validate `gaia-agent.yaml` with `gaia agent test
+  --lint`. Do **not** validate it against
   `workers/agent-hub/schemas/manifest.schema.json` — that is the Hub's *server-side
   aggregate* schema and requires fields you never hand-write (`versions`,
   `latest_version`, `deprecated`, `security_tier`, `permissions`).
 - **Platform-name skew (easy bug):** the manifest's `requirements.platforms` uses
-  `win-x64`; `binaries.lock.json` + the CI matrix use `win32-x64`. Same agent, two
-  spellings — don't copy one into the other.
+  `win-x64`; `binaries.lock.json` and the CI matrix use `win32-x64`. Don't copy
+  one into the other.
 
 ## The three version numbers the release checks
 
-The `Resolve + validate release version` step fails loudly unless all three are
-identical:
+The `version` job fails loudly unless all three are identical, and runs before
+any freezing:
 
-1. the **tag** (or `workflow_dispatch` input) — `agent-pkg-<id>-v<version>` → `<version>`
-2. `hub/agents/<id>/npm/package.json` → `.version`
-3. `hub/agents/<id>/python/gaia-agent.yaml` → `version`
+1. the **tag** (or `workflow_dispatch` input) — `agent-pkg-gaia-v<version>` → `<version>`
+2. `hub/agents/gaia/npm/package.json` → `.version`
+3. `hub/agents/gaia/python/gaia-agent.yaml` → `version`
 
-Bump with **`gaia agent version patch|minor|major`**. It bumps **from the
-`gaia-agent.yaml` value**, rewrites `pyproject.toml` and the package's
-`__version__` / `version.py`, then runs the agent's `packaging/stamp_version.py`,
-which moves the npm `package.json`, `package-lock.json` and `binaries.lock.json`
-(`agentVersion` + `baseUrl`). After that it runs `--check`. If any file can't be
-moved, the command fails and names it, so a partial bump doesn't ship. Add the
-matching `CHANGELOG.md` entry too if the agent keeps one (recommended, not required by publish). `binaries.lock.json`'s `agentVersion`
-+ `baseUrl` are **regenerated by CI** — don't hand-edit them for a release.
+Bump with **`gaia agent version patch|minor|major --path hub/agents/gaia/python`**.
+It bumps from the `gaia-agent.yaml` value, rewrites `pyproject.toml` and the
+package's version, then runs `packaging/stamp_version.py`, which moves the npm
+`package.json`, `package-lock.json` and `binaries.lock.json`, and then `--check`s.
+If any file can't be moved, the command fails and names it. The lock's hashes are
+**regenerated by CI** — don't hand-edit them.
 
-## Cutting a release (existing agent)
+## Cutting a release
 
-1. **Version-bump PR → main.** `gaia agent version <bump>` (moves the npm
-   `package.json` + `package-lock.json` too), add the CHANGELOG entry, merge to `main` (the workflow asserts the
-   release commit is a `main` ancestor — publishing is allowed only from main).
-2. **Pre-flight** in `hub/agents/<id>/npm/`: `npm ci && npm run build && npm
-   test`, and `npm pack --dry-run` to confirm `README.md` ships (and `CHANGELOG.md`, if you keep one).
+1. **Version-bump PR → main.** `gaia agent version <bump>`, add the CHANGELOG
+   entry, merge to `main` (publishing is allowed only from a `main` ancestor).
+2. **Pre-flight** in `hub/agents/gaia/npm/`: `npm ci && npm run build && npm
+   test`, and `npm pack --dry-run` to confirm the docs ship. Before any publish,
+   `python util/verify_publish_pipeline.py` proves the publisher against a local
+   Worker (see `docs/reference/dev.mdx`).
 3. **Tag from main** (or `workflow_dispatch` with the version):
    ```bash
-   git tag agent-pkg-<id>-v<version> && git push origin --tags
+   git tag agent-pkg-gaia-v<version> && git push origin --tags
    ```
-   Namespace is `agent-pkg-<id>-*` (NOT `v*`) — it deliberately does not fire the
+   Namespace is `agent-pkg-gaia-*` (NOT `v*`) — it deliberately does not fire the
    core `publish.yml`.
-4. **Build stage** freezes on 4 platforms — `win32-x64`, `darwin-arm64`, `linux-x64`
-   **required**; `darwin-x64` (Intel) **best-effort** — smoke-tests each, hashes it.
-   (The smoke test proves the binary boots and the REST route answers; with no
-   Lemonade in CI it does **not** exercise real LLM triage — a 502/timeout passes.)
-5. **Approve the gate.** The `publish` job pauses on the `agent-publish` environment
-   until a maintainer approves; the publish token isn't readable until then.
-6. **Publish stage** (atomic): POST every binary to `/publish` → regenerate
-   `binaries.lock.json` with the **real** hashes → **fetch-verify every published
-   object** against the lock → `npm publish` via OIDC (provenance) → trigger
-   `deploy_website.yml` so the home page's download links pick up the new build.
-7. **Flagship (`gaia`) only — merge the lock PR.** Its `pin-lock` job opens a PR
-   committing the verified lock to main (branch `flagship-lock/v<version>`),
-   because the installer build and the final core release read the committed copy.
-   Merge it; don't pin hashes by hand. Re-running the job is safe: it never opens a
-   second PR and does nothing when main already matches.
+4. **Freeze** on 4 platforms — `win32-x64`, `darwin-arm64`, `linux-x64`
+   **required**; `darwin-x64` (Intel) **best-effort** — smoke-test each, hash it.
+   The `tui` job proves the pinned `terminal-hub` version is published and
+   cross-checks its six artifacts against the hub's own SHA-256; a missing version
+   fails the release, with no fallback build.
+5. **Gates:** `tests` (Python suite + npm vitest) and `scorecard-gate` (parses
+   `hub/agents/gaia/npm/SCORECARD.md`, bar from
+   `tests/fixtures/gaia/quality_gate_thresholds.json`, regression vs the previous
+   `agent-pkg-gaia-*` tag) block publish. `gaia-eval` runs a judged subset on
+   self-hosted hardware and only reports.
+6. **Approve the gate.** `publish` pauses on the `agent-publish` environment until
+   a maintainer approves; the publish secrets aren't readable until then.
+7. **Publish** (atomic): upload the sidecars → regenerate `binaries.lock.json` with
+   the **real** hashes for both lanes → **fetch-verify every entry** at the public
+   origin → `npm publish` via OIDC → trigger `deploy_website.yml`.
+8. **Merge the lock PR.** `pin-lock` opens a PR committing the verified lock to
+   main (branch `flagship-lock/v<version>`), because the installer build and the
+   final core release read the committed copy. Merge it before tagging the core
+   release; don't pin hashes by hand. Re-running the job is safe.
 
-Monitor with `gh run watch`. The npm step goes through `util/npm_publish_once.py`,
-the same helper as the core release: it skips a version already on npm with the
-same tarball, fails if npm holds different bytes under that version, and refuses a
-prerelease version (agents publish finals under `latest` only). `/publish` is a
-verified 409 no-op for identical bytes. So a failed run is safe to re-run with
+Monitor with `gh run watch`. The npm step goes through `util/npm_publish_once.py`:
+it skips a version already on npm with the same tarball, fails if npm holds
+different bytes under that version, and refuses a prerelease version. `/publish`
+is a verified 409 no-op for identical bytes, so a failed run is safe to re-run with
 `gh run rerun <run-id> --failed`.
-
-## Onboarding a NEW sidecar agent (one-time)
-
-1. **Scaffold** the normal agent first (`gaia agent init`, see `gaia-build-agent`), then add
-   `packaging/` and the `hub/agents/<id>/npm/` client. Mirror email.
-2. **Adapt the packaging scripts.** `freeze.py` (its `NAME = "email-agent"` constant)
-   and `publish_to_r2.py` (the executable name + the `email-agent-` filename prefix it
-   parses) **hardcode `email-agent`** — copy + parameterize them for `<id>`.
-   `gen_binaries_lock.py` is already generic (driven by `published.json` + manifest
-   `id`); the `agents/email` hub prefix lives in the workflow's `HUB_PREFIX` env, not a
-   script.
-3. **Copy the workflow** `release_agent_email.yml` → `release_agent_<id>.yml` and
-   change: `PKG_DIR`, `MANIFEST`, `README`, `FREEZE_DIST`, `HUB_PREFIX`
-   (`agents/<id>`), the tag trigger (`agent-pkg-<id>-*`), the artifact/frozen names,
-   and the npm package name in the verify/publish steps.
-4. **Register the npm trusted publisher** for `@amd-gaia/agent-<id>` against the
-   exact filename `release_agent_<id>.yml`. ⚠️ The OIDC subject is tied to the
-   filename — **renaming the workflow later breaks publish.**
-5. *(Maintainability)* per-agent copies of a ~550-line workflow + three hardcoded
-   scripts **will drift**. The durable fix is a reusable `workflow_call` release
-   workflow + scripts parameterized by `<id>`; the per-agent copy is interim.
 
 ## One-time infrastructure (verify it exists)
 
-Per the workflow header (`release_agent_email.yml`), these are **maintainer setup**
-— confirm each before the first release:
+Per the workflow header, these are **maintainer setup** — confirm each before a
+release:
 
 - **GitHub environment `agent-publish`** with **required reviewers**; restrict its
   deployment branches/tags to `main` **and** the `agent-pkg-*` tag pattern (a
   main-only rule blocks the tag-triggered gate).
-- **Secret `GAIA_HUB_TOKEN`** — download-server (`hub.amd-gaia.ai`) Bearer token matching an entry in the
-  Worker's `PUBLISH_TOKENS`, scoped to the agent's `author`. Define it as an
-  **environment** secret on `agent-publish` (not a repo secret) so it's unreadable
-  until the gate is approved. (The workflow maps it into the publish script's
-  `AGENT_HUB_PUBLISH_TOKEN` env var — same token, different name inside the script.)
-- **Var `GAIA_HUB_BASE_URL`** — public Worker origin for downloads + the lock
+- **Secret `GAIA_HUB_TOKEN`** — download-server Bearer token matching an entry in
+  the Worker's `PUBLISH_TOKENS`, scoped to the `AMD` author. An **environment**
+  secret on `agent-publish`, not a repo secret. (The publish script reads it as
+  `AGENT_HUB_PUBLISH_TOKEN`.)
+- **Secrets `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `CLOUDFLARE_ACCOUNT_ID`** —
+  required every release, because the Linux sidecar goes straight to R2. Same
+  environment-secret placement.
+- **Var `GAIA_HUB_BASE_URL`** — public Worker origin for downloads and the lock
   `baseUrl` (default `https://hub.amd-gaia.ai`).
-- **Var `GAIA_HUB_PUBLISH_URL`** — the Worker's **workers.dev** URL for uploads. The
-  free-plan WAF on the proxied `hub.amd-gaia.ai` custom domain blocks large binary
-  uploads (but not GETs). **Required** — the release fails loudly if it is unset (no
-  silent fallback to the custom domain).
+- **Var `GAIA_HUB_PUBLISH_URL`** — the Worker's **workers.dev** URL for uploads; the
+  WAF on the `hub.amd-gaia.ai` custom domain 403s large uploads. **Required** — the
+  release fails loudly if it is unset.
+- **npm trusted publisher** for `@amd-gaia/gaia`, registered against the exact
+  filename `release_agent_gaia.yml`. ⚠️ Renaming the workflow breaks publish.
+- "Allow GitHub Actions to create and approve pull requests" stays on, so
+  `pin-lock` can open its PR.
 
 ## Invariants & gotchas
 
 - **Immutable per filename.** The Worker `409`s on any re-POST of an existing
-  filename (it keys on the filename via `head()`, not a byte-compare). The publish
-  script then re-fetches and hashes the stored object: **identical bytes → idempotent
-  no-op**, a **hash mismatch → fail loudly**. Fix a bad release with a new version —
-  never an overwrite.
+  filename. The publish script then re-fetches and hashes the stored object:
+  identical bytes → idempotent no-op, a hash mismatch → fail loudly.
 - **Publish only from main.** The job asserts the release commit is on `main`.
-- **`SCHEMA_VERSION` MAJOR is the compat gate.** Client and binary must agree on the
-  wire-contract MAJOR or `startSidecar` throws `VersionMismatchError`. Bump the npm
-  package and re-publish the binary together.
-- **Best-effort Intel.** `darwin-x64` builds on `macos-26-intel`, then is verified on
-  `macos-15-intel`. If it fails/absent it's **dropped** (3-platform release) with a
-  loud `::warning::`; Intel users get a clear "no binary for darwin-x64" install
-  error, never a placeholder one.
-- **SHA-256 provenance.** `publish_to_r2.py` hashes each binary locally and the Worker
-  hashes it server-side; the script **asserts they match** on the `201` before that
-  (local, server-verified) hash is written to `binaries.lock.json`. The lock hash is
-  then the gate the npm `fetch` CLI enforces on download (`PlatformError` on a
-  placeholder, `IntegrityError` on a mismatch).
-- **Fetch-verify is the real gate.** After `/publish`, CI re-fetches every object via
-  the npm `fetch` CLI and checks bytes-hash-to-lock (bounded retry for Cloudflare
-  edge propagation) before `npm publish`.
-- **Website is rebuilt, not patched.** The home page's download links are resolved
-  from the published manifests at build time; the publish job triggers
+- **Best-effort Intel.** If `darwin-x64` fails or is absent it is **dropped** (a
+  3-platform release) with a loud `::warning::`; Intel users get a clear "no
+  binary" install error, never a placeholder.
+- **SHA-256 provenance.** `publish_to_r2.py` hashes each binary locally and asserts
+  the Worker's server-side hash matches before writing it to the lock. The lock
+  hash is then the gate the install-time fetcher enforces.
+- **Fetch-verify is the real gate.** After `/publish`, CI re-fetches every object
+  and checks bytes-hash-to-lock (bounded retry for edge propagation) before
+  `npm publish`.
+- **Website is rebuilt, not patched.** The publish job triggers
   `deploy_website.yml` on `main`.
-- **Manual fallback:** `hub/agents/<id>/python/packaging/HUB-UPLOAD.md` documents the
-  by-hand rclone path to the `gaia-hub` bucket — identical objects + lock as CI.
 - **Write the CHANGELOG entry, PR body, and your status reports** per [CLAUDE.md → How You
   Communicate](../../../CLAUDE.md#how-you-communicate): lead with what changes for someone
   installing the agent, put versions, hashes, and workflow mechanics underneath. Always say
@@ -212,12 +173,12 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
 
 ## Reference files
 
-- `.github/workflows/release_agent_email.yml` — the canonical release workflow (its
-  header comments document the whole contract).
-- `hub/agents/email/python/gaia-agent.yaml` — manifest reference.
-- `hub/agents/email/npm/{package.json,binaries.lock.json,README.md}` —
-  client package reference.
-- `hub/agents/email/python/packaging/{freeze,smoke_test,publish_to_r2,gen_binaries_lock}.py`,
-  `HUB-UPLOAD.md` — packaging + publish tooling.
+- `.github/workflows/release_agent_gaia.yml` — the release workflow (its header
+  comments document the whole contract).
+- `.github/workflows/build_flagship_sidecar.yml` — the freeze matrix.
+- `hub/agents/gaia/python/gaia-agent.yaml` — manifest.
+- `hub/agents/gaia/npm/{package.json,binaries.lock.json,SPEC.md}` — launcher
+  package and the lock schema (SPEC §2).
+- `hub/agents/gaia/python/packaging/` — packaging and publish tooling.
 - `workers/agent-hub/{README.md,schemas/manifest.schema.json,src/}` — the Worker, the
   `/publish` contract, and the server-side aggregate schema.

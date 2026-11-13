@@ -24,15 +24,15 @@ from gaia.daemon.sidecars.errors import SidecarError, SidecarHTTPError
 from gaia.ui import _chat_helpers as helpers
 from gaia.ui import permissions as session_permissions
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar import daemon_client as daemon_client_module
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import (
-    EMAIL_PROFILE,
+from gaia.ui.models import ChatRequest
+from gaia.ui.routers.chat import router as chat_router
+from gaia.ui.sidecar import daemon_client as daemon_client_module
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import (
+    _NO_PROFILE,
     GAIA_PROFILE,
     full_access_supported,
 )
-from gaia.ui.models import ChatRequest
-from gaia.ui.routers.chat import router as chat_router
 from gaia.ui.sse_handler import SSEOutputHandler
 
 pytestmark = pytest.mark.allow_network
@@ -56,8 +56,8 @@ def test_only_a_flagship_with_the_bypass_route_takes_the_mode(version, expected)
     assert full_access_supported(GAIA_PROFILE, version) is expected
 
 
-def test_email_has_no_mode_to_set():
-    assert full_access_supported(EMAIL_PROFILE, "2.99") is False
+def test_a_profile_without_the_floor_has_no_mode_to_set():
+    assert full_access_supported(_NO_PROFILE, "2.99") is False
 
 
 # ── The dispatch reads the chat's mode ─────────────────────────────────────
@@ -379,7 +379,7 @@ def live_gaia_sidecar(monkeypatch):
 
 
 def test_the_flagship_follows_the_chats_mode_turn_by_turn(live_gaia_sidecar):
-    from gaia.ui.email_sidecar.proxy import SidecarProxy
+    from gaia.ui.sidecar.proxy import SidecarProxy
 
     base_url, agents = live_gaia_sidecar
     proxy = SidecarProxy(base_url, agent_id="gaia")

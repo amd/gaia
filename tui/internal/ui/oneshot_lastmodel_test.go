@@ -52,7 +52,7 @@ func TestOneShotModel(t *testing.T) {
 	})
 
 	t.Run("another agent keeps its own model", func(t *testing.T) {
-		if got, _ := oneShotModel("email", "", false, unread); got != "" {
+		if got, _ := oneShotModel("notes", "", false, unread); got != "" {
 			t.Fatalf("got %q", got)
 		}
 	})
@@ -90,8 +90,8 @@ func TestOneShotReadinessChecksTheChosenModel(t *testing.T) {
 	if got := oneShotConfig("gaia", "GAIA", "").Model; got != "" {
 		t.Fatalf("with no model chosen, readiness checks %q, want the agent default", got)
 	}
-	// The email agent ignores --model, so its own local model is still checked.
-	if got := oneShotConfig("email", "Email", "fireworks.deepseek-v4p1-flash").Model; got != "" {
-		t.Fatalf("email readiness checks %q, want its own default", got)
+	// Another agent ignores --model, so its own local model is still checked.
+	if got := oneShotConfig("notes", "Notes", "fireworks.deepseek-v4p1-flash").Model; got != "" {
+		t.Fatalf("notes readiness checks %q, want its own default", got)
 	}
 }

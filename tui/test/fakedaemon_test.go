@@ -67,7 +67,7 @@ func newFakeDaemon(t *testing.T) *fakeDaemon {
 	t.Setenv(daemon.EnvHome, dir)
 
 	f := &fakeDaemon{t: t}
-	f.catalogBody = emailCatalog()
+	f.catalogBody = notesCatalog()
 	f.srv = httptest.NewServer(http.HandlerFunc(f.handle))
 	t.Cleanup(f.srv.Close)
 
@@ -143,7 +143,7 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 
 	case r.URL.Path == daemon.APIPrefix+"/agents":
 		writeJSON(w, map[string]any{"agents": []map[string]any{
-			{"agent_id": "email", "state": "stopped"},
+			{"agent_id": "notes", "state": "stopped"},
 		}})
 
 	default:
@@ -152,18 +152,18 @@ func (f *fakeDaemon) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// emailCatalog is a GET /daemon/v1/catalog body with one supervised,
+// notesCatalog is a GET /daemon/v1/catalog body with one supervised,
 // non-verified agent.
-func emailCatalog() map[string]any {
+func notesCatalog() map[string]any {
 	entry := map[string]any{
-		"id":                  "email",
-		"name":                "Email",
-		"description":         "Email triage, drafting, and calendar",
+		"id":                  "notes",
+		"name":                "Notes",
+		"description":         "Note taking and search",
 		"category":            "Productivity",
-		"icon":                "📧",
+		"icon":                "📝",
 		"author":              "AMD",
 		"security_tier":       "experimental",
-		"permissions":         []string{"gmail:read", "gmail:send", "calendar:write"},
+		"permissions":         []string{"filesystem:read", "filesystem:write"},
 		"download_size_bytes": 39845888,
 		"latest_version":      "0.5.0",
 		"deprecated":          false,

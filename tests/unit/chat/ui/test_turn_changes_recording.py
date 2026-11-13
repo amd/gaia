@@ -97,7 +97,7 @@ def _relay_to_a_sidecar_that_edits(monkeypatch, api_version, created, deleted):
     under the turn id the request carries."""
     import threading
 
-    from gaia.ui.email_sidecar import daemon_client, relay
+    from gaia.ui.sidecar import daemon_client, relay
 
     handle = types.SimpleNamespace(
         api_version=api_version,

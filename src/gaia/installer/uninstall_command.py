@@ -227,6 +227,8 @@ def _purge_paths(home: Optional[Path] = None) -> List[Path]:
         gaia / "core",
         gaia / "app-core",
         gaia / "traces",
+        # Data the removed email agent left behind; nothing reads it any more.
+        gaia / "email",
     ]
 
 

@@ -27,7 +27,7 @@ export interface Session {
     agent_type?: string;
     /** Device used for this session (cpu / gpu / npu). */
     device?: string;
-    /** Mail provider for email-triage sessions ("google" | "microsoft"). */
+    /** Mailbox the session's mail tools read ("google" | "microsoft"). */
     mail_provider?: string | null;
     /** Whether chat leaves this machine; null/absent when the backend can't tell. */
     inference_remote?: boolean | null;

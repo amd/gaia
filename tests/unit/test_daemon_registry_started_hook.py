@@ -90,7 +90,7 @@ class _FakeManager:
 def _registry(on_started, *, manager_cls=_FakeManager):
     from gaia.daemon.sidecars.registry import SidecarRegistry
 
-    reg = SidecarRegistry({"email": builtin_specs()["email"]}, on_started=on_started)
+    reg = SidecarRegistry({"gaia": builtin_specs()["gaia"]}, on_started=on_started)
     reg._manager_factory = manager_cls  # type: ignore[attr-defined]
     return reg
 
@@ -99,12 +99,12 @@ def test_fresh_spawn_fires_on_started_once_with_manager():
     calls = []
     reg = _registry(lambda aid, mgr: calls.append((aid, mgr)))
 
-    entry = reg.ensure("email")
+    entry = reg.ensure("gaia")
 
     assert entry["state"] == "running"
     assert len(calls) == 1
     agent_id, manager = calls[0]
-    assert agent_id == "email"
+    assert agent_id == "gaia"
     # The hook receives the SAME manager the sidecar spawned, so the forwarder
     # can resolve its base_url + bearer.
     assert manager.base_url == entry["base_url"]
@@ -115,10 +115,10 @@ def test_attach_to_running_does_not_refire_on_started():
     calls = []
     reg = _registry(lambda aid, mgr: calls.append(aid))
 
-    reg.ensure("email")  # fresh spawn -> fires once
-    reg.ensure("email")  # attach to the already-running sidecar -> must NOT fire
+    reg.ensure("gaia")  # fresh spawn -> fires once
+    reg.ensure("gaia")  # attach to the already-running sidecar -> must NOT fire
 
-    assert calls == ["email"]
+    assert calls == ["gaia"]
 
 
 def test_on_started_failure_is_swallowed_and_spawn_still_succeeds(caplog):
@@ -128,21 +128,21 @@ def test_on_started_failure_is_swallowed_and_spawn_still_succeeds(caplog):
     reg = _registry(_boom)
 
     with caplog.at_level(logging.WARNING):
-        entry = reg.ensure("email")
+        entry = reg.ensure("gaia")
 
     # A raising hook must NOT fail an otherwise-healthy spawn.
     assert entry["state"] == "running"
     assert entry["base_url"]
     # ...but it is NOT silent: the failure is logged loudly with context.
     assert any(
-        "post-start hook" in rec.getMessage() and "email" in rec.getMessage()
+        "post-start hook" in rec.getMessage() and "gaia" in rec.getMessage()
         for rec in caplog.records
     )
 
 
 def test_on_started_none_is_a_noop():
     reg = _registry(None)
-    entry = reg.ensure("email")  # must not raise
+    entry = reg.ensure("gaia")  # must not raise
     assert entry["state"] == "running"
 
 
@@ -163,7 +163,7 @@ class _RecordingForwarder:
 def _build_registry_with(forwarder):
     from gaia.daemon.server import _build_registry
 
-    reg = _build_registry({"email": builtin_specs()["email"]}, forwarder)
+    reg = _build_registry({"gaia": builtin_specs()["gaia"]}, forwarder)
     reg._manager_factory = _FakeManager  # type: ignore[attr-defined]
     return reg
 
@@ -172,11 +172,11 @@ def test_server_on_started_closure_calls_forward_all_with_connection():
     forwarder = _RecordingForwarder()
     reg = _build_registry_with(forwarder)
 
-    entry = reg.ensure("email")
+    entry = reg.ensure("gaia")
 
     assert len(forwarder.calls) == 1
     call = forwarder.calls[0]
-    assert call["agent_id"] == "email"
+    assert call["agent_id"] == "gaia"
     assert call["base_url"] == entry["base_url"]
     assert call["bearer"] == entry["token"]
 
@@ -190,10 +190,10 @@ def test_server_on_started_closure_returns_early_without_base_url():
     forwarder = _RecordingForwarder()
     from gaia.daemon.server import _build_registry
 
-    reg = _build_registry({"email": builtin_specs()["email"]}, forwarder)
+    reg = _build_registry({"gaia": builtin_specs()["gaia"]}, forwarder)
     reg._manager_factory = _NoUrlManager  # type: ignore[attr-defined]
 
-    reg.ensure("email")
+    reg.ensure("gaia")
 
     assert forwarder.calls == []  # no forward attempted without a base_url
 
@@ -201,11 +201,11 @@ def test_server_on_started_closure_returns_early_without_base_url():
 def test_a_sidecar_on_an_ignored_lemonade_is_restarted_on_ensure():
     """Setup chose GAIA's own while the agent ran on LEMONADE_BASE_URL (#6671)."""
     reg = _registry(lambda aid, mgr: None)
-    reg.ensure("email")
-    manager = reg._managers["email"][0]
+    reg.ensure("gaia")
+    manager = reg._managers["gaia"][0]
     assert manager.start_calls == 1
     manager.uses_ignored_lemonade = True
-    reg.ensure("email")
+    reg.ensure("gaia")
     assert manager.start_calls == 2 and manager.is_running
 
 
@@ -215,16 +215,16 @@ def test_a_restart_whose_old_sidecar_survives_fails_loudly():
             self._running = False  # the kill "succeeded" but the pid lives on
 
     reg = _registry(lambda aid, mgr: None, manager_cls=_UnkillableManager)
-    reg.ensure("email")
-    manager = reg._managers["email"][0]
+    reg.ensure("gaia")
+    manager = reg._managers["gaia"][0]
     manager.uses_ignored_lemonade = True
     with pytest.raises(StopFailedError, match=f"pid {manager.pid} survived"):
-        reg.ensure("email")
+        reg.ensure("gaia")
     assert manager.start_calls == 1
 
 
 def test_a_sidecar_on_the_right_lemonade_is_attached_not_restarted():
     reg = _registry(lambda aid, mgr: None)
-    reg.ensure("email")
-    reg.ensure("email")
-    assert reg._managers["email"][0].start_calls == 1
+    reg.ensure("gaia")
+    reg.ensure("gaia")
+    assert reg._managers["gaia"][0].start_calls == 1

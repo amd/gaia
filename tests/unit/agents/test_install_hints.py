@@ -317,14 +317,14 @@ class TestSourceInstallRef:
 
 class TestAgentImportErrorMessage:
     def test_missing_top_level_module_name_reports_not_installed(self):
-        # No CI environment can produce this for real -- gaia-agent-email is
+        # No CI environment can produce this for real -- gaia-agent-gaia is
         # installed for the wheel's own tests. CPython assigns ImportError.name
         # exactly this way at raise time, so the constructed object is the
         # identical shape the real import machinery produces.
-        error = ModuleNotFoundError("No module named 'gaia_agent_email'")
-        error.name = "gaia_agent_email"
+        error = ModuleNotFoundError("No module named 'gaia_agent'")
+        error.name = "gaia_agent"
         message = agent_import_error_message(
-            error, "The email agent is not installed", "gaia-agent-email"
+            error, "The GAIA agent is not installed", "gaia-agent-gaia"
         )
         assert "is not installed" in message
 

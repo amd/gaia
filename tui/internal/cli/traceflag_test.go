@@ -107,7 +107,7 @@ func TestTraceSpacedPathIsCaughtOnEverySubcommand(t *testing.T) {
 	}{
 		{"root", rootCmd, []string{"out.jsonl"}},
 		{"chat", chatCmd, []string{"out.jsonl"}},
-		{"run", runCmd, []string{"email", "out.jsonl"}},
+		{"run", runCmd, []string{"notes", "out.jsonl"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := parseTraceFlag(t, "--trace"); err != nil {
@@ -134,8 +134,8 @@ func TestTraceArgAdviceStaysOutOfTheWay(t *testing.T) {
 		if _, err := parseTraceFlag(t, "--trace"); err != nil {
 			t.Fatalf("parse: %v", err)
 		}
-		if err := runCmd.Args(runCmd, []string{"email"}); err != nil {
-			t.Errorf("`run email --trace` was rejected: %v", err)
+		if err := runCmd.Args(runCmd, []string{"notes"}); err != nil {
+			t.Errorf("`run notes --trace` was rejected: %v", err)
 		}
 	})
 

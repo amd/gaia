@@ -59,15 +59,15 @@ func lemonadeRow(t *testing.T, rep Report) Row {
 // --- it fires, and a successful start takes the row green ---------------------
 
 func TestADownLocalServerIsStartedWithoutTheUserTypingAnything(t *testing.T) {
-	f := newFake().with("GET /v1/email/init", 503, initUnreachableLocal)
+	f := newFake().with("GET /v1/gaia/init", 503, initUnreachableLocal)
 	// A real start makes the next /init answer differently. Without this the
 	// test would prove only that a POST happened, not that it repaired anything.
 	f.startLemonadeFn = func(context.Context) error {
-		f.with("GET /v1/email/init", 200, initReady)
+		f.with("GET /v1/gaia/init", 200, initReady)
 		return nil
 	}
 
-	rep := Check(context.Background(), f, EmailConfig())
+	rep := Check(context.Background(), f, testConfig())
 
 	if !f.called(http.MethodPost, daemon.APIPrefix+"/lemonade/start") {
 		t.Fatalf("the gate never asked the daemon to start the local model server")
@@ -87,7 +87,7 @@ func TestAReachableServerIsNeverStarted(t *testing.T) {
 	// cost, and no more.
 	f := newFake()
 
-	Check(context.Background(), f, EmailConfig())
+	Check(context.Background(), f, testConfig())
 
 	if f.called(http.MethodPost, daemon.APIPrefix+"/lemonade/start") {
 		t.Errorf("started a model server that was already running")
@@ -97,9 +97,9 @@ func TestAReachableServerIsNeverStarted(t *testing.T) {
 func TestARemoteServerIsNeverStartedHere(t *testing.T) {
 	// Starting a server on THIS machine would not be used by an agent pointed
 	// at another one — so the honest answer stays "start it over there".
-	f := newFake().with("GET /v1/email/init", 503, initUnreachableRemote)
+	f := newFake().with("GET /v1/gaia/init", 503, initUnreachableRemote)
 
-	rep := Check(context.Background(), f, EmailConfig())
+	rep := Check(context.Background(), f, testConfig())
 
 	if f.called(http.MethodPost, daemon.APIPrefix+"/lemonade/start") {
 		t.Fatalf("tried to start a local server for a remote base URL")
@@ -115,9 +115,9 @@ func TestARemoteServerIsNeverStartedHere(t *testing.T) {
 func TestTheStartIsAttemptedOnlyOnce(t *testing.T) {
 	// A second attempt re-waits the full start budget to reach the same answer.
 	// Every failure the starter reports is one a retry cannot change.
-	f := newFake().with("GET /v1/email/init", 503, initUnreachableLocal)
+	f := newFake().with("GET /v1/gaia/init", 503, initUnreachableLocal)
 
-	Check(context.Background(), f, EmailConfig())
+	Check(context.Background(), f, testConfig())
 
 	starts := 0
 	for _, c := range f.calls {
@@ -138,10 +138,10 @@ func TestARefusedStartShowsTheDaemonsOwnReason(t *testing.T) {
 	// is the wrong remedy for two of those three, so its text is what shows.
 	const detail = "Port 13305 on localhost is in use by a process that does not answer " +
 		"Lemonade's health endpoint, so GAIA will not start a server there."
-	f := newFake().with("GET /v1/email/init", 503, initUnreachableLocal)
+	f := newFake().with("GET /v1/gaia/init", 503, initUnreachableLocal)
 	f.startLemonadeErr = &LemonadeStartRefused{Status: http.StatusServiceUnavailable, Detail: detail}
 
-	rep := Check(context.Background(), f, EmailConfig())
+	rep := Check(context.Background(), f, testConfig())
 
 	row := lemonadeRow(t, rep)
 	if row.State != StateFailed {
@@ -160,10 +160,10 @@ func TestADaemonTooOldToStartLemonadeSaysSoRatherThanBlamingTheAgent(t *testing.
 	// A 404 on this route is a version skew. The generic 404 branch of the
 	// ladder reads it as "the agent is not installed" — a wrong subject and a
 	// wrong fix.
-	f := newFake().with("GET /v1/email/init", 503, initUnreachableLocal)
+	f := newFake().with("GET /v1/gaia/init", 503, initUnreachableLocal)
 	f.startLemonadeErr = &LemonadeStartRefused{Status: http.StatusNotFound}
 
-	rep := Check(context.Background(), f, EmailConfig())
+	rep := Check(context.Background(), f, testConfig())
 
 	row := lemonadeRow(t, rep)
 	if !strings.Contains(row.Detail, "older than this app") {
@@ -177,12 +177,12 @@ func TestADaemonTooOldToStartLemonadeSaysSoRatherThanBlamingTheAgent(t *testing.
 func TestAnUnreachableDaemonIsDiagnosedAsTheDaemonNotAsLemonade(t *testing.T) {
 	// The POST never reached the daemon, so the daemon is the subject. Saying
 	// "start Lemonade" here sends the user at the wrong process.
-	f := newFake().with("GET /v1/email/init", 503, initUnreachableLocal)
+	f := newFake().with("GET /v1/gaia/init", 503, initUnreachableLocal)
 	f.startLemonadeErr = &daemon.RequestError{
 		Op: "call POST /daemon/v1/lemonade/start", Detail: "connection refused",
 	}
 
-	rep := Check(context.Background(), f, EmailConfig())
+	rep := Check(context.Background(), f, testConfig())
 
 	row := lemonadeRow(t, rep)
 	if !strings.Contains(strings.ToLower(row.Detail), "background service") {

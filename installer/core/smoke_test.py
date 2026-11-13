@@ -55,7 +55,7 @@ BUNDLED_MODULES = [
 if sys.platform == "win32":
     BUNDLED_MODULES.append("plyer.platforms.win.notification")
 #: The hub agents run as their own binaries; the core must not carry them.
-NOT_BUNDLED = ["gaia_agent", "gaia_agent_email", "torch", "PyInstaller"]
+NOT_BUNDLED = ["gaia_agent", "torch", "PyInstaller"]
 HEALTH_TIMEOUT_S = 90
 
 #: One MCP ``initialize`` request; a stdio server answers it, then exits at EOF.

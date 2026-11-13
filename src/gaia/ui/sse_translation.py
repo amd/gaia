@@ -178,7 +178,7 @@ class CanonicalTranslator:
     Args:
         run_id: The host-minted run handle, echoed on pause events.
         agent_id: Agent this run belongs to. Drives ``respond_url`` — the reason
-            this is a parameter and not a constant: a hardcoded ``/v1/email/...``
+            this is a parameter and not a constant: a hardcoded ``/v1/<agent>/...``
             silently points every other agent's client at the wrong sidecar.
         action_labels: ``tool name -> human headline`` for confirmation prompts.
         summary_renderer: ``(tool, args) -> str`` override for the whole

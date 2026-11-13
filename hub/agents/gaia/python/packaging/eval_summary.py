@@ -3,8 +3,7 @@
 
 """Republish the gaia-agent eval's gate verdicts as a GitHub job summary.
 
-Adapted nearly verbatim from ``hub/agents/email/python/packaging/eval_summary.py``
-— one reporter shape across agents. A gate manifest under ``tests/fixtures/gaia/``
+A gate manifest under ``tests/fixtures/gaia/``
 that ships ``enforce: false`` lets a BREACHED BAR exit 0 and produce a green step
 with no annotation -- the number only exists inside ``eval-out/*.json``, which
 nobody opens. That is not coverage. This reporter reads the gate reports the eval

@@ -3,7 +3,6 @@
 # Format: <file>:<rule> <count>. Counts may only go down: fix a site, then
 # lower its line (or delete it at zero). Never raise a count to land new code.
 
-hub/agents/email/python/packaging/smoke_test.py:subprocess_no_timeout 1
 hub/agents/gaia/python/packaging/check_glibc.py:subprocess_no_timeout 1
 hub/agents/gaia/python/packaging/eval_csv_export.py:subprocess_no_timeout 1
 hub/agents/gaia/python/packaging/smoke_test.py:subprocess_no_timeout 1

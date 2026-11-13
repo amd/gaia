@@ -334,10 +334,10 @@ older than source (2.4 vs 2.6). When testing an agent from a checkout, set the
 same mode on the TUI launch so its ensure request agrees with the sidecar:
 
 ```bash
-GAIA_EMAIL_AGENT_MODE=dev /path/to/gaia-tui --control-port 8815
+GAIA_GAIA_AGENT_MODE=dev /path/to/gaia-tui --control-port 8815
 ```
 
-Use `GAIA_GAIA_AGENT_MODE=dev` for the flagship `gaia` agent. The TUI resolves
+The variable is per agent (`GAIA_<ID>_AGENT_MODE`). The TUI resolves
 the caller checkout and sends the per-agent source directory to the daemon;
 starting a dev sidecar separately while the TUI still defaults to `user`
 creates a mode conflict. Check `api_version` in `GET /daemon/v1/agents`.

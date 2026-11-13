@@ -21,12 +21,12 @@ import (
 // sit here looking asserted-as-real.
 func TestTheLocalAIRemedyNamesACommandThisMachineHas(t *testing.T) {
 	rows := map[string]*fakeTransport{
-		"not reachable":         newFake().with("GET /v1/email/init", 503, initUnreachable),
-		"model list unreadable": newFake().with("GET /v1/email/init", 503, initModelListUnreadable),
+		"not reachable":         newFake().with("GET /v1/gaia/init", 503, initUnreachable),
+		"model list unreadable": newFake().with("GET /v1/gaia/init", 503, initModelListUnreadable),
 	}
 	for name, f := range rows {
 		t.Run(name, func(t *testing.T) {
-			rep := Check(context.Background(), f, EmailConfig())
+			rep := Check(context.Background(), f, testConfig())
 			row, ok := rep.Find(KeyLemonade)
 			if !ok || row.State != StateFailed {
 				t.Fatalf("expected a failed Local AI row:\n%s", rep)
@@ -47,7 +47,7 @@ func TestTheLocalAIRemedyNamesACommandThisMachineHas(t *testing.T) {
 // The same property through the ladder, which the chat view shares — a mid-run
 // Lemonade outage must not print a command the gate would not.
 func TestTheLadderNamesACommandThisMachineHas(t *testing.T) {
-	l := Ladder{AgentID: "email"}
+	l := Ladder{AgentID: "gaia"}
 	for name, d := range map[string]Diagnosis{
 		"not reachable": l.Text("check the local AI",
 			"Local Lemonade Server is not reachable at http://localhost:13305/api/v1"),

@@ -164,7 +164,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const handleDetachFailed = useCallback((name: string, err: unknown) => {
         setActionError(t('chat.detachFailed', { name, error: requestErrorParam(err) }));
     }, [t]);
-    // A chat made by a retired agent (chat/doc/file) can be read but not continued.
+    // A chat made by a retired agent (chat/doc/file/email) can be read but not continued.
     const retiredAgent = session?.agent_type && session.agent_type !== FLAGSHIP_AGENT_ID ? session.agent_type : null;
 
     const [liveHistoryNotice, setLiveHistoryNotice] = useState<string | null>(null);
@@ -795,7 +795,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                     return;
                 }
 
-                // ── Stateless confirmation card (email /query, #2109 D1) ──
+                // ── Stateless confirmation card (sidecar relay, #2109 D1) ──
                 // Informational: the sidecar run is already over, so this is
                 // a chat-flow card via the generic #2108 mechanism — NEVER
                 // the blocking PermissionPrompt/confirm_id path above. Only
@@ -1238,8 +1238,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [sessionId, runningHere, pollIsNewer, isStreaming]);
 
     // Listen for programmatic message dispatches from rich-content
-    // components (currently the EmailPreScanCard's Approve / Reply
-    // buttons). Wired as a window-level CustomEvent rather than prop
+    // components. Wired as a window-level CustomEvent rather than prop
     // drilling so any embedded component can reach the active session
     // without ChatView having to know about it ahead of time.
     useEffect(() => {

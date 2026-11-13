@@ -17,7 +17,7 @@ import (
 // is missing, not just list the agents that are there.
 func TestAnUnknownAgentNamesAnUnreadableInstall(t *testing.T) {
 	home := t.TempDir()
-	dir := filepath.Join(home, ".gaia", "agents", "email")
+	dir := filepath.Join(home, ".gaia", "agents", "notes")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func TestAnUnknownAgentNamesAnUnreadableInstall(t *testing.T) {
 	cat.LoadInstalledAgents()
 
 	got := knownIDs(cat)
-	if !strings.Contains(got, "'email' is not listed as installed") {
+	if !strings.Contains(got, "'notes' is not listed as installed") {
 		t.Fatalf("knownIDs = %q", got)
 	}
 }

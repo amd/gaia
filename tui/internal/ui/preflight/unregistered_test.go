@@ -11,7 +11,7 @@ import (
 // so — and `gaia init` alone, which installs outside the daemon, must not be
 // offered as the whole fix.
 func TestAnUnregisteredAgentIsFixedByRestartingTheDaemon(t *testing.T) {
-	onlyEmail := `{"agents":[{"agent_id":"email","state":"stopped","mode":null,` +
+	onlyOther := `{"agents":[{"agent_id":"notes","state":"stopped","mode":null,` +
 		`"pid":null,"port":null,"base_url":null,"api_version":null,"agent_version":null,` +
 		`"started_at":null,"dev_src_dir":null}]}`
 
@@ -22,8 +22,8 @@ func TestAnUnregisteredAgentIsFixedByRestartingTheDaemon(t *testing.T) {
 		wantInstall string
 	}{
 		{"flagship, empty list", "gaia", agentsEmpty, "gaia init"},
-		{"flagship, other agents listed", "gaia", onlyEmail, "gaia init"},
-		{"email, empty list", "email", agentsEmpty, "gaia hub install email"},
+		{"flagship, other agents listed", "gaia", onlyOther, "gaia init"},
+		{"another agent, empty list", "notes", agentsEmpty, "gaia hub install notes"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -38,7 +38,7 @@ func TestAnUnregisteredAgentIsFixedByRestartingTheDaemon(t *testing.T) {
 }
 
 func TestADaemon404NamesTheRestart(t *testing.T) {
-	for id, wantInstall := range map[string]string{"gaia": "gaia init", "email": "gaia hub install email"} {
+	for id, wantInstall := range map[string]string{"gaia": "gaia init", "notes": "gaia hub install notes"} {
 		d := Ladder{AgentID: id}.Status("call the agent", 404,
 			`{"detail":"unknown agent '`+id+`'. Registered: chat"}`)
 		assertRestartRemedy(t, d.AsRemedy(), wantInstall)
@@ -63,7 +63,7 @@ func TestA404WithNoAgentStillListsTheRegisteredAgents(t *testing.T) {
 // A registered agent that is merely stopped is the daemon's to start; telling
 // the user to restart the whole service there would kill every other agent.
 func TestARegisteredButStoppedAgentIsNotSentToRestartTheDaemon(t *testing.T) {
-	row := sidecarRow(t, newFake().with("GET /daemon/v1/agents", 200, agentsStopped), EmailConfig())
+	row := sidecarRow(t, newFake().with("GET /daemon/v1/agents", 200, agentsStopped), testConfig())
 	if row.Line != "installed, not started" {
 		t.Fatalf("line = %q", row.Line)
 	}

@@ -142,23 +142,23 @@ func TestARefusedFollowUpIsNotRecorded(t *testing.T) {
 
 // An older sidecar 404s the path itself, which is indistinguishable from "your
 // run ended" if the client just posts and reads the status. Ask first.
-func TestEmailAgentAtSchema215IsNeverSentAFollowUp(t *testing.T) {
+func TestAnotherAgentAtSchema215IsNeverSentAFollowUp(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.15"
-	c, stop := liveRunOnAgent(t, f, "email")
+	c, stop := liveRunOnAgent(t, f, "notes")
 	defer stop()
 
 	if c.FollowUpSupported() {
-		t.Fatal("the email agent must not advertise the flagship follow-up route")
+		t.Fatal("another agent must not advertise the flagship follow-up route")
 	}
 	if err := c.SendFollowUp(context.Background(), "only the unread ones"); err == nil {
-		t.Fatal("the email agent must not receive a mid-turn follow-up")
+		t.Fatal("another agent must not receive a mid-turn follow-up")
 	}
 	f.mu.Lock()
 	posts := len(f.followUps)
 	f.mu.Unlock()
 	if posts != 0 {
-		t.Fatalf("the email agent received %d follow-up posts", posts)
+		t.Fatalf("another agent received %d follow-up posts", posts)
 	}
 }
 

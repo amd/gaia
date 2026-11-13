@@ -31,15 +31,14 @@ v0.17.5); an in-repo package under `hub/agents/` adds a `gaia-agent.yaml` manife
    ```
 
    Then mirror an existing package for structure: `tests/fixtures/agents/hello-world/`
-   for a minimal one, `hub/agents/email/python/` for a full published agent.
+   for a minimal one, `hub/agents/gaia/python/` (the flagship) for a full published agent.
 
 2. **Write the `Agent` subclass.** Inherit from `Agent` (or a closer base like
    `ChatAgent`, which the flagship `GaiaAgent` extends). **Leave `model_id` unset** — that inherits the base default,
    `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`), which is right for nearly every agent.
    Every agent sharing one model is what keeps a single model resident, so switching
    agents never triggers an eviction + cold reload. Only set `model_id` when the agent
-   genuinely needs a different model (e.g. the email agent picks the NPU model
-   `gemma4-it-e2b-FLM` when one is present and servable), and say why. Keep the constructor thin.
+   genuinely needs a different model, and say why. Keep the constructor thin.
 
 3. **Register tools with `@tool`.** Each `@tool` method is a capability the LLM can
    call; its **docstring is the schema the model sees**, so write it for the model

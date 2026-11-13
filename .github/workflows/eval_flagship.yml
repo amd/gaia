@@ -44,8 +44,8 @@
 #
 # THIS POOL IS WINDOWS. Every inline `run:` step below is PowerShell, and Python
 # setup goes through ./.github/actions/setup-venv (uv, Windows-aware) — the
-# lab-runner convention shared by email_scorecard_refresh.yml. Do NOT
-# reintroduce bash here: this workflow's first-ever execution died instantly on
+# lab-runner convention shared by gaia_scorecard_refresh.yml. Do NOT reintroduce
+# bash here: this workflow's first-ever execution died instantly on
 # `source .venv/bin/activate` because GitHub ran it through powershell.EXE, and
 # every other bash step in the job hit the same parser. Windows also breaks the
 # text-processing assumptions bash invites — the eval prints an `Output:` line
@@ -68,7 +68,8 @@
 # This mirrors how intentional regressions are handled elsewhere: the
 # `--allow-regression` flag in src/gaia/eval/scorecard_gate.py prints a
 # `::warning::` and returns 0 rather than pretending the regression did not
-# happen. Same idea, inverted default: report unless asked to enforce.
+# happen. Same idea, inverted default: report unless asked to
+# enforce.
 #
 # REPORT MODE COVERS "WORSE" AND "DIDN'T MEASURE" ALIKE — VISIBLY. `--compare`
 # scores only scenarios present on BOTH sides: scenarios that vanish from the
@@ -116,12 +117,12 @@
 # PREREQUISITES ON THE RUNNER. Lemonade is NOT assumed to be already running:
 # install-lemonade pins the runner to the expected LEMONADE_VERSION and
 # ensure-lemonade-running.ps1 starts it as a persistent Scheduled Task and warms
-# the model — exactly what email_scorecard_refresh.yml does. (An earlier
-# revision of this file claimed the lab workflows assume a persistent server and
-# start nothing; they do not, and that claim is what left this job with no way
-# to bring Lemonade up.) The GAIA UI backend is separate and NOT persistent, so
-# this workflow starts it itself — in the SAME shell session as the evals,
-# because a backgrounded child does not survive a GitHub Actions step boundary.
+# the model — exactly what gaia_scorecard_refresh.yml does. (An earlier revision
+# of this file assumed a persistent server and started nothing, which left this
+# job with no way to bring Lemonade up.) The GAIA UI
+# backend is separate and NOT persistent, so this workflow starts it itself — in
+# the SAME shell session as the evals, because a backgrounded child does not
+# survive a GitHub Actions step boundary.
 #
 # Lemonade must serve TWO models, not one. ensure-lemonade-running.ps1 warms
 # only the chat model, but rag_quality and context_retention answer out of RAG
@@ -238,12 +239,12 @@ on:
 # NO WORKFLOW-LEVEL CONCURRENCY, deliberately. A group declared here is held by
 # the whole run, so every lane would wait on the one the first lane took and the
 # split would buy nothing — the same shape as the phantom-job bug this repo has
-# already paid for once (a caller holding the group its callee needed). Each
-# lane declares its own group at job level, where `matrix.lane` is in scope.
+# already paid for once (a caller holding the group its callee needed). Each lane declares its own group at job level,
+# where `matrix.lane` is in scope.
 #
 # `lemonade-eval` is gone from this file on purpose and must not come back. It
-# serialises by NAME across machines, which is right for the persistent pool the
-# email eval still runs on and wrong for the ephemeral one these lanes use.
+# serialises by NAME across machines, which is right for a persistent pool and
+# wrong for the ephemeral one these lanes use.
 
 permissions:
   contents: read
@@ -322,9 +323,9 @@ env:
   # job level (util/eval_lane_matrix.py).
   # Long-term memory surviving between categories makes a later category's score
   # depend on an earlier one's run order (convention: test_chat_agent.yml).
-  # The memory lane is the one place that state IS the subject, and it can opt
-  # back in safely because every category runs on its own fresh GAIA home (see
-  # the run step). Do not rely on the machine being
+  # The memory lane is the one place that state IS
+  # the subject, and it can opt back in safely because every category runs on
+  # its own fresh GAIA home (see the run step). Do not rely on the machine being
   # wiped: the runner's ~/.gaia survived between runs and leaked memory (rc16).
   #
   # Do NOT flip these here. Workflow scope would re-enable memory for every lane
@@ -760,7 +761,7 @@ jobs:
     #
     # `lemonade-eval` is deliberately NOT here. It is the lock label for the one
     # persistent Halo box, and holding it would put every lane back in a single
-    # queue. The email and publish workflows still use it; this one must not.
+    # queue. The publish workflows still use it; this one must not.
     runs-on: [self-hosted, Windows, devlab-dispatch, strix-halo]
     defaults:
       run:
@@ -1520,7 +1521,7 @@ jobs:
         # integrity / compare / upload steps still running on the partial results.
         # A job-level timeout instead CANCELS, which skips every `!cancelled()`
         # step and discards the categories that did finish. See the budget
-        # derivation on the job above. Same convention as email_scorecard_refresh.yml.
+        # derivation on the job above.
         #
         # MUST stay below the job's timeout-minutes, or the job cancels first and
         # this is dead code - the 60 min gap is the setup + collect + upload the

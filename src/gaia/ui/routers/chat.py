@@ -415,7 +415,7 @@ async def _confirm_relayed_tool(
     from starlette.concurrency import run_in_threadpool
 
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import grants as relayed_grants
+    from gaia.ui.sidecar import grants as relayed_grants
 
     always = request.always and request.approved
     scope = handler.relay_always_scope(request.confirm_id)
@@ -624,8 +624,8 @@ async def _revoke_relayed(session_id: str, agent_id: str, key: Optional[str]) ->
     from starlette.concurrency import run_in_threadpool
 
     from gaia.daemon.sidecars.errors import SidecarError
-    from gaia.ui.email_sidecar import daemon_client
-    from gaia.ui.email_sidecar import grants as relayed_grants
+    from gaia.ui.sidecar import daemon_client
+    from gaia.ui.sidecar import grants as relayed_grants
 
     from .._chat_helpers import _active_sse_handlers
 

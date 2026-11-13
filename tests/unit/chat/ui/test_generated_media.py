@@ -507,8 +507,8 @@ def test_handler_and_translation_carry_audio_path(gaia_dir):
 
 def test_a_relayed_flagship_media_result_still_draws_the_inline_card(gaia_dir):
     """The terminal's ``media`` card must not displace the Agent UI's own card."""
-    from gaia.ui.email_sidecar.profiles import profile_for
-    from gaia.ui.email_sidecar.relay import _dispatch_one
+    from gaia.ui.sidecar.profiles import profile_for
+    from gaia.ui.sidecar.relay import _dispatch_one
     from gaia.ui.sse_handler import SSEOutputHandler
     from gaia.ui.sse_translation import CanonicalTranslator
 
@@ -546,8 +546,8 @@ def test_a_relayed_flagship_media_result_still_draws_the_inline_card(gaia_dir):
 
 def test_relayed_turn_streams_and_persists_the_audio_card(gaia_dir, monkeypatch):
     import gaia.ui._chat_helpers as chat_helpers_module
-    import gaia.ui.email_sidecar.daemon_client as daemon_client_module
-    import gaia.ui.email_sidecar.relay as relay_module
+    import gaia.ui.sidecar.daemon_client as daemon_client_module
+    import gaia.ui.sidecar.relay as relay_module
     from gaia.ui._chat_helpers import _stream_chat_impl
     from gaia.ui.database import ChatDatabase
     from gaia.ui.models import ChatRequest
@@ -592,7 +592,7 @@ def test_relayed_turn_streams_and_persists_the_audio_card(gaia_dir, monkeypatch)
         handler._emit({"type": "answer", "content": "Here is your track."})
 
     class _Handle:
-        api_version = "2.4"
+        api_version = "2.12"
 
         def proxy(self):
             return SimpleNamespace(init=lambda: (200, {}))
@@ -601,15 +601,19 @@ def test_relayed_turn_streams_and_persists_the_audio_card(gaia_dir, monkeypatch)
         return None
 
     monkeypatch.setattr(
-        daemon_client_module, "acquire_handle", lambda agent_id="email": _Handle()
+        daemon_client_module, "acquire_handle", lambda agent_id: _Handle()
     )
     monkeypatch.setattr(relay_module, "relay_query", _fake_relay_query)
+    monkeypatch.setattr(
+        chat_helpers_module, "_should_relay_to_sidecar", lambda *_a: True
+    )
+    monkeypatch.setattr(chat_helpers_module, "_agent_type_unknown", lambda *_a: False)
     monkeypatch.setattr(chat_helpers_module, "_maybe_update_session_title", _noop)
 
     db = ChatDatabase(":memory:")
-    session = db.create_session(agent_type="email")
+    session = db.create_session(agent_type="gaia")
     request = ChatRequest(
-        session_id=session["id"], message="make music", stream=True, agent_type="email"
+        session_id=session["id"], message="make music", stream=True, agent_type="gaia"
     )
     streamed = []
 

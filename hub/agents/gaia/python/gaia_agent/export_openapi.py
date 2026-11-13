@@ -8,7 +8,7 @@ conforms to it, and so does anything else embedding the sidecar instead of
 reading ``docs/guides/gaia.mdx`` prose. This module both *produces* that
 artifact and lets CI *diff* it, so a route or schema change that isn't
 regenerated fails loudly instead of silently drifting from the published
-contract — mirroring ``gaia_agent_email.export_openapi`` (#1645).
+contract (#1645).
 
 The spec is built from a minimal FastAPI app that mounts ONLY the gaia router
 plus the three probe routes (``/health``, ``/version``,

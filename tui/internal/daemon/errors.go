@@ -193,7 +193,7 @@ func IsRouteMissing(path string, status int, detail string) bool {
 }
 
 // RequestError is a transport or protocol failure talking to a live daemon.
-// Op names the call ("ensure the 'email' sidecar", "stream the 'email' query").
+// Op names the call ("ensure the 'gaia' sidecar", "stream the 'gaia' query").
 type RequestError struct {
 	Op     string
 	Detail string

@@ -26,7 +26,7 @@ describe("releaseDownloads", () => {
   });
 
   it("never counts a sub-package tag as the main line", () => {
-    expect(releaseDownloads([rel("agent-pkg-email-v0.5.0")], [])[0]!.main).toBe(false);
+    expect(releaseDownloads([rel("agent-pkg-gaia-v0.5.0")], [])[0]!.main).toBe(false);
   });
 });
 

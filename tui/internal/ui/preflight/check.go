@@ -17,31 +17,13 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
-// ExtraCheck is a per-agent precondition appended after the four generic ones.
-//
-// The first four rows are the same for any sidecar agent that implements
-// GET /v1/<agent>/init. Anything agent-specific — for email, a mailbox that is
-// connected, granted send, AND proven readable — arrives here, so the screen
-// stays generic.
-type ExtraCheck struct {
-	Key   string
-	Label string
-	// Optional marks a check that gates a CAPABILITY rather than the launch —
-	// see Row.Optional. Its verdict is reported in full; it just does not stop
-	// the walk or refuse the run.
-	Optional bool
-	Run      func(ctx context.Context, t Transport, cfg Config) Row
-}
-
 // Config parameterises a readiness check.
 type Config struct {
-	// AgentID is the daemon-registered id, e.g. "email". It is the `<agent>` in
+	// AgentID is the daemon-registered id, e.g. "gaia". It is the `<agent>` in
 	// every relayed path and in every remedy command.
 	AgentID string
-	// AgentName is the display name, e.g. "Email".
+	// AgentName is the display name, e.g. "GAIA".
 	AgentName string
-	// Extras run after the generic checks, in order.
-	Extras []ExtraCheck
 	// Model is the chat model this launch starts on. A cloud id means the
 	// agent's default local chat model is not needed.
 	Model string
@@ -49,7 +31,7 @@ type Config struct {
 
 func (c Config) withDefaults() Config {
 	if c.AgentID == "" {
-		c.AgentID = "email"
+		c.AgentID = catalog.FlagshipID
 	}
 	if c.AgentName == "" {
 		// Rune-wise: byte-slicing corrupts a non-ASCII id into mojibake.
@@ -59,25 +41,9 @@ func (c Config) withDefaults() Config {
 	return c
 }
 
-// EmailConfig is the built-in configuration for the email agent: the four
-// generic checks plus the mailbox check.
-func EmailConfig() Config {
-	return Config{
-		AgentID:   "email",
-		AgentName: "Email",
-		Extras:    []ExtraCheck{MailboxCheck()},
-	}
-}
-
-// ConfigFor is what a launch site calls: the generic checks for any agent, plus
-// whatever extras that agent has. One call site, so adding an agent's extra
-// check never means finding every place a gate is built.
+// ConfigFor is what a launch site calls: the generic checks for any agent.
 func ConfigFor(agentID, agentName string) Config {
-	cfg := Config{AgentID: agentID, AgentName: agentName}.withDefaults()
-	if cfg.AgentID == "email" {
-		cfg.Extras = []ExtraCheck{MailboxCheck()}
-	}
-	return cfg
+	return Config{AgentID: agentID, AgentName: agentName}.withDefaults()
 }
 
 // Check probes every precondition in dependency order and returns a typed
@@ -108,17 +74,6 @@ func Check(ctx context.Context, t Transport, cfg Config) Report {
 		}
 	}
 
-	for _, extra := range cfg.Extras {
-		row := extra.Run(ctx, t, cfg)
-		row.Key, row.Label, row.Optional = extra.Key, extra.Label, extra.Optional
-		setRow(&rep, row)
-		// An optional row is reported, never a stop sign: it gates a capability
-		// the ask may not need, and halting here would hide the rows below it.
-		if row.State == StateFailed && !extra.Optional {
-			markPending(&rep)
-			return rep
-		}
-	}
 	return rep
 }
 
@@ -130,9 +85,6 @@ func blankRows(cfg Config) []Row {
 		{Key: KeySidecar, Label: cfg.AgentName + " agent"},
 		{Key: KeyLemonade, Label: lemonadeRowLabel},
 		{Key: KeyModel, Label: modelRowLabel},
-	}
-	for _, extra := range cfg.Extras {
-		rows = append(rows, Row{Key: extra.Key, Label: extra.Label, Optional: extra.Optional})
 	}
 	for i := range rows {
 		rows[i].State = StatePending
@@ -398,7 +350,7 @@ func describeSidecar(version *string, pid *int) string {
 }
 
 // sidecarProbeTimeout bounds the one call that proves the agent's own process is
-// serving. GET /v1/<agent>/health touches no mailbox, no model and no network,
+// serving. GET /v1/<agent>/health touches no account, no model and no network,
 // so a healthy sidecar answers in milliseconds on loopback; past this the
 // process is not answering rather than answering slowly.
 const sidecarProbeTimeout = 10 * time.Second
@@ -420,9 +372,6 @@ type sidecarLiveness struct {
 // The daemon's agent listing reports what its REGISTRY records, and a sidecar
 // whose event loop is blocked keeps its pid, keeps its port, and serves nothing
 // — so "running" is a claim about a process, not about an agent that answers.
-// That gap is what put "cannot be checked" on the Mailbox row over an agent that
-// had stopped answering every route it has.
-//
 // ANY answer proves the loop is alive: a 404 from an agent with no health route
 // still came off it. Only a call that never produced one — a transport failure,
 // or a relay saying it could not get an answer out of the sidecar — means the
@@ -839,7 +788,7 @@ func probeInit(ctx context.Context, t Transport, cfg Config, rep *Report) (State
 // markCtxShortfall reports a model loaded into a smaller context window than this
 // machine's profile pins.
 //
-// This is the mailbox bug one layer down: the row was green, the server was
+// This is a green row over a broken state: the row was green, the server was
 // healthy, short turns worked — and a document-sized request came back
 // `context_length_exceeded`. Measured on a 10.10.0 machine, the model loaded at
 // 25037 with the server started bare and 32527 with the profile's 65536
@@ -959,528 +908,8 @@ func humanCtx(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// ---------------------------------------------------------------------------
-// 5. [email-specific] The mailbox: connected, granted send, AND usable.
-// ---------------------------------------------------------------------------
-
-type connectorEntry struct {
-	Provider     string   `json:"provider"`
-	Connected    bool     `json:"connected"`
-	AccountEmail *string  `json:"account_email"`
-	Scopes       []string `json:"scopes"`
-	CanSend      bool     `json:"can_send"`
-	// Busy: another GAIA operation is saving the connection, so its scopes and
-	// can_send are unknown for the moment, not false.
-	Busy bool `json:"busy"`
-}
-
-type connectorsBody struct {
-	AgentID   string           `json:"agent_id"`
-	Providers []connectorEntry `json:"providers"`
-}
-
-// emailAgentGrantID mirrors connector_routes.EMAIL_AGENT_ID.
-const emailAgentGrantID = "installed:email"
-
-// connectScopes is the EXACT scope list a reconnect must request, per provider:
-// the connector's default_scopes ∪ the agent's FULL requested union (mail +
-// calendar), mirroring connector_routes._build_scope_union post-#2730 D3.
-// Guarded against drift from the Python side by
-// tests/fixtures/connectors/email_scopes.json (see
-// TestConnectScopesMatchesTheSharedFixture in check_test.go) — edit the
-// fixture's connect_union alongside this map, never one without the other.
-//
-// The union is not decoration. `gaia connectors connect --scopes` REPLACES the
-// provider defaults rather than adding to them (flow.py: `list(scopes) or
-// list(provider.default_scopes)`), so a remedy naming only the mail scopes
-// authorizes an account with less than it had before — the exact silent
-// narrowing #2730 removes. Every connect path now requests the same wide
-// union; only the daemon's forward-out mint narrows to what it enforces.
-var connectScopes = map[string][]string{
-	"google": {
-		// providers/google.py GOOGLE_IDENTITY_SCOPES (the catalog's default_scopes)
-		"openid", "https://www.googleapis.com/auth/userinfo.email",
-		// gaia_agent_email.scopes.ALL_SCOPES (GMAIL_SCOPES + CALENDAR_SCOPES)
-		"https://www.googleapis.com/auth/gmail.modify",
-		"https://www.googleapis.com/auth/gmail.send",
-		"https://www.googleapis.com/auth/calendar.events",
-		"https://www.googleapis.com/auth/calendar.readonly",
-	},
-	"microsoft": {
-		// catalog/microsoft.py default_scopes — no `openid`: an Entra tenant can
-		// reject the whole authorization request over it (AADSTS65002, #4079).
-		"offline_access", "https://graph.microsoft.com/User.Read",
-		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES (OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES)
-		"https://graph.microsoft.com/Mail.ReadWrite",
-		"https://graph.microsoft.com/Mail.Send",
-		"https://graph.microsoft.com/Calendars.ReadWrite",
-	},
-	"microsoft_work": {
-		// catalog/microsoft.py default_scopes (work tenant — same Graph app registration shape)
-		"offline_access", "https://graph.microsoft.com/User.Read",
-		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES — identical to personal Outlook;
-		// only the connector id (token/grant/keyring slot) differs.
-		"https://graph.microsoft.com/Mail.ReadWrite",
-		"https://graph.microsoft.com/Mail.Send",
-		"https://graph.microsoft.com/Calendars.ReadWrite",
-	},
-}
-
-// sendScopes is the per-provider scope `can_send` is really asking about. It
-// lets the row say WHICH half of the authorization is missing when the payload
-// carries enough to tell: a sign-in that never requested the scope needs a new
-// sign-in, while a sign-in that has it but was not handed to the agent does not.
-var sendScopes = map[string]string{
-	"google":         "https://www.googleapis.com/auth/gmail.send",
-	"microsoft":      "https://graph.microsoft.com/Mail.Send",
-	"microsoft_work": "https://graph.microsoft.com/Mail.Send",
-}
-
-// connectCommand is the one command that fixes every mailbox state: it
-// re-authorizes with the FULL requested union (mail + calendar) AND grants it
-// to the agent in the same flow, so the token and the grant can never
-// disagree, and never end up narrower than what the Agent UI would have
-// granted for the same account (#2730 D3).
-//
-// Deliberately NOT `gaia connectors grants grant`: that cannot add a scope the
-// stored token never carried, so on its own it would trade "cannot send" for
-// "cannot read".
-func connectCommand(provider string) string {
-	scopes, ok := connectScopes[provider]
-	if !ok {
-		provider, scopes = "google", connectScopes["google"]
-	}
-	return fmt.Sprintf("gaia connectors connect %s --grant-agent %s --scopes %s",
-		provider, emailAgentGrantID, strings.Join(scopes, " "))
-}
-
-// MailboxCheck is the email agent's extra precondition.
-//
-// It answers "is this mailbox USABLE", which is three questions, not one, and
-// they fail independently:
-//
-//   - Is an account linked?              `connected`
-//   - May the agent send from it?        `can_send`
-//   - Do the stored credentials work?    only a real read can say
-//
-// The third is the one that used to be assumed. A stored connection keeps
-// reporting `connected: true` after its refresh token is revoked, expired, or
-// (under the daemon's forward-out custody model) never reaches the sidecar at
-// all — so the row went green over a mailbox whose very first read 502s. See
-// mailboxProbeBodyJSON and mailboxProbeTimeout for what that read costs and why
-// it is bounded.
-//
-// It is an OPTIONAL check (Row.Optional), which is not the same as a soft one:
-// the row still proves what it can and still fails loudly when the mailbox is
-// unusable. What it must not do is refuse the launch, because the agent's
-// capabilities do not all need a mailbox — POST /v1/<agent>/triage classifies
-// the subject and body carried IN the request ("No mail is read or sent"), so a
-// user with nothing connected must still be able to run a triage query. The
-// mailbox operations — search, send, archive, quarantine, pre-scan, briefing —
-// fail on their own, with the sidecar's own error, and this row is what warns
-// them first.
-func MailboxCheck() ExtraCheck {
-	return ExtraCheck{
-		Key:      KeyMailbox,
-		Label:    "Mailbox",
-		Optional: true,
-		Run:      runMailboxCheck,
-	}
-}
-
-// Every StateFailed branch KeyMailbox can produce below is Disposition
-// Notify: Report.OfferableDespiteFailure treats the whole key as
-// agent-repairable (agentRepairable[KeyMailbox]), so the screen already
-// offers a single-keypress path past any mailbox failure into the
-// conversation where the agent walks the user through fixing it. Halting in
-// front of that offer would be a second prompt for one decision — see
-// TestAMailboxWhoseCredentialsAreRejectedNeverGreenLightsALaunch.
-func runMailboxCheck(ctx context.Context, t Transport, cfg Config) Row {
-	l := Ladder{AgentID: cfg.AgentID}
-	row := Row{Key: KeyMailbox, Label: "Mailbox"}
-
-	resp, err := t.Do(ctx, http.MethodGet, "/v1/"+cfg.AgentID+"/connectors", nil)
-	if err != nil {
-		d := l.Error("check which mailboxes are connected", err)
-		row.State, row.Line, row.Detail, row.Remedy, row.Raw =
-			StateFailed, "cannot be checked", d.Cause, d.AsRemedy(), err.Error()
-		row.Disposition = status.DispositionNotify
-		return row
-	}
-	row.Raw = string(resp.Body)
-	if resp.Status != http.StatusOK {
-		d := l.Status("check which mailboxes are connected", resp.Status, string(resp.Body))
-		row.State, row.Line, row.Detail, row.Remedy =
-			StateFailed, "cannot be checked", d.Cause, d.AsRemedy()
-		row.Disposition = status.DispositionNotify
-		return row
-	}
-
-	var body connectorsBody
-	if err := json.Unmarshal(resp.Body, &body); err != nil {
-		row.State, row.Line = StateFailed, "unreadable answer"
-		row.Disposition = status.DispositionNotify
-		row.Detail = "The mailbox connector list could not be read."
-		row.Remedy = Remedy{
-			Action:  "Restart the agent's sidecar, then re-check.",
-			Command: "gaia daemon start-agent " + cfg.AgentID,
-			Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
-		}
-		return row
-	}
-
-	// Prefer a mailbox whose metadata says it should work; fall back to reporting
-	// the connected-but-not-granted one, which is a distinct failure with a
-	// distinct remedy.
-	var sendable, connected, busy *connectorEntry
-	connectedCount := 0
-	for i := range body.Providers {
-		p := &body.Providers[i]
-		if !p.Connected {
-			continue
-		}
-		connectedCount++
-		if p.CanSend && sendable == nil {
-			sendable = p
-		}
-		if p.Busy && busy == nil {
-			busy = p
-		}
-		if connected == nil {
-			connected = p
-		}
-	}
-
-	switch {
-	case sendable != nil:
-		// Metadata says linked + granted. That is exactly the state that used to
-		// go green on a mailbox nothing had ever read, so PROVE it.
-		return finishMailboxRow(row, probeMailbox(ctx, t, cfg, connectedCount), sendable, cfg)
-	case busy != nil:
-		return busyMailboxRow(row, busy)
-	case connected != nil:
-		return notGrantedRow(row, connected, cfg)
-	}
-
-	row.State = StateFailed
-	row.Disposition = status.DispositionNotify
-	row.Line = "not connected"
-	row.Detail = fmt.Sprintf("%s cannot do anything until it can read a mailbox. Connecting takes about three minutes.", cfg.AgentName)
-	row.Fix = FixConnectMailbox
-	// No provider: nothing is connected, so the choice between Gmail and Outlook
-	// is the user's and belongs to the connector flow. Naming one here would
-	// route an Outlook user into a Google sign-in.
-	row.Provider = ""
-	row.Remedy = Remedy{
-		Action:  "Connect Gmail, Outlook, or Microsoft 365 — press f to choose. For Outlook swap `google` for `microsoft` below, or `microsoft_work` for a work account.",
-		Command: connectCommand("google"),
-		Where:   "https://amd-gaia.ai/docs/guides/email",
-	}
-	return row
-}
-
-// busyMailboxRow reports a mailbox another GAIA operation is saving right now.
-// Its scopes are unknown, not missing, so this is never a sign-in remedy.
-func busyMailboxRow(row Row, p *connectorEntry) Row {
-	row.State = StateUnknown
-	row.Disposition = status.DispositionNotify
-	row.Line = fmt.Sprintf("%s · being saved, not verified",
-		accountOr(p.AccountEmail, providerName(p.Provider)))
-	row.Detail = "Another GAIA operation is saving this mailbox connection right now, " +
-		"so whether it can read and send can't be checked yet."
-	row.Remedy = Remedy{
-		Action:  "Press r — this clears on its own in a moment.",
-		Command: "gaia connectors list",
-		Where:   "https://amd-gaia.ai/docs/guides/email",
-	}
-	return row
-}
-
-// notGrantedRow reports a linked account the agent may not send from.
-//
-// `can_send` is false for two different reasons that need two different
-// sentences: the sign-in itself never requested the send scope, or it did and
-// the agent was simply never handed it. The connector list carries the
-// connection's own scopes, so where that list is populated the row says which
-// one it is; where it is empty (the daemon's forward-out deployment keeps the
-// connection in its own custody store) the row says it cannot tell rather than
-// picking one. The command is the same either way — it re-runs the sign-in and
-// the grant together, which is the only fix that covers both halves; see
-// connectCommand for the one thing it can still narrow.
-func notGrantedRow(row Row, p *connectorEntry, cfg Config) Row {
-	who := accountOr(p.AccountEmail, providerName(p.Provider))
-	row.State = StateFailed
-	row.Disposition = status.DispositionNotify
-	row.Fix = FixConnectMailbox
-	row.Provider = p.Provider
-	row.Remedy = Remedy{
-		Action:  "Reconnect it — press f, or run the command. Takes about a minute.",
-		Command: connectCommand(p.Provider),
-		Where:   "https://amd-gaia.ai/docs/guides/email",
-	}
-
-	sendScope, known := sendScopes[p.Provider]
-	switch {
-	case len(p.Scopes) == 0:
-		row.Line = fmt.Sprintf("%s · send not allowed", who)
-		row.Detail = fmt.Sprintf(
-			"The account is linked but %s may not send from it, so a send fails mid-task. "+
-				"The connector list does not say whether the sign-in or the grant is the "+
-				"missing half; the command below redoes both.", cfg.AgentName)
-	case known && !containsString(p.Scopes, sendScope):
-		row.Line = fmt.Sprintf("%s · sign-in has no send access", who)
-		row.Detail = fmt.Sprintf(
-			"The account was signed in without the send scope, so nothing short of signing "+
-				"in again can add it — a grant cannot hand %s a permission the sign-in "+
-				"never carried.", cfg.AgentName)
-	default:
-		row.Line = fmt.Sprintf("%s · send access not granted", who)
-		row.Detail = fmt.Sprintf(
-			"The sign-in itself does include send permission, but %s was never granted it, "+
-				"so a send fails mid-task. The command below redoes the sign-in and the "+
-				"grant together so the two cannot disagree.", cfg.AgentName)
-	}
-	return row
-}
-
-// --- the credential probe ---------------------------------------------------
-
-// mailboxProbeBodyJSON is the cheapest read the email contract has: POST
-// /v1/<agent>/search with no query and no labels lists the INBOX (api_routes
-// ._search_inbox scopes an empty search to it), and max_results 1 bounds the
-// per-message hydration to a single fetch.
-//
-// It is a read, never a write, and it resolves its mailbox exactly the way the
-// agent's own first tool call does — so what it proves is what the user is about
-// to ask for.
-const mailboxProbeBodyJSON = `{"max_results":1}`
-
-// mailboxProbeTimeout bounds the one live call the gate makes.
-//
-// The read is two provider round trips (a list and one hydrating fetch), ~100ms
-// warm on a normal connection, against a screen the gate already holds for
-// ~800ms — so a healthy mailbox is mostly paid for out of time the user was
-// already spending. This bound is what stops a slow or wedged provider turning
-// that into a wait people resent: past it the row reports "could not be
-// verified", which does not block the launch.
-const mailboxProbeTimeout = 5 * time.Second
-
-// probeVerdict is what the credential probe established.
-type probeVerdict int
-
-const (
-	// probeUsable — the sidecar read the mailbox.
-	probeUsable probeVerdict = iota
-	// probeRefused — the sidecar tried and the mailbox refused it. Proved broken.
-	probeRefused
-	// probeInconclusive — no answer about the mailbox at all. NOT a pass.
-	probeInconclusive
-)
-
-// probeResult is the verdict plus the words for the row it produces.
-type probeResult struct {
-	verdict probeVerdict
-	// cause is what happened, in the user's terms.
-	cause string
-	// remedy is what to do about an inconclusive probe; a refusal reconnects.
-	remedy Remedy
-	// trace is appended to Row.Raw so `d` shows the probe and what it cost.
-	trace string
-}
-
-// probeMailbox issues the read and classifies the answer into exactly three
-// outcomes. The classification rule is deliberately narrow: only an answer the
-// SIDECAR gave about the MAILBOX may fail the row. Anything else — the relay not
-// reaching the sidecar, a probe this build sent wrong, an ambiguity the contract
-// cannot resolve — is inconclusive, because blaming the mailbox for it would
-// hand the user a reconnect that fixes nothing.
-func probeMailbox(ctx context.Context, t Transport, cfg Config, connectedCount int) probeResult {
-	l := Ladder{AgentID: cfg.AgentID}
-	path := "/v1/" + cfg.AgentID + "/search"
-
-	// With two mailboxes linked the read route refuses to choose between them
-	// (api_routes.get_search_backend 400s on 2+) and it takes no provider
-	// argument, so the answer is knowable without asking: spending a round trip
-	// on every launch to be told the same thing is the cost users resent.
-	if connectedCount > 1 {
-		return probeResult{
-			verdict: probeInconclusive,
-			cause: fmt.Sprintf(
-				"%d mailboxes are linked, and the agent's read cannot be aimed at one of "+
-					"them, so neither could be verified before launch.", connectedCount),
-			remedy: Remedy{
-				Action:  "Leave one mailbox linked if you want this verified before launch.",
-				Command: "gaia connectors list",
-				Where:   "https://amd-gaia.ai/docs/guides/email",
-			},
-			trace: fmt.Sprintf("mailbox probe: skipped — %d mailboxes linked and POST %s "+
-				"takes no provider", connectedCount, path),
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(ctx, mailboxProbeTimeout)
-	defer cancel()
-
-	start := time.Now()
-	resp, err := t.Do(ctx, http.MethodPost, path, []byte(mailboxProbeBodyJSON))
-	took := time.Since(start)
-	trace := func(outcome string) string {
-		return fmt.Sprintf("mailbox probe: POST %s %s -> %s in %dms",
-			path, mailboxProbeBodyJSON, outcome, took.Milliseconds())
-	}
-
-	if err != nil {
-		d := l.Error("read the mailbox", err)
-		return probeResult{
-			verdict: probeInconclusive,
-			cause:   d.Cause,
-			remedy:  d.AsRemedy(),
-			trace:   trace("transport error: " + err.Error()),
-		}
-	}
-
-	detail := jsonDetail(resp.Body)
-	outcome := fmt.Sprintf("HTTP %d %s", resp.Status, strings.TrimSpace(string(resp.Body)))
-
-	switch {
-	case resp.Status == http.StatusOK:
-		return probeResult{verdict: probeUsable, trace: trace(outcome)}
-
-	// Another GAIA operation held the connection mid-save; it clears in a moment.
-	case connectionBeingSaved(detail):
-		return probeResult{
-			verdict: probeInconclusive,
-			cause: "Another GAIA operation was saving the mailbox connection at that moment, " +
-				"so the mailbox could not be verified. " + detailSuffix(firstSentence(detail)),
-			remedy: Remedy{
-				Action:  "Press r — this clears on its own in a moment.",
-				Command: "gaia connectors list",
-				Where:   "https://amd-gaia.ai/docs/guides/email",
-			},
-			trace: trace(outcome),
-		}
-
-	// The sidecar told us its forwarded token lapsed and the daemon has not
-	// re-sent one YET (forwarded_credentials: "Retry in a moment"). Blocking a
-	// launch on that would send the user through a browser sign-in for something
-	// pressing r clears — so believe the "transient" it just told us.
-	case transientCredentialGap(detail):
-		return probeResult{
-			verdict: probeInconclusive,
-			cause: "The mailbox credential the background service hands the agent had just " +
-				"lapsed and a fresh one had not arrived yet, so the mailbox could not be " +
-				"verified. " + detailSuffix(firstSentence(detail)),
-			remedy: Remedy{
-				Action:  "Press r — this usually clears on its own within a minute.",
-				Command: "gaia connectors list",
-				Where:   "https://amd-gaia.ai/docs/guides/email",
-			},
-			trace: trace(outcome),
-		}
-
-	// 403 (auth missing/expired/revoked, or a scope the token does not carry)
-	// and a sidecar-authored 502 (gaia.connectors refused to produce a usable
-	// credential) are the mailbox itself saying no. So is a sidecar-authored
-	// 503 — it can no longer resolve a mailbox at all, which contradicts the
-	// metadata this row just read, and the metadata is the side that has been
-	// wrong. The relay authors a 503 of its own, and that one is NOT the mailbox.
-	case resp.Status == http.StatusForbidden,
-		(resp.Status == http.StatusServiceUnavailable ||
-			resp.Status == http.StatusBadGateway) && !relayGaveUp(detail):
-		// Only the DIAGNOSIS half of the sidecar's detail. The rest of it is the
-		// sidecar's own remedy, which carries a `<scopes>` placeholder — quoting
-		// that verbatim would show the user a command they cannot copy, and
-		// truncating it would show half a command, which is worse.
-		return probeResult{
-			verdict: probeRefused,
-			cause:   firstNonEmpty(firstSentence(detail), "The mailbox refused the read."),
-			trace:   trace(outcome),
-		}
-
-	// The sidecar is running (the row above proved it) but has no read route, so
-	// it is older than this check. The Ladder's generic 404 answer — "the
-	// background service does not know this agent, install it" — names the wrong
-	// subject over an agent that is up.
-	case resp.Status == http.StatusNotFound, resp.Status == http.StatusUnprocessableEntity:
-		return probeResult{
-			verdict: probeInconclusive,
-			cause: fmt.Sprintf(
-				"The running %s agent does not answer the read this check verifies a mailbox "+
-					"with, so the mailbox could not be verified. %s",
-				cfg.AgentName, detailSuffix(detail)),
-			remedy: Remedy{
-				Action:  "Update the agent if you want this verified before launch.",
-				Command: catalog.UpdateCommand(cfg.AgentID),
-				Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", cfg.AgentID),
-			},
-			trace: trace(outcome),
-		}
-	}
-
-	// Everything else — a relay 502, a 500 from a bug on the way to the mailbox —
-	// says nothing about the credentials.
-	d := l.Status("read the mailbox", resp.Status, string(resp.Body))
-	return probeResult{
-		verdict: probeInconclusive,
-		cause:   d.Cause,
-		remedy:  d.AsRemedy(),
-		trace:   trace(outcome),
-	}
-}
-
-// finishMailboxRow turns a probe verdict into the row.
-func finishMailboxRow(row Row, res probeResult, p *connectorEntry, cfg Config) Row {
-	row.Raw = strings.TrimSpace(row.Raw + "\n\n" + res.trace)
-	who := accountOr(p.AccountEmail, "connected")
-
-	switch res.verdict {
-	case probeUsable:
-		row.State = StateOK
-		row.Line = fmt.Sprintf("%s (%s) · can read and send", who, providerName(p.Provider))
-		return row
-
-	case probeRefused:
-		row.State = StateFailed
-		row.Disposition = status.DispositionNotify
-		row.Line = fmt.Sprintf("%s · sign-in no longer works",
-			accountOr(p.AccountEmail, providerName(p.Provider)))
-		row.Detail = fmt.Sprintf(
-			"The account is linked and granted, but reading it just failed, so the very "+
-				"first thing %s does would fail too. %s", cfg.AgentName, detailSuffix(res.cause))
-		row.Fix = FixConnectMailbox
-		row.Provider = p.Provider
-		row.Remedy = Remedy{
-			Action:  "Sign in again — press f, or run the command. Takes about a minute.",
-			Command: connectCommand(p.Provider),
-			Where:   "https://amd-gaia.ai/docs/guides/email",
-		}
-		return row
-	}
-
-	// Inconclusive: linked and granted, but unproven. Not a pass — it renders
-	// [?], keeps Ready() false and is named on screen — and not a block either,
-	// because nothing here says the mailbox is broken. This is also the
-	// BLOCKER-1 guard for 2+ linked mailboxes (probeMailbox refuses to probe
-	// when connectedCount > 1): that state is permanent for a supported,
-	// shipped configuration, so it must stay Notify, never Halt.
-	row.State = StateUnknown
-	row.Disposition = status.DispositionNotify
-	row.Line = fmt.Sprintf("%s (%s) · connected, not verified", who, providerName(p.Provider))
-	row.Detail = res.cause
-	row.Remedy = res.remedy
-	if row.Remedy.Empty() {
-		row.Remedy = Remedy{
-			Action:  "Press r to try again; the checks continue either way.",
-			Command: "gaia connectors list",
-			Where:   "https://amd-gaia.ai/docs/guides/email",
-		}
-	}
-	return row
-}
-
 // relayGaveUp reports whether the answer came from the daemon relay rather than
-// from the sidecar. A dead relay hop is not a mailbox that refused anything, and
-// answering it with a browser sign-in hides the one fix that works.
+// from the sidecar.
 //
 // The relay names itself in every body it authors, and this depends on that
 // wording: its two 502s say "sidecar for agent '<id>'" (relay.py), its 503 for a
@@ -1489,26 +918,12 @@ func finishMailboxRow(row Row, res probeResult, p *connectorEntry, cfg Config) R
 // answer" its own health route (sidecars/manager.check_responsive). Nothing on
 // the Python side pins those strings, so the fixtures in check_test.go carry
 // them VERBATIM — a reword there breaks a test here rather than silently turning
-// a wedged sidecar into a dead mailbox.
+// a wedged sidecar into a failure of the agent's own.
 func relayGaveUp(detail string) bool {
 	d := strings.ToLower(detail)
 	return strings.Contains(d, "sidecar for agent") ||
 		strings.Contains(d, "no running sidecar") ||
 		strings.Contains(d, "is alive but did not answer")
-}
-
-// connectionBeingSaved reports whether gaia.connectors refused because another
-// GAIA operation held the connection mid-save (ConnectionBusyError), which clears
-// itself in a moment.
-func connectionBeingSaved(detail string) bool {
-	return strings.Contains(strings.ToLower(detail), "being saved by another gaia operation")
-}
-
-// transientCredentialGap reports whether the sidecar said the forwarded token
-// had merely lapsed between re-forwards, which is the one credential failure that
-// clears itself (forwarded_credentials: "has not re-forwarded a fresh one yet").
-func transientCredentialGap(detail string) bool {
-	return strings.Contains(strings.ToLower(detail), "has not re-forwarded")
 }
 
 // jsonDetail pulls FastAPI's `{"detail": ...}` out of an error body so the row
@@ -1566,33 +981,4 @@ func clip(s string, limit int) string {
 		return s
 	}
 	return strings.TrimSpace(string(r[:limit])) + "…"
-}
-
-func containsString(list []string, want string) bool {
-	for _, s := range list {
-		if s == want {
-			return true
-		}
-	}
-	return false
-}
-
-func providerName(provider string) string {
-	switch provider {
-	case "google":
-		return "Gmail"
-	case "microsoft":
-		return "Outlook"
-	case "microsoft_work":
-		return "Microsoft 365"
-	default:
-		return provider
-	}
-}
-
-func accountOr(email *string, fallback string) string {
-	if email == nil || *email == "" {
-		return fallback
-	}
-	return *email
 }

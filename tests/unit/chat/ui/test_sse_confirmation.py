@@ -414,7 +414,7 @@ class TestSSEPathUnaffectedByDenyByDefault:
 
 
 class _FakeRespondProxy:
-    """Fake EmailSidecarProxy exposing only respond_query, for handler tests."""
+    """Fake SidecarProxy exposing only respond_query, for handler tests."""
 
     def __init__(self, *, raises=None):
         self.calls = []

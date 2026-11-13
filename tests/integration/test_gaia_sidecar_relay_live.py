@@ -32,9 +32,9 @@ import threading
 import pytest
 
 from gaia.daemon.sidecars.spec import builtin_specs
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE, api_version_supported
-from gaia.ui.email_sidecar.proxy import SidecarProxy
-from gaia.ui.email_sidecar.relay import relay_query
+from gaia.ui.sidecar.profiles import GAIA_PROFILE, api_version_supported
+from gaia.ui.sidecar.proxy import SidecarProxy
+from gaia.ui.sidecar.relay import relay_query
 from gaia.ui.turn_summary import TurnLedger
 
 pytestmark = pytest.mark.skipif(

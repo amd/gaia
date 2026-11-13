@@ -18,7 +18,7 @@ from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.ui._chat_helpers import _add_indexed_documents_to_library, _done_event
 from gaia.ui.agent_documents import add_indexed_documents, not_yet_indexed
 from gaia.ui.database import ChatDatabase
-from gaia.ui.email_sidecar.relay import _dispatch_one
+from gaia.ui.sidecar.relay import _dispatch_one
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 from gaia.ui.turn_summary import TurnLedger

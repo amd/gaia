@@ -130,21 +130,20 @@ class GoogleOAuthProvider:
                 provider_label="Google",
                 console_steps=console_steps,
                 example=(
-                    "  For the email agent, copy-paste (bash) after creating the "
+                    "  For mail and calendar in GAIA, copy-paste (bash) after creating the "
                     "client above:\n"
                     "    gaia connectors configure google --client-id <ID> "
                     "--client-secret <SECRET>\n"
                     "    gaia connectors connect google --grant-agent "
-                    "installed:email\n"
+                    "installed:gaia\n"
                     "  (Naming the agent is enough — GAIA reads the scopes it "
                     "already declares, no need to type them out. To grant a "
                     "narrower set instead, pass --scopes explicitly:\n"
-                    '    SCOPES="https://www.googleapis.com/auth/gmail.modify '
-                    "https://www.googleapis.com/auth/gmail.send "
-                    "https://www.googleapis.com/auth/calendar.events "
-                    'https://www.googleapis.com/auth/calendar.readonly"\n'
+                    '    SCOPES="https://www.googleapis.com/auth/gmail.readonly '
+                    "https://www.googleapis.com/auth/gmail.compose "
+                    'https://www.googleapis.com/auth/calendar.events"\n'
                     "    gaia connectors connect google --scopes $SCOPES "
-                    "--grant-agent installed:email)"
+                    "--grant-agent installed:gaia)"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/google",
             )

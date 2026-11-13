@@ -153,7 +153,7 @@ func TestShiftTabOverAPromptUpdatesItsModeLine(t *testing.T) {
 
 // A transport that cannot carry the mode says so and leaves the mode alone.
 func TestShiftTabWithoutAControlChannelChangesNothing(t *testing.T) {
-	m := NewChatModel(&nullClient{}, "email", "", false)
+	m := NewChatModel(&nullClient{}, "notes", "", false)
 	m.width, m.height = 100, 30
 	m.resize()
 	m = shiftTab(t, m)

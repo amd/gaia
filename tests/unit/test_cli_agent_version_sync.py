@@ -4,8 +4,8 @@
 
 A hub agent's version lives in the manifest, ``pyproject.toml``, the Python
 package, npm ``package.json`` and npm ``package-lock.json``. The bump used to
-move only the first three and ignore whether those edits landed, so the email
-agent shipped 0.6.0 with a 0.5.0 lockfile. These tests run the command against
+move only the first three and ignore whether those edits landed, so an agent
+shipped 0.6.0 with a 0.5.0 lockfile. These tests run the command against
 copies of the REAL hub packages and their real stampers.
 """
 
@@ -25,7 +25,6 @@ REPO = Path(__file__).resolve().parents[2]
 
 # Per agent: the Python package files that carry its version.
 HUB_AGENTS = {
-    "email": ["gaia_agent_email/__init__.py", "gaia_agent_email/version.py"],
     "gaia": ["gaia_agent/__init__.py"],
 }
 
@@ -111,10 +110,10 @@ def test_bump_moves_every_version_file(tmp_path, agent_id):
 
 
 def test_partial_bump_with_stale_lockfile_is_caught(tmp_path):
-    """The real 0.5.0 -> 0.6.0 history: every file moved except the lockfile."""
-    pkg = _copy_hub_agent("email", tmp_path)
+    """A real 0.5.0 -> 0.6.0 history: every file moved except the lockfile."""
+    pkg = _copy_hub_agent("gaia", tmp_path)
     lock_path = pkg.parent / "npm" / "package-lock.json"
-    current = _versions(pkg, "email")["gaia-agent.yaml"]
+    current = _versions(pkg, "gaia")["gaia-agent.yaml"]
     lock_path.write_text(
         lock_path.read_text(encoding="utf-8").replace(
             f'"version": "{current}"', '"version": "0.5.0"', 2
@@ -129,7 +128,7 @@ def test_partial_bump_with_stale_lockfile_is_caught(tmp_path):
 
     # A bump from that state still lands every file on one version.
     cli_agent.cmd_version(_version_args("patch", pkg))
-    assert len(set(_versions(pkg, "email").values())) == 1
+    assert len(set(_versions(pkg, "gaia").values())) == 1
 
 
 def test_npm_package_without_a_stamper_fails_before_writing(tmp_path):

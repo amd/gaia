@@ -40,10 +40,7 @@ INTERNAL_PATHS = frozenset(
 #:
 #: - ``/v1/connections/*`` is the forwarded pre-authenticated connections API
 #:   (#1292) — see docs/sdk/infrastructure/connectors.mdx.
-#: - ``/v1/email/*`` is the email sidecar's own REST surface, a separate
-#:   process this backend never imports — see docs/guides/email.mdx and
-#:   docs/guides/email-integration.mdx.
-DOCUMENTED_ELSEWHERE_PREFIXES = ("/v1/connections", "/v1/email")
+DOCUMENTED_ELSEWHERE_PREFIXES = ("/v1/connections",)
 
 
 @pytest.fixture(scope="module")

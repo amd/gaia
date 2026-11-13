@@ -213,7 +213,7 @@ def test_handler_reports_what_the_turn_waits_on():
 
 
 def test_a_relayed_question_waits_on_the_user_until_the_run_moves_on():
-    from gaia.ui.email_sidecar.relay import _dispatch_one
+    from gaia.ui.sidecar.relay import _dispatch_one
 
     h = SSEOutputHandler()
     _dispatch_one(

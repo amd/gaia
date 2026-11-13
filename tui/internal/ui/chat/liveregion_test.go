@@ -18,8 +18,8 @@ import (
 func TestLiveRegionKeepsBoundedHistory(t *testing.T) {
 	m := newTestChat(t)
 	for _, tool := range []string{
-		"list_inbox", "get_message", "classify", "apply_prefs",
-		"pre_scan_inbox", "index_document", "read_file", "summarize",
+		"search_email", "read_email", "classify", "apply_prefs",
+		"list_inbox", "index_document", "read_file", "summarize",
 	} {
 		m = feed(t, m, event.CanonicalToolCallEvent{Type: "tool_call", Tool: tool})
 	}
@@ -37,7 +37,7 @@ func TestLiveRegionKeepsBoundedHistory(t *testing.T) {
 		t.Errorf("live region dropped the most recent tool:\n%s", out)
 	}
 	// The oldest entry scrolls out rather than the newest being discarded.
-	if strings.Contains(out, "Reading your inbox") {
+	if strings.Contains(out, "Searching your mail") {
 		t.Errorf("oldest entry should have scrolled out of the bounded window:\n%s", out)
 	}
 }
@@ -185,7 +185,7 @@ func TestLiveRegionCollapsesRepeatsWithACounter(t *testing.T) {
 	for i := 0; i < 14; i++ {
 		m = feed(t, m, event.CanonicalToolCallEvent{
 			Type: "tool_call",
-			Tool: "triage_message",
+			Tool: "read_email",
 			Args: []byte(`{"message_id":"m` + string(rune('a'+i)) + `"}`),
 		})
 	}
@@ -193,10 +193,10 @@ func TestLiveRegionCollapsesRepeatsWithACounter(t *testing.T) {
 	out := ansi.Strip(m.renderLiveRegion())
 	t.Logf("\n%s", out)
 
-	if !strings.Contains(out, "Triaging message") || !strings.Contains(out, "x14") {
+	if !strings.Contains(out, "Opening message") || !strings.Contains(out, "x14") {
 		t.Errorf("14 calls to one tool did not collapse to a counter:\n%s", out)
 	}
-	if n := strings.Count(out, "Triaging message"); n != 1 {
+	if n := strings.Count(out, "Opening message"); n != 1 {
 		t.Errorf("the tool appears %d times; repeats must fold into one line:\n%s", n, out)
 	}
 }
@@ -225,15 +225,15 @@ func TestStillWorkingHintLastsUntilRealWorkLands(t *testing.T) {
 
 	// A completed step is.
 	m = feed(t, m,
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
-		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox", Preview: "31 messages"},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "list_inbox", Preview: "31 messages"},
 	)
 	out = ansi.Strip(m.renderLiveRegion())
 	t.Logf("work done:\n%s", out)
 	if strings.Contains(out, "still working") {
 		t.Errorf("the hint must give way once real work has landed:\n%s", out)
 	}
-	if !strings.Contains(out, "Scanning your inbox") || !strings.Contains(out, "31 messages") {
+	if !strings.Contains(out, "Reading your inbox") || !strings.Contains(out, "31 messages") {
 		t.Errorf("the completed action never appeared:\n%s", out)
 	}
 }

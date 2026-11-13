@@ -73,10 +73,10 @@ func TestToolErrorOfLeavesASuccessfulResultAlone(t *testing.T) {
 // The message keeps its line breaks: a remedy is usually a command on its own
 // line, and that is the whole point of surfacing it.
 func TestToolErrorKeepsAMultiLineRemedyIntact(t *testing.T) {
-	const remedy = "`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:email`"
+	const remedy = "`gaia connectors connect google --scopes gmail.readonly --grant-agent installed:gaia`"
 	data := `{"status":"error","code":"CONNECTOR_ERROR","error":"no credential.\nRun this:\n` + remedy + `"}`
 
-	got, failed := ToolErrorOf(CanonicalToolResultEvent{Tool: "email_pre_scan", Data: []byte(data)})
+	got, failed := ToolErrorOf(CanonicalToolResultEvent{Tool: "list_inbox", Data: []byte(data)})
 	if !failed {
 		t.Fatal("the payload did not read as a failure")
 	}
@@ -121,7 +121,7 @@ func TestLegacyToolErrorPrefersThePayloadMessage(t *testing.T) {
 	}
 }
 
-// The live shape (#2492 follow-up): the email sidecar string-encodes the tool's
+// The live shape (#2492 follow-up): a sidecar string-encodes the tool's
 // whole return value into `summary`, reports success:true on the event, and the
 // producer truncates that string at 300 chars — sometimes mid-escape, so it is
 // no longer valid JSON. Reporting "returned" for it is how the user ended up

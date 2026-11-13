@@ -23,7 +23,7 @@ import (
 func liveRun(t *testing.T, f *fakeRelay) (*SSEClient, func()) {
 	t.Helper()
 	// 2.14 is the contract that introduced /tool_decision and /bypass; below it
-	// the client refuses to call them at all. Email currently reports 2.15 but
+	// the client refuses to call them at all. Another sidecar can report 2.15 but
 	// still does not serve these routes.
 	f.contractVersion = "2.14"
 	started := make(chan struct{})
@@ -268,21 +268,21 @@ func liveRunAtContract(t *testing.T, f *fakeRelay, version string) (*SSEClient, 
 	return c, func() { close(release); c.Close() }
 }
 
-// email reports contract 2.15 but serves neither route, so a version-only
+// Another sidecar can report contract 2.15 and serve neither route, so a version-only
 // gate would send it both — the advertised-then-refused shape.
 
-func TestTheEmailAgentAtTheSameContractIsNotAskedForPermission(t *testing.T) {
+func TestAnotherAgentAtTheSameContractIsNotAskedForPermission(t *testing.T) {
 	f := newFakeRelay(t)
 	f.contractVersion = "2.14"
-	c, done := liveRunOnAgent(t, f, "email")
+	c, done := liveRunOnAgent(t, f, "notes")
 	defer done()
 
 	if c.SupportsLivePermissions() {
-		t.Error("email must not report live permissions just because it speaks 2.14")
+		t.Error("notes must not report live permissions just because it speaks 2.14")
 	}
 	err := c.RespondToolPermission("c1", PermissionAllow)
 	if err == nil {
-		t.Fatal("email has no tool_decision route; calling it must be refused")
+		t.Fatal("notes has no tool_decision route; calling it must be refused")
 	}
 	if !strings.Contains(err.Error(), "no such route") {
 		t.Errorf("an agent that never serves the route must not be told to update, got: %v", err)
@@ -290,7 +290,7 @@ func TestTheEmailAgentAtTheSameContractIsNotAskedForPermission(t *testing.T) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.decisions) != 0 {
-		t.Errorf("nothing may be sent to email: %+v", f.decisions)
+		t.Errorf("nothing may be sent to notes: %+v", f.decisions)
 	}
 }
 

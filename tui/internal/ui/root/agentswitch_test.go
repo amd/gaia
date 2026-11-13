@@ -4,6 +4,9 @@ package root
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -25,12 +28,37 @@ func (c *nullClient) Send(context.Context, string) (<-chan interface{}, error) {
 }
 func (c *nullClient) Close() error { c.closed = true; return nil }
 
+// sampleSidecarID is a hub-installed daemon sidecar, the second agent a switch
+// needs. GAIA ships only the flagship, so the test installs one.
+const sampleSidecarID = "notes"
+
+// installSampleSidecar writes sampleSidecarID's install sentinel under a fresh
+// home and loads it into cat.
+func installSampleSidecar(t *testing.T, cat *catalog.Catalog) {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".gaia", "agents", sampleSidecarID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := `{"id":"` + sampleSidecarID + `","version":"0.1.0","language":"python","artifact_kind":"binary"}`
+	if err := os.WriteFile(filepath.Join(dir, catalog.SentinelName), []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+	cat.LoadInstalledAgents()
+}
+
 // liveChatModel builds a FlagshipModel already sitting in chat with agentID
 // as the current agent, backed by a nullClient — the state switchAgent and
 // cancelFromGate both act on.
 func liveChatModel(t *testing.T, agentID string) (FlagshipModel, *nullClient) {
 	t.Helper()
 	cat := catalog.NewCatalog()
+	installSampleSidecar(t, cat)
 	agent := cat.Get(agentID)
 	if agent == nil {
 		t.Fatalf("test setup: catalog has no %q seed", agentID)
@@ -75,10 +103,10 @@ func TestSwitchAgentUnknownIDReportsAnActionableError(t *testing.T) {
 
 func TestSwitchAgentBeginsTheGateAndQueuesTheDivider(t *testing.T) {
 	m, c := liveChatModel(t, catalog.FlagshipID)
-	updated, _ := m.switchAgent("email")
+	updated, _ := m.switchAgent(sampleSidecarID)
 	m = updated.(FlagshipModel)
 
-	if m.activeView != viewPreflight || m.pending == nil || m.pending.ID != "email" {
+	if m.activeView != viewPreflight || m.pending == nil || m.pending.ID != sampleSidecarID {
 		t.Fatalf("switching did not re-enter the readiness gate for the new agent: view=%v pending=%v", m.activeView, m.pending)
 	}
 	if c.closed {
@@ -88,7 +116,7 @@ func TestSwitchAgentBeginsTheGateAndQueuesTheDivider(t *testing.T) {
 		t.Fatal("no divider was queued for the replacement chat model")
 	}
 	last := m.pendingTranscript[len(m.pendingTranscript)-1]
-	want := "Switched from gaia to email — email does not see the conversation above this line."
+	want := "Switched from gaia to notes — notes does not see the conversation above this line."
 	if last.Content != want {
 		t.Fatalf("divider text = %q, want %q", last.Content, want)
 	}
@@ -96,7 +124,7 @@ func TestSwitchAgentBeginsTheGateAndQueuesTheDivider(t *testing.T) {
 
 func TestCancelFromGateDuringASwitchReturnsToChatInsteadOfQuitting(t *testing.T) {
 	m, c := liveChatModel(t, catalog.FlagshipID)
-	updated, _ := m.switchAgent("email")
+	updated, _ := m.switchAgent(sampleSidecarID)
 	m = updated.(FlagshipModel)
 
 	updated, cmd := m.cancelFromGate()
@@ -122,10 +150,10 @@ func TestCancelFromGateDuringASwitchReturnsToChatInsteadOfQuitting(t *testing.T)
 
 func TestAgentsSelectedMsgRoutesThroughUpdateIntoSwitchAgent(t *testing.T) {
 	m, _ := liveChatModel(t, catalog.FlagshipID)
-	updated, _ := m.Update(agents.SelectedMsg{ID: "email"})
+	updated, _ := m.Update(agents.SelectedMsg{ID: sampleSidecarID})
 	m = updated.(FlagshipModel)
 
-	if m.activeView != viewPreflight || m.pending == nil || m.pending.ID != "email" {
+	if m.activeView != viewPreflight || m.pending == nil || m.pending.ID != sampleSidecarID {
 		t.Fatal("root.Update did not route agents.SelectedMsg into switchAgent")
 	}
 }

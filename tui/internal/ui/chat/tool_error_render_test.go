@@ -10,7 +10,7 @@ import (
 	"github.com/amd/gaia/tui/internal/event"
 )
 
-// failedPreScanEnvelope is the issue's literal AC-1 fixture: the email
+// failedPreScanEnvelope is the issue's literal AC-1 fixture: a
 // sidecar's success:true trap around a nested, string-encoded failure.
 const failedPreScanEnvelope = `{"summary":"{\"ok\": false, \"error\": \"CONNECTOR_ERROR: All connected mailboxes failed: google: Gmail batch GET returned 429\"}","success":true,"latency_ms":395.0}`
 
@@ -18,11 +18,11 @@ const failedPreScanEnvelope = `{"summary":"{\"ok\": false, \"error\": \"CONNECTO
 // broken card, even though the envelope's top-level "success" field lies.
 func TestFailedRenderToolShowsErrorNotCard(t *testing.T) {
 	m := feed(t, newTestChat(t),
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
 		event.CanonicalToolResultEvent{
 			Type:   "tool_result",
-			Tool:   "pre_scan_inbox",
-			Render: "email_pre_scan",
+			Tool:   "list_inbox",
+			Render: "table",
 			Data:   json.RawMessage(failedPreScanEnvelope),
 		},
 	)
@@ -86,8 +86,8 @@ func TestFailedNonRenderToolDrawsNoErrorPanel(t *testing.T) {
 func TestFailedRenderToolWithNoDetailShowsNoDetailMessage(t *testing.T) {
 	m := feed(t, newTestChat(t), event.CanonicalToolResultEvent{
 		Type:   "tool_result",
-		Tool:   "pre_scan_inbox",
-		Render: "email_pre_scan",
+		Tool:   "list_inbox",
+		Render: "table",
 		Data:   json.RawMessage(`{"ok":false}`),
 	})
 
@@ -111,11 +111,11 @@ func TestFailedRenderToolWithNoDetailShowsNoDetailMessage(t *testing.T) {
 // AC-7a: a failed render tool must tick red, not green.
 func TestFailedRenderToolTicksFailed(t *testing.T) {
 	m := feed(t, newTestChat(t),
-		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "pre_scan_inbox"},
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "list_inbox"},
 		event.CanonicalToolResultEvent{
 			Type:   "tool_result",
-			Tool:   "pre_scan_inbox",
-			Render: "email_pre_scan",
+			Tool:   "list_inbox",
+			Render: "table",
 			Data:   json.RawMessage(failedPreScanEnvelope),
 		},
 	)
@@ -210,7 +210,7 @@ func TestFailedRenderErrorSanitizesControlBytesPreservesNewlines(t *testing.T) {
 	data := json.RawMessage(`{"ok":false,"error":` + string(encoded) + `}`)
 
 	m := feed(t, newTestChat(t), event.CanonicalToolResultEvent{
-		Type: "tool_result", Tool: "pre_scan_inbox", Render: "email_pre_scan", Data: data,
+		Type: "tool_result", Tool: "list_inbox", Render: "table", Data: data,
 	})
 
 	var errMsg *Message
@@ -255,7 +255,7 @@ func TestFailedRenderErrorSanitizesControlBytesPreservesNewlines(t *testing.T) {
 // string — any failure text must surface verbatim.
 func TestFailedRenderErrorNotHardcodedToConnectorError(t *testing.T) {
 	m := feed(t, newTestChat(t), event.CanonicalToolResultEvent{
-		Type: "tool_result", Tool: "pre_scan_inbox", Render: "email_pre_scan",
+		Type: "tool_result", Tool: "list_inbox", Render: "table",
 		Data: json.RawMessage(`{"error":"disk is full"}`),
 	})
 

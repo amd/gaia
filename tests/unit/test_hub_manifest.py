@@ -598,13 +598,12 @@ def test_shipped_agent_manifest_parses(manifest_path):
     assert m.security_tier in VALID_SECURITY_TIERS
 
 
-def test_email_agent_declares_the_verified_tier():
-    """The email manifest omitted ``security_tier``, so it published as
+def test_flagship_agent_declares_the_verified_tier():
+    """An AMD manifest that omits ``security_tier`` publishes as
     ``experimental`` — and a non-verified agent refuses to install without an
-    explicit trust opt-in, making ``gaia agent install email`` fail for a
-    first-time user of AMD's own agent.
+    explicit trust opt-in, so a first-time install of AMD's own agent fails.
     """
-    path = REPO_ROOT / "hub" / "agents" / "email" / "python" / "gaia-agent.yaml"
+    path = REPO_ROOT / "hub" / "agents" / "gaia" / "python" / "gaia-agent.yaml"
 
     assert "security_tier" in yaml.safe_load(path.read_text(encoding="utf-8")), (
         "gaia-agent.yaml must declare security_tier explicitly — an omitted tier "
@@ -613,12 +612,12 @@ def test_email_agent_declares_the_verified_tier():
     assert parse(path).security_tier == VERIFIED_TIER
 
 
-def test_email_agent_installs_without_a_trust_opt_in():
+def test_flagship_agent_installs_without_a_trust_opt_in():
     """The tier only matters through the install gate, so assert the gate itself
     rather than just the parsed value (the min_lemonade_version lesson above).
     """
-    path = REPO_ROOT / "hub" / "agents" / "email" / "python" / "gaia-agent.yaml"
+    path = REPO_ROOT / "hub" / "agents" / "gaia" / "python" / "gaia-agent.yaml"
     raw = yaml.safe_load(path.read_text(encoding="utf-8"))
 
     assert requires_trust_ack(raw) is False
-    ensure_trust_ack("email", raw, trusted=False)  # must not raise
+    ensure_trust_ack("gaia", raw, trusted=False)  # must not raise

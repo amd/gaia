@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     detectProvider,
-    emailAgentGrantIds,
+    mailGrantIds,
     isAuthRequiredMessage,
 } from '../email/EmailConnectCta';
 
@@ -36,16 +36,6 @@ describe('isAuthRequiredMessage', () => {
     it('returns true for AUTH_REQUIRED: prefix', () => {
         expect(
             isAuthRequiredMessage('AUTH_REQUIRED: Authentication required for google')
-        ).toBe(true);
-    });
-
-    // Agent-specific override message from _AGENT_GRANT_MIGRATION_MESSAGES
-    it('returns true for email agent migration message', () => {
-        expect(
-            isAuthRequiredMessage(
-                'Email agent needs additional Google permissions (gmail.modify, gmail.send, calendar.events). ' +
-                'Open Settings → Connectors → Google → Reconnect to grant the missing scopes.'
-            )
         ).toBe(true);
     });
 
@@ -105,14 +95,6 @@ describe('isAuthRequiredMessage', () => {
         ).toBe(true);
     });
 
-    // Work Microsoft 365 detection (#2629) — isAuthRequiredMessage checks for
-    // "microsoft_work is not currently connected" explicitly; it is not a
-    // substring of the personal-connector phrase.
-    it('returns true for NOT_CONNECTED: microsoft_work prefix', () => {
-        expect(
-            isAuthRequiredMessage('NOT_CONNECTED: microsoft_work is not currently connected.')
-        ).toBe(true);
-    });
 });
 
 describe('detectProvider', () => {
@@ -144,39 +126,24 @@ describe('detectProvider', () => {
         expect(detectProvider('AGENT_NOT_GRANTED: this agent is not granted.')).toBe('all');
     });
 
-    // Work Microsoft 365 detection (#2629)
-    it('returns microsoft_work when the literal connector id is mentioned', () => {
-        expect(
-            detectProvider('NOT_CONNECTED: microsoft_work is not currently connected.')
-        ).toBe('microsoft_work');
-    });
-
-    it('returns microsoft_work when "microsoft 365" is mentioned, not personal microsoft', () => {
-        expect(
-            detectProvider('Your Microsoft 365 account needs to be reconnected.')
-        ).toBe('microsoft_work');
-    });
-
-    it('returns microsoft_work for office365 wording', () => {
-        expect(detectProvider('Please reconnect your office365 mailbox.')).toBe('microsoft_work');
-    });
-
-    it('does not classify a personal Outlook message as work', () => {
-        expect(detectProvider('NOT_CONNECTED: microsoft is not currently connected.')).toBe(
-            'microsoft',
-        );
+    // GAIA reads Gmail and Outlook only, so work wording gets the Microsoft button.
+    it.each([
+        'NOT_CONNECTED: microsoft_work is not currently connected.',
+        'Your Microsoft 365 account needs to be reconnected.',
+        'Please reconnect your office365 mailbox.',
+    ])('treats work-account wording as Microsoft: %s', (message) => {
+        expect(detectProvider(message)).toBe('microsoft');
     });
 });
 
 /**
- * #2117 consent-scoping: the email connect CTA must grant ONLY the email agent,
- * never co-installed agents that also declare the connector — granting a sibling
- * agent its mailbox scopes here would bypass the per-agent consent surface.
+ * #2117 consent-scoping: the connect CTA grants ONLY GAIA, never another
+ * installed agent that also declares the connector.
  */
-describe('emailAgentGrantIds', () => {
-    const email = {
-        id: 'email',
-        namespaced_agent_id: 'installed:email',
+describe('mailGrantIds', () => {
+    const gaia = {
+        id: 'gaia',
+        namespaced_agent_id: 'installed:gaia',
         required_connections: [
             { connector_id: 'google' },
             { connector_id: 'microsoft' },
@@ -188,42 +155,29 @@ describe('emailAgentGrantIds', () => {
         required_connections: [{ connector_id: 'google' }],
     };
 
-    it('grants only the email agent, not co-installed agents that declare the connector', () => {
-        expect(emailAgentGrantIds([email, customAgent], 'google')).toEqual([
-            'installed:email',
-        ]);
+    it('grants only GAIA, not another agent that declares the connector', () => {
+        expect(mailGrantIds([gaia, customAgent], 'google')).toEqual(['installed:gaia']);
     });
 
-    it('does not grant a co-installed agent even when the email agent is absent', () => {
-        // No silent fall-through to a sibling agent — returns empty, not the custom agent.
-        expect(emailAgentGrantIds([customAgent], 'google')).toEqual([]);
+    it('does not fall through to another agent when GAIA is absent', () => {
+        expect(mailGrantIds([customAgent], 'google')).toEqual([]);
     });
 
-    it('returns the email agent for microsoft too', () => {
-        expect(emailAgentGrantIds([email, customAgent], 'microsoft')).toEqual([
-            'installed:email',
-        ]);
+    it('grants GAIA for microsoft too', () => {
+        expect(mailGrantIds([gaia, customAgent], 'microsoft')).toEqual(['installed:gaia']);
     });
 
-    it('returns empty when the email agent does not declare the connector', () => {
-        const emailNoGoogle = {
-            id: 'email',
-            namespaced_agent_id: 'installed:email',
-            required_connections: [{ connector_id: 'microsoft' }],
-        };
-        expect(emailAgentGrantIds([emailNoGoogle], 'google')).toEqual([]);
+    it('returns empty when GAIA does not declare the connector', () => {
+        const noGoogle = { ...gaia, required_connections: [{ connector_id: 'microsoft' }] };
+        expect(mailGrantIds([noGoogle], 'google')).toEqual([]);
     });
 
-    it('is robust to a builtin: namespace prefix', () => {
-        const builtinEmail = {
-            id: 'email',
-            namespaced_agent_id: 'builtin:email',
-            required_connections: [{ connector_id: 'google' }],
-        };
-        expect(emailAgentGrantIds([builtinEmail], 'google')).toEqual(['builtin:email']);
+    it('does not grant the retired email agent', () => {
+        const email = { ...gaia, id: 'email', namespaced_agent_id: 'installed:email' };
+        expect(mailGrantIds([email], 'google')).toEqual([]);
     });
 
     it('returns empty for an empty agent list', () => {
-        expect(emailAgentGrantIds([], 'google')).toEqual([]);
+        expect(mailGrantIds([], 'google')).toEqual([]);
     });
 });

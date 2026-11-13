@@ -181,7 +181,7 @@ func TestChangedBroadcastsOnSnapshotChangeOnly(t *testing.T) {
 	default:
 	}
 
-	st.setSnapshot(Snapshot{View: "chat", Agent: "email"})
+	st.setSnapshot(Snapshot{View: "chat", Agent: "notes"})
 	select {
 	case <-ch:
 	case <-time.After(10 * time.Second):

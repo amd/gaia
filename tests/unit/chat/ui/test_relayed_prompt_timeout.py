@@ -12,8 +12,8 @@ from __future__ import annotations
 import threading
 import time
 
-from gaia.ui.email_sidecar import relay
-from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+from gaia.ui.sidecar import relay
+from gaia.ui.sidecar.profiles import GAIA_PROFILE
 from gaia.ui.sse_handler import SSEOutputHandler
 
 

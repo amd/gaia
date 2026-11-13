@@ -185,7 +185,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
      excited to announce", "finally", "blazing(-fast)", "game-changer", "seamless",
      "powerful", "unlock", "Here's the good stuff", "makes X effortless", "no more
      crashes", invented benchmarks.
-   - **Order by what users run.** Agents and commands first (`gaia hub`, `gaia email`, …);
+   - **Order by what users run.** Agents and commands first (`gaia-tui`, `gaia slack`, …);
      SDK, CI, and refactor work last, or omitted when it has no user-visible effect.
    - **Word budget — a cap, not a target.** **≤ 350 words** for a patch, **≤ 600** for a
      minor/major, measured from the top down to the first of `## Bug Fixes` / `## Known
@@ -198,14 +198,14 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    **Example — one highlight:**
 
    > **Bad** (prose block, promotional, three sentences where one works):
-   > ### Triage your inbox from the terminal — `gaia email`
-   > Point GAIA at your inbox and it sorts the noise from what needs you: drafts
-   > replies to routine mail, flags what's urgent, leaves the rest. Runs locally, so
-   > your mail never leaves your machine. Try it: `gaia email`.
+   > ### Talk to GAIA from Slack — `gaia slack`
+   > Bring GAIA into your workspace and it answers right where your team already
+   > talks. No more switching apps to ask a question — just message it and the
+   > answer appears in Slack. Try it: `gaia slack setup`.
 
    > **Good** (one bullet, plain, factual):
-   > - **Triage your inbox from the terminal** — `gaia email` sorts mail, drafts replies to
-   >   routine messages, and flags what needs you. Runs locally. (PR [#1234](https://github.com/amd/gaia/pull/1234))
+   > - **Talk to GAIA from Slack** — `gaia slack setup` connects a workspace so you can
+   >   message GAIA from Slack. (PR [#1234](https://github.com/amd/gaia/pull/1234))
 
 4. **Add the release page to [docs/docs.json](../../../docs/docs.json):** add `releases/v<version>` to the Releases tab. Step 5 stamps the navbar label.
 
