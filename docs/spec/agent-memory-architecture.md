@@ -28,7 +28,7 @@ Four principles:
 | **General agent memory literature** | Confidence scoring (+0.02 on recall, x0.9 decay), temporal awareness (`due_at`/`reminded_at`), sensitivity classification. |
 | **CoALA framework** | Four-tier cognitive architecture alignment (working, episodic, semantic, procedural). See Memory Tiers section. |
 
-**Key design decision:** The frozen prefix approach keeps stable content (facts, preferences) in a cached system prompt so the LLM inference engine can reuse its KV-cache, while time-sensitive content (current time, upcoming items) is injected per-turn. GAIA implements this with `get_memory_system_prompt()` (stable) + `get_memory_dynamic_context()` (per-turn, prepended to user message).
+**Key design decision:** The frozen prefix approach keeps stable content (facts, preferences) frozen for the session in the session context at the start of the first user message, so the system prompt stays byte-identical and the LLM inference engine can reuse its KV-cache, while time-sensitive content (current time, upcoming items) is injected per-turn. GAIA implements this with `get_memory_system_prompt()` (stable) + `get_memory_dynamic_context()` (per-turn, prepended to user message).
 
 ---
 
@@ -38,12 +38,12 @@ GAIA's memory maps to the four-tier cognitive architecture from the CoALA framew
 
 | Tier | What it is | GAIA Implementation |
 |------|-----------|---------------------|
-| **Working** | Active context window | System prompt (stable prefix) + dynamic context (per-turn suffix) |
+| **Working** | Active context window | System prompt + session context (stable, at the start of the first user message) + dynamic context (per-turn suffix) |
 | **Episodic** | Past events and interactions | `conversations` table -- all turns, FTS5 searchable, consolidation-eligible |
 | **Semantic** | Facts, knowledge, concepts | `knowledge` table -- hybrid search (vector + BM25), confidence-weighted |
 | **Procedural** | Skills and learned behaviors | `knowledge(category='error')` + `knowledge(category='skill')` -- injected into stable prefix |
 
-The working memory tier is bounded by the LLM's context window. The stable prefix is frozen for KV-cache reuse; the dynamic suffix changes every turn. Episodic memory is the raw conversation log -- immutable, append-only, pruned at 90 days but consolidated to semantic memory before deletion. Semantic memory is the distilled knowledge base -- facts, preferences, skills, errors -- ranked by confidence and surfaced via hybrid search. Procedural memory is a subset of semantic memory that the agent injects into every system prompt: error patterns to avoid and learned workflows to follow.
+The working memory tier is bounded by the LLM's context window. The stable prefix is frozen for KV-cache reuse; the dynamic suffix changes every turn. Episodic memory is the raw conversation log -- immutable, append-only, pruned at 90 days but consolidated to semantic memory before deletion. Semantic memory is the distilled knowledge base -- facts, preferences, skills, errors -- ranked by confidence and surfaced via hybrid search. Procedural memory is a subset of semantic memory that the agent injects into the session context at the start of the first user message of every session: error patterns to avoid and learned workflows to follow.
 
 ---
 
@@ -129,7 +129,7 @@ CREATE TABLE knowledge (
     -- Context scoping
     context     TEXT DEFAULT 'global', -- Workspace/context scope (e.g., 'work', 'personal', 'project-x')
     -- Sensitivity
-    sensitive   INTEGER DEFAULT 0,   -- 1 = sensitive (excluded from system prompt, redacted in logs)
+    sensitive   INTEGER DEFAULT 0,   -- 1 = sensitive (excluded from the session context, redacted in logs)
     -- Entity linking
     entity      TEXT,                -- Optional entity reference (e.g., 'person:sarah_chen', 'app:vscode')
     -- Timestamps
@@ -431,7 +431,7 @@ When the LLM detects a contradiction (e.g., user says "actually we switched to V
 
 **Level 3: Confidence decay (time layer)**
 
-Stale facts naturally lose confidence. If "Project uses React 18" hasn't been referenced in 30+ days, its confidence decays. New facts start at 0.5 and grow with use. Outdated facts gradually disappear from the system prompt in favor of actively-used knowledge.
+Stale facts naturally lose confidence. If "Project uses React 18" hasn't been referenced in 30+ days, its confidence decays. New facts start at 0.5 and grow with use. Outdated facts gradually disappear from the session context in favor of actively-used knowledge.
 
 ### Decay
 
@@ -820,13 +820,13 @@ Item B (stored {date_b}): {content_b}
 
 Without reconciliation:
 - Contradictory facts persist indefinitely, confusing the LLM
-- The system prompt may inject both "uses PostgreSQL" and "migrated to DynamoDB"
+- The session context may inject both "uses PostgreSQL" and "migrated to DynamoDB"
 - The user has to manually find and fix conflicts via the dashboard
 
 With reconciliation:
 - Contradictions are detected and resolved automatically
 - Older facts are superseded with lineage preserved
-- Reinforcing facts grow in confidence (used more → more prominent in system prompt)
+- Reinforcing facts grow in confidence (used more → more prominent in the session context)
 
 ### New MemoryMixin Method
 
@@ -870,7 +870,7 @@ Memory is split into two parts to allow LLM inference engines to reuse their KV-
 def get_memory_system_prompt(self) -> str:
     """Called by Agent._get_mixin_prompts() -- injects STABLE memory only.
 
-    Injects into the system prompt:
+    Injects into the session context at the start of the first user message:
     1. All user preferences in active context (max 10)
     2. Top 5 high-confidence facts in active context
     3. Top 3 high-confidence skills
@@ -885,7 +885,7 @@ def get_memory_system_prompt(self) -> str:
     """
 ```
 
-**Example stable system prompt fragment:**
+**Example stable memory fragment (session context):**
 
 ```
 === MEMORY ===
@@ -1089,7 +1089,7 @@ def remember(fact: str, category: str = "fact", domain: str = "",
     Categories: fact, preference, error, skill, note, reminder
     If the same fact already exists in the same context, it will be updated.
     Use due_at for time-sensitive items (ISO 8601 format).
-    Use sensitive="true" for private data (excluded from system prompt).
+    Use sensitive="true" for private data (excluded from the session context).
     Use entity to link to a person/app/service (e.g., "person:sarah_chen").
     The row is filed under the agent's active context; the model cannot pick
     the label.
@@ -1265,7 +1265,7 @@ The LLM converts natural language time expressions ("last week", "yesterday", "i
 
 ## Context Scoping
 
-Different areas of your life produce different knowledge. Without scoping, the system prompt mixes "deploy with `kubectl apply`" (work) with "dentist appointment Thursday" (personal) with "use 4-space indent" (side project). Context keeps them separate.
+Different areas of your life produce different knowledge. Without scoping, the session context mixes "deploy with `kubectl apply`" (work) with "dentist appointment Thursday" (personal) with "use 4-space indent" (side project). Context keeps them separate.
 
 | Context | When it's active | What it contains |
 |---|---|---|
@@ -1293,12 +1293,12 @@ Some knowledge is private -- email addresses, API tokens, health information, fi
 
 | Where | sensitive=0 (default) | sensitive=1 |
 |---|---|---|
-| System prompt | Included | Never included |
+| Session context (start of the first user message) | Included | Never included |
 | `recall()` results | Returned | Returned for any filtered call; a bare `recall()` skips them |
 | Tool history `args` | Full args logged | Args redacted to keys only |
 | Dashboard | Normal display | Badge, content blurred until clicked |
 
-The LLM can still access sensitive data via `recall()` -- it just won't be broadcast in the system prompt where it could leak into logs or debugging output.
+The LLM can still access sensitive data via `recall()` -- it just won't be broadcast in the session context at the start of the first user message, where it could leak into logs or debugging output.
 
 The one exception is a **filterless** `recall()`. That is the browse an unprompted greeting makes, and on a cloud-backed session everything it returns is sent to the provider, so it holds sensitive rows back. Any filter -- a `query`, a `category`, an `entity`, a time bound -- returns them as before (#3673).
 
@@ -1310,7 +1310,7 @@ The one exception is a **filterless** `recall()`. That is the browse an unprompt
 ```
 User -> LLM has memory tools -> calls remember(fact="Meeting at 3pm today")
 -> MemoryStore.store(category="fact", content="Meeting at 3pm today")
--> Next query: system prompt includes "Meeting at 3pm today" (high-confidence fact)
+-> Next query: session context includes "Meeting at 3pm today" (high-confidence fact)
 ```
 
 ### "I have a course starting next week"
@@ -1374,7 +1374,7 @@ Day 5 (due date):
 Agent calls execute_code(code="import torch") -> fails with ImportError
 -> _execute_tool wrapper logs: tool_history(success=0, error="ImportError: torch")
 -> Auto-stores: knowledge(category='error', content="import torch fails: not installed")
--> Next time: system prompt includes error pattern -> LLM avoids/handles it
+-> Next time: session context includes error pattern -> LLM avoids/handles it
 ```
 
 ### User says "I prefer concise answers"
@@ -1382,7 +1382,7 @@ Agent calls execute_code(code="import torch") -> fails with ImportError
 User input -> LLM extraction catches preference
 -> MemoryStore.store(category="preference", content="User prefers concise answers",
                      source="llm_extract")
--> Next session: system prompt includes preference -> LLM adjusts behavior
+-> Next session: session context includes preference -> LLM adjusts behavior
 ```
 
 ### Agent learns a workflow
@@ -1390,7 +1390,7 @@ User input -> LLM extraction catches preference
 User walks agent through multi-step deployment 3 times
 -> Agent notices pattern -> calls remember(fact="Deploy workflow: test -> build -> push -> verify",
                                          category="skill", domain="deployment")
--> Next time user says "deploy": system prompt includes skill -> LLM follows learned workflow
+-> Next time user says "deploy": session context includes skill -> LLM follows learned workflow
 ```
 
 ### Note-Taking: "Remember that the auth token expires every 24 hours"
@@ -1398,7 +1398,7 @@ User walks agent through multi-step deployment 3 times
 User -> LLM calls remember(fact="Auth token expires every 24h -- refresh before long jobs",
                            category="note", domain="auth")
 -> Stored with confidence=0.5
--> Any future query about auth/tokens: system prompt or recall surfaces this
+-> Any future query about auth/tokens: session context or recall surfaces this
 -> User can view/edit in Memory Dashboard -> Knowledge Browser
 ```
 
@@ -2170,7 +2170,7 @@ class MemoryMixin:
     def memory_context(self) -> str
         """Current active context (e.g., 'work', 'personal', 'global')."""
     def set_memory_context(self, context: str) -> None
-        """Switch active context. Rebuilds system prompt for immediate effect.
+        """Switch active context. Rebuilds the session context for immediate effect.
         Empty/whitespace strings normalized to 'global'."""
 
     # Prompt integration
@@ -2255,7 +2255,7 @@ What this system deliberately does not do:
 
 ## Risks & Mitigations
 
-### System Prompt Bloat
+### Session Context Bloat
 As knowledge accumulates, `get_memory_system_prompt()` could grow unbounded and eat into context window budget. **Mitigation:** Hard limits on each section -- max 10 preferences, max 5 facts, max 3 skills, max 5 errors. Total memory prompt section capped at ~2000 tokens. If over budget, prioritize by confidence score.
 
 ### Database Growth
@@ -2275,7 +2275,7 @@ FTS5 standalone tables can get out of sync if the process crashes mid-write. **M
 `MemoryMixin` overrides `process_query` and `_execute_tool` -- both of which are also defined in `Agent`. For MemoryMixin's versions to run first (and call `super()` to reach Agent), **MemoryMixin must appear before Agent in the class declaration**: `class MyAgent(MemoryMixin, Agent, OtherMixin)`. If Agent is listed first, both overrides are silently shadowed and tool logging + dynamic context injection will not work.
 
 ### LLM Not Using Memory Tools
-Local LLMs (especially smaller ones) may not reliably call memory tools -- they might ignore the tools or use wrong arguments. **Mitigation:** The automatic hooks (tool logging, conversation storage, system prompt injection, LLM extraction) work regardless of whether the LLM calls memory tools. The tools are a bonus for smarter models, not a requirement.
+Local LLMs (especially smaller ones) may not reliably call memory tools -- they might ignore the tools or use wrong arguments. **Mitigation:** The automatic hooks (tool logging, conversation storage, session-context injection, LLM extraction) work regardless of whether the LLM calls memory tools. The tools are a bonus for smarter models, not a requirement.
 
 ### Invalid Dates from LLM
 The LLM might pass "next Tuesday" or "2026-13-45" as `due_at`. **Mitigation:** The `remember` tool validates `due_at` with `datetime.fromisoformat()` before calling `store()`. If invalid, the fact is still saved, without a date, and the result says so (`ignored: {"due_at": ...}`) and tells the LLM to set one with `update_memory` in ISO 8601 format; an unknown `category` is handled the same way and filed as `fact`, and so is a privileged one, which a chat can never write. `update_memory` returns an error instead, since nothing new is at stake. The current time is in the system prompt so the LLM can compute dates.
@@ -2393,7 +2393,7 @@ This section documents reliability issues identified and fixed during iterative 
 
 **`rebuild_fts()` and `prune_memory()` raw exceptions as HTTP 500:** No structured error response. **Fix:** `try/except Exception` raising `HTTPException(500, ...)` with structured detail.
 
-**`set_memory_context()` stale system prompt:** Context switch didn't rebuild the cached system prompt. **Fix:** Calls `self.rebuild_system_prompt()` if available.
+**`set_memory_context()` stale system prompt:** Context switch didn't rebuild the cached prompt (now the session context). **Fix:** Calls `self.rebuild_system_prompt()` if available.
 
 **`apply_confidence_decay()` never called on long-running servers:** Only triggered in `reset_memory_session()`. **Fix:** `init_memory()` now calls it on startup.
 
@@ -2433,7 +2433,7 @@ The memory architecture is designed to support the full AI PC assistant vision. 
 | **Scheduler / Wake-up** | Scheduler polls `GET /api/memory/upcoming?days=0`. Triggers OS notification or new agent session for overdue items. Zero memory changes needed. | `due_at`, `reminded_at` |
 | **Email Triage** | Email contacts as entities (`person:sarah_chen`). Email prefs as knowledge. Sensitive emails flagged. Tool history tracks email API calls. | `entity`, `sensitive`, `context="email"` |
 | **Browser Automation** | Learned workflows stored as `category='skill'`. Browser errors auto-learned. Per-site preferences tracked. | `skill`, `error`, `entity="site:github.com"` |
-| **Multi-Agent Workspaces** | Each agent uses a different `context`. System prompt filters by context. No cross-contamination. | `context` |
+| **Multi-Agent Workspaces** | Each agent uses a different `context`. The session context filters by context. No cross-contamination. | `context` |
 | **App Integrations** | Each app is an entity (`app:vscode`, `service:slack`). App-specific prefs and errors tracked. | `entity`, `preference`, `error` |
 | **Contact Management** | People as entities with accumulated facts. `recall(entity="person:X")` returns full profile. | `entity` pattern |
 | **Knowledge Graph** | `entity` tags are today's primitive. Full KG with typed relations (`person:X ->works_on-> project:Y`) is a future layer that adds a `relations` table. | `entity` -> future `relations` table |

@@ -138,7 +138,7 @@ print(agent.process_query("What's the current state of NPU support in llama.cpp?
 `load_skill` resolves the name across the discovery roots, validates the
 manifest, registers any tools the skill provides under `<skill-name>/<tool>`,
 bridges its permissions to connector requirements, and injects the procedure
-into the system prompt. `unload_skill(name)` reverses all of it.
+into the session context at the start of the first user message. `unload_skill(name)` reverses all of it.
 
 On most agents a loaded body then renders in the prompt on every turn. The
 flagship `gaia` agent is the exception: it selects per turn which loaded

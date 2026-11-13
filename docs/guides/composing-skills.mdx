@@ -47,7 +47,7 @@ my_agent/
 </Warning>
 
 A skill is a `SKILL.md`: frontmatter plus a Markdown body. Keep the body short —
-it is injected into the system prompt when the skill loads, and every token it
+it is injected into the session context at the start of the first user message when the skill loads, and every token it
 takes is a token your tool results no longer have.
 
 ```markdown

@@ -339,8 +339,8 @@ full-access behavior as in-process. Full access does not override
 `GAIA_ALLOWED_PATHS`, the secret-path denylist, the write denylist, or the
 refusal of grants that cover the home folder or a drive root. Omit
 `allowed_paths` for the agent's default scope. Pre-2.18 binaries `422` the
-field. Whatever the scope, its existing folders are named in the system prompt
-once, when the session is built, with GAIA's documents folder first; a folder
+field. Whatever the scope, its existing folders are named once in the session
+context at the start of the first user message, when the session is built, with GAIA's documents folder first; a folder
 added to a retained session later is usable but not named. A caller that omits
 the field, like the TUI, gets the default scope (the user's home folder) named.
 
@@ -766,7 +766,7 @@ plain words, its audit result, and a security warning; it adds nothing and
 remembers the version it read. `/skills add <link> confirm` adds that version —
 a `confirm` with no earlier preview of the link previews instead, a link that
 changed since its preview is refused, and each preview covers one add — to
-`~/.gaia/skills` at the `experimental` tier and recomposes the system prompt so
+`~/.gaia/skills` at the `experimental` tier and recomposes the prompt so
 the session can use them. Skills that ship code are refused unless the line
 carries `--allow-code`. Each command ends in exactly one `final` or `error` event.
 The TUI's `/provider` panel configures credentials directly with local Lemonade;
