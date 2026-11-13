@@ -202,6 +202,18 @@ describe('ConnectAccountCard', () => {
         );
     });
 
+    it('says a sign-in left open past its deadline did not finish, and Connect tries again', async () => {
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
+        expect(await screen.findByText(/A browser tab opened for sign-in/)).toBeTruthy();
+        deliver({ reason: 'oauth_error', connectorId: 'google', payload: { reason: 'timeout' } });
+        expect((await screen.findByRole('alert')).textContent).toBe(
+            'Sign-in did not finish. Press Connect to try again.',
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledTimes(2));
+    });
+
     it('ignores a sign-in it did not open', async () => {
         render(<ConnectAccountCard data={card(['google'])} />);
         await screen.findByRole('button', { name: 'Connect Google' });

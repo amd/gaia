@@ -438,6 +438,59 @@ class TestTimeout:
         with pytest.raises(FlowTimeoutError):
             await complete_authorization(info["flow_id"])
 
+    async def test_a_sign_in_nobody_waits_on_times_out_and_closes_its_port(
+        self, google_provider, monkeypatch
+    ):
+        """The apps never await the flow: a closed sign-in tab must still end
+        it, close the callback port and tell the app."""
+        from gaia.connectors.flow import _pending
+
+        monkeypatch.setattr("gaia.connectors.flow._FLOW_TIMEOUT_SECONDS", 0.2)
+        emitted = []
+
+        async def _emit(name, payload):
+            emitted.append((name, payload))
+
+        monkeypatch.setattr("gaia.connectors.flow.emit", _emit)
+        info = await start_authorization("google", scopes=["openid"])
+        redirect_uri = parse_qs(urlparse(info["authorization_url"]).query)[
+            "redirect_uri"
+        ][0]
+
+        await asyncio.sleep(0.5)
+
+        assert info["flow_id"] not in _pending
+        assert emitted == [
+            (
+                "connector.oauth.error",
+                {
+                    "connector_id": "google",
+                    "reason": "timeout",
+                    "error": "Sign-in did not finish in time.",
+                },
+            )
+        ]
+        async with httpx.AsyncClient() as c:
+            with pytest.raises(httpx.ConnectError):
+                await c.get(f"{redirect_uri}?code=late&state=x")
+
+    async def test_a_finished_sign_in_is_not_reported_as_timed_out(
+        self, google_provider, monkeypatch
+    ):
+        monkeypatch.setattr("gaia.connectors.flow._FLOW_TIMEOUT_SECONDS", 0.2)
+        emitted = []
+
+        async def _emit(name, payload):
+            emitted.append((name, payload))
+
+        monkeypatch.setattr("gaia.connectors.flow.emit", _emit)
+        info = await start_authorization("google", scopes=["openid"])
+        await cancel_flow(info["flow_id"])
+
+        await asyncio.sleep(0.4)
+
+        assert emitted == []
+
 
 class TestKeyringIsSourceOfTruth:
     """After a successful flow, the keyring blob — and *only* the
