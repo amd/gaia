@@ -2500,6 +2500,7 @@ const messages: Messages = {
     // The connection banner
     'banner.serverStopped': 'خادم النماذج لا يعمل.',
     'banner.finishSetup': 'أعدّ النماذج على هذا الجهاز، أو اختر نموذجًا سحابيًا من الإعدادات.',
+    'banner.serverHung': 'خادم النماذج لا يستجيب. قد يكون مشغولًا بتطبيق آخر أو بتحميل نموذج، لذا يواصل GAIA التحقق.',
     'banner.unreachable': 'تعذّر الوصول إلى مساعد GAIA.',
     'banner.unreachableHint': 'يواصل GAIA محاولة إعادة الاتصال.',
     'banner.restarting': 'توقّف مساعد GAIA ويُعاد تشغيله الآن…',
@@ -2872,7 +2873,7 @@ const messages: Messages = {
     'schedules.close': 'إغلاق المهام المجدولة',
     'schedules.new': 'مهمة مجدولة جديدة',
     'schedules.when': 'موعد التشغيل',
-    'schedules.whenPlaceholder': 'اكتب الموعد بالإنجليزية…\nأمثلة: ⁦"every 30m"⁩، ⁦"daily at 9pm"⁩، ⁦"every hour from 8am to 6pm on weekdays"⁩',
+    'schedules.whenPlaceholder': 'اكتب الموعد بالإنجليزية…',
     'schedules.whenHint': 'اكتب الموعد بالإنجليزية، مثل ⁦"every 30m"⁩ أو ⁦"daily at 9pm"⁩ أو ⁦"every hour from 8am to 6pm on weekdays"⁩.',
     'schedules.parsing': 'جارٍ قراءة الموعد…',
     'schedules.notUnderstood': 'لا يمكن استخدام هذا الموعد.',

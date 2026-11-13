@@ -144,6 +144,25 @@ def test_warning_quotes_the_user_not_the_injected_memory_block(
     assert set(usage["at_risk"]) == {quoted}
 
 
+@pytest.mark.parametrize("framed", [False, True])
+def test_warning_quotes_the_user_not_the_hidden_turns_note(window, framed):
+    window(6000)
+    question = "what is the capital of France"
+    if framed:
+        question = history.frame_user_message("[GAIA Memory Context]\nnote", question)
+    noted = f"{history.HIDDEN_TURNS_NOTE}\n\n{question}"
+    turns = [_text_turn(noted, 120)]
+    while True:
+        turns.append(_text_turn("later question", 120))
+        usage = history.context_usage(_agent(), turns)
+        if usage["at_risk"]:
+            break
+        assert len(turns) < 50, "never warned"
+
+    assert usage["at_risk"][0] == "what is the capital of France"
+    assert not any("GAIA note" in quoted for quoted in usage["at_risk"])
+
+
 def test_no_warning_while_history_has_room(window):
     usage = history.context_usage(_agent(), [_text_turn("q")])
     assert usage["at_risk"] == []

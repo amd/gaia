@@ -3857,6 +3857,25 @@ for (const locale of ['en', 'ar']) {
         expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
         expect(await audit(page)).toEqual([]);
     });
+
+    test(`a narrow window hides the chat's spend before it cuts a cloud model's name (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 820, height: 640 });
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withMeasuredContext(p);
+            await withCloudSpending(p);
+        });
+        await expect(page.locator('button.context-meter:not(.spend-meter)')).toBeVisible();
+        await expect(page.locator('.spend-meter')).toBeAttached();
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        await shot(page, `composer-narrow-cloud-${locale}`);
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
+        const icon = label.locator('xpath=preceding-sibling::*[local-name()="svg"][1]');
+        expect((await icon.boundingBox())?.width ?? 0, 'the cloud icon was squeezed').toBeGreaterThanOrEqual(12);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 test('the library path row fits a phone', async ({ page }) => {

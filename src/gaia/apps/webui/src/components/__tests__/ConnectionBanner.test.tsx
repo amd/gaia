@@ -140,11 +140,26 @@ describe('the model server is down', () => {
             lemonade_running: false, lemonade_error: 'Lemonade health query failed', start_command: '/usr/bin/lemond',
         } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(container).toHaveTextContent('The model server is not answering (Lemonade health query failed)');
+        expect(container).toHaveTextContent("The model server isn't answering.");
+        expect(container).not.toHaveTextContent('Lemonade');
         expect(container).toHaveTextContent('may be busy');
         expect(container).not.toHaveTextContent("isn't running");
         expect(container).toHaveTextContent('If it stays this way, restart it:');
         expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
+    });
+});
+
+describe('a model server that listens but never answers', () => {
+    it('does not offer local setup or name a setup command, since the server is installed', () => {
+        useChatStore.setState({ systemStatus: {
+            lemonade_running: false, lemonade_error: 'Lemonade did not answer in time',
+            start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
+        } as SystemStatus });
+        const { container } = render(<ConnectionBanner />);
+        expect(container).toHaveTextContent("The model server isn't answering.");
+        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+        expect(container).not.toHaveTextContent('Set up models on this PC');
+        expect(container).not.toHaveTextContent('gaia init');
     });
 });
 
