@@ -23,8 +23,9 @@ apps. You paste one token, and nothing needs a terminal command.
 
 You DM the GAIA bot. The flagship agent answers from your PC:
 
-- It streams the reply into one message that keeps getting edited.
-- It uploads files it writes.
+- It posts each answer whole; a placeholder names the tool in use meanwhile.
+- It sends back files it writes, screenshots and images it makes, and any file you ask for.
+- *help*, *new chat*, *retry* (after an expired approval) and Discord's Reply work in the DM.
 - Before any shell command, file write or code execution, it shows **Allow / Always /
   Deny** buttons.
 
@@ -126,8 +127,8 @@ Slack:
 ## Surfaces
 
 - **CLI `gaia discord`:** `setup | connect | start [--detach] | stop | restart | pair |
-  autostart | status [--json] | decline | disconnect`, plus `schedules`, `schedule-add`,
-  `schedule-remove`, `watches`, `watch` and `unwatch` for summaries and alerts. It owns
+  autostart | status [--json] | decline | disconnect`, plus `watches`, `watch` and `unwatch`
+  for GitHub alerts. It owns
   every rule. `connect` reads the token from stdin, never
   argv.
 - **Start:** `start --detach` spawns through `popen_outliving_job` with
@@ -211,5 +212,5 @@ refuses every other `gaia` subcommand.
 
 ## Out of scope
 
-Voice, slash commands, and bot-initiated DMs other than replies and the lease marker. Scheduled
+Voice and slash commands. Scheduled
 briefs to Discord belong to `gaia schedule`'s delivery targets.

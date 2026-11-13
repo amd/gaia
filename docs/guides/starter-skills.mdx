@@ -252,7 +252,9 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 - **Demonstrates** — a scoped binary grant. It declares `shell:execute:gh`, which
   grants the GitHub CLI to this skill's session on this agent, restricted to the
   subcommands in GAIA's policy table (see the
-  [permission model](/plans/skill-format#permission-model)).
+  [permission model](/plans/skill-format#permission-model)). Read-only `gh`
+  commands run in any chat without this skill; the skill adds the triage workflow,
+  and anything it writes is confirmed per call.
 - **Configure** — nothing, if you let GAIA do it. Ask it to set up the GitHub CLI
   and it checks, installs, and signs in for you, showing you each command first —
   see [Setting up a CLI a skill needs](/guides/gaia#setting-up-a-cli-a-skill-needs).
