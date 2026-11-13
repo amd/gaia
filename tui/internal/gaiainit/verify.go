@@ -72,6 +72,9 @@ type Status struct {
 	// NoAgentBuild is the hub having no GAIA agent build for this PC: setup
 	// finishes without it, so chat cannot run here.
 	NoAgentBuild bool `json:"no_agent_build"`
+	// ModelListUnread is a StageServer whose server answers but sends a model
+	// list GAIA cannot read; setup cannot fix it.
+	ModelListUnread bool `json:"model_list_unread"`
 }
 
 // AgentReasonPrefix starts the reason `gaia init --check` gives for a missing
