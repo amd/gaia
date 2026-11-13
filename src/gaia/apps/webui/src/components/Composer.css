@@ -59,10 +59,14 @@
     container: composer-row / inline-size;
 }
 
-/* A narrow row gives way in this order before the model name is cut:
-   the day's spend, then the context bar (its % stays), then the folder's name (its icon stays). */
+/* A narrow row gives way in this order before the model name is cut: the day's spend, then the
+   chat's spend, then the context bar (its % stays), then the folder's name (its icon stays). */
 @container composer-row (max-width: 600px) {
     .spend-meter-today { display: none; }
+}
+
+@container composer-row (max-width: 580px) {
+    .spend-meter-wrap { display: none; }
 }
 
 @container composer-row (max-width: 540px) {
@@ -150,6 +154,7 @@
 .composer-attachments {
     display: flex;
     flex-wrap: wrap;
+    align-items: flex-start;
     gap: 6px;
     list-style: none;
 }
@@ -200,11 +205,8 @@
 .composer-attachment.has-error .composer-attachment-state {
     order: 1;
     flex-basis: 100%;
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    -webkit-box-orient: vertical;
-    overflow: hidden;
     white-space: normal;
+    overflow-wrap: anywhere;
     padding-block: 0 2px;
     padding-inline: 0 4px;
     color: var(--danger);
@@ -252,6 +254,10 @@
     font-size: var(--fs-label);
     font-weight: 500;
     white-space: nowrap;
+}
+
+.composer-chip > svg {
+    flex-shrink: 0;
 }
 
 .composer-chip:hover:not(:disabled) {

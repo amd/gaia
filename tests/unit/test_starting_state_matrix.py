@@ -17,14 +17,17 @@ state or entry point is one more row; every combination is then covered.
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
+import threading
+import time
 from dataclasses import dataclass
 
 import pytest
 
 from gaia import config as config_mod
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, LARGE_DEFAULT_MODEL_NAME
-from tests.fixtures.fake_lemonade import FakeLemonade
+from tests.fixtures.fake_lemonade import FakeLemonade, _server_module
 
 # The recording server is a socket on this machine; nothing leaves it.
 pytestmark = pytest.mark.allow_network
@@ -279,3 +282,107 @@ def test_the_server_keeps_answering_past_a_full_pipe():
             with urllib.request.urlopen(server.base_url + url_with_padding, timeout=10):
                 pass
         assert len(server.requests) == 200
+
+
+@pytest.fixture
+def slow_logging_server(tmp_path, monkeypatch):
+    """The fake server in-process, its log write slowed to widen any race."""
+    module = _server_module()
+    log = tmp_path / "requests.jsonl"
+    monkeypatch.setattr(module, "_log_path", log)
+    monkeypatch.setattr(module, "_catalog", dict(module.CATALOG))
+    downloaded = ("kokoro-v1", DEFAULT_MODEL_NAME)
+    monkeypatch.setattr(module, "_downloaded", {m: True for m in downloaded})
+    monkeypatch.setenv("FAKE_LEMONADE_PULL_SECONDS", "0")
+    real_log = module._log
+
+    def slow_log(entry):
+        time.sleep(0.3)
+        real_log(entry)
+
+    monkeypatch.setattr(module, "_log", slow_log)
+    server = module.LoopbackServer(("127.0.0.1", 0), module.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_address[1], log
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+
+
+def _logged(log):
+    if not log.exists():
+        return []
+    return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+
+@pytest.mark.parametrize(
+    "method, path, body, status",
+    [
+        ("GET", "/api/v1/health", None, 200),
+        ("GET", "/api/v1/models/no-such-model", None, 404),
+        ("GET", "/api/v1/nothing-here", None, 404),
+        ("POST", "/api/v1/nothing-here", {}, 404),
+        ("POST", "/api/v1/load", {"model_name": "Qwen3-0.6B-GGUF"}, 404),
+        ("POST", "/api/v1/pull", {"model_name": "user.x"}, 400),
+        ("POST", "/api/v1/pull", {"model_name": "Qwen3-0.6B-GGUF"}, 200),
+        (
+            "POST",
+            "/api/v1/pull",
+            {"model_name": "Qwen3-0.6B-GGUF", "stream": True},
+            200,
+        ),
+        ("POST", "/api/v1/audio/speech", {"model": "kokoro-v1"}, 200),
+        ("POST", "/api/v1/chat/completions", {"model": DEFAULT_MODEL_NAME}, 200),
+        (
+            "POST",
+            "/api/v1/chat/completions",
+            {"model": DEFAULT_MODEL_NAME, "stream": True},
+            200,
+        ),
+    ],
+)
+def test_a_reply_never_arrives_before_its_request_is_logged(
+    slow_logging_server, method, path, body, status
+):
+    """Reading the log right after the reply must find the request, once."""
+    port, log = slow_logging_server
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        payload = None if body is None else json.dumps(body)
+        headers = {} if body is None else {"Content-Type": "application/json"}
+        conn.request(method, path, body=payload, headers=headers)
+        response = conn.getresponse()
+        response.read()
+        assert response.status == status
+        entries = _logged(log)
+    finally:
+        conn.close()
+    assert [(e["method"], e["path"], e["status"]) for e in entries] == [
+        (method, path, status)
+    ]
+
+
+def test_each_request_on_a_kept_alive_connection_is_logged_once(
+    slow_logging_server,
+):
+    """The handler object is reused across a keep-alive connection."""
+    port, log = slow_logging_server
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    try:
+        for count in range(1, 4):
+            conn.request("GET", "/api/v1/health")
+            conn.getresponse().read()
+            assert len(_logged(log)) == count
+        conn.request(
+            "POST",
+            "/api/v1/chat/completions",
+            body=json.dumps({"model": "Qwen3-0.6B-GGUF"}),
+            headers={"Content-Type": "application/json"},
+        )
+        conn.getresponse().read()
+        assert [e["status"] for e in _logged(log)] == [200, 200, 200, 404]
+    finally:
+        conn.close()

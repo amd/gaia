@@ -182,6 +182,40 @@ describe('UpdatesSection', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent(/0\.26\.0 didn't install.*still on 0\.25\.0/);
     });
 
+    it('on a Mac links an available update to its release page instead of installing it', async () => {
+        state = {
+            ...state,
+            status: 'available',
+            version: '0.26.0',
+            manualInstall: true,
+            downloadUrl: 'https://github.com/amd/gaia/releases/tag/v0.26.0',
+        };
+        render(<UpdatesSection />);
+        const link = await screen.findByRole('link', { name: /download gaia 0\.26\.0/i });
+        expect(link).toHaveAttribute('href', 'https://github.com/amd/gaia/releases/tag/v0.26.0');
+        expect(link).toHaveAttribute('target', '_blank');
+        expect(link).toHaveAccessibleDescription(/can't update itself on this mac/i);
+        expect(screen.queryByRole('button', { name: /update to/i })).toBeNull();
+        expect(screen.queryByRole('switch', { name: /install updates automatically/i })).toBeNull();
+        expect(rcSwitch()).toBeEnabled();
+        expect(bridge.downloadUpdate).not.toHaveBeenCalled();
+    });
+
+    it('on a Mac with nothing offered shows no download link', async () => {
+        state = { ...state, manualInstall: true };
+        render(<UpdatesSection />);
+        await screen.findByText(/gaia is up to date/i, { selector: '[role="status"]' });
+        expect(screen.queryByRole('link', { name: /download gaia/i })).toBeNull();
+        expect(screen.queryByText(/can't update itself on this mac/i)).toBeNull();
+    });
+
+    it('explains the Mac download in Arabic', () => {
+        const t = translator('ar');
+        expect(t('update.settings.manualHint')).toContain('Mac');
+        expect(t('update.settings.manualHint')).not.toBe(translator('en')('update.settings.manualHint'));
+        expect(t('update.settings.downloadVersion', { version: '0.26.0' })).toContain('0.26.0');
+    });
+
     it('opens the version picker', async () => {
         render(<UpdatesSection />);
         await userEvent.click(await screen.findByRole('button', { name: /install a specific version/i }));
@@ -208,6 +242,28 @@ describe('UpdateIndicator', () => {
         render(<UpdateIndicator />);
         await userEvent.click(await screen.findByRole('button', { name: /update now/i }));
         expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('on a Mac offers a download link, never Update now', async () => {
+        state = {
+            ...state,
+            status: 'available',
+            version: '0.26.0-rc.13',
+            manualInstall: true,
+            downloadUrl: 'https://github.com/amd/gaia/releases/tag/v0.26.0-rc13',
+        };
+        render(<UpdateIndicator />);
+        const link = await screen.findByRole('link', { name: /^download$/i });
+        expect(link).toHaveAttribute('href', 'https://github.com/amd/gaia/releases/tag/v0.26.0-rc13');
+        expect(screen.queryByRole('button', { name: /update now/i })).toBeNull();
+        expect(screen.getByRole('status')).toHaveAttribute('title', expect.stringMatching(/can't update itself on this mac/i));
+    });
+
+    it('on a Mac falls back to the releases page when the update names no page', async () => {
+        state = { ...state, status: 'available', version: '0.26.0', manualInstall: true, downloadUrl: null };
+        render(<UpdateIndicator />);
+        expect(await screen.findByRole('link', { name: /^download$/i }))
+            .toHaveAttribute('href', 'https://github.com/amd/gaia/releases');
     });
 
     it('restarts into a downloaded update through the bridge', async () => {
