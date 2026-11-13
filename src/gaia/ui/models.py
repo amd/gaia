@@ -862,6 +862,8 @@ class BrowseResponse(BaseModel):
     parent_path: Optional[str] = None
     entries: List[FileEntry]
     quick_links: List[QuickLink] = Field(default_factory=list)
+    # Why a chat can't be given this folder (home, a drive root, ...); None if it can.
+    folder_refusal: Optional[str] = None
 
 
 # ── Folder Indexing ────────────────────────────────────────────────────────

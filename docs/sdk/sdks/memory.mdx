@@ -115,7 +115,7 @@ After adoption the record keeps counting. In a turn that recalled a procedure, t
 
 ### get_memory_system_prompt()
 
-Returns the **stable frozen prefix** for the system prompt. Always includes proactive usage instructions for the LLM, plus any stored preferences, facts, skills, and error patterns. Nothing time-sensitive. This method is called automatically by `Agent._get_mixin_prompts()`.
+Returns the **stable memory section**, frozen for the session. Always includes proactive usage instructions for the LLM, plus any stored preferences, facts, skills, and error patterns. Nothing time-sensitive. This method is called automatically by `Agent._get_mixin_prompts()`. It is in `Agent.VOLATILE_PROMPT_FRAGMENTS`, so it is sent in the session context at the start of the first user message, not in the system prompt (see [Session context](#kv-cache-frozen-prefix-design)).
 
 ```python
 def get_memory_system_prompt(self) -> str
@@ -215,7 +215,7 @@ Reply with just: restored
 
 **Recalled procedures** (procedural memory) ride here too, under a `=== RECALLED PROCEDURES (learned from past successful runs) ===` heading, whenever a stored procedure matches the goal. The matched set changes from turn to turn, so it never goes in the system prompt. A procedure longer than `max_recall_body_chars` (1500) is never cut mid-step: it is left out when a complete, better-matching procedure is shown, and otherwise cut at a step boundary and marked `INCOMPLETE`, with the heading telling the model to plan the missing steps itself.
 
-**Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error. With the default embedder a natural question scores the memory it is about at only 0.35-0.55 and unrelated ones at 0.25-0.40, so no fixed floor works. A match passes on a cosine of at least 0.5, or, once the store holds 8 or more memories, on clearing all three of 0.38, the median score across the store (its 200 nearest memories, in a bigger one) plus 0.08, and the best match minus 0.06. Up to two more memories (cosine 0.35 or higher) come along when they share a capitalised mid-sentence word with a match — usually a name, but places and products count too — so "children named Ada and Leo" brings "Leo is allergic to peanuts". Sensitive items, items already in the stable system prompt, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Lessons (`domain='lesson'`) are skipped here whatever the scope — they are filed as notes but belong to one workspace, and their own path scopes them and frames their raw tool output against injection. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
+**Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error. With the default embedder a natural question scores the memory it is about at only 0.35-0.55 and unrelated ones at 0.25-0.40, so no fixed floor works. A match passes on a cosine of at least 0.5, or, once the store holds 8 or more memories, on clearing all three of 0.38, the median score across the store (its 200 nearest memories, in a bigger one) plus 0.08, and the best match minus 0.06. Up to two more memories (cosine 0.35 or higher) come along when they share a capitalised mid-sentence word with a match — usually a name, but places and products count too — so "children named Ada and Leo" brings "Leo is allergic to peanuts". Sensitive items, items already in the stable memory section, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Lessons (`domain='lesson'`) are skipped here whatever the scope — they are filed as notes but belong to one workspace, and their own path scopes them and frames their raw tool output against injection. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
 
 The upcoming/overdue section is **rate-limited, not per-turn**. It rides the first turn of a session and the first turn after `REMINDER_PAUSE_SECONDS` (30 min) of silence — a natural pause — so an `[OVERDUE ...]` block never lands on an unrelated turn.
 
@@ -238,7 +238,7 @@ Registers: `remember`, `recall`, `update_memory`, `forget`, `forget_everything`,
 
 ### set_memory_context()
 
-Switch the active context mid-session. Affects system prompt filtering and the context new `remember` calls are stored under.
+Switch the active context mid-session. Affects which memories the session context includes and the context new `remember` calls are stored under.
 
 ```python
 def set_memory_context(self, context: str) -> None
@@ -364,7 +364,7 @@ Combines vector similarity (FAISS) and keyword matching (FTS5 BM25) via Reciproc
 3. FTS5 BM25 search: top-K × 4 candidates (oversample)
 4. Deduplicate by ID, apply RRF weights: `0.6 / (60 + rank_vector) + 0.4 / (60 + rank_bm25)`
 5. Return the top-K results by fused score
-6. Bump confidence +0.02 and increment `use_count` on the results returned — not on every candidate, and not at all with `count_as_use=False`, which extraction's lookup of what is already known passes. A lookup nobody asked for must not make an old memory look more trusted every turn, or stale facts out-rank new ones in the system prompt
+6. Bump confidence +0.02 and increment `use_count` on the results returned — not on every candidate, and not at all with `count_as_use=False`, which extraction's lookup of what is already known passes. A lookup nobody asked for must not make an old memory look more trusted every turn, or stale facts out-rank new ones in the session context
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -530,14 +530,29 @@ For turns of at least `MIN_EXTRACTION_WORDS` (5) words, the scheduled job fetche
 
 ## KV-Cache Frozen Prefix Design
 
-The system prompt is deliberately split into two parts:
+Memory reaches the model in two parts, and neither is in the system prompt:
 
 | Part | Method | Where injected | Changes between turns? |
 |------|--------|----------------|----------------------|
-| **Stable prefix** | `get_memory_system_prompt()` | System prompt via `_get_mixin_prompts()` | No -- frozen for KV-cache reuse |
+| **Stable section** | `get_memory_system_prompt()` | Session context, at the start of the session's first user message | No -- frozen for the session; a forget or edit of a shown item re-renders it |
 | **Dynamic context** | `get_memory_dynamic_context()` | Prepended to user message each turn | Yes -- current time, upcoming items, relevant memories, recalled procedures |
 
-This design allows LLM inference engines (like Lemonade Server) to cache the attention computations for the system prompt and reuse them across conversation turns. Only the small dynamic section (typically 2-5 lines) changes per turn.
+The system prompt and tool list then stay byte-identical across fresh sessions of the same agent, so an inference engine (like Lemonade Server) reuses its cache for them even when memory changed since the last chat. Hybrid models such as Qwen3.6 can resume only from a checkpoint at a user-message start, never from inside the system prompt, so per-session text there would make every new chat re-read the whole prompt.
+
+The session context holds every fragment named in `Agent.VOLATILE_PROMPT_FRAGMENTS` — memory, loaded skills, the project map or working directory, and (for the chat agents) the session's folders and scratch directory. `Agent.session_context` returns it; every request carries it, fenced, at the start of its first user message:
+
+```
+[GAIA Session Context]
+=== MEMORY (Persistent Second Brain) ===
+...
+[End GAIA Session Context — the rest of this message is from the user]
+
+[GAIA Memory Context]
+Current time: 2026-03-25T10:30:00-0700 (Tuesday)
+...
+```
+
+It is added per request and never stored in history, so a cut of older turns moves it to the oldest question still in view.
 
 ```python
 # Simplified flow inside MemoryMixin.process_query():
@@ -594,12 +609,12 @@ def store(
     due_at: str = None,         # ISO 8601 for time-sensitive items
     source: str = "tool",       # 'tool' | 'llm_extract' | 'error_auto' | 'user' | 'discovery' | 'consolidation'
     context: str = "global",    # Context scope
-    sensitive: bool = False,    # Exclude from system prompt if True
+    sensitive: bool = False,    # Exclude from the session context if True
     entity: str = None,         # Entity reference (e.g., 'person:sarah_chen')
 ) -> str:                       # Returns knowledge_id (UUID)
 ```
 
-**Category gate:** `store()`, `update()`, and `delete()` raise `ValueError` for `system`, `profile`, or `permission` unless the caller passes `allow_privileged=True`. Updates check both the existing and requested category, including content-only changes and recategorization out of a privileged category. Those rows lead every system prompt, so only onboarding, system-context collection, `gaia memory`, `seed_bulk()`, and the reviewed dashboard writes opt in. The LLM extractor, consolidation, and the `remember`/`update_memory`/`forget` tools cannot. The dashboard (`POST /api/memory/knowledge`, `commit-discovery`, `commit-inference`) validates against `USER_REVIEWED_CATEGORIES` — the chat-turn categories plus `profile`. Inference commits accept only `profile`. Both commit endpoints reject an invalid batch with HTTP 422 before mutation. `commit-inference` replaces the old inferred profile in one transaction (`MemoryStore.replace_by_source`), so a failed save keeps the previous profile; `commit-discovery` storage failures return HTTP 500 with a correlation ID and the number of items already stored, so callers must not assume atomic rollback there.
+**Category gate:** `store()`, `update()`, and `delete()` raise `ValueError` for `system`, `profile`, or `permission` unless the caller passes `allow_privileged=True`. Updates check both the existing and requested category, including content-only changes and recategorization out of a privileged category. Those rows lead every session context, so only onboarding, system-context collection, `gaia memory`, `seed_bulk()`, and the reviewed dashboard writes opt in. The LLM extractor, consolidation, and the `remember`/`update_memory`/`forget` tools cannot. The dashboard (`POST /api/memory/knowledge`, `commit-discovery`, `commit-inference`) validates against `USER_REVIEWED_CATEGORIES` — the chat-turn categories plus `profile`. Inference commits accept only `profile`. Both commit endpoints reject an invalid batch with HTTP 422 before mutation. `commit-inference` replaces the old inferred profile in one transaction (`MemoryStore.replace_by_source`), so a failed save keeps the previous profile; `commit-discovery` storage failures return HTTP 500 with a correlation ID and the number of items already stored, so callers must not assume atomic rollback there.
 
 **Deduplication:** Only a restatement or a refinement of an existing entry in the same `category` + `context` + `entity` scope merges into it: one fact's words, in order and ignoring filler like "the", "is" and "my", must start the other's ("... is Elena" -> "... is Elena Petrova"). The merged entry keeps the fuller wording and the higher confidence. A fact that swaps, inserts or reorders a word ("mother" -> "mother-in-law", "React 18" -> "React 19", "is" -> "is not") is stored as a new entry, never written over the old one; extraction's UPDATE and consolidation retire the old entry through `superseded_by`. The extractor files one statement as a `fact` or a `preference` interchangeably, so the same words (ignoring case and punctuation) in either of those two are one memory too: the existing row keeps its category (`INTERCHANGEABLE_CATEGORIES`).
 
@@ -1002,7 +1017,7 @@ class RememberBot(MemoryMixin, Agent):
 agent = RememberBot()
 result = agent.process_query("My name is Alex and I prefer concise answers")
 # Memory auto-extracts: fact("My name is Alex"), preference("prefer concise answers")
-# Next session, system prompt includes these automatically
+# Next session, the session context includes these automatically
 ```
 
 ### Switching Contexts
@@ -1027,7 +1042,7 @@ agent.process_query("Remember: dentist appointment Thursday at 2pm")
 # Stored in 'personal' context
 
 agent.set_memory_context("work")
-# System prompt now shows work items only (plus global)
+# The session context now shows work items only (plus global)
 # Personal items are invisible until context switches back
 ```
 
@@ -1090,7 +1105,7 @@ These 6 tools are registered by `register_memory_tools()` and exposed to the LLM
 
 <CardGroup cols={2}>
   <Card title="remember" icon="plus">
-    Store a fact, preference, error, skill, note, or reminder. Supports `category`, `domain`, `due_at`, `sensitive`, `entity`. An unknown `category` or a `due_at` that is not ISO 8601 does not fail the save: the fact is stored as a `fact`, or without a date, and the result lists the argument under `ignored`. A privileged category (`system`, `profile`, `permission`) is still refused. Stored under the agent's active context; the model does not pick one. Text that restates a file, web page or tool result this session read is refused (`status: "skipped"`) unless the user's message this turn asks to keep something, or answers yes after the agent asked about that same text; `error` memories, which describe tools rather than the user, are exempt. `update_memory` applies the same check.
+    Store a fact, preference, error, skill, note, or reminder. Supports `category`, `domain`, `due_at`, `sensitive`, `entity`. An unknown `category` or a `due_at` that is not ISO 8601 does not fail the save: the fact is stored as a `fact`, or without a date, and the result lists the argument under `ignored`. A privileged category (`system`, `profile`, `permission`) is handled the same way: the fact is stored as a `fact`, never under the privileged category. Stored under the agent's active context; the model does not pick one. Text that restates a file, web page or tool result this session read is refused (`status: "skipped"`) unless the user's message this turn asks to keep something, or answers yes after the agent asked about that same text; `error` memories, which describe tools rather than the user, are exempt. `update_memory` applies the same check.
   </Card>
 
   <Card title="recall" icon="magnifying-glass">
@@ -1142,7 +1157,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | Method | Description |
 |--------|-------------|
 | `init_memory(db_path, context)` | Initialize memory subsystem (v2: includes embedding validation, FAISS rebuild, reconciliation, consolidation) |
-| `get_memory_system_prompt()` | Stable frozen prefix for system prompt (includes Skills section) |
+| `get_memory_system_prompt()` | Stable memory section, sent in the session context (includes Skills section) |
 | `get_memory_dynamic_context()` | Per-turn time + upcoming items |
 | `register_memory_tools()` | Register 5 LLM-facing tools |
 | `run_bootstrap_conversation(prompt_fn, output_fn)` | Adaptive day-zero onboarding; stores approved answers as `source="user"` |

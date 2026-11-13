@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as api from '../../services/api';
 import { useNotificationStore } from '../notificationStore';
 import { useScheduleStore } from '../scheduleStore';
+import { useChatStore } from '../chatStore';
 import type { Schedule } from '../../types';
 
 vi.mock('../../services/api');
@@ -41,6 +42,7 @@ beforeEach(() => {
     vi.mocked(api.listSchedules).mockReset();
     useScheduleStore.setState({ schedules: [], errorCounts: null, error: null, loading: false });
     useNotificationStore.setState({ notifications: [] });
+    useChatStore.setState({ locale: 'en' });
 });
 
 describe('scheduled run failures', () => {
@@ -55,6 +57,16 @@ describe('scheduled run failures', () => {
         expect(n.title).toBe('Scheduled task "news" failed');
         expect(n.message).toBe('Run `gaia init`.');
         expect(n.sessionId).toBe('chat-1');
+    });
+
+    it('title the notice in the chosen language', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        serve(schedule());
+        await useScheduleStore.getState().loadSchedules();
+        serve(schedule({ run_count: 1, error_count: 1, last_error: 'boom' }));
+        await useScheduleStore.getState().loadSchedules();
+
+        expect(errors()[0].title.replace(/[\u2066-\u2069]/g, '')).toContain('فشلت المهمة المجدولة «news»');
     });
 
     it('notify once per failed run, not on every poll', async () => {
