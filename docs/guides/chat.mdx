@@ -307,7 +307,7 @@ print(result)
 ## Dynamic Tool Loading
 
 <Note>
-**On by default.** Turn it off under **Settings → Advanced → Dynamic Tools**, or with
+**On by default.** Turn it off under **Settings → Advanced → Dynamic tools**, or with
 `gaia config set dynamic_tools false`. Either applies to new chats.
 </Note>
 
@@ -320,7 +320,8 @@ Qwen3.6-35B-A3B that cut what a cold first turn reads from about 21,300 tokens t
 When a turn needs something else, the session moves to the full list once, and the list
 then stays put. The full list is kept ready beside the short one, so a first task starts
 as quickly as a first "hello". That move happens before the model is asked, when your
-message names a tool, a picture or a recording, when a recalled procedure needs a tool, or
+message names a tool, a picture or a recording, when you paste a skill or ask to save,
+install, or correct one, when a recalled procedure needs a tool, or
 when a tool outside the list is
 a clearly better match than every tool on it. If the agent still lacks something, it calls
 `search_tools`, which finds tools and installed skills by what they do.
