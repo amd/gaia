@@ -252,6 +252,38 @@ def test_a_file_an_earlier_turn_discussed_is_not_demanded_again():
     assert findings == []
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        # Out of scope: the validator looked on disk instead of asking (#8030).
+        "Not found: 'toybox/dates.py' does not exist, so access was not requested. "
+        "Check the name and folder, or ask the user where the file is.",
+        None,  # in scope: read_file's own missing-file error
+    ],
+    ids=["out-of-scope", "in-scope"],
+)
+def test_a_read_that_found_the_file_missing_backs_not_found(error, tmp_path):
+    """The read that came back "not found" is the look the claim needs."""
+    from gaia.agents.tools.path_access import missing_file_error, read_refusal
+
+    result = read_refusal(error) if error else missing_file_error("toybox/dates.py")
+    records = [_rec("read_file", {"file_path": "toybox/dates.py"}, result, True)]
+
+    assert records[0]["ran"] is False
+    assert (
+        look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, records, lambda p: None) == []
+    )
+
+
+def test_a_refused_read_of_a_file_that_exists_backs_nothing():
+    result = {"executed": False, "status": "error", "error": "Access denied: x"}
+    records = [_rec("read_file", {"file_path": "toybox/dates.py"}, result, True)]
+
+    findings = look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, records, lambda p: None)
+
+    assert "no search, listing or read ran" in " ".join(f.correction for f in findings)
+
+
 def test_not_found_without_any_lookup_is_caught_even_for_a_missing_file():
     findings = look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, [], lambda p: None)
 
