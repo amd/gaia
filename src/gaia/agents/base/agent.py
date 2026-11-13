@@ -2078,21 +2078,35 @@ def _is_jsonc(path: Path) -> bool:
     return any(part.lower() == ".vscode" for part in path.parts[:-1])
 
 
-def _parse_problem(path: Path, text: str) -> Optional[str]:
-    """Why *text* does not parse as *path*'s type, or None (unchecked types pass)."""
+def _parse_problem(path: Path, text: str, new: bool = False) -> Optional[str]:
+    """Why *text* does not parse as *path*'s type, or None (unchecked types pass).
+
+    *new*: the file did not exist before the turn, so it never parsed.
+    """
     suffix = path.suffix.lower()
     if suffix in (".py", ".pyi"):
         try:
             ast.parse(text)
         except (SyntaxError, ValueError) as e:
-            return f"`{path}` no longer parses as Python: {e}"
+            verb = "doesn't parse" if new else "no longer parses"
+            return f"`{path}` {verb} as Python: {e}"
     elif suffix == ".json" and not _is_jsonc(path):
         try:
             json.loads(text)
         except ValueError as e:
-            return f"`{path}` is no longer valid JSON: {e}"
+            state = "isn't" if new else "is no longer"
+            return f"`{path}` {state} valid JSON: {e}"
     return None
 
+
+def _user_supplied(text: str, request: Optional[str]) -> bool:
+    """Whether the request itself holds *text*: the user dictated the content."""
+    content = " ".join(text.split())
+    return bool(content and request) and content in " ".join(request.split())
+
+
+#: Parse baseline for a file the turn created: no earlier version to compare.
+_NEW_FILE = "new"
 
 _EDIT_VERIFICATION_PROMPT = (
     "[check:edits] The files you changed this turn were read back off disk "
@@ -11013,10 +11027,16 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     problems.append(f"`{path}` is empty after this turn's edit.")
                 continue
-            problem = _parse_problem(path, text)
+            before = self._parsed_before(path)
+            problem = _parse_problem(path, text, new=before == _NEW_FILE)
             # A file that already failed to parse before the turn touched it
-            # is not this turn's breakage to repair.
-            if problem and self._parsed_before(path) is not False:
+            # is not this turn's breakage to repair, nor is content the user
+            # dictated word for word.
+            if (
+                problem
+                and before is not False
+                and not _user_supplied(text, getattr(self, "_current_query", None))
+            ):
                 problems.append(problem)
         return problems
 
@@ -11028,7 +11048,7 @@ Do NOT wrap conversational replies in JSON.
             return None
         return os.path.normcase(str(key))
 
-    def _parsed_before(self, path: Path) -> Optional[bool]:
+    def _parsed_before(self, path: Path) -> Optional[Union[bool, str]]:
         key = self._baseline_key(str(path))
         baseline = getattr(self, "_edit_parse_baseline", None) or {}
         return baseline.get(key) if key is not None else None
@@ -11056,7 +11076,7 @@ Do NOT wrap conversational replies in JSON.
                 if not allowed:
                     return
             if not path.is_file():
-                baseline[key] = True  # a new file
+                baseline[key] = _NEW_FILE
                 return
             if path.stat().st_size > _VERIFY_MAX_BYTES:
                 return
