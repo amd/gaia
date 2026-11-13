@@ -488,6 +488,11 @@
     background: var(--tint-subtle);
 }
 
+/* A short code word keeps its chip whole; the table widens or scrolls instead. */
+.md-table .inline-code {
+    overflow-wrap: normal;
+}
+
 /* Right-align numeric columns */
 .md-table td:last-child,
 .md-table th:last-child {
