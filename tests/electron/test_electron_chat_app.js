@@ -967,7 +967,7 @@ describe('Chat App Integration', () => {
     it('should have keyboard accessibility on session items', () => {
       // Session rows are native buttons, so Tab/Enter/Space work without handlers.
       expect(sidebarContent).toMatch(
-        /<button\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
+        /<button\s+ref=\{mainRef\}\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
       );
       expect(sidebarContent).not.toContain('role="button"');
     });
@@ -1150,7 +1150,7 @@ describe('Chat App Integration', () => {
     it('should have drag-and-drop with visual overlay', () => {
       expect(chatContent).toContain('isDragOver');
       expect(chatContent).toContain('drag-overlay');
-      expect(chatContent).toContain('Drop files to index');
+      expectTranslated(chatContent, "{t('chat.dropOverlay')}", 'chat.dropOverlay', 'Drop files to index them for this chat');
     });
 
     it('should auto-upload dropped files', () => {
