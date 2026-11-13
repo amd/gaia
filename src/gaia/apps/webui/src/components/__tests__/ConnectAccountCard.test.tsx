@@ -214,6 +214,15 @@ describe('ConnectAccountCard', () => {
         await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledTimes(2));
     });
 
+    it('listens for sign-in events only while its sign-in is open', async () => {
+        sse.handlers.length = 0;
+        render(<ConnectAccountCard data={card(['google'])} />);
+        await screen.findByRole('button', { name: 'Connect Google' });
+        expect(sse.handlers).toHaveLength(0);
+        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        await waitFor(() => expect(sse.handlers.length).toBeGreaterThan(0));
+    });
+
     it('ignores a sign-in it did not open', async () => {
         render(<ConnectAccountCard data={card(['google'])} />);
         await screen.findByRole('button', { name: 'Connect Google' });

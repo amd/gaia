@@ -175,6 +175,28 @@ function ProviderRow({
     );
 }
 
+/** Watches for a sign-in this card opened to end without connecting.
+ *  Mounted only while one is open: each watcher holds a connection. */
+function SignInWatcher({
+    providers,
+    onEnded,
+}: {
+    providers: string[];
+    onEnded: (why: 'cancelled' | 'failed') => void;
+}) {
+    useConnectorsSSE(
+        useCallback(
+            (event) => {
+                if (event.reason !== 'oauth_error') return;
+                if (!event.connectorId || !providers.includes(event.connectorId)) return;
+                onEnded(event.payload.reason === 'cancelled' ? 'cancelled' : 'failed');
+            },
+            [providers, onEnded],
+        ),
+    );
+    return null;
+}
+
 export function ConnectAccountCard({ data }: { data: unknown }) {
     const t = useT();
     const agents = useChatStore((s) => s.agents);
@@ -205,19 +227,10 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         return () => clearInterval(timer);
     }, [opened, refresh]);
 
-    // A sign-in this card opened that ended without connecting.
-    const providers = valid ? data.providers : [];
-    useConnectorsSSE(
-        useCallback(
-            (event) => {
-                if (!opened || event.reason !== 'oauth_error') return;
-                if (!event.connectorId || !providers.includes(event.connectorId)) return;
-                setOpened(false);
-                setEnded(event.payload.reason === 'cancelled' ? 'cancelled' : 'failed');
-            },
-            [opened, providers.join(' ')], // eslint-disable-line react-hooks/exhaustive-deps
-        ),
-    );
+    const onEnded = useCallback((why: 'cancelled' | 'failed') => {
+        setOpened(false);
+        setEnded(why);
+    }, []);
 
     if (!isConnectAccountPayload(data)) {
         return <UnsupportedCard variant="invalid" render={CONNECT_ACCOUNT_RENDER} data={data} />;
@@ -242,6 +255,7 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                 <Link2 size={14} className="render-connect__icon" aria-hidden="true" />
                 <span role={ended ? 'alert' : undefined}>{prompt}</span>
             </div>
+            {opened && <SignInWatcher providers={data.providers} onEnded={onEnded} />}
             <div className="render-connect__providers">
                 {data.providers.map((id) => (
                     <ProviderRow

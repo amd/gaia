@@ -647,6 +647,7 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     try:
         result = await _exchange_code_for_tokens(flow, code)
     except Exception as e:
+        logger.warning("flow: sign-in to %s failed: %s", flow.provider_id, e)
         if not flow.future.done():
             flow.future.set_exception(e)
         await emit(

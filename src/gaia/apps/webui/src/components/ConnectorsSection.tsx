@@ -646,11 +646,12 @@ function OAuthConfigureBody({
             (event) => {
                 if (event.connectorId !== connector.id) return;
                 if (event.reason === 'oauth_error') {
+                    // A browser sign-in says why it ended; its raw error stays in the log.
                     const why = event.payload.reason;
                     setErr(
                         why === 'cancelled'
                             ? t('connectCard.cancelled')
-                            : why === 'timeout'
+                            : why
                               ? t('connectCard.failed')
                               : String(event.payload.error ?? t('settings.connectors.deviceFailed')),
                     );
