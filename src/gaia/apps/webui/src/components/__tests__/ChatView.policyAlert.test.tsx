@@ -331,7 +331,7 @@ describe('in Arabic', () => {
         expect(toast()!.textContent).toContain('محظور');
         expect(within(toast()!).getByRole('button', { name: /عرض الإيصال/ })).toBeInTheDocument();
 
-        fireEvent.dragOver(document.querySelector('.task-view')!);
+        fireEvent.dragOver(document.querySelector('.task-view')!, { dataTransfer: { types: ['Files'] } });
         expect(document.querySelector('.drag-overlay')!.textContent).toContain('أفلت الملفات');
     });
 });
