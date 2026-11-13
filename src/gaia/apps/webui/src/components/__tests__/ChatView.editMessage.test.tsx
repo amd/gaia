@@ -120,6 +120,33 @@ describe('editing a sent message', () => {
     });
 });
 
+describe('editing a message with an attachment', () => {
+    const LINK = '[standup.wav](/api/files/uploads/standup-25a14da6.wav)';
+
+    beforeEach(() => {
+        server[2] = row(3, 'user', `Transcribe this recording\n\n${LINK}`);
+        useChatStore.setState({ messages: [...server] });
+    });
+
+    it('shows only the typed text, with the file as a chip', async () => {
+        await show();
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'ArrowUp' });
+        expect(editor().value).toBe('Transcribe this recording');
+        const chips = screen.getByRole('list', { name: 'Attached files' });
+        expect(chips.textContent).toBe('standup.wav');
+    });
+
+    it('sends the file again with the edited text', async () => {
+        await show();
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'ArrowUp' });
+        fireEvent.change(editor(), { target: { value: 'Summarize this recording' } });
+        await act(async () => {
+            fireEvent.keyDown(editor(), { key: 'Enter' });
+        });
+        await waitFor(() => expect(sends).toEqual([`Summarize this recording\n\n${LINK}`]));
+    });
+});
+
 describe('resending an earlier message', () => {
     it('says how many later messages go away, and deletes nothing until confirmed', async () => {
         await show();

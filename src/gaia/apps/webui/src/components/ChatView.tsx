@@ -187,6 +187,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [cards]);
     // Auto-read needs the saved choice before the first reply finishes.
     useReadAloudSettings();
+    // Leaving the chat ends its reading; the stop button lives only in this view.
+    useEffect(() => () => useReadAloudStore.getState().stop(), []);
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
@@ -1588,7 +1590,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [sessionId, attach, t]);
 
-    const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
+    const handleDragOver = (e: React.DragEvent) => {
+        // Dragged text is not a drop target for files.
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(true);
+    };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
 
     // Stale connector-reply cue (#2119): when the newest reply was a connector
