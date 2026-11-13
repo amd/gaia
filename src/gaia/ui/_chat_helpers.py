@@ -653,6 +653,10 @@ _TITLE_BUSY_TRIES = 8
 _TITLE_BUSY_RETRY_S = 15
 
 
+#: Wait before a title retries a key the restarting model server just replaced.
+_TITLE_KEY_RETRY_SECONDS = 2.0
+
+
 class _TitleModelBusy(Exception):
     """The title's wait for the model slot hit its limit: the model is in use."""
 
@@ -846,7 +850,9 @@ async def _generate_session_title(
 
     from gaia.daemon.broker_client import lease_wait_limit, model_lease
     from gaia.llm.lemonade_client import (
+        OWN_KEY_REFUSED,
         SIDE_SLOT,
+        LemonadeAuthError,
         LemonadeClient,
         LemonadeClientError,
         _model_ids_match,
@@ -909,7 +915,15 @@ async def _generate_session_title(
             )
 
     try:
-        data = await asyncio.to_thread(_ask)
+        try:
+            data = await asyncio.to_thread(_ask)
+        except LemonadeAuthError as exc:
+            if str(exc) != OWN_KEY_REFUSED:
+                raise
+            # GAIA's server just restarted with a new key; a new client reads it.
+            logger.info("Auto-title: %s refused the old key; retrying once", model_id)
+            await asyncio.sleep(_TITLE_KEY_RETRY_SECONDS)
+            data = await asyncio.to_thread(_ask)
     except (LemonadeClientError, BrokerUnavailableError, OSError) as exc:
         if isinstance(exc, BrokerUnavailableError) and exc.status_code == 504:
             raise _TitleModelBusy(str(exc)) from exc

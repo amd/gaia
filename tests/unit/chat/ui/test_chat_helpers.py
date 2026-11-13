@@ -1130,6 +1130,65 @@ def _resident_title_client(model_id, reply):
     return client
 
 
+class TestTitleAfterAKeyChange:
+    """The first chat after GAIA's server restarts kept its placeholder title (#8045)."""
+
+    @staticmethod
+    def _title(client, monkeypatch):
+        from gaia.ui import _chat_helpers as ch
+
+        monkeypatch.setattr(ch, "_TITLE_KEY_RETRY_SECONDS", 0)
+        with patch(
+            "gaia.llm.lemonade_client.LemonadeClient", return_value=client
+        ) as made:
+            title = asyncio.run(
+                ch._generate_session_title(
+                    "http://localhost:13305/api/v1",
+                    "fireworks.deepseek-v4p1-flash",
+                    "plan a trip",
+                    "",
+                )
+            )
+        return title, made.call_count
+
+    def test_a_refused_own_key_is_read_again_and_retried_once(self, monkeypatch):
+        from gaia.llm.lemonade_client import OWN_KEY_REFUSED, LemonadeAuthError
+
+        client = _resident_title_client("x", "Trip plan")
+        client.chat_completions.side_effect = [
+            LemonadeAuthError(OWN_KEY_REFUSED),
+            {"choices": [{"message": {"content": "Trip plan"}}]},
+        ]
+
+        title, clients = self._title(client, monkeypatch)
+
+        assert title == "Trip plan"
+        # A new client per try is what picks up the restarted server's key.
+        assert clients == 2
+
+    def test_a_key_still_refused_gives_up_after_one_retry(self, monkeypatch):
+        from gaia.llm.lemonade_client import OWN_KEY_REFUSED, LemonadeAuthError
+
+        client = _resident_title_client("x", "Trip plan")
+        client.chat_completions.side_effect = LemonadeAuthError(OWN_KEY_REFUSED)
+
+        title, clients = self._title(client, monkeypatch)
+
+        assert title is None
+        assert clients == 2
+
+    def test_a_providers_401_is_not_retried(self, monkeypatch):
+        from gaia.llm.lemonade_client import LemonadeAuthError
+
+        client = _resident_title_client("x", "Trip plan")
+        client.chat_completions.side_effect = LemonadeAuthError("bad provider key")
+
+        title, clients = self._title(client, monkeypatch)
+
+        assert title is None
+        assert clients == 1
+
+
 class TestSessionTitleRequest:
     """The 24-token title request must not be spent on a thinking model's reasoning."""
 
