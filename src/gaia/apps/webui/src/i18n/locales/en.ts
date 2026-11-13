@@ -295,6 +295,9 @@ export const enMessages = {
     'composer.rememberNote': 'GAIA can learn from this chat and use it in later ones.',
     'composer.privateChat': 'Private chat',
     'composer.privateChatNote': "Not saved to memory, not even its first message.",
+    'composer.privateOn': 'Turn on private chat',
+    'composer.privateOnTitle': "Turn on private chat. It won't be saved to memory.",
+    'composer.privateOff': 'Turn off private chat',
 
     // Notice when the GAIA agent is missing
     'agentNotice.missing': "The GAIA agent isn't installed, so new chats can't start yet.",

@@ -295,6 +295,9 @@ const messages: Messages = {
     'composer.rememberNote': 'يمكن لـ GAIA أن يتعلم من هذه المحادثة ويستخدمها في محادثات لاحقة.',
     'composer.privateChat': 'محادثة خاصة',
     'composer.privateChatNote': 'لا تُحفظ في الذاكرة، ولا حتى رسالتها الأولى.',
+    'composer.privateOn': 'تفعيل المحادثة الخاصة',
+    'composer.privateOnTitle': 'تفعيل المحادثة الخاصة. لن تُحفظ في الذاكرة.',
+    'composer.privateOff': 'إيقاف المحادثة الخاصة',
 
     // Notice when the GAIA agent is missing
     'agentNotice.missing': 'وكيل GAIA غير مثبّت، لذا لا يمكن بدء محادثات جديدة بعد.',
