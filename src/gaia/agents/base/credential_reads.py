@@ -9,6 +9,7 @@ only computes when it runs is beyond this check.
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
@@ -21,6 +22,29 @@ log = get_logger(__name__)
 #: Tools that run Python, and the argument carrying the code or the script.
 PYTHON_TOOLS = {"run_python": "code", "execute_python_file": "file_path"}
 
+#: Every call ``python_file_reads`` reports is spelled with one of these.
+_READ_CALLS = re.compile(
+    r"open|read_text|read_bytes|copy|move|system|popen|Popen|run|call|getoutput"
+)
+
+#: Past this size, code that names no credential file is not parsed. A link
+#: to one behind an ordinary name is then beyond the check.
+_FULL_CHECK_LIMIT = 64 * 1024
+
+
+def _may_read_credentials(code: str) -> bool:
+    """False when *code* cannot read a credential file the check would find."""
+    if not _READ_CALLS.search(code):
+        return False
+    if len(code) <= _FULL_CHECK_LIMIT:
+        return True
+    from gaia import security
+
+    lowered = code.lower()
+    return any(n.lower() in lowered for n in security.SENSITIVE_FILE_NAMES) or any(
+        e in lowered for e in security.SENSITIVE_EXTENSIONS
+    )
+
 
 def credential_in_python(code: str, cwds: Iterable[str]) -> Optional[str]:
     """The first credential file *code* reads, judged from each of *cwds*.
@@ -31,6 +55,8 @@ def credential_in_python(code: str, cwds: Iterable[str]) -> Optional[str]:
     from gaia import security
     from gaia.agents.tools.shell_tools import credential_read_in_words
 
+    if not _may_read_credentials(code):
+        return None
     folders = list(dict.fromkeys(str(c) for c in cwds if c)) or [os.getcwd()]
     paths, commands = python_file_reads(code, folders[0])
     for cwd in folders:
@@ -93,7 +119,9 @@ def script_credential(file_path: str, cwds: list) -> Optional[str]:
             source = script.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             # The tool's own read fails the same way and reports it.
-            log.warning("Could not read %s to check what it reads: %s", script, exc)
+            log.warning(
+                "Could not read a script to check what it reads (errno %s)", exc.errno
+            )
             return None
         return credential_in_python(source, [str(script.parent), *cwds])
     return None

@@ -1418,14 +1418,40 @@ _PATH_READERS = frozenset({"read_text", "read_bytes", "open"})
 _SHUTIL_READERS = frozenset({"copy", "copy2", "copyfile", "copytree", "move"})
 
 
+def _mode_writes_only(mode: Optional[ast.AST]) -> bool:
+    """Whether an ``open`` *mode* leaves nothing already in the file to read.
+
+    ``w`` and ``x`` start the file empty; ``a`` writes after what is there
+    without reading it. ``r+`` and ``a+`` read, and so does a mode not
+    written out as a literal.
+    """
+    if not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)):
+        return False
+    text = mode.value
+    return "w" in text or "x" in text or ("a" in text and "+" not in text)
+
+
+def _os_open_writes_only(flags: Optional[ast.AST]) -> bool:
+    """Whether ``os.open`` *flags* open the file for writing only."""
+    if flags is None:
+        return False
+    named = {
+        node.attr if isinstance(node, ast.Attribute) else node.id
+        for node in ast.walk(flags)
+        if isinstance(node, (ast.Attribute, ast.Name))
+    }
+    return "O_WRONLY" in named and not named & {"O_RDWR", "O_RDONLY"}
+
+
 def python_file_reads(code: str, cwd: str) -> Tuple[List[str], List[List[str]]]:
     """The files a snippet opens, and the commands it hands to a shell.
 
     Only paths a read is made from: ``open``/``io.open``/``os.open``, a
     ``Path`` that is read or opened, and the source of a ``shutil`` copy or
     move. A string that is never opened — a message naming ``app/.env`` — is
-    not in the list. Paths are read the way :class:`_PyFiles` reads a file
-    change: literals, names bound to them, f-strings, ``os.path.join`` and
+    not in the list, nor is a file opened only to be written (``'w'``,
+    ``'a'``, ``'x'``, ``os.O_WRONLY``). Paths are read the way
+    :class:`_PyFiles` reads a file change: literals, names bound to them, f-strings, ``os.path.join`` and
     ``Path(...) / ...``. A path the code only works out when it runs is not.
 
     Returns:
@@ -1454,13 +1480,18 @@ def python_file_reads(code: str, cwd: str) -> Tuple[List[str], List[List[str]]]:
         if name == "open" and (
             module in _OPENERS or module == "os" or isinstance(func, ast.Name)
         ):
-            add(_arg(node, 0, "file" if module != "os" else "path"))
+            if module == "os":
+                if not _os_open_writes_only(_arg(node, 1, "flags")):
+                    add(_arg(node, 0, "path"))
+            elif not _mode_writes_only(_arg(node, 1, "mode")):
+                add(_arg(node, 0, "file"))
         elif (
             isinstance(func, ast.Attribute)
             and func.attr in _PATH_READERS
             and files.is_path(func.value)
         ):
-            add(func.value)
+            if func.attr != "open" or not _mode_writes_only(_arg(node, 0, "mode")):
+                add(func.value)
         elif module == "shutil" and name in _SHUTIL_READERS:
             add(_arg(node, 0, "src"))
         elif name in _SUBPROCESS_FUNCS or (

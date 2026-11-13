@@ -192,3 +192,66 @@ def test_a_computed_path_is_beyond_the_check(project):
     code = "print(open(''.join(['.', 'e', 'n', 'v'])).read())"
 
     assert credential_in_python(code, [str(project)]) is None
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "open('.env', 'w').write('A=1')",
+        "open('.env', mode='a').write('A=1')",
+        "with open('.env', 'x') as f:\n    f.write('A=1')",
+        "open('.env', 'wb').write(b'A=1')",
+        "open('.env', 'w+').write('A=1')",
+        "import io\nio.open('secrets.json', 'w').write('{}')",
+        "from pathlib import Path\nPath('.env').open('w').write('A=1')",
+        "from pathlib import Path\nPath('.env').open(mode='a').write('A=1')",
+        "from pathlib import Path\nPath('.env').write_text('A=1')",
+        "import os\nfd = os.open('.env', os.O_WRONLY | os.O_CREAT | os.O_TRUNC)",
+    ],
+)
+def test_opening_a_credential_file_to_write_still_runs(agent, code):
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result.get("status") == "success", result
+    assert agent.ran == [code]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "print(open('.env', 'r').read())",
+        "print(open('.env', 'rb').read())",
+        "f = open('.env', 'a+')\nf.seek(0)\nprint(f.read())",
+        "print(open('.env', 'r+').read())",
+        "print(open('.env', mode='rt').read())",
+        "mode = 'w'\nprint(open('.env', mode).read())",
+        "from pathlib import Path\nprint(Path('.env').open('r').read())",
+        "import os\nprint(os.read(os.open('.env', os.O_RDONLY), 99))",
+        "import os\nprint(os.read(os.open('.env', os.O_RDWR), 99))",
+    ],
+)
+def test_opening_a_credential_file_to_read_is_refused(agent, code):
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result["executed"] is False, result
+    assert agent.ran == []
+
+
+def test_large_code_naming_a_credential_file_is_still_checked(project):
+    code = "x = 1\n" * 20000 + "print(open('.env').read())\n"
+
+    assert len(code) > 64 * 1024
+    assert credential_in_python(code, [str(project)]) is not None
+
+
+def test_large_code_without_a_read_is_not_parsed(project, monkeypatch):
+    import gaia.agents.base.credential_reads as module
+
+    def parse_fails(*_args, **_kwargs):
+        raise AssertionError("parsed code that cannot read a file")
+
+    monkeypatch.setattr(module, "python_file_reads", parse_fails)
+
+    assert credential_in_python("x = 1\n" * 170000, [str(project)]) is None
+    big_reader = "y = open('data.csv').read()\n" * 3000
+    assert credential_in_python(big_reader, [str(project)]) is None

@@ -18,9 +18,11 @@ from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.credential_shapes import (
+    HIDDEN_LINE,
     REDACTED,
+    mask_credential_file_lines,
     redact_credentials,
-    redact_credentials_in,
+    redact_tool_output,
 )
 from gaia.llm import failure_record
 
@@ -67,6 +69,8 @@ def test_credentials_are_masked(text, secret):
         "max_tokens=512 tokens_per_second=31.2",
         "ghp_short",
         "mailto:someone@example.com",
+        "task-sk-abcdefghijklmnopqrstuvwxyz0123",
+        "build_sk-abcdefghijklmnopqrstuvwxyz0123",
     ],
 )
 def test_ordinary_text_is_left_alone(text):
@@ -81,7 +85,7 @@ def test_nested_results_are_masked_and_rebuilt():
         "return_code": 0,
     }
 
-    out = redact_credentials_in(result)
+    out = redact_tool_output(result)
 
     assert GHP not in str(out) and AKIA not in str(out)
     assert out["return_code"] == 0 and out["status"] == "success"
@@ -91,6 +95,68 @@ def test_failure_records_mask_the_shared_shapes():
     out = failure_record.redact(f"clone https://{GHP}@github.com/a/b and {AKIA}")
 
     assert GHP not in out and AKIA not in out
+
+
+GREP_OUTPUT = (
+    "./src/app.py:12:# TODO: retry\n"
+    "./.env:3:DB_PASSWORD=hunter2\n"
+    "./config/.env.local-4-API_SECRET=s3cr3t\n"
+    "./README.md:7:TODO list\n"
+)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "./.env:3:DB_PASSWORD=hunter2",
+        ".env:DB_PASSWORD=hunter2",
+        "sub/dir/.env.production:1:DB_PASSWORD=hunter2",
+        "./config/.env.local-4-API_SECRET=s3cr3t",
+        "certs/server.key:1:-----BEGIN PRIVATE KEY-----",
+        'proj\\secrets.json:2:  "token": "abc"',
+        "> proj\\.env:1:DB_PASSWORD=hunter2",
+        "  proj\\.env:2:API_SECRET=s3cr3t",
+        "./.env\x00DB_PASSWORD=hunter2",
+        "3:./.env:DB_PASSWORD=hunter2",
+        "3:.env:DB_PASSWORD=hunter2",
+        "\x1b[35m./.env\x1b[m\x1b[36m:\x1b[m3:DB_PASSWORD=hunter2",
+        "C:\\work\\app\\.npmrc:1://registry/:_authToken=x",
+    ],
+)
+def test_a_line_from_a_credential_file_is_hidden(line):
+    out = mask_credential_file_lines(line + "\n")
+
+    for secret in ("hunter2", "s3cr3t", '"abc"', "PRIVATE KEY", "_authToken"):
+        assert secret not in out, line
+    assert HIDDEN_LINE in out
+    assert out.endswith("\n")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "./src/app.py:12:# TODO: retry",
+        "./.env.example:1:DB_PASSWORD=",
+        "docs/env.md:3:put DB_PASSWORD in .env",
+        ".gitignore:1:.env",
+        "./README.md:7:copy .env.example to .env",
+        "src/settings.py-40-load_dotenv('.env')",
+        " M .env",
+        "ls: cannot access '.env': No such file or directory",
+        "",
+    ],
+)
+def test_other_lines_are_left_alone(line):
+    assert mask_credential_file_lines(line) == line
+
+
+def test_a_search_keeps_its_other_lines():
+    out = mask_credential_file_lines(GREP_OUTPUT)
+
+    assert "hunter2" not in out and "s3cr3t" not in out
+    assert "./src/app.py:12:# TODO: retry\n" in out
+    assert "./README.md:7:TODO list\n" in out
+    assert out.count(HIDDEN_LINE) == 2
 
 
 class _OutputAgent(Agent):
@@ -113,6 +179,11 @@ class _OutputAgent(Agent):
         def run_python(code: str) -> dict:
             """Print a canned key."""
             return {"status": "success", "stdout": f"{AKIA}\n{PAT}\n"}
+
+        @tool
+        def execute_python_file(file_path: str) -> dict:
+            """Print what a recursive search of a folder holding .env prints."""
+            return {"status": "success", "stdout": GREP_OUTPUT}
 
         @tool
         def read_notes(name: str) -> dict:
@@ -146,6 +217,13 @@ def test_python_output_is_masked(agent):
     result = agent._execute_tool("run_python", {"code": "print(1)"})
 
     assert AKIA not in result["stdout"] and PAT not in result["stdout"]
+
+
+def test_search_output_hides_credential_file_lines(agent):
+    result = agent._execute_tool("execute_python_file", {"file_path": "search.py"})
+
+    assert "hunter2" not in result["stdout"] and "s3cr3t" not in result["stdout"]
+    assert "./src/app.py:12:# TODO: retry" in result["stdout"]
 
 
 def test_other_tools_are_not_rewritten(agent):

@@ -441,7 +441,7 @@ def is_read_blocked(path: Any) -> Tuple[bool, str]:
         return (False, "")
 
     except Exception as e:
-        logger.error(f"Error checking read block for {path}: {e}")
+        logger.error("Could not check a path for credentials: %s", type(e).__name__)
         # Fail-closed: refuse if we can't determine safety.
         return (True, f"Read blocked: unable to validate path safety: {e}")
 
@@ -462,8 +462,10 @@ def names_credential_file(word: str) -> bool:
     look like a file name: ``passwd`` is also a getent database and ``.a.key``
     a JSON field, so those count only when such a file is really there.
     """
-    stripped = word.rstrip("/\\")
-    name = re.split(r"[\\/]", stripped)[-1].lower()
+    # '\' separates folders on Windows only; elsewhere '\.env' is a regex.
+    separators = "/\\" if os.name == "nt" else "/"
+    stripped = word.rstrip(separators)
+    name = re.split(f"[{re.escape(separators)}]", stripped)[-1].lower()
     if not name:
         return False
     if name != stripped.lower():
@@ -491,7 +493,7 @@ def credential_file_read(word: str, cwd: str) -> Optional[str]:
             is_dir = present and os.path.isdir(target)
             real = os.path.realpath(target) if present else ""
         except (OSError, ValueError) as exc:
-            logger.debug("Not a file on disk: %r (%s)", spelling, exc)
+            logger.debug("Not a file on disk (%s)", type(exc).__name__)
             present, is_dir, real = False, False, ""
         if is_dir:
             continue
