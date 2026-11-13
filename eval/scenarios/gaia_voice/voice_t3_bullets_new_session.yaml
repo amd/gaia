@@ -18,7 +18,7 @@ setup:
 
 turns:
   - turn: 1
-    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention and the only cross-scenario isolation; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: State a formatting preference"
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) (the runner also clears memory before the scenario); requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: State a formatting preference"
     user_message: "one thing about me: whenever you give me steps or a list of options, use bullet points, not paragraphs. i skim. remember that for next time too."
     ground_truth:
       expected_answer: "Acknowledged and stored as a preference"
