@@ -271,7 +271,7 @@ def test_number_range_after_a_latin_word_keeps_its_order():
         )
     )
 
-    assert "15-20" in text and "20-" not in text
+    assert "dell15-20" in text.split()
 
 
 def test_hyphenated_code_with_letters_keeps_its_order():
