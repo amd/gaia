@@ -693,6 +693,36 @@ def text_window(
     return part
 
 
+def _refuse_host_this_turn(host: Any, tool_name: str, tool_args: dict, error) -> None:
+    """Refuse a cloud-metadata host the web client blocked to every tool, this turn.
+
+    The block is policy, not a person's no, so nothing may lift it: a shell
+    ``curl`` or a Python ``urlopen`` to the same address is refused too. Only
+    metadata and link-local targets carry over; loopback and private LAN
+    addresses stay reachable from the shell, where reaching them is ordinary
+    work (a dev server, a NAS).
+    """
+    ledger = getattr(host, "_denied_effects", None)
+    if ledger is None:
+        return
+    from gaia.agents.base.denied_effects import NETWORK, is_cloud_metadata_host
+
+    if not (
+        is_cloud_metadata_host(error.host) or is_cloud_metadata_host(error.address)
+    ):
+        return
+
+    ledger.record(
+        tool_name,
+        tool_args,
+        str(error),
+        kinds={NETWORK},
+        refused=True,
+        hosts=[error.host, error.address],
+    )
+    logger.info("Refusing %s for the rest of this turn: %s", error.host, error)
+
+
 class BrowserToolsMixin:
     """Web browsing tools for content extraction, search, and download.
 
@@ -762,9 +792,14 @@ class BrowserToolsMixin:
             if (offset or find) and extract != "text":
                 return "Error: offset and find apply to extract='text' only."
 
+            from gaia.web.client import BlockedHostError
+
             try:
                 response = mixin._web_client.get(url)
                 response.raise_for_status()
+            except BlockedHostError as e:
+                _refuse_host_this_turn(mixin, "fetch_page", {"url": url}, e)
+                return f"Error: {e}"
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:
@@ -1033,6 +1068,8 @@ class BrowserToolsMixin:
                         raise _DownloadRefused(_download_denied(validator, dest_path))
                 before_change(dest_path, "download_file")
 
+            from gaia.web.client import BlockedHostError
+
             try:
                 result = mixin._web_client.download(
                     url=url,
@@ -1042,6 +1079,9 @@ class BrowserToolsMixin:
                 )
             except _DownloadRefused as e:
                 return _download_refusal(str(e))
+            except BlockedHostError as e:
+                _refuse_host_this_turn(mixin, "download_file", {"url": url}, e)
+                return f"Error: {e}"
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:

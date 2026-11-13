@@ -15,6 +15,7 @@ import {
     BookOpen,
     Database,
     FolderOpen,
+    Folder,
     BarChart3,
     Globe,
     FileEdit,
@@ -833,7 +834,7 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
     return <>{parts}</>;
 }
 
-// ── Flow: File list from file search tools ───────────────────────────────
+// ── Flow: File list from file search and folder listing tools ────────────
 
 function FileListView({ fileList }: { fileList: { files: Array<Record<string, unknown>>; total: number } }) {
     const t = useT();
@@ -857,7 +858,9 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
         <div className="file-list-view">
             {displayFiles.map((f, i) => (
                 <div key={i} className="file-list-item">
-                    <File size={11} className="file-list-icon" />
+                    {f.kind === 'folder'
+                        ? <Folder size={11} className="file-list-icon" data-kind="folder" />
+                        : <File size={11} className="file-list-icon" />}
                     <span className="file-list-name">{visibleName(getFileName(f, i))}</span>
                     {getDirectory(f) && <span className="file-list-dir">{visibleName(getDirectory(f))}</span>}
                 </div>

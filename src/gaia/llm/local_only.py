@@ -399,6 +399,29 @@ def recipes_confirm_local(recipes: List[Optional[str]]) -> bool:
     return bool(recipes) and all(is_local_recipe(r) for r in recipes)
 
 
+def blocked_reason(recipes: List[Optional[str]]) -> str:
+    """Why Local only refuses a model whose catalog *recipes* don't confirm it runs here.
+
+    Callers only use this when *recipes* fails the allowlist, so every branch
+    names a real reason instead of pointing at the privacy setting.
+    """
+    remote = [r for r in recipes if not is_local_recipe(r)]
+    if not recipes:
+        return "Lemonade's catalog doesn't list it"
+    if len(set(recipes)) > 1:
+        return (
+            f"its name matches several catalog entries ({', '.join(map(str, recipes))}) "
+            "and not all of them are local models"
+        )
+    if remote[0] is None:
+        return "Lemonade's catalog lists it without saying where it runs"
+    if remote[0] == "cloud":
+        return "it is a cloud model"
+    if str(remote[0]).startswith("collection."):
+        return f"it is a '{remote[0]}' model, which can forward requests to the cloud"
+    return f"its recipe '{remote[0]}' isn't one GAIA knows is a local model"
+
+
 def assert_model_permitted(
     model: Optional[str], recipes_of: Callable[[str], List[Optional[str]]]
 ) -> None:
@@ -426,25 +449,9 @@ def assert_model_permitted(
         ) from e
     if recipes_confirm_local(recipes):
         return
-    remote = [r for r in recipes if not is_local_recipe(r)]
-    if not recipes:
-        why = "Lemonade's catalog doesn't list it"
-    elif len(set(recipes)) > 1:
-        why = (
-            f"its name matches several catalog entries ({', '.join(map(str, recipes))}) "
-            "and not all of them are local models"
-        )
-    elif remote[0] is None:
-        why = "Lemonade's catalog lists it without saying where it runs"
-    elif remote[0] == "cloud":
-        why = "it is a cloud model"
-    elif str(remote[0]).startswith("collection."):
-        why = f"it is a '{remote[0]}' model, which can forward requests to the cloud"
-    else:
-        why = f"its recipe '{remote[0]}' isn't one GAIA knows is a local model"
     raise CloudDisabledError(
-        f"Local only is on, so '{model}' was blocked: {why}. Pick a local "
-        f"model. {SETTINGS_HINT}"
+        f"Local only is on, so '{model}' was blocked: {blocked_reason(recipes)}. "
+        f"Pick a local model. {SETTINGS_HINT}"
     )
 
 

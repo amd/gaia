@@ -4897,7 +4897,11 @@ def _handle_schedule(args):
             sink=args.sink,
             sink_args=sink_args,
         )
-        store.add(schedule)
+        try:
+            store.add(schedule)
+        except ValueError as exc:
+            print(f"❌ Cannot add schedule {args.name!r}: {exc}", file=sys.stderr)
+            sys.exit(1)
         if schedule.one_shot:
             print(
                 f"✅ Added one-time schedule {schedule.name!r} "
