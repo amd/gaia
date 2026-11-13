@@ -32,18 +32,54 @@ def resolve_input(schedule: Schedule) -> str:
     )
 
 
+class ScheduleModelError(RuntimeError):
+    """The run's model can't answer without a download; worded for the user."""
+
+
+def resolve_model() -> str:
+    """The model a scheduled run answers with: the one the GAIA apps reopen on.
+
+    A scheduled run never downloads a model: that is gigabytes nobody agreed to.
+    """
+    from gaia.config import GaiaConfig
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        cloud_model_provider,
+        resolve_chat_model,
+    )
+
+    model = resolve_chat_model()
+    if cloud_model_provider(model):
+        return model
+    client = LemonadeClient(verbose=False)
+    # A gateway model the catalog leaves out (no or expired token) has nothing to download.
+    if client._is_cloud_model(model):  # pylint: disable=protected-access
+        return model
+    info = client.get_model_info(model)
+    if info["downloaded"]:
+        return model
+    if GaiaConfig.load().last_model == model:
+        remedy = "Pick a model you have in the GAIA app"
+    else:
+        remedy = "Run `gaia config set default_model <id>` with a model you have"
+    raise ScheduleModelError(
+        f"{model} is not downloaded ({info['size_gb']:.1f} GB), and scheduled "
+        f"runs do not download models. {remedy}, or download it from the GAIA "
+        "app's Settings > Model."
+    )
+
+
 def fire(schedule: Schedule) -> str:
     """Run one scheduled job: fresh agent session -> sink. Returns the output."""
     # Imported lazily so the scheduler/store can be used without spinning up the
     # full agent stack (and so tests can register schedules without an LLM).
     from gaia.chat.sdk import AgentConfig, AgentSDK
-    from gaia.llm.lemonade_client import resolve_default_chat_model
 
     prompt = resolve_input(schedule)
     sinks.validate(schedule.sink, schedule.sink_args)
     log.info("schedule %r firing (sink=%s)", schedule.name, schedule.sink)
 
-    sdk = AgentSDK(AgentConfig(model=resolve_default_chat_model()))
+    sdk = AgentSDK(AgentConfig(model=resolve_model()))
     response = sdk.send(prompt, no_history=True)
     output = response.text
 

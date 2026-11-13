@@ -71,6 +71,10 @@ import numpy as np
 from gaia.agents.base import turn_metrics
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.history import MEMORY_CONTEXT_HEADER, frame_user_message
+from gaia.agents.base.memory_privacy import (  # noqa: F401  # pylint: disable=unused-import
+    memory_off_reason,
+    memory_writes_refused,
+)
 from gaia.agents.base.memory_store import (
     CONSOLIDATION_MIN_TURNS,
     EXTRACTABLE_CATEGORIES,
@@ -955,17 +959,23 @@ WRITE_FAILURE_INDEX = "index"  # vector stored, not in this session's index
 WRITE_FAILURE_STORE = "store"  # row not saved at all
 
 
-def memory_off_reason(agent) -> str:
-    """Why *agent* is not storing memory, in words the user can act on."""
-    reason = getattr(agent, "_incognito_reason", None)
-    if reason == "private":
-        return "This is a private chat, so nothing is saved to memory."
-    if reason == "memory_off":
-        return (
-            "Memory is turned off in Settings, so nothing is saved. "
-            "It can be turned back on there."
-        )
-    return "Memory is off for this session, so nothing is saved."
+#: Where the user can still make a change a chat may not, by what was refused.
+_REFUSED_CHANGE_REMEDY = {
+    "updated": " Nothing was updated; the user can change it on the Memory page.",
+    "erased": " Nothing was erased; the user can erase it on the Memory page.",
+}
+
+
+def _writes_refused_result(agent, done: str) -> Optional[dict]:
+    """The tool result for a memory change refused now, or None."""
+    reason = memory_writes_refused(agent)
+    if reason is None:
+        return None
+    remedy = _REFUSED_CHANGE_REMEDY.get(done, "")
+    return {
+        "status": "skipped",
+        "message": f"{reason}{remedy} Don't tell the user it was {done}.",
+    }
 
 
 _REEMBED_HINT = (
@@ -2473,7 +2483,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         results = [all_items[kid] for kid in final_ids]
 
         # Step 6: Bump confidence + use_count on recalled items.
-        if count_as_use:
+        if count_as_use and not memory_writes_refused(self):
             store.count_use(results)
 
         return results
@@ -4060,7 +4070,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             # In-session first, so a failed persist below still can't repeat
             # the item on the next turn.
             self._reminders_surfaced.add(item["id"])
-            if getattr(self, "_incognito", False):
+            if memory_writes_refused(self):
                 continue
             try:
                 self._memory_store.update(item["id"], reminded_at=now_iso)
@@ -4283,7 +4293,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             # Run deferred LLM startup tasks on first real query (after self.chat
             # exists). Not in a private or memory-off turn: upkeep sends existing
             # memories to this turn's model, so it waits for a memory-on turn.
-            if not getattr(self, "_incognito", False) and getattr(
+            if not memory_writes_refused(self) and getattr(
                 self, "_memory_post_init_pending", False
             ):
                 self._memory_post_init_pending = False
@@ -4380,9 +4390,9 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # Log to tool_history before re-raising
             try:
-                if getattr(self, "_memory_store", None) is not None and not getattr(
-                    self, "_incognito", False
-                ):
+                if getattr(
+                    self, "_memory_store", None
+                ) is not None and not memory_writes_refused(self):
                     self._memory_store.log_tool_call(
                         session_id=self.memory_session_id,
                         tool_name=tool_name,
@@ -4418,9 +4428,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Log to tool_history
         try:
             with turn_metrics.span("memory_tool_log", tool=tool_name):
-                if getattr(self, "_memory_store", None) is not None and not getattr(
-                    self, "_incognito", False
-                ):
+                if getattr(
+                    self, "_memory_store", None
+                ) is not None and not memory_writes_refused(self):
                     self._memory_store.log_tool_call(
                         session_id=self.memory_session_id,
                         tool_name=tool_name,
@@ -4772,7 +4782,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         store = getattr(self, "_memory_store", None)
         turn_erase_count = getattr(self, "_turn_erase_count", None)
         return (
-            getattr(self, "_incognito", False)
+            memory_writes_refused(self) is not None
             or store is None
             # This turn began before the user erased all of memory.
             or (turn_erase_count is not None and store.erased_since(turn_erase_count))
@@ -5349,7 +5359,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         if getattr(self, "_memory_store", None) is None:
             return
-        if getattr(self, "_incognito", False):
+        if memory_writes_refused(self):
             return
 
         # Use original (pre-augmentation) user text for storage.
@@ -5769,11 +5779,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """
             if (gone := _store_gone()) is not None:
                 return gone
-            if getattr(mixin, "_incognito", False):
-                return {
-                    "status": "skipped",
-                    "message": memory_off_reason(mixin),
-                }
+            if (refused := _writes_refused_result(mixin, "stored")) is not None:
+                return refused
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
@@ -6119,6 +6126,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Update an existing memory entry by ID. Only non-empty fields change. reminded_at is maintained for you — do not set it after mentioning an item."""
             if (gone := _store_gone()) is not None:
                 return gone
+            if (refused := _writes_refused_result(mixin, "updated")) is not None:
+                return refused
             kwargs = {}
             if content:
                 if not content.strip():
@@ -6229,6 +6238,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Remove one memory: its ID from recall, or the user's words for it (e.g. 'allergic to shellfish'). Words erase only the one memory they clearly match; otherwise nothing is erased and the matching IDs come back. To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
+            if (refused := _writes_refused_result(mixin, "erased")) is not None:
+                return refused
             ctx = mixin._memory_context
             contexts = None if ctx == "global" else (ctx, "global")
             try:
@@ -6329,6 +6340,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Erase all of memory in one call: every fact, preference and reminder, sensitive ones included, and stored past conversations. Use for 'forget everything about me' or 'delete all my data'; for one topic use forget. Cannot be undone."""
             if (gone := _store_gone()) is not None:
                 return gone
+            if (refused := _writes_refused_result(mixin, "erased")) is not None:
+                return refused
             try:
                 cleared = mixin._memory_store.clear_all()
             except MemoryScrubError as e:
