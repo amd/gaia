@@ -1636,12 +1636,12 @@ class AudioToolsMixin:
         return result
 
     def _download_speech_model(self, client) -> None:
-        """Download a missing speech model as its own visible step.
+        """Download and load the speech model as their own visible steps.
 
-        Lemonade would otherwise pull it inside the first transcription
-        request, behind a "Transcribing" line that knows nothing of it. On the
-        NPU the first load fetches a second file, with no progress, so the
-        model is loaded here too, as a step that says so.
+        Lemonade would otherwise do both inside the first transcription
+        request, behind a "Transcribing" line that knows nothing of them. On
+        the NPU the first load fetches a second file, with no progress, so that
+        step says so.
         """
         from gaia.agents.base.tools import raise_if_cancelled
 
@@ -1679,7 +1679,9 @@ class AudioToolsMixin:
             )
 
         client.ensure_model(say=say, on_percent=on_percent)
-        if npu and not client.is_loaded():
+        if not client.is_loaded():
+            # Its load time, and any file Lemonade fetches at load (the NPU
+            # part), must not run under the transcription estimate.
             raise_if_cancelled()
             report(
                 SPEECH_MODEL_DOWNLOAD_PHASE,
@@ -1690,7 +1692,7 @@ class AudioToolsMixin:
                         # Lemonade fetches it inside the load and reports nothing.
                         + SPEECH_MODEL_NPU_NO_PROGRESS
                     )
-                    if pulled
+                    if npu and pulled
                     else "Loading the speech model"
                 ),
             )

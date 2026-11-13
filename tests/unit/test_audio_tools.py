@@ -350,6 +350,35 @@ class TestTranscribeMedia:
             "Downloaded the speech model (2.4 GB)",
         ]
 
+    def test_a_first_load_off_the_npu_is_its_own_step(self, tmp_path):
+        """A load is not hidden under "Transcribing" on a GPU or CPU PC either."""
+        shown = self._run_with(tmp_path, lambda **k: None, npu_part=None)
+
+        assert ("speech_model_download", "Loading the speech model") in shown
+        kinds = [k for k, _ in shown]
+        assert kinds.index("load") < kinds.index("transcribe")
+
+    def test_a_failed_speech_model_load_is_the_tools_error(self, tmp_path):
+        source = tmp_path / "standup.wav"
+        source.write_bytes(b"stub")
+        with (
+            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
+            patch("gaia.audio.media.probe_duration", return_value=14.0),
+            patch("gaia.audio.media.to_wav16k_mono", return_value=source),
+            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
+        ):
+            client.return_value.model = "Whisper-Large-v3-Turbo"
+            client.return_value.npu_part.return_value = None
+            client.return_value.is_loaded.return_value = False
+            client.return_value.load.side_effect = LemonadeASRError(
+                "Lemonade returned 500 for load of Whisper-Large-v3-Turbo"
+            )
+            result = Host()._transcribe_media(str(source))
+
+        assert result["status"] == "error"
+        assert "load of Whisper-Large-v3-Turbo" in result["error"]
+        client.return_value.transcribe.assert_not_called()
+
     def test_a_failed_speech_model_download_is_the_tools_error(self, tmp_path):
         source = tmp_path / "standup.wav"
         source.write_bytes(b"stub")
