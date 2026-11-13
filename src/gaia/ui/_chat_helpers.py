@@ -5953,8 +5953,8 @@ def _settled_quietly(future) -> None:
         future.exception()
 
 
-# Failures retrying can't fix until the file itself changes: RAG's pdf_status
-# and xlsx_status values, plus "empty_file" for a file with nothing to index.
+# Failures retrying can't fix until the file itself changes: RAG's pdf_status,
+# xlsx_status and pptx_status values, plus "empty_file" for an empty file.
 PERMANENT_INDEX_FAILURES = frozenset(
     {"corrupted", "encrypted", "empty", "empty_file", "unsupported_workbook"}
 )
@@ -6125,7 +6125,9 @@ async def _index_document(
             kind = (
                 "empty_file"
                 if result.get("empty_file")
-                else result.get("pdf_status") or result.get("xlsx_status")
+                else result.get("pdf_status")
+                or result.get("xlsx_status")
+                or result.get("pptx_status")
             )
             if kind in PERMANENT_INDEX_FAILURES:
                 raise UnreadableDocumentError(message, kind)
