@@ -1575,6 +1575,7 @@ export const enMessages = {
     'setup.download.starting': 'Starting the downloads…',
     'setup.contents.title': 'Everything being set up',
     'setup.contents.from': 'From',
+    'setup.contents.bundled': 'Included with GAIA',
     'setup.contents.sizeOnDownload': 'Size shown when it starts',
     'setup.contents.working': 'In progress',
     'setup.contents.ready': 'Ready',
