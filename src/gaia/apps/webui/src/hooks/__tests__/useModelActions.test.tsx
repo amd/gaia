@@ -13,6 +13,7 @@ vi.mock('../../services/api', async (importActual) => ({
     ...(await importActual<typeof import('../../services/api')>()),
     downloadModel: vi.fn(),
     getSystemStatus: vi.fn(),
+    loadModelAskingFirst: vi.fn(),
 }));
 
 const mockedApi = vi.mocked(api);
@@ -70,6 +71,28 @@ describe('useModelActions.downloadModel', () => {
         await act(() => result.current.downloadModel(false));
 
         expect(result.current.downloadError).toBe('socket closed');
+    });
+});
+
+describe('useModelActions.loadModel', () => {
+    it('leaves the window to the server when no size is given', async () => {
+        mockedApi.loadModelAskingFirst.mockResolvedValueOnce(true);
+        const { result, unmount } = renderHook(() => useModelActions('Gemma-4-E4B-it-GGUF'));
+        await act(() => result.current.loadModel());
+
+        expect(mockedApi.loadModelAskingFirst).toHaveBeenCalledWith('Gemma-4-E4B-it-GGUF', undefined);
+        unmount();
+    });
+
+    it('passes an explicit size through', async () => {
+        mockedApi.loadModelAskingFirst.mockResolvedValueOnce(true);
+        const { result, unmount } = renderHook(() => useModelActions('Gemma-4-E4B-it-GGUF', 65536));
+        await act(() => result.current.loadModel());
+        await act(() => result.current.loadModel(undefined, 8192));
+
+        expect(mockedApi.loadModelAskingFirst).toHaveBeenNthCalledWith(1, 'Gemma-4-E4B-it-GGUF', 65536);
+        expect(mockedApi.loadModelAskingFirst).toHaveBeenNthCalledWith(2, 'Gemma-4-E4B-it-GGUF', 8192);
+        unmount();
     });
 });
 

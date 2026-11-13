@@ -9,6 +9,7 @@ import { ModelChip } from './ModelChip';
 import { NpuBackdrop } from './NpuBackdrop';
 import { PermissionModeChip } from './PermissionModeChip';
 import { PrivateChip } from './PrivateChip';
+import { TryChips } from './TryChips';
 import { useAttachments } from '../hooks/useAttachments';
 import { useWarmUp, type WarmUpProgress } from '../hooks/useWarmUp';
 import * as api from '../services/api';
@@ -110,7 +111,7 @@ function LibraryDocuments() {
                     {attached.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
-                            <span dir="auto">{d.filename}</span>
+                            <span dir="ltr">{d.filename}</span>
                             <button
                                 type="button"
                                 className="new-chat-doc-remove"
@@ -261,8 +262,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         if (focusRequest) inputRef.current?.focus();
     }, [focusRequest]);
 
-    // Typing drops the composer to the bottom, where the chat will continue.
-    const docked = text.length > 0 || sending;
+    // Sending, not typing, drops the composer to the bottom: the box never moves under the cursor.
+    const docked = sending;
     const innerTop = useRef<{ top: number; docked: boolean } | null>(null);
     useLayoutEffect(() => {
         const el = innerRef.current;
@@ -280,6 +281,15 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
             { duration: durationMs('--duration-spring'), easing },
         );
     });
+
+    const lastExample = useRef('');
+    const fillPrompt = useCallback((prompt: string) => {
+        const prev = lastExample.current;
+        const draft = (prev && text.endsWith(prev) ? text.slice(0, -prev.length) : text).trimEnd();
+        lastExample.current = prompt;
+        setText(draft ? `${draft}\n\n${prompt}` : prompt);
+        inputRef.current?.focus();
+    }, [text, setText]);
 
     const downloading = download?.state === 'starting' || download?.state === 'downloading';
     const activity = sending ? 'sending' : downloading ? 'download' : starting || warming !== null ? 'loading' : 'idle';
@@ -319,6 +329,7 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
                     <p className="new-chat-warmup" role="status">{warmUpLine(warming, t)}</p>
                 )}
                 {error && <p className="new-chat-error" role="alert">{error}</p>}
+                <TryChips onPick={fillPrompt} disabled={starting || sending} />
                 {startError && <AssistantUnavailable detail={startError} onRetry={() => loadStart()} />}
             </div>
         </main>

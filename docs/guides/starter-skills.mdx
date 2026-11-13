@@ -80,6 +80,47 @@ follows that a skill asking for more than `experimental` allows (`coding` and
 `github-triage` want `shell:execute:<binary>`) is refused at import, and a skill
 that ships `tools.py` needs `--allow-experimental`.
 
+## Add skills from a link
+
+Most skill libraries live on GitHub as folders holding a `SKILL.md`. Paste a link and
+GAIA reads every skill in it. For [pstack](https://github.com/michael-denyer/pstack-claude),
+a popular MIT-licensed set of engineering workflows, the Skills panel has a one-click
+**Get pstack** button, and `pstack` works anywhere a link does.
+
+- **Agent UI** — click **Skills** in the sidebar, paste the link (or click **Get
+  pstack**), then pick the skills you want and click **Add**.
+- **Terminal UI** — `/skills add <link>` lists what the link holds; `/skills add
+  <link> confirm` adds it.
+- **CLI** — `gaia skill add <link>` (see the [CLI reference](/reference/cli)).
+
+Before anything is added, every surface lists each skill with its description, what
+it is allowed to do (its declared permissions, in plain words, such as *Read pages and
+data from sites matching \*.readthedocs.io*), whether it ships code, and what the audit
+found. What gets added is exactly the version you reviewed: if the library changes
+between the preview and the add, nothing is added and you are asked to read the link
+again. In the terminal UI, a `confirm` with no preview earlier in the session shows the
+preview instead of adding.
+
+A link can be a repository (`https://github.com/owner/repo` or just `owner/repo`), a
+folder in one (`.../tree/main/skills`), a skills.sh page, or an https `.zip`.
+
+<Warning>
+Skills from a link are written by someone else. A skill's instructions steer what GAIA
+does with your files, shell and accounts, and a skill that ships code (`tools.py` or
+`scripts/`) runs that code on your PC. GAIA audits each skill and refuses anything the
+audit blocks, but an audit is not a guarantee. Only add skills from people you trust,
+and read what they do first.
+</Warning>
+
+Every added skill lands at the `experimental` tier. Skills that ship code are left out
+unless you tick **Include skills with code** (or pass `--allow-code`). Added skills go
+to `~/.gaia/skills` with the library's licence and notice files beside each one, and
+GAIA can use them from your next chat.
+
+A link always fetches the library's latest version. To update, add the same link
+again: skills you added from it are replaced in place. A skill of the same name from
+anywhere else is never overwritten.
+
 ## Use one
 
 In chat, ask the agent to use a skill by name. From code, load it with
@@ -89,7 +130,7 @@ In chat, ask the agent to use a skill by name. From code, load it with
 from gaia_agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(GaiaAgentConfig())
-agent.load_skill("research-report")     # body joins the system prompt
+agent.load_skill("research-report")     # body joins the prompt
 
 print(agent.process_query("What's the current state of NPU support in llama.cpp?"))
 ```
@@ -97,7 +138,7 @@ print(agent.process_query("What's the current state of NPU support in llama.cpp?
 `load_skill` resolves the name across the discovery roots, validates the
 manifest, registers any tools the skill provides under `<skill-name>/<tool>`,
 bridges its permissions to connector requirements, and injects the procedure
-into the system prompt. `unload_skill(name)` reverses all of it.
+into the session context at the start of the first user message. `unload_skill(name)` reverses all of it.
 
 On most agents a loaded body then renders in the prompt on every turn. The
 flagship `gaia` agent is the exception: it selects per turn which loaded
@@ -163,7 +204,9 @@ memory, and speak up only when there is news.
 ### price-watch
 
 `source-watch` specialized to products: extract the current price, compare to
-the lowest ever recorded in memory, alert only on a new low.
+the lowest ever recorded in memory, alert only on a new low. A price the user
+states (the lowest they have seen, or a target) is saved to memory before the
+page is fetched, so it is the baseline the check compares against.
 
 - **Demonstrates** — forking a template; memory holding a running extreme rather
   than a seen-list; the traps in extracting one number from a retail page.
@@ -211,7 +254,9 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 - **Demonstrates** — a scoped binary grant. It declares `shell:execute:gh`, which
   grants the GitHub CLI to this skill's session on this agent, restricted to the
   subcommands in GAIA's policy table (see the
-  [permission model](/plans/skill-format#permission-model)).
+  [permission model](/plans/skill-format#permission-model)). Read-only `gh`
+  commands run in any chat without this skill; the skill adds the triage workflow,
+  and anything it writes is confirmed per call.
 - **Configure** — nothing, if you let GAIA do it. Ask it to set up the GitHub CLI
   and it checks, installs, and signs in for you, showing you each command first —
   see [Setting up a CLI a skill needs](/guides/gaia#setting-up-a-cli-a-skill-needs).
@@ -234,9 +279,9 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 
 ### rss-digest
 
-The pack's one **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
+The smallest **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
 function, declared in `metadata.gaia.tools` and registered as
-`rss-digest/fetch_rss`.
+`rss-digest/fetch_rss`. `guides` and `calculators` follow the same shape.
 
 - **Demonstrates** — a skill contributing its own `@tool`. The loader compares
   the manifest to the function signature and refuses the skill if they disagree,
@@ -244,6 +289,67 @@ function, declared in `metadata.gaia.tools` and registered as
 - **Configure** — a feed URL. Handles both RSS 2.0 and Atom.
 - **Note** — it fetches through GAIA's `WebClient`, so private and loopback
   addresses are refused.
+
+### guides
+
+Draws a recipe, workout, how-to, checklist or trip itinerary as an interactive
+card in the Agent UI and the TUI, so the written reply is a tip or two instead
+of a long list. A recipe card rescales amounts and switches units; workout and
+how-to cards run timers and tick off items.
+
+- **Demonstrates** — a tool-providing skill whose result is a render card
+  (`tool_result.render == "guide"`) rather than text for the model to retype.
+- **Provides** — `guides/show_recipe`, `guides/show_workout`,
+  `guides/show_how_to`, `guides/show_checklist`, `guides/show_itinerary`.
+- **Note** — each tool only validates and packages what the model wrote; a bad
+  argument comes back as an error naming the fix, so the model calls again.
+
+### calculators
+
+A tip or loan calculator card that does the arithmetic in the app and
+recomputes as you change the numbers, so a small model's math never reaches the
+answer.
+
+- **Demonstrates** — moving work a small model gets wrong out of the model: it
+  only supplies the starting numbers.
+- **Provides** — `calculators/show_tip_calculator` (bill, tip percent, people)
+  and `calculators/show_loan_calculator` (price, yearly rate, years, down
+  payment).
+
+### calendar
+
+Reads and changes the main calendar of a connected Google or Outlook account:
+lists events, checks free time, and creates, moves or cancels events.
+
+- **Demonstrates** — a tool-providing skill whose writes reach other people, so
+  its manifest marks them `requires_confirmation: true`: every create, move or
+  cancel asks the person, even under Full access, and a run with nobody to ask
+  refuses it.
+- **Provides** — `calendar/list_calendar_events`,
+  `calendar/check_calendar_availability`, `calendar/create_calendar_event`,
+  `calendar/update_calendar_event`, `calendar/cancel_calendar_event`.
+- **Configure** — connect Google or Microsoft with calendar access; see
+  [Google](/connectors/google) or [Microsoft](/connectors/microsoft).
+- **Note** — event titles, locations and addresses come from whoever made the
+  event, so they reach the model marked as untrusted text.
+
+### send-email
+
+Drafts, replies to, forwards and sends mail from the connected Gmail or Outlook
+account, through the mailbox the flagship's reading tools use.
+
+- **Demonstrates** — a tool-providing skill built on an agent's own mixin: its
+  tools reach the agent's mailbox connection while they run, and its manifest
+  marks every send, draft edit and draft deletion `requires_confirmation: true`.
+  The prompt shows the sending account and the exact message. Full access
+  doesn't skip a send, and a run with nobody to ask refuses it.
+- **Provides** — `send-email/list_drafts`, `send-email/create_draft`,
+  `send-email/update_draft`, `send-email/discard_draft`,
+  `send-email/send_draft`, `send-email/send_now`,
+  `send-email/reply_to_message`, `send-email/forward_message`.
+- **Consumes** — `list_inbox`, `search_email`, `read_email`.
+- **Configure** — connect Google or Microsoft with mail write access; see the
+  [Email guide](/guides/email).
 
 ### image-gen
 
@@ -286,7 +392,8 @@ anything hard to undo.
 ### inbox-triage
 
 Turns a mailbox into a short list of what needs you, with a one-line reason for
-each. Read-only: it never replies, archives or deletes.
+each. It only reads: it never archives or deletes, and replying or sending is the
+`send-email` skill's job, for a message you ask about.
 
 - **Demonstrates** — a skill over the email tools, where the model judges and the
   tools only report facts.
@@ -328,6 +435,19 @@ decisions and action items. Takes roughly 4x realtime on a 46-minute recording.
 - **Consumes** — `transcribe_media`, `refine_transcript`, `summarize_document`,
   `query_documents`, `remember`.
 - **Configure** — an audio or video file, or a Teams/Zoom transcript export.
+
+### analyze-recording
+
+Breaks down a long recording that is not a meeting (a class, lecture, tutorial,
+webinar, podcast or interview), from a file or a link, into a timestamped
+transcript, a structured list of what it contains, and answers about it.
+
+- **Demonstrates** — a skill that loads tools with it (`loads_with`), so the
+  transcript analysis and export tools join the list when it loads.
+- **Consumes** — `transcribe_media`, `refine_transcript`, `analyze_transcript`,
+  `export_transcript`, `query_documents`, `read_file`.
+- **Configure** — an audio or video file, or a link such as YouTube. For meeting
+  minutes use `transcribe-meeting`.
 
 ## Fork one
 

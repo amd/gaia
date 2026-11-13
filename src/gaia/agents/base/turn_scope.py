@@ -60,7 +60,6 @@ _ALWAYS_RELATED = frozenset(
     {
         "read_tool_output",
         "request_user_input",
-        "session_findings",
         "load_skill",
         "list_skills",
         "skill_status",

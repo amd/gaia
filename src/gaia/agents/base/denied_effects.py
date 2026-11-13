@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import functools
+import ipaddress
 import logging
 import os
 import re
@@ -29,6 +30,8 @@ import socket
 import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+
+from gaia.agents.base.command_wrappers import unwrap_command_argv
 
 logger = logging.getLogger(__name__)
 
@@ -184,25 +187,45 @@ _NEUTRAL_PROGRAMS = frozenset(
     }
 )
 
-#: Prefixes that run the next word as the program.
-_WRAPPERS = frozenset(
-    {"sudo", "time", "nice", "nohup", "exec", "command", "call", "start", "&", "."}
-)
-#: ``<runner> run <program>`` / ``<runner> exec <program>`` wrappers.
-_RUN_WRAPPERS = {
-    "uv": {"run"},
-    "poetry": {"run"},
-    "pipenv": {"run"},
-    "pdm": {"run"},
-    "hatch": {"run"},
-    "conda": {"run"},
-    "pnpm": {"exec", "dlx"},
-    "yarn": {"dlx", "exec"},
-}
-_DIRECT_WRAPPERS = frozenset({"npx", "uvx", "pipx", "bunx"})
 
 _SHELLS = frozenset({"bash", "sh", "zsh", "dash", "cmd", "powershell", "pwsh"})
 _SHELL_COMMAND_FLAGS = frozenset({"-c", "/c", "/k", "-command", "-commandwithargs"})
+_POWERSHELLS = frozenset({"powershell", "pwsh"})
+#: PowerShell's script switch; bash and zsh use ``-f`` for something else.
+_SHELL_FILE_FLAGS = frozenset({"-file", "-f"})
+#: A script run by naming it: what it does is in its source.
+_SCRIPT_FILE_RE = re.compile(r"\.(?:ps1|bat|cmd|sh)$", re.IGNORECASE)
+#: PowerShell switches whose next word is their value, not the script to run.
+_SHELL_VALUE_FLAGS = frozenset(
+    {
+        "-executionpolicy",
+        "-ep",
+        "-ex",
+        "-windowstyle",
+        "-w",
+        "-version",
+        "-workingdirectory",
+        "-wd",
+        "-inputformat",
+        "-outputformat",
+        "-configurationname",
+        "-settingsfile",
+        "-custompipename",
+    }
+)
+#: PowerShell's process launcher. Not ``start``: cmd's own takes a title first.
+_START_PROCESS = frozenset({"start-process", "saps"})
+_START_PROCESS_VALUE_FLAGS = frozenset(
+    {
+        "-verb",
+        "-workingdirectory",
+        "-windowstyle",
+        "-redirectstandardoutput",
+        "-redirectstandarderror",
+        "-redirectstandardinput",
+        "-credential",
+    }
+)
 
 _PYTHON_RE = re.compile(r"^(?:python|pythonw|py)(?:\d+(?:\.\d+)*)?$")
 _EXE_SUFFIX_RE = re.compile(r"\.(?:exe|cmd|bat|ps1|com)$", re.IGNORECASE)
@@ -244,6 +267,22 @@ _PATH_MUTATORS = frozenset(
         "ac",
         "xcopy",
         "robocopy",
+    }
+)
+#: Switches of those commands whose value is content or a setting, not a path.
+_NON_PATH_VALUE_FLAGS = frozenset(
+    {
+        "-value",
+        "-encoding",
+        "-stream",
+        "-delimiter",
+        "-itemtype",
+        "-type",
+        "-inputobject",
+        "-filter",
+        "-include",
+        "-exclude",
+        "-credential",
     }
 )
 #: cmd programs whose ``/X`` arguments are switches, not paths.
@@ -400,11 +439,127 @@ def _norm_path_abs(raw: str) -> Optional[str]:
     return _canonical(raw)
 
 
+def _legacy_ipv4(host: str) -> Optional[str]:
+    """*host* as dotted IPv4 when it is one in the forms URL clients accept.
+
+    ``2852039166``, ``0xA9FEA9FE``, ``0251.0376.0251.0376`` and ``169.254.43518``
+    all reach 169.254.169.254: each part is decimal, ``0x`` hex or ``0`` octal,
+    and the last part fills the bytes the others leave.
+    """
+    parts = host.split(".")
+    if not 1 <= len(parts) <= 4:
+        return None
+    numbers = []
+    for part in parts:
+        try:
+            if part.lower().startswith("0x"):
+                numbers.append(int(part[2:] or "0", 16))
+            elif len(part) > 1 and part.startswith("0"):
+                numbers.append(int(part, 8))
+            else:
+                numbers.append(int(part, 10))
+        except ValueError:
+            return None
+    *head, last = numbers
+    if any(n > 255 for n in head) or last >= 256 ** (4 - len(head)):
+        return None
+    value = last
+    for index, number in enumerate(head):
+        value |= number << (24 - 8 * index)
+    return str(ipaddress.IPv4Address(value))
+
+
+def canonical_host(host: str) -> str:
+    """One spelling per network target, so every way of writing an IP matches.
+
+    ``[::ffff:169.254.169.254]``, ``2852039166`` and ``0xa9fea9fe`` are all
+    ``169.254.169.254``; a name is lowercased without its trailing dot.
+    """
+    host = host.lower().strip("[]").rstrip(".")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return _legacy_ipv4(host) or host
+    mapped = getattr(address, "ipv4_mapped", None)
+    return str(mapped or address)
+
+
+#: Names cloud providers serve instance metadata and credentials under.
+_METADATA_NAMES = frozenset(
+    {
+        "metadata",
+        "metadata.google.internal",
+        "metadata.goog",
+        "metadata.azure.com",
+        "metadata.azure.internal",
+        "instance-data",
+        "instance-data.ec2.internal",
+    }
+)
+#: Metadata addresses outside the link-local ranges: AWS over IPv6, Alibaba.
+_METADATA_ADDRESSES = frozenset(
+    {ipaddress.ip_address("fd00:ec2::254"), ipaddress.ip_address("100.100.100.200")}
+)
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def is_cloud_metadata_host(host: str) -> bool:
+    """Whether *host*, in any spelling, is a cloud-metadata or link-local target.
+
+    169.254.0.0/16 and fe80::/10 are link-local and hold every major cloud's
+    metadata service; a private LAN address (a NAS, a dev box) is not one.
+    """
+    host = canonical_host(host or "")
+    if host in _METADATA_NAMES:
+        return True
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    if address.version == 6 and address in _NAT64:
+        address = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    return address.is_link_local or address in _METADATA_ADDRESSES
+
+
 def _hosts(text: str) -> Set[Effect]:
     return {
-        Effect(NETWORK, m.group(1).lower().strip("[]").rstrip("."))
+        Effect(NETWORK, canonical_host(m.group(1)))
         for m in _URL_RE.finditer(text or "")
     }
+
+
+#: A request target written without a scheme: ``curl 169.254.169.254/x``.
+_BARE_HOST_RE = re.compile(
+    r"^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)*)(?::\d+)?(?:/|$)"
+)
+
+
+def _bare_hosts(args: Sequence[str]) -> Set[Effect]:
+    """Hosts a request client is given without ``http://`` in front of them."""
+    found: Set[Effect] = set()
+    for arg in args:
+        if arg.startswith("-") or "://" in arg:
+            continue
+        match = _BARE_HOST_RE.match(arg)
+        if match is None:
+            continue
+        written = match.group(1)
+        host = canonical_host(written)
+        # '--retry 5' is a count and 'out.json' a file: an address must look
+        # like one, and a name counts only with a path or port after it.
+        if _is_address(host) and (len(written) >= 7 or "." in written):
+            found.add(Effect(NETWORK, host))
+        elif arg[len(written) : len(written) + 1] in ("/", ":"):
+            found.add(Effect(NETWORK, host))
+    return found
+
+
+def _is_address(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
 
 
 # --------------------------------------------------------------------------- shell
@@ -603,6 +758,16 @@ def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effe
     """Every effect a shell command line has, segment by segment."""
     if depth > 3 or not isinstance(command, str):
         return set()
+    effects = _effects_of_line(command, cwd, depth)
+    if '`"' in command:
+        # PowerShell's `" nests a quote, but in sh the backtick ends a
+        # substitution, so read the line both ways.
+        effects |= _effects_of_line(command.replace('`"', "'"), cwd, depth)
+    return effects
+
+
+def _effects_of_line(command: str, cwd: str, depth: int) -> Set[Effect]:
+    """Effects of one reading of a shell command line."""
     effects: Set[Effect] = set()
     for segment in _split_segments(command):
         tokens = _tokens(segment)
@@ -645,44 +810,141 @@ def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effe
     return effects
 
 
+def _positionals(args: Sequence[str], value_flags: frozenset) -> List[str]:
+    """The words of *args* that are neither switches nor a switch's value."""
+    found: List[str] = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+        elif arg.startswith("-"):
+            skip = arg.lower() in value_flags
+        else:
+            found.append(arg)
+    return found
+
+
+def _started_process(rest: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
+    """What ``Start-Process <program> -ArgumentList '...'`` would run."""
+    program: Optional[str] = None
+    arguments: List[str] = []
+    written: List[str] = []
+    i = 0
+    while i < len(rest):
+        arg, value = rest[i].lower(), rest[i + 1] if i + 1 < len(rest) else None
+        # A switch never holds a space: "-File x.ps1" is a quoted argument list.
+        switch = arg.startswith("-") and " " not in arg
+        if switch and _abbreviates(arg, "-filepath", "-path") and value is not None:
+            program, i = value, i + 2
+        elif switch and _abbreviates(arg, "-argumentlist", "-args") and value:
+            end = _array_end(rest, i + 1)
+            arguments = _argument_list(rest[i + 1 : end])
+            i = end
+        elif switch and _abbreviates(arg, "-workingdirectory") and value is not None:
+            cwd, i = _norm_path(value, cwd) or cwd, i + 2
+        elif switch and arg.startswith("-redirectstandard") and value is not None:
+            if not arg.endswith("input"):
+                written.append(value)
+            i += 2
+        elif switch and arg in _START_PROCESS_VALUE_FLAGS:
+            i += 2
+        elif switch:
+            i += 1
+        elif program is None:
+            program, i = rest[i], i + 1
+        else:
+            end = _array_end(rest, i)
+            arguments = arguments or _argument_list(rest[i:end])
+            i = end
+    redirected = {
+        Effect(PATH, path) for path in (_norm_path(w, cwd) for w in written) if path
+    }
+    if program is None:
+        return redirected
+    return redirected | _effects_of_argv([program, *arguments], cwd, depth + 1)
+
+
+def _abbreviates(arg: str, *names: str) -> bool:
+    """PowerShell accepts any unambiguous prefix of a parameter (``-F``, ``-Arg``)."""
+    return len(arg) >= 2 and any(name.startswith(arg) for name in names)
+
+
+def _array_end(words: Sequence[str], start: int) -> int:
+    """One past an array value: ``'-File', "x.ps1"`` or ``@('-File', 'x.ps1')``
+    arrives split at each comma."""
+    end = start + 1
+    in_parens = words[start].startswith("@(") and not words[start].endswith(")")
+    while end < len(words) and (
+        in_parens or words[end - 1].endswith(",") or words[end].startswith(",")
+    ):
+        if words[end].endswith(")"):
+            in_parens = False
+        end += 1
+    return end
+
+
+def _argument_list(words: Sequence[str]) -> List[str]:
+    """The arguments Start-Process passes on. One string (``'-File x.ps1'``) is
+    split into words; an array's elements are each one argument, spaces and all."""
+    if len(words) == 1 and not words[0].startswith("@("):
+        return [w.strip("'\",") for w in _tokens(words[0]) if w.strip("'\",")]
+    elements = []
+    for word in words:
+        for piece in re.split(r"""(?<=['"]),|,(?=['"])""", word):
+            piece = piece.strip().removeprefix("@(").removesuffix(")")
+            piece = piece.strip(", ").strip("'\"")
+            if piece:
+                elements.append(piece)
+    return elements
+
+
+def _past_launcher(tokens: List[str]) -> List[str]:
+    """*tokens* without cmd's ``start ["title"] /switches`` or ``gsudo -flags``."""
+    head = _program(tokens[0]) if tokens else ""
+    if head == "start":
+        words, titled = list(tokens[1:]), False
+        # Only start's own title and switches lead: ``start cmd /c x`` keeps /c.
+        while words:
+            # The title is the quoted first word: empty, or more than one word.
+            if not titled and (not words[0].strip("'\"") or " " in words[0]):
+                titled = True
+                words.pop(0)
+            elif _SLASH_SWITCH_RE.match(words[0]):
+                if words.pop(0).lower() == "/d" and words:
+                    words.pop(0)
+            else:
+                break
+        return words or tokens
+    if head == "gsudo":
+        words = list(tokens[1:])
+        while words and words[0].startswith("-"):
+            if words.pop(0).lower() in ("-u", "--user", "-i", "--integrity") and words:
+                words.pop(0)
+        return words or tokens
+    return tokens
+
+
 def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     """Effects of one already-tokenised command, unwrapping launchers."""
     tokens = list(argv)
     while tokens and _ASSIGNMENT_RE.match(tokens[0]):
         tokens.pop(0)
-    while tokens:
-        program = _program(tokens[0])
-        if program in _WRAPPERS or program == "env":
-            tokens.pop(0)
-            while tokens and (
-                _ASSIGNMENT_RE.match(tokens[0]) or tokens[0].startswith("-")
-            ):
-                tokens.pop(0)
-            continue
-        if program in _DIRECT_WRAPPERS:
-            tokens.pop(0)
-            while tokens and tokens[0].startswith("-"):
-                tokens.pop(0)
-            continue
-        verbs = _RUN_WRAPPERS.get(program)
-        if verbs and len(tokens) > 1 and tokens[1].lower() in verbs:
-            tokens = tokens[2:]
-            while tokens and tokens[0].startswith("-"):
-                # ``conda run -n env`` takes a value.
-                tokens = (
-                    tokens[2:] if tokens[0] in ("-n", "--name", "-p") else tokens[1:]
-                )
-            continue
-        break
+    tokens = unwrap_command_argv(_past_launcher(tokens), ledger=True)
     if not tokens:
         return set()
+    first = tokens[0].strip("'\"")
     program, rest = _program(tokens[0]), tokens[1:]
     hosts: Set[Effect] = set()
+    # ``.\fix.bat`` or a script here: what it does, besides the command it is.
+    if _SCRIPT_FILE_RE.search(first) and (
+        re.search(r"[\\/]", first) or os.path.isfile(os.path.join(cwd, first))
+    ):
+        hosts = effects_of_script(first, cwd, depth + 1)
     subcommand = next((w.lower() for w in rest if not w.startswith("-")), "")
     if program in _NETWORK_PROGRAMS and (
         program != "git" or subcommand in _GIT_NETWORK_SUBCOMMANDS
     ):
-        hosts = _hosts(" ".join(rest))
+        hosts = _hosts(" ".join(rest)) | _bare_hosts(rest)
     if _PYTHON_RE.match(program):
         return _python_invocation(rest, cwd, depth)
     if program in _SHELLS:
@@ -691,8 +953,20 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
                 return effects_of_shell_command(
                     " ".join(rest[idx + 1 :]), cwd, depth + 1
                 )
-        scripts = [a for a in rest if not a.startswith("-")]
+            if program in _POWERSHELLS:
+                flag, _, attached = arg.lower().partition(":")
+                if flag in _SHELL_FILE_FLAGS and attached:
+                    return effects_of_script(arg.split(":", 1)[1], cwd, depth + 1)
+                if flag in _SHELL_FILE_FLAGS and idx + 1 < len(rest):
+                    return effects_of_script(rest[idx + 1], cwd, depth + 1)
+        if program in _POWERSHELLS:
+            scripts = _positionals(rest, _SHELL_VALUE_FLAGS)
+        else:
+            scripts = [a for a in rest if not a.startswith("-")]
         return effects_of_script(scripts[0], cwd, depth + 1) if scripts else set()
+    if program in _START_PROCESS:
+        started = _started_process(rest, cwd, depth)
+        return hosts | (started or {Effect(COMMAND, "start-process")})
     effects: Set[Effect] = set(hosts)
     family = _canonical_family(program, rest)
     if family:
@@ -701,7 +975,7 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
     if program in _PATH_MUTATORS:
         changed = [
             arg
-            for arg in rest
+            for arg in _positionals(rest, _NON_PATH_VALUE_FLAGS)
             # ``xcopy a b /Y``: a cmd switch, not a folder at the drive root.
             if not (program in _SLASH_SWITCH_PROGRAMS and _SLASH_SWITCH_RE.match(arg))
         ]
@@ -1175,6 +1449,110 @@ def effects_of_python_code(code: str, cwd: str, depth: int = 0) -> Set[Effect]:
     return effects
 
 
+#: Methods that read the path they are called on: ``Path('x').read_text()``.
+_PATH_READERS = frozenset({"read_text", "read_bytes", "open"})
+#: ``shutil`` functions whose first argument is a file they read.
+_SHUTIL_READERS = frozenset({"copy", "copy2", "copyfile", "copytree", "move"})
+
+
+#: Every call name :func:`python_file_reads` can report a read through.
+PYTHON_READ_CALLS = frozenset(
+    {"open", "system", "popen"} | _PATH_READERS | _SHUTIL_READERS | _SUBPROCESS_FUNCS
+)
+
+
+def _mode_writes_only(mode: Optional[ast.AST]) -> bool:
+    """Whether an ``open`` *mode* leaves nothing already in the file to read.
+
+    ``w`` and ``x`` start the file empty; ``a`` writes after what is there
+    without reading it. ``r+`` and ``a+`` read, and so does a mode not
+    written out as a literal.
+    """
+    if not (isinstance(mode, ast.Constant) and isinstance(mode.value, str)):
+        return False
+    text = mode.value
+    return "w" in text or "x" in text or ("a" in text and "+" not in text)
+
+
+def _os_open_writes_only(flags: Optional[ast.AST]) -> bool:
+    """Whether ``os.open`` *flags* open the file for writing only."""
+    if flags is None:
+        return False
+    named = {
+        node.attr if isinstance(node, ast.Attribute) else node.id
+        for node in ast.walk(flags)
+        if isinstance(node, (ast.Attribute, ast.Name))
+    }
+    return "O_WRONLY" in named and not named & {"O_RDWR", "O_RDONLY"}
+
+
+def python_file_reads(code: str, cwd: str) -> Tuple[List[str], List[List[str]]]:
+    """The files a snippet opens, and the commands it hands to a shell.
+
+    Only paths a read is made from: ``open``/``io.open``/``os.open``, a
+    ``Path`` that is read or opened, and the source of a ``shutil`` copy or
+    move. A string that is never opened — a message naming ``app/.env`` — is
+    not in the list, nor is a file opened only to be written (``'w'``,
+    ``'a'``, ``'x'``, ``os.O_WRONLY``). Paths are read the way
+    :class:`_PyFiles` reads a file change: literals, names bound to them, f-strings, ``os.path.join`` and
+    ``Path(...) / ...``. A path the code only works out when it runs is not.
+
+    Returns:
+        ``(paths, commands)``: *commands* are argv lists, one per command
+        given to ``subprocess`` or ``os.system``.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        # Python refuses to run it too, so it opens nothing.
+        return [], []
+    files = _PyFiles(tree, cwd)
+    paths: List[str] = []
+    commands: List[List[str]] = []
+
+    def add(node: Optional[ast.AST]) -> None:
+        text = files.text(node) if node is not None else None
+        if text:
+            paths.append(text)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        module, name = files._callee(node)
+        func = node.func
+        if name == "open" and (
+            module in _OPENERS or module == "os" or isinstance(func, ast.Name)
+        ):
+            if module == "os":
+                if not _os_open_writes_only(_arg(node, 1, "flags")):
+                    add(_arg(node, 0, "path"))
+            elif not _mode_writes_only(_arg(node, 1, "mode")):
+                add(_arg(node, 0, "file"))
+        elif (
+            isinstance(func, ast.Attribute)
+            and func.attr in _PATH_READERS
+            and files.is_path(func.value)
+        ):
+            if func.attr != "open" or not _mode_writes_only(_arg(node, 0, "mode")):
+                add(func.value)
+        elif module == "shutil" and name in _SHUTIL_READERS:
+            add(_arg(node, 0, "src"))
+        elif name in _SUBPROCESS_FUNCS or (
+            module == "os" and name in ("system", "popen")
+        ):
+            first = _arg(node, 0, "args")
+            if first is None:
+                continue
+            command = files.text(first)
+            if command:
+                commands.extend(_tokens(seg) for seg in _split_segments(command))
+            else:
+                argv, _ = files.argv(first)
+                if argv:
+                    commands.append(argv)
+    return paths, commands
+
+
 def _effects_of_python_call(
     node: ast.Call,
     subprocess_names: Set[str],
@@ -1254,7 +1632,11 @@ def effects_of_script(script: str, cwd: str, depth: int = 0) -> Set[Effect]:
     here = os.path.dirname(path)
     if path.endswith((".py", ".pyw")):
         return effects | effects_of_python_code(source, here, depth)
-    return effects | effects_of_shell_command(source, here, depth)
+    inner = effects_of_shell_command(source, here, depth)
+    if path.endswith((".bat", ".cmd")):
+        # Batch syntax (set, if, goto) parses as commands; keep what it changes.
+        inner = {e for e in inner if e.kind != COMMAND or e.target == TEST_SUITE}
+    return effects | inner
 
 
 # ---------------------------------------------------------------------------- calls
@@ -1403,6 +1785,7 @@ class DeniedEffects:
         kinds: Optional[Set[str]] = None,
         refused: bool = False,
         paths: Optional[Sequence[str]] = None,
+        hosts: Optional[Sequence[str]] = None,
     ) -> Optional[Denial]:
         """Remember what this declined call would have done.
 
@@ -1410,10 +1793,14 @@ class DeniedEffects:
         records the host or path it targeted, not the whole command family.
         *refused* marks a policy refusal rather than a person's no. *paths*,
         when given, are the call's targets as the tool itself resolved them,
-        recorded instead of reading them off the arguments.
+        recorded instead of reading them off the arguments. *hosts* likewise:
+        the host a fetch was blocked at and the address it resolved to, which
+        after a redirect is not the host the URL argument names.
         """
         if paths is not None:
             found = {Effect(PATH, p) for p in map(_norm_path_abs, paths) if p}
+        elif hosts is not None:
+            found = {Effect(NETWORK, canonical_host(h)) for h in hosts if h}
         else:
             found = effects_of_call(tool_name, tool_args, self.cwd)
         effects = {

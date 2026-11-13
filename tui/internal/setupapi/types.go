@@ -34,8 +34,10 @@ type Plan struct {
 	// choice.
 	VisionModel *string `json:"vision_model"`
 	// NPU is whether this PC has a Ryzen AI NPU and whether it can run a model
-	// yet, as the backend's own checks in npu_linux.py see it.
-	NPU NPU `json:"npu"`
+	// yet, as the backend's own checks in npu_linux.py see it. It is nil when
+	// the plan omits the field, as daemons before v0.25.4 do; that is unknown,
+	// not evidence that the PC has no NPU.
+	NPU *NPU `json:"npu"`
 }
 
 // NPU is the plan's "npu" field: present is whether Lemonade reports one on
@@ -51,8 +53,7 @@ type NPU struct {
 }
 
 // NPUProblem is one reason the NPU can't load a model yet, in words to show:
-// npu_linux.NpuProblem as the plan sends it. Params holds the values inside
-// Title and Fix for the UI's own translations, and is not decoded here.
+// npu_linux.NpuProblem as the plan sends it.
 type NPUProblem struct {
 	Code  string `json:"code"`
 	Title string `json:"title"`
@@ -154,6 +155,8 @@ type CatalogEntry struct {
 	NeedGB     *float64 `json:"need_gb"`
 	CapacityGB *float64 `json:"capacity_gb"`
 	FitReason  *string  `json:"fit_reason"`
+	// FitCode is why it doesn't fit: "memory", "npu" or "backend"; nil when it fits.
+	FitCode *string `json:"fit_code"`
 	// Role is set on Plan.Models only: "chat" or "embedding".
 	Role string `json:"role,omitempty"`
 }

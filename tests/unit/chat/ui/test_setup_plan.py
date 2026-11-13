@@ -108,6 +108,80 @@ def _plan_ids(plan):
     return [m["id"] for m in plan["models"]]
 
 
+@pytest.mark.parametrize("warm_cache", [False, True])
+def test_runtime_cloud_chat_is_not_planned_as_a_local_download(monkeypatch, warm_cache):
+    from gaia.installer import model_choice
+    from gaia.llm.lemonade_client import record_cloud_models
+
+    catalog = {"data": [{"id": "opencode.big-model", "recipe": "cloud"}]}
+    reads = []
+
+    def list_models(self):
+        reads.append(True)
+        record_cloud_models(catalog)
+        return catalog
+
+    monkeypatch.setattr(LemonadeClient, "list_models", list_models)
+    monkeypatch.setattr(sp, "_lemonade", lambda: {"mode": "gaia", "url": None})
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.resolve_chat_model", lambda: "opencode.big-model"
+    )
+    record_cloud_models(catalog if warm_cache else {"data": []})
+    try:
+        assert sp._job_model(model_choice.ROLE_CHAT) is None
+        assert sp.model_need(model_choice.ROLE_CHAT)["needed"] is False
+        assert len(reads) == (0 if warm_cache else 1)
+    finally:
+        record_cloud_models({"data": []})
+
+
+def test_registered_dotted_local_chat_model_does_not_need_catalog(
+    no_server, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from gaia.installer import model_choice
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(
+        lc,
+        "resolve_chat_model",
+        lambda: "user.Llama-3.2-3B-GGUF",
+    )
+    monkeypatch.setattr(
+        lc,
+        "find_model_requirement",
+        lambda model: (
+            SimpleNamespace(feature_tier="full")
+            if model == "user.Llama-3.2-3B-GGUF"
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        lc.LemonadeClient,
+        "list_models",
+        lambda self, **kwargs: pytest.fail("catalog should not be queried"),
+    )
+
+    assert sp._job_model(model_choice.ROLE_CHAT) == "user.Llama-3.2-3B-GGUF"
+    assert sp.model_need(model_choice.ROLE_CHAT)["needed"] is False
+
+
+def test_unclassifiable_chat_model_is_a_plan_error_not_a_crash(no_server, monkeypatch):
+    from gaia.installer import model_choice
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(lc, "resolve_chat_model", lambda: "opencode.big-model")
+
+    def unavailable(self, **_kwargs):
+        raise lc.LemonadeClientError("catalog unavailable")
+
+    monkeypatch.setattr(lc.LemonadeClient, "list_models", unavailable)
+    lc.record_cloud_models({"data": []})
+    with pytest.raises(sp.SetupPlanError, match="opencode.big-model"):
+        sp.model_need(model_choice.ROLE_CHAT)
+
+
 def test_cold_pc_names_the_starting_model_and_says_the_pick_comes_later(no_server):
     plan = sp.build_plan()
     assert plan["lemonade"]["reachable"] is False
@@ -503,6 +577,46 @@ def test_catalog_offers_the_users_flm_model_but_not_speech_or_strays(flm_box):
     assert flm["chat_choice"] and flm["downloaded"] and flm["size_gb"] == 0.0
     assert flm["recipe"] == "flm" and not flm["planned"]
     assert not _entry(plan, DEFAULT_EMBEDDING_MODEL)["chat_choice"]
+
+
+def test_catalog_leaves_out_cloud_models_lemonade_lists_as_downloaded(
+    flm_box, monkeypatch
+):
+    fake = flm_box()
+    listed = fake.list_models
+    cloud = {
+        "id": "fireworks.deepseek-v4p1-flash",
+        "downloaded": True,
+        "recipe": "cloud",
+        "labels": ["chat", "cloud"],
+    }
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [cloud]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert FLM in ids
+    assert cloud["id"] not in ids
+
+
+@pytest.mark.parametrize(
+    "entry, kept",
+    [
+        ({"id": "fireworks.glm-5p3-flash", "labels": ["chat"]}, False),
+        ({"id": "openrouter.some-model", "labels": ["chat", "cloud"]}, False),
+        ({"id": "user.My-Local-GGUF", "labels": ["chat"], "device": "none"}, True),
+    ],
+)
+def test_catalog_tells_a_local_model_from_a_cloud_one(
+    flm_box, monkeypatch, entry, kept
+):
+    fake = flm_box()
+    listed = fake.list_models
+    row = {"downloaded": True, "recipe": "llamacpp", **entry}
+    monkeypatch.setattr(
+        fake, "list_models", lambda show_all=False: {"data": listed()["data"] + [row]}
+    )
+    ids = [e["id"] for e in sp.build_plan()["catalog"]]
+    assert (row["id"] in ids) is kept
 
 
 def test_catalog_says_what_each_planned_model_is_for_and_costs(flm_box):

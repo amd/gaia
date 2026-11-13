@@ -30,7 +30,9 @@ def _no_override(monkeypatch):
 def test_memory_never_imports_a_reranker_runtime():
     """The cross-encoder reranker is gone; recall must not pull torch back in."""
     assert not hasattr(memory_mod, "_get_cross_encoder")
-    assert "sentence_transformers" not in Path(memory_mod.__file__).read_text()
+    assert "sentence_transformers" not in Path(memory_mod.__file__).read_text(
+        encoding="utf-8"
+    )
 
 
 class _ProcHost(ProceduralMemoryMixin):

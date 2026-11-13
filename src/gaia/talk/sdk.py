@@ -47,7 +47,6 @@ class TalkConfig:
 
     # General settings
     use_claude: bool = False  # Use Claude API
-    use_chatgpt: bool = False  # Removed; True raises migration guidance
     claude_model: str = DEFAULT_CLAUDE_MODEL  # Claude model when use_claude=True
     base_url: Optional[str] = (
         None  # Lemonade server base URL (None = use LEMONADE_BASE_URL env var)
@@ -128,7 +127,6 @@ class TalkSDK:
             show_stats=self.config.show_stats,
             logging_level=self.config.logging_level,
             use_claude=self.config.use_claude,
-            use_chatgpt=self.config.use_chatgpt,
             claude_model=self.config.claude_model,
             base_url=self.config.base_url,
         )
@@ -143,7 +141,6 @@ class TalkSDK:
             enable_tts=self.config.enable_tts,
             logging_level=self.config.logging_level,
             use_claude=self.config.use_claude,
-            use_chatgpt=self.config.use_chatgpt,
             system_prompt=self.config.system_prompt,
             model=self.config.model,
             claude_model=self.config.claude_model,

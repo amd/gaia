@@ -2,21 +2,6 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "Build GAIA Installer",
-            "type": "shell",
-            "command": "makensis",
-            "args": [
-                "/DOGA_TOKEN=${input:ogaToken}",
-                "${workspaceFolder}/installer/Installer.nsi"
-            ],
-            "group": "build",
-            "presentation": {
-                "reveal": "always",
-                "panel": "new"
-            },
-            "problemMatcher": []
-        },
-        {
             "label": "Compile GAIA Code Extension",
             "type": "npm",
             "script": "compile",
@@ -103,11 +88,6 @@
         }
     ],
     "inputs": [
-        {
-            "id": "ogaToken",
-            "type": "promptString",
-            "description": "Enter your GitHub token for NPU mode"
-        },
         {
             "id": "apiServerUrl",
             "type": "promptString",

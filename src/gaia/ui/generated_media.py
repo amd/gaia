@@ -140,7 +140,7 @@ def _result_path(event: Mapping[str, Any], key: str) -> Optional[str]:
     return None
 
 
-def _is_remote_or_device(raw: str) -> bool:
+def is_remote_or_device_path(raw: str) -> bool:
     """True for a UNC, device or NT-namespace spelling, judged without touching disk."""
     if "\x00" in raw:
         return True
@@ -182,7 +182,7 @@ def media_card(
         if not raw:
             continue
         # Decide on the string alone first: resolving a UNC path reaches out to the share.
-        if _is_remote_or_device(raw) or not _lexically_in_media_dir(kind, raw):
+        if is_remote_or_device_path(raw) or not _lexically_in_media_dir(kind, raw):
             logger.info("No inline %s for %s: not in %s", kind, raw, media_dir(kind))
             return None
         name = Path(raw).name

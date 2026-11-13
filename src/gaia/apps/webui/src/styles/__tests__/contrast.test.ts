@@ -385,6 +385,7 @@ describe('keyboard focus stays visible', () => {
         '.composer-input:focus-visible': { ring: '.composer:focus-within', why: 'rings the whole composer' },
         '.sb-search input': { ring: '.sb-search:focus-within', why: 'rings the search box' },
         '.sb-search input:focus-visible': { ring: '.sb-search:focus-within', why: 'rings the search box' },
+        '.msg-edit-input:focus-visible': { ring: '.msg-user:has(.msg-edit-input:focus-visible) .msg-inner', why: 'rings the message being edited' },
     };
 
     const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
@@ -906,9 +907,9 @@ describe('status hues stay on status', () => {
 
     /** A selector naming any of these is claiming a status, so it may paint one. */
     const STATUS_WORDS = [
-        'error', 'danger', 'fail', 'warn', 'deny', 'cancel',
+        'error', 'danger', 'fail', 'warn', 'deny',
         'delete', 'remove', 'clear', 'confirm', 'stop', 'invalid', 'overdue',
-        'urgent', 'missing', 'unsupported', 'bad',
+        'urgent', 'missing', 'bad',
     ];
 
     /** Status by meaning, not by name. Each entry says which status. */

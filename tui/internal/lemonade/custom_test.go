@@ -41,6 +41,14 @@ func writeConfig(t *testing.T, body string) {
 	t.Setenv("GAIA_CONFIG_FILE", path)
 }
 
+func TestReadChosenModelsReadsDefaultAndLast(t *testing.T) {
+	writeConfig(t, `{"default_model": "qwen3.5-4b-FLM", "last_model": " lfm2-1.2b-FLM "}`)
+	got, err := ReadChosenModels()
+	if err != nil || strings.Join(got, ",") != "qwen3.5-4b-FLM,lfm2-1.2b-FLM" {
+		t.Fatalf("ReadChosenModels() = %v, %v", got, err)
+	}
+}
+
 func TestReadCustomModelsMapsEachEntryToARegistration(t *testing.T) {
 	writeConfig(t, addedConfig)
 	got, err := ReadCustomModels()

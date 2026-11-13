@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import sys
 import threading
 from unittest.mock import MagicMock, patch
 
@@ -515,6 +517,78 @@ def test_the_check_target_is_the_command_with_whitespace_collapsed():
     ) != verification_check_target(
         "run_shell_command", {"command": "pytest tests/test_cart.py"}
     )
+
+
+@pytest.mark.parametrize(
+    "before, after",
+    [
+        # rc18: the fix's rerun trimmed its output differently.
+        ("python -m pytest -q 2>&1 | tail -40", "python -m pytest -q 2>&1 | tail -20"),
+        ("pytest -q", "pytest -q 2>&1 | head -50"),
+        ("pytest -q > out.txt 2>&1", "pytest -q"),
+        ("pytest -q | tee log.txt", "pytest -q 2>&1"),
+        ("pytest -q | Select-Object -Last 20", "pytest -q"),
+        ("pytest -q 2>/dev/null | tail -n 5", "pytest -q"),
+    ],
+)
+def test_trimming_a_checks_output_is_the_same_check(before, after):
+    assert verification_check_target(
+        "run_shell_command", {"command": before}
+    ) == verification_check_target("run_shell_command", {"command": after})
+
+
+@pytest.mark.parametrize(
+    "first, second",
+    [
+        ("pytest tests/ | tail -5", "pytest tests/test_cart.py | tail -5"),
+        # A filter that picks tests, or a later command, changes what ran.
+        ("pytest -q | tail -5", "pytest -q -k cart | tail -5"),
+        ("pytest -q && ruff check . | tail", "pytest -q"),
+        ("pytest -q | tail -5; pytest tests/e2e", "pytest -q"),
+        ("pytest -q | grep -v slow", "pytest -q 2>&1 | tail"),
+        # A ">" inside a quoted argument is not a redirect.
+        ('python -c "assert f()>0"', 'python -c "assert f()>5"'),
+        ('pytest -k "a>b"', 'pytest -k "a>c"'),
+    ],
+)
+def test_a_different_command_stays_a_different_check(first, second):
+    assert verification_check_target(
+        "run_shell_command", {"command": first}
+    ) != verification_check_target("run_shell_command", {"command": second})
+
+
+def test_loop_says_nothing_when_the_fixed_rerun_trims_differently(agent):
+    """rc18: "I haven't confirmed this works - 1 of 2 pytest runs didn't pass"."""
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "success", "return_code": 0, "stdout": "5 passed"},
+            "python -m pytest -q 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] == "verified"
+    _assert_no_note(result["result"])
+
+
+def test_a_trimmed_rerun_that_still_fails_is_not_verified(agent):
+    _scripted_runs(
+        agent,
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -40",
+        ),
+        (
+            {"status": "error", "error": "1 failed", "return_code": 1},
+            "python -m pytest -q 2>&1 | tail -20",
+        ),
+    )
+    result = agent.process_query("fix the test", max_steps=5)
+    assert result["verification"]["state"] != "verified"
 
 
 def test_a_named_check_tool_is_targeted_by_its_arguments():
@@ -1757,3 +1831,79 @@ def test_a_new_turn_rechecks_whether_the_project_has_tests(agent, tmp_path):
     agent.process_query("hi")
 
     assert agent._project_has_tests(root)
+
+
+_PYTEST = "{py} -m pytest -q -p no:cacheprovider"
+_TRIMMED_RERUNS = [
+    (_PYTEST + " 2>&1", _PYTEST),
+    pytest.param(
+        _PYTEST + " 2>&1 | tail -40",
+        _PYTEST + " 2>&1 | tail -20",
+        marks=pytest.mark.skipif(not shutil.which("tail"), reason="needs tail"),
+    ),
+]
+
+
+@pytest.mark.skipif(" " in sys.executable, reason="the command names python unquoted")
+@pytest.mark.parametrize("before, after", _TRIMMED_RERUNS)
+def test_the_shell_tools_own_rerun_replaces_the_run_it_fixed(tmp_path, before, after):
+    """rc18 round 2: the shell tool declares its own check, so its target counts."""
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+    from gaia.agents.base.verification import verification_record
+    from gaia.agents.tools import shell_tools
+    from gaia.security import PathValidator
+
+    test_file = tmp_path / "test_bill.py"
+    saved = dict(_TOOL_REGISTRY)
+    records = []
+    try:
+        mixin = shell_tools.ShellToolsMixin()
+        mixin.path_validator = PathValidator(allowed_paths=[str(tmp_path)])
+        mixin.register_shell_tools()
+        mixin._shell_session = shell_tools.ShellSession(start_cwd=str(tmp_path))
+        mixin._nothing_could_have_confirmed = lambda: False
+        run = _TOOL_REGISTRY["run_shell_command"]["function"]
+        # A different length each time, so a stale .pyc is never reused.
+        for template, total in ((before, 22), (after, 1)):
+            test_file.write_text(f"def test_bill():\n    assert 1 == {total}\n")
+            args = {"command": template.format(py=sys.executable)}
+            mixin.note_confirmed_call("run_shell_command", args)
+            result = run(args["command"])
+            records.append(
+                verification_record(
+                    "run_shell_command",
+                    args,
+                    result,
+                    errored=result.get("status") == "error",
+                )
+            )
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+    assert [r["check_label"] for r in records] == ["pytest", "pytest"]
+    assert [r["failed"] for r in records] == [True, False]
+    assert all(r["declared"] for r in records)
+    assert build_verification_scope(records) == ""
+    assert verification_summary(records)["state"] == "verified"
+
+
+def test_a_narrower_shell_rerun_does_not_replace_the_failed_suite():
+    from gaia.agents.base.checks import attach_check, check_from_command
+    from gaia.agents.base.verification import verification_record
+
+    def _record(command, code, out):
+        segments = [part.split() for part in command.split(" | ")]
+        result = attach_check(
+            {"status": "success" if code == 0 else "error", "return_code": code},
+            check_from_command(command, segments, code, out),
+        )
+        return verification_record(
+            "run_shell_command", {"command": command}, result, errored=code != 0
+        )
+
+    records = [
+        _record("pytest -q | tail -40", 1, "1 failed, 4 passed in 0.1s"),
+        _record("pytest -q tests/test_cart.py | tail -20", 0, "1 passed in 0.1s"),
+    ]
+    assert "didn't pass" in build_verification_scope(records)

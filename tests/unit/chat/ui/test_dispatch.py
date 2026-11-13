@@ -82,7 +82,7 @@ async def test_depends_on_waits_for_predecessor(queue):
 
     # Wait for both to complete
     for _ in range(100):
-        jobs = queue.get_all_jobs()
+        jobs = list(queue._jobs.values())
         if all(j.status in (JobStatus.DONE, JobStatus.FAILED) for j in jobs):
             break
         await asyncio.sleep(0.05)
@@ -121,7 +121,7 @@ async def test_visible_filter(queue):
     await asyncio.sleep(0.2)
 
     visible = queue.get_visible_jobs()
-    all_jobs = queue.get_all_jobs()
+    all_jobs = list(queue._jobs.values())
 
     assert len(visible) == 1
     assert visible[0].name == "visible"
@@ -143,12 +143,12 @@ async def test_independent_jobs_run_concurrently(queue):
     queue.dispatch("b", _rendezvous)
 
     for _ in range(100):
-        jobs = queue.get_all_jobs()
+        jobs = list(queue._jobs.values())
         if all(j.status in (JobStatus.DONE, JobStatus.FAILED) for j in jobs):
             break
         await asyncio.sleep(0.05)
 
-    assert all(j.status == JobStatus.DONE for j in queue.get_all_jobs())
+    assert all(j.status == JobStatus.DONE for j in list(queue._jobs.values()))
 
 
 # ── Pruning ──────────────────────────────────────────────────────────────
@@ -173,15 +173,3 @@ async def test_prune_removes_old_completed_jobs(queue):
     await asyncio.sleep(0.2)
 
     assert queue.get_job(job_id) is None, "Old job should have been pruned"
-
-
-# ── Mono-to-Wall Conversion ─────────────────────────────────────────────
-
-
-def test_mono_to_wall(queue):
-    """mono_to_wall converts monotonic timestamps to wall-clock."""
-    mono_now = time.monotonic()
-    wall_now = time.time()
-    converted = queue.mono_to_wall(mono_now)
-    # Should be within 1 second of actual wall time
-    assert abs(converted - wall_now) < 1.0

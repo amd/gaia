@@ -33,6 +33,22 @@ def store(tmp_path):
     s.close()
 
 
+def _audit_ids(store, agent_id):
+    rows = store._conn.execute(
+        "SELECT action_id FROM audit WHERE agent_id = ? ORDER BY seq", (agent_id,)
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _add_rag_chunk(store, agent_id, content):
+    store._conn.execute(
+        "INSERT INTO rag_chunks (agent_id, content, source, created_at) "
+        "VALUES (?, ?, NULL, 0)",
+        (agent_id, content),
+    )
+    store._conn.commit()
+
+
 # ===========================================================================
 # constants — the custody API carries its own MAJOR, independent of /daemon/v1
 # ===========================================================================
@@ -119,8 +135,8 @@ def test_audit_duplicate_action_id_conflicts(store):
 def test_audit_is_scoped_per_agent(store):
     store.append_audit("agent-a", "act-1", "send", "a", 1.0)
     store.append_audit("agent-b", "act-1", "send", "b", 1.0)  # same id, other agent OK
-    assert len(store.get_audit("agent-a")) == 1
-    assert len(store.get_audit("agent-b")) == 1
+    assert _audit_ids(store, "agent-a") == ["act-1"]
+    assert _audit_ids(store, "agent-b") == ["act-1"]
 
 
 def test_audit_rows_survive_store_reopen(tmp_path):
@@ -133,14 +149,14 @@ def test_audit_rows_survive_store_reopen(tmp_path):
     s1.close()
 
     s2 = CustodyStore(db)
-    rows = s2.get_audit("agent-a")
+    ids = _audit_ids(s2, "agent-a")
     s2.close()
-    assert [r["action_id"] for r in rows] == ["act-1"]
+    assert ids == ["act-1"]
 
 
 def test_rag_query_is_scoped_per_agent(store):
-    store.add_rag_chunk("agent-a", "the mitochondria is the powerhouse")
-    store.add_rag_chunk("agent-b", "b private corpus about mitochondria")
+    _add_rag_chunk(store, "agent-a", "the mitochondria is the powerhouse")
+    _add_rag_chunk(store, "agent-b", "b private corpus about mitochondria")
     hits = store.query_rag("agent-a", "mitochondria")
     assert len(hits) == 1
     assert "powerhouse" in hits[0]["content"]
@@ -391,7 +407,7 @@ def test_embedded_provider_roundtrip(store):
     assert [m["content"] for m in p.get_session(sid)] == ["hi"]
 
     p.append_audit("act-1", "send", "sent")
-    assert store.get_audit("agent-a")[0]["action_id"] == "act-1"
+    assert _audit_ids(store, "agent-a") == ["act-1"]
 
 
 def test_embedded_provider_is_isolated_per_agent(store):

@@ -355,7 +355,9 @@ class TrayManager {
       throw new TypeError("TrayManager.setHost expects {available: boolean, reason}");
     }
     this._host = { available: host.available, reason: host.available ? null : host.reason };
-    if (!host.available) {
+    if (host.available) {
+      console.log("[tray] Tray icon host available; closing the window follows the minimize-to-tray setting");
+    } else {
       console.log(
         `[tray] No tray icon host (${host.reason}: ${host.detail || "no detail"}); closing the window minimizes GAIA`
       );

@@ -4,6 +4,7 @@
 """Test fixtures and factories for GAIA agent testing."""
 
 import tempfile
+import warnings
 from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional, Type, TypeVar
@@ -242,21 +243,20 @@ class AgentTestContext:
         """Exit context and clean up."""
         # Clean up agent if it has cleanup method
         if self.agent is not None:
-            if hasattr(self.agent, "close"):
+            for method in ("close", "close_db", "stop_all_watchers"):
+                cleanup = getattr(self.agent, method, None)
+                if cleanup is None:
+                    continue
                 try:
-                    self.agent.close()
-                except Exception:
-                    pass
-            if hasattr(self.agent, "close_db"):
-                try:
-                    self.agent.close_db()
-                except Exception:
-                    pass
-            if hasattr(self.agent, "stop_all_watchers"):
-                try:
-                    self.agent.stop_all_watchers()
-                except Exception:
-                    pass
+                    cleanup()
+                except Exception as e:  # pylint: disable=broad-except
+                    # Warn, not raise: raising here would hide the test's own failure.
+                    warnings.warn(
+                        f"AgentTestContext teardown: "
+                        f"{type(self.agent).__name__}.{method}() failed: {e!r}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
 
         # Clean up temp directory
         if self._temp_dir_context is not None:

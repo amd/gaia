@@ -22,8 +22,6 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
-      - '!src/gaia/apps/*/webui/**'
-      - '!src/gaia/electron/**'
       - 'tests/test_rag.py'
       - 'tests/test_lemonade_client.py'
   pull_request:
@@ -41,8 +39,6 @@ on:
       - 'src/gaia/**'
       # Frontend-only trees: no Python test here imports them.
       - '!src/gaia/apps/webui/**'
-      - '!src/gaia/apps/*/webui/**'
-      - '!src/gaia/electron/**'
       - 'tests/test_rag.py'
       - 'tests/test_lemonade_client.py'
   merge_group:

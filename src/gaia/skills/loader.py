@@ -298,7 +298,8 @@ def _namespace_entries(
     A skill that may start a program (``program:run:<name>``) has every tool
     confirmed per call through the agent's usual permission prompt, unless it
     shipped inside GAIA: a bundled skill's declared capabilities are approved
-    by the audit it passed before release.
+    by the audit it passed before release. A tool the manifest marks
+    ``requires_confirmation`` is confirmed on every call, wherever it came from.
     """
     from gaia.skills.manager import ROOT_AGENT_BUNDLED
 
@@ -306,6 +307,7 @@ def _namespace_entries(
         p.domain == "program" and p.level == "run" for p in skill.parsed_permissions()
     )
     confirm = runs_programs and skill.root != ROOT_AGENT_BUNDLED
+    declared_confirm = {t.name for t in skill.gaia.tools if t.requires_confirmation}
     namespaced: dict[str, dict[str, Any]] = {}
     for tool_name, entry in discovered.items():
         key = skill.namespaced_tool_name(tool_name)
@@ -315,6 +317,6 @@ def _namespace_entries(
             "display_name": f"{tool_name} ({skill.name})",
             "skill": skill.name,
         }
-        if confirm:
+        if confirm or tool_name in declared_confirm:
             namespaced[key]["requires_confirmation"] = True
     return namespaced

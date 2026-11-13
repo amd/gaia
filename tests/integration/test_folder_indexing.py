@@ -5,7 +5,6 @@
 
 Tests the following endpoints through the HTTP API layer:
 - POST /api/documents/index-folder  -- bulk index all files in a folder
-- GET  /api/documents/monitor/status -- document file monitor status
 - GET  /api/documents/{doc_id}/status -- per-document indexing status
 - POST /api/documents/{doc_id}/cancel -- cancel background indexing
 - Full document lifecycle (upload -> list -> attach -> detach -> delete)
@@ -388,64 +387,6 @@ class TestFolderIndexing:
 
         assert body["indexed"] == len(extensions)
         assert body["failed"] == 0
-
-
-# ── TestDocumentMonitor ─────────────────────────────────────────────────────
-
-
-class TestDocumentMonitor:
-    """Tests for GET /api/documents/monitor/status."""
-
-    def test_monitor_status_default(self, client):
-        """Monitor status should return running, interval, and reindexing fields."""
-        resp = client.get("/api/documents/monitor/status")
-        assert resp.status_code == 200
-        body = resp.json()
-
-        # The app lifespan starts the monitor, so it should be present
-        assert "running" in body
-        assert "interval_seconds" in body
-        assert "reindexing" in body
-        assert isinstance(body["running"], bool)
-        assert isinstance(body["interval_seconds"], (int, float))
-        assert isinstance(body["reindexing"], list)
-
-    def test_monitor_status_no_monitor(self, client, app):
-        """When no monitor exists on app.state, returns running=False."""
-        # Temporarily remove the monitor from app state
-        original_monitor = getattr(app.state, "document_monitor", None)
-        try:
-            if hasattr(app.state, "document_monitor"):
-                delattr(app.state, "document_monitor")
-
-            resp = client.get("/api/documents/monitor/status")
-            assert resp.status_code == 200
-            body = resp.json()
-            assert body["running"] is False
-            assert body["interval_seconds"] == 0
-            assert body["reindexing"] == []
-        finally:
-            # Restore the monitor
-            if original_monitor is not None:
-                app.state.document_monitor = original_monitor
-
-    def test_monitor_status_with_mock_monitor(self, client, app):
-        """When a monitor is present on app.state, its fields are reflected."""
-        mock_monitor = MagicMock()
-        mock_monitor.is_running = True
-        mock_monitor._interval = 30.0
-        mock_monitor.reindexing_docs = {"doc-abc"}
-
-        app.state.document_monitor = mock_monitor
-
-        resp = client.get("/api/documents/monitor/status")
-        assert resp.status_code == 200
-        body = resp.json()
-
-        assert set(body.keys()) == {"running", "interval_seconds", "reindexing"}
-        assert body["running"] is True
-        assert body["interval_seconds"] == 30.0
-        assert body["reindexing"] == ["doc-abc"]
 
 
 # ── TestDocumentStatus ──────────────────────────────────────────────────────

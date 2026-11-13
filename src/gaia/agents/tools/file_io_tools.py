@@ -2,7 +2,7 @@
 # Copyright(C) 2024-2025 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-File I/O tools mixin for code agents.
+File I/O tools mixin.
 
 This module provides a mixin class with file I/O operations that can be
 inherited by agents that need file manipulation capabilities.
@@ -353,7 +353,7 @@ def _missing_path_validator_write_error(host: Any) -> Dict[str, Any]:
 
 
 class FileIOToolsMixin:
-    """Mixin class providing file I/O tools for code agents.
+    """Mixin class providing file I/O tools.
 
     This class provides a collection of file I/O operations as tools that can be
     registered and used by agents. It includes reading, writing, editing, searching,

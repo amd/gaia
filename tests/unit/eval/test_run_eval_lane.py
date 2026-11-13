@@ -32,6 +32,8 @@ def test_a_gaia_lane_runs_the_fake_gh_from_the_staged_fixtures(tmp_path):
     first_on_path = p["env"]["PATH"].split(os.pathsep)[0]
     assert first_on_path == str(tmp_path / ".gaia-eval-bin")
     assert p["cwd"] == tmp_path / "gaia-eval"
+    assert p["env"]["GAIA_EVAL_ROOT"] == str(tmp_path / "gaia-eval")
+    assert p["env"]["GIT_CEILING_DIRECTORIES"] == str(tmp_path)
     assert p["extra_args"] == [
         "--exclude-tag",
         "live",
@@ -46,9 +48,42 @@ def test_a_plain_lane_gets_no_auto_approval_and_no_memory(tmp_path):
 
     assert "GAIA_AUTO_APPROVE_TOOLS" not in p["env"]
     assert "PATH" not in p["env"]
+    assert "GAIA_EVAL_ROOT" not in p["env"]
     assert p["cwd"] == REPO_ROOT
     assert p["env"]["GAIA_MEMORY_DISABLED"] == "1"
     assert not p["memory"]
+
+
+def _fetch(url):
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=10) as resp:
+        return resp.status, resp.read()
+
+
+@pytest.mark.allow_network
+def test_two_runs_serve_their_own_hub_on_their_own_port(tmp_path):
+    hubs = []
+    for name in ("run-a", "run-b"):
+        hub = tmp_path / name / "fixture-hub"
+        hub.mkdir(parents=True)
+        (hub / "index.json").write_text(json.dumps({"run": name}))
+        hubs.append(hub)
+    servers = [run_eval_lane.start_fixture_server(hub) for hub in hubs]
+    try:
+        ports = [server.server_address[1] for server in servers]
+        assert len(set(ports)) == 2 and 8765 not in ports
+        for name, port in zip(("run-a", "run-b"), ports):
+            env = run_eval_lane.fixture_server_env(port)
+            assert env["GAIA_EVAL_FIXTURE_PORT"] == str(port)
+            status, body = _fetch(env["GAIA_HUB_URL"] + "/index.json")
+            assert status == 200 and json.loads(body) == {"run": name}
+            status, _ = _fetch(f"http://127.0.0.1:{port}/atlas.html")
+            assert status == 200
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
 
 
 def test_every_ci_lane_resolves():

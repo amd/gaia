@@ -4,7 +4,7 @@
 #
 # One phase of one installer journey on macOS or Linux:
 #
-#   posix-journey.sh <download|install|upgrade|launch|health|engine|setup|preflight|quit|uninstall|leftovers>
+#   posix-journey.sh <download|install|upgrade|launch|health|setup|preflight|quit|engine|uninstall|leftovers>
 #
 # It installs and uninstalls system packages, writes under /usr and /Applications,
 # and deletes the sandbox home it creates. It refuses to run anywhere but a
@@ -376,8 +376,9 @@ fedora_engine() {
   local tag rc=0
   tag="$(rel "d['tag']")"
   cp "${REPO}/installer/scripts/install.sh" "${WORK}/install.sh"
+  # shellcheck disable=SC2046  # one package per word
   docker exec gaia-fedora dnf install -y --setopt=install_weak_deps=False \
-    tar gzip findutils which procps-ng libatomic openssl-libs libdrm libzstd zlib-ng-compat libstdc++ libgomp vulkan-loader mesa-vulkan-drivers >/dev/null \
+    $(grep -v '^#' "${REPO}/installer/core/fedora-engine-packages.txt") >/dev/null \
     || die "could not prepare the Fedora container"
   docker exec -e HOME=/root -e GAIA_RELEASE_TAG="${tag}" gaia-fedora sh /work/install.sh \
     || die "install.sh failed in the Fedora container"
@@ -534,6 +535,7 @@ health)
 
 engine)
   case "${KIND}" in
+    # After quit, so the app's own Lemonade can't stand in for a fresh start.
     agent-ui-deb|appimage) real_engine "$(backend_gaia)" ;;
     install-sh) real_engine "${GAIA_HOME}/bin/gaia" ;;
     tui-rpm) fedora_engine ;;

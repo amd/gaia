@@ -60,3 +60,20 @@ func TestGeneratedImageShowsCaptionAndPath(t *testing.T) {
 	trav := Render("image", raw(t, `{"src":"/api/media/image/..%2F..%2Fx.png"}`), width80)
 	assertContains(t, trav, "Invalid image payload")
 }
+
+func TestMediaCardShowsTheGeneratedFile(t *testing.T) {
+	img := Render("media", raw(t, `{"kind":"media","path":"/home/u/.gaia/cache/images/sd_1a2b.png","media_type":"image","size_bytes":1572864,"size":"1024x768","model":"SDXL-Turbo"}`), width80)
+	t.Logf("\n%s", plain(img))
+	assertWidth(t, img, width80)
+	assertContains(t, img, "Generated image", "sd_1a2b.png", "Size: 1.5 MB", "Dimensions: 1024x768", "Model: SDXL-Turbo")
+	assertNotContains(t, img, "Unsupported card", "Invalid media payload")
+
+	audio := Render("media", raw(t, `{"kind":"media","path":"/home/u/.gaia/cache/audio/tts_9f.wav","media_type":"audio","size_bytes":2048,"duration_seconds":3.25,"model":"kokoro-v1"}`), width80)
+	assertContains(t, audio, "Generated audio", "tts_9f.wav", "Size: 2.0 KB", "Duration: 3.2s", "Model: kokoro-v1")
+	assertNotContains(t, audio, "Unsupported card", "Invalid media payload")
+}
+
+func TestMediaCardRejectsAnUnknownMediaType(t *testing.T) {
+	out := Render("media", raw(t, `{"kind":"media","path":"/tmp/a.png","media_type":"video"}`), width80)
+	assertContains(t, out, "media_type must be image or audio")
+}

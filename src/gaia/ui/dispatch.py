@@ -63,9 +63,6 @@ class DispatchQueue:
         self._jobs: dict[str, Job] = {}
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._prune_after = prune_after
-        # Anchors for converting monotonic timestamps to wall-clock.
-        self._wall_epoch = time.time()
-        self._mono_epoch = time.monotonic()
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -93,13 +90,6 @@ class DispatchQueue:
 
     def get_visible_jobs(self) -> List[Job]:
         return [j for j in self._jobs.values() if j.visible]
-
-    def get_all_jobs(self) -> List[Job]:
-        return list(self._jobs.values())
-
-    def mono_to_wall(self, mono: float) -> float:
-        """Convert a monotonic timestamp to a wall-clock epoch."""
-        return self._wall_epoch + (mono - self._mono_epoch)
 
     async def shutdown(self) -> None:
         self._executor.shutdown(wait=False)

@@ -19,8 +19,20 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.skills.errors import SkillUnavailableError
 
-# Each needs a tool from one compact-withheld feature.
-SKILLS_ON_WITHHELD_TOOLS = ("data-explore", "image-gen", "inbox-triage")
+# Each needs a tool from one compact-withheld feature; calendar provides them.
+SKILLS_ON_WITHHELD_TOOLS = (
+    "calendar",
+    "data-explore",
+    "image-gen",
+    "inbox-triage",
+    "send-email",
+)
+
+
+def _core_withheld():
+    """Withheld tools the agent registers itself; a skill's own (``x/y``) join
+    only when it loads, and a compact model can't load that skill."""
+    return {name for name in withheld_tools(COMPACT) if "/" not in name}
 
 
 @contextlib.contextmanager
@@ -54,10 +66,14 @@ def gemma(request):
 
 
 def test_gemma_loses_exactly_the_compact_features_tools(gemma, full_tools):
-    withheld = withheld_tools(COMPACT)
+    withheld = _core_withheld()
     # Every name in the table is a real tool, or the table is guarding nothing.
     assert withheld <= full_tools, sorted(withheld - full_tools)
     assert full_tools - set(gemma._tools_registry) == withheld
+    skill_tools = withheld_tools(COMPACT) - withheld
+    assert skill_tools and all(
+        t.split("/")[0] in {"calendar", "send-email"} for t in skill_tools
+    )
 
 
 def test_gemma_keeps_installed_skills_and_documents(gemma):
@@ -134,14 +150,14 @@ def test_switching_gemma_to_a_larger_model_and_back(gemma, full_tools):
 
     _switch(gemma, DEFAULT_MODEL_NAME)
     assert gemma.model_features is COMPACT
-    assert full_tools - set(gemma._tools_registry) == withheld_tools(COMPACT)
+    assert full_tools - set(gemma._tools_registry) == _core_withheld()
     assert "DATA ANALYSIS WORKFLOW (Scratchpad)" not in gemma.system_prompt
 
 
 def test_a_larger_model_switched_to_gemma_loses_the_features(full_tools):
     with _agent(LARGE_DEFAULT_MODEL_NAME) as agent:
         _switch(agent, NPU_DEFAULT_MODEL_NAME)
-        assert full_tools - set(agent._tools_registry) == withheld_tools(COMPACT)
+        assert full_tools - set(agent._tools_registry) == _core_withheld()
         with pytest.raises(SkillUnavailableError, match="larger model"):
             agent.load_skill("image-gen")
 

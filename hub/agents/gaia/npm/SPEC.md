@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.27"`                  |
+| Contract version   | `API_VERSION = "2.28"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -301,13 +301,18 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 `changes_turn_id`, `surface`) is optional.
 
 `max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
-is **150** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
+is **1000** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
 `GAIA_AGENT_MAX_STEPS` in the sidecar's launch environment, still wins.
 
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
 window, the agent drops the oldest whole turns until it does, and streams a
-`status` event saying older messages are out of the model's view. A single turn
+`status` event saying older messages are out of the model's view. The model is
+told as well: the oldest user message it still reads opens with one bracketed
+sentence saying earlier turns exist and are no longer shown, so it says it can
+no longer see them instead of denying them. `turns` is fitted the same way. The
+agent only knows about turns it was sent: a caller that leaves turns out before
+calling (the Agent UI does) adds the same sentence itself. A single turn
 bigger than the whole budget is kept, not dropped: its longest messages are cut
 with a note saying how many characters are missing, so its answer stays in view.
 
@@ -334,8 +339,8 @@ full-access behavior as in-process. Full access does not override
 `GAIA_ALLOWED_PATHS`, the secret-path denylist, the write denylist, or the
 refusal of grants that cover the home folder or a drive root. Omit
 `allowed_paths` for the agent's default scope. Pre-2.18 binaries `422` the
-field. Whatever the scope, its existing folders are named in the system prompt
-once, when the session is built, with GAIA's documents folder first; a folder
+field. Whatever the scope, its existing folders are named once in the session
+context at the start of the first user message, when the session is built, with GAIA's documents folder first; a folder
 added to a retained session later is usable but not named. A caller that omits
 the field, like the TUI, gets the default scope (the user's home folder) named.
 
@@ -358,7 +363,7 @@ the agent has none (no store, or `GAIA_MEMORY_DISABLED=1`). Pre-2.18 binaries
 `internet_off` (contract ≥ 2.23) is `true` when the caller's chat has the
 Internet switched off and `false` when it is on. With `true` the turn refuses
 web search and page fetches, the browser, connector (MCP) and Agent Hub
-tools, mailbox reads, and any call or shell command that contacts a host other than the agent's own machine, and
+tools, mailbox reads, drafts and sends, calendar access, and any call or shell command that contacts a host other than the agent's own machine, and
 the refusal tells the model the internet is off for this chat. A retained
 session keeps the last value, so send it every turn; omit it to leave the
 agent as it is. Pre-2.23 binaries `422` the field, so a caller whose chat has
@@ -412,9 +417,20 @@ out. Sent, it replaces `context`, which must then be `[]` (anything else is a
 `422`); `turns: []` means no earlier turns, and clears a retained session's
 history. A request that sent `turns`, even `[]`, gets `model_messages` on its
 `final` so the caller can store it with the reply; a request without `turns`
-never does, because the record holds every tool result in full. It is also
-absent when the run had not finished 15 s after its answer, and that turn then
-replays as text only. Pre-2.25 binaries `422` `turns`.
+never does, because the record holds every tool result in full. The record is
+sealed as the agent prints the answer, so a run still storing memory when
+`final` goes out still carries it, and that turn does not replay as text only.
+`performance` is the one part that needs the loop to return, so it is absent
+when the run had not finished 15 s after its answer. Pre-2.25 binaries `422`
+`turns`.
+
+A caller that sends `turns` is also streamed a `context_usage` event before the
+answer (contract ≥ 2.28):
+`{ "type": "context_usage", "window", "used", "turns_in_view", "turns_hidden", ... }`.
+It is the same event an in-process turn streams at turn start, so a composer's
+context meter fills during a long turn instead of staying blank until `final`.
+The counts are the shared estimate; the `final.context` copy that follows is
+measured with the loaded model's own tokenizer when it can be.
 
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
@@ -487,6 +503,12 @@ Claude Code skill folders), or `null` for any other root. An agent that predates
 carries a value the host does not know, as ungrouped and show it flat, never
 drop the skill. A skill root that cannot be read is a `500` naming it.
 
+A `tool_result` from a card tool carries `render` (`guide` or `calculator`)
+on `/query` and over stdio, with the card in `data`. Those tools come from the
+bundled `guides` and `calculators` skills and register as `<skill>/<tool>` when
+the skill loads. A failed call carries no `render`, so a client never draws an
+invalid card ahead of the model's retry.
+
 `/query` streams the answer as `token` events before its terminal `final`. A
 run cancelled mid-answer (`/cancel`, or a dropped connection) ends with an
 empty `final` and sends no `token` after the cancel, so a host keeps the text
@@ -501,10 +523,15 @@ UI's Context panel shows. `window` is the model's context window in tokens,
 by kind; `categories` lists the panel's rows (their tokens add up to `used`),
 `tool_loading` which tools ride every request, and `tokenizer.exact` whether
 the counts came from the loaded model's own tokenizer or the shared estimate.
+A caller that sends `turns` gets it measured over those turns plus this turn's
+`model_messages`, tool results included, so `turns_in_view` and `turns_hidden`
+count whole turns; turns the caller left out itself are not in either count.
 A turn that was stopped or ended on a model failure carries no `context`; a
-measurement that failed carries `context_error`, one sentence saying why, and
-the answer still stands. Older binaries send neither, so read `context` only
-when `/version` reports 2.21 or later.
+measurement that failed, or did not finish within 15 s, carries
+`context_error`, one sentence saying why, and the answer still stands. The
+measurement runs over the record sealed at the answer, so a run still storing
+memory when `final` goes out still gets one. Older binaries send neither, so
+read `context` only when `/version` reports 2.21 or later.
 
 `final` also carries `performance`: the turn's step timings, as
 `{ "timing_summary", "conversation" }`. `timing_summary` holds the run's model
@@ -513,6 +540,8 @@ and tool seconds and its model call count; `conversation` holds one
 call, with that call's token counts and speed. The Agent UI turns it into the
 Context panel's "Under the hood" figures. A run that timed nothing
 carries none, and older binaries never send it, so read it only when present.
+A request without `turns` does not wait for timings: its `final` carries them
+only when the loop had already returned.
 
 A `final` with `failed: true` ends a turn a model call broke; its `answer` says
 what was and wasn't done. When the cause is one a front-end can fix, `failure`
@@ -729,6 +758,12 @@ original spelling), and `provider: "claude"`. What remains stdio-only is the
 already off, `--accept-edits` starts it in accept-edits mode, and `--use-claude` / `--claude-model` pin the backend for the life
 of the process (embeddings stay on Lemonade either way).
 
+Sessions a host can list and reopen are stdio-only too: `--history-file` plus
+`--session-kind` keeps the session's title, status (`running`, `waiting` on a
+permission prompt, `done`, `failed`) and a readable transcript beside the
+transcript file. The terminal UI's `/sessions` and `--resume` read it. The
+layout is §10.4 of `docs/spec/agent-ui-query-sse-contract.md`.
+
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models,
 grouped by provider, with `(default)` beside the configured default model;
@@ -737,6 +772,18 @@ The switch reply is one line naming the model, where it runs, and, for a cloud
 model, that messages and anything read from files or memory are sent there.
 Cloud IDs (`fireworks.*`, `amd.*`) route through Lemonade without local model
 loading. Model-state status events identify the provider and remote inference.
+
+`/skills` is answered by the stdio loop too, never by the model. Bare `/skills`
+lists the installed skills. `/skills add <link>` reads a GitHub repository or
+folder, an `owner/repo` shorthand, a skills.sh page, or an https `.zip`, and
+replies with every `SKILL.md` it holds, each skill's declared permissions in
+plain words, its audit result, and a security warning; it adds nothing and
+remembers the version it read. `/skills add <link> confirm` adds that version —
+a `confirm` with no earlier preview of the link previews instead, a link that
+changed since its preview is refused, and each preview covers one add — to
+`~/.gaia/skills` at the `experimental` tier and recomposes the prompt so
+the session can use them. Skills that ship code are refused unless the line
+carries `--allow-code`. Each command ends in exactly one `final` or `error` event.
 The TUI's `/provider` panel configures credentials directly with local Lemonade;
 keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model

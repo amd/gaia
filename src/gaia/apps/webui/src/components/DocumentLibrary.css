@@ -80,6 +80,8 @@
     gap: 8px;
     margin-bottom: 16px;
 }
+/* The hint sits close above the form it describes. */
+.path-hint { margin: 0 0 6px; }
 .path-icon { color: var(--text-muted); flex-shrink: 0; }
 .path-input {
     flex: 1 1 200px;
@@ -104,6 +106,14 @@
     color: var(--text-muted);
     margin-bottom: 12px;
     padding: 0 2px;
+}
+.doc-stats-failed {
+    color: var(--danger);
+}
+.doc-stats-failed::before {
+    content: '·';
+    margin-inline-end: 8px;
+    color: var(--text-muted);
 }
 
 /* Document list */
@@ -167,10 +177,15 @@
     align-items: center;
     gap: 2px;
     flex-shrink: 0;
-    opacity: 0;
+    /* Muted at rest so a row still shows it has actions, for keyboard and touch too. */
+    opacity: 0.6;
     transition: opacity var(--duration-fast) var(--ease);
 }
-.doc-row:hover .doc-row-actions { opacity: 1; }
+.doc-row:hover .doc-row-actions,
+.doc-row-actions:focus-within { opacity: 1; }
+@media (hover: none) {
+    .doc-row-actions { opacity: 1; }
+}
 
 .doc-open-folder { color: var(--text-muted); }
 .doc-open-folder:hover { color: var(--accent-blue); }
@@ -259,6 +274,23 @@
     background: var(--bg-secondary);
 }
 .doc-folder-notice > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.doc-action-error { color: var(--danger); background: var(--danger-dim); }
+.doc-removed-notice { align-items: center; }
+.doc-undo {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    color: var(--accent);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.doc-undo:hover { background: var(--bg-hover); }
+.doc-load-error { color: var(--danger); }
+.doc-load-error p { overflow-wrap: anywhere; }
+.doc-load-error button { margin-top: 12px; }
 
 /* The progress bar takes the row's width; the Cancel button stays beside it. */
 .doc-indexing-status .index-progress {

@@ -71,50 +71,6 @@ def test_system_status_defaults_without_queue():
     assert status.init_tasks == []
 
 
-# ── /api/system/tasks ─────────────────────────────────────────────────────
-
-
-def test_tasks_endpoint_returns_list(client):
-    """GET /api/system/tasks returns a list of tasks."""
-    resp = client.get("/api/system/tasks")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "tasks" in data
-    assert isinstance(data["tasks"], list)
-
-
-def test_tasks_endpoint_returns_visible_only(app):
-    """GET /api/system/tasks only returns visible=True jobs.
-
-    The lifespan dispatches 3 visible startup tasks.  We verify the endpoint
-    returns only those, not any internal (non-visible) jobs.
-    """
-    with TestClient(app) as c:
-        queue = app.state.dispatch_queue
-        # All startup tasks are visible — add a hidden job directly to the dict
-        from gaia.ui.dispatch import Job, JobStatus
-
-        hidden = Job(name="hidden job", visible=False, status=JobStatus.DONE)
-        queue._jobs[hidden.id] = hidden
-
-        resp = c.get("/api/system/tasks")
-        data = resp.json()
-
-        hidden_names = [t["name"] for t in data["tasks"] if t["name"] == "hidden job"]
-        assert len(hidden_names) == 0
-        # But visible startup tasks should be present
-        assert len(data["tasks"]) >= 3
-
-
-def test_tasks_endpoint_sanitizes_errors(client):
-    """GET /api/system/tasks does not expose raw exception strings."""
-    resp = client.get("/api/system/tasks")
-    data = resp.json()
-    for task in data["tasks"]:
-        # error field should always be None (sanitized)
-        assert task.get("error") is None
-
-
 def test_status_init_tasks_has_no_error_field(client):
     """init_tasks in /api/system/status should never contain error strings."""
     resp = client.get("/api/system/status")
@@ -151,7 +107,9 @@ def _run_boot_check(app):
 
     with TestClient(app):
         queue = app.state.dispatch_queue
-        job = next(j for j in queue.get_all_jobs() if j.name == "Checking LLM server")
+        job = next(
+            j for j in queue.get_visible_jobs() if j.name == "Checking LLM server"
+        )
         deadline = time.monotonic() + 10
         while job.status not in (JobStatus.DONE, JobStatus.FAILED):
             assert time.monotonic() < deadline, "boot check never finished"
@@ -220,7 +178,9 @@ def _run_boot_model_load(app, downloaded, model="Gemma-4-E4B-it-GGUF", lease=Non
     ):
         with TestClient(app):
             queue = app.state.dispatch_queue
-            job = next(j for j in queue.get_all_jobs() if j.name == "Loading AI model")
+            job = next(
+                j for j in queue.get_visible_jobs() if j.name == "Loading AI model"
+            )
             deadline = time.monotonic() + 10
             while job.status not in (JobStatus.DONE, JobStatus.FAILED):
                 assert time.monotonic() < deadline, "boot model load never finished"

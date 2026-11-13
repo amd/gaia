@@ -115,6 +115,25 @@ def test_frozen_run_python_never_hands_the_script_to_the_agent_parser(
     assert result["status"] == "success", result
 
 
+def test_frozen_linux_run_python_reuses_the_bundle_and_its_libraries(
+    frozen, tools, project, monkeypatch
+):
+    """The relaunch reuses this one-file bundle: no reset, which unpacks the
+    whole agent again on every call, and the bundle path it loads through."""
+    bundle = "/tmp/_MEIabc"
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(sys, "_MEIPASS", bundle, raising=False)
+    monkeypatch.setenv("LD_LIBRARY_PATH", f"{bundle}:/opt/rocm/lib")
+    monkeypatch.setenv("LD_LIBRARY_PATH_ORIG", "/opt/rocm/lib")
+    monkeypatch.setenv("PYINSTALLER_RESET_ENVIRONMENT", "1")
+    with _spawn(stdout="42\n") as spawn:
+        tools["run_python"](code="print(6 * 7)")
+
+    env = spawn.call_args.kwargs["env"]
+    assert env["LD_LIBRARY_PATH"] == f"{bundle}:/opt/rocm/lib"
+    assert "PYINSTALLER_RESET_ENVIRONMENT" not in env
+
+
 def test_frozen_execute_python_file_passes_its_args_after_the_script(
     frozen, tools, project
 ):

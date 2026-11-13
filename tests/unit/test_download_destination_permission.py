@@ -156,9 +156,9 @@ class TestRefusedDestinationSaysWhy:
 
         result = harness.download(save_to="~")
 
-        assert result.startswith("Error:"), result
-        assert str(home / "tent.pdf") in result
-        assert "not in allowed paths" in result
+        assert result["executed"] is False, result
+        assert str(home / "tent.pdf") in result["error"]
+        assert "not in allowed paths" in result["error"]
         assert not (home / "tent.pdf").exists()
 
     def test_declined_new_folder_is_not_created(self, harness, home):
@@ -167,7 +167,7 @@ class TestRefusedDestinationSaysWhy:
         result = harness.download(save_to="~/Gear")
 
         assert harness.asked == [home / "Gear"]
-        assert str(home / "Gear" / "tent.pdf") in result, result
+        assert str(home / "Gear" / "tent.pdf") in result["error"], result
         assert not (home / "Gear").exists()
 
     def test_unaskable_destination_gives_the_reason(self, home, tmp_path, monkeypatch):
@@ -181,10 +181,11 @@ class TestRefusedDestinationSaysWhy:
             h.close()
 
         assert h.asked == []
-        assert str(home / "tent.pdf") in result, result
-        assert "No approval can grant it" in result
-        assert "GAIA_ALLOWED_PATHS" in result
-        assert "save_to='~/Downloads'" in result
+        assert result["executed"] is False, result
+        assert str(home / "tent.pdf") in result["error"], result
+        assert "No approval can grant it" in result["error"]
+        assert "GAIA_ALLOWED_PATHS" in result["error"]
+        assert "save_to='~/Downloads'" in result["error"]
         assert not (home / "tent.pdf").exists()
 
     def test_user_refusal_does_not_suggest_a_way_around_it(self, harness, home):
@@ -192,7 +193,7 @@ class TestRefusedDestinationSaysWhy:
 
         result = harness.download(save_to="~")
 
-        assert "~/Downloads" not in result
+        assert "~/Downloads" not in result["error"]
 
 
 class TestWriteGuardrailsStillHold:
@@ -209,9 +210,9 @@ class TestWriteGuardrailsStillHold:
 
         result = harness.download(save_to=str(protected))
 
-        assert result.startswith("Error:"), result
-        assert "protected directory" in result
-        assert str(protected.resolve()) in result
+        assert result["executed"] is False, result
+        assert "protected directory" in result["error"]
+        assert str(protected.resolve()) in result["error"]
         harness.get.assert_not_called()
         assert harness.asked == []
         assert list(protected.iterdir()) == []
@@ -221,7 +222,8 @@ class TestWriteGuardrailsStillHold:
 
         result = harness.download(save_to="~")
 
-        assert "blocked by security policy" in result, result
+        assert result["executed"] is False, result
+        assert "blocked by security policy" in result["error"]
         assert harness.asked == []
         assert not (home / "credentials.json").exists()
 

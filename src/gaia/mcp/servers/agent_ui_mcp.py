@@ -150,6 +150,60 @@ def _model_pin() -> Dict[str, Any]:
     return {"model": DEFAULT_MODEL_NAME}
 
 
+#: Longest card text a transcript carries; a full 100-item list fits.
+CARD_TEXT_MAX_CHARS = 8000
+
+_GUIDE_SECTIONS = {
+    "recipe": ("Ingredients", "Steps"),
+    "workout": ("Equipment", "Exercises"),
+    "howto": ("Materials", "Steps"),
+    "checklist": ("Items", "Steps"),
+    "itinerary": ("Packing", "Days"),
+}
+
+
+def _lines(value: Any) -> list:
+    return [str(v) for v in value] if isinstance(value, list) else []
+
+
+def card_text(render: Any, data: Any) -> Optional[str]:
+    """Plain text of a card a tool step showed the user, or ``None`` if none.
+
+    The reply beside a card is often just a tip, so whoever reads the
+    transcript instead of the screen needs the card's own content.
+    """
+    if not render:
+        return None
+    if render == "guide" and isinstance(data, dict):
+        guide_type = str(data.get("guideType") or "guide")
+        items_label, steps_label = _GUIDE_SECTIONS.get(guide_type, ("Items", "Steps"))
+        out = [f"[{guide_type} card shown to the user] {data.get('title') or ''}"]
+        for key in ("description", "notes"):
+            if data.get(key):
+                out.append(f"{key.capitalize()}: {data[key]}")
+        if data.get("servings") is not None:
+            out.append(f"Servings: {data['servings']}")
+        if _lines(data.get("items")):
+            out.append(f"{items_label}:")
+            out.extend(f"- {line}" for line in _lines(data.get("items")))
+        if _lines(data.get("steps")):
+            out.append(f"{steps_label}:")
+            out.extend(
+                f"{n}. {line}" for n, line in enumerate(_lines(data.get("steps")), 1)
+            )
+        text = "\n".join(out)
+    else:
+        text = f"[{render} card shown to the user] " + json.dumps(
+            data, ensure_ascii=False, default=str
+        )
+    if len(text) > CARD_TEXT_MAX_CHARS:
+        text = (
+            text[:CARD_TEXT_MAX_CHARS]
+            + f"\n... (card text cut at {CARD_TEXT_MAX_CHARS} characters)"
+        )
+    return text
+
+
 def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]:
     """Send a message via SSE stream and collect the full response."""
     url = f"{base_url}/api/chat/send"
@@ -177,6 +231,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     event_log = []
     current_tool = None
     inference_stats = None
+    turn_error = None
+    last_agent_error = None
 
     for line in r.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
@@ -228,6 +284,9 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
                     step_info["stderr"] = cmd["stderr"][:300]
                 if cmd.get("return_code", 0) != 0:
                     step_info["exit_code"] = cmd["return_code"]
+            card = card_text(event.get("render"), event.get("data"))
+            if card:
+                step_info["card"] = card
             agent_steps.append(step_info)
             icon = "OK" if success else "ERR"
             event_log.append(f"  result [{icon}]: {summary[:150]}")
@@ -247,6 +306,13 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
 
         elif etype == "agent_error":
             event_log.append(f"[error] {event.get('content', '')}")
+            last_agent_error = event.get("content") or last_agent_error
+            if event.get("fatal"):
+                turn_error = last_agent_error or "The agent turn failed."
+
+        elif etype == "error":
+            turn_error = event.get("content") or "The agent turn failed."
+            event_log.append(f"[error] {turn_error}")
 
         # A judge scoring what the agent did after a "no" has to see the no,
         # and any question the agent put to the user.
@@ -278,6 +344,13 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
             done_content = event.get("content", "")
             if done_content:
                 full_content = done_content
+            if event.get("failed") and not event.get("cancelled"):
+                turn_error = (
+                    turn_error
+                    or done_content
+                    or last_agent_error
+                    or "The agent turn failed."
+                )
 
         elif etype == "status":
             if event.get("retracts_answer"):
@@ -304,6 +377,8 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
         "agent_steps": agent_steps,
         "event_log": event_log,
     }
+    if turn_error:
+        result = {"status": "error", "detail": turn_error, **result}
     if inference_stats:
         result["stats"] = inference_stats
     return result
@@ -421,16 +496,19 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
             }
             steps = m.get("agent_steps") or []
             if steps:
-                msg["agent_steps"] = [
-                    {
+                msg["agent_steps"] = []
+                for s in steps:
+                    step = {
                         "type": s.get("type"),
                         "tool": s.get("tool"),
                         "label": s.get("label"),
                         "result": (s.get("result") or "")[:300],
                         "success": s.get("success"),
                     }
-                    for s in steps
-                ]
+                    card = card_text(s.get("render"), s.get("data"))
+                    if card:
+                        step["card"] = card
+                    msg["agent_steps"].append(step)
             stats = m.get("stats")
             if stats:
                 msg["stats"] = stats
@@ -441,7 +519,8 @@ def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     def send_message(session_id: str, message: str) -> Dict[str, Any]:
         """Send a message to the GAIA agent in a session and wait for the response.
         The conversation is stored and will be visible when the session is viewed.
-        Returns the agent's response, tool outputs, and an event log.
+        Returns the agent's response, tool outputs, and an event log. A turn
+        that failed also carries status "error" and the reason in "detail".
 
         Use list_sessions() first to get a session ID, or create_session() to make one.
         To make the session visible in the browser, call open_session_in_browser() first.

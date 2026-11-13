@@ -47,7 +47,6 @@ files:
   tests/integration/test_claude_history_cache.py: Proves the live Anthropic API reads conversation history back from the prompt cache; needs a billed ANTHROPIC_API_KEY, which no test lane carries.
 
   # Manual runs against running services.
-  tests/stress/test_agent_ui_stress.py: A hand-run stress script against a running Agent UI and Lemonade Server; not a pytest suite.
 
 # Test files that skip WHOLESALE in some lane that collects them.
 #
@@ -127,6 +126,7 @@ module_skips:
       - tests/unit/test_tool_loader_token_budget.py
       - tests/unit/test_tool_list_invariants.py
       - tests/unit/test_warm_up.py
+      - tests/unit/test_flagship_tool_labels.py
       - tests/unit/eval/test_harness_flagship_target.py
       - tests/unit/agents/test_engine_down_query_start.py
 
@@ -137,9 +137,4 @@ module_skips:
       - tests/unit/test_agent_ui_mcp_messages.py
       - tests/unit/test_mcp2_server.py
       - tests/unit/test_mcp_bridge_protocol.py
-
-  - reason: Needs reportlab, which the email unit lane collects tests/unit/eval/ without.
-    runs_in: test_unit.yml
-    paths:
-      - tests/unit/eval/test_pdf_document_generator.py
 

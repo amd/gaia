@@ -589,16 +589,13 @@ gaia/
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
-│   │   ├── llm/        # LLM standalone app
-│   │   ├── example/    # Reference/starter app
-│   │   └── _shared/    # Shared assets for apps
+│   │   └── llm/        # LLM standalone app
 │   ├── audio/          # Audio: Lemonade ASR, speaker diarization, TTS, media decode
 │   ├── chat/           # Agent SDK (AgentSDK class, prompts, app entry)
 │   ├── code_index/     # Code indexing/search backend
 │   ├── connectors/     # Connector framework (Google/GitHub OAuth, MCP-server connectors, grants)
 │   ├── daemon/         # Headless daemon (gaia daemon): custody, broker, scheduler, sidecars
 │   ├── database/       # DatabaseMixin and DatabaseAgent
-│   ├── electron/       # Electron app integration
 │   ├── eval/           # Evaluation framework
 │   ├── factory/        # Claude Code session-corpus harvest/analysis (LLM-free, local cache)
 │   ├── filesystem/     # Filesystem service/utilities
@@ -878,7 +875,8 @@ Two rules are important enough to restate here:
 
 Automated PR-review *policy* — severity tiers, the nit cap, skip rules, length caps —
 lives in [`REVIEW.md`](REVIEW.md), which is the single source of truth for review
-scoring. Don't fork it into another file.
+scoring. Don't fork it into another file. Vetting a PR or issue that integrates an outside
+company's product lives there too, under "Third-party integrations".
 
 ## Claude Agents
 

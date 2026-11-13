@@ -20,12 +20,13 @@ import time
 import uuid
 from collections import deque
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterator, List, Optional
 
 from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, call_risk
 from gaia.agents.base.console import Denial, OutputHandler, timeout_denial_message
 from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL, grant_scope
-from gaia.agents.base.tool_outcome import FAILED_STATUSES
+from gaia.agents.base.tool_outcome import FAILED_STATUSES, tool_result_dict
 from gaia.agents.base.tool_outcome import tool_result_failed as _tool_result_failed
 from gaia.agents.base.tools import (
     get_tool_display_label,
@@ -33,7 +34,12 @@ from gaia.agents.base.tools import (
     tool_call_progress_message,
 )
 from gaia.agents.base.turn_metrics import turn_log_path
-from gaia.agents.base.verification import split_verification_scope
+from gaia.agents.base.verification import EXECUTED_KEY, split_verification_scope
+from gaia.agents.tools.connect_card import (
+    CONNECT_CARD_KIND,
+    CONNECT_CARD_SUMMARY,
+    connect_card_in,
+)
 from gaia.llm.providers.lemonade import (
     TOOL_CALL_PROGRESS_INTERVAL_S,
     TOOL_CALL_PROGRESS_MIN_CHARS,
@@ -47,6 +53,7 @@ from gaia.ui.event_narration import (
     grant_phrase,
     tool_phrase,
 )
+from gaia.ui.generated_media import is_remote_or_device_path
 from gaia.ui.turn_summary import TurnLedger, search_hits
 from gaia.upload_names import display_file_name, upload_original_name
 from gaia.utils.json_string import (
@@ -69,6 +76,13 @@ _DIFF_CARD_MAX_CHARS = 64_000
 #: relayed result is reduced to.
 RESULT_PATH_KEYS = ("file_path", "image_path", "audio_path")
 
+#: Generated media file types that a client may later open through an explicit
+#: card action.  Keep this intentionally narrow: a successful tool result is
+#: not enough to turn an arbitrary local file into a launchable UI payload.
+MEDIA_OUTPUT_EXTENSIONS = frozenset(
+    {".png", ".jpg", ".jpeg", ".webp", ".wav", ".mp3", ".ogg", ".flac"}
+)
+
 #: A tool result with one of these statuses did not do its job.
 FAILED_TOOL_STATUSES = FAILED_STATUSES
 
@@ -82,6 +96,15 @@ def tool_result_failed(data: Any) -> bool:
 #: Matches the TUI's ``DeliverableConfirmationTimeout`` so a prompt waits as
 #: long on every surface.
 TOOL_CONFIRM_TIMEOUT_SECONDS = 10 * 60
+
+#: Terminal text for the rare race where a relayed approval is answered but
+#: the chat cannot retake the model before the sidecar sends its next event.
+#: Keep this named so the relay can distinguish it from an ordinary Stop and
+#: avoid replacing the terminal error with a misleading "Cancelled" status.
+MODEL_RETAKE_FAILED_MESSAGE = (
+    "This chat ended while your approved step was waiting for the model, "
+    "so it didn't run. Send your message again to retry."
+)
 
 #: Sentinel for "the caller did not pass a timeout". Distinct from ``None``,
 #: which is a caller explicitly asking to wait for the human indefinitely.
@@ -532,6 +555,12 @@ class SSEOutputHandler(OutputHandler):
     #: What "always" would grant on that prompt; ``None`` when not offered.
     _relay_always_scope: Optional[str] = None
 
+    #: The path that prompt asks to open, when it is a path-access prompt.
+    _relay_path_access: Optional[str] = None
+
+    #: Answers that prompt "timeout" when the confirm window runs out.
+    _relay_confirm_timer: Optional[threading.Timer] = None
+
     #: The sidecar question a relayed run is parked on, until it is answered.
     _relay_question_id: Optional[str] = None
 
@@ -607,7 +636,8 @@ class SSEOutputHandler(OutputHandler):
         # may have unloaded or reloaded it meanwhile. Raises when it can't.
         self.on_model_regained = None
         # Autonomous loop support
-        # background_mode=True: skip blocking user confirmation; immediately deny.
+        # background_mode=True: nobody can confirm. In process a gated tool is
+        # denied; on the sidecar relay the run ends at that step.
         self.background_mode: bool = background_mode
         # False on a transport with no route back for an answer (the stdio
         # agent): a question there would hang the turn, so none is asked.
@@ -640,15 +670,22 @@ class SSEOutputHandler(OutputHandler):
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
         self._relay_always_scope = None
+        self._relay_path_access = None
         # A relayed needs_input question the sidecar run is parked on.
         self._relay_question_id: Optional[str] = None
         # What the sidecar measured fills its context, from its ``final`` event.
         self.relay_context: Optional[Dict[str, Any]] = None
+        # Turns this relay left out to fit; the sidecar never sees them.
+        self.relay_hidden_turns = 0
         self.relay_context_error: Optional[str] = None
         self.relay_performance: Optional[Dict[str, Any]] = None
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # The turn's answer and record for later turns, sealed when the answer
+        # prints so a daemon's final event need not wait on the run thread's tail.
+        self.staged_answer: Optional[str] = None
+        self.staged_model_messages: Optional[List[Dict[str, Any]]] = None
         # Set by mark_turn_failed; the next answer event carries ``failed``.
         self._turn_failed = False
         self._turn_failure: Optional[str] = None
@@ -902,6 +939,15 @@ class SSEOutputHandler(OutputHandler):
         # must not reach the chat's Outputs as made.
         if isinstance(data, dict) and isinstance(data.get("status"), str):
             event["status"] = data["status"]
+        # A model the call needed and didn't find, so the UI can offer it.
+        if isinstance(data, dict) and isinstance(data.get("needs_model"), str):
+            event["needs_model"] = data["needs_model"]
+        # A "denied" call nobody answered is not one the user declined.
+        if isinstance(data, dict) and data.get("timed_out") is True:
+            event["timed_out"] = True
+        # A refusal must not read as a site contacted, relayed or not.
+        if isinstance(data, dict) and data.get(EXECUTED_KEY) is False:
+            event[EXECUTED_KEY] = False
         # String-returning tools (notably email envelopes) are summarized by a
         # hard character cap. Tell downstream classifiers that an unparsable
         # summary may be incomplete instead of making them infer truncation.
@@ -953,13 +999,16 @@ class SSEOutputHandler(OutputHandler):
         # For file search results, include structured file list
         if isinstance(data, dict) and ("files" in data or "file_list" in data):
             files = data.get("file_list", data.get("files", []))
+            folders = data.get("directories")
             if isinstance(files, list):
                 # Keep the UI contract honest: "total" should never claim more accessible
                 # files than we actually include in the event payload.
                 # list_files reports bare names; the UI renders entries.
-                limited_files = [
-                    {"name": f} if isinstance(f, str) else f for f in files[:20]
-                ]
+                entries = [
+                    {"name": _entry_name(d), "kind": "folder"}
+                    for d in (folders if isinstance(folders, list) else [])
+                ] + [{"name": f} if isinstance(f, str) else f for f in files]
+                limited_files = entries[:20]
                 event["result_data"] = {
                     "type": "file_list",
                     "files": limited_files,  # Limit to 20 files
@@ -1008,10 +1057,27 @@ class SSEOutputHandler(OutputHandler):
                     "chunks": structured_chunks,
                 }
 
+        connect = connect_card_in(data)
+        if connect is not None:
+            fault = str((tool_result_dict(data) or {}).get("error") or "")
+            said = fault.splitlines()[0][:200] if fault else CONNECT_CARD_SUMMARY
+            event["summary"] = said
+            # A relaying host reads the outcome and the summary off this payload.
+            connect = {
+                **connect,
+                "success": success,
+                "status": "ok" if success else "error",
+                "display_message": said,
+            }
+            event["result_data"] = connect
+            event["render"] = CONNECT_CARD_KIND
+            event["data"] = connect
         # The render-map card (if any) is authoritative for a registered tool —
         # set last so it always wins over the generic result_data shapes above.
-        if render_card is not None:
+        elif render_card is not None:
             event["result_data"] = render_card
+            event["render"] = self._RENDER_TOOL_TO_LANG[self._last_tool_name]
+            event["data"] = render_card
         elif self._pending_diff_card is not None:
             # ChatView and step persistence read a card from ``data``.
             event["result_data"] = self._pending_diff_card
@@ -1133,6 +1199,21 @@ class SSEOutputHandler(OutputHandler):
         # #2765: a generic ``table`` card (no new client code) so the thread
         # view renders straight from tool data instead of model prose.
         "get_thread": "table",
+        # Bundled skills: hub/skills/guides and hub/skills/calculators.
+        "guides/show_recipe": "guide",
+        "guides/show_workout": "guide",
+        "guides/show_how_to": "guide",
+        "guides/show_checklist": "guide",
+        "guides/show_itinerary": "guide",
+        "calculators/show_tip_calculator": "calculator",
+        "calculators/show_loan_calculator": "calculator",
+        # Media-producing tools return a verified local path.  The client gets
+        # it through a typed card rather than scraping a model-written path out
+        # of prose, so opening it cannot become an agent-output execution sink.
+        "generate_image": "media",
+        "generate_music": "media",
+        "generate_sound_effect": "media",
+        "text_to_speech": "media",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:
@@ -1162,6 +1243,8 @@ class SSEOutputHandler(OutputHandler):
             envelope = parsed
         else:
             return None
+        if lang == "media":
+            return self._media_card_payload(envelope)
         if not envelope.get("ok"):
             return None
         inner = envelope.get("data")
@@ -1169,11 +1252,84 @@ class SSEOutputHandler(OutputHandler):
             return None
         return inner
 
+    @staticmethod
+    def _media_card_payload(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Return a typed card only for a verified media file this tool wrote.
+
+        The terminal must never open a path copied from model prose or from an
+        unrelated tool's payload.  The render map admits only media producers;
+        this second check requires their successful, absolute, regular-file
+        output before the path crosses the wire as an actionable card.
+        """
+        if envelope.get("status") != "success":
+            return None
+        path_key = next(
+            (
+                key
+                for key in ("image_path", "audio_path", "file_path")
+                if isinstance(envelope.get(key), str) and envelope[key].strip()
+            ),
+            None,
+        )
+        if path_key is None:
+            return None
+        # Judged on the string first: stat-ing a UNC path reaches out to the share.
+        if is_remote_or_device_path(envelope[path_key]):
+            return None
+        path = Path(envelope[path_key]).expanduser()
+        if not path.is_absolute() or path.suffix.lower() not in MEDIA_OUTPUT_EXTENSIONS:
+            return None
+        try:
+            stat = path.stat()
+        except OSError:
+            return None
+        if not path.is_file():
+            return None
+        image = path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+        media_type = "image" if image else "audio"
+        payload: Dict[str, Any] = {
+            "kind": "media",
+            "path": str(path),
+            "media_type": media_type,
+            "size_bytes": stat.st_size,
+            # A relayed turn reaches the Agent UI as this payload alone; its
+            # inline image/audio card and Outputs read the tool's own keys.
+            "status": "success",
+            path_key: str(path),
+        }
+        for key in (
+            "model",
+            "size",
+            "steps",
+            "voice",
+            "format",
+            "duration_seconds",
+            "duration_requested",
+            "generation_time_s",
+        ):
+            if envelope.get(key) is not None:
+                payload[key] = envelope[key]
+        return payload
+
     # === Completion Methods ===
 
     def print_turn_metrics(self, record: Dict[str, Any]):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
+
+    def stage_final_model_messages(
+        self, answer: str, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Keep the turn's answer and record sealed at the answer for ``final``.
+
+        The agent seals them before ``print_final_answer``; the daemon reads them
+        from here so ``final`` carries the measurement and what later turns
+        replay without waiting on the run thread (which may still be storing
+        memory or writing a trace).
+        """
+        self.staged_answer = answer
+        self.staged_model_messages = messages
+        return messages
 
     def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The answer that follows ends a turn a model failure cut short."""
@@ -2068,6 +2224,7 @@ class SSEOutputHandler(OutputHandler):
         # renders a prompt that waits.
         if timeout is not None:
             request["timeout_seconds"] = timeout
+            request["expires_at"] = time.time() + timeout
         self._emit(request)
 
         # Poll in short intervals so cancellation is detected promptly.
@@ -2175,17 +2332,19 @@ class SSEOutputHandler(OutputHandler):
             self.cancelled.set()
             return False
 
-    def come_back_to_model(self) -> None:
+    def come_back_to_model(self) -> Optional[bool]:
         """Retake the model at the front of the line after a wait on the user.
 
-        A Stop while the turn waits in line, or a model that can no longer be
-        loaded, sets ``cancelled``; the caller checks it before going on.
+        Returns ``True`` when the turn may continue, ``None`` for an ordinary
+        user Stop, and ``False`` after it emitted a named terminal retake error.
+        This lets a relayed sidecar preserve that error instead of overwriting
+        it with ``Cancelled.``.
         """
         if self.cancelled.is_set():
-            return
+            return None
         if not self.turn_slot.come_back(self.cancelled):
             if self.cancelled.is_set():
-                return
+                return None
             # Not a Stop: the turn ended (cleanup or shutdown) while it waited in line.
             logger.warning(
                 "Turn ended while waiting to retake the model after the user "
@@ -2194,15 +2353,12 @@ class SSEOutputHandler(OutputHandler):
             self._emit(
                 {
                     "type": "agent_error",
-                    "content": (
-                        "This chat ended while your approved step was waiting "
-                        "for the model, so it didn't run. Send your message "
-                        "again to retry."
-                    ),
+                    "content": (MODEL_RETAKE_FAILED_MESSAGE),
                     "fatal": True,
                 }
             )
             self.cancelled.set()
+            return False
         elif not self.cancelled.is_set() and self.on_model_regained is not None:
             try:
                 self.on_model_regained()
@@ -2210,8 +2366,10 @@ class SSEOutputHandler(OutputHandler):
                 # The model the turn needs is gone and can't be loaded:
                 # end the turn before the approved tool runs, and say why.
                 logger.error("Model check after the user answered failed: %s", exc)
-                self._emit({"type": "agent_error", "content": str(exc)})
+                self._emit({"type": "agent_error", "content": str(exc), "fatal": True})
                 self.cancelled.set()
+                return False
+        return None if self.cancelled.is_set() else True
 
     def _clear_pending_confirmation(self) -> None:
         """Drop the live prompt's slot so a later answer cannot resolve it."""
@@ -2504,15 +2662,45 @@ class SSEOutputHandler(OutputHandler):
             self._relay_question_id = request_id
 
     def set_relay_confirmation(
-        self, confirm_id: Optional[str], always_scope: Optional[str] = None
+        self,
+        confirm_id: Optional[str],
+        always_scope: Optional[str] = None,
+        path_access: Optional[str] = None,
     ) -> None:
         """Record (or clear, with ``None``) the sidecar prompt now pending.
 
         *always_scope* is what an "always" answer grants, when one is offered.
+        *path_access* is the path a path-access prompt asks to open.
         """
         with self._confirm_lock:
             self._relay_confirm_id = confirm_id
             self._relay_always_scope = always_scope if confirm_id else None
+            self._relay_path_access = path_access if confirm_id else None
+            if self._relay_confirm_timer is not None:
+                self._relay_confirm_timer.cancel()
+                self._relay_confirm_timer = None
+            # The sidecar's own bound is only a backstop; this is the one the card shows.
+            timeout = self.confirm_timeout_seconds
+            if confirm_id and timeout is not None:
+                timer = threading.Timer(
+                    timeout, self._expire_relay_confirmation, args=(confirm_id,)
+                )
+                timer.daemon = True
+                timer.start()
+                self._relay_confirm_timer = timer
+
+    def _expire_relay_confirmation(self, confirm_id: str) -> None:
+        """Tell the sidecar nobody answered *confirm_id* in time."""
+        from gaia.daemon.sidecars.errors import SidecarError
+
+        try:
+            self.resolve_relay_confirmation(False, confirm_id, timed_out=True)
+        except SidecarError as exc:
+            logger.warning(
+                "Could not tell the sidecar that prompt %s timed out: %s",
+                confirm_id,
+                exc,
+            )
 
     def relay_confirmation_pending(self, confirm_id: Optional[str] = None) -> bool:
         """Whether a sidecar prompt is pending; *confirm_id* must be that one."""
@@ -2528,15 +2716,27 @@ class SSEOutputHandler(OutputHandler):
                 return None
             return self._relay_always_scope
 
+    def relay_path_access(self, confirm_id: Optional[str]) -> Optional[str]:
+        """The path the pending prompt *confirm_id* asks to open, or None."""
+        with self._confirm_lock:
+            if not confirm_id or confirm_id != self._relay_confirm_id:
+                return None
+            return self._relay_path_access
+
     def resolve_relay_confirmation(
-        self, approved: bool, confirm_id: str, always: bool = False
+        self,
+        approved: bool,
+        confirm_id: str,
+        always: bool = False,
+        timed_out: bool = False,
     ) -> bool:
         """Hand the user's answer to the sidecar run parked on it.
 
         Returns ``False`` when *confirm_id* is not the prompt pending on a live
-        relayed run, or when *always* was not offered on it. Claimed under the
-        lock before the POST, so a double click cannot send two answers; a
-        sidecar rejection raises ``SidecarError``.
+        relayed run, or when *always* was not offered on it. *timed_out* says
+        nobody answered in time. Claimed under the lock before the POST, so a
+        double click cannot send two answers; a sidecar rejection raises
+        ``SidecarError``.
         """
         with self._confirm_lock:
             proxy = self.active_relay_proxy
@@ -2551,7 +2751,10 @@ class SSEOutputHandler(OutputHandler):
                 return False
             self._relay_confirm_id = None
             self._relay_always_scope = None
-        if always:
+            self._relay_path_access = None
+        if timed_out:
+            decision = "timeout"
+        elif always:
             decision = "always"
         else:
             decision = "allow" if approved else "deny"
@@ -2665,6 +2868,68 @@ def _first_line_summary(text: str) -> str:
     return f"{first} (+{len(lines) - 1} more lines)" if len(lines) > 1 else first
 
 
+def _entry_name(entry: Any) -> str:
+    """A listed file's display name: ``{"name": "a.py", "directory": "/src"}`` -> ``"a.py (/src)"``."""
+    if not isinstance(entry, dict):
+        return str(entry)
+    name = entry.get("name", entry.get("filename", entry.get("file_name", "")))
+    if not name and entry.get("file_path"):
+        name = str(entry["file_path"]).replace("\\", "/").rsplit("/", 1)[-1]
+    directory = entry.get("directory", "")
+    if directory and name:
+        return f"{name} ({directory})"
+    return str(name or directory)
+
+
+def _listing_summary(data: Dict[str, Any]) -> str:
+    """``{"files": [...], "directories": [...]}`` -> ``"Found 3 files and 2 folders: ..."``."""
+    files = data.get("file_list", data.get("files"))
+    files = files if isinstance(files, list) else []
+    folders = data.get("directories")
+    folders = folders if isinstance(folders, list) else []
+    count = data.get("count")
+    # "count" is the files a search matched, which may exceed the names it returned.
+    file_count = (
+        max(count, len(files))
+        if isinstance(count, int) and not isinstance(count, bool)
+        else len(files)
+    )
+    folder_count = len(folders)
+    total = data.get("total")
+    other = (
+        total - file_count - folder_count
+        if isinstance(total, int) and not isinstance(total, bool)
+        else 0
+    )
+    parts = [
+        format_count(n, noun)
+        for n, noun in (
+            (file_count, "files"),
+            (folder_count, "folders"),
+            (other, "other entries"),
+        )
+        if n > 0
+    ]
+    if not parts:
+        found = "no files or folders" if "directories" in data else "no files"
+    elif len(parts) == 1:
+        found = parts[0]
+    else:
+        found = ", ".join(parts[:-1]) + f" and {parts[-1]}"
+
+    names = [f"{_entry_name(d)}/" for d in folders[:5]]
+    names += [_entry_name(f) for f in files[: 5 - len(names)]]
+    names = [n for n in names if n and n != "/"]
+    display_msg = data.get("display_message", "")
+    if not names:
+        return display_msg or f"Found {found}"
+    listed = "\n".join(f"  {name}" for name in names)
+    hidden = file_count + folder_count - len(names)
+    if hidden > 0:
+        listed += f"\n  ... +{hidden} more"
+    return f"{display_msg}\n{listed}" if display_msg else f"Found {found}:\n{listed}"
+
+
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
@@ -2690,39 +2955,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
             return preview
         return "Command completed (no output)"
 
-    # File search results
+    # File search and folder listing results
     if "files" in data or "file_list" in data:
-        files = data.get("file_list", data.get("files", []))
-        count = data.get("count", len(files) if isinstance(files, list) else 0)
-        display_msg = data.get("display_message", "")
-        if isinstance(files, list) and files:
-            file_names = []
-            for f in files[:5]:
-                if isinstance(f, dict):
-                    name = f.get("name", f.get("filename", f.get("file_name", "")))
-                    # Fallback: extract filename from file_path if name keys are missing
-                    if not name and f.get("file_path"):
-                        name = f["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
-                    directory = f.get("directory", "")
-                    if directory and name:
-                        file_names.append(f"{name} ({directory})")
-                    elif name:
-                        file_names.append(name)
-                    elif directory:
-                        file_names.append(directory)
-                else:
-                    file_names.append(str(f))
-            result = "\n".join(f"  {name}" for name in file_names)
-            if count > 5:
-                result += f"\n  ... +{count - 5} more"
-            return (
-                (display_msg + "\n" + result)
-                if display_msg
-                else f"Found {count} file(s):\n{result}"
-            )
-        if display_msg:
-            return display_msg
-        return f"Found {count} file(s)"
+        return _listing_summary(data)
 
     # Search/query results with chunks
     if "chunks" in data:

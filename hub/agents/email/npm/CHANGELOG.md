@@ -2,10 +2,13 @@
 
 What's new in `@amd-gaia/agent-email`, in plain language. For the technical detail
 behind any entry — API shapes, endpoints, and version semantics — see
-[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.6.0/hub/agents/email/npm/SPEC.md).
+[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-0.6.0/hub/agents/email/npm/SPEC.md).
 
 ## [Unreleased]
 
+- **Warnings are marked as warnings.** A `status` event that warns the user now
+  carries `level: "warning"`, so a client can show it rather than treat it as
+  progress.
 - **Scheduled failures now tell you what happened (#5411).** A failed send, a failed snooze restore, and an interrupted send get different notices; an interrupted send warns that it may already have been delivered and tells you to check Sent before retrying.
 - **Private and memory-off email chats stay out of memory (#5482, schema 2.16).** `EmailQueryRequest` now accepts `memory: "on" | "private" | "off"`; private and memory-off turns stop the agent from reading or writing memory.
 - **The drafting eval's judge prefers your Claude Code login.** It now uses

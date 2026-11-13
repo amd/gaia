@@ -16,6 +16,9 @@ leak it into a scorecard.
 "no mailbox is connected" answer a new user gets. It is process-wide state,
 flipped only by the eval admin endpoint.
 
+Drafts and sends land in memory: a sent message gets the ``SENT`` label and joins
+the mailbox, and nothing leaves the process.
+
 Search implements Gmail's query grammar (AND by juxtaposition, ``OR``, ``{}``,
 ``-``, parentheses) and the operators an agent actually sends. An operator it
 cannot answer is an HTTP 400, never a silent empty result.
@@ -26,7 +29,11 @@ from ``tests/fixtures/email/fake_gmail.py``, the fake the email unit tests use.
 
 from __future__ import annotations
 
+import base64
+import email
 import importlib.util
+import itertools
+import json
 import logging
 import os
 import threading
@@ -38,7 +45,7 @@ from urllib.parse import parse_qs
 import httpx
 
 from gaia.agents.tools._email.errors import MailboxError
-from gaia.agents.tools._email.gmail import GMAIL_API_BASE, GmailReadBackend
+from gaia.agents.tools._email.gmail import GMAIL_API_BASE, GmailWriteBackend
 
 logger = logging.getLogger(__name__)
 
@@ -229,12 +236,15 @@ def _load_fake_gmail():
 
 
 class _FixtureGmailApi:
-    """Answers the Gmail API v1 GETs ``GmailReadBackend`` makes, from an mbox."""
+    """Answers the Gmail API v1 calls the Gmail backends make, from an mbox."""
 
     def __init__(self, mbox_path: Path) -> None:
         self._fake = _load_fake_gmail()
         self._store = self._fake.FakeGmailBackend(mbox_path, user_email=FIXTURE_ADDRESS)
         self._messages: Dict[str, Dict[str, Any]] = self._store._messages
+        self._drafts: Dict[str, str] = {}
+        self._ids = itertools.count(1)
+        self.sent: List[Dict[str, Any]] = []
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         prefix = httpx.URL(GMAIL_API_BASE).path
@@ -244,6 +254,10 @@ class _FixtureGmailApi:
         if parts[:2] != ["users", "me"]:
             return self._error(404, f"unknown path {path}")
         rest = parts[2:]
+        if request.method != "GET":
+            return self._write(request, rest)
+        if rest[:1] == ["drafts"]:
+            return self._read_draft(rest, query)
         if rest == ["profile"]:
             return httpx.Response(200, json={"emailAddress": FIXTURE_ADDRESS})
         if rest == ["labels"]:
@@ -273,6 +287,69 @@ class _FixtureGmailApi:
                 200, json=self._store.get_message(rest[1], format=fmt)
             )
         return self._error(404, f"unknown path {path}")
+
+    def _stored(self, request: httpx.Request, labels: List[str]) -> Dict[str, Any]:
+        """The ``raw`` message in *request*, parsed and added to the mailbox."""
+        resource = json.loads(request.content)
+        resource = resource.get("message", resource)
+        raw = resource["raw"]
+        parsed = email.message_from_bytes(
+            base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4))
+        )
+        message = self._fake.mbox_message_to_gmail_payload(parsed)
+        number = next(self._ids)
+        message["id"] = f"fixture-out-{number}"
+        message["threadId"] = resource.get("threadId") or message["id"]
+        message["labelIds"] = labels
+        self._messages[message["id"]] = message
+        return message
+
+    def _write(self, request: httpx.Request, rest: List[str]) -> httpx.Response:
+        method = request.method
+        if method == "POST" and rest == ["messages", "send"]:
+            message = self._stored(request, ["SENT"])
+            self.sent.append(message)
+            return httpx.Response(
+                200, json={"id": message["id"], "threadId": message["threadId"]}
+            )
+        if method == "POST" and rest == ["drafts"]:
+            message = self._stored(request, ["DRAFT"])
+            draft_id = f"fixture-draft-{next(self._ids)}"
+            self._drafts[draft_id] = message["id"]
+            return httpx.Response(200, json={"id": draft_id, "message": message})
+        if method == "POST" and rest == ["drafts", "send"]:
+            draft_id = json.loads(request.content)["id"]
+            if draft_id not in self._drafts:
+                return self._error(404, f"no draft {draft_id}")
+            message = self._messages[self._drafts.pop(draft_id)]
+            message["labelIds"] = ["SENT"]
+            self.sent.append(message)
+            return httpx.Response(
+                200, json={"id": message["id"], "threadId": message["threadId"]}
+            )
+        if len(rest) == 2 and rest[0] == "drafts" and rest[1] in self._drafts:
+            if method == "PUT":
+                del self._messages[self._drafts[rest[1]]]
+                message = self._stored(request, ["DRAFT"])
+                self._drafts[rest[1]] = message["id"]
+                return httpx.Response(200, json={"id": rest[1], "message": message})
+            if method == "DELETE":
+                del self._messages[self._drafts.pop(rest[1])]
+                return httpx.Response(204)
+        return self._error(404, f"unknown {method} {'/'.join(rest)}")
+
+    def _read_draft(
+        self, rest: List[str], query: Dict[str, List[str]]
+    ) -> httpx.Response:
+        if rest == ["drafts"]:
+            return httpx.Response(
+                200, json={"drafts": [{"id": did} for did in self._drafts]}
+            )
+        if len(rest) != 2 or rest[1] not in self._drafts:
+            return self._error(404, f"no draft {'/'.join(rest[1:])}")
+        fmt = (query.get("format") or ["full"])[0]
+        message = self._store.get_message(self._drafts[rest[1]], format=fmt)
+        return httpx.Response(200, json={"id": rest[1], "message": message})
 
     def _thread(self, thread_id: str) -> List[Dict[str, Any]]:
         return [
@@ -356,8 +433,8 @@ class _FixtureGmailApi:
         return httpx.Response(code, json={"error": body})
 
 
-def build_fixture_backend(mbox_path: str) -> GmailReadBackend:
-    """A ``GmailReadBackend`` whose HTTP calls are answered from ``mbox_path``."""
+def build_fixture_backend(mbox_path: str) -> GmailWriteBackend:
+    """A ``GmailWriteBackend`` whose HTTP calls are answered from ``mbox_path``."""
     path = Path(mbox_path).expanduser()
     if not path.is_file():
         raise MailboxError(
@@ -368,7 +445,9 @@ def build_fixture_backend(mbox_path: str) -> GmailReadBackend:
     api = _FixtureGmailApi(path)
     client = httpx.Client(transport=httpx.MockTransport(api.handle))
     logger.warning("email tools are reading the eval fixture mailbox %s", path)
-    return GmailReadBackend(lambda: "eval-fixture-token", http_client=client)
+    backend = GmailWriteBackend(lambda: "eval-fixture-token", http_client=client)
+    backend.fixture_api = api
+    return backend
 
 
 __all__ = [

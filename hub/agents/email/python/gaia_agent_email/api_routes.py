@@ -621,7 +621,6 @@ class EmailTriageService:
             model=model_id,
             use_local_llm=True,
             use_claude=False,
-            use_chatgpt=False,
             # Output cap (not input); context window governs what fits.
             # 4096 gives Gemma-4-E4B room for its reasoning chain + JSON.
             max_tokens=4096,

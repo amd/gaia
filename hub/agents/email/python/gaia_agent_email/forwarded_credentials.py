@@ -49,6 +49,18 @@ FORWARDED_MODE_ENV_VAR = "GAIA_EMAIL_FORWARDED_CREDENTIALS"
 _EXPIRY_BUFFER_SECONDS = 30.0
 
 
+class ForwardedTokenExpiredError(ConnectorsError):
+    """The forwarded token lapsed and the daemon has not re-forwarded one yet."""
+
+
+class ForwardedScopesMissingError(ConnectorsError):
+    """The forwarded token does not cover the scopes the caller needs."""
+
+    def __init__(self, message: str, missing_scopes: List[str]):
+        super().__init__(message)
+        self.missing_scopes = list(missing_scopes)
+
+
 def _all_scopes_for(provider: str) -> List[str]:
     """The FULL requested scope set for *provider* (#2730 D3/AC-9a) — used
     only to render a copy-pasteable remedy command. Deliberately ALL_SCOPES,
@@ -200,7 +212,7 @@ def get_forwarded_token(provider: str, scopes: List[str]) -> str:
             "the Agent UI. The daemon forwards a token on the next use."
         )
     if (cred.expires_at - time.time()) < _EXPIRY_BUFFER_SECONDS:
-        raise ConnectorsError(
+        raise ForwardedTokenExpiredError(
             f"the forwarded '{provider}' access token has expired and the daemon "
             "has not re-forwarded a fresh one yet. Retry in a moment; if it "
             f"persists, reconnect with `gaia connectors connect {provider} "
@@ -214,13 +226,14 @@ def get_forwarded_token(provider: str, scopes: List[str]) -> str:
         # overwrites rather than unions), so a "missing-only" suggestion would
         # silently drop the scopes already held on reconnect (#2603).
         suggested = sorted(set(cred.scopes) | set(scopes))
-        raise ConnectorsError(
+        raise ForwardedScopesMissingError(
             f"the forwarded '{provider}' token does not cover the required "
             f"scopes {missing}. Reconnect with those scopes in one command: "
             f"`gaia connectors connect {provider} --scopes "
             f"{' '.join(suggested)} --grant-agent installed:email` (or "
             "Settings -> Connectors in the Agent UI) so the daemon can "
-            "forward a token that covers them."
+            "forward a token that covers them.",
+            missing,
         )
     return cred.access_token
 
@@ -247,6 +260,8 @@ def reset() -> None:
 
 __all__ = [
     "FORWARDED_MODE_ENV_VAR",
+    "ForwardedScopesMissingError",
+    "ForwardedTokenExpiredError",
     "is_forwarding_enabled",
     "set_forwarded",
     "withdraw",

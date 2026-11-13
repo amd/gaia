@@ -255,7 +255,7 @@ jobs:
             grep -rnE "is_path_allowed|validate_write|validate_read|allowed_paths|trust_native|ensure_trust_ack|requires_trust_ack" src hub --include=*.py || true
             echo ""
             echo "## Electron / web UI sinks (renderer trust, IPC, HTML injection, external URLs)"
-            grep -rnE "nodeIntegration|contextIsolation|webSecurity|ipcMain\.(handle|on)|shell\.openExternal|dangerouslySetInnerHTML|innerHTML *=|\beval\(" src/gaia/apps src/gaia/electron --include=*.ts --include=*.tsx --include=*.js --include=*.cjs --include=*.mjs || true
+            grep -rnE "nodeIntegration|contextIsolation|webSecurity|ipcMain\.(handle|on)|shell\.openExternal|dangerouslySetInnerHTML|innerHTML *=|\beval\(" src/gaia/apps --include=*.ts --include=*.tsx --include=*.js --include=*.cjs --include=*.mjs || true
             echo ""
             echo "## Go TUI process / file sinks"
             grep -rnE "exec\.Command|os\.(WriteFile|RemoveAll|Rename)" tui --include=*.go --exclude=*_test.go || true
@@ -271,7 +271,7 @@ jobs:
       - name: Run Claude (${{ matrix.lens }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13  # v1.0.262
+        uses: anthropics/claude-code-action@61a9c274fa7110a66dfafc1bbbced03833eb25fe  # v1.0.269
         with:
           anthropic_api_key: ${{ needs.preflight.outputs.claude_account == 'none' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ needs.preflight.outputs.claude_account == 'secondary' && secrets.CLAUDE_CODE_OAUTH_TOKEN_SECONDARY || secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -305,7 +305,7 @@ jobs:
             1. Read `CLAUDE.md` (esp. "No Silent Fallbacks" and "Issue Response Guidelines" →
                never discuss vulnerability details publicly).
                Scope is every shipped language: Python (`src/`, `hub/`), the Go TUI (`tui/`),
-               the TypeScript/Electron Agent UI (`src/gaia/apps/`, `src/gaia/electron/`), the
+               the TypeScript/Electron Agent UI (`src/gaia/apps/`), the
                installer scripts, and `.github/workflows/` (untrusted event fields expanded
                into `run:`, privileged triggers, over-broad `permissions:`).
             2. Read `security-worklist.txt` — a deterministic list of suppressions, sinks, and

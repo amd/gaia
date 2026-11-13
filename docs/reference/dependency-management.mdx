@@ -10,7 +10,7 @@ Dependabot automatically monitors GAIA's dependencies and opens pull requests fo
 
 ## How GAIA uses Dependabot
 
-Dependabot is configured in [`.github/dependabot.yml`](https://github.com/amd/gaia/blob/main/.github/dependabot.yml) and runs every Monday across six entries: one for Python (`pip`), one for GitHub Actions, one for the TUI's Go module (`gomod`), and three for npm (the root workspace, the Agent UI, and one multi-directory entry for every other standalone npm package). Every entry has `open-pull-requests-limit: 5` — the prior `0` (soft-disabled) state was a "silent fallback" violation that's now retired by design ([#1157](https://github.com/amd/gaia/issues/1157)).
+Dependabot is configured in [`.github/dependabot.yml`](https://github.com/amd/gaia/blob/main/.github/dependabot.yml) and runs every Monday across six entries: one for Python (`pip`), one for GitHub Actions, one for the TUI's Go module (`gomod`), and three for npm (the root `package.json`, the Agent UI, and one multi-directory entry for every other standalone npm package). Every entry has `open-pull-requests-limit: 5` — the prior `0` (soft-disabled) state was a "silent fallback" violation that's now retired by design ([#1157](https://github.com/amd/gaia/issues/1157)).
 
 A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://github.com/amd/gaia/blob/main/.github/workflows/dependabot-automerge.yml) auto-merges low-risk Dependabot PRs once required status checks pass.
 
@@ -27,7 +27,7 @@ A companion workflow at [`.github/workflows/dependabot-automerge.yml`](https://g
 
 **Why grouping matters.** Each ecosystem uses a wildcard `groups:` stanza so that a week's worth of updates collapse into a single grouped PR per ecosystem. Without grouping, the `limit: 5` would be hit by five individual single-package PRs and the rest would queue — defeating the point of the cap.
 
-**Workspace coverage.** The root npm entry follows the workspaces declaration in `package.json` (`src/gaia/electron`, `src/gaia/apps/*/webui`), including the example Electron app. The flagship Agent UI at `src/gaia/apps/webui` is **not** matched by that glob (it sits directly under `apps/`, not under `apps/<name>/webui`) so it has its own entry above. Apps that match `src/gaia/apps/*/webui` should not carry a nested lockfile or a nested Dependabot entry.
+**Root package.** The root npm entry covers only the root `package.json`, which declares no workspaces. The flagship Agent UI at `src/gaia/apps/webui` has its own lockfile, so it has its own entry above.
 
 **Held-back versions.** The pip entry ignores `cryptography` 49 and later. `setup.py` keeps Intel Macs below 49 on purpose, because 49+ publishes no x86_64 macOS wheel and its source build needs Rust. Other platforms are uncapped, so they already get 49+ without a bump. Without the ignore, Dependabot would propose lifting that cap every week. Drop the ignore when cryptography ships an x86_64 macOS wheel again.
 

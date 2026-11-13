@@ -8,6 +8,10 @@ import sys
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
+    from gaia.env import unfreeze_loader_paths
+
+    # The loader read the bundle path at exec; children need the user's.
+    unfreeze_loader_paths(os.environ)
     from gaia.frozen import dispatch
 
     status = dispatch(sys.argv[1:])

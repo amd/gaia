@@ -76,10 +76,6 @@ class CodeAnalysis:
         """The distinct domains the code touches."""
         return {use.domain for use in self.domain_uses}
 
-    def levels_for(self, domain: str) -> set[str]:
-        """The distinct levels observed for one domain."""
-        return {use.level for use in self.domain_uses if use.domain == domain}
-
     def merge(self, other: "CodeAnalysis") -> "CodeAnalysis":
         """Combine two analyses (used to fold per-file results together)."""
         return CodeAnalysis(

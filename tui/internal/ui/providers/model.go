@@ -381,6 +381,13 @@ func loadCatalog(ctx context.Context, c *lemonade.Client, provider string) model
 		npu = readNPUVerdict(ctx)
 	}
 	entries, err := c.Catalog(ctx, provider, capacity, capErr, npu, added...)
+	if provider == "local" && err == nil {
+		chosen, cerr := readChosenModels()
+		if cerr != nil {
+			note = "The model you chose last isn't listed: " + cerr.Error()
+		}
+		entries = lemonade.OnlyProvenNPU(entries, chosen)
+	}
 	return modelsMsg{source: c, entries: entries, capacity: line, err: err, note: note}
 }
 
@@ -398,7 +405,7 @@ func readNPUVerdictFrom(ctx context.Context, api setupapi.API) lemonade.NPUVerdi
 	ctx, cancel := context.WithTimeout(ctx, planTimeout)
 	defer cancel()
 	plan, err := api.Plan(ctx)
-	if err != nil {
+	if err != nil || plan.NPU == nil {
 		return lemonade.NPUVerdict{}
 	}
 	reasons := make([]string, 0, len(plan.NPU.Problems))

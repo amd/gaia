@@ -26,16 +26,14 @@ func TestEnvOverrideWins(t *testing.T) {
 		lipgloss.SetHasDarkBackground(!tc.want)
 		t.Setenv(EnvTheme, tc.env)
 		Init()
-		if got := IsDark(); got != tc.want {
-			t.Errorf("GAIA_TUI_THEME=%q: IsDark()=%v, want %v", tc.env, got, tc.want)
+		if got := lipgloss.HasDarkBackground(); got != tc.want {
+			t.Errorf("GAIA_TUI_THEME=%q: dark=%v, want %v", tc.env, got, tc.want)
 		}
 	}
 }
 
 // An unset or unrecognised value must fall through to detection rather than
-// silently pinning a mode. IsDark() is defined in terms of
-// lipgloss.HasDarkBackground(), so comparing the two can never fail — this
-// pins a known mode first and asserts Init left it untouched instead.
+// silently pinning a mode: pin a known mode, then assert Init left it alone.
 func TestUnknownValueFallsBackToDetection(t *testing.T) {
 	restore := lipgloss.HasDarkBackground()
 	t.Cleanup(func() { lipgloss.SetHasDarkBackground(restore) })
@@ -43,7 +41,7 @@ func TestUnknownValueFallsBackToDetection(t *testing.T) {
 	lipgloss.SetHasDarkBackground(false)
 	t.Setenv(EnvTheme, "chartreuse")
 	Init()
-	if IsDark() != false {
+	if lipgloss.HasDarkBackground() {
 		t.Error("an unrecognised GAIA_TUI_THEME did not fall through to detection: " +
 			"it pinned a mode instead of leaving the existing one alone")
 	}

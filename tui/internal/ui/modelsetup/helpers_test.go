@@ -105,6 +105,30 @@ func flmOnly() setupapi.Plan {
 	return labelled(p)
 }
 
+// The two reasons memory_fit gives an FLM model, verbatim: the PC has no NPU,
+// or it has one that isn't set up. Both block; only the second implies a fix.
+const (
+	noNpuReason    = "runs on a Ryzen AI NPU, and Lemonade reports none on this PC"
+	notReadyReason = "needs this PC's NPU set up first: Locked-memory limit is too low. Raise the limit"
+)
+
+// flmBlocked is the same FLM model on a PC whose NPU isn't set up: the backend
+// marks it unfit with the "npu" code and no memory numbers, as memory_fit does.
+func flmBlocked() setupapi.Plan { return flmBlockedWith(notReadyReason) }
+
+func flmBlockedWith(reason string) setupapi.Plan {
+	p := small16()
+	e := f.Entry(flm, chat, 2.1, true, false, false, f.Bool(false), 0, 0)
+	recipe := "flm"
+	e.Recipe = &recipe
+	e.GaiaModel = false
+	e.NeedGB, e.CapacityGB = nil, nil
+	e.FitCode = f.Str("npu")
+	e.FitReason = f.Str(reason)
+	p.Catalog = append(p.Catalog, e)
+	return labelled(p)
+}
+
 // gpuShared is a 128 GB Strix Halo whose GPU gets 24 GB now: the setting
 // (16 GB) plus what the driver adds, so a setting and the GPU memory it gives
 // are different numbers, as on real hardware.

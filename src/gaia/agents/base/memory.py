@@ -61,6 +61,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Set,
     Tuple,
 )
 from uuid import uuid4
@@ -80,6 +81,7 @@ from gaia.agents.base.memory_store import (
     MemoryContentError,
     MemoryScrubError,
     content_stems,
+    fact_words,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
 from gaia.agents.base.tool_outcome import (
@@ -90,6 +92,7 @@ from gaia.agents.base.tool_outcome import (
 )
 from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import TOKEN_SHAPES
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     EMBED_MAX_CHARS,
@@ -98,6 +101,7 @@ from gaia.llm.lemonade_client import (
     backend_crash_remedy,
     configured_lemonade_url,
     find_model_requirement,
+    reasoning_headroom,
 )
 from gaia.llm.reasoning import strip_reasoning
 from gaia.llm.retry import (
@@ -306,7 +310,11 @@ _STABLE_PERSONAL_SECTIONS = (
     ("preference", "Preferences"),
     ("fact", "Known facts"),
     ("skill", "Skills"),
-    ("error", "Problems seen before (may be fixed since; check again when asked)"),
+    (
+        "error",
+        "Problems seen before (GAIA's own notes, not about the user; "
+        "may be fixed since; check again when asked)",
+    ),
     ("reminder", "Reminders on file (bring up only when relevant)"),
     ("note", "Notes"),
 )
@@ -439,9 +447,9 @@ def _forget_shared(words: set, content: str) -> set:
     }
 
 
-def _forget_text(item: Dict) -> str:
-    """*item*'s words in order, for telling copies of one memory apart."""
-    return " ".join(re.findall(r"[a-z0-9]+", str(item.get("content", "")).lower()))
+def _forget_text(item: Dict) -> Tuple[str, ...]:
+    """*item*'s words bar filler, for telling copies of one memory apart."""
+    return fact_words(str(item.get("content", "")))
 
 
 _FORGET_SENTENCE = re.compile(r"[^.!?\n]+[.!?]*")
@@ -579,6 +587,104 @@ _STORAGE_REQUEST = re.compile(
     r"|log\s+(?:it|this|that)|add\b[^.?!]{0,40}\bmemory)\b",
     re.IGNORECASE,
 )
+#: The storage requests that mean "keep this in memory", not a file or a reminder.
+_KEEP_IN_MEMORY = re.compile(
+    r"remember|memori[sz]e|don'?t\s+forget"
+    r"|keep\s+(?:(?:it|this|that|them)\s+)?in\s+mind"
+    r"|(?:save|store|add)\b[^.?!\n]{0,40}\bmemory\b"
+    r"|make\s+a\s+note(?![^.?!\n]{0,60}?(?:\w\.[a-z0-9]{2,5}\b"
+    r"|\b(?:files?|readme|folder|document)\b))|learn\s+about\s+me",
+    re.IGNORECASE,
+)
+#: After the verb, what makes it a recall question ("remember what I said"), a
+#: reminder ("remember to call") or a login option ("remember me"), not a fact.
+_NOT_A_FACT = re.compile(
+    r"\s+(?:what|which|when|where|who|whom|whether|if|how|why|to|me)\b",
+    re.IGNORECASE,
+)
+#: How much of a paragraph is read for a request; a long paste is material.
+_REQUEST_SCAN_CHARS = 500
+#: Sent once when a turn that was asked to keep something ends without saving it.
+SAVE_WHEN_ASKED_PROMPT = (
+    "The user asked you to remember this, but no remember call ran, so nothing "
+    "was saved. Call `remember` now with what they asked you to keep, then give "
+    "your answer."
+)
+
+
+def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
+    """What remember tells the model after saving without a bad optional argument.
+
+    Opens with "Saved": the model repeats a tool result's first words to the user.
+    """
+    parts = ["Saved."]
+    if "category" in ignored:
+        name = ignored["category"]
+        why = (
+            f"a chat can't write the '{name}' category"
+            if name in VALID_CATEGORIES
+            else f"'{name}' is not a category"
+        )
+        parts.append(
+            f"Filed as a fact: {why} "
+            f"(use one of {sorted(EXTRACTABLE_CATEGORIES)}), so it was ignored."
+        )
+    if "due_at" in ignored:
+        parts.append(
+            f"No due date was set: '{ignored['due_at']}' is not an ISO 8601 "
+            "date, so there is no reminder yet. To add one, call "
+            f"update_memory(knowledge_id='{knowledge_id}', due_at=...) with a "
+            "date like 2026-11-20T09:00."
+        )
+    return " ".join(parts)
+
+
+def _own_words(text: str) -> List[str]:
+    """The paragraphs where a user gives instructions: the first, and the last
+    unless the first introduces what follows ("Translate this letter:")."""
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    if len(paragraphs) > 1:
+        introduces = paragraphs[0].endswith(":")
+        paragraphs = paragraphs[:1] if introduces else [paragraphs[0], paragraphs[-1]]
+    return [p[:_REQUEST_SCAN_CHARS] for p in paragraphs]
+
+
+_SENTENCE_END = re.compile(r"[.?!\n]|$")
+
+
+def _is_material(part: str, start: int) -> bool:
+    """True when the words at *start* are text the user is handing over, not
+    saying: after a colon ("Explain this quote: Remember that…") or in quotes."""
+    before = part[:start]
+    return (
+        part[start] == ":"
+        or before.count('"') % 2 == 1
+        or before.count("\N{LEFT DOUBLE QUOTATION MARK}")
+        > before.count("\N{RIGHT DOUBLE QUOTATION MARK}")
+    )
+
+
+def asks_to_keep_in_memory(text: str) -> bool:
+    """True when *text* asks the agent to remember something it says."""
+    for part in _own_words(text or ""):
+        for request in _STORAGE_REQUEST.finditer(part):
+            end = _SENTENCE_END.search(part, request.end())
+            verb = _KEEP_IN_MEMORY.search(part, request.start())
+            if (
+                verb
+                and verb.start() < request.end()
+                and not _is_material(part, request.start())
+                and not _NOT_A_FACT.match(part, verb.end())
+                # "Can you remember my dog's name?" asks; "…remember that I…?" tells.
+                and (
+                    part[end.start() : end.end()] != "?"
+                    or re.match(r"\s+(?:that|this)\b", part[verb.end() :], re.I)
+                )
+            ):
+                return True
+    return False
+
+
 #: A short yes, which confirms a save the agent was refused and asked about.
 _AFFIRMATIVE = re.compile(
     r"^\W*(?:yes|yeah|yep|yup|sure|ok(?:ay)?|go ahead|do it|please do|fine"
@@ -1064,6 +1170,15 @@ def _classify_embedding_failure(exc: Exception) -> str:
     if any(marker in text for marker in _MODEL_LOAD_FAILED_MARKERS):
         return MEMORY_UNAVAILABLE_MODEL_LOAD_FAILED
     return MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE
+
+
+#: What remember / update_memory say when they refuse a secret. Unsaid, the
+#: model took "not stored" as "gone" and denied a secret still on screen.
+_CREDENTIAL_NOT_STORED = (
+    "Not stored — this looks like a credential (API key, password, or similar "
+    "secret). GAIA does not keep secrets in memory, so a new chat won't know "
+    "it. The user's message is still in this chat, as it was sent."
+)
 
 
 class MemoryMixin(ProceduralMemoryMixin):
@@ -2286,10 +2401,12 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
             pool_by_id = {item["id"]: item for item in candidate_pool}
 
-            # Preserve FAISS ranking order, only keep items that pass filters
+            # Preserve FAISS ranking order, only keep items that pass filters.
+            # The embedding BLOB is for the index; results go to the model.
             for kid, _score in faiss_hits:
                 item = pool_by_id.get(kid)
                 if item is not None:
+                    item.pop("embedding", None)
                     vector_results.append(item)
 
         # Step 3: FTS5 BM25 search
@@ -3442,7 +3559,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                     messages=[{"role": "user", "content": prompt}],
                     system_prompt="You are a memory reconciliation engine. Return valid JSON only.",
                     temperature=0.1,
-                    max_tokens=256,
+                    max_tokens=256
+                    + reasoning_headroom(getattr(self.chat, "effective_model", None)),
                     **self._side_request_kwargs(),
                 )
 
@@ -3519,11 +3637,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                         e,
                     )
 
-            except json.JSONDecodeError:
-                logger.debug(
-                    "[MemoryMixin] reconciliation JSON parse failed for pair %s/%s",
+            except json.JSONDecodeError as e:
+                logger.warning(
+                    "[MemoryMixin] reconciliation reply for pair %s/%s was not JSON "
+                    "(%s) — it will be re-checked next startup",
                     id_a[:8],
                     id_b[:8],
+                    e,
                 )
             except Exception as e:
                 logger.debug(
@@ -4395,14 +4515,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     _CREDENTIAL_PATTERNS: ClassVar[tuple] = tuple(
         re.compile(p, re.IGNORECASE)
         for p in (
-            r"\bsk-ant-[a-zA-Z0-9_-]{10,}",  # Anthropic API key
-            r"\bsk-[a-zA-Z0-9_-]{20,}",  # OpenAI-style API key
-            r"\bgh[pousr]_[a-zA-Z0-9]{20,}",  # GitHub token (ghp_/gho_/ghu_/ghs_/ghr_)
-            r"\bgithub_pat_[a-zA-Z0-9_]{20,}",  # GitHub fine-grained PAT
-            r"\bAKIA[0-9A-Z]{16}\b",  # AWS access key id
-            r"\bAIza[0-9A-Za-z_-]{20,}",  # Google API key
-            r"\bxox[baprs]-[a-zA-Z0-9-]{10,}",  # Slack token
-            r"\bglpat-[a-zA-Z0-9_-]{20,}",  # GitLab PAT
+            *TOKEN_SHAPES,
             r"\bBearer\s+[a-zA-Z0-9._-]{20,}",  # raw Bearer token
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
@@ -4568,6 +4681,23 @@ class MemoryMixin(ProceduralMemoryMixin):
         masked.append(text[cursor:])
         return "".join(masked)
 
+    def _unsaved_memory_request(self, tools_called: Set[str]) -> Optional[str]:
+        """The nudge to save, when the user asked to remember and nothing was saved."""
+        # A private chat saves nothing: remember would only refuse.
+        if getattr(self, "_incognito", False):
+            return None
+        # A scheduled or background prompt repeats: only a live request counts.
+        if getattr(getattr(self, "console", None), "background_mode", False):
+            return None
+        if "remember" not in getattr(self, "_tools_registry", {}):
+            return None
+        if tools_called & {"remember", "update_memory"}:
+            return None
+        text = getattr(self, "_original_user_input", None) or ""
+        if not asks_to_keep_in_memory(text) or self._looks_like_credential(text):
+            return None
+        return SAVE_WHEN_ASKED_PROMPT
+
     @classmethod
     def _looks_like_credential(cls, text: str) -> bool:
         """True when *text* looks like it carries a credential (conservative).
@@ -4725,11 +4855,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         from gaia.agents.base.project_map import resolve_project_root
         from gaia.agents.tools.search_scope import path_validator_of
+        from gaia.agents.tools.workspace_paths import _workspace_default
 
-        # Same explicit config ProjectMapMixin passes, so lessons and the
-        # project map can never describe two different trees.
+        # Same explicit config and start folder ProjectMapMixin passes, so
+        # lessons and the project map can never describe two different trees.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
-        root = resolve_project_root(explicit)
+        root = resolve_project_root(explicit, start=_workspace_default(self))
         if root:
             return root
         validator = path_validator_of(self)
@@ -5646,13 +5777,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
+            # A bad label must not lose the fact: save without it and say so.
+            ignored: Dict[str, str] = {}
+            # Privileged categories too: those rows lead every prompt, so a
+            # chat can't write one, but the fact itself is kept.
             if category not in EXTRACTABLE_CATEGORIES:
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}"
-                    ),
-                }
+                ignored["category"] = category
+                category = "fact"
 
             if category == "error" and MemoryMixin._is_unlearnable_error(fact):
                 return {
@@ -5694,11 +5825,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
                 return {
                     "status": "skipped",
-                    "message": (
-                        "Not stored — this looks like a credential (API key, "
-                        "password, or similar secret). GAIA does not keep "
-                        "secrets in memory; use a password manager instead."
-                    ),
+                    "message": _CREDENTIAL_NOT_STORED
+                    + " Use a password manager instead.",
                 }
 
             if category not in UNSOURCED_CATEGORIES and mixin._unrequested_material(
@@ -5715,10 +5843,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 try:
                     datetime.fromisoformat(due_at)
                 except ValueError:
-                    return {
-                        "status": "error",
-                        "message": "Invalid due_at. Use ISO 8601 format.",
-                    }
+                    ignored["due_at"] = due_at
+                    due_at = ""
 
             # The agent owns scoping. A label the model picks can file a
             # memory where no later session reads it.
@@ -5754,14 +5880,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
 
             msg = f"Remembered: {fact[:80]}"
+            if ignored:
+                msg = f"{_saved_despite(ignored, knowledge_id)} {msg}"
             if was_truncated:
                 msg += f" (note: content was truncated to {MAX_CONTENT_LENGTH} chars)"
-            return {
+            result = {
                 "status": "stored",
                 "stored": 1,
                 "knowledge_id": knowledge_id,
                 "message": msg,
             }
+            if ignored:
+                result["ignored"] = ignored
+            return result
 
         @tool
         def recall(
@@ -5780,7 +5911,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             With query=, runs hybrid semantic + keyword search. Without it,
             lists every entry matching the filters — use that to list, browse,
             or count rather than to find one specific memory. A bare recall()
-            lists recent non-sensitive rows.
+            lists the recent non-sensitive memories about the user, the ones
+            Memory > About you shows.
 
             Args:
                 query: Free-text search; enables hybrid search mode.
@@ -5916,6 +6048,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 page = mixin._memory_store.get_all_knowledge(
                     context=context or None,
                     sensitive=False if unfiltered else None,
+                    # Matches Memory > About you, which the user can see and forget.
+                    about_user=unfiltered,
                     limit=limit,
                     offset=offset,
                 )
@@ -5926,7 +6060,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 results = page.get("items", [])
                 if unfiltered:
                     withheld = mixin._memory_store.get_all_knowledge(
-                        context=context or None, sensitive=True, limit=1
+                        context=context or None,
+                        sensitive=True,
+                        about_user=True,
+                        limit=1,
                     ).get("total", 0)
 
             total_ms = (time.perf_counter() - _recall_t0) * 1000
@@ -5996,11 +6133,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                     )
                     return {
                         "status": "skipped",
-                        "message": (
-                            "Not stored — this looks like a credential (API "
-                            "key, password, or similar secret). GAIA does not "
-                            "keep secrets in memory."
-                        ),
+                        "message": _CREDENTIAL_NOT_STORED,
                     }
                 # Untruncated: the store checks it for markup, then truncates.
                 kwargs["content"] = content
@@ -6096,15 +6229,18 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Remove one memory: its ID from recall, or the user's words for it (e.g. 'allergic to shellfish'). Words erase only the one memory they clearly match; otherwise nothing is erased and the matching IDs come back. To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
+            ctx = mixin._memory_context
+            contexts = None if ctx == "global" else (ctx, "global")
             try:
                 # forget(), not delete(): extraction must not learn it again.
-                removed = mixin._memory_store.forget(knowledge_id)
+                erased_ids = mixin._memory_store.forget_with_copies(
+                    knowledge_id, contexts
+                )
             except ValueError as exc:
                 return {"status": "error", "message": str(exc)}
             matches: List[Dict] = []
             candidates: List[Dict] = []
-            erased_ids = [knowledge_id] if removed else []
-            if not removed:
+            if not erased_ids:
                 description = knowledge_id
                 try:
                     matches, candidates = mixin._forget_lookup(description)
@@ -6120,8 +6256,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                         "display_message": "Couldn't search memory, so nothing was erased",
                     }
                 for item in matches:
-                    if mixin._memory_store.forget(item["id"]):
-                        erased_ids.append(item["id"])
+                    if item["id"] not in erased_ids:
+                        erased_ids += mixin._memory_store.forget_with_copies(
+                            item["id"], contexts
+                        )
             if erased_ids:
                 for kid in erased_ids:
                     mixin._faiss_remove(kid)

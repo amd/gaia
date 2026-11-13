@@ -36,6 +36,8 @@ GOOGLE_SPEC = ConnectorSpec(
         "profile",
         "https://www.googleapis.com/auth/gmail.readonly",
         "https://www.googleapis.com/auth/gmail.send",
+        # gmail.compose lets the flagship draft and send without gmail.modify.
+        "https://www.googleapis.com/auth/gmail.compose",
         # gmail.modify is required by the email triage agent (#962) for label
         # mutations, archive, trash/untrash, and starring. Listed in
         # available_scopes so the per-agent grant ledger will accept the

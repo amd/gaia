@@ -393,9 +393,7 @@ def test_a_frozen_build_still_reads_the_claude_key_from_the_working_dir(
     gaia_env.load_env()
 
     assert gaia_env.credential("ANTHROPIC_API_KEY") == "project-key"
-    assert gaia_env.working_dir_credential_file("ANTHROPIC_API_KEY") == str(
-        project / ".env"
-    )
+    assert gaia_env.dotenv_credential_file("ANTHROPIC_API_KEY") == str(project / ".env")
     assert "ANTHROPIC_API_KEY" not in os.environ
 
 

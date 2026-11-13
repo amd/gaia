@@ -340,6 +340,55 @@ class TestRunInit(unittest.TestCase):
         self.assertEqual(result, 1)
 
 
+class TestInitProfilePersistence(unittest.TestCase):
+    """`gaia init` exits non-zero when it can't save the profile (#3954)."""
+
+    def _run(self, update):
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(
+            profile="minimal", yes=True, skip_models=True, skip_webui_build=True
+        )
+        with (
+            patch.object(InitCommand, "_print_header"),
+            patch.object(InitCommand, "_print"),
+            patch.object(InitCommand, "_print_step"),
+            patch.object(InitCommand, "_choose_lemonade", return_value=True),
+            patch.object(InitCommand, "_ensure_lemonade_ready", return_value=True),
+            patch.object(InitCommand, "_ensure_llamacpp_backend", return_value=True),
+            patch.object(InitCommand, "_verify_setup", return_value=True),
+            patch.object(
+                InitCommand, "_print_completion", return_value=True
+            ) as completion,
+            patch.object(InitCommand, "_print_error") as print_error,
+            # Never touch the real ~/.gaia/config.json during a test.
+            patch("gaia.config.GaiaConfig.update", update),
+        ):
+            rc = cmd.run()
+        return rc, print_error, completion
+
+    def test_saved_profile_exits_zero(self):
+        update = MagicMock()
+        rc, print_error, completion = self._run(update)
+
+        self.assertEqual(rc, 0)
+        update.assert_called_once()
+        print_error.assert_not_called()
+        completion.assert_called_once()
+
+    def test_unsaved_profile_exits_one_and_says_why(self):
+        update = MagicMock(side_effect=OSError("disk full"))
+        rc, print_error, completion = self._run(update)
+
+        self.assertEqual(rc, 1)
+        print_error.assert_called_once()
+        message = print_error.call_args.args[0]
+        self.assertIn("Failed to save profile 'minimal'", message)
+        self.assertIn("disk full", message)
+        self.assertIn("gaia config set profile minimal", message)
+        completion.assert_not_called()
+
+
 class TestInitProfiles(unittest.TestCase):
     """Test init profile definitions."""
 
@@ -1314,6 +1363,50 @@ class TestCheckSetupStatus(unittest.TestCase):
             "http://localhost:51234/api/v1",
         )
 
+    def test_unreadable_model_list_is_a_server_problem_not_missing_models(self):
+        """#8058: a model list in the wrong shape made a finished install read
+        as first-run setup, with every downloaded model "not downloaded"."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                return_value={"object": "list", "data": "x"},
+            ) as send,
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "server")
+        self.assertTrue(status.model_list_unread)
+        self.assertFalse(any("not downloaded" in r for r in status.reasons))
+        self.assertIn("expected shape", status.reasons[0])
+        self.assertEqual(status.to_json()["model_list_unread"], True)
+        self.assertTrue(send.call_args.args[1].endswith("/models?show_all=true"))
+
+    def test_a_server_gone_before_its_model_list_is_not_a_bad_list(self):
+        """Dying between /health and /models is an outage, not a bad list."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                side_effect=LemonadeClientError("connection refused"),
+            ),
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "server")
+        self.assertFalse(status.model_list_unread)
+
     AGENT_MISSING = "The GAIA agent is not installed -- run: gaia init"
 
     def _check_with_models(self, profile="gaia", have=True, **kwargs):
@@ -1467,12 +1560,27 @@ class TestCheckSetupStatus(unittest.TestCase):
         name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
         return gaia_home() / "bin" / name
 
-    def _install_terminal_agent(self, mode=0o755):
-        """What install.sh / install.ps1 leave: the agent in GAIA's bin dir, no sentinel."""
+    def _install_terminal_agent(self, mode=0o755, record=True):
+        """What install.sh / install.ps1 leave: the agent in GAIA's bin dir and
+        its install record beside it, no sentinel."""
+        import hashlib
+        import json
+
         path = self._terminal_agent_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"\x7fELF")
         path.chmod(mode)
+        if record:
+            (path.parent / "gaia-agent.install.json").write_text(
+                json.dumps(
+                    {
+                        "id": "gaia",
+                        "version": "0.3.9",
+                        "sha256": hashlib.sha256(b"\x7fELF").hexdigest(),
+                    }
+                ),
+                encoding="utf-8",
+            )
         return path
 
     def test_terminal_installer_agent_is_ready(self):
@@ -1486,6 +1594,32 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertFalse(status.agent_missing)
         self.assertEqual(status.reasons, [])
         self.assertEqual(status.warnings, [])
+
+    def test_terminal_installer_agent_without_a_record_is_not_ready(self):
+        """#7187: the daemon cannot verify a copy with no install record, so the
+        check must not count it either."""
+        self._remove_flagship()
+        self._install_terminal_agent(record=False)
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+
+    def test_a_tampered_terminal_installer_agent_is_not_ready(self):
+        self._remove_flagship()
+        self._install_terminal_agent().write_bytes(b"\x7fELF-replaced")
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+
+    def test_a_corrupt_terminal_install_record_is_not_ready(self):
+        self._remove_flagship()
+        path = self._install_terminal_agent()
+        (path.parent / "gaia-agent.install.json").write_text("{not json")
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
 
     def test_terminal_installer_agent_never_asks_the_hub(self):
         self._remove_flagship()
@@ -1515,7 +1649,7 @@ class TestCheckSetupStatus(unittest.TestCase):
     def _frozen_at(self, directory):
         """Run the check as the frozen gaia in *directory*."""
         name = "gaia.exe" if sys.platform == "win32" else "gaia"
-        frozen = patch("gaia.installer.init_command.is_frozen", return_value=True)
+        frozen = patch("gaia.frozen.is_frozen", return_value=True)
         exe = patch.object(sys, "executable", str(directory / name))
         frozen.start()
         exe.start()
@@ -2133,6 +2267,72 @@ class TestDiagnoseLaunchpadOutage(unittest.TestCase):
         "urllib.error.HTTPError: HTTP Error 500: Internal Server Error\n"
         "ERROR: b'GPGKeyTemporarilyNotFoundError'\n"
     )
+
+    # Trimmed from CI on 2026-11-11: add-apt.log, then apt-update.log.
+    ADD_APT_API_TIMEOUT = (
+        "Traceback (most recent call last):\n"
+        '  File "/usr/bin/add-apt-repository", line 452, in <module>\n'
+        "    sys.exit(0 if addaptrepo.main() else 1)\n"
+        '  File "/usr/lib/python3/dist-packages/softwareproperties/ppa.py", '
+        "line 111, in lp\n"
+        '  File "/usr/lib/python3/dist-packages/launchpadlib/launchpad.py", '
+        "line 494, in login_anonymously\n"
+        '  File "/usr/lib/python3/dist-packages/httplib2/__init__.py", '
+        "line 1139, in connect\n"
+        "    sock.connect((self.host, self.port))\n"
+        "TimeoutError: [Errno 110] Connection timed out\n"
+    )
+    APT_UPDATE_ONLINE = (
+        "Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]\n"
+        "Hit:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease\n"
+        "Hit:6 https://packages.microsoft.com/ubuntu/24.04/prod noble InRelease\n"
+        "Reading package lists...\n"
+    )
+
+    def test_launchpad_api_timeout_is_named_as_an_outage(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        message = diagnose_launchpad_outage(
+            self.ADD_APT_API_TIMEOUT + self.APT_UPDATE_ONLINE
+        )
+        self.assertIn("could not reach Launchpad", message)
+        self.assertIn("TimeoutError: [Errno 110] Connection timed out", message)
+        self.assertNotIn("Traceback", message)
+
+    def test_dropped_connection_names_the_last_error(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        dropped_then_timed_out = (
+            "http.client.RemoteDisconnected: Remote end closed connection "
+            "without response\n"
+            "During handling of the above exception, another exception occurred:\n"
+            + self.ADD_APT_API_TIMEOUT
+            + self.APT_UPDATE_ONLINE
+        )
+        message = diagnose_launchpad_outage(dropped_then_timed_out)
+        self.assertIn("Connection timed out", message)
+        self.assertNotIn("RemoteDisconnected", message)
+
+    def test_timeout_on_an_offline_machine_is_not_blamed_on_launchpad(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        offline = (
+            "Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]\n"
+            "Err:2 http://azure.archive.ubuntu.com/ubuntu noble InRelease\n"
+            "  Temporary failure resolving 'azure.archive.ubuntu.com'\n"
+        )
+        self.assertIsNone(diagnose_launchpad_outage(self.ADD_APT_API_TIMEOUT + offline))
+
+    def test_timeout_outside_launchpadlib_is_not_blamed_on_launchpad(self):
+        from gaia.installer.lemonade_installer import diagnose_launchpad_outage
+
+        elsewhere = (
+            "Traceback (most recent call last):\n"
+            '  File "/usr/lib/python3/dist-packages/urllib3/connection.py", '
+            "line 199, in _new_conn\n"
+            "TimeoutError: [Errno 110] Connection timed out\n"
+        )
+        self.assertIsNone(diagnose_launchpad_outage(elsewhere + self.APT_UPDATE_ONLINE))
 
     def test_index_outage_blames_launchpad_not_apt(self):
         from gaia.installer.lemonade_installer import diagnose_launchpad_outage

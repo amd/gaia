@@ -12,7 +12,7 @@ turns:
   user_message: What's the PTO policy for first-year employees? I need to know how
     many days we get.
   expected_tools:
-  - search_files
+  - search_file
   - index_document
   - query_specific_file
   ground_truth:

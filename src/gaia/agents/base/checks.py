@@ -417,6 +417,27 @@ def _output(stdout: Any, stderr: Any) -> str:
     return "\n".join(s for s in (stdout, stderr) if isinstance(s, str))
 
 
+# Trailing pieces that change how much output is shown or where it goes, never
+# what ran: "| tail -40", "| head", "| tee log", "| Select-Object -Last 20",
+# "2>&1", "> out.txt". A filter that drops lines by content (grep) is not one.
+_OUTPUT_TRIM_RE = re.compile(
+    r"(?:\s*\|\s*(?:tail|head|tee|more|less|out-string|out-host"
+    r"|select-object\s+-(?:first|last))(?:\s+[^|;&<>]*)?"
+    r"|\s+\d?>>?\s*(?:&\d|[^\s|;&<>]+))\s*$",
+    re.IGNORECASE,
+)
+
+
+def command_check_target(command: str) -> str:
+    """What a shell check ran: *command* without its trailing output trimming."""
+    command = " ".join(command.split())
+    while True:
+        trimmed = _OUTPUT_TRIM_RE.sub("", command)
+        if trimmed == command or not trimmed:
+            return command
+        command = trimmed
+
+
 def check_from_command(
     command: str,
     segments: Sequence[Sequence[str]],
@@ -441,7 +462,7 @@ def check_from_command(
     summary = found[1] if found else ""
     return CheckResult(
         label=label,
-        target=" ".join(command.split()),
+        target=command_check_target(command),
         kind=check_kind(label),
         passed=return_code == 0 and not summary_reports_failure(summary),
         summary=summary,

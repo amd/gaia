@@ -392,9 +392,9 @@ type ChatModel struct {
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
 	// panel implemented only in the root model is absent there — which is why
-	// /help did nothing at all on that path. Under the hub, root intercepts
-	// ToggleHelpMsg before it reaches here and this stays closed, so the two
-	// never both draw.
+	// /help did nothing at all on that path. Under the root model, root
+	// intercepts ToggleHelpMsg before it reaches here and this stays closed, so
+	// the two never both draw.
 	help components.HelpState
 
 	// palette is the "/" command palette's open/selected state. Its filter
@@ -515,6 +515,16 @@ type ChatModel struct {
 	// answer lives in `gaia slack decline`; this only stops a duplicate inside
 	// one run.
 	slackOffered bool
+	// discordSetup is the in-flight Discord setup: the token prompt, then the
+	// pairing step it watches. Nil when no setup is open.
+	discordSetup *discordSetupState
+	// discordOffered stops a second launch-time offer within one run.
+	discordOffered bool
+	// automationRefs are the ids /automations last listed, so
+	// "/automations pause 2" changes the one the user saw as 2.
+	automationRefs []string
+	// automationNames maps each listed name, lower-cased, to its id.
+	automationNames map[string]string
 	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
 	// setupRunning.
 	setupCancel context.CancelFunc
@@ -606,9 +616,8 @@ func NewChatModelForFlagship(c client.AgentClient, agentID, agentName string, de
 	return m.applyFirstBootGate()
 }
 
-// NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
-// CanReturnToHub) for a real catalog agent, so agentID is the catalog id
-// rather than NewChatModel's default of the display name.
+// NewChatModelForCatalogAgent creates a standalone ChatModel for a real catalog
+// agent, so agentID is the catalog id rather than NewChatModel's display name.
 func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
@@ -697,6 +706,8 @@ func (m ChatModel) Init() tea.Cmd {
 		// Whether it actually shows is `gaia slack status`'s decision, not
 		// ours -- this only asks.
 		cmds = append(cmds, querySlackCmd(true /* offer */))
+		// Brings back a Discord bridge set to autostart, then may offer setup.
+		cmds = append(cmds, launchDiscordCmd())
 	}
 	if m.startup.pending && !m.setupChecking {
 		cmds = append(cmds, startupModelCmd())
@@ -1032,6 +1043,33 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case slackStatusMsg:
 		return m.handleSlackStatus(msg)
 
+	case discordStatusMsg:
+		return m.handleDiscordStatus(msg)
+
+	case discordConnectedMsg:
+		return m.handleDiscordConnected(msg)
+
+	case discordActionMsg:
+		return m.handleDiscordAction(msg)
+
+	case discordPollMsg:
+		return m.handleDiscordPoll(msg)
+
+	case discordDeclinedMsg:
+		return m.handleDiscordDeclined(msg)
+
+	case automationsListMsg:
+		return m.handleAutomationsList(msg)
+
+	case connectorsListMsg:
+		return m.handleConnectorsList(msg)
+
+	case connectorsActivatedMsg:
+		return m.handleConnectorsActivated(msg)
+
+	case connectorsRevokedMsg:
+		return m.handleConnectorsRevoked(msg)
+
 	case updateCheckedMsg:
 		return m.handleUpdateChecked(msg)
 
@@ -1204,6 +1242,12 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m.handleSlackSetupAnswer(msg.RequestID, msg.Value)
 		}
+		if isDiscordSetupQuestion(msg.RequestID) {
+			// The bot token must never reach the agent or the transcript.
+			m.question = nil
+			m.updateViewport()
+			return m.handleDiscordSetupAnswer(msg.RequestID, msg.Value)
+		}
 		m.messages = append(m.messages, Message{
 			Role:    RoleUser,
 			Content: q.AnswerLabel(msg.Value),
@@ -1275,6 +1319,14 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
 			Content: copyHint(msg.label, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
+	case mediaActionResultMsg:
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: mediaStatus(msg.path, msg.action, msg.err),
 		})
 		m.updateViewport()
 		return m, nil
@@ -1608,6 +1660,12 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case tea.KeyCtrlF:
+		return m, m.mediaActionCmd("open")
+
+	case tea.KeyCtrlG:
+		return m, m.mediaActionCmd("reveal")
+
 	case tea.KeyCtrlV:
 		// Reaches here only when the terminal did NOT already turn this into a
 		// bracketed paste above — most terminals bind Ctrl+V to their own paste
@@ -1837,6 +1895,15 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
+	if isSkillsCommand(query) {
+		return m.submitSkillsCommand(query)
+	}
+	if isConnectorsPersonalize(query) {
+		return m.startConnectorsPersonalize(query)
+	}
+	if isConnectorsRevoke(query) {
+		return m.startConnectorsRevoke(query)
+	}
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {
 			// Same shape as setFullAccess's capability check (fullaccess.go): refuse
@@ -1919,6 +1986,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/gateway":
 		return m, func() tea.Msg { return OpenGatewayMsg{} }
+
+	case "/sessions":
+		return m, func() tea.Msg { return OpenSessionsMsg{} }
+
+	case "/sessions all":
+		return m, func() tea.Msg { return OpenSessionsMsg{AllKinds: true} }
 
 	case "/clear":
 		return m.clearConversation()
@@ -2013,6 +2086,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	case "/slack":
 		return m.startSlackCheck()
 
+	case "/connectors":
+		return m.startConnectorsList()
+
 	case "/slack setup":
 		if m.slackSetup != nil {
 			return m.statusNote("Slack setup is already open — answer it, or press Esc."), nil
@@ -2024,6 +2100,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/slack never":
 		return m, declineSlackCmd(true)
+	}
+	if query == "/discord" || strings.HasPrefix(query, "/discord ") {
+		return m.handleDiscordCommand(query)
+	}
+	if isAutomationsCommand(query) {
+		return m.handleAutomationsCommand(query)
 	}
 
 	return m.sendQuery(query)
@@ -2518,6 +2600,7 @@ func (m *ChatModel) syncViewportHeight(chrome int) {
 
 	m.confirmRows = 0
 	if m.confirmation != nil {
+		m.confirmation.SetMaxRows(budget - 1)
 		m.confirmRows = lipgloss.Height(m.confirmation.View())
 		// The transcript keeps at least one row. Past that the modal is
 		// clipped rather than allowed to push the composer and status bar off
@@ -3764,15 +3847,7 @@ func (m ChatModel) View() string {
 	// empty, which it never is here, and the step count already rides the hint
 	// under --dev. Passing it kept a second renderer for one number alive, one
 	// that would print it in user mode the day the hint did come back empty.
-	barState := components.StatusBarState{
-		AgentName:        m.agentIdentity(),
-		Connected:        m.connected,
-		Streaming:        m.streaming,
-		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
-		Preparing:        m.warming || m.startup.inFlight,
-	}
-	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
-	statusBar := components.RenderStatusBar(barState, m.width)
+	statusBar := m.renderStatusBar()
 
 	// The full access banner sits OUTSIDE the viewport, directly under the header,
 	// so it is in every frame and cannot be scrolled away. When full access is off
@@ -3949,4 +4024,17 @@ func (m ChatModel) coreVersionSuffix() string {
 // renderIdentityChip is agentIdentity styled as a header segment.
 func (m ChatModel) renderIdentityChip() string {
 	return lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentIdentity())
+}
+
+// renderStatusBar is the one-row bar at the foot of the chat screen.
+func (m ChatModel) renderStatusBar() string {
+	barState := components.StatusBarState{
+		AgentName:        m.agentIdentity(),
+		Connected:        m.connected,
+		Streaming:        m.streaming,
+		AwaitingDecision: m.confirmation != nil && m.confirmation.Pending(),
+		Preparing:        m.warming || m.startup.inFlight,
+	}
+	barState.Hint = fitHints(m.statusHints(), m.hintBudget())
+	return components.RenderStatusBar(barState, m.width)
 }

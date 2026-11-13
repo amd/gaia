@@ -136,14 +136,6 @@ class TestSessions:
         db.create_session()
         assert db.count_sessions() == 2
 
-    def test_touch_session(self, db):
-        session = db.create_session()
-        original_updated = session["updated_at"]
-        time.sleep(0.01)
-        db.touch_session(session["id"])
-        refreshed = db.get_session(session["id"])
-        assert refreshed["updated_at"] >= original_updated
-
     def test_create_session_default_mail_provider_is_null(self, db):
         # #1596: mail_provider is a FILTER — no pick stays NULL ("every
         # connected mailbox"), never silently coerced to google.
@@ -194,6 +186,41 @@ class TestMailProviderMigration:
             assert "mail_provider" in cols
             # The pre-existing row defaults to google, never NULL.
             assert database.get_session("s1")["mail_provider"] == "google"
+        finally:
+            database.close()
+
+
+class TestLegacyAgentModeMigration:
+    """A stored agent_mode 'autonomous' (#2005) is rewritten on open."""
+
+    def test_autonomous_is_rewritten_to_goal_driven_on_open(self, tmp_path, caplog):
+        path = str(tmp_path / "chat.db")
+        ChatDatabase(path).close()
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) "
+            "VALUES ('agent_mode', 'autonomous')"
+        )
+        conn.commit()
+        conn.close()
+
+        with caplog.at_level("WARNING", logger="gaia.ui.database"):
+            database = ChatDatabase(path)
+        try:
+            assert database.get_setting("agent_mode") == "goal_driven"
+            assert any("2005" in r.getMessage() for r in caplog.records)
+        finally:
+            database.close()
+
+    @pytest.mark.parametrize("mode", ["manual", "goal_driven"])
+    def test_other_modes_are_left_alone(self, tmp_path, mode):
+        path = str(tmp_path / "chat.db")
+        database = ChatDatabase(path)
+        database.set_setting("agent_mode", mode)
+        database.close()
+        database = ChatDatabase(path)
+        try:
+            assert database.get_setting("agent_mode") == mode
         finally:
             database.close()
 

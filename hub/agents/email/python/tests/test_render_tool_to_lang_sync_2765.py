@@ -42,14 +42,22 @@ from gaia.ui.sse_handler import SSEOutputHandler  # noqa: E402
 
 
 class TestRenderToolToLangMapsStayInSync:
-    def test_render_tool_to_lang_maps_differ_only_by_the_pre_scan_card(self):
+    def test_render_tool_to_lang_maps_differ_only_by_known_cards(self):
         """The two maps are deliberately no longer identical: the TUI drops
         the pre-scan card so the triage reply is its single inbox view, while
-        the Agent UI — a different surface, not retested here — keeps it.
-        Pinned as an explicit, single-key difference so any OTHER drift still
-        fails."""
+        the Agent UI — a different surface, not retested here — keeps it. The
+        guide and calculator cards come from the flagship's bundled guides and
+        calculators skills, which the email agent never loads. Pinned as an
+        explicit difference so any OTHER drift still fails."""
         assert set(SSEOutputHandler._RENDER_TOOL_TO_LANG) - set(_SIDECAR_MAP) == {
-            "pre_scan_inbox"
+            "pre_scan_inbox",
+            "guides/show_recipe",
+            "guides/show_workout",
+            "guides/show_how_to",
+            "guides/show_checklist",
+            "guides/show_itinerary",
+            "calculators/show_tip_calculator",
+            "calculators/show_loan_calculator",
         }
         assert not set(_SIDECAR_MAP) - set(SSEOutputHandler._RENDER_TOOL_TO_LANG)
         for tool, lang in _SIDECAR_MAP.items():

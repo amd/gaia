@@ -33,10 +33,10 @@ which is **not** the v2 contract below.
 
 This document defines two things and freezes the boundary between them:
 
-1. **The target wire contract** (§3–§5) — the nine canonical event types plus
-   the `/query` request body. Integrators depend on this and nothing else.
+1. **The target wire contract** (sections 3 to 5): the ten canonical event types
+   plus the `/query` request body. Integrators depend on this and nothing else.
 2. **The translation map** (§6) — a total, source-exhaustive mapping from the
-   in-process handler's vocabulary onto the nine canonical types, so the v2
+   in-process handler's vocabulary onto the ten canonical types, so the v2
    translation layer (built in #2016) can be implemented with **no source event
    left unmapped**.
 
@@ -89,7 +89,7 @@ net-new agent instrumentation.
 | `surface` | `"agent_ui"` \| `"tui"` \| `"cli"` | no | **Flagship (`gaia`) only, contract ≥ 2.20** — identifies the front-end so provider errors and feature wording fit the caller. Omit for headless callers. |
 | `internet_off` | boolean | no | **Flagship (`gaia`) only, contract ≥ 2.23** — when true, blocks tools and commands that contact another host for this retained session. Send it every turn when the caller owns the setting; omit it to retain the current mode. |
 | `working_directory` | string (absolute path) | no | **Flagship (`gaia`) only, contract ≥ 2.24** — chat workspace for resolving relative file paths. It is separate from `allowed_paths`, which controls access. Relative paths are rejected with 422. |
-| `turns` | array of arrays of objects | no | **Flagship (`gaia`) only, contract ≥ 2.25** — earlier turns as the model saw them, including tool calls and results. Send `turns` instead of `context`; `context` must then be `[]`. `turns: []` clears retained history and enables `final.model_messages`. |
+| `turns` | array of arrays of objects | no | **Flagship (`gaia`) only, contract ≥ 2.25**: earlier turns as the model saw them, including tool calls and results. Send `turns` instead of `context`; `context` must then be `[]`. `turns: []` clears retained history and enables `final.model_messages` and the pre-answer `context_usage` event (contract ≥ 2.28). |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -208,20 +208,22 @@ as "no documents are indexed" about a file the user can see attached.
 
 ---
 
-## 4. The nine canonical event types
+## 4. The ten canonical event types
 
 The contract is exactly these `type` values (design §0.2 — the original seven,
-plus `needs_input` added as an additive MINOR by #2469, and `reasoning`, sent
-only on request, by contract 2.22). No others are valid on
+plus `needs_input` added as an additive MINOR by #2469, `reasoning`, sent
+only on request, by contract 2.22, and `context_usage`, streamed before the
+answer by contract 2.28). No others are valid on
 the wire; a receiver applies the §7 unknown-type rule to anything else.
 
 | `type` | Payload | UI effect |
 |---|---|---|
-| `status` | `{message, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place |
+| `status` | `{message, level?, phase?, words?, chars?, queue?, retracts_answer?}` (§4.4; the stdio transport adds model fields, §10.3) | progress line / spinner label. `level: "warning"` means the agent is warning the user (for example, configured MCP servers were dropped): show it as a warning, not only as the live line. `retracts_answer: true` (phase `answer_restart`) means the reply was cut off and the step starts over: drop the `token` text since the last `tool_call` and show `message` in its place |
 | `token` | `{delta}` | stream assistant text |
 | `reasoning` | `{delta, retracts_answer?}` | stream the model's reasoning, apart from the answer. Sent only when the request asked for it (`reasoning: true`, contract ≥ 2.22); pieces keep their own spacing, so a client joins them as they come. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning (a model whose template opened the block sends only `</think>`): drop it from the answer shown so far |
 | `tool_call` | `{tool, args}` | "using tool" card |
 | `tool_result` | `{tool, render?, data}` | if `render` set (e.g. `email_pre_scan`), draw the typed card from `data`; else a generic result card |
+| `context_usage` | `{window, used, turns_in_view, turns_hidden, ...}` | update the composer's context meter; **not terminal**. The sidecar streams it before the answer for a caller that sent `turns` (contract ≥ 2.28), in the same shape an in-process turn streams at turn start, so the meter fills during a long turn instead of waiting for `final` |
 | `needs_confirmation` | `{run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context?, confirm_url?}` | show approve/deny; on approve continue per §0.4. **Terminal** under the stateless model. `risk` is `read`, `write`, `execute` or `destructive` — what the call does, read from its arguments; absent when the agent has no reading, and the client then labels by tool. `args` is the gated call's arguments exactly as the model sent them, each value capped at 64,000 characters (`args_truncated: true` when one was cut): `summary` shortens long code, so a client shows `args` to let the user read all of it, and a policy client matches its rules on `args` alone. What the agent adds to the prompt goes in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say it) and `risk_note` (why the agent's checks don't cover the call) |
 | `needs_input` | `{run_id, request_id, question, options, allow_free_text, sensitive?, respond_url, timeout_seconds?}` | show the question and its options; POST the answer to `respond_url`. **Not terminal** — the run resumes on the same stream (§5.1) |
 | `final` | `{answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?}` | finalize the message; terminal. `failed: true` means a model failure ended the turn and `answer` explains what happened and what is unfinished — record the run as failed, not done. `failure: "model_server_down"` means the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `performance` reports measured turn timings, `context` reports the context-meter payload, `context_error` explains why that measurement was unavailable, and `model_messages` carries the model-facing trace when the caller sent `turns` (contract >= 2.25) |
@@ -241,6 +243,7 @@ indistinguishable from a dead one.
   "properties": {
     "type":    { "const": "status" },
     "message": { "type": "string" },
+    "level":   { "const": "warning" }, // optional; absent for progress lines
     "phase":   { "type": "string" },   // optional, §4.4
     "words":   { "type": "integer" },  // with phase "reasoning"
     "chars":   { "type": "integer" },  // with phase "tool_call"
@@ -337,6 +340,18 @@ indistinguishable from a dead one.
     "retracts_answer": { "type": "boolean" }  // the tokens since the last tool_call were this reasoning
   } }
 
+// context_usage (contract >= 2.28; not terminal)
+{ "type": "object",
+  "required": ["type", "window", "used"],
+  "properties": {
+    "type":          { "const": "context_usage" },
+    "window":        { "type": "integer" },  // the model's admitted context, in tokens
+    "used":          { "type": "integer" },  // what the next call holds, by kind
+    "turns_in_view": { "type": "integer" },  // earlier turns the model still sees
+    "turns_hidden":  { "type": "integer" },  // earlier turns it no longer sees
+    "model":         { "type": "string" }    // present on the `final.context` copy
+  } }  // carries the whole breakdown; a meter reads these keys and ignores the rest
+
 // final
 { "type": "object", "additionalProperties": false,
   "required": ["type", "answer"],
@@ -378,7 +393,7 @@ unknown `render` degrades to the generic result card (see §7).
 
 ### 4.3 Generic render primitives (#2108)
 
-Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers six
+Beyond agent-specific keys like `email_pre_scan`, the Agent UI registers eight
 **generic primitives** any agent can emit on `tool_result.render` without
 shipping its own frontend component. `data` must match the schema for the key:
 
@@ -390,6 +405,14 @@ shipping its own frontend component. `data` must match the schema for the key:
 | `image` | `{ src: string, alt?: string, caption?: string, path?: string }` |
 | `audio` | `{ src: string, caption?: string, path?: string, duration_seconds?: number }` — added (additive, MINOR) for generated music and sound effects (#540) |
 | `diff` | `{ title?: string, unified: string }` — a unified-diff text; lines are styled by their `+` / `-` / `@@` prefix |
+| `guide` | `{ kind: "guide", guideType: "recipe"\|"workout"\|"howto"\|"checklist"\|"itinerary", title: string, description: string, notes: string, servings: integer\|null, items: string[], steps: string[] }` — `items` are the ingredients, equipment, materials, checklist entries or packing list; `steps` are the recipe steps, exercises, how-to steps or one line per day ("Day 1 - Lisbon: …"), and `[]` for a checklist; `servings` is set only for a recipe. The bundled `guides` skill's `guides/show_recipe`, `guides/show_workout`, `guides/show_how_to`, `guides/show_checklist` and `guides/show_itinerary` emit it |
+| `calculator` | `{ kind: "calculator", calculator: "tip", title: string, currency: string, inputs: { bill: number, tipPercent: number, people: integer } }` or `{ kind: "calculator", calculator: "loan", title: string, currency: string, inputs: { amount: number, annualRatePercent: number, years: number, downPayment: number } }` — starting numbers only; the card computes the tip, total and per-person share, or the monthly payment, total paid and interest, and recomputes as the person edits them. `title` may be `""`; `currency` is an ISO 4217 code such as `"EUR"`. The bundled `calculators` skill's `calculators/show_tip_calculator` and `calculators/show_loan_calculator` emit it |
+
+One more key is not a primitive an agent picks, but the host's own:
+
+| `render` | `data` schema |
+|---|---|
+| `connect_account` | `{ kind: "connect_account", providers: string[], agent_id?: string, reconnect?: string[], success: boolean, status: "ok"\|"error", display_message: string }` — a tool found no usable account. `providers` are connector ids to offer a Connect button for, and only `google`, `microsoft` and `microsoft_work` are allowed: a card naming any other connector is dropped, not drawn; `agent_id` is the namespaced agent that gets access when sign-in completes; a host starts sign-in with no scopes and that agent in `grant_agents`, so consent covers only what the agent declares, and sends the user to Settings › Connectors when the agent does not declare the connector. `reconnect` lists the providers that were connected already (an expired or under-scoped connection), so a host does not read their being connected as the fix. Any tool whose result carries a `connect_card` object gets it (the mail and calendar tools add one when the caller's `surface` is `agent_ui`), so the button never depends on what the model writes. `success`, `status` and `display_message` repeat the tool's outcome for a host that derives the tool row from `data` |
 
 Rules every receiver implements and every producer can rely on:
 
@@ -613,7 +636,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 > `grep '"type":"..."'` over `sse_handler.py` returns 18 strings, but two of
 > them — `file_list` and `search_results` — are **nested** `result_data.type`
 > values *inside* a `tool_result` event, not top-level event types. The handler
-> emits **16 distinct top-level event types** (listed below), plus the `None`
+> emits **17 distinct top-level event types** (listed below), plus the `None`
 > queue sentinel (stream close, not a wire event).
 
 ### 6.1 The four clean maps (named in the issue)
@@ -629,7 +652,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 
 | Source event | Emitters (`sse_handler.py`) | Decision | → Canonical | Rationale |
 |---|---|---|---|---|
-| `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, drop the `status`/`steps`/`elapsed` sub-fields (progress-only). |
+| `status` | `print_processing_start`, `print_goal`, `print_warning`, `print_info`, `start_progress`, `print_repeated_tool_warning`, `print_completion`, confirm-timeout | **map** | `status` | Already the canonical shape; keep `message`, carry `status: "warning"` as `level: "warning"`, drop the other `status` values and the `steps`/`elapsed` sub-fields (progress-only). |
 | `step` | `print_step_header` | **fold** | `status` | Step counter is progress narration; render as a `status` line (e.g. `"Step 3/20"`). No dedicated canonical type. |
 | `thinking` | `print_thought`, `print_streaming_text` (`<think>…</think>`) | **fold** / **map** | `status`, or `reasoning` | Reasoning narration, not final assistant text — never `token` (which is answer text the UI commits to the message). Folds to `status` unless the request set `reasoning: true` (contract ≥ 2.22), which maps it to `reasoning` unchanged, `retracts_answer` included. See §9 Q1, now resolved. |
 | `commentary` | `_emit` (before a `tool_start`) | **drop** | — | Re-derived from the `token` text by the receiving host's own handler, so the sidecar's copy would double it. |
@@ -642,6 +665,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 | `user_input_request` | `request_user_input_blocking` | **map** | `needs_input` | `request_id`/`message`/`options`/`choices`/`allow_free_text`/`sensitive`/`timeout_seconds` map straight across; `choices` strings become `{value, label}` options so a bare choice list is still pickable. `respond_url` is derived from `run_id`. (Was folded into `needs_confirmation` before #2469 — see §9 Q3, now resolved.) |
 | `tool_confirm_denied` | `confirm_tool_execution` (background mode) | **fold** | `status` | Unattended auto-deny is informational — the run continues and the agent retries. Surface the actionable `message` as a `status` line, not an `error` (the run did not fail). |
 | `skill_use` | `print_skill_use` | **fold** | `status` | "Using skill: _name_" when GAIA loaded the skill for one of its `loads_with` tools, or it was already loaded. Dropped when the model called `load_skill` itself, which already went out as a `tool_call`. |
+| `context_usage` | `_restore_model_history` (`_chat_helpers.py`) | **map** | `context_usage` | Already the canonical shape, streamed at turn start; passed through unchanged. A caller that sends `turns` gets the same event from the sidecar before its answer (contract ≥ 2.28). |
 | `agent_created` | `print_agent_created` | **drop** | — | Registry-refresh signal with no chat-stream meaning. Must move to a **host control channel**, not the `/query` event stream. Dropping it here is a contract decision, not a silent loss — call it out in #2016. |
 | `None` (queue sentinel) | `signal_done` | **n/a** | *stream close* | Not a wire event. The canonical stream ends after the terminal `final`/`error`; the sentinel maps to closing the `text/event-stream` response. |
 
@@ -823,8 +847,34 @@ turns (and their estimated tokens) no longer replayed to the model, and
 `message` is the line the TUI keeps in the transcript. It is sent only when more
 turns are hidden than in the last reported view (the newest turn moved the cut,
 or a smaller model or longer prompt shrank the budget), so a stable cut is
-reported once.
+reported once. The model is told on every such turn, not once: the oldest user
+message it is sent opens with a one-sentence note that earlier turns exist and
+are no longer shown.
 
-Over stdio the agent never sends `tool_result.render`,
-`needs_confirmation.confirm_url` or `error.source`. The TUI decodes them for
-other transports, and it sets `source` itself on an error it synthesizes.
+### 10.4 Session listing
+
+Launched with `--history-file <dir>/<id>.sqlite3 --session-kind <kind>`, the
+agent keeps a listing beside the transcript so a host can show and reopen the
+session without reading SQLite. `<id>.json` holds `version`, `id`, `title` (the
+first line of the first question), `kind`, `status`, `created_at`, `updated_at`,
+`pid` and `turns`, and is replaced atomically on every change. `status` is
+`running` while a turn runs, `waiting` while it is parked on a
+`needs_confirmation`, then `done` or `failed` by the turn's terminal event; `pid`
+is cleared to 0 on a clean exit. `<id>.jsonl` gains one line per finished turn:
+`{"user", "answer"}` or `{"user", "error"}`. `clear_conversation` empties it.
+The agent holds an exclusive lock on the first byte of `<id>.lock` for its whole
+life; that lock, not `pid`, is how a host tells an open session from a closed
+one, since it dies with the process and a reused pid cannot fake it. Reopening
+a session takes the lock and rewrites `<id>.json` at once (a status left at
+`running` or `waiting` becomes `failed`); if another process still holds the
+lock after a short wait (a host's probe takes and drops it), the agent refuses
+to start. `<id>` must be hex, as the TUI mints it.
+Only real turns move the listing — sentinels and `/model` do not. Without
+`--session-kind` nothing is written. The TUI passes `chat`; other launchers name
+their own kind (`eval`, `scheduled`), which the TUI hides by default.
+
+Over stdio the agent never sends `needs_confirmation.confirm_url` or
+`error.source`. The TUI decodes them for other transports, and it sets `source`
+itself on an error it synthesizes. It does send `tool_result.render` for the
+card tools (`guide`, `calculator`), and the TUI draws both: every line of a
+guide, and a calculator's results computed from its starting numbers.

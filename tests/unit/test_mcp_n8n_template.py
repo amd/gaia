@@ -94,3 +94,14 @@ def test_every_node_hits_a_route_and_tool_the_bridge_serves(node, bridge_url):
         schema = bridge.tools[tool_name]["inputSchema"]
         assert set(schema.get("required", [])) <= set(arguments), node["name"]
         assert set(arguments) <= set(schema["properties"]), node["name"]
+
+
+def test_connections_link_nodes_by_name():
+    """n8n links nodes by name; an id here imports as an unconnected node."""
+    workflow = json.loads(TEMPLATE.read_text(encoding="utf-8"))
+    names = {node["name"] for node in workflow["nodes"]}
+    for source, outputs in workflow["connections"].items():
+        assert source in names
+        for branch in outputs["main"]:
+            for target in branch:
+                assert target["node"] in names

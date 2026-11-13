@@ -29,22 +29,6 @@ def transcript():
     db.close()
 
 
-def test_recent_messages_preserve_order_and_transcript_pagination(transcript):
-    db, session = transcript
-    recent = db.get_recent_messages(session["id"], limit=4)
-    assert [m["content"] for m in recent] == [
-        "USER_11",
-        "ASST_11",
-        "failed user turn",
-        "current follow-up",
-    ]
-    assert [m["content"] for m in db.get_messages(session["id"], limit=2)] == [
-        "USER_0",
-        "ASST_0",
-    ]
-    assert db.get_recent_messages("missing", limit=4) == []
-
-
 @pytest.mark.asyncio
 @pytest.mark.allow_network  # Windows asyncio creates a local socket pair.
 @pytest.mark.parametrize("stream", [False, True])

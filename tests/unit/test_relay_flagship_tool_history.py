@@ -278,6 +278,9 @@ def test_turns_are_fitted_to_the_window_and_the_cut_is_shown(
     last = agent.seen[-1]
     # Whole turns only, oldest dropped first: each kept question has its answer.
     questions = _turn_questions(last)
+    # The oldest question still sent carries the note that turns were left out.
+    assert questions[0].startswith(history.HIDDEN_TURNS_NOTE)
+    questions[0] = questions[0].removeprefix(history.HIDDEN_TURNS_NOTE).strip()
     assert questions and "q0" not in questions
     assert questions == [f"q{i}" for i in range(4)][-len(questions) :]
     for q in questions:

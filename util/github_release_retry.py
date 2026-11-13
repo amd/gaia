@@ -20,7 +20,22 @@ from typing import Callable, Sequence
 
 
 class RateLimited(RuntimeError):
-    """The GitHub API asked the caller to retry later."""
+    """The GitHub API asked the caller to retry later.
+
+    ``reset`` is the epoch second a spent budget refills and ``retry_after`` the
+    seconds GitHub asked for, when the response named either.
+    """
+
+    def __init__(
+        self,
+        detail: str = "",
+        *,
+        reset: int | None = None,
+        retry_after: int | None = None,
+    ) -> None:
+        super().__init__(detail)
+        self.reset = reset
+        self.retry_after = retry_after
 
 
 class ReleaseError(RuntimeError):
@@ -58,9 +73,38 @@ def _run(args: Sequence[str], timeout: int = _GH_CALL_TIMEOUT_SECONDS) -> str:
     if completed.returncode == 0:
         return completed.stdout
     detail = (completed.stderr or completed.stdout).strip()
-    if _is_rate_limit_error(detail):
+    # A spent budget can surface as "release not found": gh prefers that message
+    # when its REST lookup is refused and its GraphQL draft lookup finds none.
+    if _is_rate_limit_error(detail) or core_budget_reset() is not None:
         raise RateLimited(detail)
     raise ReleaseError(f"gh {' '.join(args)} failed: {detail}")
+
+
+def core_budget_reset() -> int | None:
+    """Epoch second the token's spent core API budget resets, else None.
+
+    None also when the budget cannot be read: the caller then reports the
+    original failure. /rate_limit is not charged, so this works on a spent budget.
+    """
+    try:
+        done = subprocess.run(
+            ["gh", "api", "rate_limit", "--jq", ".resources.core"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        core = json.loads(done.stdout)
+        if int(core["remaining"]) > 0:
+            return None
+        return int(core["reset"])
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 def _rate_reset_delay() -> int | None:
@@ -70,13 +114,8 @@ def _rate_reset_delay() -> int | None:
     must use the bounded exponential backoff rather than sleeping until an
     unrelated core reset.
     """
-    try:
-        raw = _run(["api", "rate_limit", "--jq", ".resources.core"])
-        core = json.loads(raw)
-        if int(core["remaining"]) > 0:
-            return None
-        reset = int(core["reset"])
-    except (KeyError, RateLimited, ReleaseError, TypeError, ValueError):
+    reset = core_budget_reset()
+    if reset is None:
         return None
     return max(1, reset - int(time.time()))
 

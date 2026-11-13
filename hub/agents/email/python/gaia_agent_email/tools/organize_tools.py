@@ -530,6 +530,44 @@ def _coerce_ids(message_ids):
     return []
 
 
+def _record_applied(
+    db,
+    mid: str,
+    *,
+    action_type: str,
+    batch_id: str,
+    mailbox: str | None,
+    thread_id: str | None = None,
+    payload: dict | None = None,
+    payload_fn=None,
+) -> dict:
+    """Log an already-applied change; a log failure leaves it applied but not undoable."""
+    try:
+        aid = action_store.record_action(
+            db,
+            action_type=action_type,
+            message_id=mid,
+            thread_id=thread_id,
+            payload=payload_fn() if payload_fn is not None else payload,
+            batch_id=batch_id,
+            mailbox=mailbox,
+        )
+    except Exception as exc:
+        log.warning(
+            "%s applied to %s but its undo record was not saved: %s: %s",
+            action_type,
+            mid,
+            type(exc).__name__,
+            exc,
+        )
+        return {
+            "message_id": mid,
+            "action_id": None,
+            "undo_error": f"{type(exc).__name__}: {exc}",
+        }
+    return {"message_id": mid, "action_id": aid}
+
+
 def _run_batch(
     resolve_backend,
     db,
@@ -570,19 +608,21 @@ def _run_batch(
             else:
                 op_args_eff, payload_eff = op_args, dict(payload or {})
             getattr(backend, op_name)(mid, *op_args_eff)
-            aid = action_store.record_action(
-                db,
-                action_type=action_type,
-                message_id=mid,
-                payload=dict(payload_eff),
-                batch_id=batch_id,
-                mailbox=action_mailbox(mid) if action_mailbox else None,
-            )
-            succeeded.append({"message_id": mid, "action_id": aid})
         except Exception as exc:
             failed.append({"message_id": mid, "error": f"{type(exc).__name__}: {exc}"})
             if debug:
                 log.exception("batch op failed for %s", mid)
+            continue
+        succeeded.append(
+            _record_applied(
+                db,
+                mid,
+                action_type=action_type,
+                payload=dict(payload_eff),
+                batch_id=batch_id,
+                mailbox=action_mailbox(mid) if action_mailbox else None,
+            )
+        )
     return {"succeeded": succeeded, "failed": failed}
 
 
@@ -614,20 +654,22 @@ def _run_batch_with_prior(
             msg = backend.get_message(mid)
             prior = prior_fn(msg)
             op_result = backend_op(backend, mid)
-            aid = action_store.record_action(
-                db,
-                action_type=action_type,
-                message_id=mid,
-                thread_id=msg.get("threadId"),
-                payload=payload_fn(msg, prior, op_result),
-                batch_id=batch_id,
-                mailbox=action_mailbox(mid) if action_mailbox else None,
-            )
-            succeeded.append({"message_id": mid, "action_id": aid})
         except Exception as exc:
             failed.append({"message_id": mid, "error": f"{type(exc).__name__}: {exc}"})
             if debug:
                 log.exception("batch op (with prior) failed for %s", mid)
+            continue
+        succeeded.append(
+            _record_applied(
+                db,
+                mid,
+                action_type=action_type,
+                thread_id=msg.get("threadId"),
+                payload_fn=lambda: payload_fn(msg, prior, op_result),
+                batch_id=batch_id,
+                mailbox=action_mailbox(mid) if action_mailbox else None,
+            )
+        )
     return {"succeeded": succeeded, "failed": failed}
 
 
@@ -636,6 +678,9 @@ def _batch_envelope(
 ) -> str:
     """Per-item results; an error envelope when every message failed."""
     failed = result["failed"]
+    not_undoable = [
+        s for s in result["succeeded"] if isinstance(s, dict) and s.get("undo_error")
+    ]
     data = {
         "batch_id": batch_id,
         "total": len(message_ids),
@@ -644,13 +689,26 @@ def _batch_envelope(
         "succeeded": result["succeeded"],
         "failed": failed,
     }
+    summary = []
     if failed:
         reasons = "; ".join(f"{f['message_id']}: {f['error']}" for f in failed[:3])
         more = f" (and {len(failed) - 3} more)" if len(failed) > 3 else ""
-        data["summary"] = (
+        summary.append(
             f"Could not {verb} {len(failed)} of {len(message_ids)} messages: "
             f"{reasons}{more}"
         )
+    if not_undoable:
+        ids = ", ".join(s["message_id"] for s in not_undoable[:3])
+        more = f" (and {len(not_undoable) - 3} more)" if len(not_undoable) > 3 else ""
+        data["not_undoable_count"] = len(not_undoable)
+        summary.append(
+            f"The {verb} was applied to {len(not_undoable)} message(s) but could "
+            f"not be saved to the undo log, so it cannot be undone from GAIA: "
+            f"{ids}{more}. First error: {not_undoable[0]['undo_error']}"
+        )
+    if summary:
+        data["summary"] = " ".join(summary)
+    if failed:
         if not result["succeeded"]:
             return _envelope_err(data["summary"], data)
         data["partial"] = True

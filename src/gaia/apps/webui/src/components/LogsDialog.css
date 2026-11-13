@@ -1,0 +1,233 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* Above Settings (z-index 200): the log opens from inside it. */
+.log-viewer-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+    background: rgb(0 0 0 / 45%);
+}
+
+.log-viewer {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    inline-size: min(960px, 100%);
+    max-block-size: calc(100vh - 32px);
+    overflow: auto;
+    padding: 20px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.log-viewer-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.log-viewer-title {
+    flex: 1;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.log-viewer-close {
+    display: inline-flex;
+    padding: 4px;
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.log-viewer-close:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.log-viewer-view {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+    min-block-size: 0;
+}
+
+.log-viewer-hint,
+.log-viewer-source {
+    color: var(--text-secondary);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.log-viewer-warning {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    background: var(--danger-dim);
+    color: var(--danger);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+.log-viewer-detail {
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 12px;
+}
+
+.log-viewer-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 12px;
+}
+
+.log-viewer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-inline-start: auto;
+}
+
+.log-viewer-actions .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.log-viewer-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.log-viewer-empty {
+    padding: 24px 12px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    text-align: center;
+}
+
+/* Log text stays left to right in every language. */
+.log-viewer-lines {
+    flex: 1 1 auto;
+    min-block-size: 120px;
+    max-block-size: 60vh;
+    margin: 0;
+    padding: 10px 12px;
+    overflow: auto;
+    /* Our own scroll keeps it on the newest line; anchoring would read as the reader scrolling up. */
+    overflow-anchor: none;
+    border-radius: var(--radius-md);
+    background: var(--bg-code);
+    color: var(--text-code);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    line-height: 1.5;
+    text-align: start;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.log-viewer-body {
+    display: block;
+}
+
+.log-viewer-lines .is-debug {
+    color: var(--text-code-dim);
+}
+
+.log-viewer-lines .is-warning {
+    color: var(--code-warning);
+}
+
+.log-viewer-lines .is-error {
+    color: var(--code-danger);
+}
+
+/* A tab per log group; wraps on a narrow window rather than scrolling sideways. */
+.log-viewer-tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    background: var(--bg-card);
+}
+
+.log-viewer-tabs button {
+    min-height: 30px;
+    padding: 4px 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.log-viewer-tabs button.is-active {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-sm);
+}
+
+.log-viewer-file {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.log-viewer-file select {
+    max-inline-size: 100%;
+    padding: 4px 8px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.log-viewer-panel {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-block-size: 0;
+}
+
+.log-viewer-save-all {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 12px;
+    padding-block-start: 8px;
+    border-block-start: 1px solid var(--border-light);
+}
+
+.log-viewer-save-all .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.log-viewer-save-all .log-viewer-hint {
+    flex: 1 1 240px;
+}

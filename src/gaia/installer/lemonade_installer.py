@@ -131,6 +131,17 @@ _PPA_FETCH_FAILURE = re.compile(
     r"Failed to fetch \S*" + re.escape(_PPA_INDEX_HOST) + r"\S*[ \t]*(?P<reason>[^\n]*)"
 )
 
+# add-apt-repository looks the PPA up through launchpadlib before apt sees it.
+_LAUNCHPAD_API_UNREACHABLE = re.compile(
+    r"^(?:TimeoutError|ConnectionResetError|http\.client\.RemoteDisconnected)\b[^\n]*",
+    re.MULTILINE,
+)
+
+# apt got an answer from a repository that isn't on Launchpad, so this machine is online.
+_OTHER_REPOSITORY_REACHED = re.compile(
+    r"^(?:Hit|Get):\d+ https?://(?!\S*launchpad)", re.MULTILINE
+)
+
 
 def _launchpad_outage_message(what_failed: str) -> str:
     return (
@@ -149,11 +160,26 @@ def diagnose_launchpad_outage(output: str) -> Optional[str]:
     ``apt-get update`` exits 0 when only some indexes fail. Without this the
     install runs on and dies at ``apt-get install`` with "Unable to locate
     package lemonade-server", which reads as a wrong package name.
+
+    A connection failure inside ``add-apt-repository`` counts only when the
+    output shows apt reaching another repository; otherwise the machine itself
+    may be offline.
     """
     if _LAUNCHPAD_KEY_ERROR in output:
         return _launchpad_outage_message(
             f"Launchpad could not return the signing key for {LEMONADE_PPA} "
             f"({_LAUNCHPAD_KEY_ERROR}), so the repository was not added."
+        )
+
+    api_errors = _LAUNCHPAD_API_UNREACHABLE.findall(output)
+    if (
+        api_errors
+        and "launchpadlib" in output
+        and _OTHER_REPOSITORY_REACHED.search(output)
+    ):
+        return _launchpad_outage_message(
+            f"add-apt-repository could not reach Launchpad to look up {LEMONADE_PPA} "
+            f"({api_errors[-1].strip()}), so the repository was not added."
         )
 
     match = _PPA_FETCH_FAILURE.search(output)

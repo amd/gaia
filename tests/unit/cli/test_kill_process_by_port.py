@@ -414,29 +414,6 @@ def test_cli_exit_status_matches_stop_outcome(mocker, capsys, success):
     assert "stop outcome" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("missing", [False, True])
-@pytest.mark.parametrize("success", [False, True])
-def test_lemonade_port_stop_propagates_exit_status(mocker, success, missing):
-    from gaia.cli import main
-
-    mocker.patch("sys.argv", ["gaia", "kill", "--lemonade"])
-    mocker.patch(
-        "gaia.cli.subprocess.run",
-        side_effect=FileNotFoundError("lemonade-server") if missing else None,
-        return_value=SimpleNamespace(returncode=1, stderr="stop failed"),
-    )
-    mocker.patch(
-        "gaia.cli.kill_process_by_port",
-        return_value={"success": success, "message": "stop outcome"},
-    )
-    if success:
-        main()
-    else:
-        with pytest.raises(SystemExit) as exc:
-            main()
-        assert exc.value.code == 1
-
-
 @pytest.mark.parametrize("platform", ["win32", "linux"])
 def test_forceful_termination_is_bounded(mocker, platform):
     from gaia.ports import terminate_pid

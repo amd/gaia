@@ -159,6 +159,65 @@ class TestListConnectors:
         }
         assert rows["mcp-test"]["display_name"] == "MCP Test"
 
+    def test_a_corrupt_activations_file_is_named_on_every_unavailable_row(
+        self, ui_api_client
+    ):
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{not json", encoding="utf-8")
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        rows = resp.json()["connectors"]
+        assert rows
+        for row in rows:
+            assert row["error"] == "unavailable"
+            assert row["reason"] == "activations_unreadable"
+            assert row["path"] == str(path)
+
+    @pytest.mark.parametrize("body", ["[]", '{"activations": []}'])
+    def test_a_wrong_shape_activations_file_is_named_too(self, ui_api_client, body):
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+        rows = ui_api_client.get("/api/connectors").json()["connectors"]
+        assert rows and all(r["reason"] == "activations_unreadable" for r in rows)
+
+    def test_an_unreadable_but_valid_activations_file_is_not_called_corrupt(
+        self, ui_api_client, monkeypatch
+    ):
+        """A permissions error must not tell the user to delete the file."""
+        import builtins
+
+        from gaia.connectors.activations import _activations_path
+
+        path = _activations_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"version": 1, "activations": {}}', encoding="utf-8")
+        real_open = builtins.open
+
+        def deny(file, *a, **k):
+            if str(file) == str(path):
+                raise PermissionError(13, "Permission denied", str(file))
+            return real_open(file, *a, **k)
+
+        monkeypatch.setattr(builtins, "open", deny)
+        resp = ui_api_client.get("/api/connectors")
+        assert resp.status_code == 200
+        for row in resp.json()["connectors"]:
+            assert "reason" not in row
+            assert "path" not in row
+
+    def test_no_activations_file_adds_no_reason(self, ui_api_client):
+        from gaia.connectors.activations import _activations_path
+
+        assert not _activations_path().exists()
+        for row in ui_api_client.get("/api/connectors").json()["connectors"]:
+            assert "reason" not in row
+
     def test_unconfigured_connector_shows_configured_false(self, ui_api_client):
         resp = ui_api_client.get("/api/connectors")
         entry = next(e for e in resp.json()["connectors"] if e["id"] == "google")
@@ -618,6 +677,78 @@ class TestSidecarRegistrationEndToEnd:
             self._GOOGLE_ALL_SCOPES
         )
 
+    @pytest.mark.parametrize(
+        "connector_id, declared",
+        [
+            (
+                "google",
+                [
+                    "https://www.googleapis.com/auth/calendar.events",
+                    "https://www.googleapis.com/auth/gmail.compose",
+                    "https://www.googleapis.com/auth/gmail.readonly",
+                ],
+            ),
+            (
+                "microsoft",
+                [
+                    "https://graph.microsoft.com/Calendars.ReadWrite",
+                    "https://graph.microsoft.com/Mail.ReadWrite",
+                    "https://graph.microsoft.com/Mail.Send",
+                ],
+            ),
+        ],
+    )
+    def test_no_scopes_plus_the_flagship_asks_only_for_what_it_declares(
+        self, monkeypatch, connector_id, declared
+    ):
+        """The in-chat Connect card's request: no scopes, grant the flagship.
+        Sign-in must ask for the flagship's declared scopes and nothing else
+        from the connector's catalog (gmail.modify, Drive)."""
+        from starlette.testclient import TestClient
+
+        from gaia.connectors.catalog.google import GOOGLE_SPEC
+        from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
+        from gaia.connectors.registry import ConnectorRegistry
+        from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
+        from gaia.ui.server import create_app
+
+        # The real catalog, so the declared scopes are checked against the
+        # ceiling a user's install has.
+        real = ConnectorRegistry()
+        real.register(GOOGLE_SPEC)
+        real.register(MICROSOFT_SPEC)
+        monkeypatch.setattr("gaia.connectors.registry.REGISTRY", real)
+        monkeypatch.setattr("gaia.ui.routers.connectors.REGISTRY", real)
+        monkeypatch.setattr(
+            "gaia.hub.installer.list_installed",
+            lambda *a, **kw: {
+                "gaia": InstalledAgent(
+                    id="gaia",
+                    version="0.1.0",
+                    language="python",
+                    installed_at="2026-01-01T00:00:00Z",
+                    artifact_kind=ARTIFACT_KIND_BINARY,
+                )
+            },
+        )
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+
+        with TestClient(create_app(db_path=":memory:")) as client:
+            resp = client.post(
+                f"/api/connectors/{connector_id}/authorize",
+                json={"scopes": [], "grant_agents": ["installed:gaia"]},
+                headers=UI_HEADER,
+            )
+
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        assert kwargs["scopes"] == declared
+        assert sorted(kwargs["grant_agents"]["installed:gaia"]) == declared
+        assert not any("gmail.modify" in s or "drive" in s for s in kwargs["scopes"])
+
     def test_authorize_404s_when_the_bridge_is_not_wired(self, monkeypatch):
         """Sibling with the bridge itself disabled (not just 'not
         installed') — proves the 200 above comes from server.py's wiring
@@ -811,6 +942,52 @@ class TestTestEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
+
+
+class TestConnectorActionsLiftTheKeyringHold:
+    """A connectors-screen action may ask the OS to unlock the store again."""
+
+    @pytest.fixture(autouse=True)
+    def held(self):
+        from gaia.connectors import store
+
+        store._refuse(RuntimeError("Prompt dismissed"))
+        yield store
+        store.retry_keyring()
+
+    def test_test_lifts_the_hold(self, ui_api_client, monkeypatch, held):
+        seen = []
+
+        async def check(connector_id):
+            seen.append(held.keyring_refusal())
+            return {"ok": True, "detail": "token_valid"}
+
+        monkeypatch.setattr("gaia.ui.routers.connectors.health_check", check)
+        resp = ui_api_client.post("/api/connectors/google/test", headers=UI_HEADER)
+        assert resp.status_code == 200
+        assert seen == [None]
+
+    def test_authorize_lifts_the_hold(self, ui_api_client, monkeypatch, held):
+        seen = []
+
+        async def start(connector_id, scopes=None, grant_agents=None):
+            seen.append(held.keyring_refusal())
+            return {"flow_id": "f", "authorization_url": "https://x"}
+
+        monkeypatch.setattr(
+            "gaia.ui.routers.connectors.connections.start_authorization", start
+        )
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"scopes": []},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200
+        assert seen == [None]
+
+    def test_listing_does_not_lift_the_hold(self, ui_api_client, held):
+        ui_api_client.get("/api/connectors")
+        assert held.keyring_refusal() is not None
 
 
 # ---------------------------------------------------------------------------

@@ -238,7 +238,10 @@ class TurnTracker:
             failed = bool(event.get("failed")) or self.error is not None
             if failed and self.error is None:
                 self.error = str(
-                    event.get("failure") or event.get("content") or "Unknown error"
+                    event.get("failure")
+                    or event.get("content")
+                    or self._last_error_detail()
+                    or "Unknown error"
                 )
             self._finish_locked(
                 (
@@ -304,6 +307,13 @@ class TurnTracker:
         for step in reversed(self.steps):
             if step["type"] == "tool":
                 return step
+        return None
+
+    def _last_error_detail(self) -> Optional[str]:
+        # A refused turn closes with an empty failed `done`; its reason is this step.
+        for step in reversed(self.steps):
+            if step["type"] == "error" and step.get("detail"):
+                return step["detail"]
         return None
 
     def _add_step(self, step: Dict[str, Any]) -> None:

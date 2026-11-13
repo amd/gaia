@@ -1,11 +1,11 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import React, { createContext, useCallback, useContext, useId, useRef, useState, useEffect, useMemo } from 'react';
+import React, { createContext, useCallback, useContext, useId, useLayoutEffect, useRef, useState, useEffect, useMemo } from 'react';
 import type { Components } from 'react-markdown';
-import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, FolderOpen, Square, FileText } from 'lucide-react';
+import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
+import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
@@ -14,19 +14,22 @@ import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta'
 import { RenderCard } from './render/RenderCard';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { plainAnswerText } from '../utils/plainText';
 import { AnswerStats, type TurnEnding } from './AnswerStats';
 import { displayModelName, useInferencePlace, useModelNames } from '../stores/modelStore';
 import { MODEL_WAIT_HINT_S, isModelWaitLabel } from '../utils/modelWait';
 import { localizeLiveStatus } from '../utils/liveStatus';
-import { prefersReducedMotion } from '../utils/motion';
 import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
-import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
+import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
+import { useLogsStore } from '../stores/logsStore';
+import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
+import { dropAnswerDrafts } from '../utils/answerDrafts';
 import {
     buildCitationIndex, docForToken, findCitations, findPages,
     type CitationIndex, type FoundPage, type LibraryDoc,
@@ -50,8 +53,26 @@ interface MessageBubbleProps {
     onResend?: (message: Message) => void;
     /** More message actions, before Copy (e.g. Retry with…). */
     extraActions?: React.ReactNode;
-    /** Shows a labelled Try again under a failed or cut-off reply, which asks the user to press it. */
+    /** Shows a labelled Try again under a failed, cut-off or stopped reply, which asks the user to press it. */
     onTryAgain?: () => void;
+    /** Asks the same question again with the same model (answers only). */
+    onRegenerate?: () => void;
+    /** Opens this message for editing (user messages only). */
+    onEditStart?: (message: Message) => void;
+    /** Whether this message is open for editing. */
+    editing?: boolean;
+    /** Text typed into the editor before it last closed; null starts from the message. */
+    editDraft?: string | null;
+    onEditDraft?: (text: string) => void;
+    /** Sends the edited text in place of this message and everything after it. */
+    onEdit?: (message: Message, text: string) => void;
+    onEditCancel?: () => void;
+    /** Later messages that Resend or Edit on this message delete for good; above zero, they ask first. */
+    laterCount?: number;
+    /** Shows Continue under a stopped reply that wrote something. */
+    onContinue?: () => void;
+    /** The chat's latest answer, whose actions stay in view. */
+    latest?: boolean;
     /** Total wall-clock latency in ms (time from user message to response completion). */
     latencyMs?: number;
     /** The model's current phase while streaming; null shows "Thinking...". */
@@ -67,68 +88,27 @@ interface MessageBubbleProps {
 /**
  * Live status next to GAIA's name: the model's current phase ("Reading your request",
  * "Reasoning — 38 words so far"), or "Thinking..." until the first one arrives.
- * Types out on first show, swaps text in place after that, erases when done.
+ * One calm line in the UI font; the whole label shows at once.
  */
 function ThinkingIndicator({ active, label, awaitingUser = false }: { active: boolean; label?: string | null; awaitingUser?: boolean }) {
     const t = useT();
     const text = awaitingUser ? t('activity.waiting') : (label ? localizeLiveStatus(t, label) : t('msg.thinking'));
-    const [reduceMotion] = useState(prefersReducedMotion);
-    const [chars, setChars] = useState(0);
-    const [phase, setPhase] = useState<'typing' | 'idle' | 'erasing' | 'done'>(reduceMotion ? 'idle' : 'typing');
-    const wasActiveRef = useRef(active);
-    const textLengthRef = useRef(text.length);
-    textLengthRef.current = text.length;
-
-    // Type out characters
-    useEffect(() => {
-        if (phase !== 'typing') return;
-        if (reduceMotion || chars >= text.length) { setPhase('idle'); return; }
-        const timer = setTimeout(() => setChars(c => c + 1), 30);
-        return () => clearTimeout(timer);
-    }, [phase, chars, text.length, reduceMotion]);
-
-    // Detect active → false: start erasing
-    useEffect(() => {
-        if (wasActiveRef.current && !active) {
-            setChars(textLengthRef.current);
-            setPhase(reduceMotion ? 'done' : 'erasing');
-        }
-        wasActiveRef.current = active;
-    }, [active, reduceMotion]);
-
-    // Erase characters
-    useEffect(() => {
-        if (phase !== 'erasing') return;
-        if (chars <= 0) { setPhase('done'); return; }
-        const timer = setTimeout(() => setChars(c => c - 1), 20);
-        return () => clearTimeout(timer);
-    }, [phase, chars]);
-
-    // Reset on new active cycle
-    useEffect(() => {
-        if (active && phase === 'done') {
-            setChars(0);
-            setPhase('typing');
-        }
-    }, [active, phase]);
-
     const elapsed = useElapsedSeconds(active, text);
     // One clock for the whole silent wait: a repeated or retried phase must not restart it.
     const waitingOnModel = active && !awaitingUser && isModelWaitLabel(label);
     const modelWaitElapsed = useElapsedSeconds(waitingOnModel);
     const place = useInferencePlace();
 
-    if (phase === 'done') return null;
+    if (!active) return null;
 
     const showModelWaitHint = waitingOnModel && modelWaitElapsed >= MODEL_WAIT_HINT_S;
 
     return (
-        <span className={`thinking-indicator${active && !awaitingUser ? ' is-live' : ''}`}>
-            <span className="thinking-indicator-text">{phase === 'idle' ? text : text.slice(0, chars)}</span>
-            {active && !awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
+        <span className={`thinking-indicator${!awaitingUser ? ' is-live' : ''}`}>
+            <span className="thinking-indicator-text">{text}</span>
+            {!awaitingUser && elapsed >= PHASE_ELAPSED_MIN_S && (
                 <span className="thinking-indicator-elapsed"> · <bdi dir="ltr">{elapsed}s</bdi></span>
             )}
-            {active && <span className="cursor" />}
             {showModelWaitHint && (
                 <span className="thinking-indicator-hint" role="status">{t(place?.remote === false ? 'live.localModelWaitHint' : 'live.modelWaitHint')}</span>
             )}
@@ -151,6 +131,13 @@ function useElapsedSeconds(active: boolean, key?: string): number {
         return () => clearInterval(t);
     }, [active, key]);
     return elapsed;
+}
+
+/** The answer an agent writes when a model call ends its turn (`_model_failure_answer` in agent.py). */
+const MODEL_FAILURE_RE = /^The model (?:call failed|stopped responding) at step \d+, so this request is unfinished\./;
+
+export function isModelFailure(content: string): boolean {
+    return MODEL_FAILURE_RE.test(content.trimStart());
 }
 
 const CHAT_REPORT_CLASSES: ReportClasses = {
@@ -178,15 +165,35 @@ export function isErrorContent(content: string): boolean {
 const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 /**
- * Drop an error step the answer is, word for word. A run that fails before
- * answering saves its error as the whole answer; it is shown once, there, with
- * its links. An answer that only quotes a tool's error keeps the step.
+ * Drop an error step the answer is, or ends with, word for word. A run that
+ * fails before answering saves its error as the whole answer (`echoed`); one
+ * that dies mid-answer saves what it wrote, then the error, which then reads
+ * below that text rather than above it. An answer that only quotes a tool's
+ * error keeps the step, as does one ending with an error that isn't the
+ * turn's last step.
  */
-export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): { steps: AgentStep[]; echoed: boolean } {
+export function dropErrorsEchoedInAnswer(
+    steps: AgentStep[],
+    content: string,
+): { steps: AgentStep[]; echoed: boolean; endedBy: string | null } {
     const answer = squash(content);
-    if (!answer) return { steps, echoed: false };
-    const kept = steps.filter((s) => !(s.type === 'error' && s.detail && squash(s.detail) === answer));
-    return { steps: kept, echoed: kept.length < steps.length };
+    if (!answer) return { steps, echoed: false, endedBy: null };
+    const tail = content.trimEnd();
+    const last = steps[steps.length - 1];
+    let echoed = false;
+    let endedBy: string | null = null;
+    const kept = steps.filter((s) => {
+        if (s.type !== 'error' || !s.detail?.trim()) return true;
+        if (squash(s.detail) === answer) {
+            echoed = true;
+            return false;
+        }
+        // The server appends the error that ended the turn as its own paragraph.
+        if (s !== last || !tail.endsWith(`\n\n${s.detail.trim()}`)) return true;
+        endedBy = s.detail.trim();
+        return false;
+    });
+    return { steps: kept, echoed, endedBy };
 }
 
 /**
@@ -479,21 +486,105 @@ export function splitCutOff(content: string): CutOff | null {
 }
 
 /** How an assistant turn ended short of an answer, or undefined when it answered. */
-export function turnEnding(content: string, stopState: Message['stopState']): TurnEnding | undefined {
+export function turnEnding(content: string, stopState: Message['stopState'], failed = false): TurnEnding | undefined {
     if (stopState) return 'stopped';
-    return splitCutOff(content) ? 'interrupted' : undefined;
+    if (splitCutOff(content)) return 'interrupted';
+    return failed ? 'failed' : undefined;
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+const EDITOR_MAX_HEIGHT = 320;
+
+/** A sent message opened for editing: Enter sends it again, Escape puts it back. */
+function MessageEditor({ original, draft, onDraft, onSend, onCancel, confirming = false }: {
+    original: string;
+    draft?: string | null;
+    onDraft?: (text: string) => void;
+    onSend: (text: string) => void;
+    onCancel: () => void;
+    /** The delete-later-messages question is open and owns the buttons. */
+    confirming?: boolean;
+}) {
+    const t = useT();
+    // Attachments stay out of the text box and go back on when the edit is sent.
+    const { text: originalText, links } = useMemo(() => splitAttachmentLinks(original), [original]);
+    const [text, setText] = useState(() => (draft != null ? splitAttachmentLinks(draft).text : originalText));
+    const ref = useRef<HTMLTextAreaElement>(null);
+    const changed = text.trim() !== '' && text !== originalText;
+    const send = () => onSend(joinAttachmentLinks(text, links));
+
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+    }, []);
+
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, EDITOR_MAX_HEIGHT)}px`;
+    }, [text]);
+
+    const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            onCancel();
+        } else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+            e.preventDefault();
+            if (changed && !confirming) send();
+        }
+    };
+
+    return (
+        <div className="msg-edit">
+            <textarea
+                ref={ref}
+                className="msg-edit-input"
+                value={text}
+                onChange={(e) => { setText(e.target.value); onDraft?.(e.target.value); }}
+                onKeyDown={handleKeyDown}
+                aria-label={t('msg.editLabel')}
+                readOnly={confirming}
+                rows={1}
+                dir="auto"
+                {...CLAIMS_ESCAPE}
+            />
+            {links.length > 0 && (
+                <ul className="msg-edit-attachments" aria-label={t('composer.attached')}>
+                    {links.map((l, i) => (
+                        <li key={i} className="msg-edit-attachment">
+                            <FileText size={14} aria-hidden="true" />
+                            <span className="msg-edit-attachment-name" title={l.name} dir="auto">{l.name}</span>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            {!confirming && (
+                <div className="msg-edit-actions">
+                    <button type="button" className="btn-secondary msg-edit-btn" onClick={onCancel}>{t('msg.editCancel')}</button>
+                    <button type="button" className="btn-primary msg-edit-btn" onClick={send} disabled={!changed}>
+                        {t('msg.editSend')}
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+const SCHEDULE_RUN_MARKER = /^\[schedule-run\] Run #(\d+) \u00b7 (.+)$/;
+
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, laterCount = 0, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
-    const echo = useMemo(
-        () => (message.role === 'assistant' && !isStreaming && agentSteps
-            ? dropErrorsEchoedInAnswer(agentSteps, message.content)
-            : { steps: agentSteps, echoed: false }),
-        [agentSteps, message.content, message.role, isStreaming],
-    );
+    const echo = useMemo(() => {
+        if (message.role !== 'assistant' || !agentSteps) return { steps: agentSteps, echoed: false, endedBy: null };
+        const steps = dropAnswerDrafts(agentSteps, message.content);
+        return isStreaming ? { steps, echoed: false, endedBy: null } : dropErrorsEchoedInAnswer(steps, message.content);
+    }, [agentSteps, message.content, message.role, isStreaming]);
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
+    const place = useInferencePlace();
+    const showServerLog = useLogsStore((s) => s.show);
     const stopState = message.role === 'assistant'
         ? message.stopState ?? (message.content.trim() === SERVER_CANCELLED_TEXT ? 'stopped' : undefined)
         : undefined;
@@ -501,14 +592,23 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         () => (message.role === 'assistant' && !isStreaming ? splitCutOff(message.content) : null),
         [message.content, message.role, isStreaming],
     );
+    // The error that ended a partly written answer, shown apart from the answer.
+    const endedBy = cutOff ? null : echo.endedBy;
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
-        () => (message.role === 'user'
-            ? message.content
-            : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
-        [message.content, message.role, isStreaming, cutOff],
+        () => {
+            if (message.role === 'user') return message.content;
+            const body = cutOff
+                ? cutOff.body
+                : endedBy ? message.content.trimEnd().slice(0, -endedBy.length) : message.content;
+            return cleanToolCallContent(body, Boolean(isStreaming));
+        },
+        [message.content, message.role, isStreaming, cutOff, endedBy],
     );
+    const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
+    const summaryFiles = message.turnSummary?.files;
+    const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
     const readAloudId = `${message.session_id}:${message.id}`;
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
@@ -539,12 +639,13 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     }, []);
 
     const handleCopy = useCallback(() => {
+        const text = message.role === 'assistant' ? plainAnswerText(cleanedContent) : message.content;
         if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(message.content).catch(() => {});
+            navigator.clipboard.writeText(text).catch(() => {});
         } else {
             // Fallback for non-HTTPS contexts (common for localhost)
             const textarea = document.createElement('textarea');
-            textarea.value = message.content;
+            textarea.value = text;
             textarea.style.position = 'fixed';
             textarea.style.opacity = '0';
             document.body.appendChild(textarea);
@@ -555,7 +656,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         setCopied(true);
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
         copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [message.content]);
+    }, [cleanedContent, message.content, message.role]);
 
     const handleDelete = useCallback(() => {
         if (!confirmDelete) {
@@ -570,9 +671,15 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         onDelete?.(message.id);
     }, [confirmDelete, message.id, onDelete]);
 
+    const [pendingDrop, setPendingDrop] = useState<(() => void) | null>(null);
+    const askBeforeDropping = useCallback((go: () => void) => {
+        if (laterCount > 0) setPendingDrop(() => go);
+        else go();
+    }, [laterCount]);
+
     const handleResend = useCallback(() => {
-        onResend?.(message);
-    }, [message, onResend]);
+        askBeforeDropping(() => onResend?.(message));
+    }, [message, onResend, askBeforeDropping]);
 
     // Tooltip shown on hover anywhere over the bubble — full absolute
     // timestamp (e.g. "Apr 25, 2026, 11:02:04 PM"). Both user and assistant
@@ -582,16 +689,32 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         ? t(message.role === 'user' ? 'msg.sent' : 'msg.replied', { time: formatFullTimestamp(message.created_at, t) })
         : undefined;
 
+    const runMarker = message.role === 'system' ? SCHEDULE_RUN_MARKER.exec(message.content) : null;
+    if (runMarker) {
+        return <div className="msg-run-divider" role="separator">{t('msg.scheduledRun', { n: runMarker[1], time: runMarker[2] })}</div>;
+    }
+
     return (
         <div
-            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}`}
+            className={`msg msg-${message.role} ${isError ? 'msg-error' : ''}${latest ? ' msg-latest' : ''}`}
             title={hoverTimestamp}
         >
             <div className="msg-inner">
                 <div className="msg-header">
                     <div className="msg-header-left" />
-                    {!isStreaming && (
+                    {!isStreaming && !editing && (
                         <div className="msg-actions">
+                            {message.role === 'user' && onEditStart && onEdit && (
+                                <button
+                                    type="button"
+                                    className="msg-action-btn"
+                                    onClick={() => onEditStart(message)}
+                                    title={t('msg.edit')}
+                                    aria-label={t('msg.edit')}
+                                >
+                                    <Pencil size={12} />
+                                </button>
+                            )}
                             {/* Resend button - user messages only */}
                             {message.role === 'user' && onResend && (
                                 <button
@@ -603,18 +726,31 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                     <RefreshCw size={12} />
                                 </button>
                             )}
+                            {message.role === 'assistant' && onRegenerate && (
+                                <button
+                                    type="button"
+                                    className="msg-action-btn"
+                                    onClick={onRegenerate}
+                                    title={t('msg.tryAgain')}
+                                    aria-label={t('msg.tryAgain')}
+                                >
+                                    <RotateCw size={12} />
+                                </button>
+                            )}
                             {extraActions}
-                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                            {message.role === 'assistant' && !isError && hasAnswerText && (
                                 <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
                             )}
-                            <button
-                                className={`msg-copy ${copied ? 'copied' : ''}`}
-                                onClick={handleCopy}
-                                title={copied ? t('msg.copied') : t('msg.copy')}
-                                aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
-                            >
-                                {copied ? <Check size={12} /> : <Copy size={12} />}
-                            </button>
+                            {hasAnswerText && (
+                                <button
+                                    className={`msg-copy ${copied ? 'copied' : ''}`}
+                                    onClick={handleCopy}
+                                    title={copied ? t('msg.copied') : t('msg.copy')}
+                                    aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
+                                >
+                                    {copied ? <Check size={12} /> : <Copy size={12} />}
+                                </button>
+                            )}
                             {/* Delete button */}
                             {onDelete && (
                                 <button
@@ -658,7 +794,16 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     ))}
                     {/* The cursor is a streaming indicator, not decoration — it never
                         outlives the write. See docs/spec/gaia-design-language.mdx. */}
-                    {collapsibleUser ? (
+                    {editing && onEdit ? (
+                        <MessageEditor
+                            original={message.content}
+                            draft={editDraft}
+                            onDraft={onEditDraft}
+                            onSend={(text) => askBeforeDropping(() => onEdit(message, text))}
+                            onCancel={() => { setPendingDrop(null); onEditCancel?.(); }}
+                            confirming={pendingDrop !== null && !isStreaming}
+                        />
+                    ) : collapsibleUser ? (
                         <>
                             <div
                                 ref={userBodyRef}
@@ -671,13 +816,26 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 expanded={userExpanded}
                                 onToggle={toggleUserExpanded}
                                 controls={userBodyId}
-                                collapsedLabel={t.hint(t('msg.showAll'), sizeLabel(message.content))}
+                                collapsedLabel={t.hint(t('msg.showAll'), sizeLabel(t, message.content))}
                                 expandedLabel={t('msg.showLess')}
                                 className="msg-expand-toggle"
                             />
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
-                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} />
+                        <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
+                    )}
+                    {pendingDrop && !isStreaming && (
+                        <div className="msg-drop-confirm" role="alertdialog" aria-labelledby={`${userBodyId}-drop`}>
+                            <span id={`${userBodyId}-drop`}>{t.plural('msg.dropLater', laterCount)}</span>
+                            <div className="msg-edit-actions">
+                                <button type="button" className="btn-secondary msg-edit-btn" onClick={() => setPendingDrop(null)} autoFocus>
+                                    {t('msg.editCancel')}
+                                </button>
+                                <button type="button" className="btn-primary msg-edit-btn" onClick={() => { setPendingDrop(null); pendingDrop(); }}>
+                                    {t('msg.dropLaterGo')}
+                                </button>
+                            </div>
+                        </div>
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
@@ -698,10 +856,26 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 : say(cutOff.notice)))}
                         </p>
                     )}
+                    {endedBy && (
+                        <p className="msg-cut-off" role="note" dir="auto">{endedBy}</p>
+                    )}
+                    {onContinue && stopState && !isStreaming && cleanedContent.trim() && cleanedContent.trim() !== SERVER_CANCELLED_TEXT && (
+                        <button type="button" className="msg-try-again" onClick={onContinue}>
+                            <Play size={12} aria-hidden="true" />
+                            {t('msg.continue')}
+                        </button>
+                    )}
                     {onTryAgain && !isStreaming && (
                         <button type="button" className="msg-try-again" onClick={onTryAgain}>
                             <RotateCw size={12} aria-hidden="true" />
                             {t('msg.tryAgain')}
+                        </button>
+                    )}
+                    {/* A local model failed: what Lemonade and its backend wrote says why. */}
+                    {(isError || (message.role === 'assistant' && isModelFailure(message.content))) && !isStreaming && place?.remote === false && (
+                        <button type="button" className="msg-try-again" onClick={() => showServerLog('model_server')}>
+                            <ScrollText size={12} aria-hidden="true" />
+                            {t('logs.serverLog')}
                         </button>
                     )}
                     {message.role === 'assistant' && !isStreaming && (namesFailureRecord(message.content) || namesFailureRecord(message.failureText ?? '')) && (
@@ -722,7 +896,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState)} />
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError || Boolean(endedBy))} />
                         </div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
@@ -798,8 +972,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
                     expanded={expanded}
                     onToggle={() => setExpanded((v) => !v)}
                     controls={bodyId}
-                    collapsedLabel={`Expand (${lines.toLocaleString('en-US')} lines)`}
-                    expandedLabel="Collapse"
+                    collapsedLabel={t('code.expand', { size: lineCount(t, lines) })}
+                    expandedLabel={t('code.collapse')}
                     className="code-expand-toggle"
                 />
             )}
@@ -826,13 +1000,31 @@ const PATH_TRAILING_PUNCT_RE = /[.:!']+$/;
 /** An inline-code span that is one absolute path and nothing else, e.g. "Saved to `C:\out\answer.md`". */
 const WIN_PATH_ONLY_RE = new RegExp(`^(?:${WIN_PATH_RE.source})$`, 'i');
 
+/** Paths of the files this answer's turn wrote (`turn_summary.files`). */
+const WrittenFilesContext = createContext<readonly string[]>([]);
+
+/**
+ * The written file an inline-code span names: its exact path, or a bare name
+ * only one written file has. Two writes sharing a name stay plain code.
+ */
+function writtenFileFor(files: readonly string[], children: React.ReactNode): string | null {
+    if (typeof children !== 'string' || files.length === 0) return null;
+    const text = children.trim();
+    if (!text) return null;
+    if (files.includes(text)) return text;
+    if (/[\\/]/.test(text)) return null;
+    const name = text.toLowerCase();
+    const matches = files.filter((f) => (f.split(/[\\/]/).pop() ?? '').toLowerCase() === name);
+    return matches.length === 1 ? matches[0] : null;
+}
+
 function inlineCodePath(children: React.ReactNode): string | null {
     if (typeof children !== 'string') return null;
     const text = children.trim();
     return WIN_PATH_ONLY_RE.test(text) ? text : null;
 }
 
-function FilePathLink({ path }: { path: string }) {
+function FilePathLink({ path, label }: { path: string; label?: string }) {
     const handleClick = (e: React.MouseEvent) => {
         e.preventDefault();
         api.openFileOrFolder(path).catch((err) => {
@@ -850,7 +1042,7 @@ function FilePathLink({ path }: { path: string }) {
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e as unknown as React.MouseEvent); } }}
         >
             <FolderOpen size={12} className="file-path-icon" />
-            {path}
+            {label ?? path}
         </span>
     );
 }
@@ -1010,12 +1202,15 @@ function Linkified({ children }: { children?: React.ReactNode }) {
 // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
 function InlineCode({ className: _className, children, node: _node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
     const index = useContext(CitationContext);
+    const writtenFiles = useContext(WrittenFilesContext);
     const t = useT();
     // A filename here outside a block Linkified handles (e.g. inside **bold**).
     const doc = inlineCodeDoc(index, children);
     if (doc) return <CitationLink doc={doc} t={t} />;
     const path = inlineCodePath(children);
     if (path) return <FilePathLink path={path} />;
+    const written = writtenFileFor(writtenFiles, children);
+    if (written) return <FilePathLink path={written} label={String(children).trim()} />;
     return (
         <code className="inline-code" dir="ltr" {...props}>
             {children}
@@ -1103,8 +1298,8 @@ const MARKDOWN_COMPONENTS: Components = {
     ol({ children, start }) {
         return <ol className="md-ol" start={start} dir="auto">{children}</ol>;
     },
-    li({ children }) {
-        return <li className="md-li" dir="auto"><Linkified>{children}</Linkified></li>;
+    li({ children, className }) {
+        return <li className={className ? `md-li ${className}` : 'md-li'} dir="auto"><Linkified>{children}</Linkified></li>;
     },
     // Blockquote
     blockquote({ children }) {
@@ -1114,16 +1309,18 @@ const MARKDOWN_COMPONENTS: Components = {
     hr() {
         return <hr className="md-hr" />;
     },
-    // Table cells
+    // Table cells set no dir: the table's dir="auto" skips any cell that has its own.
     td({ children }) {
-        return <td dir="auto"><Linkified>{children}</Linkified></td>;
+        return <td><Linkified>{children}</Linkified></td>;
     },
     th({ children }) {
-        return <th dir="auto"><Linkified>{children}</Linkified></th>;
+        return <th><Linkified>{children}</Linkified></th>;
     },
 };
 
-export function RenderedContent({ content, showCursor, isStreaming = false }: { content: string; showCursor?: boolean; isStreaming?: boolean }) {
+const NO_WRITTEN_FILES: readonly string[] = [];
+
+export function RenderedContent({ content, showCursor, isStreaming = false, writtenFiles = NO_WRITTEN_FILES }: { content: string; showCursor?: boolean; isStreaming?: boolean; writtenFiles?: readonly string[] }) {
     const documents = useChatStore((s) => s.documents);
     const citations = useMemo(() => buildCitationIndex(documents), [documents]);
     if (!content && !showCursor) return null;
@@ -1132,6 +1329,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
     return (
         <StreamingContext.Provider value={isStreaming}>
         <CitationContext.Provider value={citations}>
+        <WrittenFilesContext.Provider value={writtenFiles}>
         <div className="md-content">
             <ReactMarkdown
                 remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
@@ -1143,6 +1341,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false }: { 
             </ReactMarkdown>
             {showCursor && <span className="cursor" />}
         </div>
+        </WrittenFilesContext.Provider>
         </CitationContext.Provider>
         </StreamingContext.Provider>
     );

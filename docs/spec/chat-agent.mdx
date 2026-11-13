@@ -2,13 +2,6 @@
 title: "ChatAgent"
 ---
 
-<Warning>
-The direct OpenAI and LiteLLM provider adapters have been removed. Any
-`use_chatgpt` field shown below is a migration-error shim: setting it to `True`
-raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-migration).
-</Warning>
-
-
 <Info>
   **Source Code:** [`hub/agents/gaia/python/gaia_agent/chat_agent.py`](https://github.com/amd/gaia/blob/main/hub/agents/gaia/python/gaia_agent/chat_agent.py)
 </Info>
@@ -99,7 +92,6 @@ class ChatAgentConfig:
 
     # LLM settings
     use_claude: bool = False
-    use_chatgpt: bool = False
     claude_model: str = "claude-sonnet-4-20250514"
     # None = fall back to LEMONADE_BASE_URL env var, then the default
     base_url: Optional[str] = None

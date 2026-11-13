@@ -5,6 +5,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,7 +21,7 @@ import (
 // The catalog reads the plan's verdict, with the server's words for each
 // problem, and a plan that cannot be read is unknown rather than absent.
 func TestTheCatalogReadsThePlansVerdict(t *testing.T) {
-	plan := setupapi.Plan{NPU: setupapi.NPU{
+	plan := setupapi.Plan{NPU: &setupapi.NPU{
 		Present: true,
 		Problems: []setupapi.NPUProblem{{
 			Code:  "memlock",
@@ -55,6 +56,33 @@ func TestAnUnreadablePlanIsUnknownNotAbsent(t *testing.T) {
 	}
 	if strings.Contains(row.Reason, "reports none") {
 		t.Fatalf("an unread plan must not claim absence, got %q", row.Reason)
+	}
+}
+
+// A daemon older than v0.25.4 sends no "npu" field. That is unknown, not
+// absent, so a downloaded FLM model stays selectable where memory permits.
+func TestAnOlderPlanWithoutAnNPUFieldLeavesADownloadedFLMModelSelectable(t *testing.T) {
+	var plan setupapi.Plan
+	if err := json.Unmarshal([]byte(`{"catalog":[],"models":[]}`), &plan); err != nil {
+		t.Fatalf("decode a plan from an older daemon: %v", err)
+	}
+	if plan.NPU != nil {
+		t.Fatal("an older daemon's plan must leave the NPU unknown")
+	}
+	got := readNPUVerdictFrom(context.Background(), &setupapitest.Fake{P: plan})
+	if got.Known {
+		t.Fatal("a missing npu field is not a known verdict")
+	}
+	models := []lemonade.Model{{ID: "gemma4-it-e4b-FLM", Recipe: "flm", Downloaded: true, Labels: []string{"chat"}}}
+	entries := lemonade.BuildEntries("local", models, lemonade.Capacity{MemoryGB: 96, DiskFreeGB: 500, NPUMemoryGB: 64}, nil, got)
+	var row *lemonade.Entry
+	for i, e := range entries {
+		if e.Model.ID == "gemma4-it-e4b-FLM" {
+			row = &entries[i]
+		}
+	}
+	if row == nil || !row.Selectable() {
+		t.Fatalf("a downloaded FLM model must stay selectable on an older daemon: %+v", row)
 	}
 }
 

@@ -95,7 +95,8 @@ func windowsSharedGB(physicalGB, carveOutGB float64) float64 {
 }
 
 // formatGB mirrors gaia.llm.model_fit.format_gb: under 1 GB keeps a decimal so
-// 0.5 never reads as 0.
+// 0.5 never reads as 0. Keep it apart from textutil.FormatGB, or the TUI and
+// Python print different "will not fit" text.
 func formatGB(gb float64) string {
 	if gb > 0 && gb < 1 {
 		return strconv.FormatFloat(gb, 'f', 1, 64)

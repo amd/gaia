@@ -146,6 +146,26 @@ def _forget_crashed_loads(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_learned_reasoning(tmp_path, monkeypatch):
+    """Start each test with nothing learned about cloud reasoning, and keep
+    probes off the developer's real ``~/.gaia/gateway.json``."""
+    from gaia.llm import gateway
+    from gaia.llm import lemonade_client as lc
+
+    monkeypatch.setattr(gateway, "GATEWAY_STATE_FILE", tmp_path / "gateway.json")
+    monkeypatch.setattr(
+        lc,
+        "_CLOUD_REASONING",
+        lc._LearnedCapability(
+            "reasoning",
+            "reasoning_models",
+            "no_reasoning_models",
+            "reasoning_probe_failures",
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
 def _forget_engine_start_failure(monkeypatch):
     """A failed start one test staged must not fail the next test's model call."""
     from gaia.llm import lemonade_client

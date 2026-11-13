@@ -98,6 +98,100 @@ def test_a_bundled_skill_tool_registers_on_load_and_goes_on_unload(flagship, tmp
     assert "rss-digest/fetch_rss" not in _TOOL_REGISTRY
 
 
+@pytest.mark.parametrize(
+    "skill_name, card, tools",
+    [
+        (
+            "guides",
+            "guide",
+            {
+                "show_recipe",
+                "show_workout",
+                "show_how_to",
+                "show_checklist",
+                "show_itinerary",
+            },
+        ),
+        ("calculators", "calculator", {"show_tip_calculator", "show_loan_calculator"}),
+    ],
+)
+def test_a_card_skill_adds_its_tools_only_once_loaded(
+    flagship, tmp_path, skill_name, card, tools
+):
+    """The card tools stay off the flagship's list until their skill loads, and
+    every one of them then draws its card in the Agent UI and the TUI."""
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    manager = _bundled_only(flagship.SKILL_DIRS, tmp_path)
+    expected = {f"{skill_name}/{name}" for name in tools}
+    before = set(flagship._tools_registry)
+    assert not before & (expected | tools), "card tools registered without a load"
+
+    flagship.load_skill(skill_name, manager=manager)
+    try:
+        assert set(flagship._tools_registry) - before == expected
+        for name in expected:
+            assert SSEOutputHandler._RENDER_TOOL_TO_LANG[name] == card
+    finally:
+        assert flagship.unload_skill(skill_name)
+
+    assert set(flagship._tools_registry) == before
+
+
+def test_the_calendar_skill_asks_before_every_change_on_the_flagship(
+    flagship, tmp_path
+):
+    """The calendar tools stay off the list until the skill loads, and then
+    every create, move and cancel waits for a person; reads do not."""
+    assert flagship.BUNDLES_CALENDAR_SKILL
+    assert not any(n.startswith("calendar/") for n in flagship._tools_registry)
+
+    flagship.load_skill(
+        "calendar", manager=_bundled_only(flagship.SKILL_DIRS, tmp_path)
+    )
+    try:
+        for name in (
+            "create_calendar_event",
+            "update_calendar_event",
+            "cancel_calendar_event",
+        ):
+            assert flagship._tool_requires_confirmation(f"calendar/{name}", {})
+        for name in ("list_calendar_events", "check_calendar_availability"):
+            assert not flagship._tool_requires_confirmation(f"calendar/{name}", {})
+    finally:
+        assert flagship.unload_skill("calendar")
+
+
+def test_the_send_email_skill_asks_before_any_mail_leaves_on_the_flagship(
+    flagship, tmp_path
+):
+    """The drafting and sending tools stay off the list until the skill loads;
+    then every send, draft edit and draft deletion waits for a person, and a
+    new draft or a draft listing does not."""
+    gated = (
+        "send_now",
+        "send_draft",
+        "reply_to_message",
+        "forward_message",
+        "update_draft",
+        "discard_draft",
+    )
+    assert flagship.BUNDLES_SEND_EMAIL_SKILL
+    assert not any(n.startswith("send-email/") for n in flagship._tools_registry)
+    assert not set(gated) & flagship.confirmation_required_tools()
+
+    flagship.load_skill(
+        "send-email", manager=_bundled_only(flagship.SKILL_DIRS, tmp_path)
+    )
+    try:
+        for name in gated:
+            assert flagship._tool_requires_confirmation(f"send-email/{name}", {})
+        for name in ("create_draft", "list_drafts"):
+            assert not flagship._tool_requires_confirmation(f"send-email/{name}", {})
+    finally:
+        assert flagship.unload_skill("send-email")
+
+
 def test_a_bundled_skill_scripts_file_runs_by_path(flagship, tmp_path):
     """A skill's scripts/ file is on disk at <skill directory>/scripts/<file>.
 

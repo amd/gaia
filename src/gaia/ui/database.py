@@ -317,6 +317,7 @@ class ChatDatabase:
         enable_wal(self._conn)
         self._schema_migration_active = False
         self._init_schema()
+        self._migrate_legacy_agent_mode()
         logger.info("Chat database initialized: %s", db_path)
 
     def _schema_is_current(self) -> bool:
@@ -420,6 +421,31 @@ class ChatDatabase:
                 self._conn.execute("BEGIN")
                 migrate_messages_table()
         logger.info("Migrated messages table: enabled autonomous history")
+
+    def _migrate_legacy_agent_mode(self) -> None:
+        """Rewrite a stored agent_mode 'autonomous' to 'goal_driven', once.
+
+        'autonomous' never had its own behaviour (#2005) and is refused on
+        write, so 'goal_driven' is what such a database already ran as.
+        """
+        # Read first: reopening a current database must take no write lock.
+        legacy = self._conn.execute(
+            "SELECT 1 FROM settings WHERE key = 'agent_mode' AND value = 'autonomous'"
+        ).fetchone()
+        if legacy is None:
+            return
+        with self._transaction():
+            changed = self._conn.execute(
+                "UPDATE settings SET value = 'goal_driven' "
+                "WHERE key = 'agent_mode' AND value = 'autonomous'"
+            ).rowcount
+        if changed:
+            logger.warning(
+                "Migrated stored agent_mode 'autonomous' to 'goal_driven': "
+                "'autonomous' is not implemented "
+                "(https://github.com/amd/gaia/issues/2005) and always ran as "
+                "'goal_driven'."
+            )
 
     def _ensure_settings_table(self):
         """Create the settings key-value table if it doesn't exist."""
@@ -935,14 +961,6 @@ class ChatDatabase:
             deleted = cursor.rowcount > 0
         return deleted
 
-    def touch_session(self, session_id: str):
-        """Update the session's updated_at timestamp."""
-        with self._transaction():
-            self._conn.execute(
-                "UPDATE sessions SET updated_at = ? WHERE id = ?",
-                (self._now(), session_id),
-            )
-
     # ── Messages ────────────────────────────────────────────────────────
 
     def add_message(
@@ -1097,20 +1115,6 @@ class ChatDatabase:
                 (session_id, limit, offset),
             ).fetchall()
 
-        return self._decode_messages(rows)
-
-    def get_recent_messages(
-        self, session_id: str, limit: int = 100
-    ) -> List[Dict[str, Any]]:
-        """Get the newest messages in chronological order for agent context."""
-        with self._lock:
-            rows = self._conn.execute(
-                """SELECT * FROM (
-                       SELECT * FROM messages WHERE session_id = ?
-                       ORDER BY created_at DESC, id DESC LIMIT ?
-                   ) ORDER BY created_at ASC, id ASC""",
-                (session_id, limit),
-            ).fetchall()
         return self._decode_messages(rows)
 
     @staticmethod
@@ -1488,6 +1492,15 @@ class ChatDatabase:
                 ),
             )
 
+    def touch_turn(self, question_id: int) -> None:
+        """Note that this process's turn is still running, with nothing new to keep."""
+        with self._transaction():
+            self._conn.execute(
+                "UPDATE unfinished_turns SET updated_at = ? "
+                "WHERE question_id = ? AND owner = ?",
+                (self._now(), question_id, current_owner()),
+            )
+
     def discard_turn(self, question_id: int) -> None:
         """Forget this process's turn, whose outcome the caller reported."""
         with self._transaction():
@@ -1510,8 +1523,13 @@ class ChatDatabase:
         notice: str,
         owner: Optional[str] = None,
         tools_notice: Optional[Callable[[List[str]], str]] = None,
+        dated_last_alive: bool = False,
     ) -> Optional[int]:
         """Save *notice* as the reply of an unfinished turn, and end it.
+
+        *dated_last_alive* dates the reply when the turn last recorded
+        anything rather than now, for a turn whose process ended some unknown
+        time ago.
 
         *owner* is the process the turn must belong to, this one by default,
         so one server never closes another's live turn. Whatever the turn had
@@ -1524,7 +1542,8 @@ class ChatDatabase:
         owner = owner or current_owner()
         with self._transaction():
             row = self._conn.execute(
-                "SELECT session_id, partial_content, tools_run FROM unfinished_turns "
+                "SELECT session_id, partial_content, tools_run, started_at, "
+                "updated_at FROM unfinished_turns "
                 "WHERE question_id = ? AND owner = ?",
                 (question_id, owner),
             ).fetchone()
@@ -1547,10 +1566,13 @@ class ChatDatabase:
                     "streamed text nor a notice to save as its reply"
                 )
             now = self._now()
+            replied_at = now
+            if dated_last_alive:
+                replied_at = row["updated_at"] or row["started_at"]
             cursor = self._conn.execute(
                 "INSERT INTO messages (session_id, role, content, created_at) "
                 "VALUES (?, 'assistant', ?, ?)",
-                (row["session_id"], content, now),
+                (row["session_id"], content, replied_at),
             )
             self._conn.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?",
@@ -1615,6 +1637,40 @@ class ChatDatabase:
                 self._conn.commit()
                 doc["chunk_count"] = new_chunk_count
                 return self._enrich_document(doc)
+
+            # The same file with new content: its row moves to the new content.
+            same_file = self._conn.execute(
+                "SELECT id FROM documents WHERE filepath = ? ORDER BY indexed_at DESC",
+                (filepath,),
+            ).fetchone()
+            if same_file:
+                self._conn.execute(
+                    """UPDATE documents
+                       SET filename = ?, file_hash = ?, file_size = ?,
+                           chunk_count = ?, file_mtime = ?, indexed_at = ?,
+                           last_accessed_at = ?, indexing_status = 'complete',
+                           last_error = NULL, error_kind = NULL
+                       WHERE id = ?""",
+                    (
+                        filename,
+                        file_hash,
+                        file_size,
+                        chunk_count,
+                        file_mtime,
+                        now,
+                        now,
+                        same_file["id"],
+                    ),
+                )
+                self._conn.commit()
+                doc_id = same_file["id"]
+                return self._enrich_document(
+                    dict(
+                        self._conn.execute(
+                            "SELECT * FROM documents WHERE id = ?", (doc_id,)
+                        ).fetchone()
+                    )
+                )
 
             # Insert new document (still under lock)
             try:
@@ -1996,12 +2052,6 @@ class ChatDatabase:
                     "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
                     (key, value),
                 )
-
-    def get_all_settings(self) -> Dict[str, str]:
-        """Get all settings as a dict."""
-        with self._lock:
-            rows = self._conn.execute("SELECT key, value FROM settings").fetchall()
-            return {row["key"]: row["value"] for row in rows}
 
     # ── Scheduled tasks ─────────────────────────────────────────────────
 

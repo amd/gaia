@@ -66,6 +66,12 @@ from gaia.agents.base.skill_loader import (
     SkillLoader,
     dynamic_skills_env_override,
 )
+from gaia.agents.base.skill_suggester import (
+    DEFAULT_SUGGEST_THRESHOLD,
+    SkillSuggester,
+    render_suggestion,
+    suggest_env_override,
+)
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.email_tools import EmailToolsMixin
 from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
@@ -182,11 +188,10 @@ def fast_env_override() -> Optional[bool]:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-#: The flagship's step limit when nothing overrides it. Desktop tasks (read nine
-#: datasheets, price a BOM, write two files) need ~60-70 steps, so the fleet's
-#: 50 ended them mid-research with nothing written. ``GAIA_AGENT_MAX_STEPS``
+#: The flagship's step limit when nothing overrides it: a backstop for a runaway
+#: turn, high enough that real work never reaches it. ``GAIA_AGENT_MAX_STEPS``
 #: and an explicit ``max_steps`` still win.
-FLAGSHIP_MAX_STEPS = 150
+FLAGSHIP_MAX_STEPS = 1000
 
 
 def flagship_max_steps() -> int:
@@ -235,6 +240,10 @@ class GaiaAgentConfig(ChatAgentConfig):
     enable_scratchpad: bool = True
     enable_browser: bool = True
 
+    # Qwen3.6's template re-renders earlier steps with their reasoning; dropping
+    # it at the next request re-reads the whole previous tool turn uncached.
+    resend_reasoning_across_requests: bool = True
+
     # Which declared skill set to load. None = load nothing (the #2848 default);
     # resolution order is explicit arg -> env -> manifest default.
     skill_set: Optional[str] = None
@@ -264,6 +273,13 @@ class GaiaAgentConfig(ChatAgentConfig):
     # this agent specifically — it ships a skill library and meets users who
     # have never read it. Overridable via GAIA_SKILL_DISCOVERY.
     skill_discovery: bool = True
+
+    # Name the catalogue skills that match each request in one line of the
+    # turn's context, so a small local model is not left to pick from the whole
+    # list — the step it skips. Suggestion only: the model still calls
+    # load_skill. Needs the catalogue on. Overridable via GAIA_SKILL_SUGGEST.
+    skill_suggestions: bool = True
+    skill_suggestion_threshold: float = DEFAULT_SUGGEST_THRESHOLD
 
     # On for the flagship only. It does pull a second resident model and evict
     # the chat model — a cost a document agent should not pay silently, so
@@ -365,6 +381,7 @@ def _apply_fast_mode(config: GaiaAgentConfig) -> None:
     config.dynamic_tools = False
     config.dynamic_skills = False
     config.skill_discovery = False
+    config.skill_suggestions = False
     config.auto_index = False
 
 
@@ -402,6 +419,9 @@ class GaiaAgent(
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
         {"install_skill", "capture_skill", "remove_skill"}
     )
+    # The calendar and send-email skills ship in this agent's bundled skills.
+    BUNDLES_CALENDAR_SKILL: ClassVar[bool] = True
+    BUNDLES_SEND_EMAIL_SKILL: ClassVar[bool] = True
 
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
         if config is not None and kwargs:
@@ -509,6 +529,7 @@ class GaiaAgent(
         )
         self.skill_loader = self._maybe_build_skill_loader()
         self._skill_catalog_enabled = self._resolve_skill_catalog_enabled()
+        self.skill_suggester = self._maybe_build_skill_suggester()
         if self._profile_registers_tools():
             self.register_skill_library_tools()
             # Adaptive skills (#2674): lets the agent propose a correction to a
@@ -570,6 +591,67 @@ class GaiaAgent(
         if override is not None:
             return override
         return bool(getattr(self.config, "skill_discovery", False))
+
+    def _maybe_build_skill_suggester(self) -> Optional[SkillSuggester]:
+        """The per-request skill suggester, or ``None`` when it is off.
+
+        Off with the catalogue: a suggestion names catalogue skills, and with
+        no catalogue there is nothing for it to point into.
+        """
+        if not self._skill_catalog_enabled:
+            return None
+        override = suggest_env_override()
+        enabled = (
+            override
+            if override is not None
+            else bool(getattr(self.config, "skill_suggestions", True))
+        )
+        if not enabled:
+            return None
+        return SkillSuggester(
+            embed_fn=self._embed_text,
+            embed_batch_fn=self._embed_texts_batch,
+            threshold=float(
+                getattr(
+                    self.config,
+                    "skill_suggestion_threshold",
+                    DEFAULT_SUGGEST_THRESHOLD,
+                )
+            ),
+        )
+
+    def _select_skill_suggestions_for_turn(self, user_input: str) -> List[str]:
+        """Unloaded catalogue skills that clearly match *user_input*.
+
+        The current message alone, unlike skill-body selection: a suggestion is
+        about what this request needs, and the previous turn's skills are
+        already loaded or were already declined. Empty when the suggester is
+        off, or memory is off (the same embedder backs both).
+        """
+        suggester = getattr(self, "skill_suggester", None)
+        if suggester is None:
+            return []
+        if getattr(self, "_memory_store", None) is None:
+            logger.debug("[skills] no suggestions: memory store (embedder) is off")
+            return []
+        return suggester.suggest(
+            user_input,
+            self._catalog_skills(),
+            loaded=frozenset(self.loaded_skills),
+            list_project=self._lists_project_skills(),
+        )
+
+    def get_memory_dynamic_context(self) -> str:
+        """Per-turn context, plus the skills that match this request.
+
+        In the user message, not the system prompt: a line that changes from
+        turn to turn anywhere in the system prompt makes the server re-read the
+        whole conversation (see ``test_prompt_prefix_stability.py``).
+        """
+        query = getattr(self, "_memory_turn_query", None) or ""
+        line = render_suggestion(self._select_skill_suggestions_for_turn(query))
+        parts = (super().get_memory_dynamic_context(), line)
+        return "\n".join(part for part in parts if part)
 
     def _maybe_build_skill_loader(self) -> Optional[SkillLoader]:
         """Construct the per-turn skill-body selector, or ``None`` when off."""

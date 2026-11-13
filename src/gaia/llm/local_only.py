@@ -257,6 +257,16 @@ def apply_policy(value: str) -> Dict[str, Any]:
 
     try:
         result["cleared"] = clear_saved_cloud_models()
+    except SavedModelsNotCheckedError as e:
+        result["cleared"] = e.cleared
+        result["notices"].append(
+            {
+                "code": "saved_models_not_checked",
+                "severity": "warning",
+                "reason": str(e),
+            }
+        )
+        result["warnings"].append(f"Saved models were not checked: {e}")
     except GaiaConfigError as e:
         result["notices"].append(
             {
@@ -295,6 +305,18 @@ def apply_policy(value: str) -> Dict[str, Any]:
     return result
 
 
+class SavedModelsNotCheckedError(RuntimeError):
+    """Lemonade's catalog couldn't say whether a saved dotted id is a cloud model.
+
+    ``cleared`` lists the ids that were cleared anyway, because they are cloud
+    models without asking Lemonade.
+    """
+
+    def __init__(self, message: str, cleared: List[Tuple[str, str]]):
+        super().__init__(message)
+        self.cleared = cleared
+
+
 #: config.json keys that can hold a model id GAIA runs or restores.
 SAVED_MODEL_KEYS = ("default_model", "last_model")
 
@@ -307,24 +329,64 @@ def clear_saved_cloud_models() -> List[Tuple[str, str]]:
 
     Raises:
         GaiaConfigError: config.json exists but can't be read or written.
+        SavedModelsNotCheckedError: a saved id needs Lemonade's catalog to
+            classify and the catalog couldn't be read. Ids that are cloud
+            without asking are still cleared and saved first.
     """
     from gaia.config import GaiaConfig
-    from gaia.llm.lemonade_client import cloud_model_provider
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        cloud_model_provider,
+        find_model_requirement,
+        is_cloud_model,
+        may_be_cloud_model,
+    )
 
     cfg = GaiaConfig.load()
     cleared = []
+    ambiguous = []
+
+    # Known cloud ids go first, so a stopped Lemonade can't keep them saved.
     for key in SAVED_MODEL_KEYS:
         model = (getattr(cfg, key) or "").strip()
         is_claude = model.lower().startswith("claude") or (
             key == "last_model" and (cfg.last_provider or "").lower() == "claude"
         )
-        if model and (cloud_model_provider(model) or is_claude):
+        if not model:
+            continue
+        if cloud_model_provider(model) or is_cloud_model(model) or is_claude:
             setattr(cfg, key, None)
             cleared.append((key, model))
-    if any(key == "last_model" for key, _ in cleared):
-        cfg.last_provider = None
-    if cleared:
-        cfg.save()
+        elif may_be_cloud_model(model) and find_model_requirement(model) is None:
+            ambiguous.append((key, model))
+
+    def save() -> None:
+        if any(key == "last_model" for key, _ in cleared):
+            cfg.last_provider = None
+        if cleared:
+            cfg.save()
+
+    if ambiguous:
+        # A CLI policy switch runs in a fresh process that hasn't read the catalog.
+        client = LemonadeClient(verbose=False)
+        try:
+            for key, model in ambiguous:
+                if client._is_cloud_model(model):
+                    setattr(cfg, key, None)
+                    cleared.append((key, model))
+        except LemonadeClientError as e:
+            save()
+            unchecked = ", ".join(
+                dict.fromkeys(m for k, m in ambiguous if (k, m) not in cleared)
+            )
+            raise SavedModelsNotCheckedError(
+                f"couldn't check whether {unchecked} is a cloud model, so it is "
+                f"still saved: {e}",
+                list(cleared),
+            ) from e
+
+    save()
     return cleared
 
 
@@ -335,6 +397,29 @@ def is_local_recipe(recipe: Optional[str]) -> bool:
 def recipes_confirm_local(recipes: List[Optional[str]]) -> bool:
     """True when *recipes* is non-empty and every one runs on this machine."""
     return bool(recipes) and all(is_local_recipe(r) for r in recipes)
+
+
+def blocked_reason(recipes: List[Optional[str]]) -> str:
+    """Why Local only refuses a model whose catalog *recipes* don't confirm it runs here.
+
+    Callers only use this when *recipes* fails the allowlist, so every branch
+    names a real reason instead of pointing at the privacy setting.
+    """
+    remote = [r for r in recipes if not is_local_recipe(r)]
+    if not recipes:
+        return "Lemonade's catalog doesn't list it"
+    if len(set(recipes)) > 1:
+        return (
+            f"its name matches several catalog entries ({', '.join(map(str, recipes))}) "
+            "and not all of them are local models"
+        )
+    if remote[0] is None:
+        return "Lemonade's catalog lists it without saying where it runs"
+    if remote[0] == "cloud":
+        return "it is a cloud model"
+    if str(remote[0]).startswith("collection."):
+        return f"it is a '{remote[0]}' model, which can forward requests to the cloud"
+    return f"its recipe '{remote[0]}' isn't one GAIA knows is a local model"
 
 
 def assert_model_permitted(
@@ -364,25 +449,9 @@ def assert_model_permitted(
         ) from e
     if recipes_confirm_local(recipes):
         return
-    remote = [r for r in recipes if not is_local_recipe(r)]
-    if not recipes:
-        why = "Lemonade's catalog doesn't list it"
-    elif len(set(recipes)) > 1:
-        why = (
-            f"its name matches several catalog entries ({', '.join(map(str, recipes))}) "
-            "and not all of them are local models"
-        )
-    elif remote[0] is None:
-        why = "Lemonade's catalog lists it without saying where it runs"
-    elif remote[0] == "cloud":
-        why = "it is a cloud model"
-    elif str(remote[0]).startswith("collection."):
-        why = f"it is a '{remote[0]}' model, which can forward requests to the cloud"
-    else:
-        why = f"its recipe '{remote[0]}' isn't one GAIA knows is a local model"
     raise CloudDisabledError(
-        f"Local only is on, so '{model}' was blocked: {why}. Pick a local "
-        f"model. {SETTINGS_HINT}"
+        f"Local only is on, so '{model}' was blocked: {blocked_reason(recipes)}. "
+        f"Pick a local model. {SETTINGS_HINT}"
     )
 
 

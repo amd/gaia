@@ -12,7 +12,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 INSTALLER_DIR = REPO_ROOT / "installer"
 SCRIPTS_DIR = INSTALLER_DIR / "scripts"
 WEBUI_DIR = REPO_ROOT / "src" / "gaia" / "apps" / "webui"
-ELECTRON_DIR = REPO_ROOT / "src" / "gaia" / "electron"
 
 
 def _script_assignment(script: Path, variable: str) -> str:
@@ -56,17 +55,13 @@ def test_start_agent_ui_resolves_project_root_and_webui_dir():
     assert WEBUI_DIR.is_dir()
 
 
-def test_build_ui_installer_resolves_repo_root_webui_and_electron_dirs():
+def test_build_ui_installer_resolves_repo_root_and_webui_dir():
     script = SCRIPTS_DIR / "build-ui-installer.sh"
 
     repo_root = _resolved_from_scripts_dir(_script_assignment(script, "REPO_ROOT"))
     webui_assignment = _literal_assignment(script, "WEBUI_DIR")
-    electron_assignment = _literal_assignment(script, "ELECTRON_DIR")
 
     assert repo_root == REPO_ROOT
     assert webui_assignment == "$REPO_ROOT/src/gaia/apps/webui"
-    assert electron_assignment == "$REPO_ROOT/src/gaia/electron"
     assert repo_root / "src" / "gaia" / "apps" / "webui" == WEBUI_DIR
-    assert repo_root / "src" / "gaia" / "electron" == ELECTRON_DIR
     assert WEBUI_DIR.is_dir()
-    assert ELECTRON_DIR.is_dir()

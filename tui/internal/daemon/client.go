@@ -95,7 +95,7 @@ func New(opts Options) *Client {
 		opts.PIDAlive = PIDAlive
 	}
 	if opts.StartCommand == nil {
-		opts.StartCommand = gaiaDaemonStart
+		opts.StartCommand = defaultStartCommand
 	}
 	if opts.Logf == nil {
 		opts.Logf = func(string, ...any) {}
@@ -360,6 +360,18 @@ func (c *Client) checkUnderLock(ctx context.Context) (*Instance, error) {
 const installGaiaHint = "Reinstall GAIA from https://amd-gaia.ai/#install, which puts `gaia` " +
 	"beside gaia-tui, or run `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
 	"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), then retry"
+
+// defaultStartCommand is what New uses when Options.StartCommand is unset.
+var defaultStartCommand = gaiaDaemonStart
+
+// StubDefaultStartForTest replaces the default launcher and returns the
+// restore, so tests in other packages that build a Client with no
+// StartCommand never spawn a real daemon.
+func StubDefaultStartForTest(fn func(context.Context) (*exec.Cmd, error)) (restore func()) {
+	orig := defaultStartCommand
+	defaultStartCommand = fn
+	return func() { defaultStartCommand = orig }
+}
 
 // gaiaDaemonStart builds the default launcher command.
 func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {

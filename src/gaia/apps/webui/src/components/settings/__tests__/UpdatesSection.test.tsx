@@ -4,7 +4,8 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { UpdatesSection } from '../UpdatesSection';
+import { UpdatesSection, describeUpdateStatus } from '../UpdatesSection';
+import { translator } from '../../../i18n/useT';
 import { UpdateIndicator } from '../../UpdateIndicator';
 import { INITIAL_STATE } from '../../../hooks/useUpdateStatus';
 import type { UpdateState } from '../../../hooks/useUpdateStatus';
@@ -50,6 +51,47 @@ describe('UpdatesSection', () => {
         vi.stubGlobal('gaiaUpdater', undefined);
         const { container } = render(<UpdatesSection />);
         expect(container).toBeEmptyDOMElement();
+    });
+
+    it('says it could not read the update status, in plain words, instead of claiming up to date', async () => {
+        bridge.getStatus.mockRejectedValueOnce(
+            new Error("Error invoking remote method 'gaia-updater:get-status': Error: No handler registered for 'gaia-updater:get-status'"),
+        );
+        render(<UpdatesSection />);
+        const line = await screen.findByText(
+            /couldn't read the update status\. press try again, or restart gaia if it keeps happening\./i,
+            { selector: '[role="status"]' },
+        );
+        expect(line.textContent).not.toMatch(/handler|gaia-updater|remote method|unknown/i);
+        expect(screen.queryByText(/up to date/i, { selector: '[role="status"]' })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /try again/i })).toBeEnabled();
+        expect(screen.queryByRole('button', { name: /check for updates/i })).not.toBeInTheDocument();
+    });
+
+    it('reads the status again on Try again', async () => {
+        bridge.getStatus.mockRejectedValueOnce(new Error('No handler registered'));
+        render(<UpdatesSection />);
+        await screen.findByText(/couldn't read the update status/i, { selector: '[role="status"]' });
+        await userEvent.click(screen.getByRole('button', { name: /try again/i }));
+        await screen.findByText(/gaia is up to date/i, { selector: '[role="status"]' });
+        expect(bridge.getStatus).toHaveBeenCalledTimes(2);
+        expect(screen.getByRole('button', { name: /check for updates/i })).toBeEnabled();
+    });
+
+    it('drops the read failure once the updater pushes a real status', async () => {
+        bridge.getStatus.mockRejectedValueOnce(new Error('No handler registered'));
+        render(<UpdatesSection />);
+        await screen.findByText(/couldn't read the update status/i, { selector: '[role="status"]' });
+        act(() => push({ status: 'available', version: '0.26.0' }));
+        await screen.findByText(/gaia 0\.26\.0 is available/i, { selector: '[role="status"]' });
+        expect(screen.queryByText(/couldn't read the update status/i, { selector: '[role="status"]' })).not.toBeInTheDocument();
+    });
+
+    it('says the update status could not be read in Arabic', () => {
+        const line = describeUpdateStatus({ ...INITIAL_STATE, readFailed: true }, translator('ar'));
+        expect(line).toContain('تعذّرت قراءة حالة التحديث');
+        expect(line).toContain('«إعادة المحاولة»');
+        expect(line).not.toContain('محدّث');
     });
 
     it('shows auto-update off by default', async () => {
@@ -140,6 +182,40 @@ describe('UpdatesSection', () => {
         expect(await screen.findByRole('alert')).toHaveTextContent(/0\.26\.0 didn't install.*still on 0\.25\.0/);
     });
 
+    it('on a Mac links an available update to its release page instead of installing it', async () => {
+        state = {
+            ...state,
+            status: 'available',
+            version: '0.26.0',
+            manualInstall: true,
+            downloadUrl: 'https://github.com/amd/gaia/releases/tag/v0.26.0',
+        };
+        render(<UpdatesSection />);
+        const link = await screen.findByRole('link', { name: /download gaia 0\.26\.0/i });
+        expect(link).toHaveAttribute('href', 'https://github.com/amd/gaia/releases/tag/v0.26.0');
+        expect(link).toHaveAttribute('target', '_blank');
+        expect(link).toHaveAccessibleDescription(/can't update itself on this mac/i);
+        expect(screen.queryByRole('button', { name: /update to/i })).toBeNull();
+        expect(screen.queryByRole('switch', { name: /install updates automatically/i })).toBeNull();
+        expect(rcSwitch()).toBeEnabled();
+        expect(bridge.downloadUpdate).not.toHaveBeenCalled();
+    });
+
+    it('on a Mac with nothing offered shows no download link', async () => {
+        state = { ...state, manualInstall: true };
+        render(<UpdatesSection />);
+        await screen.findByText(/gaia is up to date/i, { selector: '[role="status"]' });
+        expect(screen.queryByRole('link', { name: /download gaia/i })).toBeNull();
+        expect(screen.queryByText(/can't update itself on this mac/i)).toBeNull();
+    });
+
+    it('explains the Mac download in Arabic', () => {
+        const t = translator('ar');
+        expect(t('update.settings.manualHint')).toContain('Mac');
+        expect(t('update.settings.manualHint')).not.toBe(translator('en')('update.settings.manualHint'));
+        expect(t('update.settings.downloadVersion', { version: '0.26.0' })).toContain('0.26.0');
+    });
+
     it('opens the version picker', async () => {
         render(<UpdatesSection />);
         await userEvent.click(await screen.findByRole('button', { name: /install a specific version/i }));
@@ -166,6 +242,28 @@ describe('UpdateIndicator', () => {
         render(<UpdateIndicator />);
         await userEvent.click(await screen.findByRole('button', { name: /update now/i }));
         expect(bridge.downloadUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('on a Mac offers a download link, never Update now', async () => {
+        state = {
+            ...state,
+            status: 'available',
+            version: '0.26.0-rc.13',
+            manualInstall: true,
+            downloadUrl: 'https://github.com/amd/gaia/releases/tag/v0.26.0-rc13',
+        };
+        render(<UpdateIndicator />);
+        const link = await screen.findByRole('link', { name: /^download$/i });
+        expect(link).toHaveAttribute('href', 'https://github.com/amd/gaia/releases/tag/v0.26.0-rc13');
+        expect(screen.queryByRole('button', { name: /update now/i })).toBeNull();
+        expect(screen.getByRole('status')).toHaveAttribute('title', expect.stringMatching(/can't update itself on this mac/i));
+    });
+
+    it('on a Mac falls back to the releases page when the update names no page', async () => {
+        state = { ...state, status: 'available', version: '0.26.0', manualInstall: true, downloadUrl: null };
+        render(<UpdateIndicator />);
+        expect(await screen.findByRole('link', { name: /^download$/i }))
+            .toHaveAttribute('href', 'https://github.com/amd/gaia/releases');
     });
 
     it('restarts into a downloaded update through the bridge', async () => {

@@ -2905,10 +2905,12 @@ class TestRunner:
         # 1M input = $3.00, 0.5M output = $7.50, total = $10.50
         assert expected_total == pytest.approx(10.50, abs=0.01)
 
-        # Test default fallback for unknown models
-        fallback = MODEL_PRICING["default"]
-        assert fallback["input_per_mtok"] == 3.00
-        assert fallback["output_per_mtok"] == 15.00
+        # An unpriced Claude model is an error, not a guessed price
+        from gaia.eval.config import claude_pricing
+
+        assert "default" not in MODEL_PRICING
+        with pytest.raises(ValueError, match="MODEL_PRICING"):
+            claude_pricing("claude-future-9000")
 
         # Test opus pricing is higher than sonnet
         opus_pricing = MODEL_PRICING["claude-opus-4"]

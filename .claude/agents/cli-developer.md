@@ -56,14 +56,13 @@ those modules too if a command seems to be missing.
 
 ## Parent-parser pattern (shared flags)
 
-Every subcommand inherits via `parents=[parent_parser]`. Shared flags include: `--logging-level`, `--use-claude`, `--use-chatgpt`, `--base-url`, `--model`, `--trace`, `--max-steps`, `--list-tools`, `--stats` (`--show-stats`).
+Every subcommand inherits via `parents=[parent_parser]`. Shared flags include: `--logging-level`, `--use-claude`, `--base-url`, `--model`, `--trace`, `--max-steps`, `--list-tools`, `--stats` (`--show-stats`).
 
 ```python
 # src/gaia/cli.py — parent parser shape
 parent_parser = argparse.ArgumentParser(add_help=False)
 parent_parser.add_argument("--logging-level", choices=[...], default="INFO")
 parent_parser.add_argument("--use-claude", action="store_true")
-parent_parser.add_argument("--use-chatgpt", action="store_true")
 parent_parser.add_argument("--base-url", default=None)
 parent_parser.add_argument("--model", default=None)
 parent_parser.add_argument("--trace", action="store_true")

@@ -23,22 +23,39 @@ deliverable, and nothing here edits it.
 from __future__ import annotations
 
 import ast
+import builtins
 import csv
+import decimal
+import functools
 import io
 import json
 import logging
 import math
 import os
 import re
+import string
 import zipfile
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
+from types import MappingProxyType
+from typing import (
+    Any,
+    Dict,
+    FrozenSet,
+    Iterable,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from gaia.agents.base.claims import admits_unverified
 from gaia.agents.base.grounding import (
     _EXEC_WORDS,
     _TABLE_RULE,
     Finding,
+    _arg_strings,
     _args_text,
     _Corpus,
     _has,
@@ -332,9 +349,8 @@ def input_paths(records: Sequence[Dict[str, Any]]) -> List[str]:
                 found.append(args[key])
         code = args.get("code")
         if isinstance(code, str):
-            try:
-                tree = ast.parse(code)
-            except SyntaxError:
+            tree = _parsed(code)
+            if tree is None:
                 continue
             found.extend(
                 node.value
@@ -643,13 +659,906 @@ def _basename(path: str) -> str:
     return re.split(r"[\\/]", path.rstrip("\\/"))[-1].lower()
 
 
-def _evidence_texts(records: Sequence[Dict[str, Any]], written: Set[str]) -> List[str]:
-    """What this turn's tools returned that can source a figure in *written*.
+#: Calls that bring a file into a script; each must name it as a literal.
+_PY_READERS = {
+    "open",
+    "read_csv",
+    "read_excel",
+    "read_json",
+    "read_table",
+    "read_parquet",
+    "load_workbook",
+    "Path",
+    "PdfReader",
+    "Document",
+    "Presentation",
+    "loadtxt",
+    "genfromtxt",
+}
+#: Ways a script reaches data without naming a file the turn read.
+_PY_UNSEEN = {
+    "glob",
+    "iglob",
+    "rglob",
+    "listdir",
+    "scandir",
+    "walk",
+    "iterdir",
+    "requests",
+    "urllib",
+    "urlopen",
+    "httpx",
+    "subprocess",
+    "system",
+    "popen",
+    "environ",
+    "getenv",
+    "input",
+    "stdin",
+    "sqlite3",
+    "eval",
+    "exec",
+    "compile",
+}
+#: The largest figure a script may type itself: a count, an index, a rounding.
+_SMALL_INT = 10
+#: ``5,000`` is one number, not a 5 and a 0.
+_DIGITS = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?")
+#: Type names such as ``'int64'`` or ``'float32'``: no figure.
+_DTYPE = re.compile(
+    r"(?:u?int|float|complex|Int|UInt|Float)(?:8|16|32|64|128)"
+    r"|(?:datetime|timedelta)64(?:\[\w+\])?"
+)
+#: ``%10.2f`` and ``{:>12}`` size a column; they type no figure.
+_FORMAT_DIRECTIVE = re.compile(
+    r"%[-+ #0]*\d*(?:\.\d+)?[sdifeEgGxXr%]|\{[\w.\[\]]*(?:![rsa])?(?::[^{}]*)?\}"
+)
+#: Builtins that turn literals into a figure: ``int('9' + '5')``, ``ord('_')``.
+_PY_FOLDERS = {
+    "int",
+    "float",
+    "str",
+    "Decimal",
+    "ord",
+    "chr",
+    "len",
+    "abs",
+    "round",
+    "sum",
+    "max",
+    "min",
+}
+_PY_OPEN_MODULES = {"io", "codecs"}
+#: Calls whose literal arguments pick rows or dates, never a figure the
+#: script outputs: ``head(20)``, ``nlargest(25, ...)``, ``date(2026, 3, 1)``.
+_PY_SELECTORS = {
+    "head",
+    "tail",
+    "nlargest",
+    "nsmallest",
+    "sample",
+    "quantile",
+    "between",
+    "isin",
+    "startswith",
+    "endswith",
+    "date",
+    "datetime",
+    "Timestamp",
+    "to_datetime",
+    "strptime",
+    "strftime",
+    "fromisoformat",
+    "date_range",
+    "period_range",
+    "Period",
+    "DateOffset",
+    "timedelta",
+}
+#: An ISO date in a string names a day, not an amount.
+_DATE_TEXT = re.compile(
+    r"(?<![\d-])(?:19|20)\d{2}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?"
+    r"(?:[T ]\d{2}:\d{2}(?::\d{2})?)?(?![\d-])"
+)
+_YEAR = re.compile(r"(?:19|20)\d{2}")
+_SEQUENCES = (str, list, tuple)
+
+
+#: Past this a folded value is no figure anyone typed; stop folding it.
+_FOLD_LIMIT = 10**15
+_FOLD_ITEMS = 10_000
+
+
+class _Unfoldable(Exception):
+    """The expression depends on something other than the script's literals."""
+
+
+class _Bound:
+    """Names assigned once, folded on first use: ``a = 9; b = 10``."""
+
+    def __init__(self, values: Dict[str, Any]):
+        self.values = values
+        self.folded: Dict[str, Any] = {}
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.values
+
+    def fold(self, name: str, depth: int) -> Any:
+        if name not in self.folded:
+            self.folded[name] = _Unfoldable
+            try:
+                self.folded[name] = (_fold(self.values[name], depth + 1, self),)
+            except _Unfoldable:
+                pass
+        if self.folded[name] is _Unfoldable:
+            raise _Unfoldable
+        return self.folded[name][0]
+
+
+#: ``%200000000s`` and ``%*s``: a width that would build a huge string.
+_PERCENT_SPEC = re.compile(r"%(?:\([^)]*\))?[-+ #0]*(?:\*|\d+)?(?:\.(?:\*|\d+))?")
+#: String methods that pad their receiver to a width.
+_PY_PADDERS = ("ljust", "rjust", "center", "zfill")
+
+
+def _fold_size(value: Any) -> int:
+    """Characters and items in *value*, counted until past ``_FOLD_ITEMS``."""
+    total = 0
+    pending = [value]
+    while pending and total <= _FOLD_ITEMS:
+        item = pending.pop()
+        if isinstance(item, str):
+            total += len(item)
+        elif isinstance(item, (list, tuple)):
+            total += len(item)
+            if total <= _FOLD_ITEMS:
+                pending.extend(item)
+    return total
+
+
+def _capped(value: Any) -> Any:
+    if isinstance(value, _SEQUENCES) and _fold_size(value) > _FOLD_ITEMS:
+        raise _Unfoldable
+    return value
+
+
+def _wide(spec: str) -> bool:
+    """*spec* pads or rounds past ``_FOLD_ITEMS``, or takes its width from
+    an argument."""
+    return (
+        "{" in spec
+        or "*" in spec
+        or any(len(n) > 6 or int(n) > _FOLD_ITEMS for n in re.findall(r"\d+", spec))
+    )
+
+
+def _huge_decimal(value: Any) -> bool:
+    """``Decimal('1e10000000')``: turning it into an int would take minutes."""
+    return (
+        isinstance(value, decimal.Decimal)
+        and value.is_finite()
+        and value.adjusted() > 15
+    )
+
+
+def _fold(node: Any, depth: int = 0, bound: Optional[_Bound] = None) -> Any:
+    """The value of an expression built only from literals, ``9*10+5``.
+
+    *bound* maps names assigned once to the expression they hold, so
+    ``a = 9; b = 10; a*b+5`` folds too. A string or list past
+    ``_FOLD_ITEMS`` does not fold: building it would stall the turn.
+    """
+    if depth > 32:
+        raise _Unfoldable
+    return _capped(_fold_value(node, depth, bound))
+
+
+def _fold_value(node: Any, depth: int, bound: Optional[_Bound]) -> Any:
+    def sub(child: Any) -> Any:
+        return _fold(child, depth + 1, bound)
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float, str)):
+        return node.value
+    if isinstance(node, ast.Name) and bound is not None and node.id in bound:
+        return bound.fold(node.id, depth)
+    try:
+        if isinstance(node, (ast.List, ast.Tuple)):
+            items = [sub(e) for e in node.elts]
+            return items if isinstance(node, ast.List) else tuple(items)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+            value = sub(node.operand)
+            return -value if isinstance(node.op, ast.USub) else +value
+        if isinstance(node, ast.BinOp):
+            left, right = sub(node.left), sub(node.right)
+            if isinstance(node.op, ast.Pow) and (abs(right) > 64 or abs(left) > 1e6):
+                raise _Unfoldable
+            if isinstance(node.op, ast.Mult) and isinstance(
+                left, _SEQUENCES
+            ) != isinstance(right, _SEQUENCES):
+                seq, times = (
+                    (left, right)
+                    if isinstance(left, _SEQUENCES)
+                    else (
+                        right,
+                        left,
+                    )
+                )
+                if abs(times) > 1000 or _fold_size(seq) * abs(times) > _FOLD_ITEMS:
+                    raise _Unfoldable
+            if isinstance(node.op, ast.Mod) and isinstance(left, str):
+                if any(_wide(m.group(0)) for m in _PERCENT_SPEC.finditer(left)):
+                    raise _Unfoldable
+            ops = {
+                ast.Add: lambda a, b: a + b,
+                ast.Sub: lambda a, b: a - b,
+                ast.Mult: lambda a, b: a * b,
+                ast.Div: lambda a, b: a / b,
+                ast.FloorDiv: lambda a, b: a // b,
+                ast.Mod: lambda a, b: a % b,
+                ast.Pow: lambda a, b: a**b,
+            }
+            if type(node.op) not in ops:
+                raise _Unfoldable
+            value = ops[type(node.op)](left, right)
+            if isinstance(value, (int, float)) and abs(value) > _FOLD_LIMIT:
+                raise _Unfoldable
+            return value
+        if isinstance(node, ast.JoinedStr):
+            parts = []
+            for part in node.values:
+                if isinstance(part, ast.FormattedValue):
+                    parts.append(str(sub(part.value)))
+                else:
+                    parts.append(str(sub(part)))
+            if sum(len(p) for p in parts) > _FOLD_ITEMS:
+                raise _Unfoldable
+            return "".join(parts)
+        if isinstance(node, ast.Call) and not node.keywords:
+            func = node.func
+            # Methods and map() before the arguments: a list argument or a
+            # bare ``str`` must not stop ``''.join(map(str, [9, 5])))``.
+            if isinstance(func, ast.Attribute) and func.attr in (
+                "join",
+                "format",
+                *_PY_PADDERS,
+            ):
+                receiver = sub(func.value)
+                if not isinstance(receiver, str):
+                    raise _Unfoldable
+                if func.attr == "join" and len(node.args) == 1:
+                    items = sub(node.args[0])
+                    joints = len(receiver) * max(len(items) - 1, 0)
+                    if joints + _fold_size(items) > _FOLD_ITEMS:
+                        raise _Unfoldable
+                    return receiver.join(items)
+                if func.attr == "format":
+                    fields = string.Formatter().parse(receiver)
+                    if any(spec and _wide(spec) for _, _, spec, _ in fields):
+                        raise _Unfoldable
+                    return receiver.format(*[sub(a) for a in node.args])
+                if func.attr in _PY_PADDERS and 1 <= len(node.args) <= 2:
+                    args = [sub(a) for a in node.args]
+                    if not isinstance(args[0], int) or args[0] > _FOLD_ITEMS:
+                        raise _Unfoldable
+                    return getattr(receiver, func.attr)(*args)
+                raise _Unfoldable
+            if isinstance(func, ast.Name) and func.id == "map" and len(node.args) == 2:
+                mapper = node.args[0]
+                if not (isinstance(mapper, ast.Name) and mapper.id in _PY_FOLDERS):
+                    raise _Unfoldable
+                convert = getattr(builtins, mapper.id, None) or decimal.Decimal
+                values = sub(node.args[1])
+                if any(_huge_decimal(v) for v in values):
+                    raise _Unfoldable
+                return [convert(v) for v in values]
+            if isinstance(func, ast.Name) and func.id in _PY_FOLDERS:
+                args = [sub(a) for a in node.args]
+                if any(_huge_decimal(a) for a in args):
+                    raise _Unfoldable
+                if func.id == "Decimal":
+                    return decimal.Decimal(*args)
+                return getattr(builtins, func.id)(*args)
+    except _Unfoldable:
+        raise
+    except Exception as e:  # noqa: BLE001 - a literal that won't evaluate types nothing
+        raise _Unfoldable from e
+    raise _Unfoldable
+
+
+def _types_a_figure(value: Any) -> bool:
+    """*value* holds a number larger than a count: ``95``, ``'$95.00'``."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, str):
+        if _DTYPE.fullmatch(value.strip()):
+            return False
+        text = _DATE_TEXT.sub(" ", _FORMAT_DIRECTIVE.sub(" ", value))
+        return any(
+            float(n.replace(",", "")) > _SMALL_INT for n in _DIGITS.findall(text)
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_types_a_figure(v) for v in value)
+    if isinstance(value, decimal.Decimal):
+        return not value.is_finite() or value.copy_abs() > _SMALL_INT
+    try:
+        return abs(value) > _SMALL_INT
+    except TypeError:
+        return False
+
+
+def _bound_once(tree: ast.AST) -> _Bound:
+    """Names assigned exactly once, mapped to the expression they hold."""
+    stores: Dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stores[node.id] = stores.get(node.id, 0) + 1
+    return _Bound(
+        {
+            node.targets[0].id: node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and stores.get(node.targets[0].id) == 1
+        }
+    )
+
+
+def _titled(node: Any) -> bool:
+    """A printed or written string whose only numbers are years:
+    ``'Revenue 2026'``."""
+    if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+        return False
+    text = _DATE_TEXT.sub(" ", _FORMAT_DIRECTIVE.sub(" ", node.value))
+    return all(
+        _YEAR.fullmatch(n)
+        for n in _DIGITS.findall(text)
+        if float(n.replace(",", "")) > _SMALL_INT
+    )
+
+
+def _call_name(call: ast.Call) -> Optional[str]:
+    return getattr(call.func, "id", getattr(call.func, "attr", None))
+
+
+def _selecting(tree: ast.AST, bound: _Bound) -> Set[int]:
+    """Nodes whose literals pick rows, dates or a layout, not a figure.
+
+    Comparisons (``r['date'] >= '2026-03-01'``, ``year == 2026``), subscripts
+    and slices (``rows[:25]``), the arguments of a selector call
+    (``nlargest(25, ...)``, ``date(2026, 3, 1)``, ``round(x, 2)``, a ``range``
+    a loop walks), format specs, padding widths (``ljust(20)``), pandas
+    display options, encodings and ``'=' * 40``. A name bound
+    once counts when every use of it is one of these.
+    """
+    roots: List[Any] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            roots += [node.left, *node.comparators]
+        elif isinstance(node, ast.Subscript):
+            roots.append(node.slice)
+        elif isinstance(node, ast.Call):
+            name = _call_name(node)
+            if name in _PY_SELECTORS:
+                roots += list(node.args) + [k.value for k in node.keywords]
+            elif name == "round":
+                roots += node.args[1:]
+            elif name in ("print", "write"):
+                roots += [n for a in node.args for n in ast.walk(a) if _titled(n)]
+            elif name in _PY_PADDERS:
+                roots += node.args[:1]
+            elif name == "set_option":
+                roots += list(node.args) + [k.value for k in node.keywords]
+            roots += [k.value for k in node.keywords if k.arg == "encoding"]
+        elif isinstance(node, (ast.For, ast.comprehension)):
+            loop = node.iter
+            if isinstance(loop, ast.Call) and _call_name(loop) == "range":
+                roots += loop.args
+        elif isinstance(node, ast.FormattedValue) and node.format_spec is not None:
+            roots.append(node.format_spec)
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, ast.Mult):
+            for side, other in ((node.left, node.right), (node.right, node.left)):
+                if isinstance(side, ast.Constant) and isinstance(side.value, str):
+                    roots.append(other)
+    picked = {
+        id(n)
+        for root in roots
+        if not any(isinstance(n, ast.NamedExpr) for n in ast.walk(root))
+        for n in ast.walk(root)
+    }
+    loads: Dict[str, List[int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            loads.setdefault(node.id, []).append(id(node))
+    for name, value in bound.values.items():
+        uses = loads.get(name)
+        if uses and all(u in picked for u in uses):
+            picked |= {id(n) for n in ast.walk(value)}
+    return picked
+
+
+def _percent_scales(tree: ast.AST) -> Set[int]:
+    """The ``100`` constants that turn a ratio into a percentage (``a / b *
+    100``, ``share * 100`` for a ``share = v / total``) or a price into cents
+    and back (``round(p * 100) ... / 100``)."""
+
+    def is_hundred(node: Any) -> bool:
+        return isinstance(node, ast.Constant) and node.value == 100
+
+    ratio_names: Set[str] = set()
+
+    def is_ratio(node: Any) -> bool:
+        return any(
+            (
+                isinstance(n, ast.BinOp)
+                and isinstance(n.op, ast.Div)
+                and not _foldable(n.right)
+            )
+            or (isinstance(n, ast.Name) and n.id in ratio_names)
+            for n in ast.walk(node)
+        )
+
+    for _ in range(2):
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Assign)
+                and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and is_ratio(node.value)
+            ):
+                ratio_names.add(node.targets[0].id)
+
+    scales = set()
+    times: Set[int] = set()
+    over: Set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.BinOp):
+            continue
+        if isinstance(node.op, ast.Mult):
+            for side, other in ((node.left, node.right), (node.right, node.left)):
+                if is_hundred(side):
+                    times.add(id(side))
+                    if is_ratio(other):
+                        scales.add(id(side))
+        elif isinstance(node.op, (ast.Div, ast.FloorDiv)):
+            if is_hundred(node.right) and not _foldable(node.left):
+                over.add(id(node.right))
+            if (
+                isinstance(node.op, ast.Div)
+                and isinstance(node.left, ast.BinOp)
+                and isinstance(node.left.op, ast.Mult)
+                and not _foldable(node.right)
+            ):
+                for side in (node.left.left, node.left.right):
+                    if is_hundred(side):
+                        scales.add(id(side))
+    if times and over:
+        scales |= times | over
+    return scales
+
+
+def _foldable(node: Any) -> bool:
+    try:
+        _fold(node)
+    except _Unfoldable:
+        return False
+    return True
+
+
+def _string_names(tree: ast.AST) -> Dict[str, str]:
+    """Names bound once, to a string literal: ``csv_path = r"...orders.csv"``."""
+    stores: Dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            stores[node.id] = stores.get(node.id, 0) + 1
+    return {
+        node.targets[0].id: node.value.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and stores.get(node.targets[0].id) == 1
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, str)
+    }
+
+
+def _computed(
+    record: Dict[str, Any],
+    read_names: Set[str],
+    written: Set[str] = frozenset(),
+    copied: FrozenSet[float] = frozenset(),
+) -> bool:
+    """*record* is a script whose output can only come from files read this turn.
+
+    Every file it opens other than one the turn wrote was read this turn, and
+    every figure it types is in *copied*: one a tool showed this turn.
+    """
+    opened = _script_opens(record, copied)
+    read = [name for name in opened or () if name not in written]
+    return bool(read) and all(name in read_names for name in read)
+
+
+def _script_opens(
+    record: Dict[str, Any], copied: FrozenSet[float] = frozenset()
+) -> Optional[List[str]]:
+    """The files a ``run_python`` script opens, or ``None`` when its figures
+    may not come from them."""
+    io = _script_io(record, copied)
+    return None if io is None else io[0]
+
+
+def _script_wrote(
+    record: Dict[str, Any], copied: FrozenSet[float] = frozenset()
+) -> Set[str]:
+    """The files a computing script created or overwrote, not just read or
+    appended to."""
+    io = _script_io(record, copied)
+    return set() if io is None else io[1]
+
+
+#: Methods that replace the file their path names: ``df.to_csv(path)``.
+_PY_SAVERS = {
+    "to_csv",
+    "to_excel",
+    "to_markdown",
+    "to_json",
+    "to_html",
+    "to_parquet",
+    "save",
+}
+
+
+def _literal_path(node: Any, named: Dict[str, str]) -> Optional[str]:
+    if isinstance(node, ast.Name) and node.id in named:
+        return named[node.id]
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
+
+
+def _call_arg(call: ast.Call, index: int, keyword: str) -> Any:
+    if len(call.args) > index:
+        return call.args[index]
+    return next((k.value for k in call.keywords if k.arg == keyword), None)
+
+
+def _is_open(func: Any) -> bool:
+    """``open``, ``io.open`` or ``codecs.open``: the same path-then-mode call."""
+    return isinstance(func, ast.Name) or (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id in _PY_OPEN_MODULES
+    )
+
+
+def _is_print(call: ast.Call) -> bool:
+    return isinstance(call.func, ast.Name) and call.func.id == "print"
+
+
+def _truncates(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
+    """The path *call* replaces: ``open(p, 'w')``, ``Path(p).write_text``,
+    ``df.to_csv(p)``. Not a read, and not an append."""
+    func = call.func
+    ident = getattr(func, "id", getattr(func, "attr", None))
+    if ident == "open" and _is_open(func):
+        mode = _call_arg(call, 1, "mode")
+        if isinstance(mode, ast.Constant) and isinstance(mode.value, str):
+            if set(mode.value) & {"w", "x"}:
+                return _literal_path(_call_arg(call, 0, "file"), named)
+        return None
+    if ident in ("write_text", "write_bytes") and isinstance(func, ast.Attribute):
+        receiver = func.value
+        if isinstance(receiver, ast.Call) and receiver.args:
+            return _literal_path(receiver.args[0], named)
+        return None
+    if ident in _PY_SAVERS:
+        mode = next((k.value for k in call.keywords if k.arg == "mode"), None)
+        if isinstance(mode, ast.Constant) and "a" in str(mode.value):
+            return None
+        target = (call.args or [k.value for k in call.keywords] or [None])[0]
+        return _literal_path(target, named)
+    return None
+
+
+def _reads(call: ast.Call, named: Dict[str, str]) -> Optional[str]:
+    """The path *call* reads: ``open(p)``, ``Path(p).read_text()``,
+    ``pd.read_csv(p)``."""
+    func = call.func
+    ident = getattr(func, "id", getattr(func, "attr", None))
+    if ident == "open" and _is_open(func):
+        return _literal_path(_call_arg(call, 0, "file"), named)
+    if ident in ("read_text", "read_bytes") and isinstance(func, ast.Attribute):
+        receiver = func.value
+        if isinstance(receiver, ast.Call) and receiver.args:
+            return _literal_path(receiver.args[0], named)
+        return None
+    if ident in _PY_READERS - {"open", "Path"}:
+        target = (call.args or [k.value for k in call.keywords] or [None])[0]
+        return _literal_path(target, named)
+    return None
+
+
+def _script_io(
+    record: Dict[str, Any], copied: FrozenSet[float] = frozenset()
+) -> Optional[Tuple[List[str], Set[str]]]:
+    """``(files opened, files replaced)`` by a ``run_python`` script, or
+    ``None`` when its figures may not come from those files.
+
+    A file the script read and then saved back is not one it replaced: what
+    it patched in place, another tool wrote.
+
+    Each file it opens is named, as a literal or a name bound once to one; it
+    reaches no other data; and it types no figure beyond a small count —
+    ``v*40``, ``1500 - 90``, ``9*10+5`` or ``'CM5,95'.split(',')`` invents its
+    result rather than computing it. A decimal in *copied* is exempt:
+    a rate a tool printed this turn, typed into the script, was copied.
+    """
+    if _name(record) != "run_python":
+        return None
+    code = (record.get("args") or {}).get("code")
+    if not isinstance(code, str):
+        return None
+    io = _analysed(code)
+    if io is None or io[2] - copied:
+        return None
+    return list(io[0]), set(io[1])
+
+
+@functools.lru_cache(maxsize=16)
+def _parsed(code: str) -> Optional[ast.AST]:
+    """*code*'s syntax tree, or ``None`` when it cannot be analysed."""
+    try:
+        return ast.parse(code)
+    except (
+        SyntaxError,
+        ValueError,
+        RecursionError,
+        UnicodeEncodeError,
+        MemoryError,
+    ) as error:
+        logger.warning(
+            "Cannot analyse a %d-character run_python script: %s: %s",
+            len(code),
+            type(error).__name__,
+            error,
+        )
+        return None
+
+
+@functools.lru_cache(maxsize=128)
+def _analysed(
+    code: str,
+) -> Optional[Tuple[Tuple[str, ...], FrozenSet[str], FrozenSet[float]]]:
+    """``(files opened, files replaced, figures typed)`` for *code*."""
+    tree = _parsed(code)
+    if tree is None:
+        return None
+    opened: List[str] = []
+    replaced: Set[str] = set()
+    read_from: Set[str] = set()
+    named = _string_names(tree)
+    bound = _bound_once(tree)
+    untyped = _percent_scales(tree) | _selecting(tree, bound)
+    typed_strings: Set[str] = set()
+    typed: Set[float] = set()
+    paths: Set[str] = set()
+    refs: Dict[str, int] = {}
+    truncations: Dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant):
+            value = node.value
+            if isinstance(value, str) and value.lower().startswith(("http:", "https:")):
+                return None
+            # '$95.00', "CM5,95,40" or json.loads('{"cm5": 95}') types a price
+            # as surely as 95 does, unless the string is a path the script opens.
+            if isinstance(value, str) and id(node) not in untyped:
+                if _types_a_figure(value):
+                    typed_strings.add(value)
+            if isinstance(value, (int, float, complex)) and not isinstance(value, bool):
+                if id(node) in untyped:
+                    continue
+                if isinstance(value, complex):
+                    return None
+                if isinstance(value, int) or value.is_integer():
+                    if abs(value) > _SMALL_INT:
+                        return None
+                    continue
+                # A whole number matches a date or count by chance; a rate
+                # like 1.0842 does not, so only that can be judged copied.
+                if not math.isfinite(value):
+                    return None
+                typed.add(value)
+        elif (
+            isinstance(node, (ast.BinOp, ast.UnaryOp, ast.JoinedStr, ast.Call))
+            and id(node) not in untyped
+        ):
+            # 9*10+5, int('9'+'5') or a=9; b=10; a*b+5: small literals that
+            # make a price.
+            try:
+                if _types_a_figure(_fold(node, bound=bound)):
+                    return None
+            except _Unfoldable:
+                pass
+        if isinstance(node, (ast.Name, ast.Attribute)):
+            if (node.id if isinstance(node, ast.Name) else node.attr) in _PY_UNSEEN:
+                return None
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            modules = [a.name for a in node.names] + [
+                getattr(node, "module", None) or ""
+            ]
+            if any(m.split(".")[0] in _PY_UNSEEN for m in modules):
+                return None
+        if isinstance(node, ast.Call):
+            wrote = _truncates(node, named)
+            if wrote is not None:
+                replaced.add(_basename(wrote))
+                paths.add(wrote)
+                truncations[_basename(wrote)] = truncations.get(_basename(wrote), 0) + 1
+            else:
+                source = _reads(node, named)
+                if source is not None:
+                    read_from.add(_basename(source))
+                    paths.add(source)
+            for arg in list(node.args) + [k.value for k in node.keywords]:
+                ref = _literal_path(arg, named)
+                if ref is not None and not _is_print(node):
+                    refs[_basename(ref)] = refs.get(_basename(ref), 0) + 1
+            func = node.func
+            if getattr(func, "id", getattr(func, "attr", None)) not in _PY_READERS:
+                continue
+            target = (node.args or [k.value for k in node.keywords] or [None])[0]
+            path = _literal_path(target, named)
+            if path is None:
+                return None
+            opened.append(_basename(path))
+            paths.add(path)
+    if typed_strings - paths:
+        return None
+    # A path handed to any call besides the overwrite, Path(p).read_text()
+    # through a variable included, may have read the file first.
+    read_from |= {name for name in replaced if refs.get(name, 0) > truncations[name]}
+    return tuple(opened), frozenset(replaced - read_from), frozenset(typed)
+
+
+def _script_written(
+    files: Mapping[str, Sequence[Block]],
+    records: Sequence[Dict[str, Any]],
+    read_names: Set[str],
+    written: Set[str],
+    copied: Mapping[int, FrozenSet[float]] = MappingProxyType({}),
+) -> List[str]:
+    """What a computing script wrote straight into a file in *files*, minus
+    its own literals — the file was its output, as stdout would have been.
+
+    Only when the script created or overwrote that file and nothing wrote it
+    after: a script that read or appended to it did not write what is there.
+    """
+    texts = []
+    for path, blocks in files.items():
+        name = _basename(path)
+        last = None
+        for record in records:
+            if not _ran(record) or record.get("failed"):
+                continue
+            numbers = copied.get(id(record), frozenset())
+            if _computed(record, read_names, written, numbers) and name in (
+                _script_wrote(record, numbers)
+            ):
+                last = record
+            elif _may_change(record, name):
+                last = None
+        if last is not None:
+            output = {**last, "observed": blocks_text(blocks)}
+            texts.append(_spelled_out(evidence_text(output, code_literals=True)))
+    return texts
+
+
+_PATH_BREAK = re.compile(r"[^\w.\\/:~-]+")
+
+
+def _mentions(text: str, name: str) -> bool:
+    """*text* names the file called *name*, as a path or a bare file name."""
+    return any(_basename(t) == name for t in _PATH_BREAK.split(text) if t)
+
+
+def _may_change(record: Dict[str, Any], name: str) -> bool:
+    """*record* is a write or a run that names the file called *name*, other
+    than a script that only reads it."""
+    if not _has(_name(record), _WRITE_WORDS + _EXEC_WORDS):
+        return False
+    args = record.get("args") or {}
+    if not any(_mentions(text, name) for text in _arg_strings(args)):
+        return False
+    code = args.get("code") if isinstance(args, dict) else None
+    if _name(record) == "run_python" and isinstance(code, str):
+        tree = _parsed(code)
+        return tree is None or not _only_reads(tree, name)
+    return True
+
+
+def _read_target(call: ast.Call) -> Any:
+    """The path argument of a *call* that only reads it: ``open(p)``,
+    ``Path(p).read_text()``, ``pd.read_csv(p)``. Not a write or an append."""
+    func = call.func
+    ident = getattr(func, "id", getattr(func, "attr", None))
+    if ident == "open" and _is_open(func):
+        mode = _call_arg(call, 1, "mode")
+        if mode is None or (
+            isinstance(mode, ast.Constant)
+            and isinstance(mode.value, str)
+            and not set(mode.value) & {"w", "x", "a", "+"}
+        ):
+            return _call_arg(call, 0, "file")
+        return None
+    if ident in ("read_text", "read_bytes") and isinstance(func, ast.Attribute):
+        receiver = func.value
+        if isinstance(receiver, ast.Call) and receiver.args:
+            return receiver.args[0]
+        return None
+    if ident in _PY_READERS - {"open", "Path"}:
+        return (call.args or [k.value for k in call.keywords] or [None])[0]
+    return None
+
+
+def _only_reads(tree: ast.AST, name: str) -> bool:
+    """Every place the script names the file called *name* is a call that
+    reads it."""
+    named = _string_names(tree)
+    read = {
+        id(target)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        for target in [_read_target(node)]
+        if target is not None
+    }
+    bindings = {
+        id(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id in named
+    }
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            mention = id(node) not in bindings and _mentions(node.value, name)
+        elif (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Load)
+            and node.id in named
+        ):
+            mention = _mentions(named[node.id], name)
+        else:
+            continue
+        if mention and id(node) not in read:
+            return False
+    return True
+
+
+def _read_names(records: Sequence[Dict[str, Any]], written: Set[str]) -> Set[str]:
+    """Names of the files a read tool returned this turn, other than *written*."""
+    names = set()
+    for record in records:
+        name = _name(record)
+        if not _ran(record) or record.get("failed"):
+            continue
+        if _has(name, _WRITE_WORDS + _EXEC_WORDS):
+            continue
+        args = record.get("args") or {}
+        for key in _PATH_ARGS:
+            if isinstance(args, dict) and isinstance(args.get(key), str):
+                names.add(_basename(args[key]))
+    return names - written
+
+
+def _source_records(
+    records: Sequence[Dict[str, Any]], written: Set[str]
+) -> List[Dict[str, Any]]:
+    """The tool results this turn that can source a figure in *written*.
 
     Not a write tool's reply, not a failed call, and not a read of a written
     file once it was written — a read-back shows the file, not its source.
-    The script that wrote it still counts for what it computed, minus its
-    own literals.
     """
     first_write: Dict[str, int] = {}
     for index, record in enumerate(records):
@@ -662,7 +1571,7 @@ def _evidence_texts(records: Sequence[Dict[str, Any]], written: Set[str]) -> Lis
         (i for i, r in enumerate(records) if _has(_name(r), _EXEC_WORDS)),
         len(records),
     )
-    texts = []
+    sources = []
     for index, record in enumerate(records):
         name = _name(record)
         if not _ran(record) or record.get("failed"):
@@ -675,8 +1584,53 @@ def _evidence_texts(records: Sequence[Dict[str, Any]], written: Set[str]) -> Lis
             for name_ in written
         ):
             continue
-        texts.append(evidence_text(record, code_literals=True))
-    return texts
+        sources.append(record)
+    return sources
+
+
+def _copied_numbers(
+    sources: Sequence[Dict[str, Any]], shown: Iterable[str]
+) -> Dict[int, FrozenSet[float]]:
+    """Per script in *sources* (by ``id``), the numbers it could have copied:
+    those another source or a *shown* text holds. Never its own output."""
+    own = {
+        id(record): frozenset(
+            _number(n)
+            for n in _ANY_NUMBER.findall(
+                _spelled_out(evidence_text(record, code_literals=True))
+            )
+        )
+        for record in sources
+    }
+    common = frozenset(_number(n) for text in shown for n in _ANY_NUMBER.findall(text))
+    return {
+        id(record): common.union(
+            *(numbers for key, numbers in own.items() if key != id(record))
+        )
+        for record in sources
+        if _name(record) == "run_python"
+    }
+
+
+def _evidence_texts(
+    records: Sequence[Dict[str, Any]],
+    written: Set[str],
+    read_names: Set[str],
+    copied: Mapping[int, FrozenSet[float]] = MappingProxyType({}),
+) -> List[Tuple[str, bool]]:
+    """``(text, computed)`` per tool result this turn that can source a figure
+    in *written*; *computed* marks a script that computed from *read_names*.
+
+    See :func:`_source_records` for which count. The script that wrote a
+    file still counts for what it computed, minus its own literals.
+    """
+    return [
+        (
+            evidence_text(record, code_literals=True),
+            _computed(record, read_names, written, copied.get(id(record), frozenset())),
+        )
+        for record in _source_records(records, written)
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -906,25 +1860,55 @@ def file_findings(
     query: str = "",
     context: str = "",
     inputs: Sequence[str] = (),
+    input_names: Sequence[str] = (),
     answer: str = "",
 ) -> List[Finding]:
     """Figures in *files* (path → blocks) that nothing this turn supports.
 
     Evidence is the tool results in *records*, the text of *inputs* (files
     the tools were pointed at), the request (*query*) and earlier turns
-    (*context*). An answer that says its figures are unverified and names a
+    (*context*). A script's output sources an amount only when it computed
+    from files read this turn (*input_names* are the files *inputs* hold).
+    An answer that says its figures are unverified and names a
     value has already told the user about it.
     """
     if not files:
         return []
     written = {_basename(path) for path in files}
-    texts = [_spelled_out(t) for t in _evidence_texts(records, written) + list(inputs)]
+    read_names = _read_names(records, written) | (
+        {_basename(n) for n in input_names} - written
+    )
+    input_texts = [_spelled_out(t) for t in inputs]
+    copied = _copied_numbers(
+        _source_records(records, written),
+        [_spelled_out(query or "")] + input_texts,
+    )
+    found = [
+        (_spelled_out(t), c)
+        for t, c in _evidence_texts(records, written, read_names, copied)
+    ]
+    texts = [t for t, _ in found] + input_texts
     query = _spelled_out(query or "")
     context = _spelled_out(context or "")
     # "27W", "8GB": a unit glued to its number still shows the number.
     general = _Corpus(_GLUED_UNIT.sub(r"\1 \2", "\n".join([context, query] + texts)))
+    # An amount a script computed from this turn's files sources a money
+    # figure; one it echoed from them, or a "60 Hz", still doesn't.
+    seen = {
+        _number(n)
+        for t in [context] + [t for t, c in found if not c] + input_texts
+        for n in _ANY_NUMBER.findall(t)
+    }
+    computed = [
+        _ANY_NUMBER.sub(
+            lambda m: " " if _number(m.group(0)) in seen else m.group(0),
+            _UNIT.sub(" ", t),
+        )
+        for t in [t for t, c in found if c]
+        + _script_written(files, records, read_names, written, copied)
+    ]
     money = _Corpus(
-        "\n".join([query] + [_money_evidence(t) for t in [context] + texts])
+        "\n".join([query] + [_money_evidence(t) for t in [context] + texts] + computed)
     )
     request_numbers = [
         _number(n) for n in _ANY_NUMBER.findall(_TIMESTAMP.sub(" ", query or ""))

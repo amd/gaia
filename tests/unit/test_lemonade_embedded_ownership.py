@@ -731,6 +731,9 @@ class TestStartupExitMessage:
     ):
         monkeypatch.setattr(sys, "frozen", True, raising=False)
         monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(
+            sys, "_MEIPASS", "/home/u/.gaia/app-core/_internal", raising=False
+        )
         monkeypatch.setattr(embedded_mod, "vulkan_workarounds", lambda: {})
         import gaia.llm.npu_linux as npu_linux
 

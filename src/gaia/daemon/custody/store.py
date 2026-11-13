@@ -337,51 +337,7 @@ class CustodyStore:
                     f"custody store failed to append audit for '{agent_id}': {e}"
                 ) from e
 
-    def get_audit(self, agent_id: str, limit: int = 100) -> "list[dict]":
-        """Return *agent_id*'s audit rows (host-internal read; agents are
-        write-only to audit per §0.24 — this backs the dashboard/tests)."""
-        with self._lock:
-            try:
-                rows = self._conn.execute(
-                    "SELECT seq, action_id, action, summary, ts FROM audit "
-                    "WHERE agent_id = ? ORDER BY seq ASC LIMIT ?",
-                    (agent_id, int(limit)),
-                ).fetchall()
-            except sqlite3.Error as e:
-                raise StoreUnavailableError(
-                    f"custody store failed to read audit for '{agent_id}': {e}"
-                ) from e
-        return [
-            {
-                "seq": r["seq"],
-                "action_id": r["action_id"],
-                "action": r["action"],
-                "summary": r["summary"],
-                "ts": r["ts"],
-            }
-            for r in rows
-        ]
-
     # -- rag -----------------------------------------------------------------
-
-    def add_rag_chunk(
-        self, agent_id: str, content: str, source: Optional[str] = None
-    ) -> int:
-        """Add one chunk to *agent_id*'s corpus; return its row id."""
-        with self._lock:
-            try:
-                cur = self._conn.execute(
-                    "INSERT INTO rag_chunks (agent_id, content, source, created_at) "
-                    "VALUES (?, ?, ?, ?)",
-                    (agent_id, content, source, time.time()),
-                )
-                self._conn.commit()
-                return int(cur.lastrowid)
-            except sqlite3.Error as e:
-                raise StoreUnavailableError(
-                    f"custody store failed to write a RAG chunk for "
-                    f"'{agent_id}': {e}"
-                ) from e
 
     def query_rag(self, agent_id: str, query: str, k: int = 4) -> "list[dict]":
         """Return up to *k* of *agent_id*'s chunks matching *query* (substring).

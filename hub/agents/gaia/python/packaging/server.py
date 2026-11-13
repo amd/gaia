@@ -39,6 +39,8 @@ from gaia_agent.python_runner import dispatch as python_dispatch
 if __name__ == "__main__":
     # A script's multiprocessing workers re-launch this binary too.
     multiprocessing.freeze_support()
+    # os.environ keeps the bundle's library path: this one-file binary's own
+    # relaunches reuse its bundle through it. Other programs get child_env().
     _python_exit = python_dispatch(sys.argv[1:])
     if _python_exit is not None:
         sys.exit(_python_exit)

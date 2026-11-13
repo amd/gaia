@@ -4,13 +4,6 @@ description: "Foundational base class for all GAIA agents with reasoning loop, t
 icon: "robot"
 ---
 
-<Warning>
-The direct OpenAI and LiteLLM provider adapters have been removed. Any
-`use_chatgpt` field shown below is a migration-error shim: setting it to `True`
-raises before inference. Use the [Lemonade gateway path](/sdk/sdks/llm#gateway-migration).
-</Warning>
-
-
 <Note>
 🔧 **You are viewing:** API Specification - Complete technical reference for the Agent class
 
@@ -100,7 +93,6 @@ class Agent(ABC):
 def __init__(
     self,
     use_claude: bool = False,
-    use_chatgpt: bool = False,
     claude_model: str = "claude-sonnet-4-20250514",
     base_url: Optional[str] = None,
     model_id: str = None,
@@ -126,7 +118,6 @@ def __init__(
 
     Args:
         use_claude: Use Claude API instead of local LLM
-        use_chatgpt: Removed; True raises migration guidance
         claude_model: Model to use when use_claude=True
         base_url: Local LLM server URL (default: from LEMONADE_BASE_URL or http://localhost:13305/api/v1)
         model_id: Model ID for local LLM (default: None — resolve_default_chat_model(): config default_model, which gaia init sets from the hardware, else DEFAULT_MODEL_NAME, Gemma-4-E4B-it-GGUF)

@@ -12,6 +12,8 @@ flattening the whole group into prose.
 
 from __future__ import annotations
 
+import pytest
+
 from gaia.agents.base.agent import Agent
 
 
@@ -106,3 +108,26 @@ def test_shrinking_does_not_mutate_the_caller_s_messages():
     make_agent()._shrink_messages_for_overflow(messages)
 
     assert messages[1]["content"] == original
+
+
+def test_a_broken_overflow_note_hook_is_not_swallowed():
+    # A bug in a mixin's note must surface, not silently drop its lessons.
+    agent = make_agent()
+
+    def broken_note():
+        raise AttributeError("'Agent' object has no attribute '_turn_lessons'")
+
+    agent.overflow_recovery_note = broken_note
+    messages = [
+        {"role": "user", "content": "find the spec"},
+        _verbose_assistant_turn(),
+        {
+            "role": "tool",
+            "name": "search",
+            "tool_call_id": "call_abc123",
+            "content": "x" * 5000,
+        },
+    ]
+
+    with pytest.raises(AttributeError, match="_turn_lessons"):
+        agent._shrink_messages_for_overflow(messages)

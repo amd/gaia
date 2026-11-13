@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { useEffect, useRef } from 'react';
-import { AlertTriangle, Lightbulb, ExternalLink, X, AlertCircle, Bug } from 'lucide-react';
+import { AlertTriangle, X, AlertCircle, Bug } from 'lucide-react';
 import { AUDIO_EXTENSIONS, VIDEO_EXTENSIONS } from '../utils/mediaFiles';
+import { useT } from '../i18n/useT';
 import './UnsupportedFeature.css';
 
-const GITHUB_ISSUES_URL = 'https://github.com/amd/gaia/issues';
 const GITHUB_NEW_ISSUE_URL = 'https://github.com/amd/gaia/issues/new';
 const GITHUB_FEATURE_REQUEST_URL = `${GITHUB_NEW_ISSUE_URL}?template=feature_request.md`;
 const GITHUB_BUG_REPORT_URL = `${GITHUB_NEW_ISSUE_URL}?template=bug_report.md`;
@@ -245,6 +245,7 @@ interface UploadErrorToastProps {
  * Parses the backend error to show helpful context and a GitHub link.
  */
 export function UploadErrorToast({ filename, error, status, kind, onDismiss, timeout = 15000 }: UploadErrorToastProps) {
+    const t = useT();
     const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     useEffect(() => {
@@ -283,9 +284,14 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         detail = permanentHint;
         issueUrl = null;
         Icon = AlertTriangle;
+    } else if (kind === 'too_large') {
+        title = t('docs.tooLarge', { name: filename });
+        detail = error;
+        issueUrl = null;
+        Icon = AlertTriangle;
     } else if (status === 404) {
-        title = `"${filename}" doesn't exist`;
-        detail = stripPrefix(error, 'File not found:');
+        title = t('docs.notFound', { name: filename });
+        detail = t('docs.notFoundDetail');
         issueUrl = null;
         Icon = AlertTriangle;
     } else if (status === 403) {
@@ -342,61 +348,6 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
             <button className="upload-error-dismiss" onClick={onDismiss} aria-label="Dismiss">
                 <X size={14} />
             </button>
-        </div>
-    );
-}
-
-// ── Inline Unsupported Feature Banner (for chat messages) ────────────────
-
-interface UnsupportedFeatureBannerProps {
-    /** Short title of the unsupported feature. */
-    title: string;
-    /** Description of what the user asked for. */
-    description: string;
-    /** Things the user can do instead. */
-    alternatives?: string[];
-    /** Pre-filled feature request title for GitHub. */
-    featureTitle?: string;
-}
-
-/**
- * Rendered inside assistant messages when the agent detects an unsupported feature.
- * Shows what's available instead and links to GitHub for feature requests.
- */
-export function UnsupportedFeatureBanner({ title, description, alternatives, featureTitle }: UnsupportedFeatureBannerProps) {
-    const issueUrl = featureTitle
-        ? featureRequestUrl(featureTitle)
-        : `${GITHUB_ISSUES_URL}`;
-
-    return (
-        <div className="unsupported-banner">
-            <div className="unsupported-banner-header">
-                <AlertTriangle size={16} />
-                <span>{title}</span>
-            </div>
-            <div className="unsupported-banner-body">
-                <p>{description}</p>
-                {alternatives && alternatives.length > 0 && (
-                    <>
-                        <p><strong>What you can do instead:</strong></p>
-                        <ul className="unsupported-alternatives">
-                            {alternatives.map((alt, i) => (
-                                <li key={i}>{alt}</li>
-                            ))}
-                        </ul>
-                    </>
-                )}
-            </div>
-            <div className="unsupported-feature-request">
-                <Lightbulb size={14} />
-                <span>
-                    Want this feature?{' '}
-                    <a href={issueUrl} target="_blank" rel="noopener noreferrer">
-                        Request it on GitHub
-                        <ExternalLink size={10} style={{ marginLeft: 3, verticalAlign: 'middle' }} />
-                    </a>
-                </span>
-            </div>
         </div>
     );
 }

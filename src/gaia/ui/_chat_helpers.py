@@ -15,6 +15,7 @@ patches take effect.
 
 import asyncio
 import concurrent.futures
+import contextvars
 import copy
 import functools
 import json
@@ -24,6 +25,7 @@ import re as _re
 import sqlite3
 import threading
 import time as _time
+import unicodedata
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
@@ -193,6 +195,25 @@ def get_agent_registry():
 # sidecar and left this set at {"email"}, which sent every flagship turn into
 # registry.create_agent() and surfaced the stub factory's RuntimeError.
 _SIDECAR_AGENT_TYPES = SIDECAR_AGENT_IDS
+
+
+def refuse_unstreamed_sidecar_chat(agent_type: str) -> None:
+    """Refuse a ``stream=false`` turn for an agent served by its sidecar.
+
+    #2109: the sidecar's ``/query`` loop is a streaming-only SSE contract, so
+    there is no non-streaming shape to relay. Callers run this before saving
+    anything, so a refused turn leaves no message behind.
+    """
+    if not _should_relay_to_sidecar(agent_type, _agent_registry):
+        return
+    named = (profile_for(agent_type) or _NO_PROFILE).display_name
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"The {named} agent requires streaming (stream=true); "
+            f"non-streaming {named} chat is not supported."
+        ),
+    )
 
 
 def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
@@ -659,7 +680,8 @@ _CLASSIFIER_VERDICT_RE = _re.compile(
 )
 _TITLE_INSTRUCTION = (
     "Summarise the user's task in 3 to 6 plain words for a tab/window "
-    "title, in the language the user wrote in.  Reply with ONLY the "
+    "title, in the language the user wrote in.  Never translate it into "
+    "another language, whatever the reply or file names use.  Reply with ONLY the "
     "title, no quotes, no trailing "
     "punctuation, no leading verbs like 'Task:' or 'Title:'.  If the "
     "user has not asked for anything yet (only a greeting or small "
@@ -716,6 +738,35 @@ def _echoes_title_instruction(title: str) -> bool:
     words = _WORD_RE.findall(title.lower())
     echoed = sum(word in _TITLE_INSTRUCTION_WORDS for word in words)
     return echoed >= 4 and echoed >= 0.75 * len(words)
+
+
+#: Writing systems a title is checked against, by Unicode name's first word.
+_TITLE_SCRIPTS = frozenset(
+    {
+        "LATIN",
+        "CJK",
+        "HIRAGANA",
+        "KATAKANA",
+        "HANGUL",
+        "CYRILLIC",
+        "ARABIC",
+        "HEBREW",
+        "GREEK",
+        "THAI",
+        "DEVANAGARI",
+    }
+)
+
+
+def _scripts(text: str) -> set:
+    """The writing systems *text*'s letters are in."""
+    found = set()
+    for ch in text:
+        if ch.isalpha():
+            script = unicodedata.name(ch, "").split(" ", 1)[0]
+            if script in _TITLE_SCRIPTS:
+                found.add(script)
+    return found
 
 
 def _title_from_question(user_msg: str) -> Optional[str]:
@@ -799,8 +850,8 @@ async def _generate_session_title(
         LemonadeClient,
         LemonadeClientError,
         _model_ids_match,
-        find_model_requirement,
         no_thinking_kwargs,
+        reasoning_headroom,
     )
 
     # As the turn starts there is no answer yet: the question alone names it.
@@ -822,7 +873,6 @@ async def _generate_session_title(
         )
         # A thinking model would spend all 24 tokens reasoning and title nothing.
         kwargs = dict(no_thinking_kwargs(model_id))
-        mr = find_model_requirement(model_id)
         local = not _ui_cloud_provider(model_id)
         if local and not kwargs and model_id.upper().endswith("GGUF"):
             # Gemma 4 registers no switch, yet reasons on a short question ("hi");
@@ -830,11 +880,9 @@ async def _generate_session_title(
             kwargs = {"chat_template_kwargs": {"enable_thinking": False}}
         if not local:
             max_tokens = _CLOUD_TITLE_MAX_TOKENS
-        elif mr is not None and mr.reasoning_effort:
-            # It reasons even at "low"; leave room for the title after that.
-            max_tokens = 96
         else:
-            max_tokens = 24
+            # A model that reasons even at its least needs room for the title after it.
+            max_tokens = 24 + reasoning_headroom(model_id)
         # One lease over the residency check and the call, so the model can't
         # be swapped out between them; the call's own lease folds into it.
         lease = model_lease(model_id, priority="background") if local else nullcontext()
@@ -901,6 +949,15 @@ async def _generate_session_title(
     # Exact match: a real title can start with "None" ("None values in pandas").
     if title.lower() == "none":
         raise _NoTopicYet
+    foreign = _scripts(title) - _scripts(f"{user_msg} {latest_msg}")
+    if foreign:
+        logger.info(
+            "Auto-title: %s titled the chat in %s, which the user did not write "
+            "in; titling from the first question",
+            model_id,
+            "/".join(sorted(foreign)).lower(),
+        )
+        return _title_from_question(user_msg)
     return title[:64]
 
 
@@ -1628,7 +1685,13 @@ def _index_rag_with_progress(
     idx_start = _time.time()
     doc_stats = []
     total_chunks = 0
+    cancelled = getattr(sse_handler, "cancelled", None)
+    left = 0
     for i, fpath in enumerate(fpath_list, 1):
+        # Stop ends the loading here; what is left is picked up on the next turn.
+        if cancelled is not None and cancelled.is_set():
+            left = n - i + 1
+            break
         doc_name = Path(fpath).name
         sse_handler._emit(
             {
@@ -1680,8 +1743,13 @@ def _index_rag_with_progress(
                 }
             )
     idx_elapsed = round(_time.time() - idx_start, 1)
+    headline = (
+        f"Stopped: {left} of {n} {label} not loaded. They load with your next message."
+        if left
+        else f"Indexed {n} {label} in {idx_elapsed}s"
+    )
     summary_lines = [
-        f"Indexed {n} {label} in {idx_elapsed}s",
+        headline,
         f"Total: {total_chunks} chunks in index",
         "",
     ] + doc_stats
@@ -1690,7 +1758,7 @@ def _index_rag_with_progress(
             "type": "tool_result",
             "title": "Index Documents",
             "summary": "\n".join(summary_lines),
-            "success": True,
+            "success": not left,
         }
     )
 
@@ -1959,16 +2027,19 @@ def _with_attachments(allowed: list, attached: list) -> list:
 def _relayed_documents(rag_file_paths: list, attached: list) -> list:
     """Documents a relayed sidecar should grant: its only way to grant a file.
 
-    Images are left out: the sidecar indexes what it is sent, and an image is
-    read by vision, not indexed.
+    Images and recordings are left out: the sidecar indexes what it is sent,
+    and an image is read by vision and a recording transcribed, not indexed.
+    Both still reach the sidecar through the chat's allowed paths.
     """
+    from gaia.audio.media import MEDIA_EXTENSIONS
+
     from .routers.files import PREVIEWABLE_IMAGE_EXTENSIONS
 
+    not_indexed = PREVIEWABLE_IMAGE_EXTENSIONS | MEDIA_EXTENSIONS
     extra = [
         p
         for p in attached
-        if p not in rag_file_paths
-        and Path(p).suffix.lower() not in PREVIEWABLE_IMAGE_EXTENSIONS
+        if p not in rag_file_paths and Path(p).suffix.lower() not in not_indexed
     ]
     return list(rag_file_paths) + extra
 
@@ -2158,10 +2229,13 @@ def _relayed_history(
     )
     context = select_history(turns, budget, cuts.append, reporter)
 
-    # select_history returns the turns' own message dicts, so identity says
-    # which clipped messages the model still sees.
+    # select_history returns the turns' own answer dicts (a question may be a
+    # copy carrying the hidden-turns note), so identity says which turns, and
+    # so which clipped messages, the model still sees.
     in_view = {id(message) for message in context}
-    shown = {key for key in clipped if id(turns[key[0]][key[1]]) in in_view}
+    visible = {pair for pair, turn in enumerate(turns) if id(turn[1]) in in_view}
+    sse_handler.relay_hidden_turns = len(turns) - len(visible)
+    shown = {key for key in clipped if key[0] in visible}
     seen = _relay_clips.get(session_id, set()) if session_id else set()
     if session_id:
         _relay_clips[session_id] = shown
@@ -2206,7 +2280,8 @@ def _relayed_turns(
     """The chat's recorded turns that fit *model_id*'s history budget, kept whole.
 
     A turn larger than the whole budget is sent shortened (#5864); turns newly
-    out of the model's view stream a ``history_cut`` status.
+    out of the model's view stream a ``history_cut`` status, and how many turns
+    were left out is kept on *sse_handler* for the sidecar's measurement.
     """
     from gaia.agents.base.history import CutReporter, fit_turns, relayed_history_budget
 
@@ -2228,7 +2303,9 @@ def _relayed_turns(
             }
         )
 
-    return fit_turns(turns, budget, on_cut, reporter)
+    kept = fit_turns(turns, budget, on_cut, reporter)
+    sse_handler.relay_hidden_turns = len(turns) - len(kept)
+    return kept
 
 
 #: What a stopped turn's reply is saved as when it wrote no text.
@@ -2433,6 +2510,41 @@ def _probe_misses_only_another_model(
     from gaia.llm.lemonade_client import _model_ids_match
 
     return not _model_ids_match(probed, model_id)
+
+
+def _probe_misses_only_the_model(init_body: dict | None) -> bool:
+    """True when ``/init``'s only complaint is that its model is not downloaded."""
+    body = init_body or {}
+    lemonade = body.get("lemonade") or {}
+    model = body.get("model") or {}
+    return (
+        lemonade.get("reachable") is True
+        and lemonade.get("compatible") is not False
+        and bool(model.get("id"))
+        and model.get("present") is False
+    )
+
+
+def _missing_local_model_text(init_body: dict) -> str:
+    """What the chat says when the local model a turn needs is not downloaded.
+
+    The sidecar's own hint names a CLI; the app's way is Settings.
+    """
+    from gaia.llm.local_only import cloud_blocked
+
+    from .local_models import friendly_name
+
+    name = friendly_name(init_body["model"]["id"])
+    if cloud_blocked():
+        return (
+            f"Local only is on and {name} isn't downloaded yet, so GAIA can't "
+            "answer. Get a local model under Settings > Model, or turn off Local "
+            "only under Settings > Privacy to use a cloud model."
+        )
+    return (
+        f"{name} isn't downloaded yet, so GAIA can't answer. Get it, or pick "
+        "another model, under Settings > Model."
+    )
 
 
 def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
@@ -2757,6 +2869,11 @@ def _dispatch_sidecar_query(
             agent_type,
             model_id,
         )
+    elif status_code != 200 and _probe_misses_only_the_model(init_body):
+        sse_handler._emit(
+            {"type": "agent_error", "content": _missing_local_model_text(init_body)}
+        )
+        return
     elif status_code != 200:
         hint = (init_body or {}).get("hint")
         if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
@@ -2934,6 +3051,18 @@ def _find_last_tool_step(steps: list) -> dict | None:
         if steps[i].get("type") == "tool":
             return steps[i]
     return None
+
+
+def _denial(event: dict) -> Optional[str]:
+    """``"declined"`` or ``"timedOut"`` for a ``tool_result`` whose call never ran.
+
+    A relayed result nests its status in ``data``.
+    """
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    if event.get("status", data.get("status")) != "denied":
+        return None
+    timed_out = event.get("timed_out") is True or data.get("timed_out") is True
+    return "timedOut" if timed_out else "declined"
 
 
 def _insert_skill_step(steps: list, step: dict) -> None:
@@ -3293,6 +3422,9 @@ def _turn_inference_stats(
         input_tokens = answer_event.get("input_tokens")
         if isinstance(input_tokens, int) and input_tokens > 0:
             stats["input_tokens"] = input_tokens
+            cached = answer_event.get("cached_tokens")
+            if isinstance(cached, int) and cached >= 0:
+                stats["cached_tokens"] = cached
     steps = answer_event.get("steps")
     if isinstance(steps, int) and steps > 0:
         stats["steps"] = steps
@@ -3988,21 +4120,7 @@ async def _get_chat_response(
                 agent_type,
             )
         elif _should_relay_to_sidecar(agent_type, _agent_registry):
-            # #2109: a sidecar agent is served exclusively by its canonical
-            # /query loop, which is a streaming-only SSE contract (see the
-            # streaming branch in _stream_chat_impl). There is no
-            # non-streaming shape to relay, and zero verified callers exist
-            # today (the frontend hardcodes stream=true; ChatRequest.stream
-            # defaults True). Fail loud rather than ship a speculative,
-            # untested drained-response path.
-            named = (profile_for(agent_type) or _NO_PROFILE).display_name
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"The {named} agent requires streaming (stream=true); "
-                    f"non-streaming {named} chat is not supported."
-                ),
-            )
+            refuse_unstreamed_sidecar_chat(agent_type)
         else:
             # Every in-process agent, chat included, is created via the registry.
             registry = _agent_registry
@@ -4118,11 +4236,19 @@ async def _get_chat_response(
 
         # Without counts the turn is still recorded, as one of unknown cost.
         counts = (
-            {k: result.get(k) for k in ("input_tokens", "output_tokens")}
+            {
+                k: result.get(k)
+                for k in ("input_tokens", "output_tokens", "cached_tokens")
+            }
             if isinstance(result, dict)
             else {}
         )
-        spending.record_turn(db, model_id, counts)
+        spending.record_turn(
+            db,
+            model_id,
+            counts,
+            failed=isinstance(result, dict) and bool(result.get("model_failed")),
+        )
         if isinstance(result, dict):
             if model_messages is not None:
                 model_messages.extend(result.get("model_messages", []))
@@ -4818,7 +4944,17 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     last_tool_args = {}
                 elif event_type == "tool_args" and isinstance(event.get("args"), dict):
                     last_tool_args = event["args"]
-                elif event_type == "tool_result" and not event.get("render"):
+                elif event_type == "tool_result" and (
+                    not event.get("render") or event["render"] == "media"
+                ):
+                    if event.get("render") == "media":
+                        # "media" is the terminal's card, as on the relay path;
+                        # the Agent UI draws its own image/audio card below.
+                        event = {
+                            k: v
+                            for k, v in event.items()
+                            if k not in ("render", "data")
+                        }
                     card = media_card(event, last_tool_args)
                     if card is not None:
                         # A relayed result's summary-view ``data`` gives way to
@@ -4943,6 +5079,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
+                        denial = _denial(event)
+                        if denial:
+                            tool_step[denial] = True
                         # Persist MCP tool latency
                         if event.get("latency_ms") is not None:
                             tool_step["latencyMs"] = event["latency_ms"]
@@ -5007,6 +5146,25 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                 ),
                             }
                         )
+                elif (
+                    event_type == "status"
+                    and event.get("status") == "warning"
+                    and event.get("message")
+                    # With a phase it drives the live line (an answer restart), not a row.
+                    and not event.get("phase")
+                ):
+                    # A warning is part of the turn's record, not only its live line.
+                    step_id += 1
+                    captured_steps.append(
+                        {
+                            "id": step_id,
+                            "type": "status",
+                            "label": event["message"],
+                            "active": False,
+                            "success": False,
+                            "timestamp": int(asyncio.get_running_loop().time() * 1000),
+                        }
+                    )
                 elif event_type == "agent_error" and _echoes_failed_tool(
                     event, captured_steps
                 ):
@@ -5108,6 +5266,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
         # Only a Stop (run_manager.cancel() or POST /api/chat/cancel) sets
         # ``cancelled`` before this point, so True means not a normal completion.
         turn_cancelled = sse_handler.cancelled.is_set()
+        # Reply text reached the user (a failure notice isn't one), before any error is added.
+        turn_replied = bool(full_response.strip()) and not (
+            isinstance(answer_event, dict) and answer_event.get("failed")
+        )
 
         # Signal cancellation (handles client disconnect) then wait for producer.
         await _cleanup_stream()
@@ -5345,7 +5507,13 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             )
             if link_warning:
                 yield _undo_link_warning_event(link_warning)
-            spending.record_turn(db, model_id, inference_stats)
+            # A begun answer may be billed even if stopped; one that failed unanswered is not.
+            spending.record_turn(
+                db,
+                model_id,
+                inference_stats,
+                failed=turn_failed and not turn_replied,
+            )
             # Fire-and-forget auto-titling, on the model this turn ran on.
             _spawn_after_turn_title(
                 _maybe_update_session_title(
@@ -5790,8 +5958,8 @@ def _settled_quietly(future) -> None:
         future.exception()
 
 
-# Failures retrying can't fix until the file itself changes: RAG's pdf_status
-# and xlsx_status values, plus "empty_file" for a file with nothing to index.
+# Failures retrying can't fix until the file itself changes: RAG's pdf_status,
+# xlsx_status and pptx_status values, plus "empty_file" for an empty file.
 PERMANENT_INDEX_FAILURES = frozenset(
     {"corrupted", "encrypted", "empty", "empty_file", "unsupported_workbook"}
 )
@@ -5831,6 +5999,25 @@ def _page_total(filepath: Path) -> Optional[int]:
         return None
 
 
+_BATCH_EMBEDDER: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "gaia_ui_batch_embedder", default=None
+)
+
+
+@contextmanager
+def one_embedder_load():
+    """Index the documents awaited inside on one embedder load, not one per file.
+
+    Each ``_index_document`` builds its own ``RAGSDK``, which unloads and
+    reloads the embedder: ~3 s a file against well under 0.1 s of embedding.
+    """
+    token = _BATCH_EMBEDDER.set({})
+    try:
+        yield
+    finally:
+        _BATCH_EMBEDDER.reset(token)
+
+
 async def _index_document(
     filepath: Path,
     display_name: Optional[str] = None,
@@ -5839,7 +6026,9 @@ async def _index_document(
     """Index a document using RAG SDK. Returns chunk count.
 
     ``display_name`` is the user's name for the file when *filepath* is a
-    copy; every error message names it instead of the copy.
+    copy; every error message names it instead of the copy. Inside
+    :func:`one_embedder_load` it reuses the embedder an earlier document of
+    the batch loaded, unless that one read images or left some unread.
 
     With ``progress_key``, ``INDEX_PROGRESS[progress_key]`` tracks pages read
     and then chunks embedded until the index ends.
@@ -5910,6 +6099,10 @@ async def _index_document(
         allowed = [str(filepath.parent), str(Path.home())]
         config = RAGConfig(allowed_paths=allowed)
         rag = RAGSDK(config)
+        loaded = batch.pop("embedder", None) if batch is not None else None
+        if loaded is not None:
+            rag.llm_client = rag.embedder = loaded
+            rag.use_lemonade_embeddings = True
         # Cancel and the no-progress stop also end a wait for the model.
         try:
             with lease_wait_listener(_queue_update), lease_cancel_scope(stop):
@@ -5937,7 +6130,9 @@ async def _index_document(
             kind = (
                 "empty_file"
                 if result.get("empty_file")
-                else result.get("pdf_status") or result.get("xlsx_status")
+                else result.get("pdf_status")
+                or result.get("xlsx_status")
+                or result.get("pptx_status")
             )
             if kind in PERMANENT_INDEX_FAILURES:
                 raise UnreadableDocumentError(message, kind)
@@ -5948,8 +6143,18 @@ async def _index_document(
 
         chunks = result.get("num_chunks", 0) or result.get("chunk_count", 0)
         logger.info("Indexed %s (%s): %d chunks", name, filepath, chunks)
+        # A vision model loaded for this file may have pushed the embedder out,
+        # even when it then read none of the images.
+        read_with_vision = (
+            result.get("vlm_pages")
+            or result.get("vlm_slides")
+            or result.get("unread_image_pages")
+        )
+        if batch is not None and rag.embedder is not None and not read_with_vision:
+            batch["embedder"] = rag.embedder
         return chunks
 
+    batch = _BATCH_EMBEDDER.get()
     try:
         small = filepath.stat().st_size < _INDEX_SMALL_FILE_BYTES
     except OSError:

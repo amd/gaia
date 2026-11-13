@@ -19,6 +19,7 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/textutil"
 	"github.com/amd/gaia/tui/internal/ui/status"
 	"github.com/amd/gaia/tui/internal/update"
 )
@@ -856,15 +857,24 @@ func (l localRunner) verifyModelsRow(ctx context.Context) (Row, string, string, 
 		// Installed and not answering is a fault, not a step still to do.
 		row.State = StateFailed
 		row.Disposition = status.DispositionHalt
-		row.Line = "model server not answering"
 		row.Detail = strings.Join(st.Reasons, "\n")
+		row.Raw = row.Detail
+		if st.ModelListUnread {
+			row.Line = "model server's model list can't be read"
+			row.Remedy = Remedy{
+				Action: "The model server answers, but not with a list of models. Check that GAIA " +
+					"points at Lemonade Server, then press r to check again.",
+				Where: installDocs,
+			}
+			return row, "", "", st
+		}
+		row.Line = "model server not answering"
 		row.Fix = FixRunSetup
 		row.Remedy = Remedy{
 			Action:  "Press f and setup starts it again, then checks the models.",
 			Command: gaiainit.RunCommand(l.skipChatModel()),
 			Where:   installDocs,
 		}
-		row.Raw = row.Detail
 		return row, "", "", st
 	}
 
@@ -1042,14 +1052,7 @@ func downloadSize(models []gaiainit.Model) string {
 	if len(models) == 0 {
 		return ""
 	}
-	return formatGB(total)
-}
-
-func formatGB(gb float64) string {
-	if gb < 1 {
-		return fmt.Sprintf("%.0f MB", gb*1000)
-	}
-	return fmt.Sprintf("%.1f GB", gb)
+	return textutil.FormatGB(total)
 }
 
 // describeChat names a local chat model for the hand-off line.
@@ -1057,14 +1060,14 @@ func describeChat(m gaiainit.Model) string {
 	if m.SizeGB == nil {
 		return m.ID + " (on this machine)"
 	}
-	return fmt.Sprintf("%s (%s, on this machine)", m.ID, formatGB(*m.SizeGB))
+	return fmt.Sprintf("%s (%s, on this machine)", m.ID, textutil.FormatGB(*m.SizeGB))
 }
 
 func sizeSuffix(gb *float64) string {
 	if gb == nil {
 		return ""
 	}
-	return " (" + formatGB(*gb) + ")"
+	return " (" + textutil.FormatGB(*gb) + ")"
 }
 
 func modelSummaries(st gaiainit.Status) []string {

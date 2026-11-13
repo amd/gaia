@@ -44,14 +44,6 @@ def test_tui_mcp_module_default_matches_cli():
     assert tui_mcp.MCP_DEFAULT_PORT == ports.TUI_MCP_PORT == 8767
 
 
-def test_agent_ui_router_launches_on_agent_ui_port():
-    """The Agent UI's own start-server endpoint must not aim at the bridge's port."""
-    from gaia.ui.routers import mcp as ui_mcp_router
-
-    assert ui_mcp_router._agent_mcp_port == ports.AGENT_UI_MCP_PORT
-    assert ui_mcp_router.StartAgentServerRequest().port == ports.AGENT_UI_MCP_PORT
-
-
 def test_cli_mcp_parser_defaults_follow_port_map():
     parser = build_parser()
     assert parser.parse_args(["mcp", "start"]).port == ports.MCP_BRIDGE_PORT

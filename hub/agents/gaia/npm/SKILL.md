@@ -10,8 +10,11 @@ frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
 It ships no agent logic of its own, and it **builds neither binary at install
 time** — both are published artifacts it downloads and verifies. The terminal UI
 is the published `terminal-hub` component, the same binary a full GAIA install
-runs as `gaia-tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
-a local model server — nothing you type or index leaves it.
+runs as `gaia-tui`, so its behaviour cannot differ from that one. By default everything
+runs on the local machine against a local model server, and nothing you type or index
+leaves it. If you pick a cloud provider (Fireworks AI, the AMD LLM Gateway or Claude
+in the terminal UI, or `provider: "claude"` on `/query`), the conversation is sent to
+that provider.
 
 Two ways in:
 
@@ -263,7 +266,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package — call it with plain `fetch`. Contract version **2.27**; the stream is
+package: call it with plain `fetch`. Contract version **2.28**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -278,7 +281,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `allowed_paths` | no | Contract ≥ 2.18. Absolute folder or file paths the conversation may read — the scope your UI shows. A new session gets exactly this scope; a retained session adds any entry it lacks and never drops one until the session ends. `GAIA_ALLOWED_PATHS` still narrows it. A relative path is a **422**. Omit it for the agent's default scope. |
 | `working_directory` | no | Contract ≥ 2.24. Absolute chat workspace used to resolve relative file paths for reads, writes, edits and approval prompts. It is separate from `allowed_paths`; a relative path is a **422**. Send the same folder the UI shows. |
 | `memory` | no | Contract ≥ 2.18. `"on"`, `"private"` or `"off"`. Under `"private"` or `"off"` the turn saves nothing to memory, including errors and lessons the agent saves on its own. A retained session keeps the last value: send it every turn. |
-| `internet_off` | no | Contract ≥ 2.23. `true` refuses web search and page fetches, the browser, connector and Agent Hub tools, mailbox reads, and any call or shell command that contacts another host, with a message telling the model the internet is off for this chat; `false` allows them. A retained session keeps the last value: send it every turn. Omit it to leave the agent as it is. To change it mid-turn, `POST /v1/gaia/sessions/{session_id}/internet` with `{"internet_off": true}`; the next tool call follows it, and an unknown session is a **404**. Post it only once `/query` has answered, since the turn's own value replaces an earlier one; re-read the switch then and post it if it changed. |
+| `internet_off` | no | Contract ≥ 2.23. `true` refuses web search and page fetches, the browser, connector and Agent Hub tools, mailbox and calendar access, and any call or shell command that contacts another host, with a message telling the model the internet is off for this chat; `false` allows them. A retained session keeps the last value: send it every turn. Omit it to leave the agent as it is. To change it mid-turn, `POST /v1/gaia/sessions/{session_id}/internet` with `{"internet_off": true}`; the next tool call follows it, and an unknown session is a **404**. Post it only once `/query` has answered, since the turn's own value replaces an earlier one; re-read the switch then and post it if it changed. |
 | `changes_turn_id` | no | Contract ≥ 2.19. Needs `session_id`. The agent copies each file before changing it, under `<GAIA home>/snapshots/<session_id>/<changes_turn_id>/`, so the turn can be reviewed and undone; the copies are complete before the terminal event. Format: 14 digits of local time, `-`, 8 hex digits (`YYYYmmddHHMMSS-xxxxxxxx`); anything else is a **422**. Omit it to copy nothing. |
 | `surface` | no | Contract ≥ 2.20. `"agent_ui"`, `"tui"` or `"cli"` — the front-end the turn comes from. With `"agent_ui"` the agent points recurring requests at the Agent UI's **Scheduled tasks** page. It also picks where a model-provider error tells the user to fix it; omitted (a headless caller), that is the model server the GAIA host uses (`LEMONADE_BASE_URL`). Read when a session is built. |
 | `turns` | no | Contract ≥ 2.25. Earlier turns as the model saw them, oldest first: each is that turn's `final.model_messages`, or a `{user, assistant}` text pair for a turn without one. Send it instead of `context` (then `[]`, or the request is a **422**) so the agent sees its own earlier tool calls and their results; send `[]` on the first turn. It keeps the newest whole turns that fit its window. Sent, even as `[]`, it makes `final` carry `model_messages`; `[]` also clears a retained session's history. |
@@ -286,7 +289,7 @@ Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
 | `can_answer_questions` | no | Set `false` for one-shot / batch runs so the agent resolves ambiguity itself instead of parking on a question nobody can see. |
 | `model` | no | Overrides the model id. On a retained `session_id` a different model is **switched in place** (contract ≥ 2.14), keeping the conversation and any loaded skills; a switch that fails is a **409** and leaves the session on its previous model. |
 | `provider` | no | `"lemonade"` (the default backend) or `"claude"`, which sends the conversation to Anthropic's API instead of the local server. Anything else is a **400**. When you name it, `model` must agree: under `"claude"` it must be a `claude-*` id, under `"lemonade"` it must not be. A mismatch is a **400**, on a new session or an existing one. Omit it and the `model` decides instead — a `claude-*` id alone reaches Anthropic, any other id runs locally — so there is nothing to mismatch. On a retained `session_id`, naming a different provider switches the session to it in place, onto `model` or, without one, the provider's default model; omitting both leaves the session where it is. |
-| `max_steps` | no | ≥ 1. Defaults to **150** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
+| `max_steps` | no | ≥ 1. Defaults to **1000** (`FLAGSHIP_MAX_STEPS`); a value here, or `GAIA_AGENT_MAX_STEPS`, still wins. |
 
 ```ts
 import { randomUUID } from "node:crypto";
@@ -341,11 +344,12 @@ The canonical event shapes, as emitted:
 
 | Event | Shape |
 |---|---|
-| `status` | `{ type, message, phase?, words?, chars?, queue?, retracts_answer? }` — progress and reasoning narration. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`, `reconnecting`, `model_restart`, `answer_restart`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck. `reconnecting` is sent once while GAIA's own Lemonade Server restarts; the turn retries when it is back. `model_restart` is the live line while the daemon restarts a server that stopped mid-turn, including under a tool's own model calls. During `extract_document_items`, `reading` names the page ("Reading page 4 of 12…"). `answer_restart` carries `retracts_answer: true`: the reply was cut off and starts over, so drop the `token` text since the last `tool_call` and show `message` in its place |
+| `status` | `{ type, message, level?, phase?, words?, chars?, queue?, retracts_answer? }` — progress and reasoning narration. `level: "warning"` marks a warning for the user (for example, configured MCP servers that were dropped); show it, don't only put it on the live line. `phase` (`loading_model`, `downloading_model`, `reading`, `reasoning`, `tool_call`, `model_queue`, `reconnecting`, `model_restart`, `answer_restart`) names what the model is doing; show it as the live line, not as narration. `model_queue` means the turn is waiting for the model behind another request: it repeats every ~2 s with a `queue` object (`event`, `position`, `queue_length`, `holder`, `holder_model`, `waited_s`), so its steady arrival means queued, not stuck. `reconnecting` is sent once while GAIA's own Lemonade Server restarts; the turn retries when it is back. `model_restart` is the live line while the daemon restarts a server that stopped mid-turn, including under a tool's own model calls. During `extract_document_items`, `reading` names the page ("Reading page 4 of 12…"). `answer_restart` carries `retracts_answer: true`: the reply was cut off and starts over, so drop the `token` text since the last `tool_call` and show `message` in its place |
 | `token` | `{ type, delta }` — answer text to append |
 | `reasoning` | `{ type, delta, retracts_answer? }` — the model's reasoning, only when the request set `reasoning: true` (contract ≥ 2.22); join the deltas as they come and keep them apart from the answer. `retracts_answer: true` means the `token` text since the last `tool_call` was this reasoning: drop it from the answer |
 | `tool_call` | `{ type, tool, args, mcp_server?, mcp_server_label?, mcp_tool? }` — an MCP tool names its connector (`mcp_server_label`, e.g. `"Git"`) and the server's own tool name (`mcp_tool`, e.g. `"git_log"`); label the call with those, not the prefixed `tool` |
-| `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`) |
+| `tool_result` | `{ type, tool, data, render? }` — an MCP tool that returned text carries it in `data.mcp_output` (`{ text, truncated }`); a `search_web` result lists its hits in `data.sources` (`[{ title, url }]`); `render` names the card to draw — `guide` for the bundled `guides` skill's tools, `calculator` for the `calculators` skill's — and a host without a renderer for a key draws its generic result card |
+| `context_usage` | `{ type, window, used, turns_in_view, turns_hidden, ... }`: the context meter, not terminal. A request that sent `turns` gets it before the answer (contract ≥ 2.28), so the meter fills during a long turn; `final.context` follows with the loaded model's own count |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
 | `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages? }` — terminal. `failed: true`: the model failed mid-turn and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
@@ -387,8 +391,8 @@ surface — the agent's other transport can collect an approval; see SPEC §5.5.
 
 Thirteen of the agent's 105 tools mutate the machine and need explicit approval
 before they run. (Gemma 4 E4B, on the GPU or the NPU, gets fewer: it is not
-offered the scratchpad, email, image-generation or skill-hub tools, so
-`install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
+offered the scratchpad, email, send-email, calendar, image-generation or skill-hub
+tools, so `install_skill` and `remove_skill` never reach it.) Ten sit in the base `TOOLS_REQUIRING_CONFIRMATION` set —
 **`write_file`**, **`edit_file`**, **`run_shell_command`**,
 **`wait_for_condition`**, which re-runs a shell command until it succeeds,
 **`execute_python_file`**, **`run_python`**, **`notify_desktop`**, which spawns
@@ -397,7 +401,33 @@ a PowerShell child on Windows to draw the notification, **`install_cli`** /
 account, and **`forget_everything`**, which erases all memory except learned skills — and the flagship adds three of its own
 (`CONFIRMATION_REQUIRED_TOOLS`): **`install_skill`**, **`capture_skill`**, and
 **`remove_skill`**, because installing or capturing a skill writes third-party
-content under `~/.gaia/skills` and removing one deletes it. A capture that does
+content under `~/.gaia/skills` and removing one deletes it.
+The bundled `send-email` skill's eight tools join the list when the skill loads,
+and its manifest marks six `requires_confirmation`: **`send-email/send_now`**,
+**`send-email/send_draft`**, **`send-email/reply_to_message`** and
+**`send-email/forward_message`**, because mail leaves the mailbox, and
+**`send-email/discard_draft`** and **`send-email/update_draft`**, because a
+deleted or overwritten draft can't be recovered and may be one the user wrote.
+`send-email/create_draft` and `send-email/list_drafts` don't ask. The prompt
+carries the sending account and the exact message. The four sending tools are
+refused, with nothing sent, wherever no person can answer the prompt, including a
+pre-approved run. A failed send returns `sent: false` when it definitely didn't
+go, and `sent: "unknown"` when it may have (a dropped connection or a provider
+server error): tell the user to check Sent and don't call again unless they ask.
+`send-email/forward_message` carries text only, and reports the files it left out
+in `attachments_left_out`.
+The bundled `calendar` skill's tools join the list when the skill loads, and its
+**`calendar/create_calendar_event`**, **`calendar/update_calendar_event`** and
+**`calendar/cancel_calendar_event`** ask as well (its manifest marks them
+`requires_confirmation`), because they change a real calendar and can email the
+people on the event. `update_calendar_event` and `cancel_calendar_event` take
+`expected_title`, `expected_start` and `notify_attendees`, and a call whose values
+don't match the real event is refused before any approval is asked.
+`create_calendar_event` takes `calendar_account`, refused the same way unless it names
+the account the event lands on; a change or cancel prompt names that account too. A
+time that carries today's UTC offset onto a date past a daylight-saving change is
+refused with the offset in force on that date. A calendar change always asks a person, even under
+full access or `GAIA_AUTO_APPROVE_TOOLS`, and is refused when nobody can answer. A capture that does
 land is additionally **code-inert**: its instructions load, but any
 `tools.py`/scripts stay unregistered until a human runs
 `gaia skill promote <name>` in a terminal. Everything else — reading,
@@ -572,6 +602,11 @@ prompt, mid-session through `load_skill`), and its bundled skill directory is
 the highest-precedence discovery root. Skills can be grouped into named sets,
 but none ship today — see below.
 
+Some bundled skills ship tools as well as a playbook. `guides` and
+`calculators` draw recipe, workout, how-to, checklist, itinerary, tip and loan
+cards; their tools (`guides/show_recipe`, `calculators/show_loan_calculator`, …)
+join the tool list only once the skill loads, so they are not in the 105.
+
 Loaded skills are **not** all resident every turn: each turn the agent embeds
 the query against every loaded skill's description and renders only the
 matching bodies in full — the rest collapse to a one-line menu entry, and the
@@ -618,7 +653,8 @@ a default. Beyond
 ## 11. The project map — two things it costs you
 
 When the agent's working directory is a code repository, every task starts with
-a **project map** in the system prompt: the root, the directory shape, the
+a **project map** in the session context at the start of the first user
+message: the root, the directory shape, the
 likely entry points, which commands are installed, and the three platform
 differences that change command syntax. It exists so the agent stops burning
 round trips on "no such file" and "command not found".
@@ -751,7 +787,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.27","agentVersion":"0.3.5"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.28","agentVersion":"0.3.5"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
@@ -806,6 +842,12 @@ downloaded local models, marking the configured default with `(default)`;
 when available. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.
+
+`/skills add <link>` previews the skills behind a GitHub, skills.sh or `.zip` link
+with what each skill is allowed to do and a security warning, and
+`/skills add <link> confirm` adds exactly what was shown (`--allow-code`
+to include skills that ship scripts). Like `/model`, it is a stdio command, not an
+HTTP query.
 
 ## Developer engineering mode
 

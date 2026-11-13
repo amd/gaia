@@ -12,6 +12,7 @@ import ast
 import contextlib
 import contextvars
 import datetime
+import functools
 import hashlib
 import inspect
 import json
@@ -43,8 +44,16 @@ from typing import (
 )
 
 from gaia.agents.base import turn_metrics
-from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, RISK_NOTE_ARG, SHELL_TOOLS
+from gaia.agents.base.call_risk import (
+    EXACT_TEXT_ARG,
+    NEEDS_PERSON_ARG,
+    RISK_NOTE_ARG,
+    SHELL_TOOLS,
+)
+from gaia.agents.base.chunk_index import OUTPUT_TOOLS
 from gaia.agents.base.completion import (
+    _BINARY_SUFFIXES,
+    WRITE_TOOLS,
     CompletionEvidence,
     caveated_answer,
     incomplete_answer,
@@ -72,6 +81,10 @@ from gaia.agents.base.context_eviction import (
     request_tokens,
     resolve_context_eviction,
     shrink_for_overflow,
+)
+from gaia.agents.base.credential_reads import (
+    PYTHON_TOOLS,
+    python_credential_refusal,
 )
 from gaia.agents.base.deliverables import (
     DELIVERABLE_SUFFIXES,
@@ -156,6 +169,11 @@ from gaia.agents.base.turn_scope import (
     REOPENED_MARKER,
     TurnScopeGuard,
 )
+from gaia.agents.base.unasked_edits import (
+    limits_edit,
+    removal_note,
+    unasked_removals,
+)
 from gaia.agents.base.verification import (
     NOT_EXECUTED,
     VERIFY_AFTER_CHANGE_TAG,
@@ -174,6 +192,7 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
@@ -199,6 +218,7 @@ from gaia.llm.retry import (
     describe_retry_state,
     model_retry_notices,
     retry_state_of,
+    stopped_by_user,
 )
 from gaia.llm.surface_hints import TUI_SERVER_RESTART_HINT as SERVER_RESTART_HINT
 from gaia.logger import get_logger
@@ -209,6 +229,7 @@ from gaia.utils.terminal import stdin_is_interactive
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
+    from gaia.agents.base.history import TurnMessages
     from gaia.connectors.providers.base import ConnectorRequirement
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
@@ -663,6 +684,29 @@ def budget_notices_enabled() -> bool:
     )
 
 
+def verify_edits_enabled() -> bool:
+    """Whether a turn reads its own edits back before it answers.
+
+    On by default. The check is read-only and in-process — it opens the files
+    this turn wrote and nothing else — so it cannot run a build, start a
+    process, or reach anything the turn had not already touched.
+    ``GAIA_AGENT_VERIFY_EDITS=0`` turns it off. Read at call time, like the
+    other ``GAIA_AGENT_*`` knobs.
+    """
+    raw = os.environ.get("GAIA_AGENT_VERIFY_EDITS")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_AGENT_VERIFY_EDITS must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to keep the check on."
+    )
+
+
 class ToolExecutionTimeout(Exception):
     """Raised when a tool body exceeds its bounded execution window.
 
@@ -693,7 +737,6 @@ class ToolExecutionTimeout(Exception):
 # on their registry entry instead — see ``Agent._tool_requires_confirmation``.
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
-    "run_cli_command",
     # Installs software, and signs a CLI in to the user's account. Both mutate
     # the machine on the user's behalf, and neither can ever be pre-authorized:
     # the only grant that skips this gate covers ``run_shell_command`` reads
@@ -1435,6 +1478,8 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
     r"^(?:(?:ok(?:ay)?|so|alright)[,.]?\s+|(?:next|then|finally)[,.]?\s+(?!we\b))?"
     r"(?:executing step|first step|(?:my|our) next step"
     r"|now,? i need to|now,? i'll|now,? i will|i'll now|i will now"
+    # Only a bare "Starting now."; "Starting with X ... now" is often a fact.
+    r"|starting now(?:[.!]|\.\.\.|…)?$"
     r"|let me(?!\s+(?:know|explain|clarify|summari[sz]e|recap|be clear)\b)"
     r"|fetching\b(?!.*\b(?:failed|returned|timed out)\b)"
     r"|(?:now,? )?(?:i|we) (?:still |just )?need to)",
@@ -1442,6 +1487,9 @@ _NEXT_STEP_INTENT_PATTERN = re.compile(
 )
 _PLAN_HEADING_PATTERN = re.compile(
     r"^(?:corrected|new|updated|revised) plan\b", re.IGNORECASE
+)
+_STEP_HEADING_PATTERN = re.compile(
+    r"(?:execution\s+)?step\s+(\d+)\s*/\s*(\d+)\s*:?", re.IGNORECASE
 )
 # "Before finalizing, I will perform one final search…": a step never taken.
 _ANNOUNCED_ACTION_PATTERN = re.compile(
@@ -1632,6 +1680,10 @@ def _unfinished_answer_kind(answer: str) -> Optional[str]:
         for line in heading_lines
     ):
         return "narration"
+    # Only a bare "Step 1/3" heading with nothing under it; any step text is content.
+    step = _STEP_HEADING_PATTERN.fullmatch(last_line)
+    if step and int(step.group(1)) < int(step.group(2)):
+        return "narration"
     return None
 
 
@@ -1701,6 +1753,148 @@ def _tool_plan_step(paragraphs: List[str]) -> Optional[Tuple[str, str]]:
         if len(future) >= 2 and tool_steps:
             return paragraphs[plan_at], tool_steps[0]
     return None
+
+
+# The user told this turn not to act: "use no tools", "don't do anything
+# yet", "answer only with a plan". "Don't run anything yet" forbids running,
+# not writing the files asked for; "don't do anything else" limits the work.
+# "Don't touch anything, just read config.py": the ban is followed by work.
+_NO_ACTION_THEN_WORK = (
+    r"(?:read|open|look|check|inspect|run|execute|fix|edit|write|update|change"
+    r"|create|save|delete|remove|move|install|search|grep|list|modify|apply)"
+)
+_NO_ACTION_BAN = r"\b(?:do\s+not|don't|dont|never|without)\s+(?:actually\s+|yet\s+)?"
+_NO_ACTION_BAN_END = (
+    rf"(?![\s,;:—–-]*(?:(?:just|only|but|and|then)\s+)?{_NO_ACTION_THEN_WORK}\b)"
+    r"(?=\s*(?:$|[.,;:!?)\]—–-]|(?:in\s+this\s+turn|yet|now|for\s+now|until"
+    r"|before|at\s+all|this\s+time|here|and|but|just|to\s+answer|for\s+this)\b))"
+)
+_NO_ACTION_REQUEST_PATTERN = re.compile(
+    rf"(?P<forbid>{_NO_ACTION_BAN}"
+    r"(?:run(?:ning)?|execut(?:e|ing)|call(?:ing)?|us(?:e|ing)|invok(?:e|ing))"
+    rf"\s+(?:any\s+tools?|tools){_NO_ACTION_BAN_END}"
+    # "Fix foo.py but don't touch anything" limits the work; it does not stop it.
+    rf"|(?<!\bbut\s)(?<!\band\s)(?<!\bthen\s){_NO_ACTION_BAN}"
+    r"(?:do(?:ing)?|touch(?:ing)?|open(?:ing)?|read(?:ing)?)\s+"
+    rf"(?:anything|any\s+files?){_NO_ACTION_BAN_END})"
+    r"|\b(?:answer|reply|respond)\s+(?:only|just)\s+with\s+(?:a|an|the|your)\s+"
+    r"(?:[\w-]+\s+){0,3}plan\b"
+    r"|\b(?:only|just)\s+(?:give|write|show|send|outline)\s+(?:me\s+)?"
+    r"(?:a|an|the|your)\s+(?:[\w-]+\s+){0,3}plan\b"
+    # "Plan only." stands as its own clause, not "the plan only covers X".
+    r"|(?:^|[.;:!?(]\s*|\b(?:give|send|show)\s+me\s+)(?:(?:a|the|your)\s+)?"
+    r"plan\s+only\b(?=\s*(?:$|[.,;:!?)]|please\b))"
+    r"|(?<!\bnot\s)\bonly\s+(?:a|the)\s+plan\b"
+    r"(?=\s*(?:$|[.,;:!?)]|please\b|for\s+now\b|then\b))"
+    r"|\b(?:use|call|run)\s+no\s+tools\b",
+    re.IGNORECASE,
+)
+
+# "... until you've read X", "... but that one", "... except config.yaml": the
+# ban has a way out that the request itself wants taken.
+_NO_ACTION_EXCEPTION_PATTERN = re.compile(
+    r"\s*,?\s*(?:(?:until|till|before|unless)\s+you\b"
+    r"|(?:except|besides|other\s+than|apart\s+from)\b"
+    r"|but\s+(?:for\s+)?(?:that|this|the|those|these)\b)",
+    re.IGNORECASE,
+)
+
+# "Last time you answered without reading any files": a report, not a ban.
+_NARRATED_PAST_PATTERN = re.compile(
+    r"\b(?:you|we|i|it|they)\s+(?:\w+\s+)?(?:\w+ed|did|got|gave|wrote|said|ran"
+    r"|went|made)\b[^.!?\n]*$",
+    re.IGNORECASE,
+)
+
+# "... then do step 1", "and then carry it out": the plan is only the start.
+_PLAN_THEN_ACT_PATTERN = re.compile(
+    r"\b(?:then|after\s+that|afterwards?|next)\s*,?\s+(?:you\s+(?:can|should|may)\s+)?"
+    r"(?:do|carry|execute|run|go|start|implement|apply|proceed|make|create"
+    r"|write|perform|begin|continue|follow)\b",
+    re.IGNORECASE,
+)
+
+# "Why does foo.py fail? Don't touch anything": the sentence before a "touch"
+# ban asks for an investigation, so the ban bars edits, not reading.
+_INVESTIGATION_ASK_PATTERN = re.compile(
+    r"^[\s,;:—–-]*(?:(?:please|can\s+you|could\s+you|would\s+you|help\s+me)\s+)?"
+    r"(?:find|investigate|explain|review|debug|diagnose|analy[sz]e"
+    r"|summari[sz]e|tell\s+me|show\s+me|figure\s+out|look|check|inspect|read"
+    r"|open|search|trace|describe|audit|walk\s+me\s+through)\b",
+    re.IGNORECASE,
+)
+# Something in the workspace to investigate, not small talk ("how are you?").
+_WORK_OBJECT_PATTERN = re.compile(
+    r"[\w-]\.[A-Za-z]{1,6}\b|[\\/]"
+    r"|\b(?:bug|error|fail\w*|crash\w*|build|tests?|code|function|class"
+    r"|module|config\w*|logs?|script|repo\w*|exception|trace\w*|files?"
+    r"|folder|director(?:y|ies))\b",
+    re.IGNORECASE,
+)
+
+
+def _asks_to_investigate(text: str) -> bool:
+    """Whether the clause just before a ban asks for something to be looked into."""
+    # The ban's own sentence so far, or the sentence it follows.
+    clause = re.split(r"(?<=[.!?])\s+|\n", text.rstrip())[-1]
+    if not _WORK_OBJECT_PATTERN.search(clause):
+        return False
+    return bool(
+        _INVESTIGATION_ASK_PATTERN.match(clause) or clause.rstrip().endswith("?")
+    )
+
+
+def _no_action_requests(request: str) -> List[str]:
+    """Each way the user's own words this turn forbid acting, by kind.
+
+    "plan" asks for a plan and nothing else, "edits" bars edits during an
+    investigation the request asks for, "act" bars acting at all. A ban the
+    request lifts itself, a report of an earlier turn, and a plan followed by
+    "then do it" are not such a request.
+    """
+    text = (request or "").replace("’", "'")
+    found = []
+    for match in _NO_ACTION_REQUEST_PATTERN.finditer(text):
+        after = text[match.end() :]
+        lowered = match.group().lower()
+        if match.group("forbid"):
+            if _NO_ACTION_EXCEPTION_PATTERN.match(after):
+                continue
+            narrative = lowered.startswith(("without", "never"))
+            if narrative and _NARRATED_PAST_PATTERN.search(text[: match.start()]):
+                continue
+            if "touch" in lowered and _asks_to_investigate(text[: match.start()]):
+                found.append("edits")
+                continue
+        elif _PLAN_THEN_ACT_PATTERN.search(after):
+            continue
+        found.append("plan" if "plan" in lowered else "act")
+    return found
+
+
+def _asks_for_no_action(request: str) -> bool:
+    """Whether the user's own words this turn forbid acting.
+
+    Such a request wins over GAIA's nudges to do an announced step.
+    """
+    return bool(_no_action_requests(request))
+
+
+def _asks_not_to_look(request: str) -> bool:
+    """Whether the ban also covers looking, so look-first nudges stay off.
+
+    "Why does foo.py fail? Don't touch anything" still wants foo.py read.
+    """
+    return any(kind != "edits" for kind in _no_action_requests(request))
+
+
+def _asks_for_a_plan_only(request: str) -> bool:
+    """Whether this turn asked for a plan and nothing else ("answer only with a plan").
+
+    "Use no tools" alone still wants an answer: one that states a file's
+    contents unread keeps its note. A plan names files it has yet to read.
+    """
+    return "plan" in _no_action_requests(request)
 
 
 def _split_announced_step(answer: str) -> Tuple[str, Optional[str]]:
@@ -1863,6 +2057,49 @@ _LOOK_TOOLS = ("read_file", "browse_directory", "search_file", "find_files")
 _MAX_FILE_WRITE_CLAIM_REPROMPTS = 1
 #: Written files whose figures are checked, and input files read as evidence.
 _MAX_CHECKED_DELIVERABLES = 8
+# Post-edit read-back. Repair steps are granted on top of max_steps, so a model
+# under budget pressure has no reason to skip fixing what it broke.
+_VERIFY_REPAIR_STEPS = 2
+# Rounds per turn; past that the turn is looping and the gaps go into the answer.
+_MAX_EDIT_VERIFICATIONS = 2
+# Past this size a file is checked for presence only.
+_VERIFY_MAX_BYTES = 2 * 1024 * 1024
+# JSON files that conventionally allow comments and trailing commas.
+_JSONC_NAMES = frozenset(
+    {"devcontainer.json", ".devcontainer.json", ".eslintrc.json", ".babelrc.json"}
+)
+
+
+def _is_jsonc(path: Path) -> bool:
+    """Whether a .json file is JSONC by convention, so strict parsing misjudges it."""
+    name = path.name.lower()
+    if name in _JSONC_NAMES or name.startswith(("tsconfig", "jsconfig")):
+        return True
+    return any(part.lower() == ".vscode" for part in path.parts[:-1])
+
+
+def _parse_problem(path: Path, text: str) -> Optional[str]:
+    """Why *text* does not parse as *path*'s type, or None (unchecked types pass)."""
+    suffix = path.suffix.lower()
+    if suffix in (".py", ".pyi"):
+        try:
+            ast.parse(text)
+        except (SyntaxError, ValueError) as e:
+            return f"`{path}` no longer parses as Python: {e}"
+    elif suffix == ".json" and not _is_jsonc(path):
+        try:
+            json.loads(text)
+        except ValueError as e:
+            return f"`{path}` is no longer valid JSON: {e}"
+    return None
+
+
+_EDIT_VERIFICATION_PROMPT = (
+    "[check:edits] The files you changed this turn were read back off disk "
+    "and these did not come out right:\n{problems}\n\nFix them now, then "
+    "answer. You have {steps} extra steps for this and they are not charged "
+    "against your step budget."
+)
 # Tools that could hand-edit a file save_extracted_items exported this turn.
 _INVENTORY_HAND_EDITS = frozenset(
     {
@@ -1958,16 +2195,102 @@ _NON_FILE_SUFFIXES = frozenset(
 )
 
 
-def _names_a_file(sentence: str) -> bool:
-    """True when the sentence names somewhere on disk."""
-    if _FILE_TARGET_PATTERN.search(sentence):
-        return True
+_NEGATED_OUTPUT = (
+    r"(?:nothing|none(?:\s+of\s+(?:them|(?:the|these|those|your|my)\s+[\w-]+))?"
+    r"|no\s+(?:[\w-]+\s+)?(?:files?|outputs?|changes|data|cop(?:y|ies)"
+    r"|backups?|documents?|reports?))"
+)
+# "No file was written": the write verb's subject says nothing was saved.
+_NEGATED_SUBJECT_PATTERN = re.compile(
+    rf"(?:^|[^\w'-]){_NEGATED_OUTPUT}\s+$", re.IGNORECASE
+)
+# "No files besides notes.md": the exception is a save it claims.
+_SAVE_EXCEPTION = (
+    r"(?:except|besides|other\s+than|apart\s+from|aside\s+from|save\s+for)"
+)
+_SAVE_EXCEPTION_PATTERN = re.compile(rf"\b{_SAVE_EXCEPTION}\b", re.IGNORECASE)
+# "I wrote no file", "I saved nothing": so does its object.
+_NEGATED_OBJECT_PATTERN = re.compile(
+    rf"\s+{_NEGATED_OUTPUT}\b(?!\s+(?:but|{_SAVE_EXCEPTION})\b)", re.IGNORECASE
+)
+
+
+# "... stored as your bookshelf slot", "saved to memory": what was kept is a
+# remembered fact. "it" between verb and "as" is a file ("saved it as your …").
+_REMEMBERED_AFTER_PATTERN = re.compile(
+    r"\s+(?:earlier\s+|previously\s+)?(?:as\s+your\b"
+    r"|(?:in|to|into)\s+(?:my\s+|your\s+)?(?:long-term\s+)?memor(?:y|ies)\b(?!\.\w))",
+    re.IGNORECASE,
+)
+# "the `granite-1812` I have stored": the thing kept is a value, not a path.
+_VALUE_BEFORE_PATTERN = re.compile(r"`([^`\n]+)`\s+(?:that\s+|which\s+)?$")
+_CLAUSE_END_PATTERN = re.compile(r"[,;:—–]|\s-\s")
+
+
+def _has_file_extension(text: str) -> bool:
+    """A dotted token whose suffix is a file extension."""
     # A suffix with no letter is a version or a clock time, not an extension.
     return any(
         any(char.isalpha() for char in suffix)
         and suffix.lower() not in _NON_FILE_SUFFIXES
-        for suffix in _DOTTED_TOKEN_PATTERN.findall(sentence)
+        for suffix in _DOTTED_TOKEN_PATTERN.findall(text)
     )
+
+
+def _names_a_path(text: str) -> bool:
+    """A slash or a file name with an extension: somewhere on disk."""
+    if re.search(r"[\\/]", text):
+        return True
+    return _has_file_extension(text)
+
+
+def _describes_a_remembered_value(sentence: str, match: "re.Match[str]") -> bool:
+    """Whether this write verb tells of a fact kept in memory, not of a file."""
+    after = _REMEMBERED_AFTER_PATTERN.match(sentence, match.end())
+    if after and "memor" in after.group().lower():
+        return True
+    # "the `summary` I saved, at out/s.md": a path anywhere makes it a save.
+    if _names_a_path(sentence):
+        return False
+    # "saved to `notes`": so does a destination in the verb's own clause.
+    clause = _CLAUSE_END_PATTERN.split(sentence[match.end() :], maxsplit=1)[0]
+    if _names_a_file(clause):
+        return False
+    if after:
+        return True
+    head = _VALUE_BEFORE_PATTERN.search(sentence[: match.start()])
+    if head is None:
+        return False
+    token = head.group(1)
+    return not (re.search(r"[\\/~]", token) or _names_a_file(token))
+
+
+def _is_write_claim(sentence: str, denials: bool) -> bool:
+    """A write verb in *sentence*; with *denials* false, not one negated.
+
+    *denials* (a turn that asked for a save) reads every write verb as a
+    claim, a remembered value included: the save is owed either way.
+    """
+    return any(
+        denials
+        or (
+            not _describes_a_remembered_value(sentence, match)
+            and not (
+                _NEGATED_SUBJECT_PATTERN.search(sentence[: match.start()])
+                and not _SAVE_EXCEPTION_PATTERN.search(sentence, match.end())
+            )
+            and not _NEGATED_OBJECT_PATTERN.match(sentence, match.end())
+        )
+        for pattern in _FILE_WRITE_CLAIM_PATTERNS
+        for match in pattern.finditer(sentence)
+    )
+
+
+def _names_a_file(sentence: str) -> bool:
+    """True when the sentence names somewhere on disk."""
+    if _FILE_TARGET_PATTERN.search(sentence):
+        return True
+    return _has_file_extension(sentence)
 
 
 def _is_plan_narration(sentence: str) -> bool:
@@ -1983,13 +2306,15 @@ def _is_plan_narration(sentence: str) -> bool:
     )
 
 
-def _claims_file_write(answer: str) -> bool:
+def _claims_file_write(answer: str, denials: bool = False) -> bool:
     """True when the prose asserts a file has already been written to disk.
 
     A sentence must carry both a completed write verb and a file/path target,
     so "I saved the routine to notes/routine.md" fires while "I created a
     summary of the meeting" does not. Fenced code is ignored — a sample
     command is not a claim — and so is a sentence in a planning frame.
+    "No file was written" is not a claim unless *denials* is set, which a
+    turn that asked for a save uses: it still names the save that is owed.
     """
     prose = _FENCED_BLOCK_PATTERN.sub("", (answer or "").replace("’", "'"))
     prose = _URL_OR_EMAIL_PATTERN.sub(" ", prose)
@@ -1998,9 +2323,19 @@ def _claims_file_write(answer: str) -> bool:
             continue
         if not _names_a_file(sentence):
             continue
-        if any(pattern.search(sentence) for pattern in _FILE_WRITE_CLAIM_PATTERNS):
+        if _is_write_claim(sentence, denials):
             return True
     return False
+
+
+def _write_claims_for(evidence: CompletionEvidence) -> Callable[[str], bool]:
+    """The save-claim test for this turn's completion check.
+
+    Asked to save, "nothing was written" still names the save that is owed.
+    """
+    if evidence.instructed:
+        return functools.partial(_claims_file_write, denials=True)
+    return _claims_file_write
 
 
 _PLACEHOLDER_TOKEN = re.compile(r"[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+")
@@ -2253,10 +2588,10 @@ def _plan_step_placeholder(
 
 
 def _withheld_skill_tools(agent: Any, skill: Any) -> List[str]:
-    """The tools *skill* consumes that *agent*'s model is not offered."""
+    """The tools *skill* consumes or provides that *agent*'s model is not offered."""
     # getattr: test stubs copy load_skill onto a plain class.
     features = getattr(agent, "model_features", FULL)
-    return sorted(set(skill.gaia.tools_required) & withheld_tools(features))
+    return sorted(set(_skill_tool_names(skill)) & withheld_tools(features))
 
 
 def _skill_tool_names(skill: Any) -> List[str]:
@@ -2504,6 +2839,9 @@ class Agent(abc.ABC):
     # Which mixin contributed each system-prompt fragment.
     _mixin_prompt_origins: "Optional[Dict[str, Any]]" = None
 
+    # The volatile fragments, composed with the system prompt; see session_context.
+    _session_context_cache: str = ""
+
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
@@ -2668,11 +3006,11 @@ class Agent(abc.ABC):
     #: than by remembering to copy an override.
     CONFIRMATION_HOOKS: ClassVar[tuple] = ()
 
-    # ``get_*_system_prompt`` fragments whose text changes during a session.
-    # ``_compose_system_prompt`` emits these LAST so a mid-session change never
-    # invalidates the backend's KV-cache prefix for the static text above them.
-    # Add a name here only if its fragment genuinely varies within one session —
-    # a static fragment listed here just loses its position, harmlessly.
+    # ``get_*_system_prompt`` fragments whose text differs between sessions or
+    # changes during one. They ride at the start of the first user message
+    # (``session_context``), so every fresh session shares one cached system
+    # prompt; hybrid models can't resume mid-system-prompt. Listing a static
+    # fragment here only moves it, harmlessly.
     VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = frozenset(
         {
             "get_memory_system_prompt",  # re-rendered on forget/update of a shown item
@@ -2746,7 +3084,6 @@ Do NOT wrap conversational replies in JSON.
     def __init__(
         self,
         use_claude: bool = False,
-        use_chatgpt: bool = False,
         claude_model: str = "claude-sonnet-5",
         base_url: Optional[str] = None,
         model_id: str = None,
@@ -2778,7 +3115,6 @@ Do NOT wrap conversational replies in JSON.
 
         Args:
             use_claude: If True, uses Claude API (default: False)
-            use_chatgpt: Removed option; True raises migration guidance (default: False)
             claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: ``resolve_lemonade_base_url()`` — LEMONADE_BASE_URL, else GAIA's own server)
             model_id: The ID of the model to use with LLM server (default for local)
@@ -2841,10 +3177,6 @@ Do NOT wrap conversational replies in JSON.
 
         Note: Uses local LLM server by default unless use_claude is True.
         """
-        if use_chatgpt:
-            from gaia.llm.factory import REMOVED_PROVIDER_MESSAGE
-
-            raise ValueError(REMOVED_PROVIDER_MESSAGE)
         if max_output_tokens is not None and (
             isinstance(max_output_tokens, bool)
             or not isinstance(max_output_tokens, int)
@@ -2872,6 +3204,7 @@ Do NOT wrap conversational replies in JSON.
         # the entries from _turn_error_start on.
         self.error_history = []
         self._turn_error_start = 0
+        self._turn_unasked_removals = []
         # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
         # if called outside the normal process_query loop (e.g. directly in a
         # test); _process_query_impl resets this per-turn.
@@ -2900,12 +3233,22 @@ Do NOT wrap conversational replies in JSON.
         self._grounding_history = ""
         # Grounding gaps that survived their correction, for the scope note.
         self._turn_ungrounded: List[str] = []
+        # The user's own words this turn ask only for a plan, not an answer.
+        self._turn_plan_only_requested = False
+        # The user's own words this turn bar tools, reading included.
+        self._turn_no_look_requested = False
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
         # The model that wrote its own tool-call markup in this session, if any.
         self._own_markup_model: Optional[str] = None
         self._budget_notices_on = budget_notices_enabled()
+        # Post-edit verification bookkeeping; reset per turn below.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings: List[str] = []
+        # Whether each file parsed before this turn's first write to it.
+        self._edit_parse_baseline: Dict[str, bool] = {}
+        self._verify_edits_on = verify_edits_enabled()
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -2960,13 +3303,21 @@ Do NOT wrap conversational replies in JSON.
         if resolve_after_start:
             base_url = resolve_lemonade_base_url()
 
+        # Cache-only for now; the catalog is asked below before any preload.
+        from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
+
+        model_is_cloud = bool(
+            cloud_model_provider(model_id) or is_cloud_model(model_id)
+        )
+
         # Lazy Lemonade initialization for local LLM users
         # This ensures Lemonade server is running before we try to use it
         if not (use_claude or skip_lemonade):
             from gaia.llm.lemonade_client import (
                 LemonadeClient,
+                LemonadeClientError,
                 LemonadeUnresponsiveError,
-                cloud_model_provider,
+                is_cloud_model_with_catalog,
                 resolve_ctx_size,
             )
             from gaia.llm.lemonade_manager import LemonadeManager
@@ -2975,7 +3326,25 @@ Do NOT wrap conversational replies in JSON.
             req = getattr(self.__class__, "REQUIRED_HARDWARE", None)
             required_min_device = req.min_device if req is not None else None
 
-            if cloud_model_provider(model_id):
+            if not model_is_cloud:
+                try:
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+                except LemonadeClientError:
+                    # Lemonade may just be stopped: start it without loading
+                    # anything, then ask again. A second failure is raised.
+                    LemonadeManager.ensure_ready(
+                        quiet=silent_mode,
+                        base_url=base_url,
+                        required_min_device=required_min_device,
+                        device=device,
+                        model=model_id,
+                        preload=False,
+                    )
+                    if resolve_after_start:
+                        base_url = resolve_lemonade_base_url()
+                    model_is_cloud = is_cloud_model_with_catalog(model_id, base_url)
+
+            if model_is_cloud:
                 # The local manager preloads a chat model even on an idle server.
                 probe_client = LemonadeClient(base_url=base_url, verbose=False)
                 # Ask the daemon for GAIA's engine, never probe the default port.
@@ -2989,6 +3358,7 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     # Before the prompt is composed: it decides the tool format.
                     LemonadeManager.learn_tool_calling(probe_client, model_id)
+                    LemonadeManager.learn_reasoning(probe_client, model_id)
             else:
                 # Unpinned, the manager checks the device profile's floor. This
                 # model's own (possibly memory-sized) window is applied when it
@@ -3076,6 +3446,8 @@ Do NOT wrap conversational replies in JSON.
         # Rebuilt by every process_query; None before the first turn.
         self._extraction_ledger: Optional[ExtractionLedger] = None
         self._completion_evidence: Optional[CompletionEvidence] = None
+        # Backups this session's edits made (keys, file names), across turns.
+        self._session_backups: Tuple[set, set] = (set(), set())
 
         # Declarative skills: compose whatever this
         # agent's gaia-agent.yaml declares. After _register_tools so a skill's
@@ -3094,8 +3466,6 @@ Do NOT wrap conversational replies in JSON.
         # Note: Context size is configured when starting Lemonade server, not here
         # Every agent resolves the same default so switching agents never evicts
         # and cold-reloads the resident model.
-        from gaia.llm.lemonade_client import cloud_model_provider
-
         for name, value in (
             ("context_eviction_threshold_tokens", context_eviction_threshold_tokens),
             ("context_eviction_keep_steps", context_eviction_keep_steps),
@@ -3106,7 +3476,7 @@ Do NOT wrap conversational replies in JSON.
         # Env wins over the arguments; malformed values fail here, not mid-turn.
         mode = context_eviction_from_env() or context_eviction
         self.context_eviction_enabled = resolve_context_eviction(
-            mode, model_id, cloud=cloud_model_provider(model_id) is not None
+            mode, model_id, cloud=model_is_cloud
         )
         evictor = ContextEvictor(
             threshold_tokens=evict_threshold_from_env()
@@ -3135,7 +3505,7 @@ Do NOT wrap conversational replies in JSON.
                 if max_output_tokens is not None
                 else (
                     CLOUD_MAX_OUTPUT_TOKENS
-                    if not use_claude and cloud_model_provider(model_id)
+                    if not use_claude and model_is_cloud
                     else LOCAL_MAX_OUTPUT_TOKENS
                 )
             ),
@@ -3297,13 +3667,10 @@ Do NOT wrap conversational replies in JSON.
         ):
             parts.append(self._response_format_template)
 
-        # Volatile last. llama.cpp reuses the KV cache only up to the first
-        # differing token, so anything that changes mid-session — memory after a
-        # remember(), the per-turn skill-body selection, a filtered tool list —
-        # placed ABOVE the static text invalidates all of it. Tail position
-        # keeps the static head cached across turns.
-        parts.extend(volatile_mixins)
+        # Out of the system prompt entirely: see ``session_context``.
+        self._session_context_cache = "\n\n".join(p for p in volatile_mixins if p)
 
+        # A filtered text tool list grows as tools are selected, so it goes last.
         if tool_filter is not None and tools_block is not None:
             parts.append(tools_block)
 
@@ -3325,6 +3692,9 @@ Do NOT wrap conversational replies in JSON.
         if turn_log_path() is None:
             return None
         try:
+            from gaia.agents.base.history import prompt_text
+
+            sent = prompt_text(self)
             recorder = TurnRecorder(
                 query=user_input,
                 agent_name=type(self).__name__,
@@ -3343,7 +3713,7 @@ Do NOT wrap conversational replies in JSON.
                     origin: len(text)
                     for text, origin in (self._mixin_prompt_origins or {}).items()
                     # A subclass may filter a fragment out of the final prompt.
-                    if text in self.system_prompt
+                    if text in sent
                 },
             )
             for name, t0, t1 in pre_spans:
@@ -3467,6 +3837,25 @@ Do NOT wrap conversational replies in JSON.
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("console rejected turn metrics: %s", e)
 
+    def _stage_final_model_messages(
+        self, messages: "TurnMessages", answer: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Seal the turn's record when the console carries it to the caller.
+
+        The daemon's ``final`` event must not wait on this thread's tail (memory
+        store, trace) to learn what later turns replay, so the record is sealed
+        at the answer and handed over. The sealed list is reused as
+        ``result["model_messages"]``, so the turn pays for one copy, not two.
+        """
+        hook = getattr(self.console, "stage_final_model_messages", None)
+        if hook is None:
+            return None
+        try:
+            return hook(answer, messages.finish(answer))
+        except Exception as e:  # noqa: BLE001 - the answer must still print
+            logger.warning("console could not stage the turn record: %s", e)
+            return None
+
     def _announce_turn_failed(self) -> None:
         """Tell the console the answer about to print ends a failed turn.
 
@@ -3535,6 +3924,32 @@ Do NOT wrap conversational replies in JSON.
     def system_prompt(self, value: str):
         """Allow setting system prompt (used when appending tool descriptions)."""
         self._system_prompt_cache = value
+
+    @property
+    def session_context(self) -> str:
+        """The ``VOLATILE_PROMPT_FRAGMENTS`` text, composed with the system prompt.
+
+        Memory, loaded skills and the project map / working directory differ
+        from one session to the next. Every request carries them at the start
+        of its first user message instead (``_with_session_context``), so the
+        system prompt and tool list stay byte-identical across fresh sessions.
+        """
+        _ = self.system_prompt  # composes both on first access
+        return self._session_context_cache
+
+    def _with_session_context(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """*messages* as sent: the session context opens the first user message."""
+        from gaia.agents.base.history import with_session_context
+
+        return with_session_context(messages, self.session_context)
+
+    def _prompt_text(self) -> str:
+        """What the agent adds to every request: system prompt + session context."""
+        from gaia.agents.base.history import prompt_text
+
+        return prompt_text(self)
 
     def _get_system_prompt(self) -> str:
         """
@@ -3902,8 +4317,8 @@ Do NOT wrap conversational replies in JSON.
             if cloud_model_provider(model_id):
                 # A cloud reasoning model can spend its whole budget thinking
                 # about one dense page; copying quotes needs little reasoning.
-                effort = cloud_lowest_reasoning_effort(model_id)
-                sampling = {"reasoning_effort": effort} if effort else {}
+                # None: no configured cloud_reasoning_effort is added either.
+                sampling = {"reasoning_effort": cloud_lowest_reasoning_effort(model_id)}
             else:
                 # Local anti-repetition penalties fight verbatim quote copying.
                 sampling = {
@@ -4167,6 +4582,10 @@ Do NOT wrap conversational replies in JSON.
         )
         return schemas
 
+    def _history_tool_schemas(self):
+        """The tool schemas history is budgeted against."""
+        return self._openai_tools
+
     def _thin_tool_schemas(self) -> bool:
         """True when ``tools=`` carries thin schemas, with full docs on request.
 
@@ -4351,12 +4770,18 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        skills = self.skill_manager.discover()
         catalog = render_catalog(
-            {n: s for n, s in skills.items() if not _withheld_skill_tools(self, s)},
-            list_project=self._lists_project_skills(),
+            self._catalog_skills(), list_project=self._lists_project_skills()
         )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _catalog_skills(self) -> Dict[str, Any]:
+        """Installed skills this model can load: the pool the catalogue lists from."""
+        return {
+            n: s
+            for n, s in self.skill_manager.discover().items()
+            if not _withheld_skill_tools(self, s)
+        }
 
     def _lists_project_skills(self) -> bool:
         """Whether the catalogue lists the project's ``.claude/skills``.
@@ -6948,6 +7373,19 @@ Do NOT wrap conversational replies in JSON.
             return float(override)
         return tool_execution_timeout()
 
+    def _loop_guard_key(self, tool_name: str, tool_args: Any) -> Tuple[str, str]:
+        """What the repeat-call guard compares: the tool's ``dedup_key``
+        arguments when it declares one, else every argument."""
+        dedup_key = (self._tools_registry.get(tool_name) or {}).get("dedup_key")
+        # A non-dict payload has no named arguments to project.
+        if not dedup_key or not isinstance(tool_args, dict):
+            return (tool_name, str(tool_args))
+        projected = {name: tool_args.get(name) for name in dedup_key}
+        return (
+            tool_name,
+            json.dumps(projected, sort_keys=True, default=str, ensure_ascii=False),
+        )
+
     def _requested_tool_timeout(
         self, tool_name: str, tool_args: Dict[str, Any]
     ) -> Optional[float]:
@@ -7115,6 +7553,20 @@ Do NOT wrap conversational replies in JSON.
                 return str(reason)
         return f"Tool '{tool_name}' was denied by the user."
 
+    def _skill_tool_scope(self, tool_name: str) -> Any:
+        """Bind a loaded skill's tool to this agent, as its body is when it runs.
+
+        A skill's preflight and approval prompt need the agent too, and a skill
+        tool has no ``self``; any other tool gets a no-op context.
+        """
+        skill_name = (self._tools_registry.get(tool_name) or {}).get("skill")
+        skill = self.loaded_skills.get(skill_name) if skill_name else None
+        if skill is None:
+            return contextlib.nullcontext()
+        from gaia.skills.context import bind
+
+        return bind(self, skill)
+
     def _policy_refusal(
         self, tool_name: str, tool_args: Optional[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
@@ -7138,12 +7590,19 @@ Do NOT wrap conversational replies in JSON.
             )
             if refusal is not None:
                 return refusal
+        if tool_name in PYTHON_TOOLS:
+            refusal = python_credential_refusal(
+                tool_name, tool_args, self._python_call_folders()
+            )
+            if refusal is not None:
+                return refusal
         # Before the falsy-args guard: a tool whose arguments all default
         # (``update_gaia_md()``) still has a target, and must not be approved
         # only to be refused by its own body a moment later.
         preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
         if preflight is not None:
-            refusal = preflight(tool_args or {})
+            with self._skill_tool_scope(tool_name):
+                refusal = preflight(tool_args or {})
             if refusal is not None:
                 return refusal
         if not tool_args:
@@ -7152,6 +7611,21 @@ Do NOT wrap conversational replies in JSON.
         if not callable(refuses):
             return None
         return refuses(tool_name, tool_args)  # pylint: disable=not-callable
+
+    def _python_call_folders(self) -> List[str]:
+        """Where a Python tool's relative paths may resolve, most likely first."""
+        from gaia.agents.tools.workspace_paths import _workspace_default
+
+        folders = [_workspace_default(self)]
+        project_root = getattr(self, "_project_map_root", None)
+        if callable(project_root):
+            try:
+                folders.append(project_root())  # pylint: disable=not-callable
+            except ValueError as exc:
+                # The tool reports a bad project root itself; check the rest.
+                logger.debug("No project root for the credential check: %s", exc)
+        folders += [getattr(self, "scratch_dir", None), os.getcwd()]
+        return [str(f) for f in folders if f]
 
     #: The answers the denied-effect question offers.
     ALLOW_DENIED_EFFECT = "Allow once"
@@ -7459,6 +7933,8 @@ Do NOT wrap conversational replies in JSON.
                 logger.info("Turn scope refused %s: %s", tool_name, refused["error"])
                 return refused
         evidence = getattr(self, "_completion_evidence", None)
+        if outermost:
+            self._note_edit_parse_baseline(tool_name, tool_args)
         before = (
             evidence.snapshot(
                 tool_name,
@@ -7481,6 +7957,7 @@ Do NOT wrap conversational replies in JSON.
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
             if outermost:
+                self._note_edit_removals(tool_args, result)
                 result = self._flag_planted_instructions(tool_name, tool_args, result)
             return result
 
@@ -7498,6 +7975,7 @@ Do NOT wrap conversational replies in JSON.
             if scope is not None:
                 scope.record(tool_name, tool_args, result)
                 result = self._with_task_lessons(tool_name, tool_args, result)
+            self._note_edit_removals(tool_args, result)
             return self._flag_planted_instructions(tool_name, tool_args, result)
         finally:
             self._tool_timing_depth = 0
@@ -7521,6 +7999,40 @@ Do NOT wrap conversational replies in JSON.
                     )
                 except Exception as e:  # noqa: BLE001 - never displace a tool error
                     logger.warning("could not record tool timing: %s", e)
+
+    def _note_edit_removals(self, tool_args: Any, result: Any) -> None:
+        """Keep the lines a "change nothing else" edit removed unasked."""
+        args = tool_args if isinstance(tool_args, dict) else {}
+        old, new = args.get("old_content"), args.get("new_content")
+        if not isinstance(old, str) or not isinstance(new, str):
+            return
+        if self._is_error_result(result):
+            return
+        request = getattr(self, "_original_user_input", None) or getattr(
+            self, "_current_query", ""
+        )
+        if not limits_edit(str(request or "")):
+            return
+        removals = getattr(self, "_turn_unasked_removals", None)
+        if removals is None:
+            return
+        raw_path = str(args.get("file_path") or "")
+        path = os.path.abspath(raw_path) if raw_path else ""
+        key = os.path.normcase(path)
+        path = next((p for p, _ in removals if os.path.normcase(p) == key), path)
+
+        def _fold(line: str) -> str:
+            return " ".join(line.split()).lower()
+
+        restored = {_fold(line) for line in new.splitlines()}
+        removals[:] = [
+            (p, line)
+            for p, line in removals
+            if os.path.normcase(p) != key or _fold(line) not in restored
+        ]
+        for line in unasked_removals(old, new, str(request)):
+            if (path, line) not in removals:
+                removals.append((path, line))
 
     def _flag_planted_instructions(
         self, tool_name: str, tool_args: Any, result: Any
@@ -7718,7 +8230,14 @@ Do NOT wrap conversational replies in JSON.
         reserved = sorted(
             key
             for key in (tool_args if isinstance(tool_args, dict) else {})
-            if key in (RISK_NOTE_ARG, SCRATCH_ARG, NEEDS_PERSON_ARG, RESOLVED_PATH_ARG)
+            if key
+            in (
+                RISK_NOTE_ARG,
+                SCRATCH_ARG,
+                NEEDS_PERSON_ARG,
+                EXACT_TEXT_ARG,
+                RESOLVED_PATH_ARG,
+            )
         )
         if reserved:
             return {
@@ -7771,9 +8290,17 @@ Do NOT wrap conversational replies in JSON.
         # call runs. Display only: the tool runs with tool_args.
         shows = getattr(self, "confirmation_args_for_call", None)
         prompt_args = shows(tool_name, tool_args) if callable(shows) else tool_args
-        prompt_args = _with_resolved_target(
-            prompt_args, (self._tools_registry.get(tool_name) or {}).get("preflight")
-        )
+        preflight = (self._tools_registry.get(tool_name) or {}).get("preflight")
+        prompt_args = _with_resolved_target(prompt_args, preflight)
+        # A tool whose arguments don't say what will happen shows what will,
+        # on top of whatever the host already added to the prompt.
+        prompt_args_of = getattr(preflight, "prompt_args_of", None)
+        if callable(prompt_args_of):
+            with self._skill_tool_scope(tool_name):
+                shown = prompt_args_of(tool_args)
+            prompt_args = (
+                {**prompt_args, **shown} if isinstance(prompt_args, dict) else shown
+            )
         if isinstance(prompt_args, dict) and tool_name in PATH_TOOLS:
             resolved_path = prompt_args.get("file_path")
             if isinstance(resolved_path, str) and os.path.isabs(resolved_path):
@@ -7814,9 +8341,11 @@ Do NOT wrap conversational replies in JSON.
             }
         # A one-time call is approved on its own prompt, which carries its
         # risk note — never through the reroute question above. So is a call
-        # only a person may approve.
+        # only a person may approve, or one approved on its exact text.
         one_time = isinstance(prompt_args, dict) and bool(
-            prompt_args.get(RISK_NOTE_ARG) or prompt_args.get(NEEDS_PERSON_ARG)
+            prompt_args.get(RISK_NOTE_ARG)
+            or prompt_args.get(NEEDS_PERSON_ARG)
+            or prompt_args.get(EXACT_TEXT_ARG)
         )
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
@@ -7847,6 +8376,11 @@ Do NOT wrap conversational replies in JSON.
             ):
                 note_decision(tool_name, bool(approved))
             if not approved:
+                # What a preflight prepared for this prompt must not outlive a no.
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
                 denied_error = self._confirmation_denied_error(tool_name)
                 denied = {"status": "denied", "error": denied_error}
                 if self.console.confirmation_timed_out(tool_name) is True:
@@ -7982,6 +8516,9 @@ Do NOT wrap conversational replies in JSON.
             with skill_scope as skill_call:
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
+            if tool_name in OUTPUT_TOOLS:
+                # Output goes into the prompt; tokens and credential-file lines must not.
+                result = redact_tool_output(result)
             logger.debug(f"Tool execution result: {result}")
             _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
@@ -8315,7 +8852,7 @@ Do NOT wrap conversational replies in JSON.
         stats = None
         if self.streaming:
             stream = self.chat.send_messages_stream(
-                messages=request,
+                messages=self._with_session_context(request),
                 system_prompt=self.system_prompt,
                 tools=tools,
                 **no_calls,
@@ -8336,7 +8873,7 @@ Do NOT wrap conversational replies in JSON.
             self.console.start_progress(self._progress_label())
             try:
                 reply = self.chat.send_messages(
-                    messages=request,
+                    messages=self._with_session_context(request),
                     system_prompt=self.system_prompt,
                     tools=tools,
                     **no_calls,
@@ -8810,9 +9347,11 @@ Do NOT wrap conversational replies in JSON.
         Used when a context-overflow error fires but ``str(exception)`` no
         longer carries the raw ``n_ctx`` value (typical when AgentSDK
         re-raises with the typed exception's friendly user_message).
-        Returns False on any probe failure so the caller falls through to
-        the safe in-loop trim path rather than crashing.
+        Returns False, with a warning naming the URL, when Lemonade cannot be
+        reached, answers non-200 or sends an unreadable body, so the caller
+        trims in the loop instead; any other error propagates.
         """
+        health_url = "the Lemonade health endpoint"
         try:
             import httpx
 
@@ -8844,6 +9383,12 @@ Do NOT wrap conversational replies in JSON.
                 ),
             )
             if resp.status_code != 200:
+                logger.warning(
+                    "Loaded-context probe got HTTP %s from %s; trimming history "
+                    "instead of reloading the model.",
+                    resp.status_code,
+                    health_url,
+                )
                 return False
             data = resp.json()
             # Same resolution as the chat config: no model_id runs the default.
@@ -8880,7 +9425,13 @@ Do NOT wrap conversational replies in JSON.
                     return True
             return False
         except (httpx.HTTPError, ValueError, LemonadeClientError) as e:
-            logger.debug("Loaded-context probe failed: %s", e)
+            logger.warning(
+                "Loaded-context probe of %s failed (%s: %s); trimming history "
+                "instead of reloading the model.",
+                health_url,
+                type(e).__name__,
+                e,
+            )
             return False
 
     def _extract_lemonade_user_message(self, exc: BaseException) -> Optional[str]:
@@ -9436,7 +9987,7 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.artifacts import ArtifactStore
 
-        system_prompt, tools = self.system_prompt, self._openai_tools
+        system_prompt, tools = self._prompt_text(), self._openai_tools
         before = request_tokens(messages, system_prompt, tools)
         # Sized in a throwaway store first: nothing is archived for a retry that won't run.
         # Its stubs can run a few chars longer than the real store's; the 95% margin covers it.
@@ -9513,12 +10064,7 @@ Do NOT wrap conversational replies in JSON.
         lessons). User messages are never stubbed, so the note survives.
         """
         hook = getattr(self, "overflow_recovery_note", None)
-        try:
-            note = hook() if callable(hook) else ""
-        except Exception as exc:
-            # Overflow recovery is the worst moment to lose the turn to bookkeeping.
-            logger.debug("Could not build the overflow recovery note: %s", exc)
-            return messages
+        note = hook() if callable(hook) else ""
         if not note:
             return messages
 
@@ -10204,6 +10750,8 @@ Do NOT wrap conversational replies in JSON.
             getattr(self, "_turn_tool_executions", None) or [],
             history=history,
             locate=path_locator(roots),
+            plan_only=getattr(self, "_turn_plan_only_requested", False),
+            may_act=not getattr(self, "_turn_no_look_requested", False),
         )
 
     def _deliverable_findings(
@@ -10222,7 +10770,7 @@ Do NOT wrap conversational replies in JSON.
             return []
         records = getattr(self, "_turn_tool_executions", None) or []
         written_keys = {evidence.key(p) for p in written}
-        inputs = []
+        inputs, input_names = [], []
         for raw in input_paths(records) + mentioned_paths(query):
             path = path_locator(roots)(raw)
             if path is None or evidence.key(path) in written_keys:
@@ -10233,7 +10781,10 @@ Do NOT wrap conversational replies in JSON.
                 and not validator.validate_read(path, prompt_user=False)[0]
             ):
                 continue
-            inputs.append(blocks_text(self._deliverable_blocks(path)))
+            text = blocks_text(self._deliverable_blocks(path))
+            inputs.append(text)
+            if text.strip():
+                input_names.append(path)
             if len(inputs) >= _MAX_CHECKED_DELIVERABLES:
                 break
         return file_findings(
@@ -10242,6 +10793,7 @@ Do NOT wrap conversational replies in JSON.
             query=query,
             context=history,
             inputs=inputs,
+            input_names=input_names,
             answer=answer,
         )
 
@@ -10340,6 +10892,10 @@ Do NOT wrap conversational replies in JSON.
         note = self._planted_instructions_note(body)
         if note:
             body = f"{body.rstrip()}\n\n{note}"
+        removals = getattr(self, "_turn_unasked_removals", None) or []
+        removed = removal_note(removals, body)
+        if removed:
+            body = f"{body.rstrip()}\n\n{removed}"
         if not statement:
             return body
         return f"{body.rstrip()}\n\n{statement}"
@@ -10349,6 +10905,159 @@ Do NOT wrap conversational replies in JSON.
         return {
             key for key, item in self._completion_evidence.files.items() if item.written
         }
+
+    def _files_written_this_turn(self) -> List[str]:
+        """Text files a file-editing tool wrote this turn, from the evidence ledger.
+
+        Not ``_turn_file_edits`` alone: no shipped file tool sets the
+        ``operation`` field that feeds it. Generated outputs, executor-written
+        files and mtime-inferred entries are left out.
+        """
+        paths: List[str] = []
+        evidence = getattr(self, "_completion_evidence", None)
+        files = getattr(evidence, "files", None) or {}
+        removed = getattr(evidence, "removed", None) or set()
+        for item in files.values():
+            if item.written and item.edited and not item.inferred:
+                paths.append(item.path)
+        for edit in getattr(self, "_turn_file_edits", None) or []:
+            raw = (edit or {}).get("file_path")
+            if not raw:
+                continue
+            if evidence is not None:
+                try:
+                    key = evidence.key(str(raw))
+                except (OSError, ValueError):
+                    key = None
+                item = files.get(key)
+                # Deleted on purpose, or rewritten since by something that is
+                # not a file-editing tool: no longer this edit's result.
+                if key in removed or (item is not None and not item.edited):
+                    continue
+            paths.append(str(raw))
+        return paths
+
+    def _verify_turn_edits(self) -> List[str]:
+        """Count a read-back round and keep its findings as the latest ones."""
+        problems = self._edit_problems()
+        self._edit_verification_rounds = (
+            getattr(self, "_edit_verification_rounds", 0) + 1
+        )
+        self._edit_verification_findings = problems
+        logger.debug(
+            "Post-edit verification round %d: %d problem(s)",
+            self._edit_verification_rounds,
+            len(problems),
+        )
+        return problems
+
+    def _edit_problems(self) -> List[str]:
+        """Read this turn's edits back: still there, not empty, still parses.
+
+        Read-only and in-process, through the read boundary without prompting.
+        Binary files are skipped; files over ``_VERIFY_MAX_BYTES`` are checked
+        for presence only.
+        """
+        problems: List[str] = []
+        seen: set = set()
+        validator = self._read_validator()
+        for raw in self._files_written_this_turn():
+            path = Path(str(raw))
+            key = os.path.normcase(str(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            if path.suffix.lower() in _BINARY_SUFFIXES:
+                continue
+            if validator is not None:
+                try:
+                    allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                except (OSError, ValueError):
+                    allowed = False
+                if not allowed:
+                    continue
+            try:
+                if not path.is_file():
+                    problems.append(
+                        f"`{path}` was edited this turn but is not on disk now."
+                    )
+                    continue
+                size = path.stat().st_size
+                if size > _VERIFY_MAX_BYTES:
+                    continue
+                data = path.read_bytes()
+            except OSError as e:
+                problems.append(f"`{path}` could not be read back after its edit: {e}")
+                continue
+            if b"\x00" in data:
+                continue
+            text = data.decode("utf-8-sig", errors="replace")
+            if not text.strip():
+                # Same exemptions the write-time stand-in check grants.
+                if not (
+                    _empty_by_design(str(path))
+                    or _requested_empty(
+                        str(path), getattr(self, "_current_query", None)
+                    )
+                ):
+                    problems.append(f"`{path}` is empty after this turn's edit.")
+                continue
+            problem = _parse_problem(path, text)
+            # A file that already failed to parse before the turn touched it
+            # is not this turn's breakage to repair.
+            if problem and self._parsed_before(path) is not False:
+                problems.append(problem)
+        return problems
+
+    def _baseline_key(self, path: str, root: Optional[str] = None) -> Optional[str]:
+        evidence = getattr(self, "_completion_evidence", None)
+        try:
+            key = evidence.key(path, root) if evidence is not None else path
+        except (OSError, ValueError):
+            return None
+        return os.path.normcase(str(key))
+
+    def _parsed_before(self, path: Path) -> Optional[bool]:
+        key = self._baseline_key(str(path))
+        baseline = getattr(self, "_edit_parse_baseline", None) or {}
+        return baseline.get(key) if key is not None else None
+
+    def _note_edit_parse_baseline(self, tool_name: str, tool_args: Any) -> None:
+        """Before a turn's first write to a file, note whether that file parsed."""
+        if tool_name not in WRITE_TOOLS or not isinstance(tool_args, dict):
+            return
+        if not getattr(self, "_verify_edits_on", False):
+            return
+        raw = tool_args.get("file_path") or tool_args.get("path")
+        if not isinstance(raw, str) or not raw or "\x00" in raw:
+            return
+        key = self._baseline_key(raw, tool_args.get("project_dir"))
+        baseline = getattr(self, "_edit_parse_baseline", None)
+        if key is None or baseline is None or key in baseline:
+            return
+        path = Path(key)
+        if path.suffix.lower() not in (".py", ".pyi", ".json"):
+            return
+        validator = self._read_validator()
+        try:
+            if validator is not None:
+                allowed, _ = validator.validate_read(str(path), prompt_user=False)
+                if not allowed:
+                    return
+            if not path.is_file():
+                baseline[key] = True  # a new file
+                return
+            if path.stat().st_size > _VERIFY_MAX_BYTES:
+                return
+            data = path.read_bytes()
+        except (OSError, ValueError) as e:
+            logger.debug("No pre-edit parse baseline for %s: %s", path, e)
+            return
+        if b"\x00" in data:
+            return
+        text = data.decode("utf-8-sig", errors="replace")
+        # An empty file parses: emptiness is judged separately after the edit.
+        baseline[key] = not text.strip() or _parse_problem(path, text) is None
 
     def _gate_unsealed_answer(
         self, answer: Optional[str], model_failed: bool = False
@@ -10368,7 +11077,9 @@ Do NOT wrap conversational replies in JSON.
         """
         self._check_extraction_sources()
         gaps = self._completion_evidence.gaps(
-            answer or "", _claims_file_write, readback=not model_failed
+            answer or "",
+            _write_claims_for(self._completion_evidence),
+            readback=not model_failed,
         )
         gaps.extend(self._extraction_ledger.gaps(self._turn_outputs()))
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
@@ -10451,7 +11162,9 @@ Do NOT wrap conversational replies in JSON.
         """One warm-up request with the live prompt and tools; *request* adds kwargs."""
         if cancel is None:
             self.chat.send_messages(
-                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                self._with_session_context(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}]
+                ),
                 system_prompt=self.system_prompt,
                 tools=self._openai_tools,
                 max_tokens=1,
@@ -10470,7 +11183,9 @@ Do NOT wrap conversational replies in JSON.
         """
         self._warm_up_cancellable(
             lambda: self.chat.send_messages(
-                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                self._with_session_context(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}]
+                ),
                 system_prompt=self.system_prompt,
                 tools=self._openai_tools,
                 max_tokens=1,
@@ -10749,8 +11464,10 @@ Do NOT wrap conversational replies in JSON.
             return user_input
         note = (
             f"[GAIA: the user's message is {len(raw):,} characters long. Its full "
-            f"text is saved at {path}. To count, search or process it, read that "
-            "file with a tool; never copy the message into a tool call.]"
+            f"text is saved at {path}, exactly as typed: the file holds the "
+            "request itself too, not only the text it is about. To count, search "
+            "or process it, read that file with a tool; never copy the message "
+            "into a tool call.]"
         )
         return f"{note}\n\n{user_input}"
 
@@ -10775,6 +11492,7 @@ Do NOT wrap conversational replies in JSON.
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
         self._begin_turn_provenance()
+        self._turn_unasked_removals = []
         # Cleared per turn: a trace must never report the previous turn's
         # schema for a turn that never reached the backend.
         self._last_tool_schemas = None
@@ -10831,7 +11549,7 @@ Do NOT wrap conversational replies in JSON.
         logger.debug(f"Processing query: {user_input}")
         conversation = []
         # Build messages array for chat completions
-        from gaia.agents.base.history import TurnMessages
+        from gaia.agents.base.history import TurnMessages, fit_history_to_turn
 
         messages = TurnMessages()
 
@@ -10841,10 +11559,14 @@ Do NOT wrap conversational replies in JSON.
         self._turn_recorder = self._begin_turn_record(user_input)
         # Set by whichever exit seals the record; read by the tail below.
         turn_record: Optional[Dict[str, Any]] = None
+        # Sealed at the answer when the console carries it; reused for the result.
+        model_messages: Optional[List[Dict[str, Any]]] = None
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
-            messages.extend(self._history_for_request())
+            messages.extend(
+                fit_history_to_turn(self, self._history_for_request(), user_input)
+            )
             logger.debug(
                 f"Loaded {len(self.conversation_history)} messages from conversation history"
             )
@@ -10857,6 +11579,15 @@ Do NOT wrap conversational replies in JSON.
         )
         # Grounding gates that already asked for one correction this turn.
         grounding_fired: set = set()
+        # "Do not run anything, answer only with a plan": no nudge to act.
+        request_text = self._request_text(user_input)
+        no_action_requested = _asks_for_no_action(request_text)
+        # "Why does foo.py fail? Don't touch anything": look, but don't edit.
+        no_look_requested = _asks_not_to_look(request_text)
+        self._turn_no_look_requested = no_look_requested
+        self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
+        if no_look_requested:
+            grounding_fired.add(LOOK)
 
         steps_taken = 0
         final_answer = None
@@ -10883,6 +11614,7 @@ Do NOT wrap conversational replies in JSON.
         unfinished_answer_reprompts = 0
         stopped_on_announced_step = False
         look_first_reprompted = False
+        save_reprompted = False
         verify_after_change_reprompted = False
         test_claim_corrections = 0
         corrected_test_claims: set = set()
@@ -10928,10 +11660,11 @@ Do NOT wrap conversational replies in JSON.
         self._turn_ungrounded = []
         self._deliverable_cache = {}
         self._completion_evidence = CompletionEvidence(
-            user_input,
+            self._request_text(user_input),
             os.getcwd(),
             scratch=getattr(self._read_validator(), "scratch_dir", None),
             validator=self._read_validator(),
+            backups=self._session_backups,
         )
         # Files edited this turn, so an empty response can name what it left
         # behind. Per-turn: an instance persists across queries.
@@ -10941,6 +11674,13 @@ Do NOT wrap conversational replies in JSON.
         # between turns takes effect.
         self._budget_notices_sent = set()
         self._budget_notices_on = budget_notices_enabled()
+        # Per-turn too: a previous turn's edits are not this turn's to repair.
+        # The env knob is read here, not at import, so it can be changed
+        # between turns.
+        self._edit_verification_rounds = 0
+        self._edit_verification_findings = []
+        self._edit_parse_baseline = {}
+        self._verify_edits_on = verify_edits_enabled()
         # True once the emitted answer carries its scope line, so the post-loop
         # catch-all below never appends a second one.
         verification_scope_applied = False
@@ -11465,7 +12205,7 @@ Do NOT wrap conversational replies in JSON.
                     try:
                         self._before_model_call(messages)
                         response_stream = self.chat.send_messages_stream(
-                            messages=messages,
+                            messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
@@ -11592,7 +12332,10 @@ Do NOT wrap conversational replies in JSON.
                         cancelled_by_console = True
                         break
                     except Exception as e:
-                        logger.error(f"Unexpected error during streaming: {e}")
+                        if stopped_by_user(e):
+                            logger.info("Streaming stopped by the user: %s", e)
+                        else:
+                            logger.error(f"Unexpected error during streaming: {e}")
                         err_text = str(e).lower()
                         is_ctx_overflow = is_context_overflow_error(err_text)
                         # Same rule as the non-streaming branch: only the probe
@@ -11717,7 +12460,7 @@ Do NOT wrap conversational replies in JSON.
                     try:
                         self._before_model_call(messages)
                         chat_response = self.chat.send_messages(
-                            messages=messages,
+                            messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
@@ -11780,7 +12523,10 @@ Do NOT wrap conversational replies in JSON.
                         self.console.stop_progress()
                         if self.debug:
                             print(f"[DEBUG] Error calling LLM: {e}")
-                        logger.error(f"Unexpected error calling LLM: {e}")
+                        if stopped_by_user(e):
+                            logger.info("LLM call stopped by the user: %s", e)
+                        else:
+                            logger.error(f"Unexpected error calling LLM: {e}")
 
                         # Did we hit a context-overflow mid-loop? Classify by
                         # structure-then-text since typed exceptions get
@@ -12095,7 +12841,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for streaming plan response
                     stream_gen = self.chat.send_messages_stream(
-                        messages=messages,
+                        messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
@@ -12141,7 +12887,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for non-streaming plan response
                     chat_response = self.chat.send_messages(
-                        messages=messages,
+                        messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
@@ -12374,9 +13120,9 @@ Do NOT wrap conversational replies in JSON.
 
                     # Loop detection — same shape as legacy path so
                     # repeated calls across iterations are still caught.
-                    current_call = (tool_name, str(tool_args))
+                    current_call = self._loop_guard_key(tool_name, tool_args)
                     tool_call_history.append(current_call)
-                    tool_call_log.append(current_call)
+                    tool_call_log.append((tool_name, str(tool_args)))
                     if len(tool_call_history) > loop_window:
                         tool_call_history.pop(0)
                     consecutive_count = _repeat_count(tool_call_history)
@@ -12430,7 +13176,6 @@ Do NOT wrap conversational replies in JSON.
                     _QUERY_TOOLS = (
                         "query_documents",
                         "query_specific_file",
-                        "query_indexed_documents",
                     )
                     if tool_name in _QUERY_TOOLS:
                         result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -12623,10 +13368,10 @@ Do NOT wrap conversational replies in JSON.
                 self.console.start_progress(f"Executing {tool_name}")
 
                 # Check for repeated tool calls (allow up to 3 identical calls)
-                current_call = (tool_name, str(tool_args))
+                current_call = self._loop_guard_key(tool_name, tool_args)
                 tool_call_history.append(current_call)
                 tool_call_log.append(
-                    current_call
+                    (tool_name, str(tool_args))
                 )  # Full unbounded log for workflow guards
 
                 # Enough recent calls to see a short cycle repeat to the limit
@@ -12713,7 +13458,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_documents",
                     "query_specific_file",
-                    "query_indexed_documents",
                 )
                 if tool_name in _QUERY_TOOLS:
                     result_key = f"{tool_name}:{hash(str(tool_result))}"
@@ -12896,8 +13640,7 @@ Do NOT wrap conversational replies in JSON.
                 # This is a known failure pattern — the agent stops mid-workflow.
                 _INDEX_TOOLS = (
                     "index_document",
-                    "index_documents",
-                    "index_dir",
+                    "index_directory",
                     "index_folder",
                 )
                 _PLANNING_PHRASES = (
@@ -12935,7 +13678,6 @@ Do NOT wrap conversational replies in JSON.
                 _QUERY_TOOLS = (
                     "query_specific_file",
                     "query_documents",
-                    "query_indexed_documents",
                     "search_indexed_chunks",
                 )
                 last_index_pos = -1
@@ -13035,6 +13777,9 @@ Do NOT wrap conversational replies in JSON.
                     continue
 
                 unfinished_kind = _unfinished_answer_kind(answer_candidate)
+                if no_action_requested and unfinished_kind == "narration":
+                    # A plan or a stated next step is what this turn asked for.
+                    unfinished_kind = None
                 can_reprompt_unfinished = (
                     steps_taken < steps_limit - 1
                     and unfinished_answer_reprompts < _MAX_UNFINISHED_ANSWER_REPROMPTS
@@ -13081,6 +13826,7 @@ Do NOT wrap conversational replies in JSON.
                 # Plan steps run outside tool_call_log; the turn record has them.
                 if (
                     not look_first_reprompted
+                    and not no_look_requested
                     and not tool_call_log
                     and not self._turn_tool_executions
                     and steps_taken < steps_limit - 1
@@ -13106,6 +13852,23 @@ Do NOT wrap conversational replies in JSON.
                         conversation.append({"role": "user", "content": correction})
                         continue
 
+                # "Please remember this" answered with "noted" and no save.
+                unsaved = getattr(self, "_unsaved_memory_request", None)
+                if unsaved and not save_reprompted and steps_taken < steps_limit - 1:
+                    called = {name for name, _ in tool_call_log} | {
+                        record.get("tool") for record in self._turn_tool_executions
+                    }
+                    nudge = unsaved(called)
+                    if nudge:
+                        save_reprompted = True
+                        logger.info(
+                            "[WORKFLOW] Asked to remember, nothing saved; asking "
+                            "the agent to save it"
+                        )
+                        messages.append({"role": "user", "content": nudge})
+                        conversation.append({"role": "user", "content": nudge})
+                        continue
+
                 # Universal planning-text guard: catch any short response that is
                 # only an intent sentence ("I'll check...", "Let me query...") with
                 # no actual answer, regardless of whether tools were already called.
@@ -13116,6 +13879,7 @@ Do NOT wrap conversational replies in JSON.
                 # The honest ending quotes the announcement; it is final, not planning.
                 is_planning_text = (
                     not stopped_on_announced_step
+                    and not no_action_requested
                     and len(answer_candidate) < 500
                     and any(
                         phrase in answer_candidate.lower()
@@ -13413,6 +14177,39 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     continue
 
+                # Last chance to catch an edit that reported success but left a
+                # missing, empty or unparsable file.
+                if self._verify_edits_on and self._files_written_this_turn():
+                    if self._edit_verification_rounds < _MAX_EDIT_VERIFICATIONS:
+                        edit_problems = self._verify_turn_edits()
+                        if edit_problems:
+                            steps_limit += _VERIFY_REPAIR_STEPS
+                            repair = {
+                                "role": "user",
+                                "content": _EDIT_VERIFICATION_PROMPT.format(
+                                    problems="\n".join(f"- {p}" for p in edit_problems),
+                                    steps=_VERIFY_REPAIR_STEPS,
+                                ),
+                            }
+                            messages.append(repair)
+                            conversation.append(dict(repair))
+                            logger.info(
+                                "Post-edit verification found %d problem(s); "
+                                "granted %d repair step(s) (limit now %d)",
+                                len(edit_problems),
+                                _VERIFY_REPAIR_STEPS,
+                                steps_limit,
+                            )
+                            continue
+                    else:
+                        # Out of repair rounds: still-broken files go into the answer.
+                        self._edit_verification_findings = self._edit_problems()
+                        completion_gaps.extend(
+                            p
+                            for p in self._edit_verification_findings
+                            if p not in completion_gaps
+                        )
+
                 unfinalized_answer = _without_tool_markup(answer_candidate)
                 if answer_before_completion_check is not None:
                     restored = _with_replaced_answer(
@@ -13424,7 +14221,9 @@ Do NOT wrap conversational replies in JSON.
                     if (
                         restored is not None
                         and not self._completion_evidence.gaps(
-                            restored, _claims_file_write, soft=restored_soft
+                            restored,
+                            _write_claims_for(self._completion_evidence),
+                            soft=restored_soft,
                         )
                         and not restored_soft
                     ):
@@ -13435,7 +14234,9 @@ Do NOT wrap conversational replies in JSON.
                 self._check_extraction_sources()
                 soft_gaps: List[str] = []
                 artifact_gaps = self._completion_evidence.gaps(
-                    answer_candidate, _claims_file_write, soft=soft_gaps
+                    answer_candidate,
+                    _write_claims_for(self._completion_evidence),
+                    soft=soft_gaps,
                 )
                 extraction_gaps = self._extraction_ledger.gaps(self._turn_outputs())
                 artifact_gaps.extend(extraction_gaps)
@@ -13563,6 +14364,9 @@ Do NOT wrap conversational replies in JSON.
                 # same event.
                 turn_record = self._finish_turn_record(final_answer, steps_taken)
                 self._publish_turn_metrics(turn_record)
+                model_messages = self._stage_final_model_messages(
+                    messages, final_answer
+                )
                 self.console.print_final_answer(
                     final_answer,
                     streaming=self.streaming,
@@ -13663,6 +14467,9 @@ Do NOT wrap conversational replies in JSON.
                     )
                     turn_record = self._finish_turn_record(final_answer, steps_taken)
                     self._publish_turn_metrics(turn_record)
+                    model_messages = self._stage_final_model_messages(
+                        messages, final_answer
+                    )
                     self.console.print_final_answer(
                         final_answer,
                         streaming=self.streaming,
@@ -13725,6 +14532,7 @@ Do NOT wrap conversational replies in JSON.
             )
             turn_record = self._finish_turn_record(final_answer, steps_taken)
             self._publish_turn_metrics(turn_record)
+            model_messages = self._stage_final_model_messages(messages, final_answer)
             self.console.print_final_answer(
                 final_answer,
                 streaming=self.streaming,
@@ -13826,7 +14634,11 @@ Do NOT wrap conversational replies in JSON.
             "verification": self.verification_state(),
         }
 
-        result["model_messages"] = messages.finish(result["result"])
+        result["model_messages"] = (
+            model_messages
+            if model_messages is not None
+            else messages.finish(result["result"])
+        )
 
         # Catches the exits that never printed an answer (max steps). Sealed
         # BEFORE the trace write — attached after, the artifact never saw it.

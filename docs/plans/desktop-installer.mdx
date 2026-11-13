@@ -405,7 +405,6 @@ Replace `forge.config.cjs` with electron-builder's `build` section. **The existi
 - **Delete `forge.config.cjs`**
 - **Remove `electron-squirrel-startup`** from `dependencies` and from `main.cjs`
 - Move locale-pruning logic to `installer/scripts/after-pack.cjs` (electron-builder `afterPack` hook)
-- Move 4-part → 3-part SemVer normalizer to `installer/version/normalize.mjs`
 - NSIS installer template at `installer/nsis/installer.nsh` — `customInstall` / `customUnInstall` hooks that keep an existing autostart HKCU Run key across updates and remove it on uninstall
 - **No Squirrel migration code.** Release notes document the manual uninstall step for v0.17.1 users.
 
@@ -601,7 +600,6 @@ installer/
 │   ├── start-agent-ui.ps1
 │   └── start-agent-ui.sh
 └── version/
-    ├── normalize.mjs
     ├── bump-ui-version.mjs
     └── release-ui.mjs
 

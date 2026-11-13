@@ -129,6 +129,28 @@ def test_pipeline_helpers_and_cd_are_never_the_denied_effect(tmp_path):
     assert effects == {Effect(COMMAND, TEST_SUITE)}
 
 
+@pytest.mark.parametrize(
+    "wrapped_delete",
+    [
+        "call del victim.txt",
+        "start del victim.txt",
+        "& rm -rf victim.txt",
+        ". rm -rf victim.txt",
+        "conda run -n myenv rm -rf victim.txt",
+        "conda run --name=myenv rm -rf victim.txt",
+        "conda run -p C:/env rm -rf victim.txt",
+    ],
+)
+def test_wrapped_deletes_remain_overlapping_after_a_refusal(wrapped_delete, tmp_path):
+    assert _overlaps(
+        "run_shell_command",
+        _shell("rm -rf victim.txt"),
+        "run_shell_command",
+        _shell(wrapped_delete),
+        tmp_path,
+    )
+
+
 def test_a_url_inside_file_content_is_not_a_request(tmp_path):
     effects = effects_of_call(
         "write_file",
@@ -309,6 +331,27 @@ def test_a_denied_mkdir_with_a_quoted_windows_path_blocks_the_folder(tmp_path):
     )
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "sudo -E rm -rf victim_rm",
+        "timeout 5 rm -rf victim_rm",
+        "timeout -k 5 10 rm -rf victim_rm",
+        "xargs -n 1 rm -rf victim_rm",
+        "xargs -L 1 rm -rf victim_rm",
+        "timeout -- 5 rm -rf victim_rm",
+        "sudo -p pw rm -rf victim_rm",
+    ],
+)
+def test_wrapped_deletes_are_recorded_with_their_inner_operands(command, tmp_path):
+    effects = effects_of_shell_command(command, str(tmp_path))
+    expected = os.path.normcase(str(tmp_path / "victim_rm"))
+    assert any(
+        effect.kind == PATH and os.path.normcase(effect.target) == expected
+        for effect in effects
+    )
+
+
 def test_a_denied_file_is_denied_through_the_shell_too(tmp_path):
     denied = {"file_path": "notes/todo.txt", "content": "x"}
     assert _overlaps(
@@ -482,6 +525,8 @@ def test_a_delete_whose_target_the_code_computes_is_treated_as_overlapping(victi
     for code in [
         "import shutil, sys\nshutil.rmtree(sys.argv[1])",
         "import os\nos.remove(input('path? '))",
+        "from pathlib import Path\nPath(input('path? ')).unlink()",
+        "import os\ngetattr(os, 'remove')(input('path? '))",
         "import shutil, base64\nshutil.rmtree(base64.b64decode('eA==').decode())",
     ]:
         assert ledger.conflict("run_python", {"code": code}) is not None, code
@@ -900,6 +945,201 @@ def test_a_refused_rm_cannot_be_rerouted_through_a_python_script(tmp_path, victi
     assert "was refused" in rerouted["error"]
     assert "the user declined" not in rerouted["error"]
     assert "do not reach it with another tool" in rerouted["error"]
+
+
+def _hosts_script(tmp_path):
+    """The rc17 eval run's reroute: a script that writes the refused file."""
+    hosts = tmp_path / "etc" / "hosts"
+    hosts.parent.mkdir()
+    hosts.write_text("127.0.0.1 localhost\n")
+    script = tmp_path / "add-hosts.ps1"
+    script.write_text(
+        f"Add-Content -Path '{hosts}' -Value \"`r`n127.0.0.1 widgetworks.local\"\n"
+    )
+    return hosts, script
+
+
+def _elevated_reroutes(script):
+    return [
+        f"powershell -NoProfile -ExecutionPolicy Bypass -File {script}",
+        f"pwsh -ep bypass {script}",
+        f'powershell -Command "Start-Process powershell -ArgumentList '
+        f"'-NoProfile -ExecutionPolicy Bypass -File {script}' -Verb RunAs\"",
+        f"Start-Process -FilePath powershell -ArgumentList '-File',\"{script}\" "
+        "-Verb RunAs -Wait",
+    ]
+
+
+def test_running_a_script_elevated_is_what_the_script_does(tmp_path):
+    hosts, script = _hosts_script(tmp_path)
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_shell_command",
+        _shell(f"Add-Content -Path '{hosts}' -Value x"),
+        "refused",
+        kinds={NETWORK, PATH},
+    )
+    for command in _elevated_reroutes(script):
+        assert ledger.conflict("run_shell_command", _shell(command)), command
+
+
+def test_every_spelling_of_running_the_script_is_what_it_does(tmp_path):
+    hosts, script = _hosts_script(tmp_path)
+    bat = tmp_path / "fix.bat"
+    bat.write_text(f"echo 127.0.0.1 widgetworks.local >> {hosts}\n")
+    sh = tmp_path / "fix.sh"
+    sh.write_text(f"echo '127.0.0.1 widgetworks.local' >> {hosts}\n")
+    ledger = DeniedEffects(str(tmp_path))
+    ledger.record(
+        "run_shell_command",
+        _shell(f"Add-Content -Path '{hosts}' -Value x"),
+        "refused",
+        kinds={NETWORK, PATH},
+    )
+    for command in [
+        f"Start-Process -FilePath {bat} -Verb RunAs",
+        f"Start-Process powershell '-File {script}' -Verb RunAs",
+        f"Start-Process powershell -ArgumentList @('-File', '{script}')",
+        f"Start-Process -F powershell -A '-File {script}'",
+        f"powershell -NoProfile -File:{script}",
+        f"bash -f -x {sh}",
+        f"{bat}",
+    ]:
+        assert ledger.conflict("run_shell_command", _shell(command)), command
+
+
+def test_a_shim_named_like_a_script_is_still_its_program(tmp_path):
+    effects = effects_of_shell_command("npm.cmd test", str(tmp_path))
+    assert Effect(COMMAND, TEST_SUITE) in effects
+
+
+def test_a_shim_run_by_its_path_keeps_its_command(tmp_path):
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "npm.cmd").write_text(
+        '@ECHO off\nSETLOCAL\nIF EXIST "%dp0%\\node.exe" (\n  SET "_prog=node"\n)\n'
+        "endLocal & goto #_undefined_# 2>NUL || title %COMSPEC%\n"
+    )
+    shim = tools / "npm.cmd"
+    commands = {
+        e.target
+        for e in effects_of_shell_command(f"{shim} test", str(tmp_path))
+        if e.kind == COMMAND
+    }
+    # The suite it runs, and none of the batch file's own set/if/goto.
+    assert commands == {TEST_SUITE}
+
+
+def test_a_shell_switch_is_not_powershells_value_switch(tmp_path):
+    victim = tmp_path / "keep.txt"
+    victim.write_text("x")
+    script = tmp_path / "run.sh"
+    script.write_text(f"rm -f {victim}\n")
+    for command in ("bash -ex run.sh", "sh -ex run.sh arg", "bash -f -x run.sh"):
+        effects = effects_of_shell_command(command, str(tmp_path))
+        assert Effect(SCRIPT, _canonical_in(tmp_path, "run.sh")) in effects, command
+        assert Effect(PATH, _canonical_in(tmp_path, "keep.txt")) in effects, command
+
+
+def test_start_process_reads_every_way_of_passing_the_script(tmp_path):
+    spaced = tmp_path / "my scripts"
+    spaced.mkdir()
+    hosts, _ = _hosts_script(tmp_path)
+    script = spaced / "add hosts.ps1"
+    script.write_text(f"Add-Content -Path '{hosts}' -Value x\n")
+    changed = _canonical_in(tmp_path, str(hosts))
+    for command in [
+        f'Start-Process powershell -ArgumentList "-File", "{script}" -Verb RunAs',
+        f'Start-Process powershell -Verb RunAs -ArgumentList "-NoProfile -File `"{script}`""',
+        f"Start-Process powershell -Verb RunAs -WorkingDirectory '{spaced}' "
+        "-ArgumentList '-File \"add hosts.ps1\"'",
+        f"gsudo powershell -File '{script}'",
+        f"start \"\" powershell -File '{script}'",
+        f"start /wait powershell -File '{script}'",
+    ]:
+        effects = effects_of_shell_command(command, str(tmp_path))
+        assert Effect(PATH, changed) in effects, command
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "`date`" && rm keep.txt',
+        'x="`cat a.txt`"; rm keep.txt',
+        "start /b cmd /c del keep.txt",
+        "start /d . cmd /c del keep.txt",
+        'start "" /wait cmd /c del keep.txt',
+        "gsudo powershell -Command Remove-Item keep.txt",
+        "gsudo -u admin cmd /c del keep.txt",
+    ],
+)
+def test_a_launcher_or_backtick_keeps_the_command_it_runs(command, tmp_path):
+    effects = effects_of_shell_command(command, str(tmp_path))
+    assert Effect(PATH, _canonical_in(tmp_path, "keep.txt")) in effects, command
+
+
+def test_start_process_writes_where_it_redirects_output(tmp_path):
+    effects = effects_of_shell_command(
+        "Start-Process notepad -RedirectStandardOutput out.log", str(tmp_path)
+    )
+    assert Effect(PATH, _canonical_in(tmp_path, "out.log")) in effects
+
+
+@pytest.mark.parametrize(
+    "command", ["Start-Process", "Start-Process powershell -ArgumentList ,"]
+)
+def test_a_start_process_that_cannot_be_read_is_still_one(command, tmp_path):
+    assert effects_of_shell_command(command, str(tmp_path)) == {
+        Effect(COMMAND, "start-process")
+    }
+
+
+def test_a_content_value_is_not_a_path_the_command_changes(tmp_path):
+    effects = effects_of_shell_command(
+        "Add-Content -Path notes.txt -Value 'todo later' -Encoding utf8",
+        str(tmp_path),
+    )
+    changed = {e.target for e in effects if e.kind == PATH}
+    assert changed == {_canonical_in(tmp_path, "notes.txt")}
+
+
+def _canonical_in(folder, name):
+    return next(
+        e.target
+        for e in effects_of_shell_command(f"rm {name}", str(folder))
+        if e.kind == PATH
+    )
+
+
+def test_a_refused_write_cannot_be_rerouted_by_running_it_as_admin(tmp_path):
+    """rc17: the hosts file was refused, then a script ran with -Verb RunAs."""
+    hosts, script = _hosts_script(tmp_path)
+
+    def refuse_hosts(name, args):
+        command = str((args or {}).get("command", ""))
+        if command.startswith("Add-Content"):
+            return {
+                "status": "error",
+                "tier": "refuse",
+                "error": f"Access denied: {hosts} is protected. No approval can grant it.",
+            }
+        return None
+
+    for command in _elevated_reroutes(script):
+        console = _AskingConsole(Agent.ALLOW_DENIED_EFFECT)
+        agent = _agent(console, tmp_path)
+        agent.policy_refusal_for_call = refuse_hosts
+        refused = agent._execute_tool(
+            "run_shell_command", {"command": f"Add-Content -Path '{hosts}' -Value x"}
+        )
+        rerouted = agent._execute_tool("run_shell_command", {"command": command})
+
+        assert refused["executed"] is False
+        assert rerouted["status"] == "denied", command
+        assert rerouted["executed"] is False
+        assert agent.ran == []
+        assert console.questions == []
+        assert "do not reach it with another tool" in rerouted["error"]
 
 
 def test_a_users_no_is_still_put_to_them_once(tmp_path, victim):

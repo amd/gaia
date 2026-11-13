@@ -93,7 +93,7 @@ def test_defaults_without_backend_flags(monkeypatch):
     assert chat_config.claude_model == DEFAULT_CLAUDE_MODEL
     assert audio_client.call_args[1]["claude_model"] == DEFAULT_CLAUDE_MODEL
     assert chat_config.show_stats is False
-    assert chat_config.use_claude is False and chat_config.use_chatgpt is False
+    assert chat_config.use_claude is False
     assert chat_config.base_url is None
     assert audio_client.call_args[1]["model"] == DEFAULT_MODEL_NAME
 
@@ -111,7 +111,7 @@ def test_use_chatgpt_is_refused_with_migration_guidance(argv, monkeypatch, capsy
 
     assert exc.value.code != 0
     message = capsys.readouterr().err
-    assert "use_chatgpt" in message
+    assert "--use-chatgpt" in message
     assert "removed" in message
     # The error has to name the way forward, not just the refusal.
     assert "lemonade" in message.lower()

@@ -48,6 +48,7 @@ def test_a_restarted_answer_crosses_to_the_host_every_time():
             "type": "status",
             "message": "cut off",
             "retracts_answer": True,
+            "level": "warning",
             "phase": "answer_restart",
         }
     ]
@@ -82,8 +83,9 @@ def test_openapi_and_human_contract_document_emitted_final_fields():
         assert field in contract, field
 
 
-def test_contract_declares_nine_canonical_types():
+def test_contract_declares_ten_canonical_types():
     contract = CONTRACT.read_text(encoding="utf-8")
-    assert "The nine canonical event types" in contract
+    assert "The ten canonical event types" in contract
     assert '"const": "reasoning"' in contract
+    assert '"const": "context_usage"' in contract
     assert '"const": "final"' in contract

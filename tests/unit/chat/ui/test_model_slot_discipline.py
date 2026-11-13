@@ -389,6 +389,84 @@ def test_settings_load_goes_through_the_model_client_and_load_lock(ui):
 
 
 @pytest.mark.allow_network
+def test_settings_load_without_a_size_uses_the_chat_window(ui, monkeypatch):
+    client, loads, _held, _order = ui
+    asked = []
+
+    def resolve(model, *_a, **_k):
+        asked.append(model)
+        return 131072
+
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", resolve)
+
+    resp = client.post("/api/system/load-model", json={"model_name": "Mine-GGUF"})
+
+    assert resp.status_code == 202
+    assert resp.json()["ctx_size"] == 131072
+    _wait_for(lambda: loads)
+    assert loads == [("Mine-GGUF", 131072)]
+    assert asked == ["Mine-GGUF"]
+
+
+@pytest.mark.allow_network
+def test_settings_load_with_a_size_keeps_it(ui, monkeypatch):
+    client, loads, _held, _order = ui
+
+    def resolve(*_a, **_k):
+        raise AssertionError("an explicit ctx_size must not be re-resolved")
+
+    monkeypatch.setattr(lemonade_client, "resolve_ctx_size", resolve)
+
+    resp = client.post(
+        "/api/system/load-model", json={"model_name": "Mine-GGUF", "ctx_size": 8192}
+    )
+
+    assert resp.status_code == 202
+    _wait_for(lambda: loads)
+    assert loads == [("Mine-GGUF", 8192)]
+
+
+@pytest.mark.allow_network
+def test_settings_load_with_a_bad_ctx_override_fails_loudly(ui, monkeypatch):
+    client, loads, _held, _order = ui
+    monkeypatch.setenv("GAIA_CTX_SIZE", "lots")
+
+    resp = client.post("/api/system/load-model", json={"model_name": "Mine-GGUF"})
+
+    assert resp.status_code == 500
+    assert "GAIA_CTX_SIZE" in resp.json()["detail"]
+    assert loads == []
+
+
+@pytest.mark.allow_network
+def test_load_after_download_uses_the_chat_window(ui, monkeypatch):
+    from gaia.ui.routers import system
+
+    _client, loads, _held, _order = ui
+    monkeypatch.setattr(
+        lemonade_client, "resolve_ctx_size", lambda model, *_a, **_k: 131072
+    )
+
+    asyncio.run(system._auto_load_after_download("Mine-GGUF"))
+
+    assert loads == [("Mine-GGUF", 131072)]
+
+
+@pytest.mark.allow_network
+def test_load_after_download_with_a_bad_ctx_override_reports_it(ui, monkeypatch):
+    from gaia.ui.routers import system
+
+    _client, loads, _held, _order = ui
+    monkeypatch.setenv("GAIA_CTX_SIZE", "lots")
+    monkeypatch.setattr(system, "_last_load_failure", None)
+
+    asyncio.run(system._auto_load_after_download("Mine-GGUF"))
+
+    assert loads == []
+    assert "GAIA_CTX_SIZE" in system._last_load_failure
+
+
+@pytest.mark.allow_network
 def test_settings_load_asks_first_while_a_chat_is_answering(ui, monkeypatch):
     from gaia.ui.run_manager import run_manager
 

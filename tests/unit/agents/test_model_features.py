@@ -79,5 +79,13 @@ def test_compact_withholds_every_registered_email_tool():
             "get_thread",
             "list_connected_mailboxes",
             "list_waiting_on_you",
+            "send-email/list_drafts",
+            "send-email/create_draft",
+            "send-email/update_draft",
+            "send-email/discard_draft",
+            "send-email/send_draft",
+            "send-email/send_now",
+            "send-email/reply_to_message",
+            "send-email/forward_message",
         }
     )

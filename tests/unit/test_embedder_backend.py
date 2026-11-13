@@ -71,22 +71,37 @@ def test_only_the_embedder_backend_is_managed_under_either_name(not_macos):
     assert not manages_embedder_backend("Gemma-4-E4B-it-GGUF")
 
 
-def test_macos_leaves_the_embedder_to_lemonade(monkeypatch):
-    monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Darwin")
+@pytest.mark.parametrize("system", ["Darwin", "Windows", "Linux"])
+def test_every_platform_saves_the_embedder_ubatch(monkeypatch, system):
+    """Lemonade's own reload of the embedder must keep its 2,048-token input."""
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: system)
     calls = []
     client = _recording_client(calls)
 
     client.load_model(DEFAULT_EMBEDDING_MODEL, prompt=False)
 
-    assert calls == [
-        (
-            "load",
-            {
-                "model_name": DEFAULT_EMBEDDING_MODEL,
-                "llamacpp_args": EMBEDDER_LLAMACPP_ARGS,
-            },
-        )
-    ]
+    (load,) = _loads(calls)
+    assert load["llamacpp_args"] == EMBEDDER_LLAMACPP_ARGS
+    assert load["save_options"] is True
+    # macOS leaves the backend to Lemonade, which runs everything on Metal.
+    assert ("llamacpp_backend" in load) is (system != "Darwin")
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Windows", "Linux"])
+def test_every_platform_loads_the_embedder_before_its_first_embedding(
+    monkeypatch, system
+):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: system)
+    calls = []
+    client = _recording_client(calls)
+    client._follow_gaia_lemonade = lambda: None
+
+    client.embeddings("one", model=DEFAULT_EMBEDDING_MODEL)
+    client.embeddings("two", model=DEFAULT_EMBEDDING_MODEL)
+
+    endpoints = [endpoint for endpoint, _ in calls if endpoint != "system-info"]
+    assert endpoints == ["load", "embeddings", "embeddings"]
+    assert _loads(calls)[0]["save_options"] is True
 
 
 def test_the_embedder_loads_on_lemonades_gpu_backend_and_saves_it(not_macos):
@@ -370,6 +385,30 @@ def test_embedded_lemonade_saves_the_embedder_ubatch_but_no_backend(
 
     assert options[DEFAULT_EMBEDDING_MODEL] == {"llamacpp_args": EMBEDDER_LLAMACPP_ARGS}
     assert options["builtin.Qwen3.6-35B-A3B-GGUF"] == {"ctx_size": 65536}
+
+
+@pytest.mark.parametrize("system", ["Darwin", "Windows", "Linux"])
+def test_embedded_lemonade_saves_the_embedder_ubatch_on_every_platform(
+    tmp_path, monkeypatch, system
+):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: system)
+
+    options = _options_after_write_config(tmp_path, {})
+
+    assert options[DEFAULT_EMBEDDING_MODEL] == {"llamacpp_args": EMBEDDER_LLAMACPP_ARGS}
+
+
+def test_embedded_lemonade_leaves_the_backend_alone_on_macos(tmp_path, monkeypatch):
+    monkeypatch.setattr(lemonade_client.platform, "system", lambda: "Darwin")
+
+    options = _options_after_write_config(
+        tmp_path, {DEFAULT_EMBEDDING_MODEL: {"llamacpp_backend": "cpu"}}
+    )
+
+    assert options[DEFAULT_EMBEDDING_MODEL] == {
+        "llamacpp_backend": "cpu",
+        "llamacpp_args": EMBEDDER_LLAMACPP_ARGS,
+    }
 
 
 def test_embedded_lemonade_clears_a_saved_cpu_pin_so_the_gpu_is_retried(
