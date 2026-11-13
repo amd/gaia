@@ -160,7 +160,10 @@ def test_the_windows_setup_waits_on_the_binaries_not_the_packages(publish):
     binaries = publish["tui-binaries"]
     assert binaries["uses"] == "./.github/workflows/tui_installers.yml"
     # No sidecar; gaiacpp is a binary verified here for the Windows setup.
-    assert binaries["needs"] == ["validate", "build-gaiacpp"], "the binaries need no sidecar"
+    assert binaries["needs"] == [
+        "validate",
+        "build-gaiacpp",
+    ], "the binaries need no sidecar"
     assert binaries["with"]["installers"] is False
     assert not binaries["with"].get("artifact_prefix")
 
