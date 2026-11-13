@@ -985,7 +985,12 @@ def test_active_restore_fails_for_a_local_model_not_downloaded(
 
 # Lemonade lists a registered ``user.X`` model as ``X`` (seen on v2026.40.0).
 _CUSTOM = "user.ggml-gpt-oss-20b-MXFP4-GGUF"
-_CUSTOM_LISTED = {"id": "ggml-gpt-oss-20b-MXFP4-GGUF", "downloaded": True, "labels": []}
+_CUSTOM_LISTED = {
+    "id": "ggml-gpt-oss-20b-MXFP4-GGUF",
+    "recipe": "llamacpp",
+    "downloaded": True,
+    "labels": [],
+}
 
 
 def test_active_custom_model_is_downloaded_under_its_listed_name(
@@ -2688,9 +2693,50 @@ def test_selecting_a_listed_cloud_model_is_refused_under_local_only(
     resp = client.post("/api/providers/select", json={"model": _OTHER_CLOUD})
     assert resp.status_code == 409
     detail = resp.json()["detail"]
-    assert "Can't switch to big-model · othercloud: Local only is on." in detail
+    assert (
+        "Can't switch to big-model · othercloud: Local only is on, so it was blocked: it is a cloud model."
+        in detail
+    )
     assert "Settings > Privacy" in detail and "gaia config" not in detail
     assert lemonade.paths() == ["models?show_all=true"]
+    assert db.get_setting("custom_model") is None
+
+
+# ── A router collection under Local only (#7525) ─────────────────────────
+
+_ROUTER = "collection.x"
+_ROUTER_LISTED = {"id": _ROUTER, "recipe": "collection.router", "labels": []}
+
+
+@pytest.mark.parametrize("typed", ["collection.x", "COLLECTION.X", "user.collection.x"])
+def test_selecting_a_router_collection_is_refused_under_local_only(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models, typed
+):
+    # A router collection can forward to a cloud member, so Local only can't
+    # vouch for it, even though the model list never marks it "cloud".
+    lemonade.models = [_ROUTER_LISTED]
+    resp = client.post("/api/providers/select", json={"model": typed})
+    assert resp.status_code == 409, resp.json()
+    detail = resp.json()["detail"]
+    assert "Local only is on" in detail
+    assert (
+        "it is a 'collection.router' model, which can forward requests to the cloud"
+        in detail
+    )
+    assert "Settings > Privacy" in detail and "gaia config" not in detail
+    assert db.get_setting("custom_model") is None
+
+
+def test_selecting_an_unlisted_dotted_id_says_the_catalog_does_not_list_it(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    # A mistyped dotted id is not a privacy problem: the catalog simply
+    # doesn't list it, so the refusal must say that instead of pointing
+    # at the Local only setting.
+    resp = client.post("/api/providers/select", json={"model": "user.mistyped-model"})
+    assert resp.status_code == 409, resp.json()
+    detail = resp.json()["detail"]
+    assert "Lemonade's catalog doesn't list it" in detail
     assert db.get_setting("custom_model") is None
 
 
