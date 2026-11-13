@@ -1851,7 +1851,11 @@ Used to reach the UI from a phone.
   <Accordion title="POST /api/documents/index-folder">
     Index the supported files in a folder (`recursive`, default `true`, also
     takes subfolders). Returns `indexed`, `failed` with one line per file in
-    `errors`, and `skipped`: files of a type GAIA doesn't index.
+    `errors`, `skipped`: files of a type GAIA doesn't index, and
+    `skipped_images`: images, which GAIA reads only when each is added on its
+    own. A file that fails, or yields no text, gets a `failed` library row with
+    its `last_error`, so it can be retried with `reindex`; it is not in
+    `documents`.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/reindex">

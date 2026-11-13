@@ -24,6 +24,8 @@ from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
+
 from .._chat_helpers import UnreadableDocumentError, index_progress
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
@@ -708,13 +710,42 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     return {"deleted": True}
 
 
+def _record_failed_document(
+    db: ChatDatabase, filepath: Path, file_hash: str, error: Exception
+) -> None:
+    """Give a file that failed to index a library row saying why, to retry from."""
+    try:
+        file_stat = filepath.stat()
+    except OSError:
+        file_stat = None
+    doc = db.add_document(
+        filename=filepath.name,
+        filepath=str(filepath),
+        file_hash=file_hash,
+        file_size=file_stat.st_size if file_stat else 0,
+        chunk_count=0,
+        file_mtime=file_stat.st_mtime if file_stat else None,
+    )
+    # The same bytes indexed fine from elsewhere: that row stays searchable.
+    if doc.get("indexing_status") == "complete" and doc.get("chunk_count"):
+        return
+    db.update_document_status(
+        doc["id"],
+        "failed",
+        last_error=str(error),
+        error_kind=getattr(error, "kind", None),
+    )
+
+
 @router.post("/api/documents/index-folder", response_model=IndexFolderResponse)
 async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(get_db)):
     """Index all supported documents in a folder.
 
     Scans the given folder for files with extensions in
     FOLDER_INDEX_EXTENSIONS and indexes each one using the RAG pipeline.
-    Images are skipped: they index only when picked one by one.
+    Images are skipped and counted apart: they index only when picked one by
+    one. A file that fails gets a ``failed`` library row with the reason, so
+    it can be retried, and is left out of ``documents``.
     Indexing runs in a thread-pool executor to avoid blocking the
     event loop.
 
@@ -751,6 +782,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     # Collect all candidate files
     candidate_files: List[Path] = []
     skipped = 0
+    skipped_images = 0
     try:
         pattern_iter = resolved.rglob("*") if request.recursive else resolved.iterdir()
         for item in pattern_iter:
@@ -758,6 +790,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
                 continue
             if item.suffix.lower() in FOLDER_INDEX_EXTENSIONS:
                 candidate_files.append(item)
+            elif item.suffix.lower() in IMAGE_EXTENSIONS:
+                skipped_images += 1
             else:
                 skipped += 1
     except PermissionError:
@@ -768,7 +802,12 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
 
     if not candidate_files:
         return IndexFolderResponse(
-            indexed=0, failed=0, skipped=skipped, documents=[], errors=[]
+            indexed=0,
+            failed=0,
+            skipped=skipped,
+            skipped_images=skipped_images,
+            documents=[],
+            errors=[],
         )
 
     logger.info(
@@ -786,6 +825,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
 
     with one_embedder_load():
         for filepath in candidate_files:
+            file_hash = None
             try:
                 file_hash = await asyncio.get_running_loop().run_in_executor(
                     None, compute_file_hash, filepath
@@ -795,6 +835,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
                 file_mtime = file_stat.st_mtime
 
                 chunk_count = await _index_document(filepath)
+                if chunk_count == 0:
+                    raise ValueError("indexing produced 0 chunks")
 
                 doc = db.add_document(
                     filename=filepath.name,
@@ -809,6 +851,9 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
                 error_msg = f"{filepath.name}: {e}"
                 logger.warning("Failed to index %s: %s", filepath, e)
                 errors.append(error_msg)
+                # Unhashable means unreadable: no content key to file a row under.
+                if file_hash is not None:
+                    _record_failed_document(db, filepath, file_hash, e)
 
     logger.info(
         "Folder indexing complete: %d indexed, %d failed",
@@ -820,6 +865,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         indexed=len(indexed_docs),
         failed=len(errors),
         skipped=skipped,
+        skipped_images=skipped_images,
         documents=indexed_docs,
         errors=errors,
     )

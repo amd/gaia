@@ -902,6 +902,8 @@ export const enMessages = {
     'docs.folder.none': '"{name}" has no documents GAIA can index.',
     'docs.folder.skipped.one': "Skipped {n} file of a type GAIA doesn't index.",
     'docs.folder.skipped.other': "Skipped {n} files of a type GAIA doesn't index.",
+    'docs.folder.images.one': "Left out {n} image: add it on its own and GAIA will read it.",
+    'docs.folder.images.other': "Left out {n} images: add them one at a time and GAIA will read them.",
     'docs.folder.failed.one': "{n} file couldn't be indexed.",
     'docs.folder.failed.other': "{n} files couldn't be indexed.",
     'docs.folder.noSubfolders': "Subfolders aren't included.",
