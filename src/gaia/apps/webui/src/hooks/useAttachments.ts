@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Translate } from '../i18n/useT';
 import { useT } from '../i18n/useT';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
@@ -22,6 +23,19 @@ export interface UseAttachments {
     uploading: boolean;
     /** The message text with markdown links to the uploaded files appended. */
     compose: (text: string) => string;
+}
+
+/** The upload refusal in the chosen language; a refusal this build doesn't know shows the server's own words. */
+function uploadErrorText(err: unknown, t: Translate): string {
+    if (!(err instanceof api.ApiError)) return err instanceof Error ? err.message : t('composer.uploadFailed');
+    const { extension, size_mb: size, max_mb: max } = err.body ?? {};
+    switch (err.reason) {
+        case 'no_extension': return t('composer.upload.noExtension');
+        case 'unsupported_type': return t('composer.upload.unsupported', { ext: String(extension) });
+        case 'empty_file': return t('composer.upload.empty');
+        case 'too_large': return t('composer.upload.tooLarge', { size: String(size), max: String(max) });
+        default: return err.message;
+    }
 }
 
 function screenshotName(): string {
@@ -56,14 +70,14 @@ export function useAttachments(): UseAttachments {
             if (controller.signal.aborted) return;
             log.chat.error(`Upload failed: ${attachment.name}`, err);
             if (!mounted.current) return;
-            const message = err instanceof Error ? err.message : 'Upload failed';
+            const message = uploadErrorText(err, t);
             setAttachments((prev) => prev.map((a) =>
                 a.id === attachment.id ? { ...a, uploading: false, error: message } : a,
             ));
         } finally {
             uploads.current.delete(attachment.id);
         }
-    }, []);
+    }, [t]);
 
     const addFiles = useCallback((files: File[]) => {
         for (const file of files) {

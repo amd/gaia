@@ -29,6 +29,53 @@ git merge --ff-only origin/main               # safe: fails loudly instead of re
 Re-run this at the start of every round, not just once — rounds in this loop can span
 hours, and `main` moves fast when several PRs merge per round.
 
+## Order of work
+
+1. **Third-party low-risk bug fixes first**, each with a full line-by-line security review.
+2. **Maintainer and bot bug fixes.**
+3. **Ready features.**
+
+Milestones: a bug goes to the patch milestone; a feature that isn't ready goes to the next
+minor. Mark a release blocker only for a genuine ship-stopper.
+
+A PR that wires in an outside company's product gets the `third-party integration` label and
+is vetted per `../../../REVIEW.md` → "Third-party integrations".
+
+## Fast lane for small fixes
+
+Batch small fixes about 12 to a reviewer-merger agent, grouped by area, duplicate pairs
+first. That agent:
+
+- merges only clean PRs. It wrote nothing, so it is the independent verifier.
+- closes the weaker PR of a duplicate pair.
+- pushes no fixes. Anything not ready goes in a NOT-READY report, naming the exact blocker
+  and the fix needed, for the maintainer. The one exception is a mechanical keep-both
+  conflict in tests, locale files, or a CHANGELOG.
+
+## Verification
+
+- **Never self-merge.** An agent that authored a PR's final commits must not merge it; a
+  separate verifier does. A fix-and-merge shortcut once let 4 regressions land, and only an
+  independent post-merge review caught them.
+- **Cap fix-then-verify loops at about 3 rounds**, then hold for the maintainer with the
+  exact trade-off. When each patch trades one bug for another, change approach (e.g. a
+  linear tokenizer plus a differential corpus test against `main`, not another regex).
+- **Heuristic and answer-check changes:** the verifier runs branch and `main` over a corpus.
+  Any new false positive blocks the merge.
+- **Security fixes:** a new false refusal of common usage blocks the merge, the same as a
+  bypass.
+
+## Infra realities
+
+- **The repo's `GITHUB_TOKEN` API budget runs out under heavy merge volume.** Rate-limit reds
+  on label, verdict, CodeQL, or "Select unit tests" jobs don't block the merge, but they mean
+  the tests never ran. Re-run them; never merge past a test job that didn't run.
+- **`main` has no required status checks**, so the merge queue doesn't gate. Wait for the
+  PR's own CI yourself.
+- **Cap local pytest at `-n 4`** when several agents share one PC.
+- **Approving a fork's CI run:** read the head diff first. If it touches `.github/` or an
+  installer, flag it to the maintainer instead of approving.
+
 ## Per-PR subagent dispatch
 
 One `Agent` call per PR, `isolation: "worktree"`, run in parallel (multiple
@@ -77,9 +124,10 @@ One `Agent` call per PR, `isolation: "worktree"`, run in parallel (multiple
    `PYTHONPATH` pointed at *this* worktree's `src/` + `hub/agents/*/python/` (an
    editable install elsewhere on the machine will otherwise silently test the
    wrong checkout — see `project_editable_install_wrong_worktree` in memory, or the
-   repo's own root `conftest.py` pin for pytest specifically). Run lint. Merge via
-   `gh pr merge <n> --squash`, falling back to `--auto` when the repo's merge queue
-   rejects a direct squash (`"! The merge strategy for main is set by the merge
+   repo's own root `conftest.py` pin for pytest specifically). Run lint. If you pushed
+   any commit, stop there and hand the PR to a separate verifier (see "Verification");
+   otherwise merge via `gh pr merge <n> --squash`, falling back to `--auto` when the
+   repo's merge queue rejects a direct squash (`"! The merge strategy for main is set by the merge
    queue"` is the queue accepting it, not refusing it — re-check `state`/`mergedAt`
    afterward since a queued merge can still fail later and the PR stays open).
 7. **When to hold instead of merge:** a real bug whose fix is still incomplete: a

@@ -9,6 +9,10 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **An email body can no longer break out of its untrusted-content fence
+  (#2034).** Marker-like text inside a body is neutralized before the body is
+  fenced, so the model keeps reading all of it as data.
+
 - **Under the daemon, a forwarded-token hiccup no longer asks for a browser
   re-sign-in (#6995).** A token the daemon hasn't re-forwarded yet, or an
   unexpected error in the check, now reports `error` ("couldn't check") like the

@@ -73,6 +73,8 @@ function notifyNewFinishes(seenErrors: Record<string, number>, seenFinished: Rec
     }
 }
 
+export interface ScheduleDraft { when: string; name: string; prompt: string }
+
 interface ScheduleState {
     schedules: Schedule[];
     loading: boolean;
@@ -89,6 +91,9 @@ interface ScheduleState {
     errorCounts: Record<string, number> | null;
     /** Finished runs per schedule id at the last load. */
     finishedCounts: Record<string, number>;
+    /** What was typed in the New schedule form, kept so closing the dialog doesn't lose it. */
+    draft: ScheduleDraft | null;
+    setDraft: (draft: ScheduleDraft | null) => void;
 
     loadSchedules: () => Promise<void>;
     createSchedule: (name: string, interval: string, prompt: string) => Promise<void>;
@@ -110,6 +115,8 @@ export const useScheduleStore = create<ScheduleState>((set, get) => ({
     resultsLoading: false,
     errorCounts: null,
     finishedCounts: {},
+    draft: null,
+    setDraft: (draft) => set({ draft }),
 
     loadSchedules: async () => {
         // Only show loading spinner on initial load, not poll refreshes
