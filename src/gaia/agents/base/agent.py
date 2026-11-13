@@ -50,6 +50,7 @@ from gaia.agents.base.call_risk import (
     RISK_NOTE_ARG,
     SHELL_TOOLS,
 )
+from gaia.agents.base.chunk_index import OUTPUT_TOOLS
 from gaia.agents.base.completion import (
     _BINARY_SUFFIXES,
     WRITE_TOOLS,
@@ -80,6 +81,10 @@ from gaia.agents.base.context_eviction import (
     request_tokens,
     resolve_context_eviction,
     shrink_for_overflow,
+)
+from gaia.agents.base.credential_reads import (
+    PYTHON_TOOLS,
+    python_credential_refusal,
 )
 from gaia.agents.base.deliverables import (
     DELIVERABLE_SUFFIXES,
@@ -187,6 +192,7 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
@@ -7564,6 +7570,12 @@ Do NOT wrap conversational replies in JSON.
             )
             if refusal is not None:
                 return refusal
+        if tool_name in PYTHON_TOOLS:
+            refusal = python_credential_refusal(
+                tool_name, tool_args, self._python_call_folders()
+            )
+            if refusal is not None:
+                return refusal
         # Before the falsy-args guard: a tool whose arguments all default
         # (``update_gaia_md()``) still has a target, and must not be approved
         # only to be refused by its own body a moment later.
@@ -7579,6 +7591,21 @@ Do NOT wrap conversational replies in JSON.
         if not callable(refuses):
             return None
         return refuses(tool_name, tool_args)  # pylint: disable=not-callable
+
+    def _python_call_folders(self) -> List[str]:
+        """Where a Python tool's relative paths may resolve, most likely first."""
+        from gaia.agents.tools.workspace_paths import _workspace_default
+
+        folders = [_workspace_default(self)]
+        project_root = getattr(self, "_project_map_root", None)
+        if callable(project_root):
+            try:
+                folders.append(project_root())  # pylint: disable=not-callable
+            except ValueError as exc:
+                # The tool reports a bad project root itself; check the rest.
+                logger.debug("No project root for the credential check: %s", exc)
+        folders += [getattr(self, "scratch_dir", None), os.getcwd()]
+        return [str(f) for f in folders if f]
 
     #: The answers the denied-effect question offers.
     ALLOW_DENIED_EFFECT = "Allow once"
@@ -8469,6 +8496,9 @@ Do NOT wrap conversational replies in JSON.
             with skill_scope as skill_call:
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
+            if tool_name in OUTPUT_TOOLS:
+                # Output goes into the prompt; tokens and credential-file lines must not.
+                result = redact_tool_output(result)
             logger.debug(f"Tool execution result: {result}")
             _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
