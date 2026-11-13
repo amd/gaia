@@ -66,6 +66,8 @@
     font-size: 12px;
     font-weight: 600;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     color: var(--text-primary);
 }
 .resource-reading {
@@ -111,4 +113,9 @@
     .resource-tiles { flex-wrap: nowrap; gap: 12px; }
     .resource-tile { flex: 1 1 0; min-width: 0; }
     .resource-spark { display: none; }
+}
+
+/* Too narrow for one row: two even columns rather than unreadable slivers. */
+@container (max-width: 520px) {
+    .resource-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 12px; }
 }
