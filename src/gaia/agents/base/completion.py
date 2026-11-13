@@ -1350,7 +1350,7 @@ class CompletionEvidence:
             return None
         return (
             f"The answer says all {claimed} files were read, but only {opened} "
-            "were opened this turn."
+            f"{'was' if opened == 1 else 'were'} opened this turn."
         )
 
     def cleanup_gaps(self, answer: str) -> list[str]:

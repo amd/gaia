@@ -1175,7 +1175,8 @@ an index or list is not a file deletion.
 An answer that says it read every one of N files ("I read the actual content of
 every one", "I opened all 40 files") is compared with the files this turn's
 calls were given to read, not counting files it wrote. When fewer than half
-were opened, the answer is kept and a closing note says how many were. After a
+were opened, the answer is kept and a closing note says how many were, including
+on a turn that ends at the step limit or on an error. After a
 script or an indexer ran, any file may have been read, so the claim stands.
 
 The loop offers one bounded correction for missing artifact evidence. That

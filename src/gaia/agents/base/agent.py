@@ -11006,6 +11006,9 @@ Do NOT wrap conversational replies in JSON.
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
         if unsupported:
             gaps.append(unsupported[1] + ".")
+        coverage = self._completion_evidence.read_coverage_gap(answer or "")
+        if coverage and coverage not in gaps:
+            gaps.append(coverage)
         if gaps:
             report = incomplete_answer(gaps)
             # The turn ended early, so it is unfinished; whatever it said stays.

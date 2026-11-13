@@ -197,5 +197,27 @@ def test_the_closing_note_reaches_the_user(agent, tmp_path):
     )
     result = agent.process_query(f"Who owns the notes in {notes}?", max_steps=6)
     assert "I couldn't confirm all of this" in result["result"], result["result"]
-    assert "only 1 were opened" in result["result"]
+    assert "only 1 was opened" in result["result"]
+
+
+def test_the_note_is_added_when_the_turn_hits_the_step_cap(agent, tmp_path):
+    """A by-hand pass over many files is the turn most likely to run out of steps."""
+    notes = tmp_path / "notes"
+    notes.mkdir()
+    for n in range(8):
+        (notes / f"n{n}.txt").write_text(f"owner {n}\n")
+    reads = [
+        {"tool": "read_file", "tool_args": {"file_path": str(notes / f"n{n}.txt")}}
+        for n in range(2)
+    ]
+    claim = {"answer": "I read all 8 files: each note names one owner."}
+
+    def reply(*a, **kw):
+        return MagicMock(text=json.dumps(reads.pop(0) if reads else claim), stats={})
+
+    agent.chat = MagicMock()
+    agent.chat.send_messages.side_effect = reply
+    result = agent.process_query(f"Who owns the notes in {notes}?", max_steps=2)
+    assert result["max_steps_reached"], result["result"]
+    assert "only 2 were opened" in result["result"], result["result"]
     assert result["status"] == "incomplete"
