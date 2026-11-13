@@ -8,12 +8,15 @@ with. The command still works; the token never reaches the conversation.
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 from unittest.mock import patch
 
 import pytest
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.credential_shapes import (
     REDACTED,
     redact_credentials,
@@ -149,3 +152,53 @@ def test_other_tools_are_not_rewritten(agent):
     result = agent._execute_tool("read_notes", {"name": "x"})
 
     assert GHP in result["content"]
+
+
+class _ShellAgent(Agent, ShellToolsMixin):
+    """The real shell tool on the base agent."""
+
+    def _get_system_prompt(self):
+        return "probe"
+
+    def _register_tools(self):
+        self.register_shell_tools()
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_real_git_remote_v_runs_with_the_token_masked(tmp_path, monkeypatch):
+    """Local only: a remote is added, never contacted."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, str(tmp_path))
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "remote",
+            "add",
+            "origin",
+            f"https://user:{GHP}@github.com/amd/gaia.git",
+        ],
+        check=True,
+    )
+    saved = dict(_TOOL_REGISTRY)
+    try:
+        with patch("gaia.agents.base.agent.AgentSDK"):
+            agent = _ShellAgent(silent_mode=True, skip_lemonade=True)
+        agent.console.full_access = True
+        agent.console.auto_approve_gated_tools = True
+        result = agent._execute_tool(
+            "run_shell_command",
+            {"command": "git remote -v", "working_directory": str(repo)},
+        )
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+    assert result["status"] == "success", result
+    assert GHP not in str(result)
+    assert "github.com/amd/gaia.git (fetch)" in str(result)
