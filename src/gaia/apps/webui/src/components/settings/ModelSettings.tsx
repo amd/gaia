@@ -8,6 +8,7 @@ import * as api from '../../services/api';
 import { useModelStore, displayModelName, distinctModelLabels, sameModelId } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useT, type Translate } from '../../i18n/useT';
+import { providerName, providerNotice } from '../../utils/providerText';
 import { AddCustomModel } from './AddCustomModel';
 import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { LocalModelsSections } from './LocalModelsSections';
@@ -323,7 +324,7 @@ export function ModelSettings() {
                         title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? p.network?.detail ?? undefined : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
-                        <span>{p.name}</span>
+                        <span>{providerName(t, p)}</span>
                         {p.remote && p.models_discovered && <span className="provider-tab-dot" aria-label={t('settings.key.connectedDot')} />}
                     </button>
                 ))}
@@ -340,13 +341,13 @@ export function ModelSettings() {
             )}
 
             {provider && (
-                <section className="settings-card" aria-label={provider.name}>
-                    {provider.remote && <p className="settings-note"><bdi>{provider.privacy_notice}</bdi></p>}
+                <section className="settings-card" aria-label={providerName(t, provider)}>
+                    {provider.remote && <p className="settings-note"><bdi>{providerNotice(t, provider)}</bdi></p>}
 
                     <details className="settings-more">
                         <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.model.howItWorks')}</summary>
                         <p className="settings-hint">{t('settings.model.lede')}</p>
-                        {local && <p className="settings-hint"><bdi>{provider.privacy_notice}</bdi></p>}
+                        {local && <p className="settings-hint"><bdi>{providerNotice(t, provider)}</bdi></p>}
                         {local && <p className="settings-hint">{t('settings.model.devices')}</p>}
                         {local && memory && <p className="settings-hint">{t('settings.model.memory', { memory })}</p>}
                     </details>

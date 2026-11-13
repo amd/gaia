@@ -616,6 +616,13 @@ function App() {
         }
         setCurrentSession(id);
     }, [setCurrentSession, setMessages]);
+    const openChatFromNotification = useCallback((id: string) => {
+        const store = useChatStore.getState();
+        store.setShowMemoryDashboard(false);
+        store.setShowSchedules(false);
+        setShowNotificationPanel(false);
+        openChatFromTray(id);
+    }, [openChatFromTray]);
     const newChatFromTray = useCallback(() => {
         useChatStore.getState().closeSettings();
         newChat();
@@ -877,7 +884,7 @@ ${prompt}` : prompt);
             {showFileBrowser && <Suspense fallback={null}><FileBrowser onStartChat={startChat} /></Suspense>}
             {showNotificationPanel && (
                 <div className="notification-center-popover">
-                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} />
+                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} onOpenChat={openChatFromNotification} />
                 </div>
             )}
             {showMobileAccess && (
