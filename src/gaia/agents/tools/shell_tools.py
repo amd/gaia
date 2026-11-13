@@ -9,6 +9,7 @@ Provides shell command execution capabilities for file operations and system que
 import base64
 import binascii
 import fnmatch
+import ipaddress
 import logging
 import os
 import re
@@ -19,10 +20,11 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import (
     DESTRUCTIVE,
@@ -41,6 +43,7 @@ from gaia.agents.tools.command_timeouts import (
     resolve_timeout,
     terminate_process_tree,
 )
+from gaia.agents.tools.fetcher_args import destinations as fetch_destinations
 from gaia.agents.tools.package_installs import (
     install_refusal_hint,
     system_install_target,
@@ -627,6 +630,259 @@ def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
             "they decline, do not reach the same result another way."
         ),
     }
+
+
+#: A URL anywhere on a line, a script's strings included: its scheme and host.
+#: Any scheme connects (gopher, dict, ldap, smb, sftp). The match runs to the
+#: URL's end, so a URL inside its query string is not read as a second one.
+_URL_HOST = re.compile(
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*)://(?:[^/\s'\"?#]*@)?"
+    r"(\[[^\]\s'\"]*\]|[^/\s:'\"?#]+)[^\s'\";|<>()`]*",
+    re.IGNORECASE,
+)
+_URL_SCHEME = re.compile(r"([a-z][a-z0-9+.-]*)://", re.IGNORECASE)
+
+#: Schemes that open a file on this PC instead of a connection.
+_FILE_SCHEMES = frozenset({"file"})
+
+#: curl's URL globbing: ``{a,b}`` alternatives and ``[1-20]`` ranges.
+_GLOB_SET = re.compile(r"\{([^{}]*)\}")
+_GLOB_RANGE = re.compile(r"\[(\d+|[a-z])-(\d+|[a-z])(?::\d+)?\]", re.IGNORECASE)
+_GLOB_LIMIT = 32
+
+
+def _url_hosts(text: str) -> List[str]:
+    """The host of every URL in *text* that names somewhere to connect."""
+    return [
+        match.group(2)
+        for match in _URL_HOST.finditer(text)
+        if match.group(1).lower() not in _FILE_SCHEMES
+    ]
+
+
+#: Programs whose bare operand is an address: ``curl 127.0.0.1:8000/x``.
+_FETCHERS = frozenset(
+    {"curl", "wget", "invoke-webrequest", "iwr", "invoke-restmethod", "irm"}
+)
+
+#: Name endings only a local network uses.
+_LOCAL_NAME_ENDINGS = (".local", ".lan", ".internal", ".home.arpa")
+
+
+#: Public names that always answer with this PC's own address.
+_LOOPBACK_NAMES = ("localhost", "localtest.me", "lvh.me", "vcap.me")
+
+#: Services whose names answer with the address written inside the name.
+_ADDRESS_IN_NAME_ENDINGS = (".nip.io", ".sslip.io", ".xip.io", ".traefik.me")
+
+_IPV4_PART = re.compile(r"0x[0-9a-f]+|0[0-7]*|[1-9][0-9]*")
+_DOTTED_IN_NAME = re.compile(r"(?:^|[.-])(\d{1,3}(?:[.-]\d{1,3}){3})$")
+_HEX_IN_NAME = re.compile(r"(?:^|[.-])([0-9a-f]{8})$")
+
+
+def _folded(text: str) -> str:
+    """*text* as a resolver reads it: full-width digits, letters and dots as ASCII."""
+    return unicodedata.normalize("NFKC", text).replace("\u3002", ".")
+
+
+def _numeric_ipv4(name: str) -> Optional[ipaddress.IPv4Address]:
+    """*name* read as inet_aton reads it: ``127.1``, ``0177.0.0.1``, ``0x7f000001``.
+
+    One to four parts, each decimal, octal or hex; the last fills the bytes left.
+    """
+    parts = name.lower().split(".")
+    if len(parts) > 4 or not all(_IPV4_PART.fullmatch(part) for part in parts):
+        return None
+    numbers = [
+        int(part, 16 if part.startswith("0x") else 8 if part[0] == "0" else 10)
+        for part in parts
+    ]
+    value = numbers.pop()
+    if any(number > 255 for number in numbers) or value >= 256 ** (4 - len(numbers)):
+        return None
+    for index, number in enumerate(numbers):
+        value += number << (8 * (3 - index))
+    return ipaddress.IPv4Address(value)
+
+
+def _address_in_name(name: str) -> Optional[ipaddress._BaseAddress]:
+    """The address a nip.io or sslip.io *name* answers with, read off the name."""
+    for ending in _ADDRESS_IN_NAME_ENDINGS:
+        if name.endswith(ending):
+            label = name[: -len(ending)]
+            break
+    else:
+        return None
+    try:
+        dotted = _DOTTED_IN_NAME.search(label)
+        if dotted:
+            return ipaddress.IPv4Address(dotted.group(1).replace("-", "."))
+        packed = _HEX_IN_NAME.search(label)
+        if packed:
+            return ipaddress.IPv4Address(int(packed.group(1), 16))
+        return ipaddress.IPv6Address(label.rsplit(".", 1)[-1].replace("-", ":"))
+    except ValueError:
+        return None
+
+
+def private_destination(host: str) -> str:
+    """Where *host* is, when the web tools would refuse to fetch it; else "".
+
+    Judged from the text alone: an address in any spelling a fetcher accepts,
+    ``localhost``, a name that always answers with a local address, or a name
+    only a local network uses. No name is looked up.
+    """
+    from gaia.web.client import _is_blocked_ip
+
+    # An IPv6 zone (`%eth0`, `%25eth0`) picks the interface, not the address.
+    name = _folded(host).strip("[]").split("%", 1)[0].rstrip(".").lower()
+    if name in _LOOPBACK_NAMES or name.endswith(
+        tuple(f".{known}" for known in _LOOPBACK_NAMES)
+    ):
+        return "this PC"
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        ip = _numeric_ipv4(name) or _address_in_name(name)
+    if ip is None:
+        return "your local network" if name.endswith(_LOCAL_NAME_ENDINGS) else ""
+    carried = getattr(ip, "ipv4_mapped", None) or ip
+    if carried.is_loopback or carried.is_unspecified:
+        return "this PC"
+    return "your local network" if _is_blocked_ip(ip) else ""
+
+
+def _unglobbed(authority: str) -> List[str]:
+    """*authority* with curl's URL globs written out: each alternative, a range's ends."""
+    done, todo = [], [authority]
+    while todo and len(done) + len(todo) <= _GLOB_LIMIT:
+        text = todo.pop()
+        glob = _GLOB_SET.search(text)
+        picks = glob.group(1).split(",") if glob else []
+        if not glob:
+            glob = _GLOB_RANGE.search(text)
+            picks = [glob.group(1), glob.group(2)] if glob else []
+        if not glob:
+            done.append(text)
+            continue
+        todo.extend(text[: glob.start()] + pick + text[glob.end() :] for pick in picks)
+    return done + todo
+
+
+def _authority_host(authority: str) -> str:
+    """The host in ``user:password@host:port``; the last ``@`` ends the user part."""
+    address = authority.rsplit("@", 1)[-1]
+    if address.startswith("["):
+        return address[: address.find("]") + 1] or address
+    return address.rsplit(":", 1)[0]
+
+
+def _is_operand_address(address: str, alone: bool) -> bool:
+    """True when a fetcher reads *address*, written with no scheme, as a host.
+
+    *alone* says the address was the whole word: no port, path or user part.
+    """
+    number = _numeric_ipv4(address)
+    if number is None:
+        return "." in address or ":" in address or "localhost" in address
+    # A bare count such as `curl 3`: 0.0.0.3 is nowhere, and nobody means it.
+    return not (alone and "." not in address and 0 < int(number) < 2**24)
+
+
+def _word_hosts(word: str, globs: bool) -> List[str]:
+    """The hosts a fetcher connects to for *word*, a URL with or without a scheme.
+
+    Only the URL's own authority is read: an address in its path, query string
+    or fragment is data sent to that host, not a second destination.
+    """
+    scheme = _URL_SCHEME.match(word)
+    if scheme and scheme.group(1).lower() in _FILE_SCHEMES:
+        return []
+    rest = word[scheme.end() :] if scheme else word
+    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    hosts = []
+    for written in _unglobbed(authority) if globs else [authority]:
+        address = _authority_host(written)
+        if address and (scheme or _is_operand_address(address, address == word)):
+            hosts.append(address)
+    return hosts
+
+
+def _fetched_hosts(program: str, arguments: List[str]) -> List[str]:
+    """The hosts a fetcher's *arguments* make it connect to."""
+    hosts: List[str] = []
+    for word in fetch_destinations(program, arguments):
+        hosts.extend(_word_hosts(word, globs=program == "curl"))
+    return hosts
+
+
+#: Programs that can open a connection to an address on their line.
+_NETWORK_PROGRAMS = _FETCHERS | frozenset(
+    {
+        "python",
+        "py",
+        "node",
+        "perl",
+        "ruby",
+        "powershell",
+        "cmd",
+        "sh",
+        "bash",
+        "zsh",
+        "git",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "nc",
+        "ncat",
+        "telnet",
+        "ftp",
+        "certutil",
+        "bitsadmin",
+    }
+)
+
+
+def _private_hosts(
+    command: str, steps: list, whole_line: bool
+) -> List[Tuple[str, str]]:
+    """``(host, where)`` for each local or private address *command* reaches.
+
+    With *whole_line*, every address on the line counts; otherwise only those
+    handed to a program that can connect, so ``grep http://localhost f`` is not
+    turned into a prompt it never needed. A line of fetchers alone is read
+    argument by argument instead, so a header or body that holds an address
+    does not count.
+    """
+    programs = [
+        _interpreter_name(segment[0]) for step in steps for segment in step.segments
+    ]
+    only_fetchers = bool(programs) and all(name in _FETCHERS for name in programs)
+    hosts = _url_hosts(_folded(command)) if whole_line and not only_fetchers else []
+    for step in steps:
+        for segment in step.segments:
+            program = _interpreter_name(segment[0])
+            if program not in _NETWORK_PROGRAMS:
+                continue
+            words = [_folded(word) for word in segment[1:]]
+            if program in _FETCHERS:
+                # Only the words it connects to: not a file name, body or header.
+                hosts.extend(_fetched_hosts(program, words))
+            else:
+                hosts.extend(_url_hosts(" ".join(words)))
+    found = []
+    for host in dict.fromkeys(hosts):
+        where = private_destination(host)
+        if where:
+            found.append((host, where))
+    return found
+
+
+def private_fetch_note(found: List[Tuple[str, str]]) -> str:
+    """The card's line for a command that reaches the addresses in *found*."""
+    host, where = found[0]
+    return f"Reaches {host} on {where}, an address GAIA's web tools refuse to fetch."
 
 
 def _not_approvable(error: Dict[str, Any]) -> Dict[str, Any]:
@@ -5271,6 +5527,20 @@ class ShellToolsMixin:
                 },
                 command,
             )
+        # A line that already asks names every such address; one that wouldn't
+        # asks only when a program on it can connect.
+        private = _private_hosts(command, steps, whole_line=error is not None)
+        if private:
+            note = private_fetch_note(private)
+            if error is not None and error.get("tier") == TIER_CONFIRM_ONCE:
+                error = {**error, "risk_note": f"{error['risk_note']} {note}"}
+            else:
+                block = error or {
+                    "status": "error",
+                    "error": "This command reaches a local or private network address.",
+                    "has_errors": True,
+                }
+                error = {**_confirm_once(block, note), **NOT_EXECUTED}
         if error is None or error.get("tier") != TIER_CONFIRM_ONCE:
             return error, steps
         # A one-time line runs as raw shell text, which no grant exempts from

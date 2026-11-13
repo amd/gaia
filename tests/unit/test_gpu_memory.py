@@ -929,6 +929,12 @@ class TestWindows:
         shown = next(p["gpu_gb"] for p in result["presets"] if p["setting_gb"] == 64)
         assert any(f"{shown:.1f} GB GPU total" in s for s in result["guided_steps"])
 
+    def test_the_reason_says_where_not_the_restart_again(self, box, windows):
+        # The panel's own line already says it needs administrator permission and a restart.
+        reason = gm.describe(box.info, LOCAL)["method_reason"]
+        assert "AMD Software" in reason
+        assert "restart" not in reason
+
     def test_no_gib_anywhere_in_the_response(self, box, windows):
         assert "GiB" not in json.dumps(gm.describe(box.info, LOCAL))
 

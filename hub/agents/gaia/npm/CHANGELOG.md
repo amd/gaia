@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A run stopped for an approval nobody can give reads as not done.** Its
+  `final` now carries `failed: true` and the `usage` spent before the stop, so
+  `gaia -p` reports `is_error: true` with real step and token counts instead of
+  a free, zero-step success. A stopped turn's result now carries
+  the tokens it spent too.
+
 - **The terminal UI's executable is `gaia-cli`, not `gaia-tui`.** It is the same
   rename a full GAIA install makes. The package writes the binary as
   `gaia-cli[.exe]` in its cache; `npx @amd-gaia/gaia` starts it as before. A
