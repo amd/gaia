@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
-from gaia.agents.base.denied_effects import python_strings
+from gaia.agents.base.denied_effects import python_file_reads
 from gaia.agents.base.verification import NOT_EXECUTED
 from gaia.logger import get_logger
 
@@ -23,15 +23,25 @@ PYTHON_TOOLS = {"run_python": "code", "execute_python_file": "file_path"}
 
 
 def credential_in_python(code: str, cwds: Iterable[str]) -> Optional[str]:
-    """The first credential file *code* names, judged from each of *cwds*."""
+    """The first credential file *code* reads, judged from each of *cwds*.
+
+    A file it opens, copies or reads through ``Path``, or one a shell command
+    it runs reads; a string it only prints is not a read.
+    """
     from gaia import security
+    from gaia.agents.tools.shell_tools import credential_read_in_words
 
     folders = list(dict.fromkeys(str(c) for c in cwds if c)) or [os.getcwd()]
-    for text in python_strings(code, folders[0]):
-        for cwd in folders:
+    paths, commands = python_file_reads(code, folders[0])
+    for cwd in folders:
+        for text in paths:
             found = security.credential_file_read(text, cwd)
             if found is not None:
                 return found
+        for argv in commands:
+            hit = credential_read_in_words(argv, cwd)
+            if hit is not None:
+                return hit[1]
     return None
 
 
@@ -50,7 +60,7 @@ def python_credential_refusal(
     if key == "code":
         found = credential_in_python(value, cwds)
     else:
-        found = _script_credential(value, cwds)
+        found = script_credential(value, cwds)
     if found is None:
         return None
     log.info("Refused %s: its code reads the credential file %s", tool_name, found)
@@ -66,7 +76,7 @@ def python_credential_refusal(
     }
 
 
-def _script_credential(file_path: str, cwds: list) -> Optional[str]:
+def script_credential(file_path: str, cwds: list) -> Optional[str]:
     """The credential file a script on disk names, or the script itself."""
     from gaia import security
 

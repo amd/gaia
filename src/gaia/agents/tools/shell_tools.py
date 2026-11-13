@@ -2052,6 +2052,148 @@ def _bulk_read_roots(words: list) -> list:
     return roots
 
 
+#: Programs and cmdlets that print, search, copy or encode a file they are
+#: given. Only these make a credential-file operand a read: ``rm .env``,
+#: ``git add .env``, ``mv``, ``chmod`` and an editor do not put it in the output.
+_CREDENTIAL_READERS = _CONTENT_READERS | frozenset(
+    {
+        "awk",
+        "gawk",
+        "sed",
+        "sort",
+        "uniq",
+        "cut",
+        "diff",
+        "jq",
+        "yq",
+        "iconv",
+        "cp",
+        "copy",
+        "xcopy",
+        "robocopy",
+        "scp",
+        "rsync",
+        "copy-item",
+        "cpi",
+        "certutil",
+        "openssl",
+    }
+)
+
+#: Flags whose value is a file kept out of the run, never read for output.
+_EXCLUDING_FLAGS = frozenset({"--exclude", "--exclude-dir", "-exclude", "/x"})
+
+#: Uploaders that read a file named ``@file`` (curl -F x=@f, -d @f) or after -T.
+_UPLOADERS = frozenset({"curl", "wget", "http", "https", "xh", "httpie"})
+
+#: Calls a non-Python inline script reads a file with.
+_CODE_READ_CALLS = re.compile(
+    r"readFileSync|readFile|createReadStream|\bopen\b|File\.read|IO\.read|slurp"
+)
+
+
+def _read_targets(command: list) -> list:
+    """The words of one command that it reads as files."""
+    names = {_interpreter_name(word) for word in command}
+    reader = bool(names & _CREDENTIAL_READERS)
+    uploader = bool(names & _UPLOADERS)
+    targets = []
+    for index, word in enumerate(command):
+        previous = command[index - 1].lower() if index else ""
+        if previous == "<":
+            targets.append(word)
+        elif word.startswith("<") and not word.startswith("<<") and len(word) > 1:
+            targets.append(word[1:])
+        if uploader:
+            if word.startswith("@"):
+                targets.append(word[1:])
+            elif "=@" in word:
+                targets.append(word.split("=@", 1)[1])
+            elif previous in ("-t", "--upload-file"):
+                targets.append(word)
+        if not reader or index == 0 or previous in _EXCLUDING_FLAGS:
+            continue
+        if word.lower().startswith(tuple(f + "=" for f in _EXCLUDING_FLAGS)):
+            continue
+        targets.extend(_flag_path_values(word))
+    return targets
+
+
+def credential_read_in_words(words: list, cwd: str) -> Optional[Tuple[str, str]]:
+    """``(word, file)`` when a command in *words* reads a credential file.
+
+    Args:
+        words: One command's words, or several joined by ``|``/``&&``/``;``.
+        cwd: The folder relative paths resolve against.
+    """
+    commands: list = [[]]
+    for word in words:
+        if word in _COMMAND_BREAKS:
+            commands.append([])
+        else:
+            commands[-1].append(word)
+    for command in commands:
+        for target in _read_targets(command):
+            spellings = [target]
+            # cmd.exe drops an unquoted '^' that shlex keeps.
+            if _pipe_dialect() == "cmd" and "^" in target:
+                spellings.append(re.sub(r"\^(.?)", r"\1", target))
+            for spelling in spellings:
+                found = _credential_file(spelling, cwd)
+                if found is not None:
+                    return target, found
+    return None
+
+
+def _credential_read(argv: list, cwd: str) -> Optional[Tuple[str, str]]:
+    """``(what, file)`` when *argv*, or a script it runs, reads a credential file."""
+    from gaia.agents.base.credential_reads import (
+        credential_in_python,
+        script_credential,
+    )
+
+    found = credential_read_in_words(list(argv), cwd)
+    if found is not None:
+        return found
+    program = _interpreter_name(argv[0])
+    positions = _inline_script_positions(argv)
+    if program == "python" and not positions:
+        script = next((a for a in argv[1:] if not a.startswith("-")), None)
+        if script and script.lower().endswith((".py", ".pyw")):
+            hit = script_credential(script, [cwd])
+            if hit is not None:
+                return script, hit
+    script_words: list = []
+    for index, dialect in positions.items():
+        dialect = dialect.rstrip(_MAYBE)
+        if dialect in (_SWITCH, _ENV_SPLIT, _ENV_SPLIT_ATTACHED):
+            continue
+        body = argv[index]
+        if dialect != "code":
+            script_words.extend(_script_words(body, dialect))
+            continue
+        interpreter = next(
+            (
+                _interpreter_name(w)
+                for w in argv[:index]
+                if _interpreter_name(w) in _CODE_SCRIPT_FLAGS
+            ),
+            "",
+        )
+        if interpreter in ("python", "py"):
+            hit = credential_in_python(body, [cwd])
+            if hit is not None:
+                return body, hit
+        elif _CODE_READ_CALLS.search(body):
+            for word in _script_words(body, dialect):
+                hit = _credential_file(word, cwd)
+                if hit is not None:
+                    return word, hit
+    if script_words:
+        return credential_read_in_words(script_words, cwd)
+    return None
+
+
 def _command_word_lists(argv: list) -> list:
     """*argv*, then the words of any inline script it runs, as one list each."""
     lists = [list(argv)]
@@ -4567,9 +4709,10 @@ class ShellToolsMixin:
         scanned.
 
         A credential folder (``security.SECRET_DIRECTORIES``) is refused even
-        inside the allowed paths, and so is a credential file
-        (``security.is_read_blocked``) — named, linked to, or read by a
-        recursive search or wildcard from the folder it sits in.
+        inside the allowed paths, and so is reading a credential file
+        (``security.is_read_blocked``): a reader, copier, upload or ``<``
+        given it or a link to it, or a recursive search or wildcard over the
+        folder it sits in. ``rm``, ``mv`` or ``git add`` of one still runs.
 
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
@@ -4603,6 +4746,9 @@ class ShellToolsMixin:
                     return refusal
         for seg in scanned:
             argv = policy_argv(seg)
+            read = _credential_read(argv, cwd)
+            if read is not None:
+                return _credential_refusal("Argument", read[0], read[1])
             credential = _bulk_read_credential(argv, cwd)
             if credential is not None:
                 return _credential_refusal("Command", " ".join(argv), credential)
@@ -4628,11 +4774,6 @@ class ShellToolsMixin:
             )
             if refusal:
                 return refusal
-        # '--exclude=.env' keeps the file out; it is the remedy, not a read.
-        excluding = arg.lower().startswith("--exclude")
-        credential = None if excluding else _credential_file(candidate_path, cwd)
-        if credential is not None:
-            return _credential_refusal(label, arg, credential)
         # A shell or script may expand '~' and '$HOME'; check both readings.
         expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         looks_like_path = (

@@ -92,6 +92,11 @@ REFUSED_SNIPPETS = [
     "import subprocess\nsubprocess.run(['type', 'secrets.json'])",
     "import os\nos.system('more .env')",
     "print(open('server.key', 'rb').read())",
+    "import io\nprint(io.open('.env').read())",
+    "from pathlib import Path\nwith Path('secrets.json').open() as f:\n    print(f.read())",
+    "from pathlib import Path\np = Path('.env')\nprint(p.read_bytes())",
+    "import shutil\nshutil.copy('.env', 'copy.txt')",
+    "import shutil\nshutil.copyfile(src='secrets.json', dst='x')",
 ]
 
 
@@ -113,6 +118,13 @@ def test_run_python_naming_a_credential_file_is_refused(agent, code):
         "import json\nprint(json.dumps({'key': 1}))",
         "print(open('secrets.md', 'w').write('notes'))",
         "print(1 + 1)",
+        "print('Copy example.env to app/.env before you start')",
+        "msg = 'edit config/.npmrc by hand'\nprint(msg)",
+        "import os\nprint(os.path.exists('.env'))",
+        "from pathlib import Path\nprint(Path('.env').exists())",
+        "import subprocess\nsubprocess.run(['git', 'add', '.env'])",
+        "import shutil\nshutil.copy('data.csv', '.env.example')",
+        "import shutil\nshutil.move('scratch.txt', '.env')",
     ],
 )
 def test_ordinary_python_still_runs(agent, code):

@@ -1412,39 +1412,71 @@ def effects_of_python_code(code: str, cwd: str, depth: int = 0) -> Set[Effect]:
     return effects
 
 
-def python_strings(code: str, cwd: str) -> List[str]:
-    """Every string a snippet spells out, with the paths it builds from them.
+#: Methods that read the path they are called on: ``Path('x').read_text()``.
+_PATH_READERS = frozenset({"read_text", "read_bytes", "open"})
+#: ``shutil`` functions whose first argument is a file they read.
+_SHUTIL_READERS = frozenset({"copy", "copy2", "copyfile", "copytree", "move"})
 
-    The reading :class:`_PyFiles` gives a file change — literals, names bound
-    to them, f-strings, ``os.path.join``, ``Path(...) / ...`` — applied to every
-    expression, plus the words of a command it hands to a shell. A string the
-    code only works out when it runs is not in the list.
+
+def python_file_reads(code: str, cwd: str) -> Tuple[List[str], List[List[str]]]:
+    """The files a snippet opens, and the commands it hands to a shell.
+
+    Only paths a read is made from: ``open``/``io.open``/``os.open``, a
+    ``Path`` that is read or opened, and the source of a ``shutil`` copy or
+    move. A string that is never opened — a message naming ``app/.env`` — is
+    not in the list. Paths are read the way :class:`_PyFiles` reads a file
+    change: literals, names bound to them, f-strings, ``os.path.join`` and
+    ``Path(...) / ...``. A path the code only works out when it runs is not.
+
+    Returns:
+        ``(paths, commands)``: *commands* are argv lists, one per command
+        given to ``subprocess`` or ``os.system``.
     """
     try:
         tree = ast.parse(code)
     except (SyntaxError, ValueError):
         # Python refuses to run it too, so it opens nothing.
-        return []
+        return [], []
     files = _PyFiles(tree, cwd)
-    found: List[str] = []
+    paths: List[str] = []
+    commands: List[List[str]] = []
+
+    def add(node: Optional[ast.AST]) -> None:
+        text = files.text(node) if node is not None else None
+        if text:
+            paths.append(text)
+
     for node in ast.walk(tree):
-        if isinstance(node, (ast.Constant, ast.JoinedStr, ast.BinOp, ast.Call)):
-            text = files.text(node)
-            if text:
-                found.append(text)
         if not isinstance(node, ast.Call):
             continue
         module, name = files._callee(node)
-        if name in _SUBPROCESS_FUNCS or (
+        func = node.func
+        if name == "open" and (
+            module in _OPENERS or module == "os" or isinstance(func, ast.Name)
+        ):
+            add(_arg(node, 0, "file" if module != "os" else "path"))
+        elif (
+            isinstance(func, ast.Attribute)
+            and func.attr in _PATH_READERS
+            and files.is_path(func.value)
+        ):
+            add(func.value)
+        elif module == "shutil" and name in _SHUTIL_READERS:
+            add(_arg(node, 0, "src"))
+        elif name in _SUBPROCESS_FUNCS or (
             module == "os" and name in ("system", "popen")
         ):
             first = _arg(node, 0, "args")
-            command = files.text(first) if first is not None else None
+            if first is None:
+                continue
+            command = files.text(first)
             if command:
-                found.extend(
-                    word for seg in _split_segments(command) for word in _tokens(seg)
-                )
-    return found
+                commands.extend(_tokens(seg) for seg in _split_segments(command))
+            else:
+                argv, _ = files.argv(first)
+                if argv:
+                    commands.append(argv)
+    return paths, commands
 
 
 def _effects_of_python_call(
