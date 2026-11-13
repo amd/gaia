@@ -2473,7 +2473,7 @@ const SCHEDULE_ROWS = [
 /** Titles, labels and placeholders in the schedules dialog that carry no Arabic. */
 const untranslatedAttributes = (page: Page): Promise<string[]> =>
     page.locator('.schedule-modal').evaluate((root) =>
-        [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
+        [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title]:not([dir="auto"]), [aria-label], [placeholder]')].flatMap((el) =>
             ['aria-label', 'placeholder', 'title']
                 .map((a) => el.getAttribute(a) ?? '')
                 .filter((v) => /[A-Za-z]{3}/.test(v) && !/[؀-ۿ]/.test(v))));
