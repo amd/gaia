@@ -412,6 +412,8 @@ def test_a_file_a_script_writes_without_an_encoding_is_utf8(
     script = project / "report.py"
     script.write_text(_WRITES_TEXT, encoding="utf-8")
     child_env["PYTHONUTF8"] = "1"
+    # A non-UTF-8 locale codec on Linux too (Windows ignores it: cp1252 there).
+    child_env["LC_ALL"] = "C"
     child = ("import sys\nsys.frozen = True\n" if frozen_build else "") + _CHILD
     argv = [sys.executable, "-X", "utf8=0"] if frozen_build else [sys.executable]
 

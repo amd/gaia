@@ -150,7 +150,8 @@ def _apply_utf8_mode() -> None:
     A frozen interpreter ignores ``PYTHONUTF8``, so a script's bare
     ``open(path, "w")`` wrote the locale codec (cp1252 on Windows). Covers
     ``open``/``io.open`` and what ``pathlib`` resolves through
-    ``io.text_encoding``.
+    ``io.text_encoding``; ``locale.getpreferredencoding()``, ``subprocess``
+    text mode and a bare ``io.TextIOWrapper`` stay on the locale codec.
     """
     if sys.flags.utf8_mode or os.environ.get("PYTHONUTF8") != "1":
         return
