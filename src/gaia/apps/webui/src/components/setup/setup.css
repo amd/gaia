@@ -254,7 +254,8 @@
 .mc-summary-stats { display: flex; flex-wrap: wrap; gap: 4px 20px; }
 .mc-stat { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; }
 .mc-stat-label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); }
-.mc-stat-value { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.mc-stat-value { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-stat-path { overflow-wrap: anywhere; }
 
 .mc-disk {
     position: relative;

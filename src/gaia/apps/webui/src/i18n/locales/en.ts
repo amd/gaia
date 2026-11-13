@@ -1935,7 +1935,7 @@ export const enMessages = {
     'setup.summary.label': 'Download total',
     'setup.summary.download': 'Download',
     'setup.summary.free': 'Free',
-    'setup.summary.freeOn': 'Free on {drive}',
+    'setup.summary.freeOn': 'Free on',
     'setup.summary.after': 'After',
     'setup.summary.sizeUnknown': 'Size unknown',
     'setup.summary.freeUnknown': 'Free space unknown',
