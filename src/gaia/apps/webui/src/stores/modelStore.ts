@@ -197,7 +197,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
         // An empty list has no model to report, and must not wipe the sidebar.
         if (sessions?.length) useChatStore.getState().setSessions(sessions);
     },
-    queue: (model) => set({ queued: model, queueError: null }),
+    queue: (model) => {
+        set({ queued: model, queueError: null });
+        // The reply may have ended between the click and its render: apply now.
+        if (model && !useChatStore.getState().isStreaming) void get().applyQueued();
+    },
     applyQueued: async () => {
         const model = get().queued;
         if (!model) return;
@@ -241,9 +245,13 @@ export const useModelStore = create<ModelState>((set, get) => ({
  */
 export async function syncModelAfterSettingChange(): Promise<void> {
     forgetModelChecks();
+    const before = useModelStore.getState().active?.model;
     await useModelStore.getState().refresh();
     const active = useModelStore.getState().active;
-    if (active?.model && !active.remote) watchPickLoad(active.model, useModelStore.setState);
+    // Only a change starts a load; an old warm-up's failure is not this one's.
+    if (active?.model && !active.remote && !sameModelId(active.model, before)) {
+        watchPickLoad(active.model, useModelStore.setState);
+    }
     try {
         const sessions = (await api.listSessions()).sessions;
         if (sessions.length) useChatStore.getState().setSessions(sessions);

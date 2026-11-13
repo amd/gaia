@@ -784,6 +784,9 @@ def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
         agent._withheld_tool_entries = snapshot["withheld_tools"]
     if snapshot["tool_overrides"] is not None:
         agent._tool_overrides = snapshot["tool_overrides"]
+    elif "_tool_overrides" in vars(agent):
+        # The switch created it; the old model had none.
+        del agent._tool_overrides
     _restore_followers(agent, snapshot["followers"])
 
 

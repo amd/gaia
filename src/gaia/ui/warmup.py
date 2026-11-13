@@ -155,7 +155,8 @@ class PrefixWarmer:
     def turn_ended(self) -> bool:
         """Run the fresh request a chat turn held back. Returns whether it started."""
         with self._lock:
-            reason = self._pending
+            # Taken, so two turns ending together start it once; a busy request sets it again.
+            reason, self._pending = self._pending, None
         if reason is None:
             return False
         return self.request(reason, fresh=True)

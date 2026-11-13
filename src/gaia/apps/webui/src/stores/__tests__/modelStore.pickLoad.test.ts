@@ -108,6 +108,17 @@ describe('a setting that changes the model outside the picker', () => {
         expect(useModelStore.getState().pickLoad).toBeNull();
     });
 
+    it('shows no load, nor an old failure, when the model did not change', async () => {
+        useModelStore.setState({ active: local });
+        mocked.getActiveModel.mockResolvedValue(local);
+        mocked.listProviderModels.mockResolvedValue({ models: [] } as never);
+        mocked.getWarmUp.mockResolvedValue({ state: 'failed', elapsed_seconds: 1, model: null, error: 'down' } as never);
+        await syncModelAfterSettingChange();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(mocked.getWarmUp).not.toHaveBeenCalled();
+        expect(useModelStore.getState().pickLoad).toBeNull();
+    });
+
     it('follows no load when the model is now a cloud one', async () => {
         mocked.getActiveModel.mockResolvedValue({ ...(local as object), remote: true } as never);
         mocked.listProviderModels.mockResolvedValue({ models: [] } as never);

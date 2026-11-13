@@ -99,6 +99,18 @@ def test_a_pick_made_during_a_chat_turn_loads_when_the_turn_ends():
     assert warmer.turn_ended() is False, "the pick is loaded once, not per turn"
 
 
+def test_two_turns_ending_together_load_a_waiting_pick_once():
+    calls, busy = [], [True]
+    warmer = warmup.PrefixWarmer(lambda: calls.append(1) or {})
+    warmer.set_busy_check(lambda: busy[0])
+    warmer.request("model pick", fresh=True)
+    busy[0] = False
+    assert warmer.turn_ended() is True
+    assert warmer.turn_ended() is False
+    assert warmer.wait(5)
+    assert calls == [1]
+
+
 def test_a_turn_ending_starts_nothing_when_no_pick_waits():
     calls, busy = [], [True]
     warmer = warmup.PrefixWarmer(lambda: calls.append(1) or {})
