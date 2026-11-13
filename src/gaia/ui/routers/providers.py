@@ -669,6 +669,12 @@ def _learn_cloud_models(model_id: str) -> None:
         logger.info("Could not tell whether %s is a cloud model: %s", model_id, e)
 
 
+def _is_cloud(model_id: str) -> bool:
+    """True when a cloud provider answers *model_id*, reading Lemonade's list if needed."""
+    _learn_cloud_models(model_id)
+    return cloud_provider_name(model_id) is not None
+
+
 def model_label(model_id: str) -> str:
     cloud = cloud_provider_name(model_id)
     if cloud is None:
@@ -821,8 +827,12 @@ def _check_model_available(model_id: str) -> Optional[str]:
     from gaia.llm.cloud_keys import CloudKeyError, ensure_authenticated
 
     provider = provider_of(model_id)
-    if provider != LOCAL and cloud_blocked():
+    cloud = _is_cloud(model_id)
+    if cloud and cloud_blocked():
         return "Local only is on, so cloud models can't run"
+    if cloud and provider == LOCAL:
+        # A provider GAIA has no tab for: Lemonade listed it and relays it.
+        return None
     try:
         if provider != LOCAL:
             base_url = _base_url()
@@ -1535,6 +1545,7 @@ def select_model(
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
     refuse_blocked_cloud_model(model_id)
+    cloud = _is_cloud(model_id)
     from gaia.config import GaiaConfigError
     from gaia.connectors.credential_wait import (
         CredentialStoreLocked,
@@ -1567,7 +1578,7 @@ def select_model(
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)
-    if provider_of(model_id) == LOCAL:
+    if not cloud:
         from gaia.ui import warmup
 
         # Load it now: nothing else would until the next message is sent.
@@ -1671,7 +1682,7 @@ def _context_view(model_id: str) -> Dict[str, Any]:
     from gaia.llm.context_choice import context_range, saved_context_size
     from gaia.llm.model_fit import ModelFitError, capacity_from_system_info
 
-    if provider_of(model_id) != LOCAL:
+    if _is_cloud(model_id):
         raise HTTPException(status_code=422, detail=_CLOUD_CONTEXT_DETAIL)
     try:
         capacity = capacity_from_system_info(_read_system_info())
@@ -1726,7 +1737,7 @@ def set_context(body: ContextRequest) -> Dict[str, Any]:
     model_id = body.model.strip()
     if not model_id:
         raise HTTPException(status_code=422, detail="No model given.")
-    if provider_of(model_id) != LOCAL:
+    if _is_cloud(model_id):
         raise HTTPException(status_code=422, detail=_CLOUD_CONTEXT_DETAIL)
     try:
         capacity = capacity_from_system_info(_read_system_info())
@@ -2136,7 +2147,7 @@ def restart_local(
             ),
         )
     # A stopped server is started even for a cloud model: it relays that model too.
-    if server_up and provider_of(model_id) != LOCAL:
+    if server_up and _is_cloud(model_id):
         raise HTTPException(
             status_code=422,
             detail="The active model runs in the cloud; nothing to restart.",
