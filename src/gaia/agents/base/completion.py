@@ -246,8 +246,16 @@ def _inside(path: str, folder: str) -> bool:
     return any(path.startswith(folder.rstrip("/\\") + sep) for sep in "/\\")
 
 
+def _created_or_changed_ns(value: os.stat_result) -> int:
+    # Windows st_ctime may be the last metadata change, not the creation time.
+    if os.name == "nt":
+        return getattr(value, "st_birthtime_ns", value.st_ctime_ns)
+    return value.st_ctime_ns
+
+
 def _changed_at(stamp: tuple) -> int:
-    # A copy keeps its source's mtime; ctime is its creation (Windows) or\n    # metadata change (POSIX), which a copy made in the run also sets.
+    # A copy keeps its source's mtime; its creation time (Windows) or ctime
+    # (POSIX) is set by a copy made in the run.
     return max(stamp[3], stamp[4])
 
 
@@ -664,7 +672,7 @@ class CompletionEvidence:
             value.st_ino,
             value.st_size,
             value.st_mtime_ns,
-            value.st_ctime_ns,
+            _created_or_changed_ns(value),
         )
 
     def snapshot(self, tool: str, args: dict, validator=None) -> dict:

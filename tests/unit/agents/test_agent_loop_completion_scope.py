@@ -139,6 +139,46 @@ def test_a_file_from_before_the_turn_does_not_count(tmp_path):
     assert _missing(_gaps(ledger))
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows creation time")
+def test_a_metadata_change_during_the_run_is_not_a_write(tmp_path, monkeypatch):
+    import gaia.agents.base.completion as completion
+
+    out = tmp_path / "out"
+    out.mkdir()
+    old = out / "stale.csv"
+    old.write_text("old\n")
+    hour_ago = time.time() - 3600
+    os.utime(old, (hour_ago, hour_ago))
+    real_stat = os.stat
+
+    touched = []
+
+    class Touched:
+        """A stat whose st_ctime is a metadata change made during the run."""
+
+        def __init__(self, value):
+            self._value = value
+            self.st_ctime_ns = touched[0]
+
+        def __getattr__(self, name):
+            return getattr(self._value, name)
+
+    def stat_now(path, *args, **kwargs):
+        value = real_stat(path, *args, **kwargs)
+        return Touched(value) if os.path.basename(path) == "stale.csv" else value
+
+    ledger = CompletionEvidence("Save the outputs into out/", str(tmp_path))
+    before = ledger.snapshot("run_python", {"code": "x = 1"})
+    monkeypatch.setattr(completion.os, "stat", stat_now)
+    time.sleep(0.02)
+    touched.append(time.time_ns())
+    time.sleep(0.02)
+    ledger.record(
+        "run_python", {"code": "x = 1"}, {"status": "success"}, True, before=before
+    )
+    assert _missing(_gaps(ledger))
+
+
 def test_a_folder_with_no_script_run_is_not_inspected(tmp_path):
     (tmp_path / "out").mkdir()
     (tmp_path / "out" / "x.csv").write_text("fresh\n")
