@@ -78,6 +78,11 @@ describe('a permission card shows what will run', () => {
         expect(screen.getByTestId('perm-decoded')).toHaveTextContent('Get-Process');
     });
 
+    it('decodes nothing for another program that takes -e', () => {
+        show({ toolArgs: { command: 'grep -e function src/' } });
+        expect(screen.queryByTestId('perm-decoded')).not.toBeInTheDocument();
+    });
+
     it("shows cmd's reading of a caret-escaped command", () => {
         show({ toolArgs: { command: 'de^l plain.txt' } });
         expect(screen.getByTestId('perm-cmd-reading')).toHaveTextContent('del plain.txt');

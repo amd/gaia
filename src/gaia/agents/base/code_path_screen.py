@@ -138,6 +138,13 @@ def names_only_a_credential_file(text: str) -> bool:
     return bool(_name_reason(text))
 
 
+def beyond_credential_files(
+    mentions: List[ProtectedMention],
+) -> List[ProtectedMention]:
+    """*mentions* less credential files named alone; reading one is the read checks' to refuse."""
+    return [m for m in mentions if not names_only_a_credential_file(m.text)]
+
+
 def _with_home(text: str) -> str:
     home = str(Path.home())
     for spelling in _HOME_SPELLINGS:
@@ -462,6 +469,7 @@ def python_code_refusal(
         validator=getattr(host, "path_validator", None),
         may_write=True if may_write is None else bool(may_write(code)),
     )
+    mentions = beyond_credential_files(mentions)
     if not mentions:
         return None
     log.info(
@@ -555,6 +563,7 @@ def python_file_refusal(
         validator=validator,
         may_write=True if may_write is None else bool(may_write(source)),
     )
+    mentions = beyond_credential_files(mentions)
     if not mentions:
         return None
     log.info(

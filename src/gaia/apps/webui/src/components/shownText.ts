@@ -11,7 +11,9 @@ function isEncodedFlag(token: string): boolean {
 /** The script a `powershell -EncodedCommand <base64>` line runs, decoded; '' when it carries none. */
 export function decodedPowerShell(command: string): string {
     const tokens = command.split(/\s+/).filter(Boolean);
-    for (let at = 0; at < tokens.length - 1; at++) {
+    const shell = tokens.findIndex((t) => /(^|[\\/])(powershell|pwsh)(\.exe)?["']?$/i.test(t.replace(/^["']/, '')));
+    if (shell < 0) return '';
+    for (let at = shell + 1; at < tokens.length - 1; at++) {
         if (!isEncodedFlag(tokens[at])) continue;
         const payload = tokens[at + 1].replace(/^["']|["']$/g, '');
         try {

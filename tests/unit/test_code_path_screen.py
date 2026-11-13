@@ -285,6 +285,24 @@ def test_run_python_naming_a_protected_file_never_reaches_the_card(home):
     assert agent.ran == []
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        "from dotenv import load_dotenv\nload_dotenv('.env')",
+        "open('.env', 'w').write('A=1')",
+    ],
+)
+def test_a_snippet_that_only_names_a_credential_file_reaches_the_card(home, code):
+    console = _Console()
+    agent = _PythonAgent(home, console)
+    assert console.grant_call_for_session("run_python", {"code": "print(0)"})
+
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result["status"] == "success", result
+    assert agent.ran == [code]
+
+
 def test_always_allow_does_not_cover_a_snippet_naming_a_protected_path(home):
     console = _Console()
     agent = _PythonAgent(home, console)

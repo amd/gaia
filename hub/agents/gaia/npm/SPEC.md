@@ -735,7 +735,7 @@ the sidecar at startup, before it binds a port. It confines the agent's tools
 — every file tool, search, index and shell path check — not code they run: a
 `run_python` script or shell command can still read anything the OS user can
 (code whose text names a credential folder or file is refused before it runs,
-in a shell line a credential file only when the code reads it,
+a credential file only when the code reads it,
 but code that works a path out while it runs is not caught), so isolating a run from files it must not see needs a separate OS user,
 container or VM.
 
