@@ -56,3 +56,11 @@ describe('useAttachments upload refusals', () => {
         expect(msg).toBe('Brand new refusal');
     });
 });
+
+describe('useAttachments old Office files', () => {
+    it.each([['.doc', '.docx'], ['.xls', '.xlsx'], ['.ppt', '.pptx']])('tells the user to save %s as %s', async (ext, modern) => {
+        const msg = await attachRefused(`old${ext}`, refusal('unsupported_type', 400, { message: 'server english', extension: ext }));
+        expect(msg).toContain(`save it as ${modern}`);
+        expect(msg).not.toContain('Attach an image');
+    });
+});
