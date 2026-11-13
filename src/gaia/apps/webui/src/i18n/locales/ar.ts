@@ -1377,6 +1377,7 @@ const messages: Messages = {
     'readAloud.error.unreachable': "تعذّرت قراءة هذا الرد: خادم النماذج لا يستجيب.",
     'readAloud.error.speech': "تعذّرت قراءة هذا الرد: لم يتمكن خادم النماذج من توليد الكلام.",
     'readAloud.error.playback': "تعذّرت قراءة هذا الرد: لا يمكن تشغيل الصوت هنا.",
+    'readAloud.error.nothing': "لا شيء لقراءته بصوت عالٍ هنا: هذا الرد عبارة عن شيفرة فقط.",
     'readAloud.error.other': "تعذّرت قراءة هذا الرد.",
     'readAloud.group.american.female': "إنجليزية أمريكية، صوت أنثوي",
     'readAloud.group.american.male': "إنجليزية أمريكية، صوت ذكوري",
