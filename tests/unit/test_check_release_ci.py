@@ -729,6 +729,127 @@ def test_only_a_403_blames_permissions(monkeypatch, code, hinted):
     assert ("actions: write" in str(exc.value)) is hinted
 
 
+# ── A spent API budget is waited out (rc23 died on one) ─────────────────
+
+RATE_LIMITED = b'{"message":"API rate limit exceeded for installation ID 1."}'
+
+
+class _Response:
+    def __init__(self, body: bytes) -> None:
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self) -> bytes:
+        return self.body
+
+
+def _api_replies(monkeypatch, *replies):
+    """urlopen answers with ``replies`` in order; returns (requests, waits)."""
+    import io
+    import time
+    import urllib.error
+
+    queue, requests, waits = list(replies), [], []
+
+    def urlopen(req, timeout):
+        requests.append(req)
+        code, headers, body = queue.pop(0)
+        if code == 200:
+            return _Response(body)
+        raise urllib.error.HTTPError(req.full_url, code, "x", headers, io.BytesIO(body))
+
+    monkeypatch.setattr(crc.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(time, "sleep", waits.append)
+    return requests, waits
+
+
+def _spent(reset_in: int) -> dict:
+    import time
+
+    return {
+        "X-RateLimit-Remaining": "0",
+        "X-RateLimit-Reset": str(int(time.time()) + reset_in),
+    }
+
+
+RUNS = (200, {}, b'{"workflow_runs": [{"id": 7}]}')
+
+
+def test_the_gate_waits_out_a_spent_budget_then_reads_the_runs(monkeypatch):
+    requests, waits = _api_replies(monkeypatch, (403, _spent(600), RATE_LIMITED), RUNS)
+    assert crc.fetch_runs("amd/gaia", "lint.yml", "abc", "tok") == [{"id": 7}]
+    assert len(requests) == 2
+    assert len(waits) == 1 and 600 <= waits[0] <= 610
+
+
+def test_a_403_that_is_not_a_rate_limit_fails_at_once(monkeypatch):
+    denied = (
+        403,
+        {"X-RateLimit-Remaining": "4999"},
+        b'{"message":"Resource not accessible by integration"}',
+    )
+    requests, waits = _api_replies(monkeypatch, denied)
+    with pytest.raises(RuntimeError, match="actions: write") as exc:
+        crc.fetch_runs("amd/gaia", "lint.yml", "abc", "tok")
+    assert "rate limited" not in str(exc.value)
+    assert (len(requests), waits) == (1, [])
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-RateLimit-Remaining": "0"}])
+def test_a_404_fails_at_once_even_on_a_spent_budget(monkeypatch, headers):
+    requests, waits = _api_replies(monkeypatch, (404, headers, b"Not Found"))
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        crc.fetch_runs("amd/gaia", "lint.yml", "abc", "tok")
+    assert (len(requests), waits) == (1, [])
+
+
+def test_a_budget_that_outlasts_the_bound_fails_naming_the_rate_limit(monkeypatch):
+    late = _spent(crc.RATE_LIMIT_WAIT_SECONDS + 600)
+    requests, waits = _api_replies(monkeypatch, (403, late, RATE_LIMITED))
+    with pytest.raises(crc.RateLimitWaitExceeded, match="rate limited"):
+        crc.fetch_runs("amd/gaia", "lint.yml", "abc", "tok")
+    assert (len(requests), waits) == (1, [])
+
+
+def test_retry_after_is_honoured(monkeypatch):
+    limited = (429, {"Retry-After": "30"}, b"slow down")
+    requests, waits = _api_replies(monkeypatch, limited, RUNS)
+    assert crc.fetch_runs("amd/gaia", "lint.yml", "abc", "tok") == [{"id": 7}]
+    assert waits == [30]
+
+
+def test_a_secondary_limit_backs_off(monkeypatch):
+    secondary = (403, {}, b"You have exceeded a secondary rate limit")
+    _, waits = _api_replies(monkeypatch, secondary, secondary, RUNS)
+    assert crc.fetch_runs("amd/gaia", "lint.yml", "abc", "tok") == [{"id": 7}]
+    assert waits == [15, 30]
+
+
+def test_a_rate_limited_dispatch_is_sent_again_once(monkeypatch):
+    requests, waits = _api_replies(
+        monkeypatch, (403, _spent(60), RATE_LIMITED), (200, {}, b"")
+    )
+    crc.dispatch("amd/gaia", C("lint.yml"), "v1.0.0", "tok")
+    assert [r.get_method() for r in requests] == ["POST", "POST"]
+    assert len(waits) == 1
+
+
+def test_main_fails_loudly_when_the_budget_outlasts_the_bound(monkeypatch, capsys):
+    def spent(*_):
+        raise crc.RateLimitWaitExceeded("GET lint.yml runs was rate limited: ...")
+
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setattr(crc, "fetch_runs", spent)
+    code = crc.main(["--repo", "amd/gaia", "--sha", "abc", "--tag", "v1.0.0-rc1"])
+    assert code == 1
+    assert "::error::GET lint.yml runs was rate limited" in capsys.readouterr().out
+
+
 # ── Only a full-suite run of test_unit.yml passes a final ───────────────
 
 
