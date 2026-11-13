@@ -1727,6 +1727,7 @@ textarea.mem-input { resize: vertical; }
 .mem-priority-high   { background: color-mix(in srgb, var(--danger) 15%, transparent); }
 .mem-priority-medium { background: color-mix(in srgb, var(--accent-yellow) 15%, transparent); }
 .mem-priority-low    { background: color-mix(in srgb, var(--accent-blue) 15%, transparent); }
+.mem-goal-cancelled-label { background: var(--bg-hover); border: 1px solid var(--border); }
 
 .mem-goal-source-badge {
     display: flex; align-items: center; gap: 3px;
@@ -1833,11 +1834,12 @@ textarea.mem-input { resize: vertical; }
 }
 .mem-about-add {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
     margin-bottom: 20px;
 }
 .mem-about-add .mem-input {
-    flex: 1;
+    flex: 1 1 360px;
     min-width: 0;
 }
 .mem-about-add .mem-about-when {

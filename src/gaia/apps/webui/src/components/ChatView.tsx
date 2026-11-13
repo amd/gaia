@@ -61,7 +61,7 @@ import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
-import { lastSentMessage } from '../utils/editLast';
+import { laterTurns, lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
@@ -187,6 +187,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [cards]);
     // Auto-read needs the saved choice before the first reply finishes.
     useReadAloudSettings();
+    // Leaving the chat ends its reading; the stop button lives only in this view.
+    useEffect(() => () => useReadAloudStore.getState().stop(), []);
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
@@ -1588,7 +1590,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [sessionId, attach, t]);
 
-    const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
+    const handleDragOver = (e: React.DragEvent) => {
+        // Dragged text is not a drop target for files.
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(true);
+    };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
 
     // Stale connector-reply cue (#2119): when the newest reply was a connector
@@ -1643,7 +1651,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onChange={(e) => setTitleDraft(e.target.value)}
                             onBlur={saveTitle}
                             onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveTitle();
+                                if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveTitle();
                                 if (e.key === 'Escape') { e.preventDefault(); setEditingTitle(false); }
                             }}
                             {...CLAIMS_ESCAPE}
@@ -1740,6 +1748,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onEditDraft={(text: string) => { editDraftRef.current = text; }}
                                     onEdit={handleEdit}
                                     onEditCancel={handleEditCancel}
+                                    laterCount={msg.role === 'user' ? laterTurns(messages, idx) : 0}
                                     onRegenerate={canRetry && !unsent ? () => handleRegenerate(msg) : undefined}
                                     extraActions={canRetry ? (
                                         <RetryWithMenu

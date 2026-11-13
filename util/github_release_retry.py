@@ -20,7 +20,22 @@ from typing import Callable, Sequence
 
 
 class RateLimited(RuntimeError):
-    """The GitHub API asked the caller to retry later."""
+    """The GitHub API asked the caller to retry later.
+
+    ``reset`` is the epoch second a spent budget refills and ``retry_after`` the
+    seconds GitHub asked for, when the response named either.
+    """
+
+    def __init__(
+        self,
+        detail: str = "",
+        *,
+        reset: int | None = None,
+        retry_after: int | None = None,
+    ) -> None:
+        super().__init__(detail)
+        self.reset = reset
+        self.retry_after = retry_after
 
 
 class ReleaseError(RuntimeError):

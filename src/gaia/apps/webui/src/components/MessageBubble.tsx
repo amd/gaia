@@ -66,6 +66,8 @@ interface MessageBubbleProps {
     /** Sends the edited text in place of this message and everything after it. */
     onEdit?: (message: Message, text: string) => void;
     onEditCancel?: () => void;
+    /** Later messages that Resend or Edit on this message delete for good; above zero, they ask first. */
+    laterCount?: number;
     /** Shows Continue under a stopped reply that wrote something. */
     onContinue?: () => void;
     /** The chat's latest answer, whose actions stay in view. */
@@ -545,7 +547,7 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
     );
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, laterCount = 0, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(() => {
@@ -571,6 +573,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
         [message.content, message.role, isStreaming, cutOff],
     );
+    const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
     const readAloudId = `${message.session_id}:${message.id}`;
@@ -634,9 +637,15 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         onDelete?.(message.id);
     }, [confirmDelete, message.id, onDelete]);
 
+    const [pendingDrop, setPendingDrop] = useState<(() => void) | null>(null);
+    const askBeforeDropping = useCallback((go: () => void) => {
+        if (laterCount > 0) setPendingDrop(() => go);
+        else go();
+    }, [laterCount]);
+
     const handleResend = useCallback(() => {
-        onResend?.(message);
-    }, [message, onResend]);
+        askBeforeDropping(() => onResend?.(message));
+    }, [message, onResend, askBeforeDropping]);
 
     // Tooltip shown on hover anywhere over the bubble — full absolute
     // timestamp (e.g. "Apr 25, 2026, 11:02:04 PM"). Both user and assistant
@@ -690,17 +699,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
-                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                            {message.role === 'assistant' && !isError && hasAnswerText && (
                                 <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
                             )}
-                            <button
-                                className={`msg-copy ${copied ? 'copied' : ''}`}
-                                onClick={handleCopy}
-                                title={copied ? t('msg.copied') : t('msg.copy')}
-                                aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
-                            >
-                                {copied ? <Check size={12} /> : <Copy size={12} />}
-                            </button>
+                            {hasAnswerText && (
+                                <button
+                                    className={`msg-copy ${copied ? 'copied' : ''}`}
+                                    onClick={handleCopy}
+                                    title={copied ? t('msg.copied') : t('msg.copy')}
+                                    aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
+                                >
+                                    {copied ? <Check size={12} /> : <Copy size={12} />}
+                                </button>
+                            )}
                             {/* Delete button */}
                             {onDelete && (
                                 <button
@@ -749,8 +760,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             original={message.content}
                             draft={editDraft}
                             onDraft={onEditDraft}
-                            onSend={(text) => onEdit(message, text)}
-                            onCancel={() => onEditCancel?.()}
+                            onSend={(text) => askBeforeDropping(() => onEdit(message, text))}
+                            onCancel={() => { setPendingDrop(null); onEditCancel?.(); }}
                         />
                     ) : collapsibleUser ? (
                         <>
@@ -772,6 +783,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
                         <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
+                    )}
+                    {pendingDrop && !isStreaming && (
+                        <div className="msg-drop-confirm" role="alertdialog" aria-labelledby={`${userBodyId}-drop`}>
+                            <span id={`${userBodyId}-drop`}>{t.plural('msg.dropLater', laterCount)}</span>
+                            <div className="msg-edit-actions">
+                                <button type="button" className="btn-secondary msg-edit-btn" onClick={() => setPendingDrop(null)} autoFocus>
+                                    {t('msg.editCancel')}
+                                </button>
+                                <button type="button" className="btn-primary msg-edit-btn" onClick={() => { setPendingDrop(null); pendingDrop(); }}>
+                                    {t('msg.dropLaterGo')}
+                                </button>
+                            </div>
+                        </div>
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
@@ -1231,8 +1255,8 @@ const MARKDOWN_COMPONENTS: Components = {
     ol({ children, start }) {
         return <ol className="md-ol" start={start} dir="auto">{children}</ol>;
     },
-    li({ children }) {
-        return <li className="md-li" dir="auto"><Linkified>{children}</Linkified></li>;
+    li({ children, className }) {
+        return <li className={className ? `md-li ${className}` : 'md-li'} dir="auto"><Linkified>{children}</Linkified></li>;
     },
     // Blockquote
     blockquote({ children }) {

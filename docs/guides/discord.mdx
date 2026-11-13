@@ -92,13 +92,23 @@ Message your bot the way you'd talk to GAIA on your PC:
 
 A few things that help:
 
-- **Files go both ways.** Attach a file and GAIA can read it. When GAIA makes a file for you,
-  it sends it back in the chat (up to 10 MB).
+- **Files go both ways.** Attach a file and GAIA can read it. When GAIA makes a file, takes a
+  screenshot or generates an image, it sends it back in the chat. You can also ask for any
+  file on the PC: "send me my resume from Documents". Files over 10 MB, key or password
+  files, and anything in a hidden or app-settings folder (where apps keep sign-ins) stay on
+  the PC.
+- **Reply to a message** with Discord's Reply and GAIA knows which one you mean: "do this
+  one".
+- **Start fresh** by sending *new chat*. GAIA forgets the conversation so far, but keeps what
+  you asked it to remember and all your reminders and alerts.
 - **Send corrections as a new message.** A quick follow-up such as "actually, only the
   count" is answered together with the message before it. Editing a message you already
   sent doesn't change anything, and GAIA tells you so.
 - **To stop GAIA,** press **Stop** under "Thinking…", or send *stop*.
 - **Long answers** arrive as several messages.
+- **Send *help*** for a short list of what you can say.
+- **After GAIA restarts** (the PC rebooted, or you pressed Stop and Start) it begins a new
+  conversation, and says so under its first answer.
 
 ## GAIA asks before it changes anything
 
@@ -112,7 +122,7 @@ exact action with buttons:
   from then on.
 
 You can also just reply *yes* or *no*. If you don't answer within ten minutes, GAIA treats it
-as *no*.
+as *no*. Send *retry* to run that request again.
 
 <Warning>
   Whoever controls the paired Discord account can see anything GAIA can read on your PC,
@@ -130,8 +140,10 @@ GAIA can message you on its own. Just ask:
 - "Check in every 30 minutes, but only message me if something needs my attention."
 
 GAIA confirms each one before it sets it up. To see or change them later, ask "what are you
-watching?", "pause the summaries", or "stop the 5pm reminder". There's no settings screen for
-them: you manage them by asking. See [Automations](/guides/automations) for more examples.
+watching?", "pause the summaries", or "stop the 5pm reminder". On the PC, **Settings →
+Automations** in the GAIA app lists your reminders, summaries, alerts and triggers, and
+pauses, resumes or removes one. GitHub watches are changed by asking. See
+[Automations](/guides/automations) for more examples.
 
 ## Privacy
 
@@ -146,7 +158,11 @@ them: you manage them by asking. See [Automations](/guides/automations) for more
 All of these are in **Settings → Messaging → Discord** (or type `/discord` in the terminal
 app):
 
-- **Stop** pauses GAIA on Discord. **Start** turns it back on.
+- **Stop** pauses GAIA on Discord, and it stays off until you press **Start**, even after
+  you reopen GAIA.
+- **Restart** stops and starts it in one step.
+- **Ask me again for all of these** appears once you've chosen **Always allow** for
+  something. It lists what you allowed and clears the list, so GAIA asks again.
 - **Pair a different account** shows a new code, so another Discord account can take over.
   This also clears every **Always allow** you chose.
 - **Disconnect** forgets the bot and the paired account. Your bot still exists in the

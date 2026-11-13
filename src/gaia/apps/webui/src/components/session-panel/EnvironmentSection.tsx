@@ -7,6 +7,7 @@
  * backend enforces it in the agent's path checks and tool policy.
  */
 
+import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useState } from 'react';
 import { Cloud, File, Folder, FolderPlus, Monitor, ShieldAlert, ShieldCheck, Smartphone, X } from 'lucide-react';
 import * as api from '../../services/api';
@@ -213,11 +214,6 @@ function Folders({ sessionId }: { sessionId: string }) {
                             {showAllFiles ? t('env.fewerFiles') : t('env.allFiles', { n: files.length })}
                         </button>
                     )}
-                    {!env.enforced && (
-                        <span className="sp-meta">
-                            {t('env.ownProcess')}
-                        </span>
-                    )}
                     {env.removed.length > 0 && (
                         <span className="sp-meta">
                             {t('env.removed', { names: env.removed.map(baseName).join(', ') })}
@@ -356,7 +352,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     const note = MODES.find((m) => m.mode === mode)?.note;
     return (
         <Row label={t('env.permission')}>
-            <div className="sp-segmented" role="radiogroup" aria-label={t('env.permission')}>
+            <RadioGroup className="sp-segmented" aria-label={t('env.permission')}>
                 {MODES.map((m) => (
                     <button
                         key={m.mode}
@@ -373,7 +369,7 @@ function Permission({ sessionId }: { sessionId: string }) {
                         {m.mode === 'ask' ? t('env.ask') : t(m.label)}
                     </button>
                 ))}
-            </div>
+            </RadioGroup>
             {note && <span className="sp-meta">{t(note)}</span>}
             {mode === 'full_access' && promptWaiting && <span className="sp-meta" role="status">{t('perm.fullPendingNote')}</span>}
             {confirming && (

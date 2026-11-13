@@ -22,6 +22,7 @@ import inspect
 import json
 import re
 import time
+import unicodedata
 from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -128,9 +129,131 @@ class EnvelopeBudgetExceeded(RuntimeError):
     """
 
 
+# Characters that don't break a run of ``<`` or ``>``. Mirrors core's
+# ``gaia.agents.base.untrusted_text.fence_run_invisible``, which this package's
+# minimum amd-gaia predates; a test asserts the two agree on every code point.
+_FENCE_RUN_INVISIBLE_CATEGORIES = frozenset({"Cf", "Cc", "Zl", "Zp"})
+_FENCE_RUN_VISIBLE = frozenset("\t\n")
+_FENCE_RUN_INVISIBLE_RANGES = (
+    (0x00AD, 0x00AD),
+    (0x034F, 0x034F),
+    (0x061C, 0x061C),
+    (0x115F, 0x1160),
+    (0x17B4, 0x17B5),
+    (0x180B, 0x180F),
+    (0x200B, 0x200F),
+    (0x202A, 0x202E),
+    (0x2060, 0x206F),
+    (0x2800, 0x2800),
+    (0x3164, 0x3164),
+    (0xFE00, 0xFE0F),
+    (0xFEFF, 0xFEFF),
+    (0xFFA0, 0xFFA0),
+    (0xFFF0, 0xFFF8),
+    (0x1BCA0, 0x1BCA3),
+    (0x1D173, 0x1D17A),
+    (0xE0000, 0xE0FFF),
+)
+_BODY_MARKER_NAMES = ("UNTRUSTED_EMAIL_BODY_START", "UNTRUSTED_EMAIL_BODY_END")
+MARKER_NAME_REMOVED = "[fence marker removed]"
+
+
+def fence_run_invisible(char: str) -> bool:
+    """True for a character that doesn't break a run of ``<`` or ``>``."""
+    if char in _FENCE_RUN_VISIBLE:
+        return False
+    if unicodedata.category(char) in _FENCE_RUN_INVISIBLE_CATEGORIES:
+        return True
+    point = ord(char)
+    return any(low <= point <= high for low, high in _FENCE_RUN_INVISIBLE_RANGES)
+
+
+def _fence_side(char: str) -> str:
+    """``<`` or ``>`` for a character that reads as one, in any width; else ""."""
+    if char in "<>":
+        return char
+    folded = unicodedata.normalize("NFKC", char)
+    return folded if folded in ("<", ">") else ""
+
+
+def _neutralize_fence_runs(body: str) -> str:
+    """*body* with each run of 3+ ``<`` (or ``>``) look-alikes cut to two ASCII.
+
+    Invisible characters inside a run don't break it, so no marker can be
+    spelled from what is left, whatever its case, width or padding.
+    """
+    out: List[str] = []
+    start = 0
+    while start < len(body):
+        side = _fence_side(body[start])
+        if not side:
+            out.append(body[start])
+            start += 1
+            continue
+        count, last, at = 0, start, start
+        while at < len(body):
+            if _fence_side(body[at]) == side:
+                count, last = count + 1, at
+            elif not fence_run_invisible(body[at]):
+                break
+            at += 1
+        out.append(side * 2 if count >= 3 else body[start : last + 1])
+        start = last + 1
+    return "".join(out)
+
+
+def _skeleton(name: str) -> str:
+    folded = unicodedata.normalize("NFKC", name).casefold()
+    return "".join(c for c in folded if c.isascii() and c.isalnum())
+
+
+def neutralize_marker_names(text: str, names: Tuple[str, ...]) -> str:
+    """*text* with every spelling of a fence marker's name replaced.
+
+    Names are compared on ASCII letters and digits alone, after width and case
+    fold, so brackets of any shape, spacing, or line breaks can't rebuild one.
+    """
+    targets = [_skeleton(name) for name in names]
+    while True:
+        letters: List[str] = []
+        origin: List[int] = []
+        for at, char in enumerate(text):
+            for folded in unicodedata.normalize("NFKC", char).casefold():
+                if folded.isascii() and folded.isalnum():
+                    letters.append(folded)
+                    origin.append(at)
+        skeleton = "".join(letters)
+        spans = []
+        for target in targets:
+            found = skeleton.find(target)
+            while found != -1:
+                spans.append((origin[found], origin[found + len(target) - 1] + 1))
+                found = skeleton.find(target, found + len(target))
+        if not spans:
+            return text
+        out: List[str] = []
+        cursor = 0
+        for begin, end in sorted(spans):
+            if begin < cursor:
+                continue
+            out.append(text[cursor:begin])
+            out.append(MARKER_NAME_REMOVED)
+            cursor = end
+        out.append(text[cursor:])
+        text = "".join(out)
+
+
 def wrap_untrusted_body(body: str) -> str:
-    """Wrap a body in the untrusted-input delimiter pair."""
-    return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
+    """Wrap a body in the untrusted-input delimiter pair.
+
+    Fence-like runs and any spelling of a marker's name are cut first, so the
+    body can't close the fence early.
+    """
+    body = neutralize_marker_names(body, _BODY_MARKER_NAMES)
+    return (
+        f"{UNTRUSTED_BODY_OPEN}\n{_neutralize_fence_runs(body)}\n"
+        f"{UNTRUSTED_BODY_CLOSE}"
+    )
 
 
 def _truncate(text: str, limit: int) -> tuple[str, int]:

@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -407,6 +407,29 @@ for (const [title, locale] of [
         await found.screenshot({ path: info.outputPath(`recording-found-${locale}.png`) });
     });
 }
+
+test('a rejected attachment keeps its message whole and leaves the other chips alone', async ({ page }) => {
+    await open(page, '', 'en');
+    await page.route((url) => url.pathname === '/api/files/upload', async (route) => {
+        const body = route.request().postData() ?? '';
+        if (body.includes('notes.xyz')) {
+            await route.fulfill({ status: 400, json: { detail: "File type '.xyz' is not allowed. Supported types: images (png, jpg, jpeg, gif, webp, bmp, svg) and documents (pdf, pptx, docx, txt, md, csv, json, xlsx, html, code files, etc.)." } });
+        } else {
+            await route.fulfill({ json: { filename: 'q.txt', original_name: 'Quarterly notes.txt', url: '/api/files/uploads/q.txt', size: 5, content_type: 'text/plain', is_image: false } });
+        }
+    });
+    await page.locator('input[type="file"]').first().setInputFiles([
+        { name: 'Quarterly notes.txt', mimeType: 'text/plain', buffer: Buffer.from('notes') },
+        { name: 'notes.xyz', mimeType: 'application/octet-stream', buffer: Buffer.from('x') },
+    ]);
+    const bad = page.locator('.composer-attachment.has-error');
+    await expect(bad).toHaveCount(1);
+    const message = bad.locator('.composer-attachment-state');
+    expect(await message.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+    const good = page.locator('.composer-attachment:not(.has-error)').first();
+    expect((await good.boundingBox())!.height).toBeLessThan(40);
+    await shot(page, 'attachment-rejected');
+});
 
 for (const [title, locale, name] of [
     ['recording ready to send', 'ar', 'Quarterly business review recording with a very long file name 2026.mp4'],
@@ -1764,6 +1787,19 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`a skills search that matches nothing says so (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        const search = page.locator('.settings-pane input[type="search"]');
+        await search.fill('zzzz');
+        // Not a blank pane (#7410).
+        await expect(page.locator('.settings-pane [role="status"]')).toBeVisible();
+        await expect(page.locator('.settings-pane .link-btn')).toBeVisible();
+        await shot(page, `skills-search-none-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`Mobile access without ngrok (${locale})`, async ({ page }) => {
         const missing = { active: false, url: null, token: null, startedAt: null, publicIp: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
         await open(page, '', locale, (p) => p.route('**/api/tunnel/start', (route) => route.fulfill({ json: missing })));
@@ -1922,7 +1958,7 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.connector-tile-header', { hasText: 'Brave Search' }).click();
             await page.locator('.mcp-key-input').fill('BSA-not-a-real-key');
-            await page.locator('.btn-model-save').click();
+            await page.locator('.configure-actions .btn-primary').click();
             const offer = page.locator('.connector-personalize--offer');
             await expect(offer).toBeVisible();
             await offer.scrollIntoViewIfNeeded();
@@ -2070,6 +2106,78 @@ for (const locale of ['ar', 'en']) {
         await page.getByRole('dialog').locator('[data-section="messaging"]').click();
         await page.locator('.messaging-code').scrollIntoViewIfNeeded();
         await shot(page, `messaging-${locale}-phone`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const openAutomations = async (page: Page) => {
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="automations"]').click();
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`settings automations: list (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS));
+        await openAutomations(page);
+        await expect(page.locator('.automation-card')).toHaveCount(AUTOMATIONS.length);
+        await shot(page, `automations-${locale}-list`);
+        await scrollPane(page, 'bottom');
+        await shot(page, `automations-${locale}-list-end`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: nothing delivers them (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS.slice(0, 2), false));
+        await openAutomations(page);
+        await expect(page.locator('.settings-warning')).toBeVisible();
+        await shot(page, `automations-${locale}-no-delivery`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: delivery not checked (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS.slice(0, 1), null));
+        await openAutomations(page);
+        await expect(page.locator('.automation-unchecked')).toBeVisible();
+        await shot(page, `automations-${locale}-unchecked`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: empty (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, []));
+        await openAutomations(page);
+        await expect(page.locator('.automation-empty')).toBeVisible();
+        await shot(page, `automations-${locale}-empty`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: load failed (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => { await p.route('**/api/automations', (route) => route.fulfill({ status: 500, json: { detail: 'automations.json is not usable: unexpected keyword. Delete it to clear your automations.' } })); });
+        await openAutomations(page);
+        await expect(page.locator('.settings-pane .settings-error')).toBeVisible();
+        await shot(page, `automations-${locale}-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings automations: remove confirmation (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS));
+        await openAutomations(page);
+        await page.locator('.automation-card').first().locator('.btn-danger').click();
+        await expect(page.getByRole('alertdialog')).toBeVisible();
+        await shot(page, `automations-${locale}-remove`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings automations: phone width (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS));
+        await page.getByRole('button', { name: /Open sidebar/ }).click();
+        await openAutomations(page);
+        await expect(page.locator('.automation-card').first()).toBeVisible();
+        await shot(page, `automations-${locale}-phone`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -2928,6 +3036,14 @@ for (const locale of ['ar', 'en']) {
             });
         }
 
+        test('short window: the download summary scrolls with the list', async ({ page }) => {
+            await page.setViewportSize({ width: 800, height: 600 });
+            const s = scene('models');
+            await open(page, '', locale, (p) => withSetup(p, s.answers));
+            await s.reach(page);
+            await expect(page.locator('.setup-models-footer')).toHaveCSS('position', 'static');
+        });
+
         test('narrow window: no sideways scroll', async ({ page }) => {
             await page.setViewportSize({ width: 320, height: 720 });
             const s = scene('models');
@@ -3550,11 +3666,43 @@ for (const locale of ['ar', 'en']) {
         await expect(panel.locator('.notification-center-title')).toContainText(ar ? 'الإشعارات' : 'Notifications');
         await expect(panel.getByRole('tab').first()).toContainText(ar ? 'الكل' : 'All');
         await expect(panel.locator('.notification-response-badge')).toContainText(ar ? 'تم الرفض' : 'Denied');
-        await expect(panel.locator('.notification-footer-btn').first()).toContainText(ar ? 'تعليم الكل كمقروء' : 'Mark All Read');
+        await expect(panel.locator('.notification-footer-btn').first()).toContainText(ar ? 'تعليم الكل كمقروء' : 'Mark all read');
         expect(await audit(page)).toEqual([]);
         // Agent names, titles, bodies and policy reasons are the notification's own text, not the panel's.
         if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
         await shot(page, `notification-panel-${locale}`);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a scheduled task's failed and finished notices are in the UI language (${locale})`, async ({ page }) => {
+        const before = { ...SCHEDULE_ROW, run_count: 8, error_count: 0, last_error: null };
+        let loads = 0;
+        await open(page, '', locale, async (p) => {
+            await withSchedules(p);
+            await p.route('**/api/schedules', (route) => {
+                loads += 1;
+                const rows = loads === 1
+                    ? [before, { ...SCHEDULE_ROW, id: 's3', name: 'Inbox sweep', run_count: 4, error_count: 0, last_error: null }]
+                    : [{ ...before, run_count: 9, error_count: 1, last_error: 'The model server stopped.' }, { ...SCHEDULE_ROW, id: 's3', name: 'Inbox sweep', run_count: 5, error_count: 0, last_error: null }];
+                return route.fulfill({ json: { schedules: rows, total: rows.length } });
+            });
+        });
+        await page.locator('.sb').getByRole('button', { name: locale === 'ar' ? /المهام المجدولة/ : /Scheduled tasks/ }).click();
+        await expect(page.locator('.schedule-modal')).toBeVisible();
+        await page.keyboard.press('Escape');
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const titles = page.locator('.notification-center .notification-title');
+        await expect(titles).toHaveCount(2);
+        if (locale === 'ar') {
+            await expect(titles.filter({ hasText: 'فشلت المهمة المجدولة' })).toHaveCount(1);
+            await expect(titles.filter({ hasText: 'انتهت المهمة المجدولة' })).toHaveCount(1);
+            expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-message, .i18n-gloss, bdi')).toEqual([]);
+        } else {
+            await expect(titles.filter({ hasText: 'Scheduled task "Morning brief" failed' })).toHaveCount(1);
+        }
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `schedule-notices-${locale}`);
     });
 }
 
