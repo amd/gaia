@@ -938,11 +938,12 @@ class TestOperatorsUnderBypass:
         # What bypass actually lifts now: redirection, backgrounding,
         # substitution and the newline — the operators that only a shell can
         # act on, and that no per-segment check can judge. By default they are
-        # a one-time approval of the exact line; a line break is refused, since
-        # the line would not read on screen the way it runs.
+        # a one-time approval of the exact command, line breaks included; cmd
+        # refuses a line break, since it would run only the first line.
         result = check(command, bypass=False)
         assert result is not None
-        expected = TIER_REFUSE if "\n" in command else TIER_CONFIRM_ONCE
+        first_line_only = "\n" in command and shell_tools._pipe_dialect() == "cmd"
+        expected = TIER_REFUSE if first_line_only else TIER_CONFIRM_ONCE
         assert result["tier"] == expected, result
 
     def test_a_pipe_is_refused_for_its_binary_not_for_the_pipe(self):
