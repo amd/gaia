@@ -299,18 +299,20 @@
     color: var(--text-muted);
 }
 
-/* Long titles end in an ellipsis, which follows each title's own text order, so
- * a Latin title in an Arabic sidebar is cut at its end, not its start. */
 .sb-row-title {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
-    /* Each title orders its own text, but takes its side from the row, so a
-       Latin title in an Arabic sidebar lines up with Arabic ones. */
-    unicode-bidi: plaintext;
 }
-.sb-row-title:dir(rtl) {
+/* dir="auto" gives each title its own text order, so the ellipsis lands at the
+ * end of its own text. The row, not the title, decides the side it sits on. */
+.sb-row-main:dir(rtl) .sb-row-title {
     text-align: right;
+}
+.sb-row-main:dir(ltr) .sb-row-title {
+    text-align: left;
 }
 
 /* ── Status dots and unread (#5221) ── */
