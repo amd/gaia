@@ -72,7 +72,15 @@ def npx_package(argv: List[str]) -> Optional[str]:
     """The package an ``npx`` launch runs, or None for any other program."""
     if not argv or os.path.basename(argv[0]).lower() not in _NPX_PROGRAMS:
         return None
-    return next((a for a in argv[1:] if not a.startswith("-")), None)
+    args = argv[1:]
+    for i, arg in enumerate(args):
+        if arg.startswith("--package="):
+            return arg.split("=", 1)[1] or None
+        if arg in ("-p", "--package"):
+            return args[i + 1] if i + 1 < len(args) else None
+        if not arg.startswith("-"):
+            return arg
+    return None
 
 
 def _npx_lock_target(package: str) -> str:

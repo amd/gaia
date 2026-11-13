@@ -93,6 +93,8 @@ def _transport(npx):
 def test_the_package_is_read_from_an_npx_launch_only():
     assert npx_package(["C:\\node\\npx.cmd", "-y", _PACKAGE]) == _PACKAGE
     assert npx_package(["/usr/bin/npx", "--yes", "pkg"]) == "pkg"
+    assert npx_package(["npx", "-y", "-p", "pkg", "cmd"]) == "pkg"
+    assert npx_package(["npx", "--package=pkg", "cmd"]) == "pkg"
     assert npx_package(["/usr/bin/uvx", "pkg"]) is None
 
 

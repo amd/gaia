@@ -526,8 +526,9 @@ class MCPClient:
         """Connect to the MCP server and initialize.
 
         A server started through ``npx`` that dies before its first answer is
-        started once more: its first start may have raced another install of
-        the same package. On failure, stores the error message in
+        started once more: GAIA's own starts are serialized, but an npx run
+        from outside GAIA (another app, an older GAIA) may still have been
+        installing the same package. On failure, stores the error message in
         ``self.last_error``.
 
         Returns:
