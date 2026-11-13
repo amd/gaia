@@ -11,6 +11,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../../services/api');
 
 import { inferencePlace, selectInferenceLocation } from '../modelStore';
+import { translator } from '../../i18n/useT';
 import type { ActiveModel, Session } from '../../types';
 
 const LOCAL_ACTIVE: ActiveModel = {
@@ -112,5 +113,26 @@ describe('selectInferenceLocation', () => {
         expect(selectInferenceLocation(sessions, 'b')?.inference_remote).toBe(false);
         expect(selectInferenceLocation(sessions, null)?.inference_remote).toBe(true);
         expect(selectInferenceLocation([], null)).toBeUndefined();
+    });
+});
+
+describe('inferencePlace in Arabic (#7626)', () => {
+    const ar = translator('ar');
+    const location = {
+        inference_remote: false,
+        inference_description:
+            'Using Gemma-4-E4B-it-GGUF on this machine. GAIA is not sending this conversation to any cloud provider.',
+    };
+
+    it('says the place and the hover sentence in Arabic, not the backend English', () => {
+        const place = inferencePlace(LOCAL_ACTIVE, location, ar);
+        expect(place?.label).toBe('محلي');
+        expect(place?.description).toContain('على هذا الجهاز');
+        expect(place?.description).toContain('Gemma');
+        expect(place?.description).not.toMatch(/Using|GAIA is not/);
+    });
+
+    it('keeps the English sentence in English', () => {
+        expect(inferencePlace(LOCAL_ACTIVE, location)?.description).toMatch(/^Using Gemma.* on this machine\./);
     });
 });

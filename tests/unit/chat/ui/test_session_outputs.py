@@ -196,18 +196,14 @@ def test_a_file_deleted_outside_gaia_is_gone(client, session_id, tmp_path):
     assert item["state"] == "gone" and item["openable"] is False
 
 
-def test_documents_added_to_the_chat_are_listed(client, session_id, tmp_path):
+def test_documents_attached_to_the_chat_are_not_outputs(client, session_id, tmp_path):
     db = client.app.state.db
     doc = tmp_path / "manual.pdf"
     doc.write_bytes(b"%PDF")
     record = db.add_document("manual.pdf", str(doc), "hash1", 4, 1)
-    db.attach_document(session_id, record["id"])
-    (item,) = client.get(f"/api/sessions/{session_id}/outputs").json()["items"]
-    assert (item["kind"], item["name"], item["message_id"]) == (
-        "document",
-        "manual.pdf",
-        None,
-    )
+    assert db.attach_document(session_id, record["id"])
+    assert db.get_session_documents(session_id)
+    assert client.get(f"/api/sessions/{session_id}/outputs").json()["items"] == []
 
 
 def test_survives_a_reload(home, tmp_path):

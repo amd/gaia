@@ -1163,6 +1163,28 @@ def skill_granted_binaries(host: Any) -> frozenset:
     return grants.binaries() if grants is not None else frozenset()
 
 
+#: CLIs whose read-only policy tier runs unasked with no skill loaded. A read
+#: of ``gh``, or GAIA listing its own automations, changes nothing, so asking
+#: about each one only trains a click; writes still prompt as for any granted
+#: CLI. ``git`` is not here: a repository's own settings can run programs.
+READS_WITHOUT_A_SKILL = frozenset({"gh", "gaia"})
+
+
+def shell_granted_binaries(host: Any) -> frozenset:
+    """The CLIs the shell treats as granted: *host*'s skill grants plus
+    :data:`READS_WITHOUT_A_SKILL`.
+
+    Not under full access: everything is pre-approved there already, and a
+    granted CLI runs without a shell, which would break the redirects full
+    access exists to allow.
+    """
+    granted = skill_granted_binaries(host)
+    full_access = getattr(host, "full_access_active", None)
+    if callable(full_access) and full_access():
+        return granted
+    return granted | READS_WITHOUT_A_SKILL
+
+
 def _is_granted_binary(token: str, granted: frozenset) -> bool:
     """True when *token* names a CLI this agent's skills granted."""
     if not granted:
@@ -1877,28 +1899,290 @@ _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 _BYPASS_PUNCTUATION = ";&|<>\n"
 
 
-def _heredoc_start(line: str) -> Optional[tuple]:
-    """``(delimiter, strip_tabs)`` for the heredoc *line* opens, else None.
+#: The delimiters the scan trusts to end a body.
+_HEREDOC_WORD = re.compile(r"[A-Za-z0-9_.-]+")
 
-    Tokenised with the same lexer the gates use, so a ``<<`` inside quotes is
-    data and ``<<<`` (a here-string, no body) never opens one.
+#: Characters that end an unquoted word for sh.
+_SHELL_METACHARS = " \t|&;()<>"
+
+#: Bash reads these as ANSI-C quoting and arithmetic, dash as ``$`` followed
+#: by a quote or a glob, so the two shells end them in different places.
+_HEREDOC_SHELL_DEPENDENT = ("$'", "$[")
+
+#: A ``case`` pattern's bare ``)`` would close an enclosing ``$(`` early.
+_CASE_WORD = re.compile(r"case(?![\w-])")
+
+#: Expansions that nest, longest first, and the context each one opens.
+_HEREDOC_EXPANSIONS = (("$((", "$(("), ("$(", "$("), ("${", "${"), ("`", "`"))
+
+#: Contexts whose text sh reads as commands.
+_COMMAND_CONTEXTS = (None, "$(", "(", "[[")
+
+#: Contexts that read as arithmetic.
+_ARITHMETIC_CONTEXTS = ("$((", "((", "a(")
+
+
+def _continues(line: str) -> bool:
+    """Whether *line* ends in an unescaped backslash (a line continuation)."""
+    return (len(line) - len(line.rstrip("\\"))) % 2 == 1
+
+
+def _is_terminator(
+    lines: list, first: int, last: int, word: str, strip_tabs: bool
+) -> bool:
+    """Whether the logical body line ``lines[first..last]`` ends the body.
+
+    A backslash-joined line is joined the way sh does. If any reading of it —
+    joined or not, tabs stripped per physical line or not — is the terminator,
+    shells may disagree, so the scan gives up.
     """
-    try:
-        tokens = _tokenize(line, bypass_gates=True)
-    except ValueError:
-        return None
-    for index, token in enumerate(tokens):
-        if token not in ("<<", "<<-") or index + 1 >= len(tokens):
+
+    def strip(text: str) -> str:
+        return text.lstrip("\t") if strip_tabs else text
+
+    if first == last:
+        return strip(lines[first]) == word
+    head = [line[:-1] for line in lines[first:last]]
+    tail = lines[last]
+    readings = {
+        strip(head[0]) + "".join(head[1:]) + tail,
+        "".join(strip(piece) for piece in head) + strip(tail),
+        strip(tail),
+        tail,
+    }
+    if word in readings:
+        raise _UnreadableHeredoc
+    return False
+
+
+class _UnreadableHeredoc(Exception):
+    """The heredoc scan met shell text it cannot read the way sh does."""
+
+
+def _read_heredoc_word(line: str, index: int) -> Tuple[str, bool, int]:
+    """``(delimiter, quoted, end)`` for the word after ``<<`` at *index*."""
+    while index < len(line) and line[index] in " \t":
+        index += 1
+    chars: list = []
+    quoted = False
+    while index < len(line) and line[index] not in _SHELL_METACHARS:
+        char = line[index]
+        if char in "'\"":
+            close = line.find(char, index + 1)
+            inner = line[index + 1 : close]
+            if close < 0 or (char == '"' and any(c in inner for c in "$`\\")):
+                raise _UnreadableHeredoc
+            chars.append(inner)
+            quoted = True
+            index = close + 1
+        elif char == "\\" and index + 1 < len(line):
+            chars.append(line[index + 1])
+            quoted = True
+            index += 2
+        elif char in "$`\\":
+            raise _UnreadableHeredoc
+        else:
+            chars.append(char)
+            index += 1
+    word = "".join(chars)
+    if not _HEREDOC_WORD.fullmatch(word):
+        raise _UnreadableHeredoc
+    return word, quoted, index
+
+
+def _end_of_word(line: str, col: int) -> bool:
+    """Whether *col* is past the end of *line* or at a character ending a word."""
+    return col >= len(line) or line[col] in _SHELL_METACHARS
+
+
+def _scan_heredoc_bodies(lines: list) -> list:
+    """The ``(first, terminator)`` line ranges of every heredoc body in *lines*.
+
+    A single left-to-right pass that tracks quotes and nested ``${...}``,
+    ``$(...)``, ``$((...))``, backticks and ``((``/``[[`` on a stack, so each
+    character is read once. A ``<<`` opens a body only outside all of them;
+    one inside any of them, or text the pass cannot balance, raises
+    ``_UnreadableHeredoc`` rather than guess.
+    """
+    spans: list = []
+    pending: list = []
+    stack: list = []
+    # True at the start of a word, "redirect" right after < or >, else False.
+    word_start: Any = True
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        continued = False
+        col = 0
+        while col < len(line):
+            top = stack[-1] if stack else None
+            if stack and line.startswith("<<", col):
+                raise _UnreadableHeredoc
+            char = line[col]
+            if top == "'":
+                if char == "'":
+                    stack.pop()
+                col += 1
+                continue
+            if top == "`":
+                if char == "`":
+                    stack.pop()
+                col += 2 if char == "\\" else 1
+                continue
+            if char == "\\":
+                continued = col + 1 == len(line)
+                if top is None or top in _COMMAND_CONTEXTS:
+                    word_start = False
+                col += 2
+                continue
+            # Inside double quotes both shells read $' as a literal $ and quote.
+            if line.startswith(_HEREDOC_SHELL_DEPENDENT[top == '"' :], col):
+                raise _UnreadableHeredoc
+            opened = next(
+                (
+                    kind
+                    for token, kind in _HEREDOC_EXPANSIONS
+                    if line.startswith(token, col)
+                ),
+                None,
+            )
+            if opened is not None:
+                stack.append(opened)
+                word_start = opened == "$("
+                col += len(opened)
+                continue
+            if top == '"':
+                if char == '"':
+                    stack.pop()
+                col += 1
+                continue
+            if top == "${":
+                if char == "}":
+                    stack.pop()
+                elif char == "{" or (char in "'\"" and '"' in stack):
+                    raise _UnreadableHeredoc
+                elif char in "'\"":
+                    stack.append(char)
+                col += 1
+                continue
+            if top in _ARITHMETIC_CONTEXTS:
+                if char == "(":
+                    stack.append("a(")
+                elif char == ")":
+                    if top == "a(":
+                        stack.pop()
+                    elif line.startswith("))", col):
+                        stack.pop()
+                        col += 1
+                    else:
+                        raise _UnreadableHeredoc
+                elif char == "'" or (char == "#" and "((" in stack):
+                    raise _UnreadableHeredoc
+                elif char == '"':
+                    stack.append(char)
+                col += 1
+                continue
+            # A command context: the top level, $( ), a nested ( ), or [[ ]].
+            if char in "'\"":
+                stack.append(char)
+                word_start = False
+            elif char == "#" and word_start:
+                if word_start == "redirect" or stack:
+                    raise _UnreadableHeredoc
+                break
+            elif stack and word_start is True and _CASE_WORD.match(line, col):
+                raise _UnreadableHeredoc
+            elif (
+                top == "[["
+                and word_start is True
+                and line.startswith("]]", col)
+                and _end_of_word(line, col + 2)
+            ):
+                stack.pop()
+                word_start = False
+                col += 2
+                continue
+            elif line.startswith("<<<", col):
+                word_start = "redirect"
+                col += 3
+                continue
+            elif line.startswith("<<", col):
+                strip_tabs = line.startswith("<<-", col)
+                word, quoted, col = _read_heredoc_word(line, col + 2 + strip_tabs)
+                pending.append((word, strip_tabs, quoted))
+                word_start = False
+                continue
+            elif line.startswith(("<(", ">("), col):
+                stack.append("$(")
+                word_start = True
+                col += 2
+                continue
+            elif word_start is True and line.startswith("((", col):
+                stack.append("((")
+                word_start = False
+                col += 2
+                continue
+            elif (
+                word_start is True
+                and line.startswith("[[", col)
+                and _end_of_word(line, col + 2)
+            ):
+                stack.append("[[")
+                col += 2
+                continue
+            elif char == "(" and stack:
+                stack.append("(")
+                word_start = True
+            elif char == ")" and stack:
+                if top not in ("$(", "("):
+                    raise _UnreadableHeredoc
+                stack.pop()
+                word_start = False
+            elif char in "<>" or (char == "&" and word_start == "redirect"):
+                word_start = "redirect"
+            else:
+                word_start = char in " \t|&;()"
+            col += 1
+        index += 1
+        if not continued and (not stack or stack[-1] in _COMMAND_CONTEXTS):
+            # A newline ends a command; inside quotes it is data.
+            word_start = True
+        if continued or stack:
+            if pending:
+                raise _UnreadableHeredoc
             continue
-        word = tokens[index + 1]
-        strip_tabs = token == "<<-"
-        if word == "-" and index + 2 < len(tokens):
-            word, strip_tabs = tokens[index + 2], True
-        elif word.startswith("-") and len(word) > 1:
-            word, strip_tabs = word[1:], True
-        if word and all(ch not in _BYPASS_PUNCTUATION for ch in word):
-            return word, strip_tabs
-    return None
+        for word, strip_tabs, quoted in pending:
+            first = index
+            while True:
+                last = index
+                # sh joins an unquoted body's backslash-newline before matching.
+                while not quoted and last < len(lines) and _continues(lines[last]):
+                    last += 1
+                if last >= len(lines):
+                    raise _UnreadableHeredoc
+                if _is_terminator(lines, index, last, word, strip_tabs):
+                    break
+                index = last + 1
+            spans.append((first, index))
+            index += 1
+        pending = []
+    if stack or pending:
+        raise _UnreadableHeredoc
+    return spans
+
+
+def _heredoc_body_spans(command: str) -> list:
+    """The heredoc body line ranges in *command*, or ``[]`` to strip nothing.
+
+    ``[]`` whenever the scan cannot be sure, so every line is then walked as
+    a command: the gates may over-refuse an odd heredoc, never miss a command.
+    """
+    if "<<" not in command:
+        return []
+    try:
+        return _scan_heredoc_bodies(command.split("\n"))
+    except _UnreadableHeredoc:
+        return []
 
 
 def _strip_heredoc_bodies(command: str) -> str:
@@ -1907,62 +2191,35 @@ def _strip_heredoc_bodies(command: str) -> str:
     A body is input to the command that opened it, not a command, so the gates
     must not walk ``print(1+1)`` as a binary or choke on an apostrophe in it.
     Only the text used to pick out which binaries run is affected — the caller
-    keeps the original for the step it actually executes. An unterminated body
-    is left in place, so the gates see it and refuse what they cannot parse.
+    keeps the original for the step it actually executes. A body the scan
+    cannot place is left in place, so the gates see it and refuse what they
+    cannot parse.
     """
-    if "<<" not in command:
+    spans = _heredoc_body_spans(command)
+    if not spans:
         return command
-    kept: list = []
     lines = command.split("\n")
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        kept.append(line)
-        index += 1
-        opened = _heredoc_start(line)
-        if opened is None:
-            continue
-        word, strip_tabs = opened
-        end = index
-        while end < len(lines):
-            body_line = lines[end].lstrip("\t") if strip_tabs else lines[end]
-            if body_line == word:
-                break
-            end += 1
-        if end == len(lines):
-            kept.extend(lines[index:])
-            break
-        index = end + 1
-    return "\n".join(kept)
+    hidden = {i for first, last in spans for i in range(first, last + 1)}
+    return "\n".join(line for i, line in enumerate(lines) if i not in hidden)
 
 
 def _mask_heredoc_connectors(command: str) -> str:
     """*command* with ``;``, ``&``, ``|`` inside heredoc bodies neutralised.
 
     ``_split_connectors`` cannot tell a heredoc body from three chained
-    commands — ``python3 - <<'EOF'\\nimport os; os.getcwd()\\nEOF`` would
+    commands — ``python3 - <<'EOF'\nimport os; os.getcwd()\nEOF`` would
     otherwise fracture mid-script. Masking is position-preserving (same
     length, same lines, quotes untouched) so a split point found here is
     valid on the original command too.
     """
-    if "<<" not in command:
+    spans = _heredoc_body_spans(command)
+    if not spans:
         return command
     lines = command.split("\n")
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        index += 1
-        opened = _heredoc_start(line)
-        if opened is None:
-            continue
-        word, strip_tabs = opened
-        while index < len(lines):
-            body_line = lines[index].lstrip("\t") if strip_tabs else lines[index]
-            if body_line == word:
-                break
-            for ch in ";&|":
-                lines[index] = lines[index].replace(ch, "x")
-            index += 1
+    for first, last in spans:
+        for i in range(first, last):
+            for char in ";&|":
+                lines[i] = lines[i].replace(char, "x")
     return "\n".join(lines)
 
 
@@ -3200,7 +3457,7 @@ class ShellToolsMixin:
             # Only a line approved once goes to the shell whole; this one won't.
             return {"tier": TIER_REFUSE, **_GROUPING_REFUSAL}, []
 
-        granted = skill_granted_binaries(self)
+        granted = shell_granted_binaries(self)
 
         # A granted CLI is handed argv, never a shell, so a redirect would reach
         # it as a literal argument. Refuse instead of answering wrongly.
@@ -3485,7 +3742,7 @@ class ShellToolsMixin:
             # two predicates to disagree about whether the call was consented to.
             return True
 
-        granted = skill_granted_binaries(self)
+        granted = shell_granted_binaries(self)
         if not granted:
             return False
 
@@ -3498,6 +3755,13 @@ class ShellToolsMixin:
         steps, error = _parse_line(command)
         if error is not None or not steps:
             return False
+        # A pipe runs through cmd.exe as one string, which expands %VAR% into
+        # what nobody approved; a lone command runs as argv and cannot.
+        if _pipe_dialect() == "cmd" and any(len(st.segments) > 1 for st in steps):
+            return False
+        # cmd.exe reads ^ and % where GAIA's quote model does not.
+        if _pipe_dialect() == "cmd" and any(char in command for char in "^%"):
+            return False
 
         from gaia.skills.binaries import (
             BINARY_POLICIES,
@@ -3505,6 +3769,15 @@ class ShellToolsMixin:
             policy_argv,
             validate_invocation,
         )
+
+        # gh and gaia reads never need PYTHONPATH, a proxy, a CA file or a
+        # config folder, and each changes what they run or where (and to whom)
+        # their request goes. A skill's own CLI, like pytest, may take one.
+        skill_granted = skill_granted_binaries(self) - READS_WITHOUT_A_SKILL
+        for step in steps:
+            for raw, env in zip(step.segments, step.envs or ()):
+                if env and normalize_binary(raw[0]) not in skill_granted:
+                    return False
 
         for segment in map(policy_argv, (s for step in steps for s in step.segments)):
             binary = normalize_binary(segment[0])
@@ -3688,7 +3961,7 @@ class ShellToolsMixin:
         steps, parse_error = _parse_line(command, bypass_gates=False)
         if parse_error is not None or not steps:
             return False
-        granted = skill_granted_binaries(self)
+        granted = shell_granted_binaries(self)
         for step in steps:
             if step.is_cd:
                 return False
@@ -3760,7 +4033,7 @@ class ShellToolsMixin:
                 },
                 outside,
             )
-        granted = skill_granted_binaries(self)
+        granted = shell_granted_binaries(self)
         walk_cwd = cwd
         for step in steps:
             if refusal is not None:
@@ -5138,6 +5411,7 @@ class ShellToolsMixin:
                         command, cwd, steps, timeout, timeout_class, waited
                     )
 
+                # Skill grants only: a built-in read grant is read-only by policy.
                 granted = skill_granted_binaries(self)
                 # A skill-granted CLI is allowed without a prompt, not read-only.
                 may_write = may_write or any(
@@ -5263,7 +5537,9 @@ class ShellToolsMixin:
                             step,
                             step_cwd,
                             max(deadline - time.monotonic(), 0),
-                            granted,
+                            # A gh read runs with nobody asked, so it runs as argv
+                            # like a skill grant: cmd.exe never re-reads its line.
+                            shell_granted_binaries(self),
                             # Waiting in short slices is what lets a Stop kill
                             # the command while it is still running, rather
                             # than half an hour later when its budget expires.

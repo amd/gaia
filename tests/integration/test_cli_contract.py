@@ -68,21 +68,11 @@ BINDS_A_PORT = {"mcp start", "api start"}
 #: line. Keyed by (rule, command as typed); the rule is "traceback" or
 #: "model server".
 KNOWN_BUGS = {
-    ("traceback", "schedule show contract-walk"): "amd/gaia#7333",
-    ("traceback", "schedule remove contract-walk"): "amd/gaia#7333",
-    ("traceback", "schedule pause contract-walk"): "amd/gaia#7333",
-    ("traceback", "schedule resume contract-walk"): "amd/gaia#7333",
-    ("traceback", "schedule run contract-walk"): "amd/gaia#7333",
-    ("traceback", "connectors connect contract-walk"): "amd/gaia#7334",
     ("traceback", "mcp engineering --backend claude"): "amd/gaia#7335",
     ("traceback", "mcp code-index"): "amd/gaia#7335",
     ("model server", "chat"): "amd/gaia#7345",
     ("model server", "-p Reply with one word."): "amd/gaia#7345",
 }
-if sys.platform != "win32":
-    # Windows reads the token from the console and waits; elsewhere it crashes.
-    KNOWN_BUGS[("traceback", "gateway auth")] = "amd/gaia#7336"
-
 #: Commands whose --base-url is not the model server's address.
 OTHER_BASE_URL = {
     "gateway install": "its --base-url is the gateway's address",
