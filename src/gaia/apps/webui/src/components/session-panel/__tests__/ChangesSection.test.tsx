@@ -318,3 +318,23 @@ describe('ChangesSection marks hidden characters in names', () => {
         expect(document.body.textContent).not.toContain('\u202E');
     });
 });
+
+describe('ChangesSection git line marks hidden characters', () => {
+    it('shows an override in the repository folder and branch as a code', async () => {
+        const rlo = String.fromCodePoint(0x202e);
+        mocked.getSessionGit.mockResolvedValue({
+            available: true, repos: [{ ...REPO, root: `C:\\repo${rlo}x`, branch: `fix${rlo}y` }],
+        });
+        renderSection();
+        const line = await waitFor(() => {
+            const found = document.querySelector('.sp-git-repo .sp-meta');
+            expect(found).not.toBeNull();
+            return found!;
+        });
+        expect(line.textContent).toContain('repo[U+202E]x · fix[U+202E]y');
+        expect(line.getAttribute('title')).toBe('C:\\repo[U+202E]x');
+        fireEvent.click(screen.getByRole('button', { name: /Commit…/ }));
+        expect(screen.getByRole('dialog')).toHaveTextContent('In C:\\repo[U+202E]x on fix[U+202E]y.');
+        expect(document.body.innerHTML).not.toContain(rlo);
+    });
+});

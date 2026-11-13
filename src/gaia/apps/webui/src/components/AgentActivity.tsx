@@ -43,7 +43,7 @@ import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/reg
 import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
 import './AgentActivity.css';
-import { fileText } from './CalendarApproval';
+import { fileText, markStrayDirection } from './CalendarApproval';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
 
@@ -182,8 +182,8 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     // Narration can only humanize the prefixed tool id; the connector's own name says more.
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
     // GAIA writes this row itself, so it can say it in the UI's language.
-    if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
-    return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
+    if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: fileText(step.detail) });
+    return step.narration ? compactNarration(markStrayDirection(step.narration)) : toolFallbackLabel(step, t);
 }
 
 const COMPACT_DETAIL_CHARS = 48;
@@ -730,7 +730,7 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
     while ((match = pathRe.exec(text)) !== null) {
         const quote = match[1] ?? '';
         if (match.index > lastIndex || quote) {
-            parts.push(text.slice(lastIndex, match.index) + quote);
+            parts.push(markStrayDirection(text.slice(lastIndex, match.index)) + quote);
         }
         const rawMatch = quote ? match[2] : match[0];
         const filePath = rawMatch.replace(/[)}\]]+$/, ''); // trim trailing brackets
@@ -758,8 +758,8 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
         lastIndex = match.index + match[0].length;
     }
 
-    if (parts.length === 0) return text;
-    if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+    if (parts.length === 0) return markStrayDirection(text);
+    if (lastIndex < text.length) parts.push(markStrayDirection(text.slice(lastIndex)));
     return <>{parts}</>;
 }
 
@@ -788,8 +788,8 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
             {displayFiles.map((f, i) => (
                 <div key={i} className="file-list-item">
                     <File size={11} className="file-list-icon" />
-                    <span className="file-list-name">{getFileName(f, i)}</span>
-                    {getDirectory(f) && <span className="file-list-dir">{getDirectory(f)}</span>}
+                    <span className="file-list-name">{fileText(getFileName(f, i))}</span>
+                    {getDirectory(f) && <span className="file-list-dir">{fileText(getDirectory(f))}</span>}
                 </div>
             ))}
             {remaining > 0 && !expanded && (
@@ -843,7 +843,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                 title={
                     waiting || live
                         ? toolRowText(step, t)
-                        : step.narration && step.narration !== line ? step.narration : undefined
+                        : step.narration && step.narration !== line ? markStrayDirection(step.narration) : undefined
                 }
             >
                 <div className="flow-tool-left">
@@ -896,7 +896,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     {step.mcpOutput && (
                         <div className="step-detail-result result-success">
                             <span className="detail-section-label">{t('activity.detail.output')}</span>
-                            <CodeBlock code={step.mcpOutput.text} previewLines={MCP_OUTPUT_PREVIEW_LINES} testId="mcp-output" />
+                            <CodeBlock code={markStrayDirection(step.mcpOutput.text)} previewLines={MCP_OUTPUT_PREVIEW_LINES} testId="mcp-output" />
                             {step.mcpOutput.truncated && (
                                 <div className="cmd-truncated">{t('activity.truncated')}</div>
                             )}
@@ -1060,7 +1060,7 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
                                 <div className="chunk-header-left">
                                     <BookOpen size={11} style={{ color: 'var(--accent-cyan)', flexShrink: 0 }} />
                                     {chunk.source && (
-                                        <span className="chunk-source">{chunk.source}</span>
+                                        <span className="chunk-source">{fileText(chunk.source)}</span>
                                     )}
                                     {chunk.page != null && (
                                         <span className="chunk-page">{t('activity.chunkPage', { page: chunk.page })}</span>
@@ -1075,9 +1075,9 @@ function ChunksView({ chunks }: { chunks: RetrievalChunk[] }) {
                             </button>
                             <div className={`chunk-body ${isExpanded ? 'show' : ''}`}>
                                 {isExpanded ? (
-                                    <pre className="chunk-content">{chunk.content}</pre>
+                                    <pre className="chunk-content">{markStrayDirection(chunk.content)}</pre>
                                 ) : (
-                                    <div className="chunk-preview">{chunk.preview}</div>
+                                    <div className="chunk-preview">{markStrayDirection(chunk.preview)}</div>
                                 )}
                             </div>
                         </div>
@@ -1146,10 +1146,10 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
             </div>
             <div className="cmd-line">
                 <span className="cmd-prompt">$</span>
-                <span className="cmd-text">{output.command}</span>
+                <span className="cmd-text">{markStrayDirection(output.command)}</span>
             </div>
-            {output.stdout && <pre className="cmd-stdout">{output.stdout}</pre>}
-            {output.stderr && <pre className="cmd-stderr">{output.stderr}</pre>}
+            {output.stdout && <pre className="cmd-stdout">{markStrayDirection(output.stdout)}</pre>}
+            {output.stderr && <pre className="cmd-stderr">{markStrayDirection(output.stderr)}</pre>}
             {output.truncated && (
                 <div className="cmd-truncated">{t('activity.truncated')}</div>
             )}
@@ -1185,7 +1185,7 @@ export function formatArgsDisplay(detail: string): React.ReactNode {
         : detail.split(/, (?=[A-Za-z_][\w.-]{0,29}:(?:\s|$))/).filter(Boolean);
 
     if (parts.length <= 1) {
-        return <span className="arg-value">{detail}</span>;
+        return <span className="arg-value">{markStrayDirection(detail)}</span>;
     }
 
     return (
@@ -1198,11 +1198,11 @@ export function formatArgsDisplay(detail: string): React.ReactNode {
                     return (
                         <div key={i} className="arg-row">
                             <span className="arg-key">{key}</span>
-                            <span className="arg-value">{val}</span>
+                            <span className="arg-value">{markStrayDirection(val)}</span>
                         </div>
                     );
                 }
-                return <div key={i} className="arg-row"><span className="arg-value">{part}</span></div>;
+                return <div key={i} className="arg-row"><span className="arg-value">{markStrayDirection(part)}</span></div>;
             })}
         </div>
     );

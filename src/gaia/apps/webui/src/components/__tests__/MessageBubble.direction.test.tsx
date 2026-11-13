@@ -6,7 +6,8 @@
 
 import { describe, expect, it } from 'vitest';
 import { render } from '@testing-library/react';
-import { MessageBubble, RenderedContent, markStrayDirection } from '../MessageBubble';
+import { MessageBubble, RenderedContent } from '../MessageBubble';
+import { markStrayDirection } from '../CalendarApproval';
 import type { Message } from '../../types';
 
 const ANSWER = [

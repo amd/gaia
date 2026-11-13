@@ -31,6 +31,7 @@ import { useT } from '../i18n/useT';
 import type { SessionSearchResult } from '../types/api.gen';
 import { foldText, splitMatch, type MatchParts } from '../utils/chatSearch';
 import './Sidebar.css';
+import { markStrayDirection } from './CalendarApproval';
 
 interface SidebarProps {
     onNewChat: () => void;
@@ -61,7 +62,7 @@ const SEARCH_DEBOUNCE_MS = 200;
 const NO_HITS = new Map<string, SessionSearchResult>();
 
 function Highlight({ parts }: { parts: MatchParts }) {
-    return <>{parts.before}<mark className="sb-hit">{parts.match}</mark>{parts.after}</>;
+    return <>{markStrayDirection(parts.before)}<mark className="sb-hit">{markStrayDirection(parts.match)}</mark>{markStrayDirection(parts.after)}</>;
 }
 
 function readShowAutomated(): boolean {
@@ -135,7 +136,8 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
     const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
     const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
-    const title = <span className="sb-row-title">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
+    const shownTitle = markStrayDirection(session.title);
+    const title = <span className="sb-row-title">{titleMatch ? <Highlight parts={titleMatch} /> : shownTitle}</span>;
 
     return (
         <li
@@ -157,7 +159,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                     {...CLAIMS_ESCAPE}
                     autoFocus
                     onFocus={(e) => e.currentTarget.select()}
-                    aria-label={t('row.renameAria', { title: session.title })}
+                    aria-label={t('row.renameAria', { title: shownTitle })}
                     dir="auto"
                 />
             ) : (
@@ -168,8 +170,8 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                     onClick={() => onSelect(session.id)}
                     onDoubleClick={startEdit}
                     aria-current={active ? 'page' : undefined}
-                    aria-label={[session.title, label, waiting, unread ? t('row.unread') : null, snippetText].filter(Boolean).join(', ')}
-                    title={session.title}
+                    aria-label={[shownTitle, label, waiting, unread ? t('row.unread') : null, snippetText && markStrayDirection(snippetText)].filter(Boolean).join(', ')}
+                    title={shownTitle}
                 >
                     {dot && <span className={`sb-dot is-${dot}`} aria-hidden="true" title={label} />}
                     {session.private && <EyeOff size={12} className="sb-row-icon" aria-label={t('row.private')} />}
@@ -215,7 +217,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                         onClick={() => (menuOpen ? closeMenu() : setMenuOpen(true))}
                         aria-haspopup="dialog"
                         aria-expanded={menuOpen}
-                        aria-label={t('row.moreActions', { title: session.title })}
+                        aria-label={t('row.moreActions', { title: shownTitle })}
                     >
                         <MoreHorizontal size={18} aria-hidden="true" />
                     </button>
@@ -250,7 +252,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                             type="button"
                             className="sb-row-rename"
                             onClick={startEdit}
-                            aria-label={t('row.renameAria', { title: session.title })}
+                            aria-label={t('row.renameAria', { title: shownTitle })}
                             title={t('row.rename')}
                         >
                             <Pencil size={13} />
@@ -260,7 +262,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                         type="button"
                         className={`sb-row-pin${session.pinned ? ' is-pinned' : ''}`}
                         onClick={() => onPin(session.id, !session.pinned)}
-                        aria-label={t(session.pinned ? 'row.unpinAria' : 'row.pinAria', { title: session.title })}
+                        aria-label={t(session.pinned ? 'row.unpinAria' : 'row.pinAria', { title: shownTitle })}
                         aria-pressed={!!session.pinned}
                         title={session.pinned ? t('row.unpin') : t('row.pinToTop')}
                     >
@@ -272,9 +274,9 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                         onClick={() => (confirm ? onDelete(session.id) : setConfirm(true))}
                         aria-label={confirm
                             ? (unsent > 0
-                                ? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })
-                                : t('row.confirmDeleteAria', { title: session.title }))
-                            : t('row.deleteAria', { title: session.title })}
+                                ? t.plural('row.confirmDeleteUnsentAria', unsent, { title: shownTitle })
+                                : t('row.confirmDeleteAria', { title: shownTitle }))
+                            : t('row.deleteAria', { title: shownTitle })}
                         title={confirm
                             ? `${unsent > 0 ? t.plural('row.clickAgainUnsent', unsent) : t('row.clickAgain')}\n${t('row.deleteMemoryNote')}`
                             : t('row.delete')}

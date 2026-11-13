@@ -136,3 +136,23 @@ describe('Sidebar rename', () => {
         expect(titles()).toEqual(['How rainbows form', 'How rainbows form']);
     });
 });
+
+describe('Sidebar titles with direction characters', () => {
+    it('marks an override in the title, its tooltip and the row buttons', () => {
+        const rlo = String.fromCodePoint(0x202e);
+        useChatStore.setState({ sessions: [chat('a', `Notes on report${rlo}txt.md`)] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        const shown = 'Notes on report[U+202E]txt.md';
+        expect(screen.getByText(shown)).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: `Rename ${shown}` })).toBeInTheDocument();
+        expect(document.querySelector('.sb-row-main')).toHaveAttribute('title', shown);
+        expect(document.querySelector('.sb-row')!.innerHTML).not.toContain(rlo);
+    });
+
+    it('keeps an Arabic title with paired isolates as written', () => {
+        const kept = `\u0645\u0644\u0627\u062d\u0638\u0627\u062a ${String.fromCodePoint(0x2067)}x${String.fromCodePoint(0x2069)}`;
+        useChatStore.setState({ sessions: [chat('a', kept)] });
+        render(<Sidebar onNewChat={vi.fn()} />);
+        expect(document.querySelector('.sb-row-title')!.textContent).toBe(kept);
+    });
+});

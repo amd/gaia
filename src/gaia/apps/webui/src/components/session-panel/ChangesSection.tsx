@@ -310,8 +310,8 @@ function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy:
         <div className="sp-git">
             {git.repos.map((repo) => (
                 <div key={repo.root} className="sp-git-repo">
-                    <span className="sp-meta" title={repo.root}>
-                        <GitBranch size={12} aria-hidden="true" /> {baseName(repo.root)} · {repo.branch}
+                    <span className="sp-meta" title={fileText(repo.root)}>
+                        <GitBranch size={12} aria-hidden="true" /> {fileText(baseName(repo.root))} · {fileText(repo.branch)}
                         {repo.uncommitted.length === 0 && repo.files.length > 0 && ' · committed'}
                     </span>
                     <span className="sp-actions-row">
@@ -403,8 +403,8 @@ function GitDialog({ sessionId, kind, repo, onClose, onDone }: {
                 <div className="modal-body sp-git-body">
                     <p className="sp-meta">
                         {kind === 'commit'
-                            ? `In ${repo.root} on ${repo.branch}. Only the files below are committed; anything else you changed stays as it is.`
-                            : `Pushes ${repo.branch} to ${repo.remote} (never forced), then opens a pull request with GitHub's gh tool.`}
+                            ? `In ${fileText(repo.root)} on ${fileText(repo.branch)}. Only the files below are committed; anything else you changed stays as it is.`
+                            : `Pushes ${fileText(repo.branch)} to ${repo.remote} (never forced), then opens a pull request with GitHub's gh tool.`}
                     </p>
                     <label className="sp-field">
                         <span>{kind === 'commit' ? 'Summary' : 'Title'}</span>

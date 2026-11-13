@@ -28,6 +28,7 @@ import { useSavedDraft } from '../hooks/useSavedDraft';
 import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
 import { ref, type MessageKey } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
+import { fileText } from './CalendarApproval';
 
 interface NewChatProps {
     /**
@@ -111,12 +112,12 @@ function LibraryDocuments() {
                     {attached.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
-                            <span dir="auto">{d.filename}</span>
+                            <span dir="auto">{fileText(d.filename)}</span>
                             <button
                                 type="button"
                                 className="new-chat-doc-remove"
                                 onClick={() => removeDraftDocument(d.id)}
-                                aria-label={t('newChat.docs.dontAttach', { name: d.filename })}
+                                aria-label={t('newChat.docs.dontAttach', { name: fileText(d.filename) })}
                             >
                                 <X size={12} aria-hidden="true" />
                             </button>

@@ -20,6 +20,7 @@ import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from '
 import type { FileEntry, BrowseResponse, QuickLink } from '../types';
 import './FileBrowser.css';
 import './UnsupportedFeature.css';
+import { fileText, markStrayDirection } from './CalendarApproval';
 
 // File type icons mapping
 function getFileIcon(entry: FileEntry) {
@@ -491,10 +492,10 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                 key={link.path}
                                 className="fb-quick-link"
                                 onClick={() => loadDirectory(link.path)}
-                                title={link.path}
+                                title={fileText(link.path)}
                             >
                                 {getQuickLinkIcon(link.icon)}
-                                <span>{link.name}</span>
+                                <span>{fileText(link.name)}</span>
                             </button>
                         ))}
                     </div>
@@ -552,7 +553,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                     <span key={i} className="fb-crumb-item">
                                         <ChevronRight size={12} className="fb-crumb-sep" />
                                         <button className="fb-crumb" onClick={() => loadDirectory(crumb.path)}>
-                                            {crumb.label}
+                                            {fileText(crumb.label)}
                                         </button>
                                     </span>
                                 ))}
@@ -631,7 +632,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                     className={`fb-entry ${entry.type} ${selectedFiles.has(entry.path) ? 'selected' : ''} ${fileUnsupported ? 'unsupported' : ''}`}
                                     onClick={() => entry.type === 'folder' ? handleEntryClick(entry) : toggleSelection(entry.path)}
                                     onDoubleClick={() => entry.type === 'folder' ? handleEntryClick(entry) : undefined}
-                                    title={fileUnsupported ? `${unsupportedCat?.label || 'This'} file type cannot be indexed` : entry.path}
+                                    title={fileUnsupported ? `${unsupportedCat?.label || 'This'} file type cannot be indexed` : fileText(entry.path)}
                                 >
                                     <input
                                         type="checkbox"
@@ -639,10 +640,10 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                         checked={selectedFiles.has(entry.path)}
                                         onChange={() => toggleSelection(entry.path)}
                                         onClick={(e) => e.stopPropagation()}
-                                        aria-label={`Select ${entry.name}`}
+                                        aria-label={`Select ${fileText(entry.name)}`}
                                     />
                                     <span className="fb-entry-icon">{getFileIcon(entry)}</span>
-                                    <span className="fb-entry-name" title={entry.path}>{entry.name}</span>
+                                    <span className="fb-entry-name" title={fileText(entry.path)}>{fileText(entry.name)}</span>
                                     {fileUnsupported && (
                                         <span className="fb-unsupported-badge">
                                             Not indexable
@@ -653,7 +654,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                             type="button"
                                             className="fb-entry-preview-btn"
                                             onClick={(e) => { e.stopPropagation(); handleFilePreview(entry.path); }}
-                                            aria-label={`Preview ${entry.name}`}
+                                            aria-label={`Preview ${fileText(entry.name)}`}
                                             title="Preview file"
                                         >
                                             <Eye size={14} />
@@ -670,7 +671,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                         {previewFile && (
                             <div className="fb-preview">
                                 <div className="fb-preview-header">
-                                    <span className="fb-preview-name">{previewFile.name}</span>
+                                    <span className="fb-preview-name">{fileText(previewFile.name)}</span>
                                     <button className="btn-icon-sm" onClick={() => setPreviewFile(null)} aria-label="Close preview">
                                         <X size={14} />
                                     </button>
@@ -690,7 +691,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                                     <div className="fb-preview-loading">Loading preview...</div>
                                 ) : previewFile.is_text && previewFile.preview_lines.length > 0 ? (
                                     <pre className="fb-preview-content">
-                                        {previewFile.preview_lines.slice(0, 30).join('\n')}
+                                        {markStrayDirection(previewFile.preview_lines.slice(0, 30).join('\n'))}
                                     </pre>
                                 ) : (
                                     <div className="fb-preview-binary">Binary file - no preview available</div>
