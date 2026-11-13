@@ -268,7 +268,7 @@ function ChatChangesReview({ changes, onClose }: { changes: SessionChanges; onCl
                         <section key={file.path} className="changes-review-file">
                             <DiffCard
                                 data={{
-                                    title: file.path,
+                                    path: file.path,
                                     badge: CHANGE_BADGE[file.change],
                                     note: note(file),
                                     unified: file.binary || file.too_large ? '' : file.unified,
