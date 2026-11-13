@@ -343,6 +343,8 @@ export const enMessages = {
     'connectCard.reconnect': 'Reconnect {name}',
     'connectCard.connected': '{name} is connected',
     'connectCard.settings': 'Open Connectors in Settings',
+    'connectCard.cancelled': 'Sign-in was cancelled. Press Connect to try again.',
+    'connectCard.failed': 'Sign-in did not finish. Press Connect to try again.',
     'msg.continue': 'Continue',
     'msg.continuePrompt': 'Continue your answer from where it stopped.',
     'msg.reportNote': "GAIA saved what it saw when this failed. The report adds GAIA's logs and this PC's details, to attach to a bug report; nothing is sent unless you share it.",
