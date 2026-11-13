@@ -115,6 +115,13 @@ def test_attachments_are_left_out_of_a_question_title():
     assert ch._title_from_question(sent) == "hi"
 
 
+def test_a_research_message_is_named_by_its_topic():
+    assert ch._title_from_question("/research the EU AI Act") == "the EU AI Act"
+    assert ch._title_from_question("  /RESEARCH\njwst") == "jwst"
+    assert ch._title_from_question("/researcher notes") == "/researcher notes"
+    assert ch._title_from_question("/research") is None
+
+
 def test_an_image_sent_alone_is_named_by_its_file():
     assert ch._title_from_question("![red.png](/api/files/uploads/ab12_red.png)") == (
         "red.png"

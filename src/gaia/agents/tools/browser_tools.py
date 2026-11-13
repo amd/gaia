@@ -81,8 +81,8 @@ _STREAK_LOCK = threading.Lock()
 
 _NO_BACKUP_SEARCH_NOTE = (
     "No backup search provider is set up. Tell the user that adding a Tavily "
-    "API key (gaia connectors configure mcp-tavily --set TAVILY_API_KEY=...) "
-    "lets search keep working when DuckDuckGo throttles it."
+    "API key under Connectors, Tavily, lets search keep working when DuckDuckGo "
+    "throttles it. Do not give them a command to run."
 )
 
 

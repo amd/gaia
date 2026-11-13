@@ -676,6 +676,8 @@ _TITLE_INSTRUCTION_WORDS = frozenset(
 _QUESTION_TITLE_MAX_CHARS = 60
 #: A link or image the user typed: ``[text](target)`` / ``![alt](target)``.
 _MARKDOWN_LINK_RE = _re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+#: The Research switch sends ``/research <topic>``; the topic is the title.
+_RESEARCH_COMMAND_RE = _re.compile(r"\A\s*/research(?=\s|\Z)", _re.IGNORECASE)
 #: A cloud model may reason before it answers, and only some providers let a
 #: request turn that off; this leaves room for the reasoning and the title.
 _CLOUD_TITLE_MAX_TOKENS = 512
@@ -756,7 +758,7 @@ def _title_from_question(user_msg: str) -> Optional[str]:
     Only the user's own words count: the attachment links the composer appends
     are dropped, and a message of attachments alone is named by its first file.
     """
-    user_msg = user_msg or ""
+    user_msg = _RESEARCH_COMMAND_RE.sub("", user_msg or "", count=1)
     words = UPLOAD_LINK_RE.sub(" ", user_msg)
     text = " ".join(_MARKDOWN_LINK_RE.sub(r"\1", words).split())
     if not text and (first := UPLOAD_LINK_RE.search(user_msg)):

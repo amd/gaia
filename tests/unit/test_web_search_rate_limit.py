@@ -366,8 +366,9 @@ class TestSearchToolResult:
         assert "rate_limited" not in last and last["retryable"] is False
         assert "stop calling search_web" in last["error"]
         assert _is_tool_failure(last)
-        # With no backup provider, the user is told how to add one.
-        assert "gaia connectors configure mcp-tavily" in last["hint"]
+        # With no backup provider, the user is pointed at Connectors, not a command.
+        assert "under Connectors, Tavily" in last["hint"]
+        assert "gaia connectors" not in last["hint"]
 
     def test_stop_during_a_search_wait_ends_the_search(self, no_tavily):
         web = MagicMock()
