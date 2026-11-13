@@ -125,6 +125,16 @@ def test_the_transcript_keeps_a_recognizable_name(client):
     assert saved == "Quarterly_review.mp4"
 
 
+def test_a_second_recording_with_the_same_name_keeps_both(client, tmp_path):
+    first = _upload(client, "meeting.m4a", b"first").json()["filename"]
+    second = _upload(client, "meeting.m4a", b"second").json()["filename"]
+
+    assert first == "meeting.m4a"
+    assert re.fullmatch(r"[0-9a-f]{12}_meeting\.m4a", second)
+    assert (tmp_path / first).read_bytes() == b"first"
+    assert (tmp_path / second).read_bytes() == b"second"
+
+
 def test_an_attached_recording_reaches_the_agent_by_path(client, tmp_path, monkeypatch):
     monkeypatch.setattr(utils, "uploads_dir", lambda: tmp_path)
     saved = _upload(client, "talk.mp4").json()
