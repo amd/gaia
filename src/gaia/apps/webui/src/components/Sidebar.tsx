@@ -329,6 +329,9 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     const phone = useMediaQuery('(max-width: 768px)');
     const searchRef = useRef<HTMLInputElement>(null);
 
+    // Opening or leaving a chat ends the search, so the full list comes back.
+    useEffect(() => setQuery(''), [currentSessionId]);
+
     useEffect(() => {
         const focusSearch = () => {
             if (collapsed) toggleCollapsed();
