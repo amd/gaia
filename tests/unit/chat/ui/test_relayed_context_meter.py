@@ -107,6 +107,37 @@ def test_a_failed_final_does_not_leave_the_live_guess_in_the_meter():
     assert h.relay_context is None
 
 
+def test_a_live_estimate_does_not_survive_a_context_error():
+    """A live hint is not the turn's result: a failed measurement wins.
+
+    The sequence is the one the reviewer reported: ``context_usage`` first,
+    then ``final`` carrying ``context_error``. The estimate must not outrank
+    the explanation when the turn's meter is recorded.
+    """
+    h = SSEOutputHandler()
+
+    relay._dispatch_one(
+        h,
+        {"type": "context_usage", "window": 65536, "used": 900, "turns_in_view": 3},
+        GAIA_PROFILE,
+    )
+    relay._dispatch_one(
+        h,
+        {"type": "final", "answer": "Paris.", "context_error": "tokenizer exploded"},
+        GAIA_PROFILE,
+    )
+
+    assert [e["type"] for e in _events(h)] == ["context_usage", "answer"]
+    assert h.relay_context is None
+    assert h.relay_context_error == "tokenizer exploded"
+    helpers.record_relayed_context(
+        "s8096",
+        h.relay_context,
+        helpers.relayed_context_reason(GAIA_PROFILE, "2.28", h),
+    )
+    assert helpers.relayed_context("s8096") == {"reason": "tokenizer exploded"}
+
+
 def test_a_context_error_is_kept_not_streamed():
     h = SSEOutputHandler()
 

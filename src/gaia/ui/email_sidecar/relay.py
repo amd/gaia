@@ -496,6 +496,10 @@ def _dispatch_one(
             handler.relay_context = context
             handler._emit({"type": "context_usage", **context})
         elif isinstance(event.get("context_error"), str):
+            # A live pre-answer estimate is only a hint. When the measurement
+            # failed, the error is the turn's result and the estimate must not
+            # outrank it when the meter is recorded.
+            handler.relay_context = None
             handler.relay_context_error = event["context_error"]
         if isinstance(event.get("model_messages"), list):
             # Saved with the reply so later turns replay its tool calls.
