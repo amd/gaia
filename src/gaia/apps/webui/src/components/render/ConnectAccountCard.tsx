@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, ExternalLink, Link2, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
@@ -112,7 +112,7 @@ const POLL_MS = 4000;
 /** Sign-in refused because this PC has no OAuth client for the provider yet. */
 function isUnconfigured(e: unknown): boolean {
     const err = e as { httpStatus?: number; body?: Record<string, unknown> | null };
-    return err?.httpStatus === 503 && !err.body?.error;
+    return err?.httpStatus === 503 && err.body?.error === 'not_configured';
 }
 
 function ProviderRow({
@@ -138,12 +138,18 @@ function ProviderRow({
     const [error, setError] = useState<string | null>(null);
     const [setup, setSetup] = useState(false);
 
+    // Set up in Settings since: the sentence no longer applies.
+    useEffect(() => {
+        if (!needsSetup) setSetup(false);
+    }, [needsSetup]);
+
     const connect = useCallback(async () => {
         if (needsSetup) {
             setError(null);
             setSetup(true);
             return;
         }
+        setSetup(false);
         // With no agent to size the request, Settings is where access is chosen.
         if (grantAgents.length === 0) {
             openSettings('connectors');
@@ -248,6 +254,14 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         window.addEventListener('focus', refresh);
         return () => window.removeEventListener('focus', refresh);
     }, [valid, refresh]);
+
+    // Settings opens inside the app, so closing it brings no window focus back.
+    const settingsOpen = useChatStore((s) => s.settingsSection !== null);
+    const settingsWasOpen = useRef(settingsOpen);
+    useEffect(() => {
+        if (valid && settingsWasOpen.current && !settingsOpen) refresh();
+        settingsWasOpen.current = settingsOpen;
+    }, [valid, settingsOpen, refresh]);
 
     // While a sign-in tab is open, watch for the account to appear.
     useEffect(() => {
