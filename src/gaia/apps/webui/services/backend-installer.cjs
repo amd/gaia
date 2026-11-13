@@ -482,6 +482,23 @@ function findGaiaBin() {
 }
 
 /**
+ * `env` with gaiaBin's directory first on PATH, so skills that run `gaia` find
+ * the CLI the app ships; Windows installs put nothing on the user's PATH.
+ */
+function envWithGaiaOnPath(env, gaiaBin, platform = process.platform) {
+  const win = platform === "win32";
+  const pathLib = win ? path.win32 : path.posix;
+  if (!gaiaBin || !pathLib.isAbsolute(gaiaBin)) {
+    throw new Error(`envWithGaiaOnPath needs an absolute gaia path, got: ${gaiaBin}`);
+  }
+  const sep = win ? ";" : ":";
+  // Windows env names are case-insensitive and usually spelled "Path".
+  const key = (win && Object.keys(env).find((k) => k.toUpperCase() === "PATH")) || "PATH";
+  const current = env[key] || "";
+  return { ...env, [key]: current ? `${pathLib.dirname(gaiaBin)}${sep}${current}` : pathLib.dirname(gaiaBin) };
+}
+
+/**
  * Run a child process and stream output to the log file in real time.
  * Returns a Promise that resolves with { code, stdout, stderr }.
  *
@@ -2111,6 +2128,7 @@ module.exports = {
   isBackendPrefetched,
   getInstalledVersion,
   findGaiaBin,
+  envWithGaiaOnPath,
   toPep440,
   stopRunningDaemon,
 

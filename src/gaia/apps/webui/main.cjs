@@ -395,7 +395,8 @@ async function startBackend() {
       // GAIA_BUNDLED_LEMONADE_DIR: where EmbeddedLemonade.install() finds the
       // archive this app ships (electron-builder.yml) instead of downloading it.
       env: {
-        ...process.env,
+        // Skills that run `gaia` (automations) need the shipped CLI on PATH.
+        ...(app.isPackaged ? backendInstaller.envWithGaiaOnPath(process.env, gaiaCmd) : process.env),
         GAIA_APP_PID: String(process.pid),
         // Piped stdout is block-buffered: a dying backend's last lines would never arrive.
         PYTHONUNBUFFERED: "1",
