@@ -639,6 +639,8 @@ class AgentStepResponse(BaseModel):
     success: Optional[bool] = None
     # The user said no to this call; a reload must not show it as failed.
     declined: Optional[bool] = None
+    # Nobody answered its prompt in time; it never ran either.
+    timedOut: Optional[bool] = None
     active: bool = False
     planSteps: Optional[List[str]] = None
     planNarrations: Optional[List[str]] = None
@@ -862,6 +864,8 @@ class BrowseResponse(BaseModel):
     parent_path: Optional[str] = None
     entries: List[FileEntry]
     quick_links: List[QuickLink] = Field(default_factory=list)
+    # Why a chat can't be given this folder (home, a drive root, ...); None if it can.
+    folder_refusal: Optional[str] = None
 
 
 # ── Folder Indexing ────────────────────────────────────────────────────────

@@ -309,7 +309,11 @@ _STABLE_PERSONAL_SECTIONS = (
     ("preference", "Preferences"),
     ("fact", "Known facts"),
     ("skill", "Skills"),
-    ("error", "Problems seen before (may be fixed since; check again when asked)"),
+    (
+        "error",
+        "Problems seen before (GAIA's own notes, not about the user; "
+        "may be fixed since; check again when asked)",
+    ),
     ("reminder", "Reminders on file (bring up only when relevant)"),
     ("note", "Notes"),
 )
@@ -605,12 +609,33 @@ SAVE_WHEN_ASKED_PROMPT = (
     "was saved. Call `remember` now with what they asked you to keep, then give "
     "your answer."
 )
-#: Ends a remember error caused by an argument: extraction can still keep the fact.
-SAVE_FAILED_ON_ARGUMENT = (
-    " This call stored nothing. Call remember again with a valid value; if you "
-    "don't, tell the user the save failed, not that it won't be remembered: "
-    "GAIA may still learn the fact from this chat."
-)
+
+
+def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
+    """What remember tells the model after saving without a bad optional argument.
+
+    Opens with "Saved": the model repeats a tool result's first words to the user.
+    """
+    parts = ["Saved."]
+    if "category" in ignored:
+        name = ignored["category"]
+        why = (
+            f"a chat can't write the '{name}' category"
+            if name in VALID_CATEGORIES
+            else f"'{name}' is not a category"
+        )
+        parts.append(
+            f"Filed as a fact: {why} "
+            f"(use one of {sorted(EXTRACTABLE_CATEGORIES)}), so it was ignored."
+        )
+    if "due_at" in ignored:
+        parts.append(
+            f"No due date was set: '{ignored['due_at']}' is not an ISO 8601 "
+            "date, so there is no reminder yet. To add one, call "
+            f"update_memory(knowledge_id='{knowledge_id}', due_at=...) with a "
+            "date like 2026-11-20T09:00."
+        )
+    return " ".join(parts)
 
 
 def _own_words(text: str) -> List[str]:
@@ -4836,11 +4861,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         from gaia.agents.base.project_map import resolve_project_root
         from gaia.agents.tools.search_scope import path_validator_of
+        from gaia.agents.tools.workspace_paths import _workspace_default
 
-        # Same explicit config ProjectMapMixin passes, so lessons and the
-        # project map can never describe two different trees.
+        # Same explicit config and start folder ProjectMapMixin passes, so
+        # lessons and the project map can never describe two different trees.
         explicit = getattr(getattr(self, "config", None), "project_root", None)
-        root = resolve_project_root(explicit)
+        root = resolve_project_root(explicit, start=_workspace_default(self))
         if root:
             return root
         validator = path_validator_of(self)
@@ -5757,14 +5783,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
+            # A bad label must not lose the fact: save without it and say so.
+            ignored: Dict[str, str] = {}
+            # Privileged categories too: those rows lead every prompt, so a
+            # chat can't write one, but the fact itself is kept.
             if category not in EXTRACTABLE_CATEGORIES:
-                return {
-                    "status": "error",
-                    "message": (
-                        f"Invalid category. Use: {sorted(EXTRACTABLE_CATEGORIES)}."
-                        + SAVE_FAILED_ON_ARGUMENT
-                    ),
-                }
+                ignored["category"] = category
+                category = "fact"
 
             if category == "error" and MemoryMixin._is_unlearnable_error(fact):
                 return {
@@ -5824,11 +5849,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 try:
                     datetime.fromisoformat(due_at)
                 except ValueError:
-                    return {
-                        "status": "error",
-                        "message": "Invalid due_at. Use ISO 8601 format."
-                        + SAVE_FAILED_ON_ARGUMENT,
-                    }
+                    ignored["due_at"] = due_at
+                    due_at = ""
 
             # The agent owns scoping. A label the model picks can file a
             # memory where no later session reads it.
@@ -5864,14 +5886,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             )
 
             msg = f"Remembered: {fact[:80]}"
+            if ignored:
+                msg = f"{_saved_despite(ignored, knowledge_id)} {msg}"
             if was_truncated:
                 msg += f" (note: content was truncated to {MAX_CONTENT_LENGTH} chars)"
-            return {
+            result = {
                 "status": "stored",
                 "stored": 1,
                 "knowledge_id": knowledge_id,
                 "message": msg,
             }
+            if ignored:
+                result["ignored"] = ignored
+            return result
 
         @tool
         def recall(
@@ -5890,7 +5917,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             With query=, runs hybrid semantic + keyword search. Without it,
             lists every entry matching the filters — use that to list, browse,
             or count rather than to find one specific memory. A bare recall()
-            lists recent non-sensitive rows.
+            lists the recent non-sensitive memories about the user, the ones
+            Memory > About you shows.
 
             Args:
                 query: Free-text search; enables hybrid search mode.
@@ -6026,6 +6054,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 page = mixin._memory_store.get_all_knowledge(
                     context=context or None,
                     sensitive=False if unfiltered else None,
+                    # Matches Memory > About you, which the user can see and forget.
+                    about_user=unfiltered,
                     limit=limit,
                     offset=offset,
                 )
@@ -6036,7 +6066,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 results = page.get("items", [])
                 if unfiltered:
                     withheld = mixin._memory_store.get_all_knowledge(
-                        context=context or None, sensitive=True, limit=1
+                        context=context or None,
+                        sensitive=True,
+                        about_user=True,
+                        limit=1,
                     ).get("total", 0)
 
             total_ms = (time.perf_counter() - _recall_t0) * 1000

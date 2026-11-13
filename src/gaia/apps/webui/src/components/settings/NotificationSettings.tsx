@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from '../RadioGroup';
 import { useState } from 'react';
 import {
     useAlertSettings,
@@ -51,7 +52,7 @@ export function NotificationSettings() {
                 {EVENTS.map((e) => (
                     <div className="setting-row" key={e.id}>
                         <span id={`alert-${e.id}`}>{t(e.label)}</span>
-                        <div className="segmented" role="radiogroup" aria-labelledby={`alert-${e.id}`}>
+                        <RadioGroup className="segmented" aria-labelledby={`alert-${e.id}`}>
                             {MODES.map((m) => (
                                 <button
                                     key={m.value}
@@ -64,7 +65,7 @@ export function NotificationSettings() {
                                     {t(m.label)}
                                 </button>
                             ))}
-                        </div>
+                        </RadioGroup>
                     </div>
                 ))}
                 {!isDesktop && wantsBanner && permission !== 'granted' && (

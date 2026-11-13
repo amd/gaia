@@ -218,6 +218,7 @@ const ROUTES: Record<string, unknown> = {
     'GET /connectors': { connectors: [] },
     'GET /memory/settings': { memory_enabled: true },
     'GET /skills': { skills: [] },
+    'GET /skills/featured': { libraries: [{ id: 'pstack', name: 'pstack', url: 'https://github.com/michael-denyer/pstack-claude', description: 'Engineering workflows: design, review, CI fixes, TDD, PR hygiene (MIT)' }] },
     'GET /system/resources': RESOURCES,
     'GET /system/model-server': { reachable: true, error: null, base_url: 'http://127.0.0.1:13305', port: 13305, owner: 'gaia' },
     'GET /speech/model': { downloaded: true, size_gb: 0.3 },
@@ -465,6 +466,54 @@ export async function withConnectors(
         else if (/\/activations$/.test(url.pathname)) await route.fulfill({ json: { activations: {} } });
         else await route.fallback();
     });
+}
+
+const DISCORD_BASE = {
+    connected: false, paired: false, running: false, state: 'stopped', detail: '',
+    bot_name: '', owner_name: '', autostart: false, always_allowed: [], model: null,
+    portal_url: 'https://discord.com/developers/applications',
+    bot_page_url: '', invite_url: '', bot_profile_url: '',
+    pairing_code: '', pairing_expires_at: 0, discord_installed: true, should_offer_setup: true,
+};
+const DISCORD_BOT = {
+    connected: true, running: true, autostart: true, bot_name: 'GAIA on the office desktop',
+    bot_page_url: 'https://discord.com/developers/applications/1300000000000000001/bot',
+    invite_url: 'https://discord.com/oauth2/authorize?client_id=1300000000000000001&scope=bot&permissions=0',
+    bot_profile_url: 'https://discord.com/users/1300000000000000002',
+};
+
+/** Settings > Messaging, one answer per Discord bridge state. */
+export const DISCORD_STATES: Record<string, Record<string, unknown>> = {
+    none: DISCORD_BASE,
+    pairing: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'pairing', pairing_code: 'K7QX4M9P', pairing_expires_at: 1e10, detail: 'DM the code to the bot to pair it with your Discord account.' },
+    connected: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'connected', paired: true, owner_name: 'someone_with_a_long_name', model: 'Qwen3.6-35B-A3B-GGUF', always_allowed: ['write_file on files in C:/Users/someone_with_a_long_name/Documents/projects/quarterly-report', 'dir'] },
+    crashed: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'stopped', running: false, paired: true, owner_name: 'kalin', detail: 'The Discord bridge stopped unexpectedly.' },
+    taken_over: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'taken_over', paired: true, owner_name: 'kalin', detail: 'Another PC is answering this Discord bot.' },
+    token_invalid: { ...DISCORD_BASE, ...DISCORD_BOT, state: 'token_invalid', paired: true, owner_name: 'kalin', detail: 'Discord rejected the bot token (HTTP 401). Reset the token in the Developer Portal and paste the new one.' },
+};
+
+export async function withDiscord(page: Page, status: Record<string, unknown>): Promise<void> {
+    await page.route('**/api/messaging/discord', (route) => route.fulfill({ json: status }));
+}
+
+const AT = NOW.getTime() / 1000;
+const AUTOMATION = {
+    heartbeat: false, paused: false, last_run_at: 0, runs: 0,
+    prompt: '', say: '', check: '', quiet: '', days: '', failures: 0,
+};
+
+/** Settings > Automations: one of each kind, a paused one and a failing check. */
+export const AUTOMATIONS = [
+    { ...AUTOMATION, id: 'a1b2c3d4', name: 'Inbox digest', kind: 'summary', every_seconds: 86400, next_at: AT + 61200, prompt: 'Summarize what landed in my inbox overnight and flag anything that needs a reply today.', days: 'mon,tue,wed,thu,fri' },
+    { ...AUTOMATION, id: 'e5f6a7b8', name: 'Heartbeat', kind: 'alert', heartbeat: true, every_seconds: 1800, next_at: AT + 1200, prompt: 'Check my calendar, my inbox and CI on main. Only message me if something needs me.', quiet: '22:00-07:00' },
+    { ...AUTOMATION, id: 'c1c1c1c1', name: 'Call Sam', kind: 'reminder', next_at: AT + 7200, say: 'Call Sam about the venue deposit.' },
+    { ...AUTOMATION, id: 'd2d2d2d2', name: 'Main CI', kind: 'trigger', every_seconds: 900, next_at: AT + 600, prompt: 'Tell me which workflow broke and the first failing step.', check: 'gaia automation ci-status --repo amd/gaia --branch main', failures: 3 },
+    { ...AUTOMATION, id: 'f3f3f3f3', name: 'تذكير بموعد الطبيب', kind: 'reminder', paused: true, next_at: AT + 86400, say: 'موعد الطبيب الساعة الرابعة' },
+    { ...AUTOMATION, id: 'b4b4b4b4', name: 'Mount Rainier weekend weather window for a two-day climb', kind: 'alert', paused: true, every_seconds: 21600, next_at: AT + 3600, prompt: 'Tell me when a two-day window opens with low wind and no storms.' },
+];
+
+export async function withAutomations(page: Page, automations: unknown[], delivers: boolean | null = true): Promise<void> {
+    await page.route('**/api/automations', (route) => route.fulfill({ json: { automations, delivers } }));
 }
 
 /** The desktop app's backend as services/backend-supervisor.cjs reports it; no apiBase, so requests stay mocked. */

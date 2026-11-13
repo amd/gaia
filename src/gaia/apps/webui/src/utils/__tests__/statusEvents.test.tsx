@@ -78,3 +78,25 @@ it('keeps the finished download as a step of the turn, above the call still runn
     expect(rows[0]).toContain('flow-done');
     expect(rows[1]).toContain('flow-tool');
 });
+
+const queued = (queue: NonNullable<StreamEvent['queue']>): StreamEvent => ({
+    type: 'status',
+    status: 'working',
+    phase: 'model_queue',
+    message: "Waiting for the model — 'gaia' is using it for 'Gemma-4-E4B-it-GGUF' (8s)",
+    queue,
+});
+
+it('says a wait for the model without the agent id or model file', () => {
+    applyStatusEvent(queued({ event: 'queued', holder: 'gaia', waited_s: 8 }), { current: 0 });
+
+    const line = useChatStore.getState().liveStatus ?? '';
+    expect(line).toBe('Waiting for another chat to finish (8s)');
+    expect(line).not.toMatch(/gaia|GGUF/);
+});
+
+it('says where the turn stands in line', () => {
+    applyStatusEvent(queued({ event: 'queued', holder: 'gaia', position: 2, queue_length: 3, waited_s: 4 }), { current: 0 });
+
+    expect(useChatStore.getState().liveStatus).toBe('Waiting for another chat to finish, #2 of 3 in line (4s)');
+});

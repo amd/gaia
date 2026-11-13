@@ -39,12 +39,37 @@ describe('PrivacySettings local only', () => {
     it('shows the policy and switches it on from Settings', async () => {
         render(<PrivacySettings />);
         const toggle = await screen.findByRole('switch', { name: 'Local only' });
-        expect(toggle).toHaveAttribute('aria-checked', 'false');
+        expect(toggle).not.toBeChecked();
 
         fireEvent.click(toggle);
 
         await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ network_policy: 'local_ai_only' }));
-        expect(await screen.findByRole('status')).toHaveTextContent('Cloud models are unavailable');
+        const notice = await screen.findByRole('status');
+        expect(notice).toHaveTextContent('Cloud models are unavailable');
+        // Next to the switch, not at the bottom of a long pane.
+        expect(screen.getByRole('region', { name: 'Local only' })).toContainElement(notice);
+    });
+
+    it('draws Local only as the same slider switch as the rest of Settings', async () => {
+        render(<PrivacySettings />);
+        const toggle = await screen.findByRole('switch', { name: 'Local only' });
+        expect(toggle.closest('.toggle-switch')).not.toBeNull();
+        expect(toggle.closest('.toggle-switch')?.querySelector('.toggle-track')).not.toBeNull();
+        expect(screen.queryByText('Off', { exact: true })).not.toBeInTheDocument();
+    });
+
+    it('keeps keyboard focus on the switch while the change saves', async () => {
+        let finish: (v: unknown) => void = () => {};
+        mockedApi.updateSettings.mockReturnValueOnce(new Promise((r) => { finish = r; }) as never);
+        render(<PrivacySettings />);
+        const toggle = await screen.findByRole('switch', { name: 'Local only' });
+        toggle.focus();
+        fireEvent.click(toggle);
+        expect(toggle).not.toBeDisabled();
+        expect(toggle).toHaveAttribute('aria-busy', 'true');
+        expect(document.activeElement).toBe(toggle);
+        await act(async () => { finish({ network_policy: 'local_ai_only' }); });
+        expect(toggle).toBeChecked();
     });
 
     it('returns to the server policy when switching on fails', async () => {
@@ -55,7 +80,7 @@ describe('PrivacySettings local only', () => {
         fireEvent.click(toggle);
 
         expect(await screen.findByRole('alert')).toHaveTextContent('policy file is read-only');
-        expect(toggle).toHaveAttribute('aria-checked', 'false');
+        expect(toggle).not.toBeChecked();
     });
 });
 

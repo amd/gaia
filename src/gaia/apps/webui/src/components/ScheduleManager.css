@@ -23,6 +23,11 @@
     color: var(--text-secondary);
 }
 
+.schedule-field-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
 .schedule-form-row {
     display: flex;
     gap: 8px;

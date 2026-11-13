@@ -457,6 +457,18 @@ def _make_private_dir(path: Path) -> None:
         raise OSError(f"{path} is owned by another user")
 
 
+SCRATCH_PREFIX = "gaia-scratch-"
+
+
+def is_scratch_path(path: Path) -> bool:
+    """True when *path* lies in an agent scratch directory under the temp dir."""
+    temp = Path(tempfile.gettempdir()).resolve()
+    return any(
+        parent.parent == temp and parent.name.startswith(SCRATCH_PREFIX)
+        for parent in Path(path).resolve().parents
+    )
+
+
 def stable_scratch_dir(anchor: str) -> Path:
     """The agent's scratch directory for *anchor* (a project), the same every session.
 
@@ -478,11 +490,11 @@ def stable_scratch_dir(anchor: str) -> Path:
     digest = hashlib.sha1(
         f"{owner}:{Path(anchor).resolve()}".encode("utf-8"), usedforsecurity=False
     ).hexdigest()[:12]
-    path = Path(tempfile.gettempdir()) / f"gaia-scratch-{digest}"
+    path = Path(tempfile.gettempdir()) / f"{SCRATCH_PREFIX}{digest}"
     try:
         _make_private_dir(path)
     except OSError as exc:
-        fallback = Path(tempfile.mkdtemp(prefix="gaia-scratch-"))
+        fallback = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX))
         logger.warning(
             "Scratch directory %s is unusable (%s); using %s for this session",
             path,

@@ -2497,6 +2497,41 @@ def _probe_misses_only_another_model(
     return not _model_ids_match(probed, model_id)
 
 
+def _probe_misses_only_the_model(init_body: dict | None) -> bool:
+    """True when ``/init``'s only complaint is that its model is not downloaded."""
+    body = init_body or {}
+    lemonade = body.get("lemonade") or {}
+    model = body.get("model") or {}
+    return (
+        lemonade.get("reachable") is True
+        and lemonade.get("compatible") is not False
+        and bool(model.get("id"))
+        and model.get("present") is False
+    )
+
+
+def _missing_local_model_text(init_body: dict) -> str:
+    """What the chat says when the local model a turn needs is not downloaded.
+
+    The sidecar's own hint names a CLI; the app's way is Settings.
+    """
+    from gaia.llm.local_only import cloud_blocked
+
+    from .local_models import friendly_name
+
+    name = friendly_name(init_body["model"]["id"])
+    if cloud_blocked():
+        return (
+            f"Local only is on and {name} isn't downloaded yet, so GAIA can't "
+            "answer. Get a local model under Settings > Model, or turn off Local "
+            "only under Settings > Privacy to use a cloud model."
+        )
+    return (
+        f"{name} isn't downloaded yet, so GAIA can't answer. Get it, or pick "
+        "another model, under Settings > Model."
+    )
+
+
 def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     """Hand Lemonade the remembered key for a cloud model before a relayed turn.
 
@@ -2819,6 +2854,11 @@ def _dispatch_sidecar_query(
             agent_type,
             model_id,
         )
+    elif status_code != 200 and _probe_misses_only_the_model(init_body):
+        sse_handler._emit(
+            {"type": "agent_error", "content": _missing_local_model_text(init_body)}
+        )
+        return
     elif status_code != 200:
         hint = (init_body or {}).get("hint")
         if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
@@ -2998,12 +3038,16 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
-def _declined_call(event: dict) -> bool:
-    """A ``tool_result`` for a call the user said no to; a relayed one nests it in ``data``."""
+def _denial(event: dict) -> Optional[str]:
+    """``"declined"`` or ``"timedOut"`` for a ``tool_result`` whose call never ran.
+
+    A relayed result nests its status in ``data``.
+    """
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
-    status = event.get("status", data.get("status"))
+    if event.get("status", data.get("status")) != "denied":
+        return None
     timed_out = event.get("timed_out") is True or data.get("timed_out") is True
-    return status == "denied" and not timed_out
+    return "timedOut" if timed_out else "declined"
 
 
 def _insert_before_running_call(steps: list, step: dict) -> None:
@@ -5034,8 +5078,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
-                        if _declined_call(event):
-                            tool_step["declined"] = True
+                        denial = _denial(event)
+                        if denial:
+                            tool_step[denial] = True
                         # Persist MCP tool latency
                         if event.get("latency_ms") is not None:
                             tool_step["latencyMs"] = event["latency_ms"]
