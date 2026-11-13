@@ -376,6 +376,8 @@ export const enMessages = {
     'msg.cutOff.interrupted': 'This answer was interrupted when GAIA closed.',
     'msg.cutOff.cancelled': 'This answer was interrupted before it finished.',
     'msg.cutOff.noReply': 'This answer ended before GAIA could save a reply.',
+    'msg.cutOff.scheduleDeleted': 'This run was stopped because its schedule was deleted.',
+    'msg.cutOff.schedulePaused': 'This run was stopped because its schedule was paused.',
     'msg.cutOff.toolsRan': 'Before it stopped, it had started these tools: {tools}.',
     'request.gaiaUnreachable': 'GAIA can\'t be reached right now.',
     'turnChanges.loadError': 'Could not check this turn\'s file changes: {error}',

@@ -376,6 +376,8 @@ const messages: Messages = {
     'msg.cutOff.interrupted': 'انقطعت هذه الإجابة عندما أُغلق GAIA.',
     'msg.cutOff.cancelled': 'انقطعت هذه الإجابة قبل أن تكتمل.',
     'msg.cutOff.noReply': 'انتهت هذه الإجابة قبل أن يتمكن GAIA من حفظ ردّ.',
+    'msg.cutOff.scheduleDeleted': 'توقّف هذا التشغيل لأن جدوله حُذف.',
+    'msg.cutOff.schedulePaused': 'توقّف هذا التشغيل لأن جدوله أُوقف مؤقتًا.',
     'msg.cutOff.toolsRan': 'قبل أن تتوقف، كانت قد بدأت تشغيل هذه الأدوات: {tools}.',
     'request.gaiaUnreachable': 'تعذّر الوصول إلى GAIA حاليًا.',
     'turnChanges.loadError': 'تعذّر التحقق من تغييرات الملفات في هذا الدور: {error}',
