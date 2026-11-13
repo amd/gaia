@@ -2236,6 +2236,8 @@ const messages: Messages = {
     'settings.skills.alwaysOn': 'مفعّلة دائمًا',
     'settings.skills.useAria': 'جرّب {name} في محادثة جديدة',
     'settings.skills.try': 'جرّبها في محادثة جديدة',
+    'settings.skills.more': 'عرض المزيد',
+    'settings.skills.less': 'عرض أقل',
     'settings.skills.tryPrompt': 'حمّل مهارة {name}، ثم أخبرني باختصار بما تتيحه لي.',
     'settings.skills.search': 'البحث في المهارات',
     'settings.skills.clearSearch': 'مسح البحث',

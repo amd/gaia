@@ -2236,6 +2236,8 @@ export const enMessages = {
     'settings.skills.alwaysOn': 'Always on',
     'settings.skills.useAria': 'Try {name} in a new chat',
     'settings.skills.try': 'Try in a new chat',
+    'settings.skills.more': 'Show more',
+    'settings.skills.less': 'Show less',
     'settings.skills.tryPrompt': 'Load the {name} skill, then tell me briefly what it lets you do.',
     'settings.skills.search': 'Search skills',
     'settings.skills.clearSearch': 'Clear search',
