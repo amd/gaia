@@ -1654,7 +1654,7 @@ class Scheduler:
                     seconds=task.interval_seconds
                 )
             task.next_run_at = next_run.isoformat()
-        task.last_run_at = now.isoformat()
+        task.last_run_at = datetime.now(timezone.utc).isoformat()
         task.run_count = run_number
         task.last_result = error if error else (result or "completed")
         task.last_error = error

@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -529,11 +530,13 @@ class TestRunNow:
             assert running["run_count"] == 0
             assert running["last_run_at"] is None
 
+            await asyncio.sleep(0.02)
+            mid_run = datetime.now(timezone.utc)
             release.set()
             await asyncio.gather(*sched._manual_runs)
             done = sched.get_task("slow")
             assert done["run_count"] == 1
-            assert done["last_run_at"] is not None
+            assert datetime.fromisoformat(done["last_run_at"]) >= mid_run
             assert done["error_count"] == 1
         finally:
             await sched.shutdown()
