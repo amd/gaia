@@ -555,6 +555,9 @@ class SSEOutputHandler(OutputHandler):
     #: What "always" would grant on that prompt; ``None`` when not offered.
     _relay_always_scope: Optional[str] = None
 
+    #: The path that prompt asks to open, when it is a path-access prompt.
+    _relay_path_access: Optional[str] = None
+
     #: Answers that prompt "timeout" when the confirm window runs out.
     _relay_confirm_timer: Optional[threading.Timer] = None
 
@@ -667,6 +670,7 @@ class SSEOutputHandler(OutputHandler):
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
         self._relay_always_scope = None
+        self._relay_path_access = None
         # A relayed needs_input question the sidecar run is parked on.
         self._relay_question_id: Optional[str] = None
         # What the sidecar measured fills its context, from its ``final`` event.
@@ -2637,15 +2641,20 @@ class SSEOutputHandler(OutputHandler):
             self._relay_question_id = request_id
 
     def set_relay_confirmation(
-        self, confirm_id: Optional[str], always_scope: Optional[str] = None
+        self,
+        confirm_id: Optional[str],
+        always_scope: Optional[str] = None,
+        path_access: Optional[str] = None,
     ) -> None:
         """Record (or clear, with ``None``) the sidecar prompt now pending.
 
         *always_scope* is what an "always" answer grants, when one is offered.
+        *path_access* is the path a path-access prompt asks to open.
         """
         with self._confirm_lock:
             self._relay_confirm_id = confirm_id
             self._relay_always_scope = always_scope if confirm_id else None
+            self._relay_path_access = path_access if confirm_id else None
             if self._relay_confirm_timer is not None:
                 self._relay_confirm_timer.cancel()
                 self._relay_confirm_timer = None
@@ -2686,6 +2695,13 @@ class SSEOutputHandler(OutputHandler):
                 return None
             return self._relay_always_scope
 
+    def relay_path_access(self, confirm_id: Optional[str]) -> Optional[str]:
+        """The path the pending prompt *confirm_id* asks to open, or None."""
+        with self._confirm_lock:
+            if not confirm_id or confirm_id != self._relay_confirm_id:
+                return None
+            return self._relay_path_access
+
     def resolve_relay_confirmation(
         self,
         approved: bool,
@@ -2714,6 +2730,7 @@ class SSEOutputHandler(OutputHandler):
                 return False
             self._relay_confirm_id = None
             self._relay_always_scope = None
+            self._relay_path_access = None
         if timed_out:
             decision = "timeout"
         elif always:

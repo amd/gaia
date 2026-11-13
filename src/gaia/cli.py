@@ -6669,6 +6669,11 @@ Let me know your answer!
                 sys.exit(0)
             if status.stage == "load":
                 print(f"NOT READY: profile '{profile}' is downloaded but will not load")
+            elif status.model_list_unread:
+                print(
+                    f"NOT READY: profile '{profile}': the model server's model list "
+                    "can't be read"
+                )
             else:
                 print(f"NOT READY: profile '{profile}' needs setup")
             for reason in status.reasons:
