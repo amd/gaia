@@ -2004,6 +2004,14 @@ unrestricted, including push and history rewrites. It is the only mode in which
 commands GAIA otherwise refuses outright (a credential print such as
 `gh auth token`, an encoded PowerShell command) can run.
 
+Three things hold in every mode, full access included. A shell command or
+Python code that reads a file the file tools refuse (`.env`, a private key,
+`.npmrc`, `secrets.json`), or recursively searches the folder holding one, is
+refused. Tokens in shell and Python output, such as the one in a
+`git remote -v` URL, are masked before the model reads it. And a private or
+cloud-metadata address the web fetcher blocked stays blocked for the shell and
+Python for the rest of that turn.
+
 Full access is one of three permission modes. `Shift+Tab` in the TUI cycles
 them, and the status bar shows the one that is on:
 
