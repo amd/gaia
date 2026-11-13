@@ -149,7 +149,8 @@ def _reading_order(line: list) -> str:
         previous = line[index - 1][2] if index else ""
         following = line[index + 1][2] if index + 1 < len(line) else ""
         last = parts[-1][-1] if parts else ""
-        # Only after Arabic: a number glued to a Latin word joins the hyphen's run.
+        # Only when the run so far is a bare number; after a Latin word the
+        # hyphen joins one left-to-right run.
         between_numbers = (
             piece in _RUN_SEPARATORS
             and _NUMBER_PIECE.fullmatch(last)
