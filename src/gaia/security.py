@@ -82,6 +82,9 @@ def audit_shell_command(
     )
 
 
+# Opens the refusal for an out-of-scope path that turned out not to exist.
+MISSING_REFUSAL_PREFIX = "Not found: "
+
 # Maximum file size the agent is allowed to write (10 MB)
 MAX_WRITE_SIZE_BYTES = 10 * 1024 * 1024
 
@@ -1547,7 +1550,8 @@ class PathValidator:
             # Unreadable is not missing; let the user decide as before.
             return ""
         message = (
-            f"Not found: '{path}' does not exist, so access was not requested. "
+            f"{MISSING_REFUSAL_PREFIX}'{path}' does not exist, so access was not "
+            "requested. "
             "Check the name and folder, or ask the user where the file is."
         )
         candidates = self._in_scope_files_named(real_path.name)
