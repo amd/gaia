@@ -12,6 +12,21 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   violation in Python's `_wmi` module when a WMI query timed out. It now reads
   OS and CPU facts without WMI.
 
+- **A new chat starts faster on hybrid models.** Memory, loaded skills, the
+  project map or working directory, and the session's folders and scratch
+  directory now go in the session context at the start of the first user
+  message instead of the system prompt. The system prompt and tool list stay
+  identical across new chats, so a model like Qwen3.6 no longer re-reads the
+  whole prompt before its first reply.
+
+- **The context meter fills during a long turn (contract 2.28).** A request
+  that sends `turns` is now streamed a `context_usage` event before the answer,
+  the same one an in-process turn streams at turn start, so a composer no
+  longer shows a blank meter until `final`. The turn's record and its
+  measurement are sealed as the agent prints the answer, so a run still
+  storing memory past the old 15 s wait no longer drops them, and a
+  measurement that cannot finish carries `context_error` instead of nothing.
+
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the
   `hint` read "The model X is not downloaded. X is not downloaded, and no
   Lemonade client CLI was found …, then re-check." It is now the one sentence.

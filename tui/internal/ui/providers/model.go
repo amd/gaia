@@ -376,6 +376,13 @@ func loadCatalog(ctx context.Context, c *lemonade.Client, provider string) model
 		}
 	}
 	entries, err := c.Catalog(ctx, provider, capacity, capErr, added...)
+	if provider == "local" && err == nil {
+		chosen, cerr := readChosenModels()
+		if cerr != nil {
+			note = "The model you chose last isn't listed: " + cerr.Error()
+		}
+		entries = lemonade.OnlyProvenNPU(entries, chosen)
+	}
 	return modelsMsg{source: c, entries: entries, capacity: line, err: err, note: note}
 }
 

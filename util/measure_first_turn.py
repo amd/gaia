@@ -137,12 +137,52 @@ def _run_session(model: str, out: Path) -> None:
     out.write_text(json.dumps(answers, indent=1), encoding="utf-8")
 
 
-def _run_leg(model: str, dynamic: bool) -> List[Dict[str, Any]]:
+def _lemonade_env() -> Dict[str, str]:
+    """The server this process uses, pinned so a leg under an empty home finds it.
+
+    GAIA's own server is found through its home's ``state.json``, and the
+    credentials file marks its URL as one to re-resolve from there. A leg's
+    empty home has no state file, so the leg would fall back to the default
+    port. Hand it the resolved URL and key as a plain choice instead.
+    """
+    from gaia.llm.lemonade_client import (
+        LemonadeClient,
+        LemonadeClientError,
+        resolve_lemonade_api_key,
+        resolve_lemonade_base_url,
+    )
+
+    base_url = resolve_lemonade_base_url()
+    api_key = resolve_lemonade_api_key(base_url=base_url)
+    try:
+        LemonadeClient(base_url=base_url, api_key=api_key).health_check()
+    except LemonadeClientError as e:
+        raise SystemExit(
+            f"Lemonade at {base_url} is not answering, so there is nothing to "
+            "measure. Start it first (`gaia lemonade embedded start`, then load "
+            "its env file), or set LEMONADE_BASE_URL to a running server. "
+            f"Detail: {e}"
+        ) from e
+    env = {"LEMONADE_BASE_URL": base_url}
+    if api_key:
+        env["LEMONADE_API_KEY"] = api_key
+    return env
+
+
+def _run_leg(
+    model: str, dynamic: bool, lemonade: Dict[str, str]
+) -> List[Dict[str, Any]]:
     """Run one leg in a clean process with an empty GAIA home."""
     home = Path(tempfile.mkdtemp(prefix="gaia-first-turn-"))
     out = home / "result.json"
+    inherited = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("GAIA_LEMONADE_EMBEDDED", "LEMONADE_API_KEY")
+    }
     env = dict(
-        os.environ,
+        inherited,
+        **lemonade,
         GAIA_HOME=str(home / "home"),
         GAIA_DAEMON_HOME=str(home / "daemon"),
         GAIA_PROJECT_MAP_AUTO_INDEX="0",
@@ -221,8 +261,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         _run_session(args.model, Path(args.leg))
         return 0
 
-    off = _run_leg(args.model, dynamic=False)
-    on = _run_leg(args.model, dynamic=True)
+    lemonade = _lemonade_env()
+    off = _run_leg(args.model, dynamic=False, lemonade=lemonade)
+    on = _run_leg(args.model, dynamic=True, lemonade=lemonade)
     print(_table(on, off))
     if args.out:
         Path(args.out).write_text(
