@@ -137,6 +137,16 @@ describe('citations to dropped files and same-named files', () => {
         expect(found.map(({ id, text }) => [id, text])).toEqual([['a23', '2023/report.pdf'], ['a24', '2024/report.pdf']]);
     });
 
+    it('a same-named file under a folder with a space opens itself', () => {
+        useChatStore.setState({ documents: [
+            at('js23', 'plan.pdf', 'C:\\Users\\John Smith\\2023\\plan.pdf'),
+            at('js24', 'plan.pdf', 'C:\\Users\\John Smith\\2024\\plan.pdf'),
+        ] });
+        const found = links('See C:\\Users\\John Smith\\2024\\plan.pdf, page 4.');
+        expect(found.map(({ kind, id }) => [kind, id])).toEqual([['doc', 'js24'], ['page', 'js24']]);
+        expect(found[0].text).toBe('2024/plan.pdf');
+    });
+
     it('a bare name two files share links neither, rather than the wrong one', () => {
         useChatStore.setState({ documents: TWINS });
         expect(links('According to report.pdf, page 2.')).toEqual([]);

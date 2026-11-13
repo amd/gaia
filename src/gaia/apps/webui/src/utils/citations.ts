@@ -111,10 +111,27 @@ export function findCitations(index: CitationIndex, text: string): FoundCitation
     if (!index.re) return [];
     const found: FoundCitation[] = [];
     for (const m of text.matchAll(index.re)) {
+        const end = m.index! + m[0].length;
         const doc = docForToken(index, m[0]);
-        if (doc) found.push({ start: m.index!, end: m.index! + m[0].length, doc });
+        if (doc) {
+            found.push({ start: m.index!, end, doc });
+            continue;
+        }
+        const spaced = storedPathEndingAt(index, text, end, baseName(m[0]).toLowerCase());
+        if (spaced) found.push({ start: spaced.start, end, doc: spaced.doc });
     }
     return found;
+}
+
+/** A stored path the text spells out in full up to `end`, for a shared name whose folders hold spaces. */
+function storedPathEndingAt(
+    index: CitationIndex, text: string, end: number, name: string,
+): { start: number; doc: CitedDoc } | null {
+    const before = text.slice(0, end).replace(/\\/g, '/').toLowerCase();
+    for (const [key, doc] of index.byPath) {
+        if (baseName(key) === name && before.endsWith(key)) return { start: end - key.length, doc };
+    }
+    return null;
 }
 
 const DIGITS = '[0-9\\u0660-\\u0669\\u06F0-\\u06F9]+';
