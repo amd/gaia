@@ -1443,6 +1443,7 @@ export const enMessages = {
     'setup.check.ledeDone': "Here's what setup found. No models have downloaded yet.",
     'setup.check.ledeAllOnPc': "Here's what setup found. Your models are already on this PC.",
     'setup.check.ledeSomeOnPc': "Here's what setup found. Some of your models are already on this PC.",
+    'setup.check.ledeOthersOnPc': "Here's what setup found. Some models are already on this PC, but none of them are in your plan yet.",
     'setup.check.serverWorking': "Getting GAIA's model server ready…",
     'setup.checks.count': 'Checks done: {done} of {total}',
     'setup.checks.waitingChoice': 'Waiting for your choice below',

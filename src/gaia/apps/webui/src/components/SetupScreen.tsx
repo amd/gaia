@@ -908,8 +908,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const pending = selection ? pendingDownloads(catalog, selection) : [];
     const short = plan && selection ? shortfall(plan, selection) : null;
     const modelsOnPc = selection ? catalog.filter((e) => selection.ticked.has(e.id) && e.downloaded).length : 0;
+    // Settings > Setup counts every downloaded model, so step 1 must not say none are here.
+    const othersOnPc = catalog.some((e) => e.downloaded);
     const checkLede = !checksDone ? 'setup.check.lede'
-        : modelsOnPc === 0 ? 'setup.check.ledeDone'
+        : modelsOnPc === 0 ? (othersOnPc ? 'setup.check.ledeOthersOnPc' : 'setup.check.ledeDone')
             : pending.length === 0 ? 'setup.check.ledeAllOnPc' : 'setup.check.ledeSomeOnPc';
     const chatEntry = catalog.find((e) => e.id === selection?.defaultChat);
 

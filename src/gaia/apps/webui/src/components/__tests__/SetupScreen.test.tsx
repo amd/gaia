@@ -439,6 +439,19 @@ describe('SetupScreen: the recommendation', () => {
         expect(await screen.findByText(/Some of your models are already on this PC\./)).toBeInTheDocument();
     });
 
+    it('says models are on this PC when the only ones downloaded are outside the plan', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED, FLM]));
+        renderSetup();
+        expect(await screen.findByText(/Some models are already on this PC, but none of them are in your plan yet\./)).toBeInTheDocument();
+        expect(screen.queryByText(/No models have downloaded yet/)).not.toBeInTheDocument();
+    });
+
+    it('says no models have downloaded when nothing is on this PC', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED]));
+        renderSetup();
+        expect(await screen.findByText(/No models have downloaded yet\./)).toBeInTheDocument();
+    });
+
     it('offers Test and start when there is nothing to download', async () => {
         const on = (e: typeof QWEN) => ({ ...e, downloaded: true, size_gb: 0 });
         mockedApi.getSetupPlan.mockResolvedValue(plan([on(QWEN), on(GEMMA), on(EMBED)]));

@@ -1443,6 +1443,7 @@ const messages: Messages = {
     'setup.check.ledeDone': 'هذا ما وجده الإعداد. لم يُنزَّل أي نموذج بعد.',
     'setup.check.ledeAllOnPc': 'هذا ما وجده الإعداد. نماذجك موجودة بالفعل على هذا الجهاز.',
     'setup.check.ledeSomeOnPc': 'هذا ما وجده الإعداد. بعض نماذجك موجودة بالفعل على هذا الجهاز.',
+    'setup.check.ledeOthersOnPc': 'هذا ما وجده الإعداد. بعض النماذج موجودة بالفعل على هذا الجهاز، لكن لا شيء منها في خطتك بعد.',
     'setup.check.serverWorking': 'جارٍ تجهيز خادم النماذج الخاص بـ GAIA…',
     'setup.checks.count': 'الفحوصات المكتملة: {done} من {total}',
     'setup.checks.waitingChoice': 'بانتظار اختيارك أدناه',
