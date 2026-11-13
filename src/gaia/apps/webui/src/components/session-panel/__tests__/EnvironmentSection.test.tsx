@@ -142,6 +142,7 @@ describe('Can read and write', () => {
         const pickFolder = vi.fn<(defaultPath?: string) => Promise<string | null>>();
         beforeEach(() => {
             window.gaiaAPI = { dialog: { pickFolder } } as unknown as NonNullable<typeof window.gaiaAPI>;
+            mocked.checkEnvironmentFolder.mockResolvedValue({ refusal: null });
         });
         afterEach(() => {
             delete window.gaiaAPI;
@@ -155,6 +156,16 @@ describe('Can read and write', () => {
             await waitFor(() => expect(mocked.addEnvironmentFolder).toHaveBeenCalledWith(SID, '/Users/me/notes'));
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
             expect(mocked.browseFiles).not.toHaveBeenCalled();
+        });
+
+        it('refuses the home folder as soon as it is picked in the OS picker (#7996)', async () => {
+            const why = "GAIA can't be given /Users/me: it is your home directory. Pick a narrower folder.";
+            pickFolder.mockResolvedValue('/Users/me');
+            mocked.checkEnvironmentFolder.mockResolvedValue({ refusal: why });
+            render(<EnvironmentSection sessionId={SID} busy={false} />);
+            fireEvent.click(await screen.findByRole('button', { name: /Add folder/ }));
+            expect(await screen.findByRole('alert')).toHaveTextContent(why);
+            expect(mocked.addEnvironmentFolder).not.toHaveBeenCalled();
         });
 
         it('adds nothing when the OS picker is cancelled', async () => {

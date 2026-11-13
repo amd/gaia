@@ -551,8 +551,9 @@ carries none, and older binaries never send it, so read it only when present.
 A request without `turns` does not wait for timings: its `final` carries them
 only when the loop had already returned.
 
-A `final` with `failed: true` ends a turn a model call broke; its `answer` says
-what was and wasn't done. When the cause is one a front-end can fix, `failure`
+A `final` with `failed: true` ends a turn that did not do what was asked: a
+model call broke, or a confirmation-gated tool was refused on a run nobody can
+answer (§8). Its `answer` says what was and wasn't done. When the cause is one a front-end can fix, `failure`
 names it. `"model_server_down"` means the local model server took no
 connection. Cloud models go through that server too, so the provider was never
 reached; the turn fails at once instead of retrying, and its `answer` names the
