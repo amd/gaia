@@ -1380,6 +1380,7 @@ export const enMessages = {
     'readAloud.error.unreachable': "Couldn't read this aloud: the model server isn't answering.",
     'readAloud.error.speech': "Couldn't read this aloud: the model server couldn't make the speech.",
     'readAloud.error.playback': "Couldn't read this aloud: the speech couldn't be played here.",
+    'readAloud.error.nothing': "There's nothing to read aloud here: this reply is only code.",
     'readAloud.error.other': "Couldn't read this aloud.",
     'readAloud.group.american.female': "American English, female",
     'readAloud.group.american.male': "American English, male",
