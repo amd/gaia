@@ -565,6 +565,8 @@ const messages: Messages = {
     'activity.filter.all': 'الكل',
     'activity.filter.success': 'نجحت',
     'activity.filter.error': 'خطأ',
+    'activity.fetchBlocked': 'حجبه الموقع ({code})',
+    'activity.fetchFailed': 'تعذر تحميلها',
     'activity.identicalCalls': 'استدعاءات متطابقة: {n}',
     'activity.detail.tool': 'الأداة',
     'activity.detail.via': 'عبر {server}',
