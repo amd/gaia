@@ -195,6 +195,25 @@ def get_agent_registry():
 _SIDECAR_AGENT_TYPES = SIDECAR_AGENT_IDS
 
 
+def refuse_unstreamed_sidecar_chat(agent_type: str) -> None:
+    """Refuse a ``stream=false`` turn for an agent served by its sidecar.
+
+    #2109: the sidecar's ``/query`` loop is a streaming-only SSE contract, so
+    there is no non-streaming shape to relay. Callers run this before saving
+    anything, so a refused turn leaves no message behind.
+    """
+    if not _should_relay_to_sidecar(agent_type, _agent_registry):
+        return
+    named = (profile_for(agent_type) or _NO_PROFILE).display_name
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"The {named} agent requires streaming (stream=true); "
+            f"non-streaming {named} chat is not supported."
+        ),
+    )
+
+
 def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     """Whether *agent_type* must be served by its daemon sidecar this turn.
 
@@ -2481,6 +2500,41 @@ def _probe_misses_only_another_model(
     return not _model_ids_match(probed, model_id)
 
 
+def _probe_misses_only_the_model(init_body: dict | None) -> bool:
+    """True when ``/init``'s only complaint is that its model is not downloaded."""
+    body = init_body or {}
+    lemonade = body.get("lemonade") or {}
+    model = body.get("model") or {}
+    return (
+        lemonade.get("reachable") is True
+        and lemonade.get("compatible") is not False
+        and bool(model.get("id"))
+        and model.get("present") is False
+    )
+
+
+def _missing_local_model_text(init_body: dict) -> str:
+    """What the chat says when the local model a turn needs is not downloaded.
+
+    The sidecar's own hint names a CLI; the app's way is Settings.
+    """
+    from gaia.llm.local_only import cloud_blocked
+
+    from .local_models import friendly_name
+
+    name = friendly_name(init_body["model"]["id"])
+    if cloud_blocked():
+        return (
+            f"Local only is on and {name} isn't downloaded yet, so GAIA can't "
+            "answer. Get a local model under Settings > Model, or turn off Local "
+            "only under Settings > Privacy to use a cloud model."
+        )
+    return (
+        f"{name} isn't downloaded yet, so GAIA can't answer. Get it, or pick "
+        "another model, under Settings > Model."
+    )
+
+
 def _replay_cloud_key_for_relay(sse_handler, model_id: str | None) -> None:
     """Hand Lemonade the remembered key for a cloud model before a relayed turn.
 
@@ -2803,6 +2857,11 @@ def _dispatch_sidecar_query(
             agent_type,
             model_id,
         )
+    elif status_code != 200 and _probe_misses_only_the_model(init_body):
+        sse_handler._emit(
+            {"type": "agent_error", "content": _missing_local_model_text(init_body)}
+        )
+        return
     elif status_code != 200:
         hint = (init_body or {}).get("hint")
         if profile.readiness_is_blocking or not _probe_is_only_unreachable(init_body):
@@ -2982,12 +3041,16 @@ def _find_last_tool_step(steps: list) -> dict | None:
     return None
 
 
-def _declined_call(event: dict) -> bool:
-    """A ``tool_result`` for a call the user said no to; a relayed one nests it in ``data``."""
+def _denial(event: dict) -> Optional[str]:
+    """``"declined"`` or ``"timedOut"`` for a ``tool_result`` whose call never ran.
+
+    A relayed result nests its status in ``data``.
+    """
     data = event.get("data") if isinstance(event.get("data"), dict) else {}
-    status = event.get("status", data.get("status"))
+    if event.get("status", data.get("status")) != "denied":
+        return None
     timed_out = event.get("timed_out") is True or data.get("timed_out") is True
-    return status == "denied" and not timed_out
+    return "timedOut" if timed_out else "declined"
 
 
 def _insert_skill_step(steps: list, step: dict) -> None:
@@ -4045,21 +4108,7 @@ async def _get_chat_response(
                 agent_type,
             )
         elif _should_relay_to_sidecar(agent_type, _agent_registry):
-            # #2109: a sidecar agent is served exclusively by its canonical
-            # /query loop, which is a streaming-only SSE contract (see the
-            # streaming branch in _stream_chat_impl). There is no
-            # non-streaming shape to relay, and zero verified callers exist
-            # today (the frontend hardcodes stream=true; ChatRequest.stream
-            # defaults True). Fail loud rather than ship a speculative,
-            # untested drained-response path.
-            named = (profile_for(agent_type) or _NO_PROFILE).display_name
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"The {named} agent requires streaming (stream=true); "
-                    f"non-streaming {named} chat is not supported."
-                ),
-            )
+            refuse_unstreamed_sidecar_chat(agent_type)
         else:
             # Every in-process agent, chat included, is created via the registry.
             registry = _agent_registry
@@ -5018,8 +5067,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             event.get("summary") or event.get("title") or "Done"
                         )
                         tool_step["success"] = event.get("success", True)
-                        if _declined_call(event):
-                            tool_step["declined"] = True
+                        denial = _denial(event)
+                        if denial:
+                            tool_step[denial] = True
                         # Persist MCP tool latency
                         if event.get("latency_ms") is not None:
                             tool_step["latencyMs"] = event["latency_ms"]
@@ -5896,8 +5946,8 @@ def _settled_quietly(future) -> None:
         future.exception()
 
 
-# Failures retrying can't fix until the file itself changes: RAG's pdf_status
-# and xlsx_status values, plus "empty_file" for a file with nothing to index.
+# Failures retrying can't fix until the file itself changes: RAG's pdf_status,
+# xlsx_status and pptx_status values, plus "empty_file" for an empty file.
 PERMANENT_INDEX_FAILURES = frozenset(
     {"corrupted", "encrypted", "empty", "empty_file", "unsupported_workbook"}
 )
@@ -6068,7 +6118,9 @@ async def _index_document(
             kind = (
                 "empty_file"
                 if result.get("empty_file")
-                else result.get("pdf_status") or result.get("xlsx_status")
+                else result.get("pdf_status")
+                or result.get("xlsx_status")
+                or result.get("pptx_status")
             )
             if kind in PERMANENT_INDEX_FAILURES:
                 raise UnreadableDocumentError(message, kind)

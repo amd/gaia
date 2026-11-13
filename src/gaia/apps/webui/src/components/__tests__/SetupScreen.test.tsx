@@ -344,7 +344,8 @@ describe('SetupScreen: the recommendation', () => {
         expect(cloud).not.toBeChecked();
         expect(screen.getByRole('region', { name: 'Recommended setup' })).toHaveTextContent('Recommended for this PC');
         const cloudCard = screen.getByRole('region', { name: 'Cloud model' });
-        expect(cloudCard).toHaveTextContent('Nothing to download');
+        expect(cloudCard).toHaveTextContent('GAIA still sets up graphics support and a small model on this PC');
+        expect(cloudCard).not.toHaveTextContent('Nothing to download');
         expect(cloudCard).toHaveTextContent('Each message and the chat history are sent to the provider.');
         expect(cloudCard).not.toHaveTextContent('Recommended');
         // Customize is its own button in the bottom bar, not a link beside the cloud choice.
@@ -423,6 +424,33 @@ describe('SetupScreen: the recommendation', () => {
         const list = screen.getByText('See everything that will be downloaded').closest('details') as HTMLElement;
         expect(within(list).getByText('Graphics support')).toBeInTheDocument();
         expect(within(list).getByText(QWEN.name)).toBeInTheDocument();
+    });
+
+    it('says the models are already on this PC when they are, not that none downloaded', async () => {
+        const on = (e: typeof QWEN) => ({ ...e, downloaded: true, size_gb: 0 });
+        mockedApi.getSetupPlan.mockResolvedValue(plan([on(QWEN), on(GEMMA), on(EMBED)]));
+        renderSetup();
+        expect(await screen.findByText(/Your models are already on this PC\./)).toBeInTheDocument();
+        expect(screen.queryByText(/No models have downloaded yet/)).not.toBeInTheDocument();
+    });
+
+    it('says some models are on this PC when only part of the plan is downloaded', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([{ ...QWEN, downloaded: true, size_gb: 0 }, GEMMA, EMBED]));
+        renderSetup();
+        expect(await screen.findByText(/Some of your models are already on this PC\./)).toBeInTheDocument();
+    });
+
+    it('says models are on this PC when the only ones downloaded are outside the plan', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED, FLM]));
+        renderSetup();
+        expect(await screen.findByText(/Some models are already on this PC, but none of them are in your plan yet\./)).toBeInTheDocument();
+        expect(screen.queryByText(/No models have downloaded yet/)).not.toBeInTheDocument();
+    });
+
+    it('says no models have downloaded when nothing is on this PC', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED]));
+        renderSetup();
+        expect(await screen.findByText(/No models have downloaded yet\./)).toBeInTheDocument();
     });
 
     it('offers Test and start when there is nothing to download', async () => {

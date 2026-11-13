@@ -80,6 +80,47 @@ follows that a skill asking for more than `experimental` allows (`coding` and
 `github-triage` want `shell:execute:<binary>`) is refused at import, and a skill
 that ships `tools.py` needs `--allow-experimental`.
 
+## Add skills from a link
+
+Most skill libraries live on GitHub as folders holding a `SKILL.md`. Paste a link and
+GAIA reads every skill in it. For [pstack](https://github.com/michael-denyer/pstack-claude),
+a popular MIT-licensed set of engineering workflows, the Skills panel has a one-click
+**Get pstack** button, and `pstack` works anywhere a link does.
+
+- **Agent UI** — click **Skills** in the sidebar, paste the link (or click **Get
+  pstack**), then pick the skills you want and click **Add**.
+- **Terminal UI** — `/skills add <link>` lists what the link holds; `/skills add
+  <link> confirm` adds it.
+- **CLI** — `gaia skill add <link>` (see the [CLI reference](/reference/cli)).
+
+Before anything is added, every surface lists each skill with its description, what
+it is allowed to do (its declared permissions, in plain words, such as *Read pages and
+data from sites matching \*.readthedocs.io*), whether it ships code, and what the audit
+found. What gets added is exactly the version you reviewed: if the library changes
+between the preview and the add, nothing is added and you are asked to read the link
+again. In the terminal UI, a `confirm` with no preview earlier in the session shows the
+preview instead of adding.
+
+A link can be a repository (`https://github.com/owner/repo` or just `owner/repo`), a
+folder in one (`.../tree/main/skills`), a skills.sh page, or an https `.zip`.
+
+<Warning>
+Skills from a link are written by someone else. A skill's instructions steer what GAIA
+does with your files, shell and accounts, and a skill that ships code (`tools.py` or
+`scripts/`) runs that code on your PC. GAIA audits each skill and refuses anything the
+audit blocks, but an audit is not a guarantee. Only add skills from people you trust,
+and read what they do first.
+</Warning>
+
+Every added skill lands at the `experimental` tier. Skills that ship code are left out
+unless you tick **Include skills with code** (or pass `--allow-code`). Added skills go
+to `~/.gaia/skills` with the library's licence and notice files beside each one, and
+GAIA can use them from your next chat.
+
+A link always fetches the library's latest version. To update, add the same link
+again: skills you added from it are replaced in place. A skill of the same name from
+anywhere else is never overwritten.
+
 ## Use one
 
 In chat, ask the agent to use a skill by name. From code, load it with
@@ -89,7 +130,7 @@ In chat, ask the agent to use a skill by name. From code, load it with
 from gaia_agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(GaiaAgentConfig())
-agent.load_skill("research-report")     # body joins the system prompt
+agent.load_skill("research-report")     # body joins the prompt
 
 print(agent.process_query("What's the current state of NPU support in llama.cpp?"))
 ```
@@ -97,7 +138,7 @@ print(agent.process_query("What's the current state of NPU support in llama.cpp?
 `load_skill` resolves the name across the discovery roots, validates the
 manifest, registers any tools the skill provides under `<skill-name>/<tool>`,
 bridges its permissions to connector requirements, and injects the procedure
-into the system prompt. `unload_skill(name)` reverses all of it.
+into the session context at the start of the first user message. `unload_skill(name)` reverses all of it.
 
 On most agents a loaded body then renders in the prompt on every turn. The
 flagship `gaia` agent is the exception: it selects per turn which loaded
@@ -163,7 +204,9 @@ memory, and speak up only when there is news.
 ### price-watch
 
 `source-watch` specialized to products: extract the current price, compare to
-the lowest ever recorded in memory, alert only on a new low.
+the lowest ever recorded in memory, alert only on a new low. A price the user
+states (the lowest they have seen, or a target) is saved to memory before the
+page is fetched, so it is the baseline the check compares against.
 
 - **Demonstrates** — forking a template; memory holding a running extreme rather
   than a seen-list; the traps in extracting one number from a retail page.
@@ -211,7 +254,9 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 - **Demonstrates** — a scoped binary grant. It declares `shell:execute:gh`, which
   grants the GitHub CLI to this skill's session on this agent, restricted to the
   subcommands in GAIA's policy table (see the
-  [permission model](/plans/skill-format#permission-model)).
+  [permission model](/plans/skill-format#permission-model)). Read-only `gh`
+  commands run in any chat without this skill; the skill adds the triage workflow,
+  and anything it writes is confirmed per call.
 - **Configure** — nothing, if you let GAIA do it. Ask it to set up the GitHub CLI
   and it checks, installs, and signs in for you, showing you each command first —
   see [Setting up a CLI a skill needs](/guides/gaia#setting-up-a-cli-a-skill-needs).

@@ -47,7 +47,7 @@ my_agent/
 </Warning>
 
 A skill is a `SKILL.md`: frontmatter plus a Markdown body. Keep the body short —
-it is injected into the system prompt when the skill loads, and every token it
+it is injected into the session context at the start of the first user message when the skill loads, and every token it
 takes is a token your tool results no longer have.
 
 ```markdown
@@ -239,7 +239,7 @@ agent.load_skill_set("application")
 
 ## Budget the set
 
-Loading a set injects each body into the system prompt. Three skills of ~250
+Loading a set injects each body into the prompt. Three skills of ~250
 tokens each is ~750 tokens gone from a window your tool results were already
 using — enough to overflow a tight context and turn a working run into a
 `context_length_exceeded` error.

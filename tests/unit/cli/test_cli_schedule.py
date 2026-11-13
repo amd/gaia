@@ -175,6 +175,29 @@ def test_add_accepts_notification_sink_on_windows(parser, mock_store, mocker):
     assert constructed.sink == "notification"
 
 
+def test_add_with_a_taken_name_exits_1_with_one_line_not_a_traceback(
+    parser, mocker, tmp_path, capsys
+):
+    """The store's ValueError already holds the right message; the CLI must print it."""
+    from gaia.schedule.store import TomlScheduleStore
+
+    store = TomlScheduleStore(tmp_path / "schedules.toml")
+    mocker.patch("gaia.schedule.store.TomlScheduleStore", return_value=store)
+    argv = ["add", "--name", "n", "--cron", "* * * * *", "--prompt"]
+    _handle_schedule(_parse(parser, [*argv, "first"]))
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as excinfo:
+        _handle_schedule(_parse(parser, [*argv, "second"]))
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("❌ Cannot add schedule 'n': schedule 'n' already")
+    assert "Traceback" not in captured.err
+    assert store.get("n").prompt == "first"
+
+
 def test_add_requires_name_and_cron(parser):
     with pytest.raises(SystemExit) as excinfo:
         _parse(parser, ["add", "--prompt", "hi"])
@@ -399,3 +422,30 @@ def test_no_subcommand_prints_usage_hint_to_stderr(parser, mock_store, capsys):
     err = capsys.readouterr().err
     assert "No schedule action specified" in err
     assert "add|list|show|remove|pause|resume|run|daemon" in err
+
+
+# ---- A name the store doesn't have ----
+
+
+@pytest.mark.parametrize("action", ["show", "remove", "pause", "resume", "run"])
+def test_an_unknown_schedule_name_exits_1_with_one_line_not_a_traceback(
+    parser, mocker, tmp_path, capsys, action
+):
+    """The store's KeyError already holds the right message; the CLI must print it."""
+    from gaia.schedule.store import TomlScheduleStore
+
+    # A real store, so the real KeyError reaches the handler.
+    mocker.patch(
+        "gaia.schedule.store.TomlScheduleStore",
+        return_value=TomlScheduleStore(tmp_path / "schedules.toml"),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _handle_schedule(_parse(parser, [action, "nope"]))
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("❌ no schedule named 'nope'")
+    assert "gaia schedule list" in captured.err
+    assert "Traceback" not in captured.err

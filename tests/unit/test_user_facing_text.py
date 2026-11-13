@@ -97,9 +97,6 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
     "src/gaia/agents/registry.py": {
         "terminal command": (1, "amd/gaia#7338"),
     },
-    "src/gaia/agents/tools/browser_tools.py": {
-        "terminal command": (1, "amd/gaia#7338"),
-    },
     "src/gaia/agents/tools/document_text.py": {
         "pip": (2, "amd/gaia#7338"),
     },
@@ -114,9 +111,6 @@ KNOWN: dict[str, dict[str, tuple[int, str]]] = {
     },
     "src/gaia/agents/tools/skill_library_tools.py": {
         "terminal command": (2, "amd/gaia#7338"),
-    },
-    "src/gaia/ui/email_sidecar/profiles.py": {
-        "removed feature": (6, "amd/gaia#4825"),
     },
     "src/gaia/ui/routers/memory.py": {
         "pip": (1, "amd/gaia#7338"),

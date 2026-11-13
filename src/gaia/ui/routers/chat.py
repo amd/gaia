@@ -27,10 +27,12 @@ from gaia.agents.base.tool_grants import grant_scope
 
 from .. import answer_retry, followups
 from .. import permissions as session_permissions
+from .. import session_environment
 from .._chat_helpers import (
     _set_provisional_title,
     _spawn_background,
     model_context_messages,
+    refuse_unstreamed_sidecar_chat,
     stuck_producer,
     turn_takes_the_line,
 )
@@ -110,6 +112,8 @@ async def send_message(
     request.agent_type = flagship_only(
         http_request, request.agent_type, session.get("agent_type") or "chat"
     )
+    if not request.stream:
+        refuse_unstreamed_sidecar_chat(request.agent_type)
 
     # ── Per-session lock ─────────────────────────────────────────────
     # setdefault is atomic: safe under concurrent requests for the same session
@@ -426,6 +430,7 @@ async def _confirm_relayed_tool(
             ),
         )
     proxy = handler.active_relay_proxy
+    path_access = handler.relay_path_access(request.confirm_id)
     try:
         # Off the event loop: this is an HTTP round trip to the sidecar.
         delivered = await run_in_threadpool(
@@ -440,6 +445,8 @@ async def _confirm_relayed_tool(
         ) from exc
     if not delivered:
         raise stale
+    if request.approved and path_access:
+        session_environment.note_approved_path(request.session_id, path_access)
     if always:
         try:
             await run_in_threadpool(relayed_grants.refresh, proxy, request.session_id)

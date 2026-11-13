@@ -234,6 +234,9 @@ type queryRequest struct {
 	SessionID string `json:"session_id,omitempty"`
 	// Sent only to a peer proven >= 2.20 (negotiate.go); empty omits it.
 	Surface string `json:"surface,omitempty"`
+	// The folder GAIA was started in: where relative paths and the project map
+	// resolve. Not a file scope; allowed_paths is never sent. Peer >= 2.24 only.
+	WorkingDirectory string `json:"working_directory,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -299,6 +302,13 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 	if peer.supportsSurface {
 		surface = "tui"
 	}
+	var workingDirectory string
+	if peer.supportsWorkingDirectory {
+		workingDirectory, err = os.Getwd()
+		if err != nil {
+			return nil, fmt.Errorf("could not read the folder GAIA was started in, which the agent needs to resolve file names you give without a full path; restart GAIA from a folder that exists: %w", err)
+		}
+	}
 
 	payload, err := json.Marshal(queryRequest{
 		Query:              query,
@@ -309,6 +319,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		CanAnswerQuestions: canAnswer,
 		SessionID:          sessionID,
 		Surface:            surface,
+		WorkingDirectory:   workingDirectory,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)

@@ -337,6 +337,43 @@ class TestGaiaDispatch:
         assert handler.events[0]["type"] == "agent_error"
         assert "The model is not downloaded" in handler.events[0]["content"]
 
+    @pytest.mark.parametrize("local_only", [True, False])
+    def test_a_missing_local_model_is_said_once_with_the_in_app_fix(
+        self, monkeypatch, tmp_path, local_only
+    ):
+        """It was the sidecar's CLI hint, said twice, inside "isn't ready yet"."""
+        from gaia.llm import local_only as policy
+
+        monkeypatch.setenv("GAIA_POLICY_FILE", str(tmp_path / "policy.json"))
+        policy.set_policy("local_ai_only" if local_only else "cloud_allowed")
+        model = "Gemma-4-E4B-it-GGUF"
+        body = self._init_body(
+            reachable=True,
+            present=False,
+            hint=(
+                f"The model {model} is not downloaded. {model} is not downloaded, "
+                "and no Lemonade client CLI was found to do it — see "
+                "https://lemonade-server.ai, then re-check."
+            ),
+        )
+        body["model"]["id"] = model
+        _, calls = self._patch(monkeypatch, _FakeHandle(init_result=(503, body)))
+        handler = _FakeSSEHandler()
+        request = ChatRequest(session_id="s1", message="hi", agent_type="gaia")
+
+        _dispatch_sidecar_query(handler, request, [], model, "gaia")
+
+        assert calls == []
+        [event] = handler.events
+        content = event["content"]
+        assert event["type"] == "agent_error"
+        assert content.count("downloaded") == 1
+        assert "Settings > Model" in content
+        assert ("Local only is on" in content) is local_only
+        assert ("Settings > Privacy" in content) is local_only
+        for developer_word in ("CLI", "agent card", "re-check", "lemonade-server.ai"):
+            assert developer_word not in content
+
     def test_a_missing_default_model_does_not_block_a_cloud_turn(self, monkeypatch):
         """The probe checks the sidecar's default local model. A turn on a
         gateway model never touches it, so a user who skipped the local
@@ -556,7 +593,7 @@ class TestRelayedToolResult:
         )
         [step] = ui.events
         assert step["success"] is True
-        assert step["summary"].startswith("Found 2 file(s)")
+        assert step["summary"].startswith("Found 2 files")
 
     def test_full_tool_data_with_an_error_status_is_a_failure(self):
         ui = _FakeSSEHandler()

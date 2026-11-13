@@ -1442,6 +1442,11 @@ Deleting a chat deletes its copies.
     Upload an arbitrary file for use as a chat attachment (not added to the
     RAG library). Use `POST /api/documents/upload` instead if you want the
     file indexed for Q&A.
+
+    A refused upload returns HTTP 400 (or 413) with `detail` as an object:
+    `{"status", "message"}`, where `message` is an English sentence. `status` is
+    `no_extension`, `unsupported_type` (plus `extension`), `empty_file` or
+    `too_large` (plus `size_mb` and `max_mb`).
   </Accordion>
 
   <Accordion title="Recording progress events">
@@ -2355,6 +2360,91 @@ OAuth and MCP-server connections for the Settings page and per-agent grants
   [Connectors infrastructure doc](/sdk/infrastructure/connectors) for it.
 </Note>
 
+### Messaging
+
+Settings → Messaging: connect, pair and run the Discord bridge
+([Discord guide](/guides/discord)). The routes call the same functions as
+`gaia discord`. **Every route is local-PC only, reads included:** the status
+carries the pairing code, so a request over mobile access or from another
+computer gets a 403. Mutating routes also require the `X-Gaia-UI: 1` header.
+
+<AccordionGroup>
+  <Accordion title="GET /api/messaging/discord">
+    Connection, pairing and bridge state, plus every link setup opens:
+    `connected`, `paired`, `running`, `state`, `detail`, `bot_name`,
+    `owner_name`, `autostart`, `always_allowed`, `pairing_code`, `portal_url`,
+    `invite_url`,
+    `bot_profile_url` and more.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/connect">
+    Body `{token, model?}`. Checks the bot token with Discord, stores it in the
+    OS keyring, and starts the bridge in pairing mode. 400 when Discord refuses
+    the token or it belongs to the Discord connector's bot; 502 when Discord
+    can't be reached.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/start">
+    Body `{model?, take_over?}`. Starts the bridge; `take_over` answers from this
+    PC even when another PC holds the bot's lease.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/stop">
+    Stops the bridge, and keeps it stopped the next time a GAIA app opens. 500
+    when it does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/restart">
+    Stops the bridge and starts it again. 500, leaving it as it was, when it
+    does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/forget-always">
+    Forgets every "Always allow" answered in Discord, so GAIA asks again. A
+    running bridge is restarted so its agent forgets them too. 500, forgetting
+    nothing, when the bridge does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/pair">
+    Forgets the paired account and starts over with a new code. 500, keeping
+    the pairing, when the bridge does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/disconnect">
+    Stops the bridge and forgets the token, the pairing and the status. 500,
+    keeping everything, when the bridge does not stop.
+  </Accordion>
+</AccordionGroup>
+
+### Automations
+
+Settings → Automations: list, pause, resume and remove the reminders,
+summaries, alerts and triggers GAIA runs on its own
+([Automations guide](/guides/automations)). The routes read and write the same
+store as `gaia automation`. **Every route is local-PC only, reads included:** a
+trigger's check is a command that runs on this PC, and prompts can carry
+private detail. Mutating routes also require the `X-Gaia-UI: 1` header.
+
+<AccordionGroup>
+  <Accordion title="GET /api/automations">
+    `{automations, delivers}`. Each automation has `id`, `name`, `kind`
+    (`reminder`, `summary`, `alert` or `trigger`), `heartbeat`, `paused`,
+    `every_seconds`, `next_at`, `last_run_at`, `runs`, `prompt`, `say`, `check`,
+    `quiet`, `days` and `failures`. `delivers` is whether a paired Discord DM
+    receives what they send, or `null` when that could not be checked. 500 when
+    the store can't be read.
+  </Accordion>
+
+  <Accordion title="POST /api/automations/{ref}/{action}">
+    `action` is `pause` or `resume`; `ref` is an id or exact name. Returns the
+    changed automation. 404 when nothing matches.
+  </Accordion>
+
+  <Accordion title="DELETE /api/automations/{ref}">
+    Removes the automation and returns it. 404 when nothing matches.
+  </Accordion>
+</AccordionGroup>
+
 ### Goals
 
 Autonomous goal/task tracking (`GoalStore`) behind the Agent UI's Goals panel.
@@ -3117,6 +3207,40 @@ model with no known price reads as unknown, never $0. Cloud models from
 
   <Accordion title="DELETE /api/skills/{name}/preferences">
     Forget every saved preference of the skill. Returns `{"skill", "reset"}`.
+  </Accordion>
+
+  <Accordion title="GET /api/skills/featured">
+    The skill libraries the Skills panel offers as one-click adds. Returns
+    `{"libraries": [{"id", "name", "url", "description"}]}`.
+  </Accordion>
+
+  <Accordion title="POST /api/skills/link/preview">
+    List and audit the skills behind a pasted link without installing any.
+    Body: `{"url"}`. Returns `{"link", "source", "pin", "warning", "skills":
+    [{"name", "description", "path", "has_code", "permissions",
+    "permissions_unreadable", "verdict", "findings", "installed", "update",
+    "error"}]}`. `permissions` lists what the skill declares it may do as
+    `[{"grant", "text"}]` — the raw grant (`network:read:*.example.com`) and a
+    plain-language sentence. `permissions_unreadable` is true when they could
+    not be parsed, so an empty list means unknown, not none. `pin` is
+    `commit:<sha>` for a GitHub link and the archive's `sha256:<digest>` for any
+    other `.zip`. **400** when
+    the link cannot be read or holds no skill.
+  </Accordion>
+
+  <Accordion title="POST /api/skills/link/add">
+    Add skills behind a link to `~/.gaia/skills`. Body: `{"url", "names",
+    "allow_code", "force", "pin"}`; omit `names` to add every addable skill.
+    `pin` is required: send the preview's `pin` so what lands is what was
+    reviewed. Skills that ship code are refused unless `allow_code` is true.
+    Returns `{"added": [...], "failed": {name: reason}}`. **422** when `pin`
+    is missing, **400** when it is malformed or the link cannot be read,
+    **409** when the link changed since the preview.
+  </Accordion>
+
+  <Accordion title="DELETE /api/skills/{name}">
+    Remove a skill from `~/.gaia/skills`. Returns `{"removed"}`. **404** when
+    no such skill is installed, **400** for a skill that ships with GAIA.
   </Accordion>
 </AccordionGroup>
 

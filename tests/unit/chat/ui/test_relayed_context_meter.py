@@ -50,6 +50,94 @@ def test_final_context_reaches_the_meter_before_the_answer():
     assert h.relay_context == _USAGE
 
 
+def test_a_live_measurement_reaches_the_meter_before_the_answer():
+    """Contract 2.28: the sidecar measures at turn start; the relay forwards it.
+
+    The relay's own cuts are turns the sidecar never saw, so they are added to
+    its count here, exactly as the ``final`` copy does.
+    """
+    h = SSEOutputHandler()
+    h.relay_hidden_turns = 2
+
+    relay._dispatch_one(
+        h,
+        {
+            "type": "context_usage",
+            "window": 65536,
+            "used": 900,
+            "turns_in_view": 3,
+            "turns_hidden": 0,
+        },
+        GAIA_PROFILE,
+    )
+
+    [meter] = _events(h)
+    assert meter == {
+        "type": "context_usage",
+        "window": 65536,
+        "used": 900,
+        "turns_in_view": 3,
+        "turns_hidden": 2,
+    }
+    assert h.relay_context["turns_hidden"] == 2
+
+
+def test_a_failed_final_does_not_leave_the_live_guess_in_the_meter():
+    """A pre-answer estimate is not the failed turn's usage; ``final`` has none.
+
+    The live event itself stands (it was true when streamed), but the turn's
+    recorded meter must not show the guess as its result.
+    """
+    h = SSEOutputHandler()
+
+    relay._dispatch_one(
+        h,
+        {"type": "context_usage", "window": 65536, "used": 900, "turns_in_view": 3},
+        GAIA_PROFILE,
+    )
+    relay._dispatch_one(
+        h,
+        {"type": "final", "answer": "The model server went away.", "failed": True},
+        GAIA_PROFILE,
+    )
+
+    events = _events(h)
+    assert [e["type"] for e in events] == ["context_usage", "answer"]
+    assert events[1]["failed"] is True
+    assert h.relay_context is None
+
+
+def test_a_live_estimate_does_not_survive_a_context_error():
+    """A live hint is not the turn's result: a failed measurement wins.
+
+    The sequence is the one the reviewer reported: ``context_usage`` first,
+    then ``final`` carrying ``context_error``. The estimate must not outrank
+    the explanation when the turn's meter is recorded.
+    """
+    h = SSEOutputHandler()
+
+    relay._dispatch_one(
+        h,
+        {"type": "context_usage", "window": 65536, "used": 900, "turns_in_view": 3},
+        GAIA_PROFILE,
+    )
+    relay._dispatch_one(
+        h,
+        {"type": "final", "answer": "Paris.", "context_error": "tokenizer exploded"},
+        GAIA_PROFILE,
+    )
+
+    assert [e["type"] for e in _events(h)] == ["context_usage", "answer"]
+    assert h.relay_context is None
+    assert h.relay_context_error == "tokenizer exploded"
+    helpers.record_relayed_context(
+        "s8096",
+        h.relay_context,
+        helpers.relayed_context_reason(GAIA_PROFILE, "2.28", h),
+    )
+    assert helpers.relayed_context("s8096") == {"reason": "tokenizer exploded"}
+
+
 def test_a_context_error_is_kept_not_streamed():
     h = SSEOutputHandler()
 

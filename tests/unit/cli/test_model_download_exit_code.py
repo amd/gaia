@@ -42,7 +42,7 @@ def test_download_exits_nonzero_when_the_server_is_unreachable(
     code = _run_main(argv, monkeypatch)
 
     assert code == 1
-    assert "not running or not accessible" in capsys.readouterr().err
+    assert "not reachable" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(
@@ -61,7 +61,8 @@ def test_download_list_exits_nonzero_when_the_server_is_unreachable(
 
     captured = capsys.readouterr()
     assert code == 1
-    assert "not running or not accessible" in captured.err
+    assert "not reachable" in captured.err
+    assert "gaia init" not in captured.err
     assert "⬜" not in captured.out
 
 

@@ -4,14 +4,19 @@
 
 import json
 import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
+import gaia
 from gaia.engineering.service import EngineeringService
 from gaia.mcp.servers.engineering_mcp import create_engineering_mcp
+
+SRC = str(Path(gaia.__file__).resolve().parents[1])
 
 
 def test_mcp_default_is_disabled(tmp_path):
@@ -89,3 +94,28 @@ async def test_real_client_roundtrip_and_revocation(tmp_path, backend):
             result = await session.call_tool("get_context", {"job_id": job["id"]})
             assert result.is_error
             assert "violet-otter-92" not in result.content[0].text
+
+
+def test_gaia_mcp_engineering_refuses_without_developer_mode_and_no_traceback(tmp_path):
+    env = {k: v for k, v in os.environ.items() if k != "GAIA_DEVELOPER_MODE"}
+    env.update(PYTHONPATH=SRC, HOME=str(tmp_path), USERPROFILE=str(tmp_path))
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from gaia.cli import main; sys.exit(main())",
+            "mcp",
+            "engineering",
+            "--backend",
+            "claude",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+
+    assert proc.returncode == 1
+    assert "only available in developer mode" in proc.stderr
+    assert "Traceback" not in proc.stderr

@@ -345,6 +345,49 @@ def test_a_terminal_caller_gets_the_command_and_no_card(mail, surface):
     assert CONNECT_CARD_KEY not in status
 
 
+@pytest.mark.parametrize("surface", ["agent_ui", "tui", "cli", None])
+def test_a_missing_mailbox_is_not_learned_as_a_tool_error(mail, surface):
+    """How to connect is worded for the front-end asking. Saved to memory it
+    was replayed into a terminal run, which then pointed at a Connect button
+    on a screen that was not there."""
+    from gaia.agents.base.memory import MemoryMixin
+
+    out = mail(surface)("list_inbox")
+    assert out["success"] is False
+    assert MemoryMixin._was_refused(out)
+
+
+def test_a_write_the_connection_cannot_make_is_not_learned_either(monkeypatch):
+    import gaia.connectors.api as api
+    from gaia.agents.base.memory import MemoryMixin
+    from gaia.agents.tools.email_tools import OPERATION_SEND, _write_scopes
+
+    monkeypatch.setattr(api, "get_connection", lambda p: {"scopes": [GMAIL_READONLY]})
+    for app in (True, False):
+        with pytest.raises(MailboxError) as err:
+            _write_scopes("google", OPERATION_SEND, app=app)
+        out = with_connect_card(
+            {"error": str(err.value)},
+            err.value,
+            agent_id=AGENT,
+            surface="agent_ui" if app else None,
+        )
+        assert MemoryMixin._was_refused(out)
+
+
+def test_a_mailbox_fault_is_still_learned():
+    """Only setup state is kept out of memory, not a real failure."""
+    from gaia.agents.base.memory import MemoryMixin
+
+    out = with_connect_card(
+        {"error": "Gmail returned 500"},
+        MailboxError("Gmail returned 500"),
+        agent_id=AGENT,
+        surface="agent_ui",
+    )
+    assert not MemoryMixin._was_refused(out)
+
+
 def test_in_the_agent_ui_a_mailbox_without_mail_access_is_a_reconnect(mail):
     calendar_only = {"scopes": ["https://www.googleapis.com/auth/calendar.events"]}
     out = mail("agent_ui", {"google": calendar_only})("list_inbox")

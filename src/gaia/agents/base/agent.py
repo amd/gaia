@@ -50,6 +50,7 @@ from gaia.agents.base.call_risk import (
     RISK_NOTE_ARG,
     SHELL_TOOLS,
 )
+from gaia.agents.base.chunk_index import OUTPUT_TOOLS
 from gaia.agents.base.completion import (
     _BINARY_SUFFIXES,
     WRITE_TOOLS,
@@ -80,6 +81,10 @@ from gaia.agents.base.context_eviction import (
     request_tokens,
     resolve_context_eviction,
     shrink_for_overflow,
+)
+from gaia.agents.base.credential_reads import (
+    PYTHON_TOOLS,
+    python_credential_refusal,
 )
 from gaia.agents.base.deliverables import (
     DELIVERABLE_SUFFIXES,
@@ -187,6 +192,7 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
@@ -223,6 +229,7 @@ from gaia.utils.terminal import stdin_is_interactive
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
+    from gaia.agents.base.history import TurnMessages
     from gaia.connectors.providers.base import ConnectorRequirement
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
@@ -2832,6 +2839,9 @@ class Agent(abc.ABC):
     # Which mixin contributed each system-prompt fragment.
     _mixin_prompt_origins: "Optional[Dict[str, Any]]" = None
 
+    # The volatile fragments, composed with the system prompt; see session_context.
+    _session_context_cache: str = ""
+
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
@@ -2996,11 +3006,11 @@ class Agent(abc.ABC):
     #: than by remembering to copy an override.
     CONFIRMATION_HOOKS: ClassVar[tuple] = ()
 
-    # ``get_*_system_prompt`` fragments whose text changes during a session.
-    # ``_compose_system_prompt`` emits these LAST so a mid-session change never
-    # invalidates the backend's KV-cache prefix for the static text above them.
-    # Add a name here only if its fragment genuinely varies within one session —
-    # a static fragment listed here just loses its position, harmlessly.
+    # ``get_*_system_prompt`` fragments whose text differs between sessions or
+    # changes during one. They ride at the start of the first user message
+    # (``session_context``), so every fresh session shares one cached system
+    # prompt; hybrid models can't resume mid-system-prompt. Listing a static
+    # fragment here only moves it, harmlessly.
     VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = frozenset(
         {
             "get_memory_system_prompt",  # re-rendered on forget/update of a shown item
@@ -3225,6 +3235,8 @@ Do NOT wrap conversational replies in JSON.
         self._turn_ungrounded: List[str] = []
         # The user's own words this turn ask only for a plan, not an answer.
         self._turn_plan_only_requested = False
+        # The user's own words this turn bar tools, reading included.
+        self._turn_no_look_requested = False
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
@@ -3655,13 +3667,10 @@ Do NOT wrap conversational replies in JSON.
         ):
             parts.append(self._response_format_template)
 
-        # Volatile last. llama.cpp reuses the KV cache only up to the first
-        # differing token, so anything that changes mid-session — memory after a
-        # remember(), the per-turn skill-body selection, a filtered tool list —
-        # placed ABOVE the static text invalidates all of it. Tail position
-        # keeps the static head cached across turns.
-        parts.extend(volatile_mixins)
+        # Out of the system prompt entirely: see ``session_context``.
+        self._session_context_cache = "\n\n".join(p for p in volatile_mixins if p)
 
+        # A filtered text tool list grows as tools are selected, so it goes last.
         if tool_filter is not None and tools_block is not None:
             parts.append(tools_block)
 
@@ -3683,6 +3692,9 @@ Do NOT wrap conversational replies in JSON.
         if turn_log_path() is None:
             return None
         try:
+            from gaia.agents.base.history import prompt_text
+
+            sent = prompt_text(self)
             recorder = TurnRecorder(
                 query=user_input,
                 agent_name=type(self).__name__,
@@ -3701,7 +3713,7 @@ Do NOT wrap conversational replies in JSON.
                     origin: len(text)
                     for text, origin in (self._mixin_prompt_origins or {}).items()
                     # A subclass may filter a fragment out of the final prompt.
-                    if text in self.system_prompt
+                    if text in sent
                 },
             )
             for name, t0, t1 in pre_spans:
@@ -3825,6 +3837,25 @@ Do NOT wrap conversational replies in JSON.
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("console rejected turn metrics: %s", e)
 
+    def _stage_final_model_messages(
+        self, messages: "TurnMessages", answer: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Seal the turn's record when the console carries it to the caller.
+
+        The daemon's ``final`` event must not wait on this thread's tail (memory
+        store, trace) to learn what later turns replay, so the record is sealed
+        at the answer and handed over. The sealed list is reused as
+        ``result["model_messages"]``, so the turn pays for one copy, not two.
+        """
+        hook = getattr(self.console, "stage_final_model_messages", None)
+        if hook is None:
+            return None
+        try:
+            return hook(answer, messages.finish(answer))
+        except Exception as e:  # noqa: BLE001 - the answer must still print
+            logger.warning("console could not stage the turn record: %s", e)
+            return None
+
     def _announce_turn_failed(self) -> None:
         """Tell the console the answer about to print ends a failed turn.
 
@@ -3893,6 +3924,32 @@ Do NOT wrap conversational replies in JSON.
     def system_prompt(self, value: str):
         """Allow setting system prompt (used when appending tool descriptions)."""
         self._system_prompt_cache = value
+
+    @property
+    def session_context(self) -> str:
+        """The ``VOLATILE_PROMPT_FRAGMENTS`` text, composed with the system prompt.
+
+        Memory, loaded skills and the project map / working directory differ
+        from one session to the next. Every request carries them at the start
+        of its first user message instead (``_with_session_context``), so the
+        system prompt and tool list stay byte-identical across fresh sessions.
+        """
+        _ = self.system_prompt  # composes both on first access
+        return self._session_context_cache
+
+    def _with_session_context(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """*messages* as sent: the session context opens the first user message."""
+        from gaia.agents.base.history import with_session_context
+
+        return with_session_context(messages, self.session_context)
+
+    def _prompt_text(self) -> str:
+        """What the agent adds to every request: system prompt + session context."""
+        from gaia.agents.base.history import prompt_text
+
+        return prompt_text(self)
 
     def _get_system_prompt(self) -> str:
         """
@@ -4713,12 +4770,18 @@ Do NOT wrap conversational replies in JSON.
             return ""
         from gaia.agents.base.skill_catalog import GROUNDING_RULE, render_catalog
 
-        skills = self.skill_manager.discover()
         catalog = render_catalog(
-            {n: s for n, s in skills.items() if not _withheld_skill_tools(self, s)},
-            list_project=self._lists_project_skills(),
+            self._catalog_skills(), list_project=self._lists_project_skills()
         )
         return f"{GROUNDING_RULE}\n\n{catalog}" if catalog else GROUNDING_RULE
+
+    def _catalog_skills(self) -> Dict[str, Any]:
+        """Installed skills this model can load: the pool the catalogue lists from."""
+        return {
+            n: s
+            for n, s in self.skill_manager.discover().items()
+            if not _withheld_skill_tools(self, s)
+        }
 
     def _lists_project_skills(self) -> bool:
         """Whether the catalogue lists the project's ``.claude/skills``.
@@ -7527,6 +7590,12 @@ Do NOT wrap conversational replies in JSON.
             )
             if refusal is not None:
                 return refusal
+        if tool_name in PYTHON_TOOLS:
+            refusal = python_credential_refusal(
+                tool_name, tool_args, self._python_call_folders()
+            )
+            if refusal is not None:
+                return refusal
         # Before the falsy-args guard: a tool whose arguments all default
         # (``update_gaia_md()``) still has a target, and must not be approved
         # only to be refused by its own body a moment later.
@@ -7542,6 +7611,21 @@ Do NOT wrap conversational replies in JSON.
         if not callable(refuses):
             return None
         return refuses(tool_name, tool_args)  # pylint: disable=not-callable
+
+    def _python_call_folders(self) -> List[str]:
+        """Where a Python tool's relative paths may resolve, most likely first."""
+        from gaia.agents.tools.workspace_paths import _workspace_default
+
+        folders = [_workspace_default(self)]
+        project_root = getattr(self, "_project_map_root", None)
+        if callable(project_root):
+            try:
+                folders.append(project_root())  # pylint: disable=not-callable
+            except ValueError as exc:
+                # The tool reports a bad project root itself; check the rest.
+                logger.debug("No project root for the credential check: %s", exc)
+        folders += [getattr(self, "scratch_dir", None), os.getcwd()]
+        return [str(f) for f in folders if f]
 
     #: The answers the denied-effect question offers.
     ALLOW_DENIED_EFFECT = "Allow once"
@@ -8432,6 +8516,9 @@ Do NOT wrap conversational replies in JSON.
             with skill_scope as skill_call:
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
+            if tool_name in OUTPUT_TOOLS:
+                # Output goes into the prompt; tokens and credential-file lines must not.
+                result = redact_tool_output(result)
             logger.debug(f"Tool execution result: {result}")
             _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
@@ -8765,7 +8852,7 @@ Do NOT wrap conversational replies in JSON.
         stats = None
         if self.streaming:
             stream = self.chat.send_messages_stream(
-                messages=request,
+                messages=self._with_session_context(request),
                 system_prompt=self.system_prompt,
                 tools=tools,
                 **no_calls,
@@ -8786,7 +8873,7 @@ Do NOT wrap conversational replies in JSON.
             self.console.start_progress(self._progress_label())
             try:
                 reply = self.chat.send_messages(
-                    messages=request,
+                    messages=self._with_session_context(request),
                     system_prompt=self.system_prompt,
                     tools=tools,
                     **no_calls,
@@ -9900,7 +9987,7 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.artifacts import ArtifactStore
 
-        system_prompt, tools = self.system_prompt, self._openai_tools
+        system_prompt, tools = self._prompt_text(), self._openai_tools
         before = request_tokens(messages, system_prompt, tools)
         # Sized in a throwaway store first: nothing is archived for a retry that won't run.
         # Its stubs can run a few chars longer than the real store's; the 95% margin covers it.
@@ -10664,6 +10751,7 @@ Do NOT wrap conversational replies in JSON.
             history=history,
             locate=path_locator(roots),
             plan_only=getattr(self, "_turn_plan_only_requested", False),
+            may_act=not getattr(self, "_turn_no_look_requested", False),
         )
 
     def _deliverable_findings(
@@ -11074,7 +11162,9 @@ Do NOT wrap conversational replies in JSON.
         """One warm-up request with the live prompt and tools; *request* adds kwargs."""
         if cancel is None:
             self.chat.send_messages(
-                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                self._with_session_context(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}]
+                ),
                 system_prompt=self.system_prompt,
                 tools=self._openai_tools,
                 max_tokens=1,
@@ -11093,7 +11183,9 @@ Do NOT wrap conversational replies in JSON.
         """
         self._warm_up_cancellable(
             lambda: self.chat.send_messages(
-                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                self._with_session_context(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}]
+                ),
                 system_prompt=self.system_prompt,
                 tools=self._openai_tools,
                 max_tokens=1,
@@ -11467,6 +11559,8 @@ Do NOT wrap conversational replies in JSON.
         self._turn_recorder = self._begin_turn_record(user_input)
         # Set by whichever exit seals the record; read by the tail below.
         turn_record: Optional[Dict[str, Any]] = None
+        # Sealed at the answer when the console carries it; reused for the result.
+        model_messages: Optional[List[Dict[str, Any]]] = None
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
@@ -11490,6 +11584,7 @@ Do NOT wrap conversational replies in JSON.
         no_action_requested = _asks_for_no_action(request_text)
         # "Why does foo.py fail? Don't touch anything": look, but don't edit.
         no_look_requested = _asks_not_to_look(request_text)
+        self._turn_no_look_requested = no_look_requested
         self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
         if no_look_requested:
             grounding_fired.add(LOOK)
@@ -12110,7 +12205,7 @@ Do NOT wrap conversational replies in JSON.
                     try:
                         self._before_model_call(messages)
                         response_stream = self.chat.send_messages_stream(
-                            messages=messages,
+                            messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
@@ -12365,7 +12460,7 @@ Do NOT wrap conversational replies in JSON.
                     try:
                         self._before_model_call(messages)
                         chat_response = self.chat.send_messages(
-                            messages=messages,
+                            messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
@@ -12746,7 +12841,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for streaming plan response
                     stream_gen = self.chat.send_messages_stream(
-                        messages=messages,
+                        messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
@@ -12792,7 +12887,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for non-streaming plan response
                     chat_response = self.chat.send_messages(
-                        messages=messages,
+                        messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
@@ -14269,6 +14364,9 @@ Do NOT wrap conversational replies in JSON.
                 # same event.
                 turn_record = self._finish_turn_record(final_answer, steps_taken)
                 self._publish_turn_metrics(turn_record)
+                model_messages = self._stage_final_model_messages(
+                    messages, final_answer
+                )
                 self.console.print_final_answer(
                     final_answer,
                     streaming=self.streaming,
@@ -14369,6 +14467,9 @@ Do NOT wrap conversational replies in JSON.
                     )
                     turn_record = self._finish_turn_record(final_answer, steps_taken)
                     self._publish_turn_metrics(turn_record)
+                    model_messages = self._stage_final_model_messages(
+                        messages, final_answer
+                    )
                     self.console.print_final_answer(
                         final_answer,
                         streaming=self.streaming,
@@ -14431,6 +14532,7 @@ Do NOT wrap conversational replies in JSON.
             )
             turn_record = self._finish_turn_record(final_answer, steps_taken)
             self._publish_turn_metrics(turn_record)
+            model_messages = self._stage_final_model_messages(messages, final_answer)
             self.console.print_final_answer(
                 final_answer,
                 streaming=self.streaming,
@@ -14532,7 +14634,11 @@ Do NOT wrap conversational replies in JSON.
             "verification": self.verification_state(),
         }
 
-        result["model_messages"] = messages.finish(result["result"])
+        result["model_messages"] = (
+            model_messages
+            if model_messages is not None
+            else messages.finish(result["result"])
+        )
 
         # Catches the exits that never printed an answer (max steps). Sealed
         # BEFORE the trace write — attached after, the artifact never saw it.

@@ -489,6 +489,16 @@ type ChatModel struct {
 	// answer lives in `gaia slack decline`; this only stops a duplicate inside
 	// one run.
 	slackOffered bool
+	// discordSetup is the in-flight Discord setup: the token prompt, then the
+	// pairing step it watches. Nil when no setup is open.
+	discordSetup *discordSetupState
+	// discordOffered stops a second launch-time offer within one run.
+	discordOffered bool
+	// automationRefs are the ids /automations last listed, so
+	// "/automations pause 2" changes the one the user saw as 2.
+	automationRefs []string
+	// automationNames maps each listed name, lower-cased, to its id.
+	automationNames map[string]string
 	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
 	// setupRunning.
 	setupCancel context.CancelFunc
@@ -658,6 +668,8 @@ func (m ChatModel) Init() tea.Cmd {
 		// Whether it actually shows is `gaia slack status`'s decision, not
 		// ours -- this only asks.
 		cmds = append(cmds, querySlackCmd(true /* offer */))
+		// Brings back a Discord bridge set to autostart, then may offer setup.
+		cmds = append(cmds, launchDiscordCmd())
 	}
 	if m.startup.pending && !m.setupChecking {
 		cmds = append(cmds, startupModelCmd())
@@ -902,11 +914,33 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case slackStatusMsg:
 		return m.handleSlackStatus(msg)
 
+	case discordStatusMsg:
+		return m.handleDiscordStatus(msg)
+
+	case discordConnectedMsg:
+		return m.handleDiscordConnected(msg)
+
+	case discordActionMsg:
+		return m.handleDiscordAction(msg)
+
+	case discordPollMsg:
+		return m.handleDiscordPoll(msg)
+
+	case discordDeclinedMsg:
+		return m.handleDiscordDeclined(msg)
+
+	case automationsListMsg:
+		return m.handleAutomationsList(msg)
+
 	case connectorsListMsg:
 		return m.handleConnectorsList(msg)
 
 	case connectorsActivatedMsg:
 		return m.handleConnectorsActivated(msg)
+
+	case connectorsRevokedMsg:
+		return m.handleConnectorsRevoked(msg)
+
 	case updateCheckedMsg:
 		return m.handleUpdateChecked(msg)
 
@@ -1044,6 +1078,12 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.question = nil
 			m.updateViewport()
 			return m.handleSlackSetupAnswer(msg.RequestID, msg.Value)
+		}
+		if isDiscordSetupQuestion(msg.RequestID) {
+			// The bot token must never reach the agent or the transcript.
+			m.question = nil
+			m.updateViewport()
+			return m.handleDiscordSetupAnswer(msg.RequestID, msg.Value)
 		}
 		m.messages = append(m.messages, Message{
 			Role:    RoleUser,
@@ -1689,8 +1729,14 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	// `/model` takes a free-form argument (a model id), so it can't join the
 	// exact-match switch below like /full-access's fixed variants — it's dispatched
 	// here instead, still before anything falls through to sendQuery.
+	if isSkillsCommand(query) {
+		return m.submitSkillsCommand(query)
+	}
 	if isConnectorsPersonalize(query) {
 		return m.startConnectorsPersonalize(query)
+	}
+	if isConnectorsRevoke(query) {
+		return m.startConnectorsRevoke(query)
 	}
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {
@@ -1888,6 +1934,12 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 
 	case "/slack never":
 		return m, declineSlackCmd(true)
+	}
+	if query == "/discord" || strings.HasPrefix(query, "/discord ") {
+		return m.handleDiscordCommand(query)
+	}
+	if isAutomationsCommand(query) {
+		return m.handleAutomationsCommand(query)
 	}
 
 	return m.sendQuery(query)
