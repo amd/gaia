@@ -11,8 +11,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **Scratch folders no longer pile up in the temp folder.** A `gaia-scratch-…`
   folder was removed only when its agent was closed, so a sidecar that was
   killed or exited left it behind (one PC held about 2,900). The agent now
-  removes the scratch folders it holds when its process exits, and clears ones
-  no run has written to for a day when it starts.
+  removes the scratch folders it holds when its process exits normally, and
+  the next agent to start clears any no agent has used for a day, including
+  ones a killed process left.
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the
   `hint` read "The model X is not downloaded. X is not downloaded, and no
   Lemonade client CLI was found …, then re-check." It is now the one sentence.

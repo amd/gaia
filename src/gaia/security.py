@@ -607,6 +607,8 @@ def acquire_scratch_dir(anchor: str) -> Path:
     """
     global _scratch_swept, _scratch_sweeper
     path = stable_scratch_dir(anchor)
+    # A folder in use must not look stale to another process's sweep.
+    os.utime(path)
     with _scratch_lock:
         key = _scratch_key(path)
         _scratch_holders[key] = _scratch_holders.get(key, 0) + 1

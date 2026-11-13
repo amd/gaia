@@ -99,6 +99,18 @@ def test_only_scratch_folders_are_touched(temp):
     assert other.is_dir() and lookalike.is_file()
 
 
+def test_taking_a_folder_marks_it_in_use_for_other_processes(temp, tmp_path):
+    held = acquire_scratch_dir(str(tmp_path / "proj"))
+    release_scratch_dir(held)
+    _aged(held, 2 * _DAY)
+
+    again = acquire_scratch_dir(str(tmp_path / "proj"))
+    security._scratch_holders.clear()  # as another process sees it
+
+    assert security.sweep_stale_scratch_dirs() == 0
+    assert again.is_dir()
+
+
 def test_the_folders_a_process_still_holds_are_removed_when_it_exits(temp, tmp_path):
     first = acquire_scratch_dir(str(tmp_path / "a"))
     acquire_scratch_dir(str(tmp_path / "a"))
