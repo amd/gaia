@@ -133,6 +133,28 @@ describe('Personalize GAIA offer', () => {
         await waitFor(() => expect(screen.queryByRole('button', { name: 'Personalize GAIA' })).toBeNull());
     });
 
+    it('says on the tile that GAIA keeps access afterwards and where to turn it off', async () => {
+        await openTile(mcpRow({ id: 'mcp-slack', display_name: 'Slack', configured: true }));
+        const tile = screen.getByText(/your recent Slack channels/);
+        expect(tile).toHaveTextContent('GAIA keeps access to Slack afterwards; you can turn that off below.');
+        // The pass is only told to read; the copy must not promise more than that.
+        expect(tile).not.toHaveTextContent(/only reads/i);
+    });
+
+    it('says in the connect offer that GAIA keeps access afterwards and where to turn it off', async () => {
+        mocked.getConnector.mockResolvedValue(mcpRow({ id: 'mcp-memory', display_name: 'Memory', configured: true }));
+        await openTile(mcpRow({ id: 'mcp-memory', display_name: 'Memory' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Connect' }));
+        // The card's own offer, the one place it is made (#7703).
+        const banner = await waitFor(() => {
+            const offer = document.querySelector('.connector-personalize--offer');
+            expect(offer).not.toBeNull();
+            return offer;
+        });
+        expect(banner).toHaveTextContent('GAIA keeps access to Memory afterwards; you can turn that off anytime by opening Memory here.');
+        expect(banner).not.toHaveTextContent(/only reads/i);
+    });
+
     it('is not offered before the connector is connected', async () => {
         await openTile(mcpRow({ id: 'mcp-slack', display_name: 'Slack' }));
         expect(screen.queryByRole('button', { name: 'Personalize GAIA' })).toBeNull();

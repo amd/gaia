@@ -528,7 +528,7 @@ function ConnectorTile({
                     )}
                     {connector.configured && connector.enabled !== false && (
                         <div className={`connector-personalize${justConnected ? ' connector-personalize--offer' : ''}`} role={justConnected ? 'status' : undefined}>
-                            <p>{t(justConnected ? 'settings.connectors.personalize.offer' : 'settings.connectors.personalize.tile', { source: personalizeSourceRef(connector) })}</p>
+                            <p>{t(justConnected ? 'settings.connectors.personalize.offer' : 'settings.connectors.personalize.tile', { source: personalizeSourceRef(connector), name: connector.display_name })}</p>
                             <PersonalizeButton connector={connector} primary={justConnected} onStarted={onPersonalizeStarted} />
                         </div>
                     )}
@@ -1027,7 +1027,7 @@ function OAuthClientEditor({
                     )}
                     <div className="configure-actions">
                         <button
-                            className={`btn-model-save${saved ? ' saved' : ''}`}
+                            className="btn-primary"
                             disabled={busy || !values['client_id']?.trim()}
                             onClick={() => void handleSave()}
                         >
@@ -1247,7 +1247,7 @@ function MCPServerConfigureBody({
             <div className="configure-actions">
                 {!(keyless && connector.configured) && (
                     <button
-                        className={`btn-model-save${saved ? ' saved' : ''}`}
+                        className="btn-primary"
                         disabled={busy || (!keyless && nothingTyped)}
                         onClick={() => void handleSave()}
                     >

@@ -281,6 +281,22 @@
     outline: none;
 }
 
+/* The browser's bright blue clear button, redrawn in the app's muted icon colour. */
+.settings-input[type="search"]::-webkit-search-cancel-button {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+    background: var(--text-muted);
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E") center / contain no-repeat;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.5' stroke-linecap='round'%3E%3Cpath d='M18 6 6 18M6 6l12 12'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.settings-input[type="search"]::-webkit-search-cancel-button:hover {
+    background: var(--text-primary);
+}
+
 .segmented {
     display: inline-flex;
     align-self: flex-start;
@@ -959,6 +975,11 @@
     text-decoration: none;
 }
 
+.update-download-link,
+.update-download-link:hover {
+    text-decoration: none;
+}
+
 [dir='rtl'] .messaging-link-icon {
     transform: scaleX(-1);
 }
@@ -1022,6 +1043,84 @@
 .messaging-footer {
     padding-block-start: 12px;
     border-block-start: 1px solid var(--border-light);
+}
+
+.messaging-always-list {
+    margin: 4px 0 8px;
+    padding-inline-start: 1.25em;
+    overflow-wrap: anywhere;
+}
+
+/* ── Automations ───────────────────────────────────────────────── */
+
+.automation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.automation-card.is-paused .automation-name,
+.automation-card.is-paused .automation-detail {
+    color: var(--text-secondary);
+}
+
+.automation-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-inline-size: 0;
+}
+
+.automation-name {
+    margin: 0;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+}
+
+.automation-kind,
+.automation-paused {
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.automation-paused {
+    background: transparent;
+    border: 1px solid var(--border-light);
+}
+
+.automation-when {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 0;
+}
+
+.automation-detail {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.automation-check {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.automation-messaging {
+    align-self: flex-start;
 }
 
 /* Add skills from a link */

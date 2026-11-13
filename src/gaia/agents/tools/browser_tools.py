@@ -16,6 +16,8 @@ import logging
 import os
 import re
 import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
 from urllib.parse import urlsplit
@@ -26,6 +28,7 @@ from gaia.agents.tools.workspace_paths import _workspace_target
 from gaia.tool_cancellation import ToolCancelled, tool_cancelled
 
 if TYPE_CHECKING:
+    from gaia.connectors.spec import ConnectorSpec
     from gaia.web.client import SearchUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -74,15 +77,20 @@ def _download_denied(validator, dest_path: Path) -> str:
 #: loop to wait and retry, so the failure breaker can end a dead search loop.
 SEARCH_UNAVAILABLE_STREAK_LIMIT = 3
 
+#: Searched through GAIA's own client (cache, credit ledger), not its MCP tool.
 _TAVILY_CONNECTOR_ID = "mcp-tavily"
 
 #: Parallel ``search_web`` calls share one refusal streak per agent.
 _STREAK_LOCK = threading.Lock()
 
-_NO_BACKUP_SEARCH_NOTE = (
-    "No backup search provider is set up. Tell the user that adding a Tavily "
-    "API key (gaia connectors configure mcp-tavily --set TAVILY_API_KEY=...) "
-    "lets search keep working when DuckDuckGo throttles it."
+#: Distinct queries a session remembers, and for how long, so a query the
+#: model repeats is answered without spending another DuckDuckGo request.
+SEARCH_CACHE_SIZE = 128
+SEARCH_CACHE_TTL_SECONDS = 30 * 60
+
+_REPEAT_SEARCH_NOTE = (
+    "(You already ran this search, so these are the same results. Search with "
+    "different words, or fetch_page a result, to learn more.)"
 )
 
 
@@ -97,33 +105,86 @@ def _search_stop_requested(mixin) -> bool:
     )
 
 
-def _tavily_fallback(
-    query: str, num_results: int
-) -> Tuple[Optional[List[Dict[str, str]]], Optional[str]]:
-    """Results from the Tavily connector when the user configured one.
+def _cache_key(query: str) -> str:
+    """Case and spacing don't change what a search finds."""
+    return " ".join(query.casefold().split())
 
-    Returns ``(results, None)``, ``(None, None)`` when Tavily is not
-    configured, or ``(None, error)`` when it is configured but failed.
-    """
-    from gaia.connectors.mcp_server import is_mcp_server_configured
 
+class _SearchCache:
+    """A session's recent search results, keyed by normalized query."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: "OrderedDict[str, _CachedSearch]" = OrderedDict()
+
+    def get(
+        self, query: str, num_results: int
+    ) -> Optional[Tuple[List[Dict[str, str]], Optional[str]]]:
+        key = _cache_key(query)
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            stored_at, asked, results, source_note = entry
+            if time.monotonic() - stored_at > SEARCH_CACHE_TTL_SECONDS:
+                del self._entries[key]
+                return None
+            # A bigger ask needs a new search, unless the last one already
+            # returned everything there was.
+            if num_results > asked and len(results) >= asked:
+                return None
+            self._entries.move_to_end(key)
+            return results[:num_results], source_note
+
+    def put(
+        self,
+        query: str,
+        num_results: int,
+        results: List[Dict[str, str]],
+        source_note: Optional[str],
+    ) -> None:
+        key = _cache_key(query)
+        with self._lock:
+            self._entries[key] = (time.monotonic(), num_results, results, source_note)
+            self._entries.move_to_end(key)
+            while len(self._entries) > SEARCH_CACHE_SIZE:
+                self._entries.popitem(last=False)
+
+
+#: (stored at, results asked for, results, source note)
+_CachedSearch = Tuple[float, int, List[Dict[str, str]], Optional[str]]
+
+
+def _search_connectors() -> List["ConnectorSpec"]:
+    """Every catalog connector that can answer a web search, in catalog order."""
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+    from gaia.connectors.spec import WEB_SEARCH
+
+    return [spec for spec in REGISTRY if WEB_SEARCH in spec.provides]
+
+
+def _no_backup_search_note() -> str:
+    names = " or ".join(spec.display_name for spec in _search_connectors())
+    return (
+        "No backup search provider is set up. Tell the user that adding a search "
+        f"connector ({names}) in Settings > Connectors lets search keep working "
+        "when DuckDuckGo limits it."
+    )
+
+
+def _tavily_search(query: str, num_results: int) -> Optional[List[Dict[str, str]]]:
+    """Results from GAIA's Tavily client, or ``None`` when it holds no key."""
+    from gaia.web.tavily import TavilyClient
+
+    client = TavilyClient()
     try:
-        if not is_mcp_server_configured(_TAVILY_CONNECTOR_ID):
-            return None, None
-        from gaia.web.tavily import TavilyClient
-
-        client = TavilyClient()
-        try:
-            if not client.configured:
-                return None, None
-            response = client.search(query, max_results=num_results)
-        finally:
-            client.close()
-    # Tool boundary: the error is reported to the model, never swallowed.
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.warning("Tavily fallback search failed: %s", e)
-        return None, f"The Tavily connector also failed: {e}"
-    results = [
+        if not client.configured:
+            return None
+        response = client.search(query, max_results=num_results)
+    finally:
+        client.close()
+    return [
         {
             "title": r.get("title", ""),
             "url": r.get("url", ""),
@@ -132,11 +193,161 @@ def _tavily_fallback(
         for r in response.get("results", [])
         if r.get("url")
     ]
-    return results, None
+
+
+#: Labels search servers put before each field of a plain-text result.
+_TEXT_RESULT_FIELDS = {
+    "title": "title",
+    "url": "url",
+    "link": "url",
+    "description": "snippet",
+    "content": "snippet",
+    "snippet": "snippet",
+}
+
+#: A search result's snippet is a summary; longer text is page content.
+_SNIPPET_CHARS = 500
+
+_FIELD_LABEL = re.compile(r"[A-Za-z][A-Za-z ]{0,30}$")
+
+#: Argument names search tools use for how many results to return.
+_RESULT_COUNT_ARGS = ("count", "max_results", "num_results", "limit")
+
+
+def _parse_search_text(text: str) -> List[Dict[str, str]]:
+    """Results from a search tool's answer.
+
+    Reads JSON with a ``results`` list, or ``Title:`` / ``URL:`` /
+    ``Description:`` blocks, the plain-text shape search servers return.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("results"), list):
+        return [
+            {
+                "title": str(r.get("title") or ""),
+                "url": str(r["url"]),
+                "snippet": str(
+                    r.get("content") or r.get("description") or r.get("snippet") or ""
+                ),
+            }
+            for r in data["results"]
+            if isinstance(r, dict) and r.get("url")
+        ]
+    records: List[Dict[str, str]] = []
+    current: Dict[str, str] = {}
+    last_field = None
+    for line in text.splitlines():
+        label, sep, value = line.partition(":")
+        name = _TEXT_RESULT_FIELDS.get(label.strip().lower()) if sep else None
+        if name is None:
+            # A wrapped snippet continues; a blank line or another field
+            # ("Raw Content:", "Favicon:") ends it.
+            if not line.strip() or (sep and _FIELD_LABEL.match(label)):
+                last_field = None
+            elif last_field == "snippet":
+                current["snippet"] += " " + line.strip()
+            continue
+        # A repeated field, or a title after other fields, starts the next result.
+        if name in current or (name == "title" and current):
+            records.append(current)
+            current = {}
+        current[name] = value.strip()
+        last_field = name
+    records.append(current)
+    return [
+        {
+            "title": r.get("title", ""),
+            "url": r["url"],
+            "snippet": r.get("snippet", "")[:_SNIPPET_CHARS],
+        }
+        for r in records
+        if r.get("url")
+    ]
+
+
+def _mcp_connector_search(
+    mixin, spec: "ConnectorSpec", query: str, num_results: int
+) -> List[Dict[str, str]]:
+    """Run *spec*'s search tool on the MCP server this agent already runs."""
+    from gaia.mcp.client.mcp_client import mcp_tool_error
+
+    manager = getattr(mixin, "_mcp_manager", None)
+    active_servers = getattr(mixin, "_active_mcp_servers", None)
+    active = active_servers(manager) if manager and active_servers else []
+    client = manager.get_client(spec.id) if spec.id in active else None
+    if client is None:
+        failure = manager.failure(spec.id) if manager else None
+        reason = f" ({failure})" if failure else ""
+        raise RuntimeError(
+            f"it is set up but not running for this agent{reason}. Turn it on "
+            "for this agent in Settings > Connectors"
+        )
+    tool = next(
+        (t for t in client.list_tools() if t.name == spec.web_search_tool), None
+    )
+    if tool is None:
+        raise RuntimeError(f"its server has no {spec.web_search_tool} tool")
+    properties = (tool.input_schema or {}).get("properties") or {}
+    arguments: Dict[str, Any] = {"query": query}
+    count_arg = next((a for a in _RESULT_COUNT_ARGS if a in properties), None)
+    if count_arg:
+        arguments[count_arg] = num_results
+    result = client.call_tool(tool.name, arguments)
+    error = mcp_tool_error(result)
+    if error:
+        raise RuntimeError(error)
+    text = "\n".join(
+        item.get("text", "")
+        for item in result.get("content") or []
+        if isinstance(item, dict) and item.get("type", "text") == "text"
+    ).strip()
+    results = _parse_search_text(text)
+    if text and not results:
+        raise RuntimeError(f"GAIA could not read results from its answer: {text[:200]}")
+    return results[:num_results]
+
+
+def _connector_fallback(
+    mixin, query: str, num_results: int
+) -> Tuple[Optional[List[Dict[str, str]]], Optional[str], List[str]]:
+    """Results from the first configured search connector that answers.
+
+    Returns ``(results, connector name, errors)``. ``results`` is ``None`` when
+    none answered; ``errors`` then says why each configured one failed, and is
+    empty when none is configured.
+    """
+    from gaia.connectors.mcp_server import (
+        is_mcp_server_configured,
+        is_mcp_server_enabled,
+    )
+
+    errors: List[str] = []
+    for spec in _search_connectors():
+        try:
+            if not is_mcp_server_configured(spec.id) or not is_mcp_server_enabled(
+                spec.id
+            ):
+                continue
+            if spec.id == _TAVILY_CONNECTOR_ID:
+                results = _tavily_search(query, num_results)
+                if results is None:
+                    continue
+            else:
+                results = _mcp_connector_search(mixin, spec, query, num_results)
+        # Tool boundary: the error is reported to the model, never swallowed.
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            logger.warning("%s fallback search failed: %s", spec.display_name, e)
+            errors.append(f"The {spec.display_name} connector also failed: {e}")
+            continue
+        return results, spec.display_name, errors
+    return None, None, errors
 
 
 def _search_unavailable_result(
-    mixin, error: "SearchUnavailableError", fallback_error: Optional[str]
+    mixin, error: "SearchUnavailableError", fallback_errors: List[str]
 ) -> Dict[str, Any]:
     """What the model gets when every search route refused the query.
 
@@ -147,8 +358,8 @@ def _search_unavailable_result(
     with _STREAK_LOCK:
         streak = getattr(mixin, "_search_unavailable_streak", 0) + 1
         mixin._search_unavailable_streak = streak
-    detail = f" {fallback_error}" if fallback_error else ""
-    backup = "" if fallback_error else f" {_NO_BACKUP_SEARCH_NOTE}"
+    detail = "".join(f" {e}" for e in fallback_errors)
+    backup = "" if fallback_errors else f" {_no_backup_search_note()}"
     if streak >= SEARCH_UNAVAILABLE_STREAK_LIMIT:
         return {
             "status": "error",
@@ -687,39 +898,53 @@ class BrowserToolsMixin:
             # Clamp num_results
             num_results = max(1, min(num_results, 10))
 
-            source_note = None
-            try:
-                results = mixin._web_client.search_duckduckgo(
-                    query,
-                    num_results=num_results,
-                    should_stop=lambda: _search_stop_requested(mixin),
-                )
-            except ToolCancelled as e:
-                return f"Web search stopped: {e}."
-            except ImportError as e:
-                return f"Error: {e}"
-            except ValueError as e:
-                return f"Error: {e}"
-            except SearchUnavailableError as e:
-                logger.warning("Web search unavailable: %s", e)
-                results, fallback_error = _tavily_fallback(query, num_results)
-                if results is None:
-                    return _search_unavailable_result(mixin, e, fallback_error)
-                logger.warning(
-                    "DuckDuckGo refused the search; answered by the Tavily "
-                    "connector instead (%d results)",
-                    len(results),
-                )
-                source_note = (
-                    "(DuckDuckGo is rate-limiting searches; these results are "
-                    "from the configured Tavily connector.)"
-                )
-            except Exception as e:
-                logger.error(f"Error searching web: {e}")
-                return (
-                    f"Error performing web search: {e}\n"
-                    "Try using fetch_page with a direct URL instead."
-                )
+            with _STREAK_LOCK:
+                cache = getattr(mixin, "_search_cache", None)
+                if cache is None:
+                    cache = mixin._search_cache = _SearchCache()
+            cached = cache.get(query, num_results)
+            repeat = cached is not None
+            if repeat:
+                results, source_note = cached
+            else:
+                source_note = None
+                try:
+                    results = mixin._web_client.search_duckduckgo(
+                        query,
+                        num_results=num_results,
+                        should_stop=lambda: _search_stop_requested(mixin),
+                    )
+                except ToolCancelled as e:
+                    return f"Web search stopped: {e}."
+                except ImportError as e:
+                    return f"Error: {e}"
+                except ValueError as e:
+                    return f"Error: {e}"
+                except SearchUnavailableError as e:
+                    logger.warning("Web search unavailable: %s", e)
+                    results, connector, errors = _connector_fallback(
+                        mixin, query, num_results
+                    )
+                    if results is None:
+                        return _search_unavailable_result(mixin, e, errors)
+                    logger.warning(
+                        "DuckDuckGo refused the search; answered by the %s "
+                        "connector instead (%d results)",
+                        connector,
+                        len(results),
+                    )
+                    source_note = (
+                        "(DuckDuckGo is rate-limiting searches; these results are "
+                        f"from the configured {connector} connector.)"
+                    )
+                except Exception as e:
+                    logger.error(f"Error searching web: {e}")
+                    return (
+                        f"Error performing web search: {e}\n"
+                        "Try using fetch_page with a direct URL instead."
+                    )
+                if results:
+                    cache.put(query, num_results, results, source_note)
             with _STREAK_LOCK:
                 mixin._search_unavailable_streak = 0
 
@@ -730,8 +955,8 @@ class BrowserToolsMixin:
                 )
 
             lines = [f'Web search results for: "{query}"', ""]
-            if source_note:
-                lines[1:1] = [source_note]
+            notes = [n for n in (source_note, repeat and _REPEAT_SEARCH_NOTE) if n]
+            lines[1:1] = notes
             # Only release questions: on everyday searches a shared word
             # ("boston" in boston.com) does not make a site the subject's own.
             release_query = _is_release_query(query)
