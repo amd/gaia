@@ -2737,7 +2737,7 @@ export function MemoryDashboard() {
                                             <option value="medium">{t.bare('mem.goals.priorityMedium')}</option>
                                             <option value="high">{t.bare('mem.goals.priorityHigh')}</option>
                                         </select>
-                                        <button className="btn-primary" onClick={createGoal}>{t('mem.goals.create')}</button>
+                                        <button className="btn-primary" disabled={!goalForm.title.trim()} onClick={createGoal}>{t('mem.goals.create')}</button>
                                         <button className="btn-secondary" onClick={() => { setGoalFormError(null); setShowAddGoalForm(false); }}>{t('mem.cancel')}</button>
                                     </div>
                                     {goalFormError && <p className="mem-form-error" role="alert"><bdi>{goalFormError}</bdi></p>}
@@ -2778,6 +2778,9 @@ export function MemoryDashboard() {
                                                     <span className={`mem-goal-status-dot status-${goal.status.replace('_','-')}`} />
                                                     <bdi className="mem-goal-title">{goal.title}</bdi>
                                                     <span className={`mem-goal-priority mem-priority-${goal.priority}`}><Code value={goal.priority} keys={PRIORITY_KEYS} /></span>
+                                                    {goal.status === 'cancelled' && (
+                                                        <span className="mem-goal-priority mem-goal-cancelled-label">{t(STATUS_KEYS.cancelled)}</span>
+                                                    )}
                                                     {goal.source !== 'user' && (
                                                         <span className="mem-goal-source-badge">
                                                             <Zap size={10} /> <Code value={goal.source} keys={GOAL_SOURCE_KEYS} />
@@ -2839,9 +2842,9 @@ export function MemoryDashboard() {
                                                                 </div>
                                                             ))}
                                                         </div>
-                                                    ) : (
+                                                    ) : goal.status === 'queued' || goal.status === 'in_progress' ? (
                                                         <p className="mem-goal-no-tasks">{t('mem.goals.noTasks')}</p>
-                                                    )}
+                                                    ) : null}
                                                 </div>
                                             )}
                                         </div>
