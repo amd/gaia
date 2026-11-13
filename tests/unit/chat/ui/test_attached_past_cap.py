@@ -203,7 +203,7 @@ def test_a_relayed_flagship_loads_up_to_the_cap_and_evicts_nothing(library):
 
 def test_the_agent_ui_warns_at_the_same_cap():
     bar = (
-        Path(__file__).parents[3]
+        Path(__file__).parents[4]
         / "src/gaia/apps/webui/src/components/SessionDocsBar.tsx"
     )
     source = bar.read_text(encoding="utf-8")
