@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1537,6 +1538,28 @@ def test_a_bare_output_a_script_wrote_beside_the_named_input_is_found(tmp_path):
     assert not [g for g in gaps(ledger, "Both files are in kx.") if "recon_tables" in g]
 
 
+def test_a_write_the_file_clock_dates_a_tick_early_is_still_the_runs(tmp_path):
+    """Linux and Windows stamp files with a coarse clock that trails time.time_ns."""
+    kx = tmp_path / "kx"
+    kx.mkdir()
+    (kx / "reconciliation.md").write_text("# Recon\n")
+    ledger = CompletionEvidence(
+        f"Read {kx / 'reconciliation.md'} and make recon_tables.xlsx from it.",
+        str(tmp_path),
+    )
+    xlsx = kx / "recon_tables.xlsx"
+
+    tick_early = time.time_ns() - 10_000_000
+
+    def write_a_tick_early():
+        xlsx.write_bytes(b"PK")
+        os.utime(xlsx, ns=(tick_early, tick_early))
+
+    _script_run(ledger, tmp_path / "build.py", write_a_tick_early)
+
+    assert not [g for g in gaps(ledger, "Done.") if "recon_tables" in g]
+
+
 def test_a_bare_output_no_run_wrote_is_still_missing(tmp_path):
     kx = tmp_path / "kx"
     kx.mkdir()
@@ -1659,6 +1682,29 @@ def test_a_real_save_after_a_would_have_clause_counts_on_a_read_only_turn(
     found = gaps(ledger, sentence.format(other=other))
 
     assert found
+    assert not [g for g in found if "a.txt" in g]
+
+
+@pytest.mark.parametrize("sep", ["/", "\\"])
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "I would have written it to {a}, but saved the totals to {b}.",
+        "I would have written it to {a} but saved it to {b} instead.",
+        "I saved the totals to {b}.",
+    ],
+)
+def test_a_save_to_a_windows_path_after_a_would_have_clause_is_a_claim(
+    tmp_path, sentence, sep
+):
+    """F51: a drive letter's colon ended the clause, so the save went unchecked."""
+    folder = sep.join(["C:", "Users", "t", "Documents", "t"])
+    a, b = f"{folder}{sep}a.txt", f"{folder}{sep}b.txt"
+    ledger = CompletionEvidence("What are the totals in data.csv?", str(tmp_path))
+
+    found = gaps(ledger, sentence.format(a=a, b=b))
+
+    assert any("b.txt" in g for g in found)
     assert not [g for g in found if "a.txt" in g]
 
 

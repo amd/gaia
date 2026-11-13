@@ -713,6 +713,7 @@ export interface IndexFolderResponse {
   failed?: number;
   indexed?: number;
   skipped?: number;
+  skipped_images?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];

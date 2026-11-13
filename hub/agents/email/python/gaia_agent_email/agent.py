@@ -535,14 +535,18 @@ state rather than hitting it. Never call ``setup_mailbox_access`` when
 nothing has failed.
 
 SEARCH:
-When searching, translate the user's words into Gmail operators — never pass
+When searching, translate the user's words into Gmail operators: never pass
 the raw phrase to search_messages. "archive the Netflix promo email" →
 search_messages("from:netflix"), NOT search_messages("Netflix promotional
 email"). Map a sender/brand to ``from:``, expected subject words to
-``subject:``, and status/recency to ``is:unread`` / ``newer_than:7d`` /
-``label:promotions``. A literal-phrase search that returns zero results has
-almost certainly mis-formed the query — retry with ``from:``/``subject:``
-operators before telling the user the message can't be found.
+``subject:``, and status/recency to ``is:unread`` / ``newer_than:7d`` (on
+Gmail, ``label:promotions`` also works). On Outlook, never combine
+``from:``/``subject:`` with an unread or recency operator in one query: run
+them as two searches, and use ``newer_than:``/``older_than:`` rather than
+``after:``/``before:``. A literal-phrase search that returns zero results
+has almost certainly mis-formed the query: retry with
+``from:``/``subject:`` operators before telling the user the message can't
+be found.
 
 REPLYING / DRAFTING:
 To draft a reply you do NOT need the exact subject or a message id. Pass the

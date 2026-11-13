@@ -46,6 +46,8 @@ SIDE_EFFECT_PATHS = {
 }
 _EXEC_TOOLS = frozenset({"run_python", "execute_python_file", "run_shell_command"})
 _UNOBSERVABLE = object()
+# File systems date writes by a coarse clock that trails time.time_ns().
+_FILE_CLOCK_SLACK_NS = 20_000_000
 _BINARY_SUFFIXES = frozenset(
     {
         ".png",
@@ -151,7 +153,8 @@ _COUNTERFACTUAL = re.compile(
     r"(?:\b(?:would|could|should|might)(?:n['’]t|\s+not)?|\b(?:I|we)['’]d)\s+have\s+"
     rf"(?:\w+\s+)?{_WRITE_VERB}\b"
     r"(?:(?!\b(?:but|and|so|then|instead|or|yet|while|whereas|though|although)\b"
-    rf"|\b{_WRITE_VERB}\b|\s-\s)[^,;:—–])*"
+    # A drive letter's colon ("C:/", "C:\\") stays inside the clause.
+    rf"|\b{_WRITE_VERB}\b|\s-\s)(?:[^,;:—–]|(?<=\b[A-Za-z]):(?=[\\/])))*"
     # The clause's own ";" or dash goes too, or the save after it reads as
     # a second clause that destination_paths never reaches.
     r"(?:\s*(?:[;—–]|-(?=\s)))?"
@@ -263,8 +266,8 @@ _CODE_NAME = re.compile(r"^_|[()=<>]|::")
 
 def _path_token(match: re.Match) -> str | None:
     value = next(g for g in match.groups() if g is not None).strip()
-    value = value.lstrip("([（「【《")
-    value = value.rstrip(".,;:)]?!؟،؛。？！，；：、」）】》")
+    value = value.lstrip("([（「【《*")
+    value = value.rstrip(".,;:)]?!؟،؛。？！，；：、」）】》*")
     if not value or "://" in value or "@" in value or "\x00" in value:
         return None
     if "<" in value or ">" in value:
@@ -615,7 +618,7 @@ class CompletionEvidence:
         """Metadata only, for concrete executor targets within the read boundary."""
         if tool not in _EXEC_TOOLS:
             return {}
-        self._exec_started = time.time_ns()
+        self._exec_started = time.time_ns() - _FILE_CLOCK_SLACK_NS
         paths = set(self.files) | {self.key(p) for p in self.requested}
         code = args.get("code")
         if isinstance(code, str):

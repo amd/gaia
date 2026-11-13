@@ -82,6 +82,9 @@ def audit_shell_command(
     )
 
 
+# Opens the refusal for an out-of-scope path that turned out not to exist.
+MISSING_REFUSAL_PREFIX = "Not found: "
+
 # Maximum file size the agent is allowed to write (10 MB)
 MAX_WRITE_SIZE_BYTES = 10 * 1024 * 1024
 
@@ -394,6 +397,67 @@ def _real_path(path: Any) -> str:
     same path — not a literal ``<cwd>/~`` that happens to sit inside the CWD.
     """
     return os.path.realpath(os.path.expanduser(os.fspath(path)))
+
+
+def is_credential_file_name(name: str) -> bool:
+    """Whether a file called *name* is one the read tools refuse by name.
+
+    The same names and extensions as :meth:`PathValidator.is_read_blocked`.
+    """
+    lowered = name.lower()
+    return (
+        lowered in {n.lower() for n in SENSITIVE_FILE_NAMES}
+        or os.path.splitext(lowered)[1] in SENSITIVE_EXTENSIONS
+    )
+
+
+def names_credential_file(word: str) -> bool:
+    """Whether *word*, read as a path, names a credential file.
+
+    A word with a folder in it is judged by its last part. A bare word must
+    look like a file name: ``passwd`` is also a getent database and ``.a.key``
+    a JSON field, so those count only when such a file is really there.
+    """
+    # '\' separates folders on Windows only; elsewhere '\.env' is a regex.
+    separators = "/\\" if os.name == "nt" else "/"
+    stripped = word.rstrip(separators)
+    name = re.split(f"[{re.escape(separators)}]", stripped)[-1].lower()
+    if not name:
+        return False
+    if name != stripped.lower():
+        return is_credential_file_name(name)
+    if name in {n.lower() for n in SENSITIVE_FILE_NAMES}:
+        return "." in name
+    ext = os.path.splitext(name)[1]
+    return ext in SENSITIVE_EXTENSIONS and not name.startswith(".")
+
+
+def credential_file_read(word: str, cwd: str) -> Optional[str]:
+    """The credential file *word* reads from *cwd*, or None.
+
+    By name for what the word says, and by the real file for what it is: a
+    ``notes.txt`` symlinked to ``.env`` reads ``.env``. A folder is not a file,
+    so a virtualenv called ``.env`` stays listable.
+    """
+    if not word or "://" in word:
+        return None
+    expanded = os.path.expandvars(os.path.expanduser(word))
+    for spelling in dict.fromkeys((word, expanded)):
+        try:
+            target = Path(cwd).joinpath(spelling)
+            present = os.path.lexists(target)
+            is_dir = present and os.path.isdir(target)
+            real = os.path.realpath(target) if present else ""
+        except (OSError, ValueError) as exc:
+            logger.debug("Not a file on disk (%s)", type(exc).__name__)
+            present, is_dir, real = False, False, ""
+        if is_dir:
+            continue
+        if names_credential_file(spelling):
+            return spelling
+        if present and is_credential_file_name(os.path.basename(real)):
+            return real
+    return None
 
 
 def _normalize_macos_symlinks(path_str: str) -> str:
@@ -785,6 +849,8 @@ class PathValidator:
         self._interactive_check = interactive_check
         self._access_prompt: Optional[Callable[[Path], bool]] = None
         self._access_declines: Optional[Callable[[Path], bool]] = None
+        # Paths whose access prompt the user answered "no" to.
+        self._declined_paths: Set[Path] = set()
 
         # Load persisted paths
         self._load_persisted_paths()
@@ -1060,6 +1126,24 @@ class PathValidator:
         self._access_prompt = prompt
         self._access_declines = declines if prompt is not None else None
 
+    def note_access_answer(self, path: Path, declined: bool) -> None:
+        """Record whether the user said no to *path*'s access prompt.
+
+        A timed-out prompt is not a no, so it clears an earlier one too.
+        """
+        resolved = Path(_real_path(str(path))).resolve()
+        if declined:
+            self._declined_paths.add(resolved)
+        else:
+            self._declined_paths.discard(resolved)
+
+    def _declined_by_user(self, path: str) -> bool:
+        target = Path(_real_path(path)).resolve()
+        return any(
+            target == declined or declined in target.parents
+            for declined in self._declined_paths
+        )
+
     def _unaskable_reason(self, path: Path) -> str:
         """Why *path* stays refused whatever the user answers, or "".
 
@@ -1212,6 +1296,13 @@ class PathValidator:
                 "from this chat's folders. Don't try another way to reach it; tell "
                 "the user it can be added back under Environment in the session "
                 "panel."
+            )
+        if self._declined_by_user(path):
+            return (
+                f"Access denied: the user declined access to '{path}' when asked. "
+                "The file is fine; GAIA may not read it. Don't reach it, or what "
+                "it holds, another way. Tell the user, and offer to read it if "
+                "they attach it to this chat or allow it when asked again."
             )
         message = f"Access denied: '{path}' is not in allowed paths."
         real_path = Path(_real_path(path))
@@ -1459,7 +1550,8 @@ class PathValidator:
             # Unreadable is not missing; let the user decide as before.
             return ""
         message = (
-            f"Not found: '{path}' does not exist, so access was not requested. "
+            f"{MISSING_REFUSAL_PREFIX}'{path}' does not exist, so access was not "
+            "requested. "
             "Check the name and folder, or ask the user where the file is."
         )
         candidates = self._in_scope_files_named(real_path.name)

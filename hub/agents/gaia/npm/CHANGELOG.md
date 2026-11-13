@@ -14,6 +14,28 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   that lands just after the run ended. A host that closes the stream on Stop
   never read the loading step's "Stopped: N documents were not loaded" result,
   so its user was told nothing. The field is absent when nothing was left.
+
+- **A run stopped for an approval nobody can give reads as not done.** Its
+  `final` now carries `failed: true` and the `usage` spent before the stop, so
+  `gaia -p` reports `is_error: true` with real step and token counts instead of
+  a free, zero-step success. A stopped turn's result now carries
+  the tokens it spent too.
+
+- **A new chat starts faster on hybrid models.** Memory, loaded skills, the
+  project map or working directory, and the session's folders and scratch
+  directory now go in the session context at the start of the first user
+  message instead of the system prompt. The system prompt and tool list stay
+  identical across new chats, so a model like Qwen3.6 no longer re-reads the
+  whole prompt before its first reply.
+
+- **The context meter fills during a long turn (contract 2.28).** A request
+  that sends `turns` is now streamed a `context_usage` event before the answer,
+  the same one an in-process turn streams at turn start, so a composer no
+  longer shows a blank meter until `final`. The turn's record and its
+  measurement are sealed as the agent prints the answer, so a run still
+  storing memory past the old 15 s wait no longer drops them, and a
+  measurement that cannot finish carries `context_error` instead of nothing.
+
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the
   `hint` read "The model X is not downloaded. X is not downloaded, and no
   Lemonade client CLI was found …, then re-check." It is now the one sentence.
