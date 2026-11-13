@@ -576,7 +576,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
     const readAloudId = `${message.session_id}:${message.id}`;
-    const [copied, setCopied] = useState(false);
+    const [copyState, handleCopy] = useCopy(message.content);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
     const [userExpanded, setUserExpanded] = useState(false);
@@ -593,40 +593,14 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         scrollAfterCollapseRef.current = false;
         userBodyRef.current?.scrollIntoView?.({ block: 'nearest' });
     }, [userExpanded]);
-    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // Clean up timers on unmount to avoid setState on unmounted component
     useEffect(() => {
         return () => {
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
             if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
         };
     }, []);
-
-    const handleCopy = useCallback(() => {
-        const showCopied = () => {
-            setCopied(true);
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-            copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-        };
-        if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(message.content).then(showCopied).catch((err) => {
-                log.ui.warn('Could not copy to the clipboard', err);
-            });
-            return;
-        }
-        // Fallback for non-HTTPS contexts (common for localhost)
-        const textarea = document.createElement('textarea');
-        textarea.value = message.content;
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-        showCopied();
-    }, [message.content]);
 
     const handleDelete = useCallback(() => {
         if (!confirmDelete) {
@@ -706,13 +680,16 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.role === 'assistant' && !isError && cleanedContent.trim() && (
                                 <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
                             )}
+                            {copyState === 'failed' && (
+                                <span className="msg-copy-error" role="alert">{t('msg.copyFailed')}</span>
+                            )}
                             <button
-                                className={`msg-copy ${copied ? 'copied' : ''}`}
+                                className={`msg-copy ${copyState === 'copied' ? 'copied' : copyState === 'failed' ? 'copy-failed' : ''}`}
                                 onClick={handleCopy}
-                                title={copied ? t('msg.copied') : t('msg.copy')}
-                                aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
+                                title={copyState === 'copied' ? t('msg.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('msg.copy')}
+                                aria-label={copyState === 'copied' ? t('msg.copiedAria') : copyState === 'failed' ? t('msg.copyFailed') : t('msg.copy')}
                             >
-                                {copied ? <Check size={12} /> : <Copy size={12} />}
+                                {copyState === 'copied' ? <Check size={12} /> : copyState === 'failed' ? <AlertTriangle size={12} /> : <Copy size={12} />}
                             </button>
                             {/* Delete button */}
                             {onDelete && (
@@ -869,13 +846,60 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     );
 }
 
+type CopyState = 'idle' | 'copied' | 'failed';
+
+/** Copy text; rejects when nothing reached the clipboard. */
+function writeClipboard(text: string): Promise<void> {
+    if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text);
+    // Fallback for non-HTTPS contexts (common for localhost)
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    return ok ? Promise.resolve() : Promise.reject(new Error('The browser refused the copy command'));
+}
+
+/** A copy button's state: Copied only once the write succeeded, a failure otherwise. */
+function useCopy(text: string): [CopyState, () => void] {
+    const [state, setState] = useState<CopyState>('idle');
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => () => {
+        if (timerRef.current) clearTimeout(timerRef.current);
+    }, []);
+    const copy = useCallback(() => {
+        const show = (next: CopyState, ms: number) => {
+            setState(next);
+            if (timerRef.current) clearTimeout(timerRef.current);
+            timerRef.current = setTimeout(() => setState('idle'), ms);
+        };
+        // Write inside the click itself: the execCommand fallback needs the user gesture.
+        let written: Promise<unknown>;
+        try {
+            written = Promise.resolve(writeClipboard(text));
+        } catch (err) {
+            written = Promise.reject(err);
+        }
+        written
+            .then(() => show('copied', 2000))
+            .catch((err) => {
+                log.ui.warn('Could not copy to the clipboard', err);
+                show('failed', 4000);
+            });
+    }, [text]);
+    return [state, copy];
+}
+
 /** Whether the markdown being rendered is still streaming in. */
 const StreamingContext = createContext(false);
 
 /** Custom code block with copy button; a long one opens collapsed to a preview. */
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
     const t = useT();
-    const [copied, setCopied] = useState(false);
+    const [copyState, handleCopy] = useCopy(code);
     const [expanded, setExpanded] = useState(false);
     const streaming = useContext(StreamingContext);
     const bodyId = useId();
@@ -883,37 +907,6 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
     // While streaming, cap as soon as the preview fills so the block never grows and then shrinks.
     const collapsible = lines > (streaming ? CODE_PREVIEW_LINES : CODE_COLLAPSE_LINES);
     const collapsed = collapsible && !expanded;
-    const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-    useEffect(() => {
-        return () => {
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-        };
-    }, []);
-
-    const handleCopy = useCallback(() => {
-        const showCopied = () => {
-            setCopied(true);
-            if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
-            copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-        };
-        if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(code).then(showCopied).catch((err) => {
-                log.ui.warn('Could not copy to the clipboard', err);
-            });
-            return;
-        }
-        // Fallback for non-HTTPS contexts (common for localhost)
-        const textarea = document.createElement('textarea');
-        textarea.value = code;
-        textarea.style.position = 'fixed';
-        textarea.style.opacity = '0';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-        showCopied();
-    }, [code]);
 
     return (
         // Code reads left to right even inside an Arabic answer.
@@ -921,13 +914,15 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
             <div className="code-header">
                 <span className="code-lang">{lang || 'code'}</span>
                 <button
-                    className={`code-copy ${copied ? 'copied' : ''}`}
+                    className={`code-copy ${copyState === 'copied' ? 'copied' : copyState === 'failed' ? 'copy-failed' : ''}`}
                     onClick={handleCopy}
-                    title={copied ? t('msg.copied') : t('code.copy')}
-                    aria-label={copied ? t('msg.copiedAria') : t('code.copyAria')}
+                    title={copyState === 'copied' ? t('msg.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('code.copy')}
+                    aria-label={copyState === 'copied' ? t('msg.copiedAria') : copyState === 'failed' ? t('msg.copyFailed') : t('code.copyAria')}
                 >
-                    {copied ? <Check size={13} /> : <Copy size={13} />}
-                    <span>{copied ? t('code.copied') : t('code.copy')}</span>
+                    {copyState === 'copied' ? <Check size={13} /> : copyState === 'failed' ? <AlertTriangle size={13} /> : <Copy size={13} />}
+                    <span role={copyState === 'failed' ? 'alert' : undefined}>
+                        {copyState === 'copied' ? t('code.copied') : copyState === 'failed' ? t('msg.copyFailed') : t('code.copy')}
+                    </span>
                 </button>
             </div>
             <pre id={bodyId}><code>{code}</code></pre>

@@ -90,7 +90,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                     QRCodeLib = mod.default || mod;
                 } catch {
                     log.system.error('QR code library not available - install with: npm install qrcode');
-                    setQrError('QR code unavailable on this build. Use the link below instead.');
+                    setQrError(t('mobile.qrMissing'));
                     return;
                 }
             }
@@ -106,7 +106,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                     'QR code skipped: --text-primary/--bg-primary did not resolve. ' +
                         'styles/index.css must be loaded before this modal renders.',
                 );
-                setQrError('QR code unavailable — the theme did not load. Use the link below instead.');
+                setQrError(t('mobile.qrNoTheme'));
                 return;
             }
 
@@ -119,12 +119,12 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                 });
             } catch (err) {
                 log.system.error('QR code generation failed', err);
-                setQrError('QR code could not be drawn. Use the link below instead.');
+                setQrError(t('mobile.qrFailed'));
             }
         };
 
         generateQR();
-    }, [status?.active, status?.url, status?.token]);
+    }, [status?.active, status?.url, status?.token, t]);
 
     // Copy URL to clipboard
     const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -179,12 +179,12 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                         }`} />
                         <span>
                             {status?.active
-                                ? 'Tunnel active'
+                                ? t('mobile.active')
                                 : needsSetup
                                     ? t('mobile.ngrokRequired')
                                     : error
-                                        ? "Couldn't start mobile access"
-                                        : 'Starting tunnel...'}
+                                        ? t('mobile.startFailed')
+                                        : t('mobile.starting')}
                         </span>
                         {!status?.active && !halted && <span className="tunnel-spinner" />}
                     </div>
@@ -219,7 +219,7 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                             ) : (
                                 <div className="qr-placeholder">
                                     <div className="placeholder-spinner" />
-                                    <span>Connecting...</span>
+                                    <span>{t('mobile.connecting')}</span>
                                 </div>
                             )}
                         </div>
@@ -228,18 +228,20 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                     {/* URL display */}
                     {status?.active && mobileUrl && (
                         <div className="tunnel-url-area">
-                            <label>Mobile URL</label>
+                            <label htmlFor="mobile-url">{t('mobile.url')}</label>
                             <div className="tunnel-url-row">
-                                <input type="text" readOnly value={mobileUrl} />
+                                <input id="mobile-url" type="text" dir="ltr" readOnly value={mobileUrl} />
                                 <button
                                     className={`copy-url-btn ${copied ? 'copied' : ''}`}
                                     onClick={copyUrl}
-                                    title="Copy URL"
+                                    title={t('mobile.copyUrl')}
                                 >
                                     {copied ? <Check size={13} /> : <Copy size={13} />}
-                                    {copied ? 'Copied' : 'Copy'}
+                                    {copied ? t('mobile.copied') : t('mobile.copy')}
                                 </button>
                             </div>
+                            {/* Next to the button it answers, not below the fold of a scrolled dialog. */}
+                            {copyFailed && <div className="tunnel-error" role="alert">{t('mobile.copyFailed')}</div>}
                         </div>
                     )}
 
@@ -247,10 +249,10 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                     {status?.active && status?.publicIp && status?.url &&
                      !status.url.includes('ngrok-free.app') && (
                         <div className="tunnel-password-hint">
-                            <label>Tunnel password</label>
+                            <label>{t('mobile.password')}</label>
                             <div className="tunnel-password-value">{status.publicIp}</div>
                             <span className="tunnel-password-note">
-                                Enter this when the tunnel page asks for a password
+                                {t('mobile.passwordNote')}
                             </span>
                         </div>
                     )}
@@ -260,15 +262,13 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                         <div className="mobile-instructions">
                             <ol>
                                 <li>
-                                    {qrError
-                                        ? 'Open the mobile URL above on your phone'
-                                        : "Scan the QR code with your phone's camera"}
+                                    {qrError ? t('mobile.stepOpenUrl') : t('mobile.stepScan')}
                                 </li>
                                 {status?.url && !status.url.includes('ngrok-free.app') && (
-                                    <li>Enter the tunnel password shown above when prompted</li>
+                                    <li>{t('mobile.stepPassword')}</li>
                                 )}
-                                <li>Chat with GAIA from your mobile device</li>
-                                <li>Your data stays secure via encrypted tunnel</li>
+                                <li>{t('mobile.stepChat')}</li>
+                                <li>{t('mobile.stepSecure')}</li>
                             </ol>
                         </div>
                     )}
@@ -281,19 +281,15 @@ export function MobileAccessModal({ isOpen, onClose, onStop, error, setupCommand
                         </div>
                     )}
 
-                    {copyFailed && (
-                        <div className="tunnel-error" role="alert">{t('mobile.copyFailed')}</div>
-                    )}
-
                     {/* Actions */}
                     <div className="mobile-access-actions">
                         {status?.active && onStop && (
                             <button
                                 className="btn-danger"
                                 onClick={onStop}
-                                title="Close the tunnel and revoke the mobile URL"
+                                title={t('mobile.stopTitle')}
                             >
-                                Stop tunnel
+                                {t('mobile.stop')}
                             </button>
                         )}
                         {needsSetup && onRetry && (

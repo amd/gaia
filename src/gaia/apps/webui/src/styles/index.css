@@ -730,6 +730,11 @@ textarea:focus-visible {
 .app-notice > span {
     flex: 1;
     min-width: 0;
+    /* The server's English keeps its full stop at its end in an Arabic window. */
+    unicode-bidi: plaintext;
+}
+.app-notice > span:dir(rtl) {
+    text-align: right;
 }
 
 .app-notice-close {

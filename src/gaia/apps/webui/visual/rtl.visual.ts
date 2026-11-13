@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, DISCORD_STATES, MEMORY_ITEMS, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -4345,5 +4345,198 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `skills-link-result-${locale}`);
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.skill-link-result')).toEqual([]);
+    });
+}
+
+/** A clipboard that refuses every write until the page sets `clipboardWorks`. */
+function refusingClipboard(): void {
+    const w = window as unknown as { clipboardWorks?: boolean };
+    Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: { writeText: () => (w.clipboardWorks ? Promise.resolve() : Promise.reject(new DOMException('Write permission denied.', 'NotAllowedError'))) },
+    });
+}
+const letClipboardWork = (page: Page) => page.evaluate(() => { (window as unknown as { clipboardWorks?: boolean }).clipboardWorks = true; });
+
+const SHELL_ANSWER = {
+    messages: [MESSAGES.messages[0], {
+        ...MESSAGES.messages[1],
+        agent_steps: [{
+            id: 1, type: 'tool', label: 'Using tool', tool: 'run_shell', detail: 'git status --short', result: 'Ran command', active: false, success: true, latencyMs: 210,
+            commandOutput: { command: 'git status --short', stdout: ' M src/app.ts\n?? notes.md', stderr: '', returnCode: 0, cwd: 'C:\\Users\\me\\gaia', durationSeconds: 0.2 },
+        }],
+    }],
+    total: 2,
+};
+
+for (const locale of ['en', 'ar']) {
+    // Copy once said Copied when the clipboard refused the write.
+    test(`a copy the clipboard refuses says so, then Copied once it works (${locale})`, async ({ page }) => {
+        await page.addInitScript(refusingClipboard);
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) => p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({ json: SHELL_ANSWER })));
+        const answer = page.locator('.msg-assistant').last();
+        await answer.locator('.flow-tool-header').click();
+        const cmdCopy = answer.locator('.cmd-copy');
+        await cmdCopy.click();
+        await expect(answer.locator('.cmd-copy-error')).toBeVisible();
+        await expect(cmdCopy).not.toHaveClass(/copied/);
+        const msgCopy = answer.locator('.msg-copy');
+        await msgCopy.click();
+        await expect(msgCopy).toHaveClass(/copy-failed/);
+        await expect(msgCopy).toHaveAttribute('title', locale === 'ar' ? /تعذّر النسخ/ : "Couldn't copy");
+        await expect(answer.locator('.msg-copy-error')).toBeVisible();
+        // The failure note sits beside the copy button, not over it; a terminal reads left to right in both languages.
+        const [note, button] = [await answer.locator('.cmd-copy-error').boundingBox(), await cmdCopy.boundingBox()];
+        expect(note!.x + note!.width).toBeLessThanOrEqual(button!.x + 1);
+        await expect(answer.locator('.cmd-output')).toHaveCSS('direction', 'ltr');
+        await shot(page, `copy-failed-${locale}`);
+        expect(await audit(page)).toEqual([]);
+
+        await letClipboardWork(page);
+        await cmdCopy.click();
+        await msgCopy.click();
+        await expect(cmdCopy).toHaveClass(/copied/);
+        await expect(answer.locator('.cmd-copy-error')).toHaveCount(0);
+        await expect(msgCopy).toHaveClass(/copied/);
+        await expect(msgCopy).not.toHaveClass(/copy-failed/);
+        await shot(page, `copy-copied-${locale}`);
+    });
+
+    test(`a mobile link the clipboard refuses says so, in the UI language (${locale})`, async ({ page }) => {
+        const live = { active: true, url: 'https://quiet-river-42.ngrok-free.app', token: 'tok-3f9c', startedAt: NOW.toISOString(), publicIp: null, error: null };
+        await page.addInitScript(refusingClipboard);
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/tunnel/start', (route) => route.fulfill({ json: live }));
+            await p.route('**/api/tunnel/status', (route) => route.fulfill({ json: live }));
+        });
+        await page.locator('.sb-icon-btn').filter({ has: page.locator('.lucide-smartphone') }).click();
+        const dialog = page.locator('.mobile-modal');
+        const copy = dialog.locator('.copy-url-btn');
+        await copy.click();
+        await expect(dialog.getByRole('alert')).toBeVisible();
+        await expect(copy).not.toHaveClass(/copied/);
+        await shot(page, `mobile-copy-failed-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.mobile-modal')).toEqual([]);
+        // The steps' numbers sit inside their box, on the reading side.
+        const [list, step] = [await dialog.locator('.mobile-instructions').boundingBox(), await dialog.locator('.mobile-instructions li').first().boundingBox()];
+        expect(locale === 'ar' ? list!.x + list!.width - (step!.x + step!.width) : step!.x - list!.x).toBeGreaterThanOrEqual(30);
+        await letClipboardWork(page);
+        await copy.click();
+        await expect(copy).toHaveClass(/copied/);
+        await expect(dialog.getByRole('alert')).toHaveCount(0);
+        await shot(page, `mobile-copy-copied-${locale}`);
+    });
+
+    // The session panel's switch once stuck on "Starting…" after a failed start.
+    test(`Phone access falls back to Off when mobile access fails to start (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, (p) => p.route('**/api/tunnel/start', (route) => route.fulfill({
+            json: { active: false, url: null, token: null, startedAt: null, publicIp: null, error: 'ngrok could not start: authentication failed (ERR_NGROK_4018).' },
+        })));
+        const phone = page.getByRole('switch', { name: locale === 'ar' ? 'الوصول من الهاتف' : 'Phone access' });
+        await phone.click();
+        await expect(page.locator('.mobile-modal .tunnel-error')).toBeVisible();
+        await shot(page, `phone-access-failed-dialog-${locale}`);
+        await page.locator('.mobile-modal .btn-icon').click();
+        await expect(phone).toBeEnabled();
+        await expect(phone).not.toBeChecked();
+        const row = page.locator('.sp-env-row', { has: phone });
+        await expect(row).not.toContainText(locale === 'ar' ? 'جارٍ التشغيل' : 'Starting');
+        await shot(page, `phone-access-failed-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    // The library's refusal names what to do instead, not only that it can't.
+    for (const [file, mime] of [['IMG_2041.heic', 'image/heic'], ['Team call 2026-09-14.mp4', 'video/mp4']] as const) {
+        const ext = file.split('.').pop();
+        test(`the document library refuses .${ext} and says what to do (${locale})`, async ({ page }) => {
+            await open(page, '', locale);
+            await page.locator('.sb').getByRole('button', { name: /Documents|المستندات/ }).click();
+            await page.locator('.doc-modal input[type="file"]').setInputFiles({ name: file, mimeType: mime, buffer: Buffer.from('x') });
+            const toast = page.locator('.upload-error-toast');
+            await expect(toast).toBeVisible();
+            await shot(page, `documents-refused-${ext}-${locale}`);
+            await expect(toast).toContainText(mime === 'video/mp4' ? (locale === 'ar' ? 'أرفق' : 'Attach the video to a chat') : 'PNG');
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.upload-error-toast')).toEqual([]);
+        });
+    }
+
+    // A dismissed warning once came back on the next five-second recheck.
+    test(`a dismissed restore warning stays dismissed through a recheck (${locale})`, async ({ page }) => {
+        let reads = 0;
+        await open(page, '', locale, (p) => p.route((url) => url.pathname === '/api/providers/active', (route) => {
+            reads += 1;
+            return route.fulfill({ json: {
+                provider: 'local', model: 'Gemma-4-E4B-it-GGUF', label: 'Gemma-4-E4B-it-GGUF · local', remote: false, is_default: true,
+                restore: { status: 'failed', retry: true, message: "Couldn't restore your last model, Qwen3.6-35B-A3B-GGUF: the model server is still starting." },
+            } });
+        }));
+        const notice = page.locator('.app-notice.is-warning');
+        await expect(notice).toBeVisible();
+        // The server's English sentence keeps its full stop at its end in an Arabic window.
+        await expect(notice.locator('span').first()).toHaveCSS('unicode-bidi', 'plaintext');
+        await shot(page, `restore-warning-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.app-notice', 'span')).toEqual([]);
+        await expect(notice.locator('.app-notice-close')).toHaveAttribute('aria-label', locale === 'ar' ? /إغلاق/ : 'Dismiss');
+        await notice.locator('.app-notice-close').click();
+        await expect(notice).toHaveCount(0);
+        const seen = reads;
+        await expect.poll(() => reads, { timeout: 8_000 }).toBeGreaterThan(seen);
+        await page.waitForTimeout(300);
+        await expect(notice).toHaveCount(0);
+        await shot(page, `restore-warning-dismissed-${locale}`);
+    });
+
+    // A refused download once lost its error on the next status read.
+    test(`a refused download keeps its error after the next status read (${locale})`, async ({ page }) => {
+        const failedOnly = {
+            ...SETUP_RUNNING, state: 'failed', text: 'A download failed',
+            models: [SETUP_ROW('Gemma-4-E4B-it-GGUF', ['chat', 'vision'], 'failed', 2e9, 5.97e9, { error: 'Connection reset by peer', error_kind: 'network' })],
+            overall: { bytes_done: 2e9, bytes_total: 5.97e9, speed_bps: 0, eta_s: null, percent: 33, failed: 1 },
+        };
+        await openModelPage(page, locale, { status: failedOnly });
+        await page.route('**/api/setup/models/download', (route) => route.fulfill({ status: 409, json: { detail: 'Another model download is already running. Wait for it to finish, then try again.' } }));
+        const downloads = page.locator('.models-downloads-slot');
+        await downloads.locator('.dl-row.is-failed .btn-primary').click();
+        const error = downloads.locator('.settings-error[role="alert"]');
+        await expect(error).toBeVisible();
+        await page.waitForTimeout(2_500);
+        await expect(error).toBeVisible();
+        // The server's English keeps its full stop at its end in an Arabic window.
+        await expect(error).toHaveCSS('unicode-bidi', 'plaintext');
+        await downloads.scrollIntoViewIfNeeded();
+        await shot(page, `model-${locale}-download-refused`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`clearing a reminder's due date saves it as cleared (${locale})`, async ({ page }) => {
+        await openMemory(page, locale);
+        let sent: Record<string, unknown> | null = null;
+        await page.route((url) => url.pathname === '/api/memory/knowledge/k3', (route) => {
+            if (route.request().method() !== 'PUT') return route.fallback();
+            sent = route.request().postDataJSON();
+            return route.fulfill({ json: { id: 'k3', due_at: null, embedded: true } });
+        });
+        await memoryTab(page, /Advanced|متقدم/);
+        const row = page.locator('.mem-knowledge-table tbody tr', { hasText: 'Dentist appointment' });
+        const dueDate = row.locator('.mem-due-badge:not(.none)');
+        await expect(dueDate).toBeVisible();
+        await row.locator('.mem-row-action-btn').first().click();
+        const due = page.locator('.mem-inline-form-row', { hasText: locale === 'ar' ? 'الموعد' : 'Due at' }).locator('input');
+        await expect(due).not.toHaveValue('');
+        await due.fill('');
+        await checkMemory(page, locale, 'due-cleared-form');
+        await page.route((url) => url.pathname === '/api/memory/knowledge', (route) => route.fulfill({
+            json: { items: MEMORY_ITEMS.map((m) => (m.id === 'k3' ? { ...m, due_at: null } : m)), total: MEMORY_ITEMS.length, offset: 0, limit: 15 },
+        }));
+        await page.route((url) => url.pathname === '/api/memory/upcoming', (route) => route.fulfill({ json: [] }));
+        await page.locator('.mem-inline-form-actions .btn-primary').click();
+        await expect.poll(() => sent).not.toBeNull();
+        expect(sent!.due_at).toBeNull();
+        await expect(dueDate).toHaveCount(0);
+        await expect(row.locator('.mem-due-badge.none')).toBeVisible();
+        await checkMemory(page, locale, 'due-cleared');
     });
 }

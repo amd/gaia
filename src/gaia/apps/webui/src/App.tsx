@@ -873,10 +873,10 @@ ${prompt}` : prompt);
                         <span>{restoreNotice.message}</span>
                         {!restoreNotice.ok && (
                             <button type="button" className="link-btn" onClick={() => { dismissRestoreNotice(); openSettings('model'); }}>
-                                Pick a model
+                                {t('banner.restore.pick')}
                             </button>
                         )}
-                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label="Dismiss">
+                        <button type="button" className="app-notice-close" onClick={dismissRestoreNotice} aria-label={t('banner.dismiss')}>
                             <X size={14} />
                         </button>
                     </div>

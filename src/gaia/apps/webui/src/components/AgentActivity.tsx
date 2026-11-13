@@ -1204,7 +1204,8 @@ function CommandOutputView({ output }: { output: CommandOutput }) {
     const isError = output.returnCode !== 0 && !output.expectedExit;
 
     return (
-        <div className={`cmd-output ${isError ? 'cmd-error' : ''}`}>
+        // A terminal reads left to right even inside an Arabic answer.
+        <div className={`cmd-output ${isError ? 'cmd-error' : ''}`} dir="ltr">
             <div className="cmd-header">
                 <div className="cmd-header-left">
                     <Terminal size={12} className="cmd-header-icon" />

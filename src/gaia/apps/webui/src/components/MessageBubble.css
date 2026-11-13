@@ -107,6 +107,8 @@
 /* Delete stands apart from the everyday actions. */
 .msg-actions .msg-delete { margin-inline-start: 10px; }
 .msg-copy.copied { color: var(--accent-green); }
+.msg-copy.copy-failed { color: var(--danger); }
+.msg-copy-error { font-size: 12px; color: var(--danger); }
 
 /* A reply being read stays stoppable without hovering it. */
 .msg-actions:has(.msg-read-aloud.is-active) { opacity: 1; }
@@ -607,6 +609,7 @@
     color: var(--code-success);
     background: color-mix(in srgb, var(--code-success) 10%, var(--bg-code));
 }
+.code-copy.copy-failed { color: var(--code-danger); }
 
 .code-block pre {
     padding: 16px 18px;
