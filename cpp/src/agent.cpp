@@ -860,6 +860,18 @@ bool isContextOverflow(const std::exception& e) {
     return false;
 }
 
+// Many lines of comma- or tab-separated values: rows copied out of a data file.
+bool looksLikePastedRows(const std::string& text) {
+    std::string t = text;
+    for (size_t at; (at = t.find("\\n")) != std::string::npos;) t.replace(at, 2, "\n");
+    size_t rows = 0, start = 0;
+    for (size_t end; (end = t.find('\n', start)) != std::string::npos; start = end + 1) {
+        const std::string line = t.substr(start, end - start);
+        if (std::count(line.begin(), line.end(), ',') + std::count(line.begin(), line.end(), '\t') >= 2) ++rows;
+    }
+    return rows >= 10;
+}
+
 // A reply made of a model's unused special tokens (`<unused49><unused49>...`) is noise from a
 // server whose copy of the model went bad, never an answer.
 bool isPlaceholderRun(const std::string& text) {
@@ -1953,11 +1965,13 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         std::string batchNote;
         if (!llmResult.toolCalls.empty() && llmResult.finishReason == "length") {
             const size_t sent = llmResult.toolCalls.size();
+            bool pastingRows = false;
             while (!llmResult.toolCalls.empty()) {
                 try {
                     llmResult.toolCalls.back().parsedArgs();
                     break;
                 } catch (const std::exception&) {
+                    pastingRows = pastingRows || looksLikePastedRows(llmResult.toolCalls.back().arguments);
                     llmResult.toolCalls.pop_back();
                 }
             }
@@ -1970,6 +1984,12 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                             " unfinished tool call(s) at the end did not run. Send fewer calls "
                             "per reply and keep arguments short; write long content in parts, and refer to "
                             "a file by its path instead of pasting its contents.]";
+                if (pastingRows) {
+                    batchNote += " [The cut-off call was pasting rows of data. Don't copy a file's rows into a "
+                                 "command: a short script that opens the file is enough, for example python -c "
+                                 "\"import pandas as pd; df = pd.read_csv('data.csv'); "
+                                 "print(df.groupby('region')['revenue'].sum())\" with your file and column names.]";
+                }
             }
             if (llmResult.toolCalls.empty()) {
                 if (++malformedStreak > 2) {

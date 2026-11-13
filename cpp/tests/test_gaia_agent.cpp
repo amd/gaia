@@ -1091,3 +1091,13 @@ TEST(GaiaAgentTest, ReadingALargeCsvPointsAtReadingItByPath) {
     const json tiny = agent.toolRegistry().executeTool("file_read", {{"path", (w.path / "tiny.csv").string()}});
     EXPECT_FALSE(tiny.contains("note"));
 }
+
+TEST(GaiaAgentTest, PastingATwoColumnCsvIsRefusedToo) {
+    Workdir w;
+    std::ofstream(w.path / "expenses.csv") << "category,amount\nTravel,1200\nMeals,340\nSoftware,2150\nTravel,800\nMeals,95\n";
+    const std::string pasted = "python -c \"import csv\nfrom io import StringIO\n\ncsv_data = '''category,amount\n"
+                               "Travel,1200\nMeals,340\nSoftware,2150\nTravel,800\nMeals,95'''\n\n# totals per category"
+                               " follow, written with a long comment so the command passes the size gate............"
+                               "......................................................................\"";
+    EXPECT_NE(GaiaAgent::pastedDataRefusal(pasted, {w.path.u8string()}).find("expenses.csv"), std::string::npos);
+}
