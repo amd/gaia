@@ -592,6 +592,11 @@
 .download-chip-bar > span { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--accent); transition: inline-size var(--duration-slow) var(--ease-linear); }
 .download-chip.is-failed { border-color: var(--danger); }
 
+/* Pinned, the summary covers a quarter of a short window and leaves one model row. */
+@media (max-height: 700px) {
+    .setup-models-footer { position: static; }
+}
+
 /* ── Narrow windows and 200% zoom ──────────────────────────────── */
 @media (max-width: 480px) {
     .setup { --setup-pad-block: 24px; padding: var(--setup-pad-block) 12px; }

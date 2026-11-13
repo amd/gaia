@@ -3036,6 +3036,14 @@ for (const locale of ['ar', 'en']) {
             });
         }
 
+        test('short window: the download summary scrolls with the list', async ({ page }) => {
+            await page.setViewportSize({ width: 800, height: 600 });
+            const s = scene('models');
+            await open(page, '', locale, (p) => withSetup(p, s.answers));
+            await s.reach(page);
+            await expect(page.locator('.setup-models-footer')).toHaveCSS('position', 'static');
+        });
+
         test('narrow window: no sideways scroll', async ({ page }) => {
             await page.setViewportSize({ width: 320, height: 720 });
             const s = scene('models');
