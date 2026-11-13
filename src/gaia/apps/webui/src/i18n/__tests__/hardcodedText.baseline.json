@@ -3,7 +3,7 @@
   "components/AgentActivity.tsx": 2,
   "components/ChangesReview.tsx": 6,
   "components/ChatView.tsx": 14,
-  "components/ConnectionBanner.tsx": 29,
+  "components/ConnectionBanner.tsx": 28,
   "components/ConnectorRetryBanner.tsx": 3,
   "components/ConnectorsSection.tsx": 1,
   "components/ContextPanel.tsx": 1,
