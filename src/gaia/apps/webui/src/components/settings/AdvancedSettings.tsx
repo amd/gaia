@@ -12,6 +12,7 @@ import { useT, type Translate } from '../../i18n/useT';
 import { isolate, type MessageKey } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
+import { useModelStore } from '../../stores/modelStore';
 import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
@@ -111,6 +112,8 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
+            // The chip names the model now in use, without waiting for its poll.
+            void useModelStore.getState().refresh();
             setSaveNote(customModelNote(nextValue, updated.model_status));
             setJustSaved(true);
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);

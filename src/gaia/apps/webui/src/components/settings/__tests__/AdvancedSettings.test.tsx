@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdvancedSettings } from '../AdvancedSettings';
 import * as api from '../../../services/api';
 import { useChatStore } from '../../../stores/chatStore';
+import { useModelStore } from '../../../stores/modelStore';
 import type { SystemStatus } from '../../../types';
 
 vi.mock('../../../services/api');
@@ -244,6 +245,30 @@ describe('AdvancedSettings', () => {
         render(<AdvancedSettings />);
 
         expect(await screen.findByText('None loaded yet — it loads with the first message.')).toBeInTheDocument();
+    });
+
+    it('clearing the custom model ID leaves the field empty and re-reads the model in use', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({ default_model_is_cloud: true }));
+        mockedApi.getSettings.mockResolvedValue(
+            { custom_model: 'fireworks.glm-5p3-flash', dynamic_tools: false, dynamic_tools_locked: false } as never,
+        );
+        // The backend goes back to the model picked under Model, which is not a custom ID.
+        mockedApi.updateSettings.mockResolvedValue(
+            { custom_model: null, dynamic_tools: false, dynamic_tools_locked: false } as never,
+        );
+        mockedApi.getActiveModel.mockResolvedValue({
+            provider: 'fireworks', model: 'fireworks.deepseek-v4p1-flash', label: 'deepseek-v4p1-flash · Fireworks AI',
+            remote: true, is_default: false,
+        } as never);
+        render(<AdvancedSettings />);
+        const field = await screen.findByDisplayValue('fireworks.glm-5p3-flash');
+
+        fireEvent.change(field, { target: { value: '' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Save custom model' }));
+
+        await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledWith({ custom_model: '' }));
+        await waitFor(() => expect(useModelStore.getState().active?.model).toBe('fireworks.deepseek-v4p1-flash'));
+        expect(screen.getByRole('textbox', { name: 'Custom model override' })).toHaveValue('');
     });
 
     describe('Custom model ID', () => {
