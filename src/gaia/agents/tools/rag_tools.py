@@ -13,6 +13,7 @@ import re
 import threading
 import time
 import weakref
+from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -525,7 +526,12 @@ def _best_chunk_per_document(
     A global top-k lets one long document that matches everywhere fill every
     slot; this makes sure every document's best passage is at least considered.
     """
-    files = [f for f in list(rag.indexed_files) if f not in (left_out or {})]
+    # Only documents with a cached per-file index: a miss would re-embed the file.
+    files = [
+        f
+        for f in list(rag.indexed_files)
+        if f not in (left_out or {}) and f in rag.file_indices
+    ]
     if len(files) < 2:
         return [], []
     chunks, scores = [], []
@@ -538,24 +544,50 @@ def _best_chunk_per_document(
     return chunks, scores
 
 
-def _one_per_document_first(
-    ranked: List[tuple], owner: Dict[str, List[int]], rag: Any, limit: int
+def _spread_over_documents(
+    ranked: List[tuple],
+    extra: List[tuple],
+    owner: Dict[str, List[int]],
+    rag: Any,
+    limit: int,
 ) -> List[tuple]:
-    """*ranked* with each document's best chunk moved to the front, up to *limit*.
+    """The top *limit* of *ranked*, with documents it leaves out given a passage.
 
-    The rest follow by score, so the cut to *limit* keeps one passage from as
-    many documents as fit, then the strongest of what is left.
+    Each document missing from the top gets its best passage from *extra*,
+    best first: into a free slot, or in place of the weakest passage of a
+    document that has several. At most half of *limit* changes this way, so a
+    question about one document keeps most of its passages.
     """
-    firsts, rest, seen = [], [], set()
-    for chunk, score in ranked:
-        indices = owner.get(chunk) or [-1]
-        doc = rag.chunk_to_file.get(indices[0])
-        if doc is not None and doc not in seen and len(firsts) < limit:
-            seen.add(doc)
-            firsts.append((chunk, score))
+
+    def doc_of(chunk: str) -> Optional[str]:
+        return rag.chunk_to_file.get((owner.get(chunk) or [-1])[0])
+
+    top, rest = list(ranked[:limit]), list(ranked[limit:])
+    counts = Counter(doc_of(chunk) for chunk, _ in top)
+    held = {chunk for chunk, _ in top}
+    changes = limit // 2
+    for chunk, score in sorted(extra, key=lambda item: item[1], reverse=True):
+        if changes == 0:
+            break
+        doc = doc_of(chunk)
+        if doc is None or counts[doc] or chunk in held:
+            continue
+        if len(top) < limit:
+            top.append((chunk, score))
         else:
-            rest.append((chunk, score))
-    return firsts + rest
+            crowded = [i for i, (c, _) in enumerate(top) if counts[doc_of(c)] > 1]
+            if not crowded:
+                break
+            weakest = min(crowded, key=lambda i: top[i][1])
+            counts[doc_of(top[weakest][0])] -= 1
+            held.discard(top[weakest][0])
+            rest.append(top[weakest])
+            top[weakest] = (chunk, score)
+        counts[doc] += 1
+        held.add(chunk)
+        changes -= 1
+    rest = [item for item in rest if item[0] not in held]
+    return top + sorted(rest, key=lambda item: item[1], reverse=True)
 
 
 def _chunk_positions(rag: Any, left_out=None) -> Dict[str, List[int]]:
@@ -1184,12 +1216,11 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
-                # Several documents: consider each one's best passage too.
+                # Several documents: each one's best passage, for those the
+                # search leaves out.
                 per_doc_chunks, per_doc_scores = _best_chunk_per_document(
                     rag, query, left_out
                 )
-                all_chunks.extend(per_doc_chunks)
-                all_scores.extend(per_doc_scores)
 
                 # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
@@ -1322,7 +1353,13 @@ class RAGToolsMixin:
                 # A twin chunk in a left-out file must not be cited.
                 positions = _chunk_positions(rag, left_out)
                 kept = top_or_whole_index(
-                    _one_per_document_first(sorted_items, positions, rag, adaptive_max),
+                    _spread_over_documents(
+                        sorted_items,
+                        list(zip(per_doc_chunks, per_doc_scores)),
+                        positions,
+                        rag,
+                        adaptive_max,
+                    ),
                     _served_chunks(rag, left_out),
                     adaptive_max,
                     _CHUNK_CHARS,

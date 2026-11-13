@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 
 from gaia.agents.base.tools import _TOOL_REGISTRY
+from gaia.agents.tools import rag_tools
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.rag.sdk import RAGSDK, RAGConfig
 
@@ -32,7 +33,7 @@ def _clean_registry():
 
 def _vector(text: str) -> np.ndarray:
     """The loud document sits on the query; the quiet ones well away from it."""
-    if text.startswith("Vendor A") or text == QUERY:
+    if "Vendor A" in text or text == QUERY:
         return np.array([1.0, 0.0, 0.0, 0.0], dtype="float32")
     return np.array([0.0, 1.0, 0.0, 0.0], dtype="float32")
 
@@ -49,8 +50,7 @@ class _Host(RAGToolsMixin):
         return [query]
 
 
-@pytest.fixture
-def quotes(tmp_path):
+def _library(tmp_path, totals):
     pytest.importorskip("faiss", reason="Real vector-index tests require faiss-cpu")
     with patch("gaia.rag.sdk.AgentSDK"):
         rag = RAGSDK(
@@ -72,7 +72,7 @@ def quotes(tmp_path):
         encoding="utf-8",
     )
     paths.append(loud)
-    for n, total in enumerate([1200, 3400, 5600, 7800, 9100], start=1):
+    for n, total in enumerate(totals, start=1):
         quiet = tmp_path / f"quote_{n}.txt"
         quiet.write_text(QUIET.format(n=n, total=total), encoding="utf-8")
         paths.append(quiet)
@@ -82,6 +82,35 @@ def quotes(tmp_path):
     assert len(rag.chunks) > 50  # past the small-library whole-index shortcut
     host.register_rag_tools()
     return rag, paths
+
+
+@pytest.fixture
+def quotes(tmp_path):
+    return _library(tmp_path, [1200, 3400, 5600, 7800, 9100])
+
+
+def test_a_question_about_one_document_keeps_its_passages(tmp_path, monkeypatch):
+    # Eleven unrelated files: every one of them could claim a slot.
+    rag, _ = _library(tmp_path, range(1000, 12000, 1000))
+    budget = 20 if len(rag.chunks) > 100 else 10
+    search = _TOOL_REGISTRY["query_documents"]["function"]
+
+    def loud(result):
+        return [
+            c["content"]
+            for c in result["chunks"]
+            if Path(c["source_file"]).name == "vendor_A.txt"
+        ]
+
+    balanced = search(query=QUERY)
+    monkeypatch.setattr(rag_tools, "_best_chunk_per_document", lambda *_a: ([], []))
+    unbalanced = search(query=QUERY)
+
+    # Nothing the search found in the document asked about is pushed out,
+    # and the other files take at most half of the budget.
+    assert loud(balanced) == loud(unbalanced)
+    others = len(balanced["chunks"]) - len(loud(balanced))
+    assert 0 < others <= budget // 2
 
 
 def test_a_search_over_six_quotes_reads_all_six(quotes):
