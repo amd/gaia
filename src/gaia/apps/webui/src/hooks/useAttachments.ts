@@ -46,6 +46,8 @@ export function useAttachments(): UseAttachments {
     const t = useT();
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const mounted = useRef(true);
+    const current = useRef<Attachment[]>([]);
+    current.current = attachments;
     const uploads = useRef(new Map<string, AbortController>());
     useEffect(() => {
         mounted.current = true;
@@ -80,7 +82,11 @@ export function useAttachments(): UseAttachments {
     }, [t]);
 
     const addFiles = useCallback((files: File[]) => {
+        const taken = [...current.current];
         for (const file of files) {
+            // The same file picked twice is one chip; a refused one may be retried.
+            if (taken.some((a) => !a.error && a.file.name === file.name && a.file.size === file.size
+                && a.file.lastModified === file.lastModified)) continue;
             const isImage = file.type.startsWith('image/');
             const attachment: Attachment = {
                 id: `attach-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -92,6 +98,7 @@ export function useAttachments(): UseAttachments {
                 isImage,
                 isMedia: isMediaFile(file.name),
             };
+            taken.push(attachment);
             setAttachments((prev) => [...prev, attachment]);
             void upload(attachment);
         }

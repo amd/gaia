@@ -56,3 +56,25 @@ describe('useAttachments upload refusals', () => {
         expect(msg).toBe('Brand new refusal');
     });
 });
+
+describe('useAttachments the same file twice', () => {
+    it('keeps one chip when the same file is attached again', async () => {
+        vi.mocked(api.uploadFile).mockResolvedValue({ url: '/files/notes.txt' } as Awaited<ReturnType<typeof api.uploadFile>>);
+        const { result } = renderHook(() => useAttachments());
+        const file = new File(['hello'], 'notes.txt', { lastModified: 1000 });
+        act(() => result.current.addFiles([file]));
+        act(() => result.current.addFiles([new File(['hello'], 'notes.txt', { lastModified: 1000 })]));
+        act(() => result.current.addFiles([file, file]));
+        await waitFor(() => expect(result.current.hasUploaded).toBe(true));
+        expect(result.current.attachments).toHaveLength(1);
+        expect(api.uploadFile).toHaveBeenCalledTimes(1);
+    });
+
+    it('still adds a different file with the same name', () => {
+        vi.mocked(api.uploadFile).mockResolvedValue({ url: '/files/x' } as Awaited<ReturnType<typeof api.uploadFile>>);
+        const { result } = renderHook(() => useAttachments());
+        act(() => result.current.addFiles([new File(['one'], 'notes.txt', { lastModified: 1 })]));
+        act(() => result.current.addFiles([new File(['two!'], 'notes.txt', { lastModified: 2 })]));
+        expect(result.current.attachments).toHaveLength(2);
+    });
+});
