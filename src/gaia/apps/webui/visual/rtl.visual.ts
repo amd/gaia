@@ -2035,7 +2035,7 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
-        test('a connected tile offers Personalize, and connecting a server offers it in a banner', async ({ page }) => {
+        test('a connected tile offers Personalize, and connecting a server offers it once, on its card', async ({ page }) => {
             const brave = { id: 'brave-search', display_name: 'Brave Search', type: 'mcp_server', icon: null, category: 'general',
                 tier: 'core', description: 'Lets GAIA work with Brave Search on your behalf.', configurable: true, enabled: true,
                 account_id: null, default_scopes: [], available_scopes: [], mcp_env_keys: ['BRAVE_API_KEY'], oauth_setup_fields: [] };
@@ -2058,6 +2058,9 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.configure-actions .btn-primary').click();
             const offer = page.locator('.connector-personalize--offer');
             await expect(offer).toBeVisible();
+            // One offer, on the card: a second one once sat above the list (#7703).
+            await expect(page.locator('.connector-personalize')).toHaveCount(1);
+            await expect(page.locator('.connector-tile--open .connector-tile-menu')).toHaveCount(0);
             await offer.scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-personalize-offer`);
             expect(await audit(page)).toEqual([]);
