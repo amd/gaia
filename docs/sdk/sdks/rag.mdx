@@ -200,7 +200,7 @@ indexed re-indexes it (the result has `reindexed: True`); an unchanged one
 returns `already_indexed: True` without re-embedding. `is_current(path)` tells
 you which without indexing, and `freshness(path)` does so cheaply enough to
 call before every query (it hashes only when the file's size or timestamps
-moved). If replacement fails, the call reports the error and the previously
+moved, and opens the file to confirm it can still be read). If replacement fails, the call reports the error and the previously
 indexed version remains available for queries. The agent's document search
 tools run this check themselves, so they never answer from an edited file's
 old text. `reindex_document(path)`, which the file watcher calls, takes the same

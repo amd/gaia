@@ -584,6 +584,17 @@ async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
             status_code=404,
             detail=f"{doc.get('filename') or doc_id} is no longer on disk at {path}",
         )
+    # FileResponse opens the file only once headers are out, cutting the reply.
+    try:
+        with open(real, "rb"):
+            pass
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{doc.get('filename') or doc_id} can't be opened: "
+            "this account isn't allowed to read it, or another program has it "
+            "locked.",
+        ) from e
     response = FileResponse(
         path=str(real),
         media_type=_INLINE_MEDIA_TYPES.get(
