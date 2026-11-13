@@ -357,6 +357,7 @@ def _write_scopes(provider: str, operation: str, app: bool = False) -> Tuple[str
             f"mail left ticked on {name}'s consent screen fixes it.",
             connect=(provider,),
             reconnect=(provider,),
+            setup=True,
         )
     if missing:
         union = sorted(set(conn_scopes) | set(DECLARED_SCOPES[provider]))
@@ -366,20 +367,23 @@ def _write_scopes(provider: str, operation: str, app: bool = False) -> Tuple[str
             f"was changed. Reconnect {name} in Settings -> Connectors and approve "
             "reading, composing and sending mail, leaving that option ticked on "
             f"{name}'s consent screen. In a terminal: `gaia connectors connect "
-            f"{provider} --scopes {' '.join(union)}`. See {_EMAIL_DOCS_URL}"
+            f"{provider} --scopes {' '.join(union)}`. See {_EMAIL_DOCS_URL}",
+            setup=True,
         )
     needed = WRITE_SCOPES[provider][operation]
     granted = list_agent_grants(provider).get(EMAIL_AGENT_ID, [])
     if missing_write_scopes(provider, operation, held_scopes=granted) and app:
         raise MailboxError(
             f"The {name} connection can write mail, but GAIA has not been given "
-            f"that access. Turn it on for GAIA under {CONNECTORS_SETTINGS}."
+            f"that access. Turn it on for GAIA under {CONNECTORS_SETTINGS}.",
+            setup=True,
         )
     if missing_write_scopes(provider, operation, held_scopes=granted):
         raise MailboxError(
             f"The {name} connection can write mail, but this agent holds no grant "
             f"to. Run `gaia connectors grants grant {provider} {EMAIL_AGENT_ID} "
-            f"--scopes {' '.join(needed)}` (a ledger write, no browser needed)."
+            f"--scopes {' '.join(needed)}` (a ledger write, no browser needed).",
+            setup=True,
         )
     return needed
 
@@ -455,7 +459,10 @@ class EmailToolsMixin:
             # A terminal caller's remedy is already in each line above.
             targets, connected = _connect_targets() if app else ((), ())
             raise MailboxError(
-                _no_mailbox_error(states), connect=targets, reconnect=connected
+                _no_mailbox_error(states),
+                connect=targets,
+                reconnect=connected,
+                setup=True,
             )
 
         chosen = usable[0]
@@ -476,6 +483,7 @@ class EmailToolsMixin:
                         {p: (None, _not_connected(p, app)) for p in MAILBOX_PROVIDERS}
                     ),
                     connect=MAILBOX_PROVIDERS if app else (),
+                    setup=True,
                 )
             backend = fixture.build_fixture_backend(eval_mailbox)
             self._email_provider = GOOGLE_CONNECTOR_ID
@@ -588,7 +596,9 @@ class EmailToolsMixin:
             logger.warning("email: no %s token: %s", provider, exc)
             message, reconnect = token_fault(_PROVIDER_NAMES[provider], exc)
             fix = (provider,) if reconnect else ()
-            raise MailboxError(message, connect=fix, reconnect=fix) from exc
+            raise MailboxError(
+                message, connect=fix, reconnect=fix, setup=reconnect
+            ) from exc
 
     def _email_account_label(self) -> str:
         """The account a write goes through, as its prompt names it."""

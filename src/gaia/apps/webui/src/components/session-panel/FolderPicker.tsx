@@ -107,13 +107,14 @@ export function FolderPicker({ onPick, onClose }: { onPick: (path: string) => vo
                         {loading && <li className="sp-meta"><Loader2 size={12} className="spin" aria-hidden="true" /> {t('pick.loading')}</li>}
                     </ul>
                     {error && <p className="sp-error" role="alert">{error}</p>}
+                    {listing?.folder_refusal && <p className="sp-meta" role="status">{listing.folder_refusal}</p>}
                 </div>
                 <div className="sp-picker-actions">
                     <button type="button" className="btn-secondary" onClick={onClose}>{t('sp.cancel')}</button>
                     <button
                         type="button"
                         className="btn-primary"
-                        disabled={!listing}
+                        disabled={!listing || !!listing.folder_refusal}
                         onClick={() => listing && onPick(listing.current_path)}
                     >
                         {t('pick.use')}

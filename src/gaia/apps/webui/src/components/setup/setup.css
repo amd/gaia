@@ -44,6 +44,7 @@
 
 .setup-present { flex-direction: column; align-items: stretch; margin: 0; }
 .setup-present p { display: flex; align-items: center; gap: 6px; }
+.setup-present .link-btn { align-self: flex-start; }
 .setup-present svg { color: var(--accent-green); }
 
 /* ── Reveal: height + opacity, 180 ms ───────────────────────────── */
@@ -254,7 +255,8 @@
 .mc-summary-stats { display: flex; flex-wrap: wrap; gap: 4px 20px; }
 .mc-stat { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; }
 .mc-stat-label { display: inline-flex; align-items: center; gap: 4px; color: var(--text-secondary); }
-.mc-stat-value { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.mc-stat-value { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mc-stat-path { overflow-wrap: anywhere; }
 
 .mc-disk {
     position: relative;
@@ -591,6 +593,11 @@
 .download-chip-bar { flex: 1; block-size: 4px; min-inline-size: 30px; position: relative; overflow: hidden; border-radius: var(--radius-full); background: var(--bg-tertiary); }
 .download-chip-bar > span { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--accent); transition: inline-size var(--duration-slow) var(--ease-linear); }
 .download-chip.is-failed { border-color: var(--danger); }
+
+/* Pinned, the summary covers a quarter of a short window and leaves one model row. */
+@media (max-height: 700px) {
+    .setup-models-footer { position: static; }
+}
 
 /* ── Narrow windows and 200% zoom ──────────────────────────────── */
 @media (max-width: 480px) {
