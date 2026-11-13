@@ -1228,6 +1228,8 @@ const messages: Messages = {
     'pick.showHidden': 'إظهار المخفي',
     'pick.up': 'مستوى واحد للأعلى',
     'pick.use': 'استخدام هذا المجلد',
+    'pick.openFailed': 'تعذّر فتح أداة اختيار المجلدات: {error}',
+    'pick.checkFailed': 'تعذّر التحقق من هذا المجلد، لذا لم تتم إضافته: {error}',
     'ctx.sheetAria': 'السياق والأداء',
     'ctx.unknown': 'غير معروف',
     'ctx.tokens': 'الرموز: {n}',

@@ -1309,6 +1309,11 @@ export async function addEnvironmentFolder(sessionId: string, path: string): Pro
     return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders`, { path });
 }
 
+/** Why a chat can't be given *path*, or null: the same rule adding it applies. */
+export async function checkEnvironmentFolder(path: string): Promise<{ refusal: string | null }> {
+    return apiFetch('POST', '/environment/folders/check', { path });
+}
+
 export async function removeEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
     return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders/remove`, { path });
 }
