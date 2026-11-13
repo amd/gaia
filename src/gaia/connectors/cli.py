@@ -266,6 +266,7 @@ def handle(args: argparse.Namespace) -> int:
 
 def _handle_list(args: argparse.Namespace) -> int:
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.activations import load_activations
     from gaia.connectors.mcp_server import (
         is_mcp_server_configured,
         is_mcp_server_enabled,
@@ -289,12 +290,17 @@ def _handle_list(args: argparse.Namespace) -> int:
     # so this list-call collapses to one polymorphic call. The same
     # if/elif lives in routers/connectors.py:_connector_summary; the
     # two should refactor together.
+
+    # Which agents may use each MCP server's tools, so a front-end can show
+    # (and offer to revoke) a standing activation. A corrupt ledger raises.
+    ledger = load_activations() if any(s.type == "mcp_server" for s in specs) else {}
     rows = []
     for spec in specs:
         configured = False
         enabled = True
         account_id = None
         scopes: list = []
+        activations: dict = {}
         if spec.type == "oauth_pkce":
             blob = peek_connection(spec.oauth_provider_ref or spec.id)
             if blob is not None:
@@ -304,6 +310,7 @@ def _handle_list(args: argparse.Namespace) -> int:
         elif spec.type == "mcp_server":
             configured = is_mcp_server_configured(spec.id)
             enabled = is_mcp_server_enabled(spec.id)
+            activations = dict(ledger.get(spec.id, {}))
 
         rows.append(
             {
@@ -316,6 +323,7 @@ def _handle_list(args: argparse.Namespace) -> int:
                 "enabled": enabled,
                 "account_id": account_id,
                 "scopes": scopes,
+                "activations": activations,
             }
         )
 

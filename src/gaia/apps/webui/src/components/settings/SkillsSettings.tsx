@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import type { MessageKey, Params } from '../../i18n/registry';
@@ -25,6 +25,36 @@ function skipReason(why: string): MessageKey {
     if (/description is \d+ characters/.test(why)) return 'settings.skills.skipped.tooLong';
     if (/'description' is missing/.test(why)) return 'settings.skills.skipped.noDescription';
     return 'settings.skills.skipped.other';
+}
+
+/** A skill's description, cut at two lines until the reader asks for the rest. */
+function SkillDescription({ text }: { text: string }) {
+    const t = useT();
+    const ref = useRef<HTMLSpanElement>(null);
+    const [open, setOpen] = useState(false);
+    const [cut, setCut] = useState(false);
+
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (!el || open) return;
+        const measure = () => setCut(el.scrollHeight > el.clientHeight + 1);
+        measure();
+        if (typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, [text, open]);
+
+    return (
+        <>
+            <span ref={ref} className={`skill-row-desc${open ? ' is-open' : ''}`}><bdi>{text}</bdi></span>
+            {(cut || open) && (
+                <button type="button" className="skill-row-more" aria-expanded={open} onClick={() => setOpen(!open)}>
+                    {t(open ? 'settings.skills.less' : 'settings.skills.more')}
+                </button>
+            )}
+        </>
+    );
 }
 
 /** The skills GAIA can load, with a way to start a chat that uses one. */
@@ -64,7 +94,7 @@ export function SkillsSettings({ onUseSkill }: { onUseSkill: (name: string) => v
                     <span title={s.version ? `v${s.version}` : undefined}>{s.name}</span>
                     {s.always_on && <span className="skill-row-meta"> · {t('settings.skills.alwaysOn')}</span>}
                 </span>
-                <span className="skill-row-desc"><bdi>{s.description}</bdi></span>
+                <SkillDescription text={s.description} />
             </div>
             {!s.always_on && (
                 <button

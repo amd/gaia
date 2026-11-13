@@ -1499,3 +1499,19 @@ def test_preview_reads_the_file_off_the_event_loop(client, sample_text_file):
     assert resp.status_code == 200
     assert resp.json()["is_text"] is True
     assert calls == ["read_text_preview"]
+
+
+class TestFileBrowseDenialReason:
+    """A 403 caused by the operating system says so; the home-folder limit does not."""
+
+    def test_unreadable_folder_is_marked_os_denied(self, client, home_tmp_dir):
+        with patch("pathlib.Path.iterdir", side_effect=PermissionError("denied")):
+            resp = client.get("/api/files/browse", params={"path": str(home_tmp_dir)})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["status"] == "os_denied"
+
+    def test_outside_home_is_not_marked_os_denied(self, client):
+        outside = "C:\\\\Windows" if platform.system() == "Windows" else "/etc"
+        resp = client.get("/api/files/browse", params={"path": outside})
+        assert resp.status_code == 403
+        assert isinstance(resp.json()["detail"], str)

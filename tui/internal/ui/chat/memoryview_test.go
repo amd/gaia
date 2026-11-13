@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -357,5 +358,26 @@ func TestALongMemoryEntryIsCutOnACharacterBoundary(t *testing.T) {
 	}
 	if !strings.Contains(out, "(+80 more)") {
 		t.Errorf("the count of what was cut is wrong:\n%s", out)
+	}
+}
+
+// gaiacpp stamps memories in UTC ("Z"); the Python agent in local time with an
+// offset. Both must render in the PC's zone, not in whatever zone was stamped.
+func TestFormatMemoryTimestampRendersLocalTime(t *testing.T) {
+	saved := time.Local
+	time.Local = time.FixedZone("UTC-7", -7*60*60)
+	t.Cleanup(func() { time.Local = saved })
+
+	cases := map[string]string{
+		"2026-08-13T21:22:05Z":             "2026-08-13 14:22",
+		"2026-08-13T14:22:05.123456-07:00": "2026-08-13 14:22",
+		"2026-08-13T23:22:05.5+02:00":      "2026-08-13 14:22",
+		"2026-08-14T15:36:00":              "2026-08-14 15:36",
+		"":                                 "",
+	}
+	for in, want := range cases {
+		if got := formatMemoryTimestamp(in); got != want {
+			t.Errorf("formatMemoryTimestamp(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

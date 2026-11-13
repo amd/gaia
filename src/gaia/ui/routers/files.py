@@ -59,6 +59,9 @@ from ..utils import (
 
 logger = logging.getLogger(__name__)
 
+# `detail.status` of a 403 the operating system caused, as opposed to GAIA's home-folder limit.
+OS_DENIED = "os_denied"
+
 # Maximum upload file size: 20 MB
 MAX_UPLOAD_SIZE = 20 * 1024 * 1024
 
@@ -349,7 +352,10 @@ async def browse_files(path: Optional[str] = None):
                 status_code=400, detail="Symbolic links are not supported"
             )
     except PermissionError:
-        raise HTTPException(status_code=403, detail="Access denied")
+        raise HTTPException(
+            status_code=403,
+            detail={"status": OS_DENIED, "message": "Access denied"},
+        )
 
     if not resolved.is_dir():
         raise HTTPException(status_code=404, detail="Directory not found")
@@ -413,7 +419,11 @@ async def browse_files(path: Optional[str] = None):
                     )
     except PermissionError:
         raise HTTPException(
-            status_code=403, detail="Permission denied for this directory"
+            status_code=403,
+            detail={
+                "status": OS_DENIED,
+                "message": "Permission denied for this directory",
+            },
         )
 
     # Sort: folders first, then files, alphabetically within each group

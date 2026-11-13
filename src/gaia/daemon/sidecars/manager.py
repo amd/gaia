@@ -53,6 +53,7 @@ from gaia.daemon.constants import (
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
+    IntegrityError,
     SidecarInhibitedError,
     SidecarNotRunningError,
     SidecarSpawnError,
@@ -396,9 +397,22 @@ class AgentSidecarManager:
                 )
             except Exception as e:  # re-raise with the user-mode remedy
                 docs = f" Docs: {self.spec.docs_url}." if self.spec.docs_url else ""
+                unrecorded = ""
+                placed = (
+                    fetch.installer_placed_flagship()
+                    if self.spec.agent_id == fetch.FLAGSHIP_AGENT_ID
+                    and not isinstance(e, IntegrityError)
+                    else None
+                )
+                if placed is not None:
+                    unrecorded = (
+                        f"The copy at {placed} has no install record to "
+                        "verify it against, so it is not started.\n"
+                    )
                 raise SidecarSpawnError(
                     f"Cannot start the {self.spec.display_name} agent: no verified "
                     f"sidecar binary is available in user mode. {e}\n"
+                    f"{unrecorded}"
                     "Fix it one of these ways:\n"
                     f"  * Install '{self.spec.agent_id}' — run "
                     f"`{fetch.install_command(self.spec.agent_id)}` (or click "
@@ -535,14 +549,17 @@ class AgentSidecarManager:
         # them. Delivery leg (0600 file vs deprecated bare env) is negotiated
         # pre-spawn (#2149), before the log opens so a refusal leaks nothing.
         # Not child_env(): a sidecar is GAIA itself and must receive its credentials.
-        from gaia.env import unfreeze_loader_paths
+        from gaia.env import expose_shipped_gaia, unfreeze_loader_paths
         from gaia.llm.lemonade_choice import child_lemonade_env
 
         # A frozen sidecar is another bundle: it must not record ours as the
-        # user's library path and hand it to the commands it runs.
+        # user's library path and hand it to the commands it runs. Its skills
+        # run `gaia`, which the desktop app ships beside us, not on PATH.
         spawn_env = child_lemonade_env(
-            unfreeze_loader_paths(
-                {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+            expose_shipped_gaia(
+                unfreeze_loader_paths(
+                    {**os.environ, **(popen_kwargs.pop("env", None) or {})}
+                )
             )
         )
         self._spawned_lemonade = (

@@ -15,6 +15,7 @@ import {
     BookOpen,
     Database,
     FolderOpen,
+    Folder,
     BarChart3,
     Globe,
     FileEdit,
@@ -207,6 +208,18 @@ const MCP_OUTPUT_PREVIEW_LINES = 5;
 /** Below this many call rows the list is short enough to scan without a filter. */
 const FILTER_MIN_TOOL_ROWS = 6;
 
+const FETCH_ERROR = /^Error fetching page:\s*(\d{3})?/;
+
+/** What a failed page fetch shows on its row; the library's own error stays in the opened step. */
+export function failureText(step: AgentStep, t: Translate): string {
+    const result = step.result ?? '';
+    const match = step.tool === 'fetch_page' ? FETCH_ERROR.exec(result) : null;
+    if (!match) return result;
+    const code = match[1];
+    if (code && ['401', '403', '429'].includes(code)) return t('activity.fetchBlocked', { code });
+    return t('activity.fetchFailed');
+}
+
 /**
  * Shorten the detail of "Reading file: <long path>" to the part that differs
  * between similar rows (a path's tail, a URL's host and page) instead of
@@ -352,9 +365,11 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
 
-        // Merge consecutive thinking steps; concatenate so accumulated text survives.
+        // Merge consecutive thinking steps; concatenate so accumulated text survives. A step
+        // that has a duration ends a thought; saved token pieces have none until their last.
         if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-            const merged = (prev.detail || '') + (step.detail || '');
+            const gap = prev.latencyMs != null && /\S$/.test(prev.detail || '') && /^\S/.test(step.detail || '') ? '\n\n' : '';
+            const merged = (prev.detail || '') + gap + (step.detail || '');
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
         }
@@ -818,7 +833,7 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
     return <>{parts}</>;
 }
 
-// ── Flow: File list from file search tools ───────────────────────────────
+// ── Flow: File list from file search and folder listing tools ────────────
 
 function FileListView({ fileList }: { fileList: { files: Array<Record<string, unknown>>; total: number } }) {
     const t = useT();
@@ -842,7 +857,9 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
         <div className="file-list-view">
             {displayFiles.map((f, i) => (
                 <div key={i} className="file-list-item">
-                    <File size={11} className="file-list-icon" />
+                    {f.kind === 'folder'
+                        ? <Folder size={11} className="file-list-icon" data-kind="folder" />
+                        : <File size={11} className="file-list-icon" />}
                     <span className="file-list-name">{getFileName(f, i)}</span>
                     {getDirectory(f) && <span className="file-list-dir">{getDirectory(f)}</span>}
                 </div>
@@ -885,7 +902,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const notRun = (!!step.declined || !!step.timedOut) && !step.active;
-    const failure = step.success === false && step.result && !notRun ? step.result : '';
+    const failure = step.success === false && step.result && !notRun ? failureText(step, t) : '';
     const timing = waiting
         ? ''
         : step.active

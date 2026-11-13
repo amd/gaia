@@ -722,12 +722,12 @@ Every other path serves the Agent UI page, except paths under `/api`: an unknown
 
     | Field | Type | Description |
     |-------|------|-------------|
-    | `custom_model` | string or null | HuggingFace model ID overriding the default, or `null` if using the default model. |
+    | `custom_model` | string or null | Model ID typed as a custom override, or `null` when the model picked under Model (or the default model) is in use. |
     | `model_status` | object or null | Status of the custom model on Lemonade. `null` when no custom model is set. Contains `found` (in catalog), `downloaded` (on disk), `loaded` (currently active), and `checked` (the model list was read; when `false`, `found` says nothing). Settings notes a saved ID that is unlisted or could not be checked. |
   </Accordion>
 
   <Accordion title="PUT /api/settings">
-    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and revert to the default model; omitting it or sending `null` leaves it unchanged. The value is also saved as `last_model` in `~/.gaia/config.json` (cleared with it), so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on, including one from a provider GAIA knows only from the model server's list; when that list can't be read to tell, the save is refused with `503`.
+    Update user settings. Set `custom_model` to a model ID to override the default, or to an empty string to clear the override and go back to the model picked under Model (`POST /api/providers/select`); omitting it or sending `null` leaves it unchanged. With no pick on record, clearing reverts to the default model, except for a cloud model whose user has not downloaded the local default, which stays in use. The model left running is also saved as `last_model` in `~/.gaia/config.json`, so the flagship's start-up warm-up and the next launch use the same model. A cloud model is refused with `409` while Local only is on, including one from a provider GAIA knows only from the model server's list; when that list can't be read to tell, the save is refused with `503`.
 
     **Request:**
     ```json
@@ -2387,7 +2387,8 @@ computer gets a 403. Mutating routes also require the `X-Gaia-UI: 1` header.
   <Accordion title="GET /api/messaging/discord">
     Connection, pairing and bridge state, plus every link setup opens:
     `connected`, `paired`, `running`, `state`, `detail`, `bot_name`,
-    `owner_name`, `pairing_code`, `portal_url`, `invite_url`,
+    `owner_name`, `autostart`, `always_allowed`, `pairing_code`, `portal_url`,
+    `invite_url`,
     `bot_profile_url` and more.
   </Accordion>
 
@@ -2404,7 +2405,19 @@ computer gets a 403. Mutating routes also require the `X-Gaia-UI: 1` header.
   </Accordion>
 
   <Accordion title="POST /api/messaging/discord/stop">
-    Stops the bridge. 500 when it does not stop.
+    Stops the bridge, and keeps it stopped the next time a GAIA app opens. 500
+    when it does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/restart">
+    Stops the bridge and starts it again. 500, leaving it as it was, when it
+    does not stop.
+  </Accordion>
+
+  <Accordion title="POST /api/messaging/discord/forget-always">
+    Forgets every "Always allow" answered in Discord, so GAIA asks again. A
+    running bridge is restarted so its agent forgets them too. 500, forgetting
+    nothing, when the bridge does not stop.
   </Accordion>
 
   <Accordion title="POST /api/messaging/discord/pair">
@@ -2415,6 +2428,35 @@ computer gets a 403. Mutating routes also require the `X-Gaia-UI: 1` header.
   <Accordion title="POST /api/messaging/discord/disconnect">
     Stops the bridge and forgets the token, the pairing and the status. 500,
     keeping everything, when the bridge does not stop.
+  </Accordion>
+</AccordionGroup>
+
+### Automations
+
+Settings → Automations: list, pause, resume and remove the reminders,
+summaries, alerts and triggers GAIA runs on its own
+([Automations guide](/guides/automations)). The routes read and write the same
+store as `gaia automation`. **Every route is local-PC only, reads included:** a
+trigger's check is a command that runs on this PC, and prompts can carry
+private detail. Mutating routes also require the `X-Gaia-UI: 1` header.
+
+<AccordionGroup>
+  <Accordion title="GET /api/automations">
+    `{automations, delivers}`. Each automation has `id`, `name`, `kind`
+    (`reminder`, `summary`, `alert` or `trigger`), `heartbeat`, `paused`,
+    `every_seconds`, `next_at`, `last_run_at`, `runs`, `prompt`, `say`, `check`,
+    `quiet`, `days` and `failures`. `delivers` is whether a paired Discord DM
+    receives what they send, or `null` when that could not be checked. 500 when
+    the store can't be read.
+  </Accordion>
+
+  <Accordion title="POST /api/automations/{ref}/{action}">
+    `action` is `pause` or `resume`; `ref` is an id or exact name. Returns the
+    changed automation. 404 when nothing matches.
+  </Accordion>
+
+  <Accordion title="DELETE /api/automations/{ref}">
+    Removes the automation and returns it. 404 when nothing matches.
   </Accordion>
 </AccordionGroup>
 

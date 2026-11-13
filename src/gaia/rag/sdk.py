@@ -58,6 +58,12 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
+from gaia.rag.text_units import (
+    SENTENCE_BREAK,
+    estimate_tokens,
+    join_pieces,
+    last_tokens,
+)
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
     UNSUPPORTED_DOCUMENTS,
@@ -81,9 +87,9 @@ _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
 )
-_TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
 _TEXT_TRIED_ENCODINGS = ", ".join(
-    dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
+    list(dict.fromkeys(e for _, e in _TEXT_BOM_ENCODINGS))
+    + ["utf-8", "cp1252", "detected legacy encodings (Windows-1256, Shift-JIS, GBK…)"]
 )
 
 
@@ -188,19 +194,36 @@ def folder_index_skip_reason(file_path) -> Optional[str]:
 
 
 def _decode_text_bytes(data: bytes) -> str:
-    """Decode text bytes without letting latin-1 hide Windows encodings."""
+    """Decode text bytes, detecting legacy encodings; raise when none fits."""
     for bom, encoding in _TEXT_BOM_ENCODINGS:
         if data.startswith(bom):
             return data.decode(encoding)
 
-    for encoding in _TEXT_FALLBACK_ENCODINGS:
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
 
-    # latin-1 never fails; only a corrupt BOM-tagged file raises (above).
-    raise UnicodeDecodeError("text", data, 0, len(data), "unsupported encoding")
+    from charset_normalizer import from_bytes
+
+    matches = from_bytes(data)
+    try:
+        cp1252_text = data.decode("cp1252")
+    except UnicodeDecodeError:
+        cp1252_text = None
+    # Short Western text scores as cp1250/cp775 too; keep cp1252 when it reads cleanly.
+    if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
+        return cp1252_text
+    best = matches.best()
+    if best is not None:
+        return str(best)
+    # Symbol-heavy Western text ("12€ — 15€") the detector can't place.
+    high = sum(byte >= 0x80 for byte in data)
+    if cp1252_text is not None and high <= sum(0x20 < byte < 0x80 for byte in data):
+        return cp1252_text
+    raise UnicodeDecodeError(
+        "text", data, 0, len(data), "no text encoding fits these bytes"
+    )
 
 
 # --- PDF extraction errors ---------------------------------------------------
@@ -336,6 +359,12 @@ class SpreadsheetReadError(ValueError):
     def __init__(self, message: str, status: str):
         super().__init__(message)
         self.status = status
+
+
+class PresentationReadError(ValueError):
+    """A .pptx that is damaged or not a real presentation."""
+
+    status = "corrupted"
 
 
 # Legacy .xls and password-protected .xlsx are both OLE2 compound files.
@@ -2104,7 +2133,7 @@ class RAGSDK:
             self._log_read_failure(
                 e, pptx_path, f"Corrupted PPTX (bad zip): {pptx_path}: {e}"
             )
-            raise ValueError(msg) from e
+            raise PresentationReadError(msg) from e
 
         try:
             # A stream, not the path: given a path, python-pptx's is_zipfile
@@ -2122,7 +2151,7 @@ class RAGSDK:
                 "  3. Save as PDF and index the PDF instead"
             )
             self._log_read_failure(e, pptx_path, f"Corrupted PPTX {pptx_path}: {e}")
-            raise ValueError(msg) from e
+            raise PresentationReadError(msg) from e
 
         try:
             extract_start = time_module.time()
@@ -3337,7 +3366,7 @@ These positions indicate where to split the text."""
                 continue
 
             # Estimate tokens (rough: 1 token ≈ 4 characters)
-            para_tokens = len(para) // 4
+            para_tokens = estimate_tokens(para)
 
             # Check if this is VLM content - if so, keep it atomic
             is_vlm_content = idx in vlm_paragraphs
@@ -3348,18 +3377,18 @@ These positions indicate where to split the text."""
                 sentences = self._split_into_sentences(para)
 
                 for sentence in sentences:
-                    sentence_tokens = len(sentence) // 4
+                    sentence_tokens = estimate_tokens(sentence)
 
                     # If adding this sentence exceeds chunk size, save current chunk
                     if (
                         current_size + sentence_tokens > chunk_size_tokens
                         and current_chunk
                     ):
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
 
                         # Keep overlap (last few sentences)
-                        overlap_text = " ".join(current_chunk)
-                        overlap_actual = len(overlap_text) // 4
+                        overlap_text = join_pieces(current_chunk)
+                        overlap_actual = estimate_tokens(overlap_text)
                         if overlap_actual > overlap_tokens:
                             # Trim to overlap size
                             current_chunk = self._get_last_n_tokens(
@@ -3378,7 +3407,7 @@ These positions indicate where to split the text."""
                 if is_vlm_content:
                     if current_chunk:
                         # Save current chunk before adding VLM content
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
                         current_chunk = []
                         current_size = 0
 
@@ -3390,14 +3419,14 @@ These positions indicate where to split the text."""
 
                 elif current_size + para_tokens > chunk_size_tokens and current_chunk:
                     # Save current chunk
-                    chunks.append(" ".join(current_chunk))
+                    chunks.append(join_pieces(current_chunk))
 
                     # Keep overlap
-                    overlap_text = " ".join(current_chunk)
+                    overlap_text = join_pieces(current_chunk)
                     current_chunk = self._get_last_n_tokens(
                         overlap_text, overlap_tokens
                     ).split()
-                    current_size = len(" ".join(current_chunk)) // 4
+                    current_size = estimate_tokens(join_pieces(current_chunk))
 
                     current_chunk.append(para)
                     current_size += para_tokens
@@ -3407,7 +3436,7 @@ These positions indicate where to split the text."""
 
         # Add final chunk
         if current_chunk:
-            chunks.append(" ".join(current_chunk))
+            chunks.append(join_pieces(current_chunk))
 
         # STEP 4: Restore VLM blocks from placeholders
         if vlm_blocks:
@@ -3461,8 +3490,6 @@ These positions indicate where to split the text."""
 
         Better than word splitting, doesn't require NLTK dependency.
         """
-        # Split on sentence endings followed by space and capital letter
-
         # Handle common abbreviations that shouldn't split
         text = text.replace("Dr.", "Dr<DOT>")
         text = text.replace("Mr.", "Mr<DOT>")
@@ -3477,7 +3504,7 @@ These positions indicate where to split the text."""
         text = text.replace("etc.", "etc<DOT>")
 
         # Split on sentence boundaries
-        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+        sentences = SENTENCE_BREAK.split(text)
 
         # Restore abbreviations
         sentences = [s.replace("<DOT>", ".") for s in sentences]
@@ -3486,20 +3513,7 @@ These positions indicate where to split the text."""
 
     def _get_last_n_tokens(self, text: str, n_tokens: int) -> str:
         """Get approximately the last n tokens from text."""
-        # text[-0:] is the whole string, so no overlap must return nothing.
-        if n_tokens <= 0:
-            return ""
-        # Rough estimate: 1 token ≈ 4 characters
-        target_chars = n_tokens * 4
-        if len(text) <= target_chars:
-            return text
-
-        # Try to break on word boundary
-        trimmed = text[-target_chars:]
-        first_space = trimmed.find(" ")
-        if first_space > 0:
-            return trimmed[first_space + 1 :]
-        return trimmed
+        return last_tokens(text, n_tokens)
 
     def _create_faiss_index(self, embeddings: "np.ndarray"):
         """Build a FAISS L2 index from precomputed embeddings."""
@@ -4096,7 +4110,8 @@ These positions indicate where to split the text."""
                 "error_type": str (some failures: "file_locked",
                     "cache_busy" or "embedding_unavailable"),
                 "xlsx_status": str (an unreadable workbook: "corrupted",
-                    "unsupported_workbook" or "empty_file")
+                    "unsupported_workbook" or "empty_file"),
+                "pptx_status": str ("readable", or "corrupted" for a damaged file)
             }
 
         Raises:
@@ -4653,6 +4668,13 @@ These positions indicate where to split the text."""
             self.log.error(f"Excel extraction failed for {file_path}: {e.status}")
             stats["error"] = str(e)
             stats["xlsx_status"] = e.status
+            return stats
+        except PresentationReadError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"PowerPoint extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["pptx_status"] = e.status
             return stats
         except VisionModelFailedError as e:
             if self.config.show_stats:
