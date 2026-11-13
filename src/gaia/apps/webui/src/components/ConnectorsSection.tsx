@@ -187,6 +187,8 @@ export function ConnectorsSection() {
     const [connectedAtLoad, setConnectedAtLoad] = useState<ReadonlySet<string>>(new Set());
     // The connector a refresh just showed going from not connected to connected.
     const [justConnected, setJustConnected] = useState<string | null>(null);
+    // A connector just disconnected and moved back to its group, which opens to show it.
+    const [movedBack, setMovedBack] = useState<string | null>(null);
     const connectorsRef = useRef<ConnectorListEntry[]>([]);
     connectorsRef.current = connectors;
     // Kept here, not in the tile: a first save moves the tile into "Connected" and remounts it.
@@ -237,6 +239,16 @@ export function ConnectorsSection() {
 
     useEffect(() => { void load(); }, [load]);
 
+    // The tile left the group it was in; keep it in view, and keep focus on it if it went with the tile.
+    useEffect(() => {
+        if (!movedBack) return;
+        const tile = [...document.querySelectorAll<HTMLElement>('.connector-tile')].find((el) => el.dataset.connectorId === movedBack);
+        const header = tile?.querySelector<HTMLElement>('.connector-tile-header');
+        if (!header) return;
+        header.scrollIntoView?.({ block: 'nearest' });
+        if (!document.activeElement || document.activeElement === document.body) header.focus({ preventScroll: true });
+    }, [movedBack]);
+
     const toggle = (id: string) =>
         setExpanded((prev) => (prev === id ? null : id));
 
@@ -252,6 +264,11 @@ export function ConnectorsSection() {
             } else if (!row.configured || row.enabled === false) {
                 // A disconnect or disable takes back the offer made for that connector.
                 setJustConnected((prev) => (prev === id ? null : prev));
+            }
+            if (before && 'configured' in before && before.configured && !row.configured) {
+                // Disconnected: back to its own group, counted there, not left under "Connected".
+                setConnectedAtLoad((prev) => new Set([...prev].filter((c) => c !== id)));
+                setMovedBack(id);
             }
             setConnectors((prev) => prev.map((c) => (c.id === id ? row : c)));
         } catch {
@@ -295,6 +312,10 @@ export function ConnectorsSection() {
     const accounts = available.filter((c) => !connectedAtLoad.has(c.id) && c.type === 'oauth_pkce');
     const servers = available.filter((c) => !connectedAtLoad.has(c.id) && c.type !== 'oauth_pkce');
     const nothingConnected = !connectors.some((c) => !('error' in c) && c.configured);
+    // Re-keyed so the group the tile moved into opens on it.
+    const groupKey = (name: string, rows: ConnectorRow[]) =>
+        (movedBack && rows.some((c) => c.id === movedBack) ? `${name}:${movedBack}` : name);
+    const holdsMoved = (rows: ConnectorRow[]) => !!movedBack && rows.some((c) => c.id === movedBack);
 
     const tiles = (rows: ConnectorRow[]) => (
         <div className="connectors-list">
@@ -302,7 +323,7 @@ export function ConnectorsSection() {
                 <ConnectorTile
                     key={c.id}
                     connector={c}
-                    wasConnected={connectedAtLoad.has(c.id)}
+                    wasConnected={connectedAtLoad.has(c.id) || movedBack === c.id}
                     justConnected={justConnected === c.id}
                     onPersonalizeStarted={() => setJustConnected(null)}
                     expanded={expanded === c.id}
@@ -369,12 +390,12 @@ export function ConnectorsSection() {
                         </SettingsDisclosure>
                     )}
                     {accounts.length > 0 && (
-                        <SettingsDisclosure title={t('settings.connectors.accounts')} hint={t('settings.connectors.accountsHint')} count={accounts.length} defaultOpen={nothingConnected} forceOpen={!!q}>
+                        <SettingsDisclosure key={groupKey('accounts', accounts)} title={t('settings.connectors.accounts')} hint={t('settings.connectors.accountsHint')} count={accounts.length} defaultOpen={nothingConnected || holdsMoved(accounts)} forceOpen={!!q}>
                             {tiles(accounts)}
                         </SettingsDisclosure>
                     )}
                     {servers.length > 0 && (
-                        <SettingsDisclosure title={t('settings.connectors.servers')} hint={t('settings.connectors.serversHint')} count={servers.length} forceOpen={!!q}>
+                        <SettingsDisclosure key={groupKey('servers', servers)} title={t('settings.connectors.servers')} hint={t('settings.connectors.serversHint')} count={servers.length} defaultOpen={holdsMoved(servers)} forceOpen={!!q}>
                             {tiles(servers)}
                         </SettingsDisclosure>
                     )}
@@ -470,7 +491,7 @@ function ConnectorTile({
     };
 
     return (
-        <div className={`connector-tile${expanded ? ' connector-tile--open' : ''}`}>
+        <div className={`connector-tile${expanded ? ' connector-tile--open' : ''}`} data-connector-id={connector.id}>
             <div className="connector-tile-row">
                 <button
                     type="button"

@@ -95,20 +95,42 @@ describe('ConnectorsSection groups', () => {
         expect(screen.getAllByRole('button', { name: 'Personalize GAIA' })).toHaveLength(1);
     });
 
-    it('marks a connector that disconnects, and stops counting it as connected (#7704)', async () => {
+    it('moves a connector that disconnects back to its group, open, counted there and marked (#7704, #7863)', async () => {
         const git = row('Git', 'mcp_server', { configured: true });
-        list([git, row('GitHub', 'mcp_server', { configured: true })]);
+        list([git, row('GitHub', 'mcp_server', { configured: true }), row('Notion', 'mcp_server')]);
         mocked.disconnectConnector.mockResolvedValue(undefined as never);
         mocked.getConnector.mockResolvedValue({ ...git, configured: false });
         render(<ConnectorsSection />);
         await screen.findByText('Git');
         const connected = group('Connected');
         expect(connected.querySelector('.settings-disclosure-count')).toHaveTextContent('2');
+        expect(group('MCP servers').querySelector('.settings-disclosure-count')).toHaveTextContent('1');
         fireEvent.click(within(connected).getByRole('button', { name: /^Git\b(?!Hub)/ }));
         fireEvent.click(within(connected).getByRole('button', { name: 'Disconnect' }));
 
-        expect(await within(connected).findByText('Disconnected')).toHaveAttribute('role', 'status');
-        expect(connected.querySelector('.settings-disclosure-count')).toHaveTextContent('1');
+        await waitFor(() => expect(within(group('MCP servers')).queryByText('Git')).toBeInTheDocument());
+        const servers = group('MCP servers');
+        expect(servers.open).toBe(true);
+        expect(servers.querySelector('.settings-disclosure-count')).toHaveTextContent('2');
+        expect(within(servers).getByText('Disconnected')).toHaveAttribute('role', 'status');
+        expect(within(group('Connected')).queryByText('Git')).not.toBeInTheDocument();
+        expect(group('Connected').querySelector('.settings-disclosure-count')).toHaveTextContent('1');
+        // Focus went with the tile, not to the page.
+        expect(within(servers).getByRole('button', { name: /^Git\b(?!Hub)/ })).toHaveFocus();
+    });
+
+    it('closes the Connected group when its last connector disconnects (#7863)', async () => {
+        const git = row('Git', 'mcp_server', { configured: true });
+        list([git, row('Notion', 'mcp_server')]);
+        mocked.disconnectConnector.mockResolvedValue(undefined as never);
+        mocked.getConnector.mockResolvedValue({ ...git, configured: false });
+        render(<ConnectorsSection />);
+        await screen.findByText('Git');
+        fireEvent.click(within(group('Connected')).getByRole('button', { name: /^Git/ }));
+        fireEvent.click(screen.getByRole('button', { name: 'Disconnect' }));
+
+        await waitFor(() => expect(screen.queryByText('Connected', { selector: '.settings-disclosure-title' })).not.toBeInTheDocument());
+        expect(within(group('MCP servers')).getByText('Git')).toBeInTheDocument();
     });
 
     it('offers Disconnect once: the menu steps aside while the card is open (#7704)', async () => {
