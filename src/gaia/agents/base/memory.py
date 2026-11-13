@@ -71,7 +71,7 @@ import numpy as np
 from gaia.agents.base import turn_metrics
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.history import MEMORY_CONTEXT_HEADER, frame_user_message
-from gaia.agents.base.memory_privacy import (  # noqa: F401 - re-exported
+from gaia.agents.base.memory_privacy import (  # noqa: F401  # pylint: disable=unused-import
     memory_off_reason,
     memory_writes_refused,
 )

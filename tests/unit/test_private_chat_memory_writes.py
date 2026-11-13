@@ -28,8 +28,14 @@ def _rows(store):
         return store._conn.execute("SELECT * FROM knowledge ORDER BY id").fetchall()
 
 
+@pytest.fixture(autouse=True)
+def _memory_on(monkeypatch):
+    # CI's unit lane sets GAIA_MEMORY_DISABLED; these tests need a real store.
+    monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+
+
 @pytest.fixture
-def private(mixin_with_tools):
+def private(mixin_with_tools):  # noqa: F811 - the imported fixture
     store = mixin_with_tools.memory_store
     kid = store.store(category="fact", content="Project budget is 73,904 euros")
     mixin_with_tools._incognito = True
