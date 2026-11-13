@@ -642,7 +642,7 @@ class TestNoConnector:
 class TestSearchCapability:
     def test_catalog_search_connectors(self):
         ids = [spec.id for spec in browser_tools._search_connectors()]
-        assert ids == [TAVILY, BRAVE]
+        assert ids == [TAVILY, BRAVE, "mcp-keenable"]
 
     def test_every_search_connector_names_its_tool(self):
         for spec in browser_tools._search_connectors():

@@ -2503,6 +2503,7 @@ export const enMessages = {
     'connectors.mcp-discord.description': 'Read and send messages in the Discord servers your bot has joined.',
     'connectors.mcp-notion.description': 'Search, read and edit the Notion pages and databases you share with GAIA.',
     'connectors.mcp-brave-search.description': 'Web and local search through the Brave Search API.',
+    'connectors.mcp-keenable.description': "Web search and page fetch through Keenable's hosted service. No API key.",
     'connectors.mcp-github.GITHUB_PERSONAL_ACCESS_TOKEN.label': 'GitHub Personal Access Token',
     'connectors.mcp-github.GITHUB_PERSONAL_ACCESS_TOKEN.help': 'Create a [classic token](https://github.com/settings/tokens) with `repo` and `workflow` scopes.',
     'connectors.mcp-tavily.TAVILY_API_KEY.label': 'Tavily API Key',

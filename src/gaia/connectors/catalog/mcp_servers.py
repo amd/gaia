@@ -275,6 +275,21 @@ _BRAVE_SEARCH = ConnectorSpec(
     ),
 )
 
+_KEENABLE = ConnectorSpec(
+    id="mcp-keenable",
+    display_name="Keenable",
+    icon="🔍",
+    category="search",
+    tier=2,
+    type="mcp_server",
+    description="Web search and page fetch through Keenable's hosted service. No API key.",
+    docs_url="https://amd-gaia.ai/docs/connectors/keenable",
+    mcp_command="npx",
+    mcp_args=("-y", "@keenable/mcp@0.1.1"),
+    provides=(WEB_SEARCH,),
+    web_search_tool="search_web_pages",
+)
+
 # ---------------------------------------------------------------------------
 # Registration
 # ---------------------------------------------------------------------------
@@ -288,6 +303,7 @@ _ALL_SPECS = (
     _DISCORD,
     _NOTION,
     _BRAVE_SEARCH,
+    _KEENABLE,
 )
 
 for _spec in _ALL_SPECS:

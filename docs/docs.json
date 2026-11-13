@@ -147,6 +147,7 @@
                   "connectors/discord",
                   "connectors/notion",
                   "connectors/brave-search",
+                  "connectors/keenable",
                   "security/connections",
                   "security/connectors"
                 ]

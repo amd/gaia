@@ -2504,6 +2504,7 @@ const messages: Messages = {
     'connectors.mcp-discord.description': 'قراءة الرسائل وإرسالها في خوادم Discord التي انضم إليها البوت الخاص بك.',
     'connectors.mcp-notion.description': 'البحث في صفحات وقواعد بيانات Notion التي تشاركها مع GAIA وقراءتها وتعديلها.',
     'connectors.mcp-brave-search.description': 'بحث في الويب وبحث محلي عبر واجهة Brave Search البرمجية.',
+    'connectors.mcp-keenable.description': 'بحث في الويب وجلب الصفحات عبر خدمة Keenable المستضافة. لا يحتاج إلى مفتاح API.',
     'connectors.mcp-github.GITHUB_PERSONAL_ACCESS_TOKEN.label': 'رمز الوصول الشخصي إلى GitHub',
     'connectors.mcp-github.GITHUB_PERSONAL_ACCESS_TOKEN.help': 'أنشئ [رمزًا كلاسيكيًا](https://github.com/settings/tokens) بالصلاحيتين `repo` و`workflow`.',
     'connectors.mcp-tavily.TAVILY_API_KEY.label': 'مفتاح واجهة Tavily البرمجية',
