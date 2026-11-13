@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""What the system prompt tells the model about its own session.
+"""What the prompt tells the model about its own session.
 
 Asked to "summarize vendor_contract.md in my documents folder", the flagship
 spent ~10 tool calls trying ``~/Documents`` and the home folder before finding
@@ -62,7 +62,7 @@ def test_the_prompt_names_exactly_the_sessions_existing_folders(gaia_docs, tmp_p
         ]
     )
     try:
-        line = _folders_line(agent._get_system_prompt())
+        line = _folders_line(agent.get_session_folders_system_prompt())
     finally:
         agent.__del__()
 
@@ -79,7 +79,7 @@ def test_saving_to_my_documents_names_the_users_folder_not_gaias(
     monkeypatch.setattr("gaia_agent.chat_agent.documents_dir", lambda: documents)
     agent = _build(allowed_paths=[str(gaia_docs)])
     try:
-        line = _folders_line(agent._get_system_prompt())
+        line = _folders_line(agent.get_session_folders_system_prompt())
     finally:
         agent.__del__()
     assert f"save a new file to the user's Documents folder, use {documents}" in line
@@ -90,7 +90,7 @@ def test_no_documents_note_without_gaias_documents_folder(gaia_docs, tmp_path):
     work.mkdir()
     agent = _build(allowed_paths=[str(work)])
     try:
-        line = _folders_line(agent._get_system_prompt())
+        line = _folders_line(agent.get_session_folders_system_prompt())
     finally:
         agent.__del__()
     assert "Documents folder" not in line
@@ -100,9 +100,9 @@ def test_the_folders_line_does_not_change_mid_session(gaia_docs, tmp_path):
     later = tmp_path / "later"
     agent = _build(allowed_paths=[str(gaia_docs), str(later)])
     try:
-        before = agent._get_system_prompt()
+        before = agent.get_session_folders_system_prompt()
         later.mkdir()
-        assert agent._get_system_prompt() == before
+        assert agent.get_session_folders_system_prompt() == before
     finally:
         agent.__del__()
 
@@ -110,7 +110,7 @@ def test_the_folders_line_does_not_change_mid_session(gaia_docs, tmp_path):
 def test_no_folders_line_without_an_existing_folder(gaia_docs, tmp_path):
     agent = _build(allowed_paths=[str(tmp_path / "gone")])
     try:
-        assert "Your folders" not in agent._get_system_prompt()
+        assert "Your folders" not in agent.get_session_folders_system_prompt()
     finally:
         agent.__del__()
 
@@ -120,7 +120,7 @@ def test_the_fast_chat_profile_has_no_folders_line(gaia_docs):
     with patch.dict(_TOOL_REGISTRY, clear=True):
         agent = _build(prompt_profile="chat", allowed_paths=[str(gaia_docs)])
         try:
-            assert "Your folders" not in agent._get_system_prompt()
+            assert "Your folders" not in agent.get_session_folders_system_prompt()
         finally:
             agent.__del__()
 

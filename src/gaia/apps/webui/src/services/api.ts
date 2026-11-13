@@ -1001,6 +1001,11 @@ export async function uploadDocumentByPath(filepath: string): Promise<Document> 
     return apiFetch('POST', '/documents/upload-path', { filepath });
 }
 
+function uploadError(status: number, errorText: string): ApiError {
+    const detail = parseErrorDetail(errorText);
+    return new ApiError(getFriendlyError(status, detail), status, detail, parseErrorStatus(errorText), [], parseErrorBody(errorText));
+}
+
 /**
  * Upload a document as a multipart blob for indexing.
  *
@@ -1032,8 +1037,7 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw uploadError(res.status, errorText);
     }
 
     const data = await res.json();
@@ -1143,8 +1147,7 @@ export async function uploadFile(file: File): Promise<{
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), [], parseErrorBody(errorText));
+        throw uploadError(res.status, errorText);
     }
 
     const data = await res.json();

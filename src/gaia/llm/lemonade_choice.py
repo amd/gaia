@@ -57,6 +57,23 @@ _PROBE_TIMEOUT = (3.0, 10.0)
 SWITCH_BACK_HINT = "run `gaia config set lemonade_mode gaia` to use GAIA's own instead"
 
 
+def unreachable_server_message(url: str) -> str:
+    """The remedy for a server the user named that does not answer.
+
+    Shared by the error printer and the start path so both say the same thing:
+    a configured endpoint is never reported as something GAIA can start.
+    """
+    switch_back = (
+        "unset LEMONADE_BASE_URL to use GAIA's own server"
+        if _env_url()
+        else SWITCH_BACK_HINT
+    )
+    return (
+        f"Lemonade Server at {url} not reachable. "
+        f"Start Lemonade on that host, or {switch_back}."
+    )
+
+
 class LemonadeChoiceError(ValueError):
     """The Lemonade choice is unusable; the message names the fix.
 

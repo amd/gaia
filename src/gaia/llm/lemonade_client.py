@@ -3873,6 +3873,10 @@ class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
 
 
+class ModelListShapeError(LemonadeClientError):
+    """The server answered ``/models``, but not with a list of model objects."""
+
+
 class LemonadeUnresponsiveError(LemonadeClientError):
     """Lemonade accepted the connection but sent no answer before the read
     timeout: it is up and busy (often loading a model), or stuck — not down."""
@@ -8111,7 +8115,7 @@ class LemonadeClient:
             if bad is None:
                 return
             got = f"entry {bad[0]} of 'data' as a JSON {_json_type_name(bad[1])}"
-        raise LemonadeClientError(
+        raise ModelListShapeError(
             f"The model list{self._from_server()} isn't in the expected shape: "
             f"expected an object whose 'data' is a list of model objects, got "
             f"{got}. Check that LEMONADE_BASE_URL points at Lemonade Server and "
