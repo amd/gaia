@@ -159,4 +159,52 @@ describe('trying a skill from Settings', () => {
 
         expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(PROMPT);
     });
+
+    it('does not add the prompt a second time when it is still in the box', async () => {
+        withSkill();
+        render(<App />);
+        await advance(0);
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'half a thought' } });
+        await advance(0);
+
+        await tryFromSettings('calculators');
+        await tryFromSettings('calculators');
+
+        expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(`half a thought\n\n${PROMPT}`);
+    });
+
+    it('treats the prompt followed by trailing whitespace as already in the box', async () => {
+        withSkill();
+        render(<App />);
+        await advance(0);
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: `${PROMPT}  \n\n` } });
+        await advance(0);
+
+        await tryFromSettings('calculators');
+
+        expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(`${PROMPT}  \n\n`);
+    });
+
+    it('still adds a different skill, and re-adds one that is no longer last', async () => {
+        mocked.listSkills.mockResolvedValue({
+            skills: [
+                { name: 'calculators', description: 'Math', version: null, tier: null, tools: [], path: '/s/calculators/SKILL.md', source: 'agent-bundled' },
+                { name: 'pdf-forms', description: 'Fill PDF forms', version: null, tier: null, tools: [], path: '/s/pdf-forms/SKILL.md', source: 'agent-bundled' },
+            ],
+            invalid: {},
+        });
+        mocked.listFeaturedSkillLibraries.mockResolvedValue({ libraries: [] });
+        const PDF = 'Load the pdf-forms skill, then tell me briefly what it lets you do.';
+        render(<App />);
+        await advance(0);
+
+        await tryFromSettings('calculators');
+        await tryFromSettings('pdf-forms');
+        await tryFromSettings('pdf-forms');
+        const box = () => (screen.getByLabelText('Message') as HTMLTextAreaElement).value;
+        expect(box()).toBe(`${PROMPT}\n\n${PDF}`);
+
+        await tryFromSettings('calculators');
+        expect(box()).toBe(`${PROMPT}\n\n${PDF}\n\n${PROMPT}`);
+    });
 });

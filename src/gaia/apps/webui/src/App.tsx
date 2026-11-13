@@ -639,7 +639,9 @@ function App() {
         const unsent = store.pendingPrompt?.sessionId === store.currentSessionId ? store.pendingPrompt?.text : null;
         newChat();
         const prompt = t.bare('settings.skills.tryPrompt', { name });
-        const text = [readSavedDraft(NEW_CHAT_DRAFT_KEY), unsent, prompt].filter(Boolean).join('\n\n');
+        const base = [readSavedDraft(NEW_CHAT_DRAFT_KEY), unsent].filter(Boolean).join('\n\n');
+        // A repeat Try with the prompt still in the box must not paste it twice.
+        const text = base.trimEnd().endsWith(prompt) ? base : [base, prompt].filter(Boolean).join('\n\n');
         writeSavedDraft(NEW_CHAT_DRAFT_KEY, text);
         setDraftText(text);
         // Remount even when the box is already open with this same text.
