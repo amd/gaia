@@ -551,24 +551,51 @@ def _hard_if_unofferable(error: Dict[str, Any], command: str) -> Dict[str, Any]:
     reason = _one_time_hard_reason(command)
     if not reason:
         return error
+    hint = (
+        _FIRST_LINE_ONLY_HINT
+        if reason == _FIRST_LINE_ONLY
+        else (
+            "Tell the user the exact command and why it is blocked, so they can "
+            "run it themselves if they want to."
+        )
+    )
     return {
         **error,
         "tier": TIER_REFUSE,
         "error": f"Not offered: `{command}` cannot be approved, because {reason}.",
-        "hint": (
-            "Tell the user the exact command and why it is blocked, so they can "
-            "run it themselves if they want to."
-        ),
+        "hint": hint,
     }
 
 
-def _unreadable_reason(command: str) -> str:
-    """Why *command* would not read on a prompt the way it runs, or ""."""
-    if "\n" in command or "\r" in command or _MISLEADING_CHARS_RE.search(command):
+#: cmd.exe stops at the first line break, so the rest of the text never runs.
+_FIRST_LINE_ONLY = (
+    "it has more than one line, and Windows runs only the first line of a "
+    "command like this"
+)
+_FIRST_LINE_ONLY_HINT = (
+    "Send each line as its own command, or write the file's contents with the "
+    "file tools instead of a heredoc."
+)
+
+
+def _unreadable_reason(command: str, *, shown_whole: bool = False) -> str:
+    """Why *command* would not read on a prompt the way it runs, or "".
+
+    *shown_whole* is a prompt that shows the exact text, line breaks kept.
+    """
+    if "\r" in command or _MISLEADING_CHARS_RE.search(command):
         return (
             "it contains line breaks or invisible characters, so it would not "
             "read on screen the way it runs"
         )
+    if "\n" in command:
+        if not shown_whole:
+            return (
+                "it contains line breaks, so it would not read on screen the "
+                "way it runs"
+            )
+        if _pipe_dialect() == "cmd":
+            return _FIRST_LINE_ONLY
     return ""
 
 
@@ -578,9 +605,10 @@ def _one_time_hard_reason(command: str) -> str:
     A one-time line runs exactly as shown, so what it says is what it does —
     unless its characters display as something else, or it carries a step that
     is never offered: an encoded script, or one that deletes or discards work.
-    The text is over-read on purpose, quotes and substitutions included.
+    The text is over-read on purpose, quotes and substitutions included, and
+    every line of it is read like the first.
     """
-    unreadable = _unreadable_reason(command)
+    unreadable = _unreadable_reason(command, shown_whole=True)
     if unreadable:
         return unreadable
     lowered = command.lower()
