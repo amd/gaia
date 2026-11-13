@@ -1595,6 +1595,15 @@ agent at once, so they take effect on its next step.
     the user removed.
   </Accordion>
 
+  <Accordion title="POST /api/environment/folders/check">
+    **Request:** `{"path": "C:\\work\\project"}`. **Response:**
+    `{"refusal": null}`, or why the folder itself can't be given to any chat
+    (not a folder, a filesystem root, the home folder or a protected folder).
+    It knows no chat, so a folder inside one removed from a chat passes here
+    and is refused when added. The desktop app asks this as soon as a folder is
+    picked in the system dialog.
+  </Accordion>
+
   <Accordion title="POST /api/sessions/{session_id}/environment/folders/remove">
     **Request:** `{"path": "..."}`. Take a folder or file away from the chat.
     The agent's path validator then refuses everything under it, even inside a
