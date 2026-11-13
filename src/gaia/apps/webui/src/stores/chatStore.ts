@@ -527,11 +527,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const steps = [...state.agentSteps];
             const last = steps[steps.length - 1];
             if (last.type !== 'thinking') return state;
+            const prior = last.detail ?? '';
+            // Streamed pieces carry their own spacing; a closed thought ends with a break, as in consolidateSteps.
+            const gap = !last.active && last.latencyMs != null && /\S$/.test(prior) && /^\S/.test(content) ? '\n\n' : '';
             steps[steps.length - 1] = {
                 ...last,
-                // Streamed pieces carry their own spacing, as the saved turn joins them.
-                detail: (last.detail ?? '') + content,
+                detail: prior + gap + content,
                 active: true,
+                latencyMs: undefined,
             };
             return { agentSteps: steps };
         }),
