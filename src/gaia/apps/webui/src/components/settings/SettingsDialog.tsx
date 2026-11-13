@@ -63,7 +63,8 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
         const TAKES_OVER = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
         const land = (): boolean => {
             const hit = root.querySelector<HTMLElement>(jump.target);
-            if (!hit) return false;
+            // A switch stays disabled until its pane has read its value, and can't take focus before.
+            if (!hit || (hit as HTMLInputElement).disabled) return false;
             for (let d = hit.closest('details'); d; d = d.parentElement?.closest('details') ?? null) d.open = true;
             box = hit.closest<HTMLElement>('.model-in-use-field, .settings-field, details, .settings-card') ?? hit;
             box.classList.add('settings-target-hit');
@@ -79,9 +80,10 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
             return true;
         };
         const watch = new MutationObserver(() => { if (land()) watch.disconnect(); });
-        if (!land()) watch.observe(root, { childList: true, subtree: true });
+        if (!land()) watch.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
         TAKES_OVER.forEach((type) => root.addEventListener(type, release, { passive: true }));
-        const giveUp = setTimeout(() => { watch.disconnect(); release(); }, 5000);
+        // Stops waiting for a setting that never shows up; a landed one stays held until the user moves.
+        const giveUp = setTimeout(() => watch.disconnect(), 5000);
         return () => {
             watch.disconnect();
             release();

@@ -80,7 +80,7 @@ export function SetupSettings() {
                 { label: t('settings.section.connectors'), value: null, section: 'connectors' },
                 { label: t('settings.section.memory'), value: null, section: 'memory' },
                 { label: t('settings.language'), value: null, section: 'general', target: '#ui-language' },
-                { label: t('settings.setup.signIn'), value: null, section: 'general', target: '#desktop-app-label', shown: !!window.gaiaAPI?.tray },
+                { label: t('settings.setup.signIn'), value: null, section: 'general', target: '#desktop-startOnLogin', shown: !!window.gaiaAPI?.tray },
             ],
         },
     ];
