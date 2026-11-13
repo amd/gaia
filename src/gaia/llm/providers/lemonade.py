@@ -31,6 +31,7 @@ from ..lemonade_client import (
     DEFAULT_MODEL_NAME,
     FULL_TOOLS_SLOT,
     KV_CACHE_SHARED_PHRASES,
+    CloudContextOverflowError,
     CloudModelUnavailableError,
     CloudProviderDisconnectedError,
     GaiaLemonadeStartError,
@@ -936,6 +937,9 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
             return LemonadeCloudModelUnavailableError(cur.model_id, cur.provider)
+        if isinstance(cur, CloudContextOverflowError):
+            # A hosted model has no wrong-size load to fix: never reloadable.
+            return LemonadeContextOverflowError()
         if isinstance(cur, CloudDisabledError):
             return LemonadeLocalOnlyError(user_message=str(cur))
         chain_text.append(str(cur))

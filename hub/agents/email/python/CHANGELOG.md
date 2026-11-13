@@ -9,6 +9,18 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The search guidance no longer teaches Outlook queries that Microsoft
+  Graph rejects (#3587).** The `search_messages` description and the agent's
+  SEARCH prompt now say `label:` and `after:`/`before:` are Gmail-only, and
+  that one Outlook search cannot mix `from:`/`subject:` with
+  `is:`/`newer_than:`/`older_than:`. On Outlook they point at two separate
+  searches and at `newer_than:`/`older_than:` durations instead. The
+  translator is unchanged: the same queries still raise a named error.
+
+- **An email body can no longer break out of its untrusted-content fence
+  (#2034).** Marker-like text inside a body is neutralized before the body is
+  fenced, so the model keeps reading all of it as data.
+
 - **Under the daemon, a forwarded-token hiccup no longer asks for a browser
   re-sign-in (#6995).** A token the daemon hasn't re-forwarded yet, or an
   unexpected error in the check, now reports `error` ("couldn't check") like the
@@ -330,10 +342,11 @@ contract version is tracked separately as
   `translate_query` let each one fall through to the `$search` bucket and
   reach Graph as inert literal text: Graph never errors on an unrecognised
   `$search` token, so the search silently matched nothing. The agent's own
-  tool description recommends several of these (`label:promotions`,
+  tool description recommended several of these (`label:promotions`,
   `after:YYYY/MM/DD`), so a model following its own instructions could hit
-  this. `translate_query` now raises an actionable error naming the
-  unsupported operator instead of degrading to a phrase match.
+  this; #3587 later scoped that guidance by backend. `translate_query` now
+  raises an actionable error naming the unsupported operator instead of
+  degrading to a phrase match.
 - **An Outlook search on an ordinary quoted phrase containing a colon word
   (`subject:"check in: monday"`) no longer raises the unsupported-operator
   error above (#3592).** The guard matched `is:`/`after:`/`has:`/etc.

@@ -29,6 +29,7 @@ from gaia.daemon.constants import (
 )
 from gaia.daemon.paths import instance_path
 from gaia.daemon.timeouts import agent_read_timeout
+from gaia.listener_guard import keep_listening_after_client_resets
 
 
 def build_require_token(token: str):
@@ -144,6 +145,8 @@ def create_app(
     async def lifespan(_app):
         # A client quitting mid-connection is not an error here.
         quiet_client_hangups(asyncio.get_running_loop())
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
         if on_startup is not None:
             on_startup()
         try:

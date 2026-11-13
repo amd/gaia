@@ -11,6 +11,7 @@ a traceback, though nothing went wrong on this side.
 
 import asyncio
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -106,3 +107,26 @@ def test_the_daemon_installs_it_when_it_starts(caplog):
         pass
 
     assert seen["levels"] == [logging.INFO]
+
+
+def test_the_listener_guard_still_drops_its_own_accept_reset(caplog):
+    """Installed as the servers do, the guard sees its re-armed accept first."""
+    from gaia import listener_guard
+
+    loop = (
+        asyncio.ProactorEventLoop() if hasattr(asyncio, "ProactorEventLoop") else None
+    )
+    if loop is None:
+        pytest.skip("only a proactor loop has the accept guard")
+    try:
+        quiet_client_hangups(loop)
+        assert listener_guard.keep_listening_after_client_resets(loop)
+
+        accept_coro = SimpleNamespace(__qualname__=listener_guard._ACCEPT_TASK)
+        task = SimpleNamespace(get_coro=lambda: accept_coro)
+        reset = OSError(None, "reset", None, 10054)
+        with caplog.at_level(logging.DEBUG, logger="gaia.client_hangups"):
+            _report(loop, {"message": "m", "exception": reset, "future": task})
+        assert [r for r in caplog.records if r.name == "gaia.client_hangups"] == []
+    finally:
+        loop.close()
