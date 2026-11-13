@@ -68,6 +68,8 @@ _DOCUMENT_IS_DATA = (
 
 
 def _as_data(text: str) -> str:
+    # A document holding the closing marker must not end its own fence early.
+    text = text.replace("DOCUMENT>>>", "DOCUMENT> > >")
     return f"<<<DOCUMENT\n{text}\nDOCUMENT>>>\n\n{_DOCUMENT_IS_DATA}"
 
 
