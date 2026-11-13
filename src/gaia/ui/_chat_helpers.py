@@ -197,6 +197,25 @@ def get_agent_registry():
 _SIDECAR_AGENT_TYPES = SIDECAR_AGENT_IDS
 
 
+def refuse_unstreamed_sidecar_chat(agent_type: str) -> None:
+    """Refuse a ``stream=false`` turn for an agent served by its sidecar.
+
+    #2109: the sidecar's ``/query`` loop is a streaming-only SSE contract, so
+    there is no non-streaming shape to relay. Callers run this before saving
+    anything, so a refused turn leaves no message behind.
+    """
+    if not _should_relay_to_sidecar(agent_type, _agent_registry):
+        return
+    named = (profile_for(agent_type) or _NO_PROFILE).display_name
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"The {named} agent requires streaming (stream=true); "
+            f"non-streaming {named} chat is not supported."
+        ),
+    )
+
+
 def _should_relay_to_sidecar(agent_type: str, registry) -> bool:
     """Whether *agent_type* must be served by its daemon sidecar this turn.
 
@@ -4101,21 +4120,7 @@ async def _get_chat_response(
                 agent_type,
             )
         elif _should_relay_to_sidecar(agent_type, _agent_registry):
-            # #2109: a sidecar agent is served exclusively by its canonical
-            # /query loop, which is a streaming-only SSE contract (see the
-            # streaming branch in _stream_chat_impl). There is no
-            # non-streaming shape to relay, and zero verified callers exist
-            # today (the frontend hardcodes stream=true; ChatRequest.stream
-            # defaults True). Fail loud rather than ship a speculative,
-            # untested drained-response path.
-            named = (profile_for(agent_type) or _NO_PROFILE).display_name
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"The {named} agent requires streaming (stream=true); "
-                    f"non-streaming {named} chat is not supported."
-                ),
-            )
+            refuse_unstreamed_sidecar_chat(agent_type)
         else:
             # Every in-process agent, chat included, is created via the registry.
             registry = _agent_registry
