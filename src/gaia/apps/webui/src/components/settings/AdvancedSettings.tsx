@@ -193,7 +193,7 @@ export function AdvancedSettings() {
                                 value={status.model_loaded || t('settings.advanced.noneLoaded')}
                                 ok={!!status.model_loaded && (cloudModel || status.expected_model_loaded !== false)}
                                 hint={!status.model_loaded
-                                    ? t('settings.advanced.loadsFirst')
+                                    ? t(status.lemonade_running ? 'settings.advanced.loadsFirst' : 'settings.advanced.loadsWhenBack')
                                     : !cloudModel && status.expected_model_loaded === false
                                     ? t('settings.advanced.expected', { name: modelName ?? '' })
                                     : undefined}

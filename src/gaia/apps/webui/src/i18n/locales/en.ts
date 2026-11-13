@@ -2197,6 +2197,7 @@ export const enMessages = {
     'settings.advanced.queryFailed': 'Could not query it: {reason}',
     'settings.advanced.noneLoaded': 'None loaded',
     'settings.advanced.loadsFirst': 'None loaded yet — it loads with the first message.',
+    'settings.advanced.loadsWhenBack': 'It loads once the model server is back.',
     'settings.advanced.expected': 'Expected: {name}',
     'settings.advanced.disk': 'Disk space free',
     'settings.advanced.diskLow': 'Local models need about {need} — only {size} free',

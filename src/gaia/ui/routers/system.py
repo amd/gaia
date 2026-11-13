@@ -577,13 +577,16 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     # renders the same answer. Never fatal: a banner losing its hint is far
     # better than the status endpoint failing.
     try:
-        from gaia.llm.lemonade_launcher import describe_start_hint
+        from gaia.llm.lemonade_launcher import describe_start_hint, gaia_runs_lemonade
 
-        # Resolve WITH the required ctx so the rendered command carries it;
-        # callers must print it verbatim, never append their own flag.
-        hint = describe_start_hint(_MIN_CONTEXT_SIZE)
-        status.start_instruction = hint.instruction
-        status.start_command = hint.command
+        # GAIA starts its own server by itself; the app has nothing to tell
+        # the user to run, so its own "it starts on its own" line shows.
+        if not gaia_runs_lemonade():
+            # Resolve WITH the required ctx so the rendered command carries it;
+            # callers must print it verbatim, never append their own flag.
+            hint = describe_start_hint(_MIN_CONTEXT_SIZE)
+            status.start_instruction = hint.instruction
+            status.start_command = hint.command
     except Exception as exc:  # noqa: BLE001
         logger.warning("system status: could not resolve the start hint: %s", exc)
 

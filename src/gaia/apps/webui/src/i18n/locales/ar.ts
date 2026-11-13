@@ -2197,6 +2197,7 @@ const messages: Messages = {
     'settings.advanced.queryFailed': 'تعذّر الاستعلام عنه: {reason}',
     'settings.advanced.noneLoaded': 'لا يوجد نموذج محمّل',
     'settings.advanced.loadsFirst': 'لم يُحمَّل بعد — يُحمَّل مع أول رسالة.',
+    'settings.advanced.loadsWhenBack': 'يُحمَّل عند عودة خادم النماذج.',
     'settings.advanced.expected': 'المتوقع: {name}',
     'settings.advanced.disk': 'مساحة القرص الحرة',
     'settings.advanced.diskLow': 'تحتاج النماذج المحلية إلى نحو {need} — المتاح {size} فقط',

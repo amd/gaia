@@ -2811,6 +2811,23 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `setup-${locale}-server-down`);
         expect(await audit(page)).toEqual([]);
     });
+
+    test(`GAIA's own server that isn't answering names no command (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await withSettingsPanes(p);
+            await p.route('**/api/system/status', (route) => route.fulfill({
+                json: { ...SYSTEM_STATUS, initialized: true, lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null, start_instruction: null },
+            }));
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="advanced"]').click();
+        const card = page.getByRole('dialog').locator('.settings-card').first();
+        await expect(card.locator('.status-row--has-hint')).toHaveCount(2);
+        await expect(card).not.toContainText(/gaia |first message|أول رسالة/);
+        await expect(page.locator('.connection-banner')).not.toContainText(/gaia |run /);
+        await shot(page, `advanced-${locale}-own-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 for (const locale of ['ar', 'en']) {

@@ -239,6 +239,21 @@ def test_system_status_renders_the_complete_context_remedy(
         assert "reload the model" in body["start_instruction"]
 
 
+@pytest.mark.allow_network
+def test_system_status_gives_no_start_command_for_gaias_own_server(
+    stub_lemonade, monkeypatch
+):
+    """The app has no command to show: GAIA starts its own server by itself."""
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda base_url=None: True
+    )
+    stub_lemonade({"/health": {}, "/models": {"data": []}, "/system-info": {}})
+    body = TestClient(create_app(db_path=":memory:")).get("/api/system/status").json()
+
+    assert body["start_command"] is None
+    assert body["start_instruction"] is None
+
+
 @pytest.mark.parametrize("fixture,expected_name,expected_vram", REAL_PAYLOADS)
 @pytest.mark.allow_network
 def test_system_status_reports_gpu(
