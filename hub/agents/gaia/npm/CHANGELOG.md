@@ -13,11 +13,24 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   the tool limit now also reaches the model each turn, so asked about one it
   says it is set up but unavailable rather than that nothing by that name
   exists. A corrupt `mcp_servers.json` is described in plain words.
+- **A turn the output limit keeps cutting off says what to do next.** It told
+  the user to "retry with a higher output-token limit (max_tokens)", a setting
+  the apps don't have, dropped what the turn had done, and sent no token counts,
+  so its cost read "Not reported". It now names the tools it ran and its last
+  findings, suggests asking for the work in smaller parts, and carries the
+  turn's token counts.
 - **A run stopped for an approval nobody can give reads as not done.** Its
   `final` now carries `failed: true` and the `usage` spent before the stop, so
   `gaia -p` reports `is_error: true` with real step and token counts instead of
   a free, zero-step success. A stopped turn's result now carries
   the tokens it spent too.
+
+- **Scratch folders no longer pile up in the temp folder.** A `gaia-scratch-…`
+  folder was removed only when its agent was closed, so a sidecar that was
+  killed or exited left it behind (one PC held about 2,900). The agent now
+  removes the scratch folders it holds when its process exits normally, and
+  the next agent to start clears any no agent has used for a day, including
+  ones a killed process left.
 
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
