@@ -97,7 +97,12 @@ def lab(tmp_path, monkeypatch):
         live = state and state.get("port") == port and state.get("api_key") == key
         return {"status": "ok", "all_models_loaded": []} if live else None
 
+    real_popen = embedded_mod.subprocess.Popen
+
     def popen(argv, **kwargs):
+        # Popen is patched process-wide: let other commands (macOS sysctl) run.
+        if "--port" not in argv:
+            return real_popen(argv, **kwargs)
         lab.spawned_ports.append(int(argv[argv.index("--port") + 1]))
         # This process's pid, so pid checks see a live server.
         return SimpleNamespace(pid=os.getpid(), poll=lambda: None, returncode=None)
