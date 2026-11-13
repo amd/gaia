@@ -1481,3 +1481,19 @@ class TestPreviewEdgeCases:
         # min(max(0, 1), 200) = 1
         data = resp.json()
         assert len(data["preview_lines"]) == 1
+
+
+class TestFileBrowseDenialReason:
+    """A 403 caused by the operating system says so; the home-folder limit does not."""
+
+    def test_unreadable_folder_is_marked_os_denied(self, client, home_tmp_dir):
+        with patch("pathlib.Path.iterdir", side_effect=PermissionError("denied")):
+            resp = client.get("/api/files/browse", params={"path": str(home_tmp_dir)})
+        assert resp.status_code == 403
+        assert resp.json()["detail"]["status"] == "os_denied"
+
+    def test_outside_home_is_not_marked_os_denied(self, client):
+        outside = "C:\\\\Windows" if platform.system() == "Windows" else "/etc"
+        resp = client.get("/api/files/browse", params={"path": outside})
+        assert resp.status_code == 403
+        assert isinstance(resp.json()["detail"], str)
