@@ -151,7 +151,8 @@ _COUNTERFACTUAL = re.compile(
     r"(?:\b(?:would|could|should|might)(?:n['’]t|\s+not)?|\b(?:I|we)['’]d)\s+have\s+"
     rf"(?:\w+\s+)?{_WRITE_VERB}\b"
     r"(?:(?!\b(?:but|and|so|then|instead|or|yet|while|whereas|though|although)\b"
-    rf"|\b{_WRITE_VERB}\b|\s-\s)[^,;:—–])*"
+    # A drive letter's colon ("C:/", "C:\\") stays inside the clause.
+    rf"|\b{_WRITE_VERB}\b|\s-\s)(?:[^,;:—–]|(?<=\b[A-Za-z]):(?=[\\/])))*"
     # The clause's own ";" or dash goes too, or the save after it reads as
     # a second clause that destination_paths never reaches.
     r"(?:\s*(?:[;—–]|-(?=\s)))?"

@@ -8,8 +8,8 @@ import { log } from '../../utils/logger';
 import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
 import { formatGb } from '../../utils/modelLabels';
-import { useT } from '../../i18n/useT';
-import { isolate } from '../../i18n/registry';
+import { useT, type Translate } from '../../i18n/useT';
+import { isolate, type MessageKey } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
 import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
@@ -215,7 +215,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--download"
+                                    className="btn-primary"
                                     onClick={() => downloadModel(false, undefined, !status.model_loaded)}
                                     disabled={isDownloadingModel}
                                 >
@@ -240,7 +240,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--load"
+                                    className="btn-primary"
                                     onClick={() => loadModel()}
                                     disabled={isLoadingModel}
                                 >
@@ -266,7 +266,7 @@ export function AdvancedSettings() {
                                     <StatusRow label={t('settings.advanced.context')} value={t('settings.ctx.tokens', { size: `${(status.model_context_size / 1024).toFixed(0)}K` })} ok={status.context_size_sufficient} />
                                 )}
                                 {status.model_labels && status.model_labels.length > 0 && (
-                                    <StatusRow label={t('settings.advanced.capabilities')} value={status.model_labels.join(', ')} ok={true} />
+                                    <StatusRow label={t('settings.advanced.capabilities')} value={capabilitiesText(t, status.model_labels)} ok={true} />
                                 )}
                                 <StatusRow label={t('settings.advanced.embedding')} value={status.embedding_model_loaded ? t('settings.advanced.available') : t('settings.advanced.notLoaded')} ok={status.embedding_model_loaded} />
                                 {status.gpu_name && (
@@ -285,7 +285,7 @@ export function AdvancedSettings() {
                                 <div className="force-redownload-row">
                                     <span className="force-redownload-label">{t('settings.advanced.corrupted')}</span>
                                     <button
-                                        className="btn-force-redownload"
+                                        className="btn-secondary"
                                         onClick={() => downloadModel(true, undefined, !status.model_loaded)}
                                         disabled={isDownloadingModel}
                                     >
@@ -338,7 +338,7 @@ export function AdvancedSettings() {
                     />
                     <div className="model-btn-group">
                         <button
-                            className={`btn-model-save${justSaved ? ' saved' : ''}`}
+                            className="btn-primary"
                             onClick={() => { void saveCustomModel(); }}
                             disabled={!settingsLoaded || savingModel || (!customModelDirty && !justSaved)}
                             aria-label={t('settings.advanced.customSave')}
@@ -455,6 +455,27 @@ function SaveError({ message }: { message: string }) {
             </div>
         </div>
     );
+}
+
+// Lemonade's model labels; one it adds later shows as sent.
+const CAPABILITIES: Record<string, MessageKey> = {
+    cloud: 'settings.advanced.capability.cloud',
+    chat: 'settings.advanced.capability.chat',
+    vision: 'settings.advanced.capability.vision',
+    'tool-calling': 'settings.advanced.capability.toolCalling',
+    reasoning: 'settings.advanced.capability.reasoning',
+    embeddings: 'settings.advanced.capability.embeddings',
+    reranking: 'settings.advanced.capability.reranking',
+    coding: 'settings.advanced.capability.coding',
+    audio: 'settings.advanced.capability.audio',
+    image: 'settings.advanced.capability.image',
+    tts: 'settings.advanced.capability.tts',
+    stt: 'settings.advanced.capability.stt',
+    transcription: 'settings.advanced.capability.transcription',
+};
+
+function capabilitiesText(t: Translate, labels: string[]): string {
+    return t.compose((say) => labels.map((l) => (CAPABILITIES[l] ? say(CAPABILITIES[l]) : l)).join(say('mem.listSeparator')));
 }
 
 function StatusRow({ label, value, ok, hint }: { label: string; value: ReactNode; ok: boolean; hint?: string }) {

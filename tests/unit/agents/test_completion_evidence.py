@@ -1662,6 +1662,29 @@ def test_a_real_save_after_a_would_have_clause_counts_on_a_read_only_turn(
     assert not [g for g in found if "a.txt" in g]
 
 
+@pytest.mark.parametrize("sep", ["/", "\\"])
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "I would have written it to {a}, but saved the totals to {b}.",
+        "I would have written it to {a} but saved it to {b} instead.",
+        "I saved the totals to {b}.",
+    ],
+)
+def test_a_save_to_a_windows_path_after_a_would_have_clause_is_a_claim(
+    tmp_path, sentence, sep
+):
+    """F51: a drive letter's colon ended the clause, so the save went unchecked."""
+    folder = sep.join(["C:", "Users", "t", "Documents", "t"])
+    a, b = f"{folder}{sep}a.txt", f"{folder}{sep}b.txt"
+    ledger = CompletionEvidence("What are the totals in data.csv?", str(tmp_path))
+
+    found = gaps(ledger, sentence.format(a=a, b=b))
+
+    assert any("b.txt" in g for g in found)
+    assert not [g for g in found if "a.txt" in g]
+
+
 @pytest.mark.parametrize(
     "sentence",
     [
