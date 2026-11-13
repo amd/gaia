@@ -1997,6 +1997,45 @@ def _split_script(body: str, dialect: str) -> list:
     return words
 
 
+#: A quoted string of path separators only: '\', "/", '\\'.
+_PS_SEPARATOR_STRING = r"""(?:'[\\/]+'|"[\\/]+")"""
+#: String methods and operators whose arguments are only searched for, never
+#: part of what they return: ``.Split('\')``, ``-split '/'``.
+_PS_SEARCH_ARGUMENTS = re.compile(
+    r"\.(?:Split|Trim|TrimStart|TrimEnd|IndexOf|LastIndexOf|IndexOfAny"
+    r"|LastIndexOfAny|StartsWith|EndsWith|Contains)\s*\([^()]*\)"
+    rf"|-[ci]?split\s+{_PS_SEPARATOR_STRING}",
+    re.IGNORECASE,
+)
+#: A replace whose search text is a separator: ``.Replace('\','/')``,
+#: ``-replace '\\','/'``. The replacement is output, so it counts as text only
+#: when it swaps one separator for another.
+_PS_SEPARATOR_REPLACE = re.compile(
+    rf"(\.Replace\s*\(\s*|-[ci]?replace\s+){_PS_SEPARATOR_STRING}"
+    rf"(\s*,\s*)({_PS_SEPARATOR_STRING})?",
+    re.IGNORECASE,
+)
+
+
+def _without_separator_strings(body: str) -> str:
+    """*body* with the separator strings that are only text emptied.
+
+    ``'\\'`` handed to a string method was read as a path, the drive root, and
+    the guard refused the whole script. A separator a method can return
+    (``'x'.Replace('x','\\')``, ``-join '\\'``) stays a path.
+    """
+
+    def empty(match: re.Match) -> str:
+        return re.sub(_PS_SEPARATOR_STRING, "''", match.group(0))
+
+    def empty_swap(match: re.Match) -> str:
+        replacement = "''" if match.group(3) else ""
+        return f"{match.group(1)}''{match.group(2)}{replacement}"
+
+    body = _PS_SEPARATOR_REPLACE.sub(empty_swap, body)
+    return _PS_SEARCH_ARGUMENTS.sub(empty, body)
+
+
 def _script_words(body: str, dialect: str) -> list:
     """The words an inline script operand names, for the path check."""
     if dialect == _PS_ENCODED:
@@ -2014,6 +2053,8 @@ def _script_words(body: str, dialect: str) -> list:
         except ValueError:
             # sh refuses an unbalanced quote too; still check every word in it.
             return _split_script(body, "code")
+    if dialect == "powershell":
+        body = _without_separator_strings(body)
     words = _split_script(body, dialect)
     if dialect == "powershell":
         # '-Path:C:\x' binds its value with a colon.
