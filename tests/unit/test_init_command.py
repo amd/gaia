@@ -1388,6 +1388,25 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertEqual(status.to_json()["model_list_unread"], True)
         self.assertTrue(send.call_args.args[1].endswith("/models?show_all=true"))
 
+    def test_a_server_gone_before_its_model_list_is_not_a_bad_list(self):
+        """Dying between /health and /models is an outage, not a bad list."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                side_effect=LemonadeClientError("connection refused"),
+            ),
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertEqual(status.stage, "server")
+        self.assertFalse(status.model_list_unread)
+
     AGENT_MISSING = "The GAIA agent is not installed -- run: gaia init"
 
     def _check_with_models(self, profile="gaia", have=True, **kwargs):

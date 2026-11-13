@@ -719,6 +719,7 @@ def check_setup_status(
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         LemonadeClientError,
+        ModelListShapeError,
         configured_lemonade_url,
         resolve_lemonade_base_url,
     )
@@ -805,7 +806,7 @@ def check_setup_status(
             ready=False,
             reasons=[f"Could not read the model list from {base_url}: {e}"],
             stage="server",
-            model_list_unread=True,
+            model_list_unread=isinstance(e, ModelListShapeError),
         )
 
     if profile_config["models"]:
