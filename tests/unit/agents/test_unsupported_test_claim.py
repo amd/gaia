@@ -18,6 +18,7 @@ Three layers:
 from __future__ import annotations
 
 import ast
+import gc
 import json
 import random
 import time
@@ -1336,34 +1337,54 @@ _PYTEST_ARGV = "subprocess.run([sys.executable, '-m', 'pytest'])\n"
 _PYTEST_IN_A_DEF = "def run_tests():\n    " + _PYTEST_ARGV
 
 
+def _growth_seconds(small: str, big: str) -> tuple[float, float]:
+    # Interleaved best-of-3 with GC paused, so neither a load spike nor a
+    # collection can land on one size only.
+    small_best = big_best = float("inf")
+    gc.disable()
+    try:
+        for _ in range(3):
+            small_best = min(small_best, _detect_seconds(small)[1])
+            big_best = min(big_best, _detect_seconds(big)[1])
+    finally:
+        gc.enable()
+    return small_best, big_best
+
+
+def _assert_grows_linearly(make_source) -> None:
+    # 4x the launches: linear is ~4x the time, the unbounded n**2 / 2 is ~16x.
+    small, big = _growth_seconds(make_source(1000), make_source(4000))
+    assert big < 9 * small + 0.05
+
+
 @pytest.mark.parametrize(
     "storm",
     [
-        "s = ''\n" + "s += 'echo a; '\nos.system(s)\n" * 5000,
-        "s = []\n" + "s += ['echo', 'a']\nsubprocess.run(s)\n" * 5000,
-        "s = 'echo'\n" + "s = f'{s} a'\nos.system(s)\n" * 5000,
+        lambda n: "s = ''\n" + "s += 'echo a; '\nos.system(s)\n" * n,
+        lambda n: "s = []\n" + "s += ['echo', 'a']\nsubprocess.run(s)\n" * n,
+        lambda n: "s = 'echo'\n" + "s = f'{s} a'\nos.system(s)\n" * n,
     ],
     ids=["shell-text", "argv", "f-string"],
 )
 @pytest.mark.parametrize("runner", ["before", "after", "in-def"])
 def test_a_command_grown_and_launched_each_time_stays_linear(storm, runner):
     # Launch k sees all k commands: unbounded, the checks add up to n**2 / 2.
-    source = (
-        _LAUNCH_HEADER
-        + {
-            "before": _PYTEST_ARGV + storm,
-            "after": storm + _PYTEST_ARGV,
-            "in-def": _PYTEST_IN_A_DEF + storm + "run_tests()\n",
-        }[runner]
-    )
+    def with_runner(n: int) -> str:
+        return (
+            _LAUNCH_HEADER
+            + {
+                "before": _PYTEST_ARGV + storm(n),
+                "after": storm(n) + _PYTEST_ARGV,
+                "in-def": _PYTEST_IN_A_DEF + storm(n) + "run_tests()\n",
+            }[runner]
+        )
+
     with patch("gaia.agents.base.checks.log") as log:
-        found, seconds = _detect_seconds(source)
-    assert found is True
-    assert seconds < _linear_bound(source)
+        assert _detect_test_runner(with_runner(5000)) is True
     assert not log.warning.called
-    storm_only, seconds = _detect_seconds(_LAUNCH_HEADER + storm)
-    assert storm_only is False
-    assert seconds < _linear_bound(_LAUNCH_HEADER + storm)
+    assert _detect_test_runner(_LAUNCH_HEADER + storm(5000)) is False
+    _assert_grows_linearly(with_runner)
+    _assert_grows_linearly(lambda n: _LAUNCH_HEADER + storm(n))
 
 
 _WIDE = 5001
