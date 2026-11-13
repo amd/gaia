@@ -769,6 +769,15 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "forget_everything",
 }
 
+
+def _argument_shape(name: str, param: inspect.Parameter) -> str:
+    """``name (type)`` for a missing-argument error; just the name when untyped."""
+    annotation = param.annotation
+    if annotation is inspect.Parameter.empty:
+        return name
+    return f"{name} ({getattr(annotation, '__name__', annotation)})"
+
+
 #: Put on a call the user declined, so the model stops instead of rerouting.
 DECLINED_HINT = (
     "The user declined this. Do not try to get the same result another way "
@@ -8452,8 +8461,12 @@ Do NOT wrap conversational replies in JSON.
         # Check for missing required arguments
         missing_args = [arg for arg in required_args if arg not in tool_args]
         if missing_args:
+            wanted = ", ".join(
+                _argument_shape(name, required_args[name]) for name in required_args
+            )
             error_msg = (
-                f"Missing required arguments for {tool_name}: {', '.join(missing_args)}"
+                f"Missing required arguments for {tool_name}: {', '.join(missing_args)}. "
+                f"Call it again with every argument filled in: {wanted}."
             )
             logger.error(error_msg)
             # Tagged so callers can tell a malformed call (retryable — the model
