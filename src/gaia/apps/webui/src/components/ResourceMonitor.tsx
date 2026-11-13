@@ -234,7 +234,7 @@ export function ResourceMonitor({ onClose }: ResourceMonitorProps) {
                             <Sparkline values={tile.history} max={tile.max} dashed={tile.dashed} />
                             <span className="resource-text">
                                 <span className="resource-label">
-                                    {tile.label}
+                                    <bdi>{tile.label}</bdi>
                                     {tile.name && <span className="resource-sr-only">{` (${tile.name})`}</span>}
                                 </span>
                                 <span className="resource-reading">
