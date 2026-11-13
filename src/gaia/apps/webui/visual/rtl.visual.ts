@@ -2943,6 +2943,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const MODEL_SERVER_STATES = [
+    { name: 'hung', status: { lemonade_error: 'Lemonade did not answer in time' }, hint: { ar: 'فأعد تشغيله', en: 'restart it:' } },
+    { name: 'stopped', status: { lemonade_error: null }, hint: { ar: 'لتشغيله يدويًا', en: 'To start it by hand' } },
+] as const;
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const { name, status, hint } of MODEL_SERVER_STATES) {
+        test(`a ${name} model server's banner reads in the interface language, its command left to right (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route('**/api/system/status', (route) => route.fulfill({
+                    json: { ...SYSTEM_STATUS, lemonade_running: false, model_loaded: null, start_command: 'C:\\Program Files\\Lemonade\\lemond.exe', ...status },
+                }));
+            });
+            const banner = page.locator('.connection-banner');
+            await expect(banner).toContainText(hint[locale]);
+            await expect(banner).not.toContainText('did not answer in time');
+            const code = banner.locator('code');
+            await expect(code).toHaveText('C:\\Program Files\\Lemonade\\lemond.exe');
+            expect(await code.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            await shot(page, `model-server-${name}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.connection-banner', 'code')).toEqual([]);
+        });
+    }
+}
+
 for (const locale of ['ar', 'en']) {
     test(`a server LEMONADE_BASE_URL picks offers GAIA's own and names no command (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
