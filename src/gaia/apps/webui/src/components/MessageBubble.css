@@ -454,7 +454,7 @@
     --table-fade: 0px;
     animation-timeline: scroll(self x);
 }
-[dir="rtl"] .md-table-wrap {
+.md-table-wrap:dir(rtl) {
     mask-image: linear-gradient(to left, black calc(100% - var(--table-fade)), transparent);
 }
 @property --table-fade {

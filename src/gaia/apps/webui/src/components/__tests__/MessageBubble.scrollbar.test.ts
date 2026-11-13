@@ -28,7 +28,7 @@ describe('MessageBubble horizontal scroll cue', () => {
         const css = rule('.md-table-wrap');
         expect(css).toMatch(/mask-image:\s*linear-gradient\(to right,[^;]*var\(--table-fade\)/);
         expect(css).toMatch(/animation-timeline:\s*scroll\(self x\)/);
-        expect(rule('[dir="rtl"] .md-table-wrap')).toMatch(/to left/);
+        expect(rule('.md-table-wrap:dir(rtl)')).toMatch(/to left/);
         const frames = bubbleCss.slice(bubbleCss.indexOf('@keyframes md-table-fade'));
         expect(frames).toMatch(/0%,\s*90%\s*\{\s*--table-fade:\s*40px/);
         expect(frames).toMatch(/100%\s*\{\s*--table-fade:\s*0px/);
