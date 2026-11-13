@@ -958,14 +958,22 @@ WRITE_FAILURE_INDEX = "index"  # vector stored, not in this session's index
 WRITE_FAILURE_STORE = "store"  # row not saved at all
 
 
+#: Where the user can still make a change a chat may not, by what was refused.
+_REFUSED_CHANGE_REMEDY = {
+    "updated": " Nothing was updated; the user can change it on the Memory page.",
+    "erased": " Nothing was erased; the user can erase it on the Memory page.",
+}
+
+
 def _writes_refused_result(agent, done: str) -> Optional[dict]:
     """The tool result for a memory change refused now, or None."""
     reason = memory_writes_refused(agent)
     if reason is None:
         return None
+    remedy = _REFUSED_CHANGE_REMEDY.get(done, "")
     return {
         "status": "skipped",
-        "message": f"{reason} Nothing was {done}. Don't tell the user it was {done}.",
+        "message": f"{reason}{remedy} Don't tell the user it was {done}.",
     }
 
 

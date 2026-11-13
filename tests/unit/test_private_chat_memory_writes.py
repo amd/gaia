@@ -66,7 +66,10 @@ def test_a_private_chat_refuses_every_memory_change(private, name, kwargs, done)
 
     assert result["status"] == "skipped", result
     assert "private chat" in result["message"]
-    assert f"Nothing was {done}" in result["message"]
+    assert f"Don't tell the user it was {done}" in result["message"]
+    if done != "stored":
+        assert f"Nothing was {done}" in result["message"]
+        assert "Memory page" in result["message"]
     assert _rows(store) == before
 
 
@@ -89,6 +92,17 @@ def test_memory_off_refuses_an_update_with_its_own_reason(private):
     assert result["status"] == "skipped"
     assert "turned off in Settings" in result["message"]
     assert store.get_item(kid)["content"] == "Project budget is 73,904 euros"
+
+
+def test_memory_off_tells_how_to_erase_anyway(private):
+    agent, store, _kid = private
+    agent._incognito_reason = "memory_off"
+
+    result = _tool(agent, "forget_everything")()
+
+    assert result["status"] == "skipped"
+    assert "erase it on the Memory page" in result["message"]
+    assert _rows(store)
 
 
 def test_an_update_still_works_once_the_chat_is_not_private(private):
