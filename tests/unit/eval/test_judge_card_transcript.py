@@ -15,8 +15,6 @@ import pytest
 from gaia.mcp.servers import agent_ui_mcp
 from gaia.mcp.servers.agent_ui_mcp import CARD_TEXT_MAX_CHARS, card_text
 
-pytest.importorskip("mcp")
-
 GUIDES_TOOLS = "hub/skills/guides/tools.py"
 
 
@@ -141,6 +139,7 @@ def test_full_hundred_item_checklist_of_normal_lines_is_not_cut():
 
 @pytest.fixture
 def server(monkeypatch):
+    pytest.importorskip("mcp")  # Only the MCP tool registration needs the extra.
     monkeypatch.setenv("GAIA_MEMORY_MCP_ALWAYS", "1")
     return agent_ui_mcp.create_agent_ui_mcp("http://backend")
 
