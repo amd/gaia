@@ -3576,11 +3576,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 reason: Human-readable explanation (shown in activity log).
                 wake_in_seconds: Seconds until next wakeup (only for "scheduled").
                     Minimum: 30. Maximum: 86400 (24 hours).
-                goal_outcome: "done" when the goal you worked on is achieved,
-                    "failed" when it cannot be done (say why in reason), or
-                    empty when unfinished. Unfinished with state "scheduled"
-                    checks back without cost; any other unfinished stop uses
-                    up one of the goal's three tries.
+                goal_outcome: "done" if the goal is achieved, "failed" if it
+                    can't be (say why in reason), "" if unfinished. Unfinished
+                    uses one of 3 tries unless state is "scheduled".
             """
             valid_states = {"idle", "scheduled", "paused"}
             if state not in valid_states:
