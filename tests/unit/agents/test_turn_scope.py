@@ -492,13 +492,13 @@ def test_a_plan_budget_stop_does_not_count_as_the_answer(tmp_path, monkeypatch):
         )
         result = agent.process_query(
             "Using current prices online, write a 40-unit BOM to `bom.xlsx`.",
-            # The plan cap binds once half the step budget is spent.
+            # The plan cap binds with 8 of 16 steps left (half a small budget).
             max_steps=16,
         )
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(snapshot)
-    assert any("Maximum plan iterations" in str(m["content"]) for m in sent[1])
+    assert any("No room for another plan" in str(m["content"]) for m in sent[1])
     assert "[check:completion]" in sent[2][-1]["content"]
     refusals = [
         m["content"]
