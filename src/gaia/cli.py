@@ -34,6 +34,7 @@ from gaia.llm.lemonade_client import (
     resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
+from gaia.llm.reasoning import ReasoningStreamFilter
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
 from gaia.log_rotation import log_family
 from gaia.logger import get_logger
@@ -318,9 +319,17 @@ class GaiaCliClient:
                 max_tokens=self.max_tokens,
             )
 
+            # A reasoning model's <think> block is not the answer stdout promises.
+            answer = ReasoningStreamFilter()
             for chunk in response_generator:
-                print(chunk, end="", flush=True)
-                yield chunk
+                shown = answer.feed(chunk)
+                if shown:
+                    print(shown, end="", flush=True)
+                    yield shown
+            shown = answer.flush()
+            if shown:
+                print(shown, end="", flush=True)
+                yield shown
 
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
