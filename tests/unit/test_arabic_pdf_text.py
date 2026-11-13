@@ -258,6 +258,22 @@ def test_hyphenated_date_reads_year_first():
     assert text.strip() == "يب 2027-02-15."
 
 
+def test_number_range_after_a_latin_word_keeps_its_order():
+    # After a Latin word the hyphen joins the numbers into one left-to-right run.
+    text = _page_text(
+        _line(
+            (50, b"BCABCABC"),
+            (100, b"dell"),
+            (130, b"15"),
+            (142, b"-"),
+            (146, b"20"),
+            (180, b"ABCABCAB"),
+        )
+    )
+
+    assert "15-20" in text and "20-" not in text
+
+
 def test_hyphenated_code_with_letters_keeps_its_order():
     text = _page_text(
         _line(
