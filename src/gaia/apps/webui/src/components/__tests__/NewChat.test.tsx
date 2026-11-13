@@ -7,6 +7,7 @@ import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
+import newChatCss from '../NewChat.css?raw';
 import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
 
 vi.mock('../../services/api');
@@ -161,6 +162,33 @@ describe('NewChat try chips', () => {
         expect(screen.getByLabelText('Message')).toHaveValue('Give me a banana bread recipe');
         expect(screen.getByLabelText('Message')).toHaveFocus();
         expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it('keeps a question already typed and adds the example after it (#7594)', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'What should I cook this week?' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+
+        expect(screen.getByLabelText('Message')).toHaveValue('What should I cook this week?\n\nGive me a banana bread recipe');
+    });
+
+    it('swaps the earlier chip example for the next one, with and without a typed question', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+        const box = screen.getByLabelText('Message');
+
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('A 15-minute workout I can do at home');
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('A 15-minute workout I can do at home');
+
+        fireEvent.change(box, { target: { value: 'What should I do today?' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('What should I do today?\n\nA 15-minute workout I can do at home');
     });
 });
 
@@ -526,5 +554,13 @@ describe('NewChat after first-run setup failed', () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready', setup_error: null } as SystemStatus });
         render(<NewChat onSend={vi.fn()} />);
         expect(screen.queryByRole('alert')).toBeNull();
+    });
+});
+
+describe('the greeting gloss', () => {
+    it('is set smaller than the greeting, so the English never out-sizes the Arabic', () => {
+        const rule = newChatCss.match(/\.new-chat-greeting \.i18n-gloss\.i18n-gloss \{([^}]*)\}/);
+        expect(rule?.[1]).toMatch(/font-size:\s*0\.55em/);
+        expect(rule?.[1]).toMatch(/display:\s*block/);
     });
 });

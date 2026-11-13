@@ -87,7 +87,7 @@ describe('connector catalog text in Arabic', () => {
 
     it('names a missing field in each language of the error', async () => {
         await openTile(workRow());
-        fireEvent.click(screen.getByRole('button', { name: /Save & Connect/ }));
+        fireEvent.click(screen.getByRole('button', { name: /Save and connect/ }));
         const text = shown();
         expect(text).toContain(`مطلوب: ${arMessages['connectors.microsoft_work.client_id.label']}`);
         expect(text).toContain('(Required: Application (client) ID)');

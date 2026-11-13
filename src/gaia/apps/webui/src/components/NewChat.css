@@ -77,6 +77,12 @@
     text-wrap: balance;
 }
 
+/* The serif has no Arabic, so the Arabic line renders small and the default gloss would out-size it. */
+.new-chat-greeting .i18n-gloss.i18n-gloss {
+    display: block;
+    font-size: 0.55em;
+}
+
 /* Holds its height before the folder arrives, so nothing below jumps. */
 .new-chat-meta {
     display: flex;

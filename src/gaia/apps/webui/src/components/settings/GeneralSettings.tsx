@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from '../RadioGroup';
 import { useChatStore } from '../../stores/chatStore';
 import { useResourceMonitorStore } from '../../stores/resourceMonitorStore';
 import type { ThemePreference } from '../../utils/theme';
@@ -77,7 +78,7 @@ export function GeneralSettings() {
             </div>
             <div className="settings-field">
                 <span className="settings-label" id="appearance-label">{t('settings.appearance')}</span>
-                <div className="segmented" role="radiogroup" aria-labelledby="appearance-label">
+                <RadioGroup className="segmented" aria-labelledby="appearance-label">
                     {THEMES.map((th) => (
                         <button
                             key={th.value}
@@ -90,7 +91,7 @@ export function GeneralSettings() {
                             {t(th.label)}
                         </button>
                     ))}
-                </div>
+                </RadioGroup>
             </div>
             <div className="settings-field">
                 <label className="setting-row">
@@ -109,7 +110,7 @@ export function GeneralSettings() {
                 <span className="settings-hint" id="resources-hint">{t('resources.settingsHint')}</span>
             </div>
             <SettingsDisclosure title={t('settings.colors')} titleId="palette-label" defaultOpen={palette === 'custom'}>
-                <div className="palette-grid" role="radiogroup" aria-labelledby="palette-label">
+                <RadioGroup className="palette-grid" aria-labelledby="palette-label">
                     {PALETTES.map((p) => (
                         <button
                             key={p.id}
@@ -138,7 +139,7 @@ export function GeneralSettings() {
                         </span>
                         {t('settings.colors.custom')}
                     </button>
-                </div>
+                </RadioGroup>
                 {palette === 'custom' && (
                     <div className="palette-custom">
                         <label className="palette-color" htmlFor="custom-accent">

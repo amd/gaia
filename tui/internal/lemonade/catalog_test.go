@@ -338,6 +338,26 @@ func TestAColdNPUPCIsOfferedGemmaBeforeLemonadeListsIt(t *testing.T) {
 	}
 }
 
+// #7975: every FLM build on the PC was offered, though only the ladder is proven.
+func TestOnlyProvenNPUModelsAreOffered(t *testing.T) {
+	flm := func(id string) Model {
+		return Model{ID: id, Recipe: "flm", Downloaded: true, Labels: []string{"chat"}}
+	}
+	models := []Model{flm("gemma4-it-e4b-FLM"), flm("lfm2-1.2b-FLM"), flm("qwen3.5-4b-FLM"),
+		{ID: "Tiny-GGUF", Downloaded: true, Labels: []string{"chat"}}}
+	entries := BuildEntries("local", models, Capacity{MemoryGB: 64, DiskFreeGB: 500, NPUMemoryGB: 32}, nil)
+
+	kept := OnlyProvenNPU(entries, []string{"QWEN3.5-4B-FLM"})
+
+	for id, want := range map[string]bool{
+		"gemma4-it-e4b-FLM": true, "lfm2-1.2b-FLM": false, "qwen3.5-4b-FLM": true, "Tiny-GGUF": true,
+	} {
+		if got := npuEntry(kept, id) != nil; got != want {
+			t.Errorf("%s offered = %v, want %v", id, got, want)
+		}
+	}
+}
+
 func TestAPCWithoutAnNPUIsNotOfferedFLMModels(t *testing.T) {
 	entries := BuildEntries("local", nil, Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil)
 	if e := npuEntry(entries, "gemma4-it-e4b-FLM"); e != nil {
