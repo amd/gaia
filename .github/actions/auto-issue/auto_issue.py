@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -315,6 +316,22 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def issue_number(ref: str) -> str:
+    """The issue number from ``report``'s ref: a number, or the new issue's URL."""
+    number = ref.strip().rstrip("/").rsplit("/", 1)[-1]
+    if not number.isascii() or not number.isdigit():
+        raise ValueError(f"no issue number in {ref!r}")
+    return number
+
+
+def write_output(name: str, value: str) -> None:
+    """Set a step output, when running as a GitHub Actions step."""
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"{name}={value}\n")
+
+
 def main(argv: Sequence[str] | None = None, run: Runner = gh) -> int:
     try:
         return _main(argv, run)
@@ -338,7 +355,7 @@ def _main(argv: Sequence[str] | None, run: Runner) -> int:
             raise SystemExit("report needs a non-empty --title")
         with open(args.body_file, encoding="utf-8") as f:
             body = f.read()
-        code, _ = report(
+        code, ref = report(
             repo=args.repo,
             key=validate_key(args.key.strip()),
             title=title,
@@ -349,6 +366,13 @@ def _main(argv: Sequence[str] | None, run: Runner) -> int:
             selector=selector,
             run=run,
         )
+        try:
+            number = issue_number(ref)
+        except ValueError as e:
+            # The issue was filed or updated; only the output a later step reads is missing.
+            print(f"::error::{e}. The issue was written, but no step output was set.")
+            return 1
+        write_output("issue", number)
         return code
 
     selector.keys = {validate_key(k) for k in _lines(args.key)}

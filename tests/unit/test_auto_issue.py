@@ -118,6 +118,42 @@ def test_report_files_a_marked_issue_when_none_is_open(tmp_path):
     assert create[create.index("--repo") + 1] == R
 
 
+@pytest.mark.parametrize(
+    "open_issues,expected",
+    [([], "9999"), ([_issue(12, "anything", key="wf/failure")], "12")],
+    ids=["filed", "existing"],
+)
+def test_report_outputs_the_issue_number(tmp_path, monkeypatch, open_issues, expected):
+    """A later step links the issue, so the number is a step output either way."""
+    output = tmp_path / "github_output"
+    output.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    assert _report(FakeGh(open_issues), tmp_path) == 0
+    assert output.read_text(encoding="utf-8") == f"issue={expected}\n"
+
+
+def test_an_issue_ref_without_a_number_is_refused():
+    with pytest.raises(ValueError, match="no issue number"):
+        auto_issue.issue_number("https://github.com/amd/gaia/issues/new")
+
+
+def test_a_filed_issue_without_a_number_fails_the_step_cleanly(
+    tmp_path, monkeypatch, capsys
+):
+    output = tmp_path / "github_output"
+    output.write_text("", encoding="utf-8")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+
+    class NoNumberGh(FakeGh):
+        def __call__(self, argv):
+            out = super().__call__(argv)
+            return "filed\n" if list(argv)[:2] == ["issue", "create"] else out
+
+    assert _report(NoNumberGh(), tmp_path) == 1
+    assert "::error::no issue number in 'filed'" in capsys.readouterr().out
+    assert output.read_text(encoding="utf-8") == ""
+
+
 def test_rerun_comments_on_the_marked_issue_instead_of_filing(tmp_path):
     gh = FakeGh([_issue(12, "anything", key="wf/failure")])
     assert _report(gh, tmp_path, title="a reworded title") == 0
