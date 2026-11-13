@@ -917,41 +917,35 @@ def check_setup_status(
     )
 
 
-def _terminal_installer_agent() -> Optional[Path]:
-    """The flagship an installer shipped outside the hub, else None.
-
-    install.sh / install.ps1 put it in GAIA's bin dir. The terminal packages
-    ship it with the frozen gaia: beside it (Windows setup) or on PATH (.deb,
-    .rpm, .pkg). None of them write a hub sentinel; the TUI runs it from any
-    of these places. A pip install's PATH is not trusted for it.
-    """
-    from gaia.home import gaia_home
-
-    name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
-    candidates = [gaia_home() / "bin" / name]
-    if is_frozen():
-        candidates.append(Path(sys.executable).parent / name)
-        on_path = shutil.which("gaia-agent")
-        if on_path:
-            candidates.append(Path(on_path))
-    for path in candidates:
-        if not path.is_file():
-            continue
-        if sys.platform != "win32" and not os.access(path, os.X_OK):
-            continue
-        return path
-    return None
-
-
 def _agent_ready_for_check(agent_id: str) -> bool:
     """Whether the readiness check counts *agent_id* as installed.
 
-    The hub sentinel `gaia init` writes, or for the flagship the terminal
-    installer's copy. Never touches the network.
+    The hub sentinel `gaia init` writes, or for the flagship an installer's
+    copy that verifies against its install record -- the lookup the daemon
+    starts it from. Never touches the network.
     """
     if InitCommand._is_hub_agent_available(agent_id):
         return True
-    return agent_id == FLAGSHIP_AGENT_ID and _terminal_installer_agent() is not None
+    if agent_id != FLAGSHIP_AGENT_ID:
+        return False
+    from gaia.daemon.sidecars import fetch as sidecar_fetch
+    from gaia.daemon.sidecars.errors import IntegrityError
+    from gaia.home import gaia_home
+
+    try:
+        if sidecar_fetch.installer_verified_binary(agent_id) is not None:
+            return True
+    except IntegrityError as e:
+        log.warning("Not counting the installed GAIA agent: %s", e)
+        return False
+    # The terminal packages (.deb, .rpm, .pkg, Windows setup) write no install
+    # record yet, and the TUI runs their copy directly. GAIA's bin dir is the
+    # install scripts', which always record theirs.
+    placed = sidecar_fetch.installer_placed_flagship()
+    return (
+        placed is not None
+        and placed.parent.resolve() != (gaia_home() / "bin").resolve()
+    )
 
 
 def _agent_build_missing(agent_id: str) -> Tuple[Optional[str], Optional[str]]:
