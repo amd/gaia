@@ -31,7 +31,7 @@ from gaia.env import child_env
 from gaia.upload_names import upload_copy_name
 from gaia.utils.user_folders import documents_dir
 
-from .. import generated_media
+from .. import generated_media, session_environment
 from ..models import (
     BrowseResponse,
     FileEntry,
@@ -171,7 +171,10 @@ async def upload_media(request: Request, name: str = Query(..., min_length=1)):
 
     if file_size == 0:
         dest_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        raise HTTPException(
+            status_code=400,
+            detail={"status": "empty_file", "message": "Uploaded file is empty"},
+        )
 
     logger.info("Recording uploaded: %s (%d bytes)", unique_name, file_size)
     return FileUploadResponse(
@@ -212,15 +215,26 @@ async def upload_file(file: UploadFile = File(...)):
     original_name = file.filename
     ext = Path(original_name).suffix.lower()
     if ext not in UPLOAD_ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=(
+        if not ext:
+            message = (
+                "This file has no extension, so GAIA can't tell what it is. "
+                "Add one, such as .txt, and try again."
+            )
+        else:
+            message = (
                 f"File type '{ext}' is not allowed. "
                 f"Supported types: images (png, jpg, jpeg, gif, webp, bmp, svg) "
                 f"and documents (pdf, pptx, docx, txt, md, csv, json, xlsx, html, code files, etc.). "
                 f"Legacy Office formats (.doc, .ppt, .xls) are not supported — "
                 f"re-save as .docx, .pptx, or .xlsx."
-            ),
+            )
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "status": "unsupported_type" if ext else "no_extension",
+                "message": message,
+                "extension": ext,
+            },
         )
 
     # Read file content and validate size
@@ -228,15 +242,22 @@ async def upload_file(file: UploadFile = File(...)):
     file_size = len(content)
 
     if file_size == 0:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+        raise HTTPException(
+            status_code=400,
+            detail={"status": "empty_file", "message": "Uploaded file is empty"},
+        )
 
     if file_size > MAX_UPLOAD_SIZE:
+        size_mb = f"{file_size / (1024 * 1024):.1f}"
+        max_mb = f"{MAX_UPLOAD_SIZE / (1024 * 1024):.0f}"
         raise HTTPException(
             status_code=413,
-            detail=(
-                f"File too large ({file_size / (1024 * 1024):.1f} MB). "
-                f"Maximum allowed size is {MAX_UPLOAD_SIZE / (1024 * 1024):.0f} MB."
-            ),
+            detail={
+                "status": "too_large",
+                "message": f"File too large ({size_mb} MB). Maximum allowed size is {max_mb} MB.",
+                "size_mb": size_mb,
+                "max_mb": max_mb,
+            },
         )
 
     # Ensure uploads directory exists
@@ -398,11 +419,18 @@ async def browse_files(path: Optional[str] = None):
     # Sort: folders first, then files, alphabetically within each group
     entries.sort(key=lambda e: (e.type != "folder", e.name.lower()))
 
+    try:
+        session_environment.check_folder(str(resolved))
+        folder_refusal = None
+    except session_environment.EnvironmentChangeError as e:
+        folder_refusal = str(e)
+
     return BrowseResponse(
         current_path=str(resolved),
         parent_path=parent_path,
         entries=entries,
         quick_links=quick_links,
+        folder_refusal=folder_refusal,
     )
 
 
@@ -760,6 +788,24 @@ async def search_files(
 # ── File Preview ─────────────────────────────────────────────────────────────
 
 
+def _looks_like_text(path: Path) -> bool:
+    """True when the file starts as valid UTF-8 text, not NULs or a PDF header."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(8192)
+    except OSError:
+        return False
+    if b"\x00" in head or head.startswith(b"%PDF-"):
+        return False
+    try:
+        head.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        # A multi-byte character cut off by the 8 KB read is not binary.
+        if exc.start < len(head) - 3:
+            return False
+    return True
+
+
 @router.get("/api/files/preview", response_model=FilePreviewResponse)
 async def preview_file(path: str, lines: int = 50):
     """Get a preview of a file's contents.
@@ -820,8 +866,10 @@ async def preview_file(path: str, lines: int = 50):
         "encoding": None,
     }
 
-    # Try to read as text
-    if ext in TEXT_EXTENSIONS or stat.st_size < 1_000_000:  # Try text for < 1MB
+    # Try to read as text; other types must look like text (PDF, DOCX, PNG... decode as latin-1)
+    if ext in TEXT_EXTENSIONS or (
+        stat.st_size < 1_000_000 and _looks_like_text(resolved)
+    ):
         for encoding in ("utf-8", "latin-1", "cp1252"):
             try:
                 import itertools

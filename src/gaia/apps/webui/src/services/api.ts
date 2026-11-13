@@ -1144,7 +1144,7 @@ export async function uploadFile(file: File): Promise<{
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
         const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), [], parseErrorBody(errorText));
     }
 
     const data = await res.json();
@@ -1174,7 +1174,7 @@ export function uploadMedia(file: File, onProgress: (percent: number) => void, s
             }
             log.api.error(`POST ${url} - HTTP ${request.status}`, { errorText: request.responseText });
             const detail = parseErrorDetail(request.responseText);
-            reject(new ApiError(getFriendlyError(request.status, detail), request.status, detail, parseErrorStatus(request.responseText)));
+            reject(new ApiError(getFriendlyError(request.status, detail), request.status, detail, parseErrorStatus(request.responseText), [], parseErrorBody(request.responseText)));
         };
         request.send(file);
     });

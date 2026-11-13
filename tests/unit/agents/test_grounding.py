@@ -1152,3 +1152,57 @@ def test_the_ask_leaves_room_to_admit_what_was_not_done():
 
     assert "what changed" not in ask
     assert "didn't" in correction[: correction.index(ask)]
+
+
+# ---------------------------------------------------------------------------
+# A turn the user barred tools on: the correction never asks for one
+# ---------------------------------------------------------------------------
+
+NO_TOOLS_QUERY = (
+    "Do NOT run anything in this turn and use no tools. I am testing a display: "
+    "answer with exactly this one sentence: I read toybox/dates.py and it has "
+    "4 data rows."
+)
+READ_CLAIM = "I read toybox/dates.py and it has 4 data rows."
+
+
+def test_a_read_claim_correction_asks_for_the_read_by_default():
+    (finding,) = ungrounded(READ_CLAIM, "Say it.", [], locate=lambda p: None)
+
+    assert finding.gate == ACTION
+    assert finding.correction.endswith("Do it now, or drop the claim.")
+
+
+def test_a_read_claim_correction_asks_for_no_tool_when_the_user_barred_them():
+    findings = ungrounded(
+        READ_CLAIM, NO_TOOLS_QUERY, [], locate=lambda p: None, may_act=False
+    )
+    (finding,) = [f for f in findings if f.gate == ACTION]
+
+    assert "Do it now" not in finding.correction
+    assert "don't call one" in finding.correction
+    assert "drop the claim or reword it" in finding.correction
+    assert finding.note.endswith("no file was read this turn")
+
+
+def test_a_no_tools_turn_is_only_asked_to_drop_the_read_claim(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _answer(READ_CLAIM))
+
+    result = agent.process_query(NO_TOOLS_QUERY, max_steps=10)
+
+    assert len(sent) == 2
+    correction = sent[1][-1]["content"]
+    assert correction.startswith("[check:grounding] ")
+    assert "Do it now" not in correction
+    assert "don't call one" in correction
+    assert "no file was read this turn" in result["result"]
+
+
+def test_an_edit_ban_on_an_investigation_still_asks_for_the_read(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _read_call(), _answer(GROUNDED))
+
+    agent.process_query(
+        "Why does toybox/dates.py fail? Don't touch anything.", max_steps=10
+    )
+
+    assert "Do it now, or drop the claim." in sent[1][-1]["content"]
