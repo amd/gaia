@@ -2832,6 +2832,9 @@ class Agent(abc.ABC):
     # Which mixin contributed each system-prompt fragment.
     _mixin_prompt_origins: "Optional[Dict[str, Any]]" = None
 
+    # The volatile fragments, composed with the system prompt; see session_context.
+    _session_context_cache: str = ""
+
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
@@ -3906,7 +3909,7 @@ Do NOT wrap conversational replies in JSON.
         system prompt and tool list stay byte-identical across fresh sessions.
         """
         _ = self.system_prompt  # composes both on first access
-        return getattr(self, "_session_context_cache", "")
+        return self._session_context_cache
 
     def _with_session_context(
         self, messages: List[Dict[str, Any]]
