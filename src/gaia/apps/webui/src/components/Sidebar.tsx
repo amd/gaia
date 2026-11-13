@@ -81,6 +81,7 @@ function SessionRow({ session, active, phone, moved, focusPin, status, queuePlac
     active: boolean;
     /** Just pinned or unpinned from the phone menu: the row jumped groups, so scroll to it and mark it. */
     moved: boolean;
+    /** Pinned by keyboard and remounted in its new group: focus its pin button once. */
     focusPin: boolean;
     /** Phone width: the row's actions sit behind one ⋯ menu instead of three icons. */
     phone: boolean;
