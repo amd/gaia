@@ -157,8 +157,8 @@ describe('CalculatorCard in Arabic', () => {
     it('labels the fields and results in Arabic', () => {
         useChatStore.setState({ locale: 'ar' });
         render(<RenderCard render="calculator" data={tip} />);
-        expect(screen.getByRole('spinbutton', { name: /الفاتورة/ })).toBeInTheDocument();
-        expect(screen.getByRole('spinbutton', { name: /عدد الأشخاص/ })).toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: /الفاتورة/ })).toBeInTheDocument();
+        expect(screen.getByRole('textbox', { name: /عدد الأشخاص/ })).toBeInTheDocument();
         expect(screen.getByText(/لكل شخص/)).toBeInTheDocument();
         expect(screen.queryByText('Per person')).toBeNull();
     });
