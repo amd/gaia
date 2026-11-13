@@ -364,6 +364,11 @@ Loading that skill grants **`gh` only**, **to that skill's session**, **on that
 agent instance** — the grant lives on the agent (mirroring how skill-derived
 connector requirements shadow the `REQUIRED_CONNECTORS` ClassVar), never in a
 module-level allowlist, so it can never widen a sibling agent's shell.
+
+One exception is deliberate. `READS_WITHOUT_A_SKILL` in `shell_tools.py` names `gh`
+and `gaia`: every flagship session may run those two binaries' read-only subcommands
+unprompted, under the same policy table, so "what's open on this repo?" and "what are
+you watching?" work without loading a skill. It grants no write, and no other binary.
 `unload_skill` revokes it; a binary stays granted while another loaded skill
 still declares it.
 

@@ -24,10 +24,11 @@ import { ErrorBoundary } from '../ErrorBoundary';
 // The heaviest panes, and ones most people never open, load on first open.
 const ConnectorsPane = lazy(() => import('./ConnectorsPane').then((m) => ({ default: m.ConnectorsPane })));
 const MessagingPane = lazy(() => import('./MessagingSettings').then((m) => ({ default: m.MessagingSettings })));
+const AutomationsPane = lazy(() => import('./AutomationsSettings').then((m) => ({ default: m.AutomationsSettings })));
 const AdvancedPane = lazy(() => import('./AdvancedSettings').then((m) => ({ default: m.AdvancedSettings })));
 
 const SECTIONS: SettingsSection[] = [
-    'general', 'setup', 'model', 'permissions', 'skills', 'connectors', 'messaging', 'memory', 'notifications', 'voice', 'privacy', 'advanced',
+    'general', 'setup', 'model', 'permissions', 'skills', 'connectors', 'messaging', 'automations', 'memory', 'notifications', 'voice', 'privacy', 'advanced',
 ];
 
 /** One settings window with a section list on the left. */
@@ -52,27 +53,45 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     useEffect(() => {
         const root = scroller.current;
         if (!jump || jump.section !== section || !root) return;
+        // The ring leaves the tab that was left, even when the setting never shows up.
+        panel.current?.querySelector<HTMLElement>(`[data-section="${section}"]`)?.focus();
         let unflash: ReturnType<typeof setTimeout> | undefined;
+        let box: HTMLElement | null = null;
+        const align = () => box?.scrollIntoView({ block: 'start' });
+        // Rows above the setting keep loading after it appears, so hold it in place until the user takes over.
+        const settle = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(align);
+        const release = () => settle?.disconnect();
+        const TAKES_OVER = ['wheel', 'touchstart', 'pointerdown', 'keydown'] as const;
         const land = (): boolean => {
             const hit = root.querySelector<HTMLElement>(jump.target);
-            if (!hit) return false;
+            // A switch stays disabled until its pane has read its value, and can't take focus before.
+            if (!hit || (hit as HTMLInputElement).disabled) return false;
             for (let d = hit.closest('details'); d; d = d.parentElement?.closest('details') ?? null) d.open = true;
-            const box = hit.closest<HTMLElement>('.model-in-use-field, .settings-field, details, .settings-card') ?? hit;
+            box = hit.closest<HTMLElement>('.model-in-use-field, .settings-field, details, .settings-card') ?? hit;
             box.classList.add('settings-target-hit');
-            box.scrollIntoView({ block: 'start' });
-            const focusTo = hit instanceof HTMLDetailsElement ? hit.querySelector('summary') : hit;
+            align();
+            const focusTo = hit instanceof HTMLDetailsElement ? hit.querySelector('summary') : hit.closest('summary') ?? hit;
             if (focusTo) {
                 if (!focusTo.matches('summary, button, input, select, textarea, a[href], [tabindex]')) focusTo.tabIndex = -1;
                 focusTo.focus({ preventScroll: true });
             }
-            unflash = setTimeout(() => box.classList.remove('settings-target-hit'), 1600);
+            const pane = hit.closest('.settings-pane');
+            if (pane) settle?.observe(pane);
+            unflash = setTimeout(() => box?.classList.remove('settings-target-hit'), 1600);
             return true;
         };
-        if (land()) return () => clearTimeout(unflash);
         const watch = new MutationObserver(() => { if (land()) watch.disconnect(); });
-        watch.observe(root, { childList: true, subtree: true });
+        if (!land()) watch.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled'] });
+        TAKES_OVER.forEach((type) => root.addEventListener(type, release, { passive: true }));
+        // Stops waiting for a setting that never shows up; a landed one stays held until the user moves.
         const giveUp = setTimeout(() => watch.disconnect(), 5000);
-        return () => { watch.disconnect(); clearTimeout(giveUp); clearTimeout(unflash); };
+        return () => {
+            watch.disconnect();
+            release();
+            TAKES_OVER.forEach((type) => root.removeEventListener(type, release));
+            clearTimeout(giveUp);
+            clearTimeout(unflash);
+        };
     }, [jump, section]);
 
     if (!section) return null;
@@ -86,6 +105,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
             case 'skills': return <SkillsSettings onUseSkill={(name) => { close(); onUseSkill(name); }} />;
             case 'connectors': return <ConnectorsPane />;
             case 'messaging': return <MessagingPane />;
+            case 'automations': return <AutomationsPane />;
             case 'memory': return <MemorySettings />;
             case 'notifications': return <NotificationSettings />;
             case 'voice': return <ReadAloudSettings />;
@@ -117,20 +137,21 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                     <button type="button" className="settings-close" onClick={close} aria-label={t('settings.close')}>
                         <X size={18} />
                     </button>
+                    {/* Outside the scroller: a sticky tab title must not cover the way back. */}
+                    {jump && jump.section === section && (
+                        <button
+                            type="button"
+                            className="settings-back"
+                            onClick={() => {
+                                open(jump.from);
+                                panel.current?.querySelector<HTMLElement>(`[data-section="${jump.from}"]`)?.focus();
+                            }}
+                        >
+                            <ChevronLeft size={14} aria-hidden="true" />
+                            {t.compose((say) => say('settings.backTo', { section: say(`settings.section.${jump.from}`) }))}
+                        </button>
+                    )}
                     <div ref={scroller} className="settings-scroll">
-                        {jump && jump.section === section && (
-                            <button
-                                type="button"
-                                className="settings-back"
-                                onClick={() => {
-                                    open(jump.from);
-                                    panel.current?.querySelector<HTMLElement>(`[data-section="${jump.from}"]`)?.focus();
-                                }}
-                            >
-                                <ChevronLeft size={14} aria-hidden="true" />
-                                {t.compose((say) => say('settings.backTo', { section: say(`settings.section.${jump.from}`) }))}
-                            </button>
-                        )}
                         {/* Keyed so a crashed section clears when another is picked. */}
                         <ErrorBoundary key={section} area={`settings.${section}`}>
                             <Suspense fallback={<p className="settings-hint"><Loader2 size={13} className="spin" /> {t('settings.loading')}</p>}>

@@ -63,7 +63,7 @@ def test_the_map_is_of_the_start_folders_project(build, project):
 
     assert agent._project_map_root() == str(project.resolve())
     assert agent._script_project_root() == str(project.resolve())
-    prompt = agent._compose_system_prompt()
+    prompt = agent._compose_system_prompt() + agent.session_context
     assert "PROJECT MAP" in prompt and str(project.resolve()) in prompt
 
 

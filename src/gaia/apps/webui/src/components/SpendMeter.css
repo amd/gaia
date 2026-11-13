@@ -10,7 +10,7 @@
     color: var(--text-muted);
 }
 
-/* Keeps its width; the model chip beside it is the one that truncates. */
+/* Never shrinks; a narrow composer hides it whole (Composer.css) before the model name is cut. */
 .composer-row .spend-meter-wrap {
     flex-shrink: 0;
     min-width: auto;

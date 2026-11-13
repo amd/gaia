@@ -2,6 +2,15 @@
 /* SPDX-License-Identifier: MIT */
 /* Chat View - Refined conversation interface */
 
+.turn-announcer {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
 .history-notice,
 .library-notices {
     margin: 8px auto;
@@ -359,9 +368,6 @@
 }
 .streaming-bubble.stream-active {
     animation: streamBubbleIn var(--duration-slow) var(--ease);
-}
-.streaming-bubble.stream-ending {
-    pointer-events: none;
 }
 @keyframes streamBubbleIn {
     from { opacity: 0; transform: translateY(12px); }

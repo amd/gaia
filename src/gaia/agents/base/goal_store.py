@@ -32,6 +32,7 @@ import json
 import logging
 import sqlite3
 import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -90,6 +91,9 @@ Action = Literal[
 ]
 
 Risk = Literal["low", "medium", "high", "critical"]
+
+#: What ``set_loop_state(goal_outcome=...)`` may report; "" means not finished.
+GOAL_OUTCOMES = frozenset({"", "done", "failed"})
 
 _GOAL_STATUSES = frozenset(get_args(GoalStatus))
 _TASK_STATUSES = frozenset(get_args(TaskStatus))
@@ -182,6 +186,10 @@ class Goal:
     created_at: str
     updated_at: str
     tasks: List[Task] = field(default_factory=list)
+    #: Background runs that ended without the goal finished or failed.
+    attempts: int = 0
+    #: Epoch seconds before which the goal is not run again; None runs it now.
+    retry_at: Optional[float] = None
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +213,9 @@ CREATE TABLE IF NOT EXISTS goals (
     priority          TEXT    NOT NULL DEFAULT 'medium',
     progress_notes    TEXT    NOT NULL DEFAULT '',
     created_at        TEXT    NOT NULL,
-    updated_at        TEXT    NOT NULL
+    updated_at        TEXT    NOT NULL,
+    attempts          INTEGER NOT NULL DEFAULT 0,
+    retry_at          REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_goals_status    ON goals(status);
@@ -229,6 +239,12 @@ CREATE INDEX IF NOT EXISTS idx_tasks_status  ON tasks(status);
 """
 
 _SCHEMA_VERSION = 1
+
+#: Columns added after the first schema, each with its ALTER TABLE.
+_ADDED_GOAL_COLUMNS = {
+    "attempts": "ALTER TABLE goals ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0",
+    "retry_at": "ALTER TABLE goals ADD COLUMN retry_at REAL",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +311,11 @@ class GoalStore:
         with self._lock:
             conn = self._get_conn()
             conn.executescript(_SCHEMA_SQL)
+            have = {r["name"] for r in conn.execute("PRAGMA table_info(goals)")}
+            for column, ddl in _ADDED_GOAL_COLUMNS.items():
+                if column not in have:
+                    conn.execute(ddl)
+            conn.commit()
             row = conn.execute(
                 "SELECT version FROM schema_version ORDER BY migrated_at DESC LIMIT 1"
             ).fetchone()
@@ -331,6 +352,8 @@ class GoalStore:
             progress_notes=row["progress_notes"] or "",
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+            attempts=row["attempts"],
+            retry_at=row["retry_at"],
         )
         if include_tasks:
             goal.tasks = self._get_tasks_unlocked(goal.id)
@@ -699,17 +722,103 @@ class GoalStore:
     def get_actionable_goals(self) -> List[Goal]:
         """Approved goals that are queued or in-progress — ready for the agent loop.
 
-        Ordered by priority (high → medium → low) then creation time (oldest first).
+        A goal waiting out the pause after an unfinished run is left out until
+        its ``retry_at``. Ordered by priority (high → medium → low) then
+        creation time (oldest first).
         """
         with self._lock:
             conn = self._get_conn()
-            rows = conn.execute("""SELECT * FROM goals
+            rows = conn.execute(
+                """SELECT * FROM goals
                    WHERE approved_for_auto = 1
                      AND status IN ('queued', 'in_progress')
+                     AND (retry_at IS NULL OR retry_at <= ?)
                    ORDER BY
                      CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
-                     created_at ASC""").fetchall()
+                     created_at ASC""",
+                (time.time(),),
+            ).fetchall()
             return [self._row_to_goal(r) for r in rows]
+
+    def record_unfinished_run(
+        self, goal_id: str, note: str, *, max_tries: int, first_wait_s: float
+    ) -> Optional[Goal]:
+        """Count a background run that ended with *goal_id* neither done nor failed.
+
+        The goal waits ``first_wait_s``, doubling after each run, before it is
+        run again; the ``max_tries``-th such run fails it with *note* as the
+        reason. A goal no longer queued or in progress is left alone.
+        """
+        now = _now_iso()
+        with self._lock:
+            conn = self._get_conn()
+            row = conn.execute(
+                "SELECT attempts FROM goals WHERE id=? "
+                "AND status IN ('queued', 'in_progress')",
+                (goal_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            tries = row["attempts"] + 1
+            if tries >= max_tries:
+                conn.execute(
+                    "UPDATE goals SET status='failed', attempts=?, retry_at=NULL, "
+                    "progress_notes=?, updated_at=? WHERE id=?",
+                    (
+                        tries,
+                        f"Stopped after {tries} tries without finishing. The "
+                        f"last try said: {note}",
+                        now,
+                        goal_id,
+                    ),
+                )
+            else:
+                wait = first_wait_s * 2 ** (tries - 1)
+                conn.execute(
+                    "UPDATE goals SET attempts=?, retry_at=?, progress_notes=?, "
+                    "updated_at=? WHERE id=?",
+                    (
+                        tries,
+                        time.time() + wait,
+                        f"Try {tries} of {max_tries} didn't finish; trying again "
+                        f"in about {max(1, round(wait / 60))} min. It said: {note}",
+                        now,
+                        goal_id,
+                    ),
+                )
+            conn.commit()
+        return self.get_goal(goal_id)
+
+    def defer_goal(self, goal_id: str, wait_s: int, note: str) -> Optional[Goal]:
+        """Hold a queued goal *wait_s* seconds without counting a try."""
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute(
+                "UPDATE goals SET retry_at=?, progress_notes=?, updated_at=? "
+                "WHERE id=? AND status IN ('queued', 'in_progress')",
+                (time.time() + max(0, wait_s), note, _now_iso(), goal_id),
+            )
+            conn.commit()
+        return self.get_goal(goal_id)
+
+    def end_goal(self, goal_id: str, status: GoalStatus, note: str) -> Optional[Goal]:
+        """Mark a queued or in-progress goal ``completed`` or ``failed`` with *note*.
+
+        A goal already in another state (cancelled while it ran) is left alone.
+        """
+        if status not in ("completed", "failed"):
+            raise ValueError(
+                f"end_goal ends a goal completed or failed, not {status!r}"
+            )
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute(
+                "UPDATE goals SET status=?, retry_at=NULL, progress_notes=?, "
+                "updated_at=? WHERE id=? AND status IN ('queued', 'in_progress')",
+                (status, note, _now_iso(), goal_id),
+            )
+            conn.commit()
+        return self.get_goal(goal_id)
 
     def get_next_task(self, goal_id: str) -> Optional[Task]:
         """Return the lowest-index queued or unblocked task for a goal."""

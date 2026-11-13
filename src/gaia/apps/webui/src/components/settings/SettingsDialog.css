@@ -66,6 +66,7 @@
 .settings-body {
     position: relative;
     display: flex;
+    flex-direction: column;
     flex: 1;
     min-width: 0;
     min-height: 0;
@@ -103,8 +104,11 @@
 .settings-back {
     display: inline-flex;
     align-items: center;
+    flex: none;
+    align-self: flex-start;
     gap: 4px;
-    margin-block-end: 8px;
+    margin-block: 14px 0;
+    margin-inline: 26px 60px;
     padding-block: 2px;
     padding-inline: 2px 6px;
     border-radius: var(--radius-sm);
@@ -119,7 +123,7 @@
 
 /* The setting a Setup row pointed at, marked for a moment after landing. */
 .settings-target-hit {
-    scroll-margin-top: 64px;
+    scroll-margin-top: 76px;
     outline: 2px solid var(--accent);
     outline-offset: 4px;
 }
@@ -531,6 +535,10 @@
     margin-inline-start: 0;
 }
 
+.model-chips .settings-more > .model-row-meta {
+    display: block;
+}
+
 /* The card that answers "what am I using?". */
 .model-in-use {
     align-items: flex-start;
@@ -744,6 +752,22 @@
     overflow: hidden;
 }
 
+.skill-row-desc.is-open {
+    display: block;
+    overflow: visible;
+}
+
+.skill-row-more {
+    align-self: flex-start;
+    padding: 0;
+    color: var(--text-primary);
+    font-size: 12.5px;
+    text-decoration: underline;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
 .model-row > button,
 .skill-row > button {
     flex-shrink: 0;
@@ -898,7 +922,7 @@
     text-align: start;
 }
 
-.settings-setup-row:hover {
+.settings-setup-row:not(.is-fact):hover {
     background: var(--bg-hover);
 }
 
@@ -1043,6 +1067,84 @@
 .messaging-footer {
     padding-block-start: 12px;
     border-block-start: 1px solid var(--border-light);
+}
+
+.messaging-always-list {
+    margin: 4px 0 8px;
+    padding-inline-start: 1.25em;
+    overflow-wrap: anywhere;
+}
+
+/* ── Automations ───────────────────────────────────────────────── */
+
+.automation-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.automation-card.is-paused .automation-name,
+.automation-card.is-paused .automation-detail {
+    color: var(--text-secondary);
+}
+
+.automation-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    min-inline-size: 0;
+}
+
+.automation-name {
+    margin: 0;
+    min-inline-size: 0;
+    overflow-wrap: anywhere;
+}
+
+.automation-kind,
+.automation-paused {
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 12px;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+}
+
+.automation-paused {
+    background: transparent;
+    border: 1px solid var(--border-light);
+}
+
+.automation-when {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+    margin: 0;
+}
+
+.automation-detail {
+    margin: 0;
+    color: var(--text-primary);
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.automation-check {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.automation-messaging {
+    align-self: flex-start;
 }
 
 /* Add skills from a link */
