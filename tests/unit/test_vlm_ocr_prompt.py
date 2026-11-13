@@ -26,13 +26,13 @@ def sent_prompt():
 
 
 def test_ocr_prompt_forbids_translating(sent_prompt):
-    assert "translate" in sent_prompt.lower()
-    assert "language" in sent_prompt.lower()
+    flat = " ".join(sent_prompt.split())
+    assert "Keep the text in its original language and script." in flat
+    assert "Do NOT translate or transliterate it" in flat
 
 
-def test_ocr_prompt_keeps_the_original_script_and_digits(sent_prompt):
-    assert "script" in sent_prompt.lower()
-    assert "digits" in sent_prompt.lower()
+def test_ocr_prompt_keeps_digits_as_written(sent_prompt):
+    assert "Keep digits as written" in " ".join(sent_prompt.split())
 
 
 def test_a_caller_prompt_is_sent_unchanged():
