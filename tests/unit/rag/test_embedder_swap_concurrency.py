@@ -121,3 +121,26 @@ def test_uploads_loading_the_embedder_never_break_a_search_in_flight(lemonade):
 
     assert errors == []
     assert lemonade.swapped_during_request == 0
+
+
+def test_a_code_search_waits_out_an_embedder_reload(tmp_path):
+    from gaia.code_index.sdk import CodeIndexConfig, CodeIndexSDK
+    from gaia.rag.sdk import _EMBEDDER_SWAP
+
+    sdk = CodeIndexSDK(CodeIndexConfig(repo_path=str(tmp_path)))
+    reached = threading.Event()
+    sdk._embedder = Mock()
+    sdk._embedder.embeddings.side_effect = lambda *a, **k: (
+        reached.set() or {"data": [{"embedding": [1.0]}]}
+    )
+
+    with _EMBEDDER_SWAP.swap():
+        search = threading.Thread(
+            target=sdk._embed_batch_call, args=(["def f(): pass"],)
+        )
+        search.start()
+        # Held off while the embedder is being reloaded.
+        assert not reached.wait(0.3)
+    search.join(timeout=10)
+
+    assert reached.is_set()
