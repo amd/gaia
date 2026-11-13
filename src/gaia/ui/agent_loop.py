@@ -567,7 +567,10 @@ class AgentLoop:
                     return
 
                 cached_agent = _helpers._get_cached_agent(
-                    session_id, model_id, agent_type
+                    session_id,
+                    model_id,
+                    agent_type,
+                    session.get("document_ids", []),
                 )
                 if cached_agent is not None:
                     agent = cached_agent
