@@ -59,7 +59,11 @@ start of the call. Messages added during retrieval are available on the next
 call. A failed or prematurely empty page returns an explicit error rather than
 a partial transcript. Message text is cut to 2,000 characters and tool results to
 300; pass `full_replies=True` to get assistant replies whole (the eval judge does,
-so a long answer isn't judged on a clipped copy).
+so a long answer isn't judged on a clipped copy). A tool step that showed the
+user a card (a checklist, recipe, itinerary, calculator or table) also carries
+a `card` field with the card's text, up to 8,000 characters, so a reader that
+can't see the screen still sees the list the user got. `send_message` adds the
+same field to its tool steps.
 
 <Note>
   The `memory_*` tools are **conditional**. The read tools (`memory_stats`, `memory_list`,
