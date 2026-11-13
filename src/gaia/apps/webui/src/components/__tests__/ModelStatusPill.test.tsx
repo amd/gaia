@@ -219,7 +219,7 @@ describe('ModelStatusPill', () => {
         useChatStore.setState({ locale: 'ar' });
         mockedApi.getLocalModelStatus.mockResolvedValue({ ...LOADED, active_remote: true, active_display_name: 'DeepSeek V4' });
         render(<ModelStatusPill />);
-        fireEvent.click(screen.getByRole('button', { name: /Local · Gemma 4 E4B/ }));
+        fireEvent.click(screen.getByRole('button', { name: /محلي · Gemma 4 E4B/ }));
         const dialog = await screen.findByRole('dialog', { name: /حالة النموذج/ });
         await within(dialog).findByText(/محمّل/);
         const labels = [...dialog.querySelectorAll('dt')].map((dt) => stripIsolates(dt.textContent ?? ''));
@@ -229,6 +229,8 @@ describe('ModelStatusPill', () => {
         const memory = dialog.querySelectorAll('dd')[2].textContent ?? '';
         expect(memory).toContain('\u2068~8.2 GB\u2069');
         expect(memory).toContain('\u206880.5 GB\u2069');
+        expect(memory).toContain(' ·\u00A0');
+        expect(memory).not.toContain(' · ');
         const cloud = dialog.querySelector('.settings-hint')?.textContent ?? '';
         expect(cloud).toContain('\u2068DeepSeek V4\u2069');
         expect(stripIsolates(cloud)).toMatch(/^تستخدم الرسائل الجديدة DeepSeek V4 في السحابة\. النموذج المحلي أدناه\./);

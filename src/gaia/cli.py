@@ -4823,6 +4823,12 @@ def _handle_eval_tasks(args):
         )
 
 
+def _exit_unknown_schedule(error: KeyError) -> None:
+    """Exit 1 with the store's one-line reason for a schedule name it doesn't have."""
+    print(f"❌ {error.args[0]}", file=sys.stderr)
+    sys.exit(1)
+
+
 def _handle_schedule(args):
     """Dispatch `gaia schedule <action>` (issue #892)."""
     from gaia.schedule import daemon as schedule_daemon
@@ -4918,7 +4924,10 @@ def _handle_schedule(args):
         return
 
     if action == "show":
-        s = store.get(args.name)
+        try:
+            s = store.get(args.name)
+        except KeyError as exc:
+            _exit_unknown_schedule(exc)
         print(f"name:       {s.name}")
         if s.one_shot:
             print(f"once at:    {s.due_at().astimezone().isoformat()}")
@@ -4956,20 +4965,29 @@ def _handle_schedule(args):
         return
 
     if action == "remove":
-        store.remove(args.name)
+        try:
+            store.remove(args.name)
+        except KeyError as exc:
+            _exit_unknown_schedule(exc)
         print(f"✅ Removed schedule {args.name!r}")
         return
 
     if action in ("pause", "resume"):
         enabled = action == "resume"
-        store.set_enabled(args.name, enabled)
+        try:
+            store.set_enabled(args.name, enabled)
+        except KeyError as exc:
+            _exit_unknown_schedule(exc)
         print(f"✅ {'Resumed' if enabled else 'Paused'} schedule {args.name!r}")
         return
 
     if action == "run":
         from datetime import datetime, timezone
 
-        schedule = store.get(args.name)
+        try:
+            schedule = store.get(args.name)
+        except KeyError as exc:
+            _exit_unknown_schedule(exc)
         if schedule.one_shot:
             claimed = store.claim_one_shot(
                 schedule.name, datetime.now(timezone.utc), due_only=False
@@ -7776,7 +7794,16 @@ def _resolve_gateway_token(args, *, prompt: str) -> str:
 
     import getpass
 
-    return getpass.getpass(prompt)
+    try:
+        return getpass.getpass(prompt)
+    except EOFError:
+        # No terminal to type into: a script, a CI step, stdin closed.
+        print(
+            "\n❌ gaia gateway needs a terminal to ask for the token. Pass "
+            "--token-stdin and pipe it in, or set GAIA_GATEWAY_TOKEN.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 def _claude_route_sends_another_token(token):
@@ -8766,8 +8793,10 @@ def _collect_signal(source_key: str, scanner):
     Returns:
         The scanner's fact dicts, or [] after printing why there are none.
     """
-    from gaia.agents.base.discovery import unsupported_reason
+    from gaia.agents.base.discovery import covered_by_twin, unsupported_reason
 
+    if covered_by_twin(source_key):
+        return []
     reason = unsupported_reason(source_key)
     if reason:
         print(f"\n  Skipped: {reason}")

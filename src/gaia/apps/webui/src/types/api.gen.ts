@@ -261,6 +261,7 @@ export interface AgentStepResponse {
   result?: string | null;
   ruleIds?: string[] | null;
   success?: boolean | null;
+  timedOut?: boolean | null;
   timestamp?: number;
   tool?: string | null;
   type: string;
@@ -322,6 +323,7 @@ export interface BodyUploadFileApiFilesUploadPost {
 export interface BrowseResponse {
   current_path: string;
   entries: FileEntry[];
+  folder_refusal?: string | null;
   parent_path?: string | null;
   quick_links?: QuickLink[];
 }

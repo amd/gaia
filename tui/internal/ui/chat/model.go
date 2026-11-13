@@ -1067,6 +1067,9 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case connectorsActivatedMsg:
 		return m.handleConnectorsActivated(msg)
 
+	case connectorsRevokedMsg:
+		return m.handleConnectorsRevoked(msg)
+
 	case updateCheckedMsg:
 		return m.handleUpdateChecked(msg)
 
@@ -1897,6 +1900,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	}
 	if isConnectorsPersonalize(query) {
 		return m.startConnectorsPersonalize(query)
+	}
+	if isConnectorsRevoke(query) {
+		return m.startConnectorsRevoke(query)
 	}
 	if isModelCommand(query) {
 		if !m.supportsModelCommand() {

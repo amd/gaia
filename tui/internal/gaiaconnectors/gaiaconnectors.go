@@ -1,9 +1,9 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Package gaiaconnectors asks the `gaia` CLI which connectors exist and which
-// are connected, and builds the optional "get to know me" prompt the TUI offers
-// once one is.
+// Package gaiaconnectors asks the `gaia` CLI which connectors exist, which are
+// connected and which GAIA may use, turns that use on and off, and builds the
+// optional "get to know me" prompt the TUI offers once one is.
 //
 // Like gaiaslack it shells out: src/gaia/connectors/ owns what "configured"
 // means, and `gaia connectors list --json` exists so this can be a thin reader.
@@ -44,6 +44,9 @@ type Connector struct {
 	// Absent from older CLIs, so it defaults to true.
 	Enabled   *bool  `json:"enabled"`
 	AccountID string `json:"account_id"`
+	// Activations maps agent id to whether it may use an MCP server's tools.
+	// Absent from older CLIs, which then show no access line.
+	Activations map[string]bool `json:"activations"`
 }
 
 // List runs `gaia connectors list --json`.
@@ -86,6 +89,12 @@ func (c Connector) Usable() bool {
 // FlagshipAgentID is the agent a personalization chat runs on.
 const FlagshipAgentID = "installed:gaia"
 
+// FlagshipCanUse reports whether the flagship may use an MCP connector's
+// tools. Personalize turns this on and it stays on until revoked.
+func (c Connector) FlagshipCanUse() bool {
+	return c.Type == "mcp_server" && c.Activations[FlagshipAgentID]
+}
+
 // Activate lets the flagship see an MCP connector's tools. They stay hidden
 // until it is activated for the agent, so a pass run without this has nothing
 // to read. OAuth connectors need nothing here.
@@ -93,19 +102,34 @@ func Activate(ctx context.Context, c Connector) error {
 	if c.Type != "mcp_server" {
 		return nil
 	}
+	return runActivations(ctx, "let GAIA use", c, "activate", "--scopes", "use")
+}
+
+// Deactivate takes back the flagship's use of an MCP connector's tools. The
+// grant stays, as with the Agent UI's per-agent toggle.
+func Deactivate(ctx context.Context, c Connector) error {
+	if c.Type != "mcp_server" {
+		return fmt.Errorf("GAIA's access to %s comes with connecting it. Disconnect it "+
+			"under Connectors in the Agent UI to remove that", c.DisplayName)
+	}
+	return runActivations(ctx, "turn off GAIA's access to", c, "deactivate")
+}
+
+func runActivations(ctx context.Context, what string, c Connector, sub string, extra ...string) error {
 	bin, err := Binary()
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, ListTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, bin, "connectors", "activations", "activate",
-		c.ID, FlagshipAgentID, "--scopes", "use")
+	args := append([]string{"connectors", "activations", sub, c.ID, FlagshipAgentID}, extra...)
+	cmd := exec.CommandContext(ctx, bin, args...)
 	var errBuf bytes.Buffer
 	cmd.Stderr = &errBuf
 	if runErr := cmd.Run(); runErr != nil {
-		return fmt.Errorf("could not let GAIA use %s (`gaia connectors activations activate %s %s` "+
-			"failed: %w): %s", c.DisplayName, c.ID, FlagshipAgentID, runErr, strings.TrimSpace(errBuf.String()))
+		return fmt.Errorf("could not %s %s (`gaia connectors activations %s %s %s` "+
+			"failed: %w): %s", what, c.DisplayName, sub, c.ID, FlagshipAgentID, runErr,
+			strings.TrimSpace(errBuf.String()))
 	}
 	return nil
 }
@@ -128,6 +152,7 @@ func Render(rows []Connector) string {
 	var b strings.Builder
 	b.WriteString("Connectors\n\n")
 	anyConnected := false
+	var withAccess []string
 	for _, c := range rows {
 		status := "not connected"
 		switch {
@@ -140,12 +165,21 @@ func Render(rows []Connector) string {
 		case c.Configured:
 			status = "connected but switched off"
 		}
+		if c.Usable() && c.FlagshipCanUse() {
+			status += " · GAIA can use it"
+			withAccess = append(withAccess, c.ID)
+		}
 		fmt.Fprintf(&b, "  %-24s %s\n", c.DisplayName+" ("+c.ID+")", status)
 	}
 	b.WriteString("\nConnect one from Connectors in the Agent UI.")
 	if anyConnected {
 		b.WriteString("\nOptional: /connectors personalize <id> lets GAIA read recent activity, " +
-			"save what it learns to memory, and suggest automations.")
+			"save what it learns to memory, and suggest automations. GAIA keeps access " +
+			"to that app afterwards.")
+	}
+	if len(withAccess) > 0 {
+		b.WriteString("\nTo turn off GAIA's access: /connectors revoke <id> (" +
+			strings.Join(withAccess, ", ") + ").")
 	}
 	return b.String()
 }
