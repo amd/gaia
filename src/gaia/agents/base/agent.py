@@ -3283,7 +3283,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn.
         self._denied_effects = DeniedEffects()
-        self._begin_turn_prompts()
+        # (turn, call) for each approval prompt nobody answered.
+        self._expired_calls: set = set()
         # (turn, path) for each access prompt declined or left unanswered.
         self._refused_paths: List[Tuple[int, Path]] = []
 
@@ -5603,10 +5604,6 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_incognito", False):
             return False
         return True
-
-    def _begin_turn_prompts(self) -> None:
-        """Open a turn in which an expired approval may be asked for again."""
-        self._turn_expired_calls: set = set()
 
     @staticmethod
     def _prompted_call_key(tool_name: str, tool_args: Any) -> str:
@@ -8285,8 +8282,16 @@ Do NOT wrap conversational replies in JSON.
             tool_name, tool_args
         ):
             # Re-asking an unanswered prompt would hold the chat for another timeout.
-            call_key = self._prompted_call_key(tool_name, tool_args)
-            if call_key in getattr(self, "_turn_expired_calls", ()):
+            call_key = (
+                getattr(self, "_turn_seq", 0),
+                self._prompted_call_key(tool_name, tool_args),
+            )
+            if call_key in getattr(self, "_expired_calls", ()):
+                # A draft prepared for this prompt must not outlive it.
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
                 return {
                     **NOT_EXECUTED,
                     "status": "denied",
@@ -8335,9 +8340,9 @@ Do NOT wrap conversational replies in JSON.
                 if self.console.confirmation_timed_out(tool_name) is True:
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
-                    if not hasattr(self, "_turn_expired_calls"):
-                        self._begin_turn_prompts()
-                    self._turn_expired_calls.add(call_key)
+                    if not hasattr(self, "_expired_calls"):
+                        self._expired_calls = set()
+                    self._expired_calls.add(call_key)
                 else:
                     if denied_error == user_denial_message(tool_name):
                         denied["hint"] = DECLINED_HINT
@@ -11436,7 +11441,6 @@ Do NOT wrap conversational replies in JSON.
         self._single_tool_done = False
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
-        self._begin_turn_prompts()
         self._begin_turn_provenance()
         self._turn_unasked_removals = []
         # Cleared per turn: a trace must never report the previous turn's

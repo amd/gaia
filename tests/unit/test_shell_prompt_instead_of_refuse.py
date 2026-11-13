@@ -570,7 +570,7 @@ def test_a_new_turn_asks_again_after_a_timeout(repo):
     agent = _agent(handler)
     _drive(agent, handler, _shell("git add a.txt", repo))
 
-    agent._begin_turn_prompts()
+    agent._turn_seq += 1  # what process_query does as a turn opens
     result, events = _drive(
         agent, handler, _shell("git add a.txt", repo), on_prompt=_answer(handler)
     )

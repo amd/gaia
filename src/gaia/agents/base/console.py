@@ -151,7 +151,8 @@ def timeout_denial_message(tool_name: str, waited: str) -> str:
         f"Nobody answered the confirmation for '{tool_name}' within {waited}, "
         "so it did not run. The prompt timed out — the user did NOT refuse it. "
         "Tell the user the approval request expired and ask whether to try again. "
-        "Don't ask again in this request: nobody is there to answer."
+        "Don't ask again in this request for approval: nobody is there to "
+        "answer."
     )
 
 
