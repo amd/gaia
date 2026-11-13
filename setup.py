@@ -224,7 +224,7 @@ setup(
             "faiss-cpu>=1.7.0",
             "numpy>=1.24.0",
             "pypdfium2>=5.0.0,<6",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
             "openpyxl>=3.1.0",
@@ -297,7 +297,7 @@ setup(
         "eval": [
             "bs4",
             "numpy>=2.0,<2.3.0",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             "reportlab",
             # Tool-prompt cost measurement (#1448): tiktoken cl100k_base proxy.
             "tiktoken>=0.7.0,<1.0.0",
@@ -330,7 +330,7 @@ setup(
             # PDF rendering and image extraction (PDFium; Apache-2.0/BSD-3).
             # PyMuPDF is AGPL-3.0 and must not come back.
             "pypdfium2>=5.0.0,<6",
-            "pypdf>=6.20.0",
+            "pypdf>=6.21.0",
             # Reading AND writing the common office formats. The read half is
             # what RAG needs; the write half is what the document skills need,
             # and this is the extra `gaia init --profile chat` installs. Without
