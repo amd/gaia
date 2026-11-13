@@ -67,6 +67,17 @@ The first runs of the suite showed where reports go wrong, even on a capable mod
 
 The `research-report` skill (1.1.0) now addresses each: the whole cited report goes in the reply; anything that can change gets a search for developments since the newest source, reported with its date; encyclopedias are a map to primary sources; long pages are read with `find`; and the report ends with a Sources list. It also says what to do when search is refused (below).
 
+#### What the runs showed across model tiers
+
+The suite was run on a hosted DeepSeek model, Qwen3.6-35B-A3B and Gemma-4-E4B, each plain and in research mode, and on a frontier reference agent with its own web tools:
+
+- **The hosted mid-tier model passes most topics,** with every citation fetched; research mode reached the same result in fewer steps and tokens.
+- **Qwen3.6 writes readable reports with factual slips:** figures that are not in the page it cites, and now and then a page it never opened.
+- **Gemma-4-E4B barely researches on its own,** answering from one page or none. Research mode makes it search, but it then cites search results it never read and alters links into ones that do not exist (a `crispr-cas9` path rewritten as `crispr_cas9`).
+- **The reference agent writes the most complete reports but cites pages it only saw as search results,** so it fails the fetch-before-citing rule too. The rule is deliberate: a search snippet is not the page.
+
+Refused searches hit every tier on this network, the local models hardest, so their results also measure how they cope without search.
+
 ### 4. Keep search answering
 
 A deep report needs a dozen or more searches, which is exactly where DuckDuckGo starts refusing automated queries. In the suite's runs it refused every search of a whole task more than once; the agent then fetched the pages it knew by address and said search was down, which is the right fallback but caps how far a report can reach. GAIA already paces searches, backs off, and tells the model how long to wait; it falls back to Tavily only when the user configured it. For research to work out of the box on any PC, the remaining options are:
@@ -76,9 +87,9 @@ A deep report needs a dozen or more searches, which is exactly where DuckDuckGo 
 
 Either is a product decision, not a code fix, and is tracked separately.
 
-### 5. Check citations at run time (next)
+### 5. Check citations at run time — next
 
-The suite's source check (`gaia.eval.research_quality`) needs nothing but the report and the tool record, both of which the agent has. Exposed as a tool the skill calls before answering, it would let the agent repair an unread or invented citation before the user ever sees it. Adding a tool changes the prompt every model sees, so it waits for the suite to show the skill change alone is not enough.
+The suite's source check (`gaia.eval.research_quality`) needs nothing but the report and the tool record, both of which the agent has. Exposed as a tool the skill calls before answering, it would let the agent repair an unread or invented citation before the user ever sees it. The runs above show the skill alone is not enough on smaller models: unread and altered links are exactly what this check catches and a model cannot see in its own report. Adding a tool changes the prompt every model sees, so it ships with an eval run of its own.
 
 ## Non-goals
 
