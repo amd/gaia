@@ -1566,6 +1566,7 @@ const messages: Messages = {
     'setup.download.starting': 'جارٍ بدء التنزيلات…',
     'setup.contents.title': 'كل ما يتم إعداده',
     'setup.contents.from': 'من',
+    'setup.contents.bundled': 'مضمّن مع GAIA',
     'setup.contents.sizeOnDownload': 'يظهر الحجم عند البدء',
     'setup.contents.working': 'قيد التنفيذ',
     'setup.contents.ready': 'جاهز',
