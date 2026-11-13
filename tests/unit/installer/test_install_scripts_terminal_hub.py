@@ -1327,6 +1327,12 @@ def _check_counts_agent():
     return _agent_ready_for_check("gaia")
 
 
+# install.ps1 places gaia-agent.exe; only a Windows daemon looks for that name.
+windows_only = pytest.mark.skipif(
+    sys.platform != "win32", reason="install.ps1 only installs on Windows"
+)
+
+
 def _ps1_install_agent(tmp_path, base_url):
     """install.ps1's Install-FlagshipAgent, writing into the profile's ~/.gaia/bin."""
     result, _ = _run_ps1(
@@ -1341,6 +1347,7 @@ def _ps1_install_agent(tmp_path, base_url):
 
 
 @needs_powershell
+@windows_only
 def test_daemon_starts_the_agent_install_ps1_placed(tmp_path, fake_hub, monkeypatch):
     gaia_dir = _ps1_install_agent(tmp_path, fake_hub.base)
     agent = gaia_dir / "bin" / "gaia-agent.exe"
@@ -1354,6 +1361,7 @@ def test_daemon_starts_the_agent_install_ps1_placed(tmp_path, fake_hub, monkeypa
 
 
 @needs_powershell
+@windows_only
 def test_daemon_refuses_an_agent_replaced_after_install_ps1(
     tmp_path, fake_hub, monkeypatch
 ):
@@ -1372,6 +1380,7 @@ def test_daemon_refuses_an_agent_replaced_after_install_ps1(
 
 
 @needs_powershell
+@windows_only
 def test_an_rc_pin_records_the_candidates_agent_version(
     tmp_path, fake_hub, monkeypatch
 ):
