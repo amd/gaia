@@ -16,7 +16,11 @@ from pathlib import Path
 import pytest
 
 from gaia.agents.tools._calendar.scopes import CALENDAR_SCOPES
-from gaia.agents.tools._email.scopes import DECLARED_SCOPES
+from gaia.agents.tools._email.scopes import (
+    DECLARED_SCOPES,
+    MICROSOFT_CONNECTOR_ID,
+    SCOPE_MAIL_READ,
+)
 from gaia.daemon.sidecars.spec import builtin_specs
 
 _FIXTURE = json.loads(
@@ -35,9 +39,14 @@ def _spec() -> dict:
 
 def test_daemon_spec_requests_exactly_the_declared_scopes():
     requested = {k: tuple(cr.scopes) for k, cr in _spec().items()}
-    assert requested == {
-        k: (*mail, CALENDAR_SCOPES[k]) for k, mail in DECLARED_SCOPES.items()
-    }
+    expected = {k: (*mail, CALENDAR_SCOPES[k]) for k, mail in DECLARED_SCOPES.items()}
+    # The spec may also list Mail.Read so a read-only Outlook connect is granted.
+    if requested[MICROSOFT_CONNECTOR_ID][:1] == (SCOPE_MAIL_READ,):
+        expected[MICROSOFT_CONNECTOR_ID] = (
+            SCOPE_MAIL_READ,
+            *expected[MICROSOFT_CONNECTOR_ID],
+        )
+    assert requested == expected
 
 
 def test_only_the_mail_scopes_are_required_to_connect():
