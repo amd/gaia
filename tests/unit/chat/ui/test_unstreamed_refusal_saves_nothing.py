@@ -27,6 +27,12 @@ def client():
     return TestClient(create_app(db_path=":memory:"))
 
 
+def _gaia_chat(client, title=None):
+    # Straight to the database: creating it through the API needs the
+    # flagship registered, which not every test job installs.
+    return client.app.state.db.create_session(title=title, agent_type="gaia")["id"]
+
+
 @pytest.fixture
 def served_by_its_sidecar():
     with patch("gaia.ui._chat_helpers._should_relay_to_sidecar", return_value=True):
@@ -34,9 +40,7 @@ def served_by_its_sidecar():
 
 
 def test_a_refused_unstreamed_send_saves_no_message(client, served_by_its_sidecar):
-    sid = client.post(
-        "/api/sessions", json={"title": "New Task", "agent_type": "gaia"}
-    ).json()["id"]
+    sid = _gaia_chat(client, title="New Task")
     with patch("gaia.ui.server._get_chat_response") as reply:
         r = client.post(
             "/api/chat/send",
@@ -56,7 +60,7 @@ def test_a_refused_unstreamed_send_saves_no_message(client, served_by_its_sideca
 def test_the_refusal_leaves_the_chat_free_for_a_streamed_send(
     client, served_by_its_sidecar
 ):
-    sid = client.post("/api/sessions", json={"agent_type": "gaia"}).json()["id"]
+    sid = _gaia_chat(client)
     client.post(
         "/api/chat/send",
         json={"session_id": sid, "message": "a", "stream": False},
