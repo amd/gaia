@@ -8,6 +8,7 @@ Provides shell command execution capabilities for file operations and system que
 
 import base64
 import binascii
+import fnmatch
 import logging
 import os
 import re
@@ -1860,6 +1861,324 @@ def _protected_folder(resolved_path: str) -> Optional[str]:
         if security._path_is_within(Path(resolved_path), Path(folder)):
             return folder
     return None
+
+
+def _credential_file_name(name: str) -> bool:
+    """Whether a file called *name* is one ``security.is_read_blocked`` refuses."""
+    from gaia import security
+
+    lowered = name.lower()
+    return (
+        lowered in {n.lower() for n in security.SENSITIVE_FILE_NAMES}
+        or os.path.splitext(lowered)[1] in security.SENSITIVE_EXTENSIONS
+    )
+
+
+def _named_credential(word: str) -> bool:
+    """Whether *word* names a credential file even when nothing is on disk yet.
+
+    A word with a folder in it is judged by its last part. A bare word must
+    look like a file name: ``getent passwd`` names a database, ``jq .a.key`` a
+    JSON field, and both are only refused when such a file is really there.
+    """
+    from gaia import security
+
+    stripped = word.rstrip("/\\")
+    name = re.split(r"[\\/]", stripped)[-1].lower()
+    if not name:
+        return False
+    if name != stripped.lower():
+        return _credential_file_name(name)
+    if name in {n.lower() for n in security.SENSITIVE_FILE_NAMES}:
+        return "." in name
+    ext = os.path.splitext(name)[1]
+    return ext in security.SENSITIVE_EXTENSIONS and not name.startswith(".")
+
+
+def _credential_file(candidate_path: str, cwd: str) -> Optional[str]:
+    """The credential file *candidate_path* reads, or None.
+
+    By name for what the word says, and by the real file for what it is: a
+    ``notes.txt`` symlinked to ``.env`` reads ``.env``. A folder is not a file,
+    so a virtualenv called ``.env`` stays listable.
+    """
+    if not candidate_path or "://" in candidate_path:
+        return None
+    expanded = os.path.expandvars(os.path.expanduser(candidate_path))
+    for word in dict.fromkeys((candidate_path, expanded)):
+        try:
+            target = Path(cwd).joinpath(word)
+            present = os.path.lexists(target)
+            is_dir = present and os.path.isdir(target)
+            real = os.path.realpath(target) if present else ""
+        except (OSError, ValueError) as exc:
+            logger.debug("Not a file on disk: %r (%s)", word, exc)
+            present, is_dir, real = False, False, ""
+        if is_dir:
+            continue
+        if _named_credential(word):
+            return word
+        if present and _credential_file_name(os.path.basename(real)):
+            return real
+    return None
+
+
+#: Programs that print a file's contents, so a wildcard operand reads every match.
+_CONTENT_READERS = frozenset(
+    {
+        "cat",
+        "type",
+        "more",
+        "less",
+        "head",
+        "tail",
+        "nl",
+        "tac",
+        "strings",
+        "xxd",
+        "od",
+        "base64",
+        "grep",
+        "egrep",
+        "fgrep",
+        "rg",
+        "findstr",
+        "get-content",
+        "gc",
+        "select-string",
+        "sls",
+    }
+)
+
+#: grep's short flags that take a value, and the long ones that may take it apart.
+_GREP_VALUE_SHORT = frozenset("efmABCdD")
+_GREP_VALUE_LONG = frozenset(
+    {
+        "--regexp",
+        "--file",
+        "--max-count",
+        "--after-context",
+        "--before-context",
+        "--context",
+        "--directories",
+        "--devices",
+        "--include",
+        "--exclude",
+        "--exclude-dir",
+        "--exclude-from",
+        "--label",
+        "--binary-files",
+        "--group-separator",
+    }
+)
+
+_COMMAND_BREAKS = frozenset({"|", "||", "&&", ";", "&"})
+
+_WILDCARD = re.compile(r"[*?\[]")
+
+
+def _grep_roots(args: list) -> list:
+    """``(root, includes, excludes)`` for a recursive ``grep``; [] when not recursive."""
+    recursive = pattern_given = False
+    includes: list = []
+    excludes: list = []
+    positional: list = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg == "--":
+            positional.extend(args[index:])
+            break
+        if arg.startswith("--"):
+            name, eq, value = arg.partition("=")
+            if name in ("--recursive", "--dereference-recursive"):
+                recursive = True
+            if name in _GREP_VALUE_LONG and not eq:
+                value = args[index] if index < len(args) else ""
+                index += 1
+            if name in ("--regexp", "--file"):
+                pattern_given = True
+            elif name == "--include":
+                includes.append(value)
+            elif name == "--exclude":
+                excludes.append(value)
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            for offset, flag in enumerate(arg[1:], start=1):
+                if flag in "rR":
+                    recursive = True
+                if flag in _GREP_VALUE_SHORT:
+                    pattern_given = pattern_given or flag in "ef"
+                    if offset == len(arg) - 1:
+                        index += 1
+                    break
+            continue
+        positional.append(arg)
+    if not recursive:
+        return []
+    roots = positional if pattern_given else positional[1:]
+    return [(root, includes, excludes) for root in roots or ["."]]
+
+
+def _findstr_roots(args: list) -> list:
+    """``(spec, [], [])`` for each file spec of ``findstr /s``; [] without ``/s``."""
+    recursive = pattern_given = False
+    folders: list = []
+    positional: list = []
+    for arg in args:
+        if arg[:1] in ("/", "-") and len(arg) > 1:
+            head, colon, value = arg[1:].partition(":")
+            if colon:
+                if head.lower() in ("c", "g"):
+                    pattern_given = True
+                elif head.lower() == "d":
+                    folders.extend(f for f in value.split(";") if f)
+            elif head.isalpha() and "s" in head.lower():
+                recursive = True
+            continue
+        positional.append(arg)
+    if not recursive:
+        return []
+    specs = positional if pattern_given else positional[1:]
+    if folders:
+        specs = [os.path.join(folder, spec) for folder in folders for spec in specs]
+    return [(spec, [], []) for spec in specs]
+
+
+def _select_string_roots(words: list) -> list:
+    """Roots of a PowerShell ``Select-String`` that recurses, or []."""
+    lowered = [w.lower() for w in words]
+    if not any(w in ("select-string", "sls") for w in lowered):
+        return []
+    if not any(len(w) > 1 and "-recurse".startswith(w) for w in lowered):
+        return []
+    roots: list = []
+    includes: list = []
+    for index, word in enumerate(lowered[:-1]):
+        value = words[index + 1]
+        if word in ("-path", "-literalpath", "-lp", "-pspath"):
+            roots.append(value)
+        elif word in ("-include", "-filter"):
+            includes.extend(v for v in value.split(",") if v)
+        elif word in ("get-childitem", "gci", "ls", "dir", "childitem"):
+            if not value.startswith("-"):
+                roots.append(value)
+    return [(root, includes, []) for root in roots or ["."]]
+
+
+def _bulk_read_roots(words: list) -> list:
+    """``(spec, includes, excludes)`` for every folder or wildcard *words* reads.
+
+    A recursive search reads every file under its root; a reader given a
+    wildcard reads every match. Each spec is a folder or a folder/glob.
+    """
+    commands: list = [[]]
+    for word in words:
+        if word in _COMMAND_BREAKS:
+            commands.append([])
+        else:
+            commands[-1].append(word)
+    roots: list = []
+    for command in commands:
+        if not command:
+            continue
+        program = _interpreter_name(command[0])
+        if program in ("grep", "egrep", "fgrep"):
+            roots.extend(_grep_roots(command[1:]))
+        elif program == "findstr":
+            roots.extend(_findstr_roots(command[1:]))
+    roots.extend(_select_string_roots(words))
+    if any(_interpreter_name(w) in _CONTENT_READERS for w in words):
+        roots.extend(
+            (word, [], [])
+            for word in words
+            if not word.startswith("-") and _WILDCARD.search(word)
+        )
+    return roots
+
+
+def _command_word_lists(argv: list) -> list:
+    """*argv*, then the words of any inline script it runs, as one list each."""
+    lists = [list(argv)]
+    script: list = []
+    for index, dialect in _inline_script_positions(argv).items():
+        dialect = dialect.rstrip(_MAYBE)
+        if dialect in (_SWITCH, _ENV_SPLIT, _ENV_SPLIT_ATTACHED):
+            continue
+        script.extend(_script_words(argv[index], dialect))
+    if script:
+        lists.append(script)
+    return lists
+
+
+def _bulk_read_credential(argv: list, cwd: str) -> Optional[str]:
+    """A credential file directly inside a folder *argv* reads as a whole, or None.
+
+    Only the folder's own entries are listed, never a whole tree, so a
+    credential file in a subfolder is not found here.
+    """
+    for words in _command_word_lists(argv):
+        for spec, includes, excludes in _bulk_read_roots(words):
+            spec = os.path.expandvars(os.path.expanduser(spec))
+            try:
+                base = Path(cwd).joinpath(spec)
+                if base.is_dir():
+                    folder, pattern = base, None
+                elif _WILDCARD.search(base.name) and base.parent.is_dir():
+                    folder, pattern = base.parent, base.name.lower()
+                else:
+                    continue
+                entries = list(os.scandir(folder))
+            except (OSError, ValueError) as exc:
+                logger.debug("Cannot list %r for the credential check: %s", spec, exc)
+                continue
+            for entry in entries:
+                if _bulk_entry_is_credential(entry, pattern, includes, excludes):
+                    return entry.path
+    return None
+
+
+def _bulk_entry_is_credential(
+    entry: os.DirEntry, pattern: Optional[str], includes: list, excludes: list
+) -> bool:
+    """Whether a folder-wide read of *entry*'s folder reads it as a credential."""
+    name = entry.name.lower()
+    if pattern and not fnmatch.fnmatchcase(name, pattern):
+        return False
+    if includes and not any(fnmatch.fnmatchcase(name, g.lower()) for g in includes):
+        return False
+    if any(fnmatch.fnmatchcase(name, g.lower()) for g in excludes):
+        return False
+    try:
+        if not entry.is_file():
+            return False
+        real = os.path.realpath(entry.path)
+    except OSError as exc:
+        logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
+        return False
+    return _credential_file_name(name) or _credential_file_name(os.path.basename(real))
+
+
+def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]:
+    """The hard refusal for a shell argument that reads a credential file.
+
+    No tier: neither an approval nor full access lifts it.
+    """
+    return {
+        **NOT_EXECUTED,
+        "status": "error",
+        "error": (
+            f"Access denied: {label} '{arg}' reads '{credential}', which holds "
+            "credentials, keys or secrets. Shell commands may not read it, even "
+            "with full access or after approval."
+        ),
+        "has_errors": True,
+        "hint": (
+            "Ask the user to open the file themselves. To search a folder that "
+            "holds one, name the files to search or exclude it."
+        ),
+    }
 
 
 def _operator_check_text(command: str) -> str:
@@ -4294,7 +4613,9 @@ class ShellToolsMixin:
         scanned.
 
         A credential folder (``security.SECRET_DIRECTORIES``) is refused even
-        inside the allowed paths.
+        inside the allowed paths, and so is a credential file
+        (``security.is_read_blocked``) — named, linked to, or read by a
+        recursive search or wildcard from the folder it sits in.
 
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
@@ -4326,6 +4647,11 @@ class ShellToolsMixin:
                 )
                 if refusal:
                     return refusal
+        for seg in scanned:
+            argv = policy_argv(seg)
+            credential = _bulk_read_credential(argv, cwd)
+            if credential is not None:
+                return _credential_refusal("Command", " ".join(argv), credential)
         return None
 
     def _path_candidate_refusal(
@@ -4348,6 +4674,11 @@ class ShellToolsMixin:
             )
             if refusal:
                 return refusal
+        # '--exclude=.env' keeps the file out; it is the remedy, not a read.
+        excluding = arg.lower().startswith("--exclude")
+        credential = None if excluding else _credential_file(candidate_path, cwd)
+        if credential is not None:
+            return _credential_refusal(label, arg, credential)
         # A shell or script may expand '~' and '$HOME'; check both readings.
         expanded = os.path.expandvars(os.path.expanduser(candidate_path))
         looks_like_path = (
