@@ -352,10 +352,10 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
 
-        // Merge consecutive thinking steps; concatenate so accumulated text survives.
+        // Merge consecutive thinking steps; concatenate so accumulated text survives. A step
+        // that has a duration ends a thought; saved token pieces have none until their last.
         if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-            // A finished thought and the next one are separate thoughts; a streaming one continues.
-            const gap = prev.active === false && /\S$/.test(prev.detail || '') && /^\S/.test(step.detail || '') ? '\n\n' : '';
+            const gap = prev.latencyMs != null && /\S$/.test(prev.detail || '') && /^\S/.test(step.detail || '') ? '\n\n' : '';
             const merged = (prev.detail || '') + gap + (step.detail || '');
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
