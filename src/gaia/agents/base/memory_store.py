@@ -609,6 +609,19 @@ def _in(words: frozenset, word: str) -> bool:
     return not words.isdisjoint(forms)
 
 
+#: Words that make a row talk about a word rather than state a fact with it:
+#: "Fluoxetine is spelled with an x", "Definition of fluoxetine".
+_ABOUT_THE_WORD_RE = re.compile(
+    r"""\b(?:
+      spell(?:s|ed|t|ing)? | pronounc\w* | pronunciation\w* | defin(?:e|es|ed|ition\w*)
+      | meaning | synonyms? | abbreviat\w* | acronyms? | translat\w* | etymolog\w*
+      | words? | dictionar\w* | wikipedia | research\w* | stud(?:y|ies) | articles?
+      | essays? | thesis | documentar\w* | podcasts? | lectures? | trivia | quiz\w*
+    )\b""",
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
 class _Terms(NamedTuple):
     """What a memory's text says, for telling one sensitive fact from another."""
 
@@ -621,6 +634,8 @@ class _Terms(NamedTuple):
     #: Exact figures of four or more digits ("92,000"), years and dates aside.
     figures: frozenset
     people: frozenset
+    #: Words that talk about a word ("spelled", "definition").
+    talk: frozenset
 
 
 @lru_cache(maxsize=4096)
@@ -652,6 +667,7 @@ def _fact_terms(text: str) -> _Terms:
         frozenset(key),
         frozenset(figures),
         frozenset(people),
+        frozenset(m.lower() for m in _ABOUT_THE_WORD_RE.findall(plain)),
     )
 
 
@@ -685,8 +701,9 @@ def _states(row: _Terms, fact: _Terms, row_entity: Optional[str] = None) -> str:
     euros" is "salary is 92,000 euros"). A shared sentence shape is never
     enough. Holding the words is still only ``_NEAR`` when the row may be
     about something else: another distinctive word splits them ("allergic
-    to green mango"), or the fact has one word ("diabetes") and the row
-    neither stays short, shares a frame word with it, nor is tagged with it
+    to green mango"), the row talks about the word ("fluoxetine is spelled
+    with an x"), or the fact has one word ("diabetes") and the row neither
+    stays short, shares a frame word with it, nor is tagged with it
     ("writing a report on diabetes research").
     """
     if not (fact.key or fact.figures) or not fact.figures <= row.figures:
@@ -697,7 +714,7 @@ def _states(row: _Terms, fact: _Terms, row_entity: Optional[str] = None) -> str:
         return _COPY if figures else ""
     if fact.figures:
         return _COPY
-    if _split_by_another_word(row, fact):
+    if _split_by_another_word(row, fact) or row.talk - fact.talk:
         return _NEAR
     if len(fact.key) > 1:
         return _COPY

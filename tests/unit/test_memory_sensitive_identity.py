@@ -78,6 +78,9 @@ class Row:
     #: Another fact that shares a distinctive word with the sensitive one. Said
     #: in the turn that marked it, it is hidden too, but never forgotten with it.
     near: bool = False
+    #: Holds the fact's word but talks about the word, or is about someone
+    #: else: hidden whenever it is written, never forgotten with the fact.
+    hidden: bool = False
 
 
 @dataclass
@@ -125,6 +128,14 @@ CASES = {
             Row("I take magnesium every morning"),
             Row("I take vitamin D every morning with breakfast"),
             Row("Takes vitamin D every morning"),
+            # Round 5: rows that mention the drug without stating the fact.
+            Row(
+                "Fluoxetine is spelled with an x, not a z", "user", "note", hidden=True
+            ),
+            Row("My mother also takes fluoxetine", "user", hidden=True),
+            Row("How to pronounce fluoxetine", "user", "note", hidden=True),
+            Row("Definition of fluoxetine: an SSRI", "user", "note", hidden=True),
+            Row("Look up the word fluoxetine", "user", "note", hidden=True),
         ],
     ),
     # Round 4: two remember saves of one fact were never tied.
@@ -211,13 +222,17 @@ def _no_plain_copy(db: MemoryStore, case: Case, same_turn: bool = False) -> None
     is. Extraction's copy may have been merged into the flagged row, so look
     at every row left."""
     plain = [c for c, flag in _contents(db) if not flag]
-    others = [o.content for o in case.others if not (same_turn and o.near)]
+    others = [o.content for o in case.others if not _hidden(o, same_turn)]
     assert sorted(plain) == sorted(others), _contents(db)
+
+
+def _hidden(row: Row, same_turn: bool) -> bool:
+    return row.hidden or (same_turn and row.near)
 
 
 def _only_others_left(db: MemoryStore, case: Case, same_turn: bool = False) -> None:
     """B and C: the fact is gone whole, the other facts are as they were."""
-    others = [(o.content, int(same_turn and o.near)) for o in case.others]
+    others = [(o.content, int(_hidden(o, same_turn))) for o in case.others]
     assert sorted(_contents(db)) == sorted(others)
     kept_words = db._conn.execute("SELECT content, sensitive FROM forgotten").fetchall()
     assert all(flag == 1 for _, flag in kept_words), kept_words
