@@ -4988,8 +4988,6 @@ def _handle_schedule(args):
     if action == "run":
         from datetime import datetime, timezone
 
-        from gaia.llm.lemonade_client import LemonadeClientError
-
         try:
             schedule = store.get(args.name)
         except KeyError as exc:
