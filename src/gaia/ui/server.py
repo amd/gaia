@@ -471,9 +471,14 @@ class _ScheduledRuns:
                     "freeing the model while its thread winds down",
                     self._timeout,
                 )
+            limit = (
+                f"{self._timeout / 60:g} minutes"
+                if self._timeout >= 120
+                else f"{self._timeout:g} seconds"
+            )
             raise asyncio.TimeoutError(
-                f"Scheduled run did not finish within {self._timeout:g}s and was "
-                "stopped. Raise GAIA_SCHEDULE_TIMEOUT if the task needs longer."
+                f"This scheduled task took longer than {limit} and was stopped. "
+                "Try a shorter or simpler task, or run it again."
             )
         finally:
             turn_queue.release()
