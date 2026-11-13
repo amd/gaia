@@ -13,6 +13,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `documents`, the agent loads up to that limit instead of loading every one
   and pushing earlier ones out, says in the `index_documents` step how many it left unloaded, and
   never calls one of those "not attached": asking about one by name loads it.
+- **A run stopped for an approval nobody can give reads as not done.** Its
+  `final` now carries `failed: true` and the `usage` spent before the stop, so
+  `gaia -p` reports `is_error: true` with real step and token counts instead of
+  a free, zero-step success. A stopped turn's result now carries
+  the tokens it spent too.
 
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch

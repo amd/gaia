@@ -75,6 +75,10 @@ EXECUTED_KEY = "executed"
 #: Spread into a tool's pre-execution refusal: ``{**NOT_EXECUTED, "status": …}``.
 NOT_EXECUTED: Dict[str, Any] = {EXECUTED_KEY: False}
 
+#: On a result that looked on disk and found the path missing: nothing ran,
+#: but the absence was checked, which is what a "doesn't exist" claim needs.
+CHECKED_ABSENT_KEY = "checked_absent"
+
 #: A declined confirmation never reaches the tool body, so there is nothing
 #: there to declare it. The loop's own denial shape says it for them.
 _DENIED_STATUS = "denied"
@@ -849,6 +853,8 @@ def verification_record(
         "check_kind": kind,
         "failed": failed,
         "ran": check_was_executed(result),
+        "checked_absent": isinstance(result, dict)
+        and result.get(CHECKED_ABSENT_KEY) is True,
         "mutated": is_file_mutation(tool_name),
         "declared": declared,
     }

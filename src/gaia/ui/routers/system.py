@@ -9,6 +9,7 @@ import logging
 import shutil
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -555,6 +556,58 @@ def _loaded_chat_entry(
 # Most the Lemonade probes in /api/system/status may take together.
 _STATUS_PROBE_BUDGET_S = 20.0
 
+# The daemon start of GAIA's own stopped server that a status poll asked for.
+_own_server_restart: Optional[threading.Thread] = None
+_own_server_restart_failed_at: Optional[float] = None
+# How long a failed start waits before a poll asks again.
+_OWN_SERVER_RESTART_RETRY_S = 30.0
+
+
+def _gaia_lemonade_is_stopped() -> bool:
+    """True when this install runs GAIA's own server and it is not running.
+
+    Its address is then not probed: only its recorded, running server is it.
+    """
+    from gaia.llm.lemonade_client import running_embedded_lemonade_url
+    from gaia.llm.lemonade_launcher import gaia_runs_lemonade
+
+    return gaia_runs_lemonade() and running_embedded_lemonade_url() is None
+
+
+def _restart_gaia_lemonade() -> None:
+    """Have the daemon start GAIA's own server again, one start at a time."""
+    global _own_server_restart
+    if _own_server_restart is not None and _own_server_restart.is_alive():
+        return
+    failed_at = _own_server_restart_failed_at
+    if (
+        failed_at is not None
+        and time.monotonic() - failed_at < _OWN_SERVER_RESTART_RETRY_S
+    ):
+        return
+
+    def _start() -> None:
+        global _own_server_restart_failed_at
+        from gaia.daemon.errors import DaemonError
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        try:
+            LemonadeManager.start_embedded_if_stopped()
+        except DaemonError as exc:
+            _own_server_restart_failed_at = time.monotonic()
+            logger.warning("Could not restart GAIA's model server: %s", exc)
+        except Exception:
+            _own_server_restart_failed_at = time.monotonic()
+            raise
+        else:
+            _own_server_restart_failed_at = None
+
+    logger.warning("GAIA's model server has stopped; asking the daemon to start it")
+    _own_server_restart = threading.Thread(
+        target=_start, name="gaia-lemonade-restart", daemon=True
+    )
+    _own_server_restart.start()
+
 
 @router.get("/api/system/status", response_model=SystemStatus)
 async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
@@ -613,6 +666,10 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
         # Failures of the supplementary probes below: transport, bad JSON, or
         # an unexpected payload shape.
         probe_errors = (httpx.HTTPError, ValueError, TypeError, AttributeError)
+
+        if _gaia_lemonade_is_stopped():
+            _restart_gaia_lemonade()
+            raise httpx.ConnectError("GAIA's own model server is not running")
 
         async with httpx.AsyncClient(timeout=10.0) as client:
             base_url = resolve_lemonade_base_url()
@@ -1118,7 +1175,9 @@ def _resolve_dynamic_tools_setting() -> tuple[bool, bool]:
 @router.get("/api/settings", response_model=SettingsResponse)
 async def get_settings(db: ChatDatabase = Depends(get_db)):
     """Get current user settings with model status."""
-    custom_model = db.get_setting("custom_model")
+    from .providers import custom_model_override
+
+    custom_model = custom_model_override(db)
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
@@ -1155,8 +1214,9 @@ async def update_settings(
     """Update user settings.
 
     Setting ``custom_model`` to an **empty string** clears the override
-    and reverts to the default model. Sending ``null`` (or omitting the
-    field) is a no-op — by GAIA convention only explicit ``""`` clears.
+    and reverts to the model picked under Model (the default model when
+    there is no pick; see ``model_after_clearing_custom``). Sending
+    ``null`` (or omitting the field) is a no-op — by GAIA convention only explicit ``""`` clears.
     Pydantic *can* distinguish an explicit ``null`` from an unset field
     via ``model_fields_set``; we don't lean on that distinction here so
     clients have a single, simple rule (omit to keep, ``""`` to clear).
@@ -1174,7 +1234,9 @@ async def update_settings(
         from gaia.config import GaiaConfig, GaiaConfigError
 
         from .providers import (
+            PICKED_MODEL_SETTING,
             clear_restore_notice,
+            model_after_clearing_custom,
             provider_of,
             refuse_blocked_cloud_model,
         )
@@ -1183,8 +1245,11 @@ async def update_settings(
             refuse_blocked_cloud_model(value)
             logger.info("Custom model override set: %s", value)
         else:
-            logger.info("Custom model override cleared")
-            value = None
+            # Back to the model chosen under Model, as the field says.
+            value = model_after_clearing_custom(db)
+            logger.info("Custom model override cleared; running %s", value or "default")
+            if value:
+                db.set_setting(PICKED_MODEL_SETTING, value)
         # last_model is what the flagship sidecar warms and the next start restores.
         try:
             GaiaConfig.save_keys(
@@ -1276,7 +1341,9 @@ async def update_settings(
                 db.set_setting("custom_model", None)
         logger.info("Network policy set: %s", result["policy"].value)
 
-    custom_model = db.get_setting("custom_model")
+    from .providers import custom_model_override
+
+    custom_model = custom_model_override(db)
     context_size_str = db.get_setting("context_size")
     context_size = int(context_size_str) if context_size_str else None
     agent_mode = resolve_agent_mode(db)
@@ -1318,15 +1385,14 @@ def _read_model_server(custom_model: Optional[str]) -> ModelServerInfo:
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         LemonadeClientError,
-        _read_embedded_lemonade_state,
+        gaia_lemonade_port,
     )
     from gaia.llm.model_server_info import describe_model_server, server_owner
 
     preferred = GaiaConfig.load().llamacpp_backend
     client = LemonadeClient(verbose=False)
     base_url = client.base_url
-    state = _read_embedded_lemonade_state()
-    owner = server_owner(base_url, state.get("port") if state else None)
+    owner = server_owner(base_url, gaia_lemonade_port())
     try:
         health = client.health_check(timeout=5)
     except LemonadeClientError as exc:
