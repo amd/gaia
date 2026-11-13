@@ -299,22 +299,20 @@
     color: var(--text-muted);
 }
 
-/* Long titles fade out instead of ending in an ellipsis. The fade covers 24px
- * of padding only overflowing text reaches, so a short title is never dimmed. */
 .sb-row-title {
+    flex: 1;
+    min-width: 0;
     overflow: hidden;
     white-space: nowrap;
-    padding-inline-end: 24px;
-    /* Each title orders its own text, but takes its side, padding and fade from
-       the row, so a Latin title in an Arabic sidebar lines up with Arabic ones. */
-    unicode-bidi: plaintext;
-    -webkit-mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
-    mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+    text-overflow: ellipsis;
 }
-.sb-row-title:dir(rtl) {
+/* dir="auto" gives each title its own text order, so the ellipsis lands at the
+ * end of its own text. The row, not the title, decides the side it sits on. */
+.sb-row-main:dir(rtl) .sb-row-title {
     text-align: right;
-    -webkit-mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
-    mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
+}
+.sb-row-main:dir(ltr) .sb-row-title {
+    text-align: left;
 }
 
 /* ── Status dots and unread (#5221) ── */

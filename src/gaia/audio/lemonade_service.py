@@ -76,7 +76,7 @@ class LemonadeAudioService:
         label: str,
         say: Optional[Callable[[str], None]] = None,
         on_percent: Optional[Callable[[int], None]] = None,
-    ) -> None:
+    ) -> bool:
         """Pull ``self.model`` if the server has it in its catalog but not on disk.
 
         Args:
@@ -85,6 +85,10 @@ class LemonadeAudioService:
             say: Called once with a human-readable line before a download.
             on_percent: Called with the download's percent each time it changes;
                 giving it makes the pull a streamed one.
+
+        Returns:
+            ``True`` when this call downloaded the model, ``False`` when it was
+            already on disk.
 
         Raises:
             ConnectionError: Lemonade Server is not reachable.
@@ -109,7 +113,7 @@ class LemonadeAudioService:
                 f"{', '.join(entry.get('labels') or []) or 'none'})."
             )
         if entry.get("downloaded"):
-            return
+            return False
         size = entry.get("size")
         message = f"Downloading {self.model} through Lemonade" + (
             f" (~{float(size):.2f} GB)" if isinstance(size, (int, float)) else ""
@@ -119,7 +123,7 @@ class LemonadeAudioService:
             say(message)
         if on_percent is not None:
             self._pull_with_progress(on_percent)
-            return
+            return True
         # Built-in models are pulled by name only; a recipe 400s on them (#1655).
         self._post_json(
             f"{self.base_url}/pull",
@@ -127,6 +131,7 @@ class LemonadeAudioService:
             what=f"pull of {self.model}",
             timeout=MODEL_PULL_TIMEOUT,
         )
+        return True
 
     def _pull_with_progress(self, on_percent: Callable[[int], None]) -> None:
         """Pull ``self.model`` by name over Lemonade's streamed pull."""
