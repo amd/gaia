@@ -142,6 +142,27 @@ describe('citations to dropped files and same-named files', () => {
         expect(links('According to report.pdf, page 2.')).toEqual([]);
         expect(links('According to annual_report.pdf, page 2.').map(({ id }) => id)).toEqual(['annual', 'annual']);
     });
+
+    const SPACED = [
+        at('js23', 'plan.pdf', 'C:\\Users\\John Smith\\2023\\plan.pdf'),
+        at('js24', 'plan.pdf', 'C:\\Users\\John Smith\\2024\\plan.pdf'),
+        at('od', 'budget.xlsx', 'C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx'),
+        at('od2', 'budget.xlsx', 'C:\\Users\\me\\Archive\\budget.xlsx'),
+    ];
+
+    it('a same-named file cited by a path with spaces in a folder opens itself', () => {
+        useChatStore.setState({ documents: SPACED });
+        const found = links('According to C:\\Users\\John Smith\\2023\\plan.pdf, page 4, and C:\\Users\\me\\OneDrive - AMD\\Finance\\budget.xlsx.');
+        expect(found.map(({ kind, id, page }) => [kind, id, page])).toEqual([
+            ['doc', 'js23', 4], ['page', 'js23', 4], ['doc', 'od', null],
+        ]);
+    });
+
+    it('two paths in one sentence each link to their own file', () => {
+        useChatStore.setState({ documents: SPACED });
+        const found = links('Compare C:\\Users\\John Smith\\2023\\plan.pdf and C:\\Users\\John Smith\\2024\\plan.pdf for totals.');
+        expect(found.map(({ id }) => id)).toEqual(['js23', 'js24']);
+    });
 });
 
 describe('page references', () => {

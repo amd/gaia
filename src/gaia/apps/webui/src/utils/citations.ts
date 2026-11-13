@@ -52,7 +52,10 @@ export const PAGE_GAP_CHARS = 40;
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // A Windows or Linux folder path in front of the name, so the whole path becomes the link.
-const SEGMENT = String.raw`[^\s*?"<>|,;)}\]\\/]+[\\/]`;
+// A folder may hold spaces ("John Smith", "OneDrive - AMD") but not start or end with one,
+// and no colon, so prose running into a second path ("a.pdf and C:\x\") doesn't join it.
+const SEG_EDGE = String.raw`[^\s*?"<>|,;:)}\]\\/]`;
+const SEGMENT = String.raw`${SEG_EDGE}(?:[^*?"<>|,;:)}\]\\/\r\n]*${SEG_EDGE})?[\\/]`;
 const FOLDER_PREFIX = String.raw`(?:(?:[A-Za-z]:[\\/]|(?<![\p{L}\p{N}_.\-\\/])/)(?:${SEGMENT})*)?`;
 // A filename stands alone: no name character touches it on either side.
 const NAME_BEFORE = String.raw`(?<![\p{L}\p{N}_.\-])`;
