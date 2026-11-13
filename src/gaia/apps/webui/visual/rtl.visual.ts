@@ -632,6 +632,43 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** The server's crash notice is English; it ends a partial answer and repeats as the last error step. */
+const CRASH_NOTICE = 'GAIA stopped unexpectedly while answering. Anything it had already written is kept above. Send your message again.';
+
+async function withCrashedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write me an essay about rivers.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: `Rivers shape the land they cross. They carve valleys and carry silt to the sea.\n\n${CRASH_NOTICE}`,
+                        inference_stats: { seconds: 7, place: 'via Fireworks AI' },
+                        agent_steps: [
+                            { id: 1, type: 'thinking', label: 'Thinking', detail: 'Let me write.', active: false, timestamp: 1 },
+                            { id: 2, type: 'error', label: 'Error', detail: CRASH_NOTICE, active: false, success: false, timestamp: 2 },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a crash notice under a partial answer reads left to right (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCrashedAnswer);
+        const note = page.locator('.msg-assistant .msg-cut-off', { hasText: 'GAIA stopped unexpectedly' });
+        await expect(note).toHaveCount(1);
+        expect(await note.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        await expect(page.locator('.msg-assistant .msg-stats-summary')).toContainText(locale === 'en' ? 'Failed after' : 'فشلت بعد');
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`crashed-answer-${locale}.png`) });
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     test(`the latest answer's actions sit under its text, at the start edge (${locale})`, async ({ page }, info) => {
         await open(page, `#${ANSWER_SESSION}`, locale);

@@ -857,7 +857,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         </p>
                     )}
                     {endedBy && (
-                        <p className="msg-cut-off" role="note">{endedBy}</p>
+                        <p className="msg-cut-off" role="note" dir="auto">{endedBy}</p>
                     )}
                     {onContinue && stopState && !isStreaming && cleanedContent.trim() && cleanedContent.trim() !== SERVER_CANCELLED_TEXT && (
                         <button type="button" className="msg-try-again" onClick={onContinue}>
