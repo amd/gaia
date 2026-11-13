@@ -420,6 +420,23 @@ describe('DocumentLibrary path box', () => {
         expect(screen.queryByRole('alert')).toBeNull();
     });
 
+    it('says how many images a folder left out and how to add them', async () => {
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 0, skipped_images: 2, errors: [], documents: [COMPLETE_DOC],
+        });
+        render(<DocumentLibrary />);
+
+        submitPath('/home/me/scan');
+
+        const notice = await screen.findByRole('status');
+        expect(notice.textContent).toContain('Left out 2 images: add them one at a time and GAIA will read them.');
+        expect(notice.textContent).not.toContain('Skipped');
+    });
+
     it('reports a folder with nothing indexable plainly', async () => {
         mockedApi.listDocuments.mockResolvedValue(emptyList);
         mockedApi.uploadDocumentByPath.mockRejectedValue(
@@ -597,6 +614,23 @@ describe('DocumentLibrary notices follow the interface language', () => {
         expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يفهرس نوعها: 1.');
         expect(text).toContain('لا تُضمَّن المجلدات الفرعية.');
         expect(text.indexOf('الملفات المفهرسة')).toBe(0);
+    });
+
+    it('says in Arabic how many images a folder left out', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 1, failed: 0, skipped: 0, skipped_images: 2, errors: [], documents: [COMPLETE_DOC],
+        });
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/scan');
+
+        const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
+        expect(text).toContain('الصور المستبعدة: 2. أضِف كل صورة وحدها ليقرأها GAIA.');
     });
 
     it('says in Arabic that a mistyped path does not exist', async () => {

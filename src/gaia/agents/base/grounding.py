@@ -286,6 +286,12 @@ def _read_it(target: str, records: Iterable[Dict[str, Any]]) -> bool:
     return False
 
 
+def _found_missing(target: str, records: Iterable[Dict[str, Any]]) -> bool:
+    """True when a call looked for *target* on disk and found it isn't there."""
+    key = _target_key(target)
+    return any(r.get("checked_absent") and key in _args_text(r) for r in records)
+
+
 def _target_key(target: str) -> str:
     return _slashed(re.split(r"[\\/]", target.rstrip("\\/"))[-1])
 
@@ -338,7 +344,11 @@ def look_findings(
     about_project = any(where_is.values()) or any(_ran(r) for r in records)
     engaged = plan_only or any(_read_it(t, records) for t in targets)
     for target in targets:
-        if _read_it(target, records) or _slashed(target) in earlier:
+        if (
+            _read_it(target, records)
+            or _found_missing(target, records)
+            or _slashed(target) in earlier
+        ):
             continue
         key = _target_key(target)
         said_read = any(key in clause for clause in claimed)
@@ -365,7 +375,9 @@ def look_findings(
                 f"I didn't read {names} this turn",
             )
         )
-    if absent and not any(_searched(r) or _looked(r) for r in records):
+    if absent and not any(
+        _searched(r) or _looked(r) or r.get("checked_absent") for r in records
+    ):
         findings.append(
             Finding(
                 LOOK,

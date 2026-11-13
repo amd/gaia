@@ -772,6 +772,15 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "forget_everything",
 }
 
+
+def _argument_shape(name: str, param: inspect.Parameter) -> str:
+    """``name (type)`` for a missing-argument error; just the name when untyped."""
+    annotation = param.annotation
+    if annotation is inspect.Parameter.empty:
+        return name
+    return f"{name} ({getattr(annotation, '__name__', annotation)})"
+
+
 #: Put on a call the user declined, so the model stops instead of rerouting.
 DECLINED_HINT = (
     "The user declined this. Do not try to get the same result another way "
@@ -2081,21 +2090,35 @@ def _is_jsonc(path: Path) -> bool:
     return any(part.lower() == ".vscode" for part in path.parts[:-1])
 
 
-def _parse_problem(path: Path, text: str) -> Optional[str]:
-    """Why *text* does not parse as *path*'s type, or None (unchecked types pass)."""
+def _parse_problem(path: Path, text: str, new: bool = False) -> Optional[str]:
+    """Why *text* does not parse as *path*'s type, or None (unchecked types pass).
+
+    *new*: the file did not exist before the turn, so it never parsed.
+    """
     suffix = path.suffix.lower()
     if suffix in (".py", ".pyi"):
         try:
             ast.parse(text)
         except (SyntaxError, ValueError) as e:
-            return f"`{path}` no longer parses as Python: {e}"
+            verb = "doesn't parse" if new else "no longer parses"
+            return f"`{path}` {verb} as Python: {e}"
     elif suffix == ".json" and not _is_jsonc(path):
         try:
             json.loads(text)
         except ValueError as e:
-            return f"`{path}` is no longer valid JSON: {e}"
+            state = "isn't" if new else "is no longer"
+            return f"`{path}` {state} valid JSON: {e}"
     return None
 
+
+def _user_supplied(text: str, request: Optional[str]) -> bool:
+    """Whether the request itself holds *text*: the user dictated the content."""
+    content = " ".join(text.split())
+    return bool(content and request) and content in " ".join(request.split())
+
+
+#: Parse baseline for a file the turn created: no earlier version to compare.
+_NEW_FILE = "new"
 
 _EDIT_VERIFICATION_PROMPT = (
     "[check:edits] The files you changed this turn were read back off disk "
@@ -4207,6 +4230,17 @@ Do NOT wrap conversational replies in JSON.
             )
             if not granted:
                 refused.append((turn, target))
+            timed_out = getattr(self.console, "confirmation_timed_out", None)
+            note = getattr(self._read_validator(), "note_access_answer", None)
+            if callable(note):
+                note(
+                    target,
+                    declined=not granted
+                    and not (
+                        callable(timed_out)
+                        and timed_out(PATH_ACCESS_PROMPT_TOOL) is True
+                    ),
+                )
             return granted
         finally:
             if clock is not None:
@@ -8444,8 +8478,12 @@ Do NOT wrap conversational replies in JSON.
         # Check for missing required arguments
         missing_args = [arg for arg in required_args if arg not in tool_args]
         if missing_args:
+            wanted = ", ".join(
+                _argument_shape(name, required_args[name]) for name in required_args
+            )
             error_msg = (
-                f"Missing required arguments for {tool_name}: {', '.join(missing_args)}"
+                f"Missing required arguments for {tool_name}: {', '.join(missing_args)}. "
+                f"Call it again with every argument filled in: {wanted}."
             )
             logger.error(error_msg)
             # Tagged so callers can tell a malformed call (retryable — the model
@@ -11019,10 +11057,16 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     problems.append(f"`{path}` is empty after this turn's edit.")
                 continue
-            problem = _parse_problem(path, text)
+            before = self._parsed_before(path)
+            problem = _parse_problem(path, text, new=before == _NEW_FILE)
             # A file that already failed to parse before the turn touched it
-            # is not this turn's breakage to repair.
-            if problem and self._parsed_before(path) is not False:
+            # is not this turn's breakage to repair, nor is content the user
+            # dictated word for word.
+            if (
+                problem
+                and before is not False
+                and not _user_supplied(text, getattr(self, "_current_query", None))
+            ):
                 problems.append(problem)
         return problems
 
@@ -11034,7 +11078,7 @@ Do NOT wrap conversational replies in JSON.
             return None
         return os.path.normcase(str(key))
 
-    def _parsed_before(self, path: Path) -> Optional[bool]:
+    def _parsed_before(self, path: Path) -> Optional[Union[bool, str]]:
         key = self._baseline_key(str(path))
         baseline = getattr(self, "_edit_parse_baseline", None) or {}
         return baseline.get(key) if key is not None else None
@@ -11062,7 +11106,7 @@ Do NOT wrap conversational replies in JSON.
                 if not allowed:
                     return
             if not path.is_file():
-                baseline[key] = True  # a new file
+                baseline[key] = _NEW_FILE
                 return
             if path.stat().st_size > _VERIFY_MAX_BYTES:
                 return
@@ -14508,12 +14552,18 @@ Do NOT wrap conversational replies in JSON.
         # non-empty "here's what I accomplished" message.
         if cancelled_by_console:
             logger.info("Agent run cancelled mid-generation via console.cancelled")
+            # A stopped turn was still billed for the model calls it made.
+            spent_in, spent_out = _sum_conversation_tokens(
+                conversation, self._tool_reported_usage
+            )
             self.last_result = {
                 "status": "cancelled",
                 "result": "",
                 "system_prompt": self.system_prompt,
                 "conversation": conversation,
                 "steps_taken": steps_taken,
+                "input_tokens": spent_in,
+                "output_tokens": spent_out,
                 "timing_summary": timing_summary,
                 "duration": time.time() - start_time,
                 "error_count": len(self._turn_errors()),
