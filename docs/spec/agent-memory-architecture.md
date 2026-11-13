@@ -677,7 +677,7 @@ id="new-456", content="User prefers Rust", superseded_by=NULL
 id="old-123", content="User prefers Python", superseded_by="new-456"
 ```
 
-Active queries (`search_hybrid`, `get_by_category`, system prompt injection) filter on `WHERE superseded_by IS NULL` to return only current facts. Historical queries can traverse the `superseded_by` chain to answer "what did I used to prefer?" or "when did this change?"
+Active queries (`search_hybrid`, `get_by_category`, session-context injection) filter on `WHERE superseded_by IS NULL` to return only current facts. Historical queries can traverse the `superseded_by` chain to answer "what did I used to prefer?" or "when did this change?"
 
 ### Error Handling
 
@@ -858,7 +858,7 @@ First query: _run_memory_post_init() [deferred until the LLM is available]
 
 ---
 
-## System Prompt Architecture
+## Prompt Architecture
 
 Memory is split into two parts to allow LLM inference engines to reuse their KV-cache across conversation turns. Neither part is in the system prompt itself, which stays byte-identical across fresh sessions of one agent.
 
@@ -1027,9 +1027,9 @@ LIMIT ?   -- parameterized, default 10; callers can override via limit= paramete
 
 The mixin hooks memory into the Agent lifecycle at exactly **3 points**.
 
-### Hook 1: System Prompt Injection + Per-Turn Dynamic Context
+### Hook 1: Session Context Injection + Per-Turn Dynamic Context
 
-Described in the System Prompt Architecture section above. Two methods:
+Described in the Prompt Architecture section above. Two methods:
 - `get_memory_system_prompt()` -- stable prefix, KV-cache friendly
 - `get_memory_dynamic_context()` -- per-turn suffix with current time + upcoming items
 
@@ -1547,9 +1547,9 @@ Agent: "What tools/languages do you use most for work?"
         context="work", entity="app:vscode")
 ```
 
-**Why the stack is stored twice:** the `work`-context rows are the entity-linked, context-scoped truth. But a default chat session runs in the `global` context, and the prompt builder selects *only* `global` rows there -- so a `work`-only stack would never reach the system prompt and the agent would look like it had forgotten the user's tools. The `profile`/`global` row is the one the agent actually sees day one; the `work` rows are what an agent working in the `work` context recalls, and what entity search (`app:vscode`) finds.
+**Why the stack is stored twice:** the `work`-context rows are the entity-linked, context-scoped truth. But a default chat session runs in the `global` context, and the prompt builder selects *only* `global` rows there -- so a `work`-only stack would never reach the session context and the agent would look like it had forgotten the user's tools. The `profile`/`global` row is the one the agent actually sees day one; the `work` rows are what an agent working in the `work` context recalls, and what entity search (`app:vscode`) finds.
 
-**Why `profile` and not `fact` for identity:** `profile` is a *privileged* category (`_PRIVILEGED_CATEGORIES` in `memory_store.py`). Only explicit user action may write one -- the LLM conversation extractor cannot mint one from a chat turn -- and profile entries render into their own "User profile:" section of the system prompt, always in the `global` context. Identity answers therefore stay `profile`; only the work-shaped answers (stack, IDE, engineering workflow) are `fact` in the `work` context. First-boot detection also keys on a `profile`/`global` entry existing, so demoting these to `fact` would re-offer onboarding forever.
+**Why `profile` and not `fact` for identity:** `profile` is a *privileged* category (`_PRIVILEGED_CATEGORIES` in `memory_store.py`). Only explicit user action may write one -- the LLM conversation extractor cannot mint one from a chat turn -- and profile entries render into their own "User profile:" section of the session context, always in the `global` context. Identity answers therefore stay `profile`; only the work-shaped answers (stack, IDE, engineering workflow) are `fact` in the `work` context. First-boot detection also keys on a `profile`/`global` entry existing, so demoting these to `fact` would re-offer onboarding forever.
 
 **Why `store(source="user")` and not the `remember` tool:** `remember` writes `source="tool"`, and Reset Safety (below) requires onboarding answers to be `source="user"` so that a discovery reset never deletes them. Onboarding writes through `MemoryStore.store()` directly with `source="user"` and `confidence=0.8`.
 
@@ -2278,7 +2278,7 @@ FTS5 standalone tables can get out of sync if the process crashes mid-write. **M
 Local LLMs (especially smaller ones) may not reliably call memory tools -- they might ignore the tools or use wrong arguments. **Mitigation:** The automatic hooks (tool logging, conversation storage, session-context injection, LLM extraction) work regardless of whether the LLM calls memory tools. The tools are a bonus for smarter models, not a requirement.
 
 ### Invalid Dates from LLM
-The LLM might pass "next Tuesday" or "2026-13-45" as `due_at`. **Mitigation:** The `remember` tool validates `due_at` with `datetime.fromisoformat()` before calling `store()`. If invalid, the fact is still saved, without a date, and the result says so (`ignored: {"due_at": ...}`) and tells the LLM to set one with `update_memory` in ISO 8601 format; an unknown `category` is handled the same way and filed as `fact`, and so is a privileged one, which a chat can never write. `update_memory` returns an error instead, since nothing new is at stake. The current time is in the system prompt so the LLM can compute dates.
+The LLM might pass "next Tuesday" or "2026-13-45" as `due_at`. **Mitigation:** The `remember` tool validates `due_at` with `datetime.fromisoformat()` before calling `store()`. If invalid, the fact is still saved, without a date, and the result says so (`ignored: {"due_at": ...}`) and tells the LLM to set one with `update_memory` in ISO 8601 format; an unknown `category` is handled the same way and filed as `fact`, and so is a privileged one, which a chat can never write. `update_memory` returns an error instead, since nothing new is at stake. The current time is in the per-turn context at the start of each user message so the LLM can compute dates.
 
 ### Dashboard DB Access
 The UI backend (FastAPI) needs its own MemoryStore instance to access `~/.gaia/memory.db`. This is safe because WAL mode supports concurrent readers. **Implementation:** The dashboard uses a single shared read-write `MemoryStore` singleton (thread-safe initialization via `threading.Lock`), which handles both read and write endpoints through the public `MemoryStore` API. Raw SQL access from the router layer is prohibited -- all queries must go through named `MemoryStore` methods. The singleton is lazy-initialized on first request and persists for the lifetime of the server process.

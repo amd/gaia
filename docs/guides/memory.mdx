@@ -72,7 +72,7 @@ The email agent supports private chats and memory-off turns when it advertises c
 While memory is off, none of the behaviors on this page (cross-session recall, automatic extraction, the Memory page) are active -- sessions run in "incognito" mode, nothing is written to `~/.gaia/memory.db`, and the agent says memory is turned off when asked to remember something.
 
 <Note>
-  While memory is on, conversations are summarized into `~/.gaia/memory.db` -- a **plaintext SQLite file** (not encrypted). The [Sensitive Data](#sensitive-data) section below explains the `sensitive` flag for controlling system-prompt visibility; do not store passwords or tokens in agent memory.
+  While memory is on, conversations are summarized into `~/.gaia/memory.db` -- a **plaintext SQLite file** (not encrypted). The [Sensitive Data](#sensitive-data) section below explains the `sensitive` flag for controlling what the session context shows; do not store passwords or tokens in agent memory.
 </Note>
 
 ---
