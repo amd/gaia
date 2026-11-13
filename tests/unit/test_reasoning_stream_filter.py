@@ -32,8 +32,23 @@ def test_a_reply_with_no_reasoning_streams_as_it_comes():
     assert answer.flush() == ""
 
 
-def test_a_lone_close_tag_is_not_printed():
-    assert _shown(["4", "2</th", "ink>"]) == "42"
+def test_a_leading_lone_close_tag_is_not_printed():
+    """The template opened the block in the prompt and the reply has none."""
+    assert _shown(["</th", "ink>\n", "42"]) == "42"
+
+
+@pytest.mark.parametrize(
+    "chunks",
+    [
+        ["Qwen wraps reasoning in <think> tags", " so clients can hide it."],
+        ["Qwen wraps reasoning in <th", "ink> tags so clients can hide it."],
+    ],
+)
+def test_a_tag_the_answer_mentions_is_printed(chunks):
+    """Only a block the reply opens with is reasoning, as in split_reasoning."""
+    assert (
+        _shown(chunks) == "Qwen wraps reasoning in <think> tags so clients can hide it."
+    )
 
 
 def test_a_reply_cut_off_mid_thought_prints_nothing():

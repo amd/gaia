@@ -62,10 +62,14 @@ def _partial_tag(text: str) -> int:
 
 
 class ReasoningStreamFilter:
-    """Drop inline ``<think>`` reasoning from a reply as it streams.
+    """Drop the ``<think>`` reasoning a streamed reply opens with.
 
-    Only a possible partial tag at a chunk's end is held back, so the answer
-    still streams. A reply cut off inside a block is reasoning to the end.
+    As in :func:`split_reasoning`, only a block the reply *opens* with is
+    reasoning: once answer text has been shown, a tag is quoted prose and
+    passes through. Only a possible leading tag is held back, so the answer
+    still streams. A reply cut off inside its block is reasoning to the end.
+    Text before a lone ``</think>`` (the template opened the block in the
+    prompt) has already been shown by then; only the tag itself is dropped.
     """
 
     def __init__(self) -> None:
@@ -75,41 +79,38 @@ class ReasoningStreamFilter:
 
     def feed(self, chunk: str) -> str:
         """The part of *chunk* that is answer and safe to show now."""
+        if self._answered:
+            return chunk
         self._held += chunk
-        out: List[str] = []
-        while True:
+        while not self._answered:
             if self._inside:
                 end = self._held.find(THINK_CLOSE)
                 if end < 0:
                     keep = _partial_tag(self._held)
                     self._held = self._held[len(self._held) - keep :] if keep else ""
-                    break
+                    return ""
                 self._held = self._held[end + len(THINK_CLOSE) :]
                 self._inside = False
                 continue
-            start = self._held.find(THINK_OPEN)
-            if start >= 0:
-                out.append(self._held[:start])
-                self._held = self._held[start + len(THINK_OPEN) :]
-                self._inside = True
-                continue
-            # A lone close tag: the template opened the block in the prompt.
-            self._held = self._held.replace(THINK_CLOSE, "")
-            keep = _partial_tag(self._held)
-            cut = len(self._held) - keep
-            out.append(self._held[:cut])
-            self._held = self._held[cut:]
-            break
-        return self._shown("".join(out))
+            lead = self._held.lstrip()
+            for tag in (THINK_OPEN, THINK_CLOSE):
+                if lead.startswith(tag):
+                    self._held = lead[len(tag) :]
+                    self._inside = tag == THINK_OPEN
+                    break
+            else:
+                if (
+                    not lead
+                    or THINK_OPEN.startswith(lead)
+                    or THINK_CLOSE.startswith(lead)
+                ):
+                    return ""  # nothing yet, or a tag still arriving
+                self._answered = True
+                self._held, shown = "", lead
+                return shown
+        return ""
 
     def flush(self) -> str:
         """Whatever was held back, once the reply has ended."""
-        held, self._held = ("" if self._inside else self._held), ""
-        return self._shown(held)
-
-    def _shown(self, text: str) -> str:
-        # The blank line a think block leaves before the answer isn't answer.
-        if not self._answered:
-            text = text.lstrip()
-            self._answered = bool(text)
-        return text
+        held, self._held = ("" if self._inside else self._held.lstrip()), ""
+        return held
