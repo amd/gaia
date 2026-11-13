@@ -520,6 +520,11 @@ type ChatModel struct {
 	discordSetup *discordSetupState
 	// discordOffered stops a second launch-time offer within one run.
 	discordOffered bool
+	// automationRefs are the ids /automations last listed, so
+	// "/automations pause 2" changes the one the user saw as 2.
+	automationRefs []string
+	// automationNames maps each listed name, lower-cased, to its id.
+	automationNames map[string]string
 	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
 	// setupRunning.
 	setupCancel context.CancelFunc
@@ -1052,6 +1057,9 @@ func (m ChatModel) updateChat(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case discordDeclinedMsg:
 		return m.handleDiscordDeclined(msg)
+
+	case automationsListMsg:
+		return m.handleAutomationsList(msg)
 
 	case connectorsListMsg:
 		return m.handleConnectorsList(msg)
@@ -2095,6 +2103,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	}
 	if query == "/discord" || strings.HasPrefix(query, "/discord ") {
 		return m.handleDiscordCommand(query)
+	}
+	if isAutomationsCommand(query) {
+		return m.handleAutomationsCommand(query)
 	}
 
 	return m.sendQuery(query)

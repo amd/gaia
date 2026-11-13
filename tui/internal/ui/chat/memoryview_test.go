@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -339,5 +340,26 @@ func TestDismissedMemoryFetchReportsNothingWhenItLandsLate(t *testing.T) {
 	if got := len(late.(ChatModel).messages); got != before {
 		t.Errorf("a dismissed fetch posted %d message(s) after Esc: %+v",
 			got-before, late.(ChatModel).messages[before:])
+	}
+}
+
+// gaiacpp stamps memories in UTC ("Z"); the Python agent in local time with an
+// offset. Both must render in the PC's zone, not in whatever zone was stamped.
+func TestFormatMemoryTimestampRendersLocalTime(t *testing.T) {
+	saved := time.Local
+	time.Local = time.FixedZone("UTC-7", -7*60*60)
+	t.Cleanup(func() { time.Local = saved })
+
+	cases := map[string]string{
+		"2026-08-13T21:22:05Z":             "2026-08-13 14:22",
+		"2026-08-13T14:22:05.123456-07:00": "2026-08-13 14:22",
+		"2026-08-13T23:22:05.5+02:00":      "2026-08-13 14:22",
+		"2026-08-14T15:36:00":              "2026-08-14 15:36",
+		"":                                 "",
+	}
+	for in, want := range cases {
+		if got := formatMemoryTimestamp(in); got != want {
+			t.Errorf("formatMemoryTimestamp(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
