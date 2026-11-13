@@ -365,6 +365,29 @@ def test_a_document_taken_off_the_chat_is_no_longer_searched_by_the_relayed_flag
     assert agent.rag.removed == [str(gone.resolve())]
 
 
+def test_a_file_dropped_into_an_earlier_message_stays_searchable(
+    monkeypatch, live_gaia_sidecar, chat, tmp_path
+):
+    import gaia.ui.utils as ui_utils
+
+    base_url, agents, api_version = live_gaia_sidecar
+    _point_ui_at(monkeypatch, base_url, api_version)
+    uploads = tmp_path / "uploads"
+    uploads.mkdir()
+    monkeypatch.setattr(ui_utils, "uploads_dir", lambda: uploads)
+    (uploads / "report.txt").write_text("UPLOAD-4", encoding="utf-8")
+    linked = "Read this [report.txt](/api/files/uploads/report.txt)"
+    chat.db.add_message(chat.session_id, "user", linked)
+    assert _answer(chat.send(ui_utils.resolve_upload_links(linked))) == "UPLOAD-4"
+
+    chat.db.add_message(chat.session_id, "user", "and section 3?")
+    answer = _answer(chat.send("and section 3?"))
+
+    assert answer == "UPLOAD-4"
+    [agent] = agents
+    assert agent.rag.removed == []
+
+
 def test_detaching_every_document_empties_the_relayed_flagship(
     monkeypatch, live_gaia_sidecar, chat, tmp_path
 ):

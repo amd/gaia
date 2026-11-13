@@ -93,7 +93,12 @@ from .session_environment import load as load_environment
 from .session_environment import with_folder_note, withheld_refusal
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
-from .utils import UPLOAD_LINK_RE, attached_upload_paths, managed_documents_dir
+from .utils import (
+    UPLOAD_LINK_RE,
+    attached_upload_paths,
+    managed_documents_dir,
+    resolve_upload_links,
+)
 from .warmup import wait_for_warm_up
 
 logger = logging.getLogger(__name__)
@@ -2059,6 +2064,21 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
         if p not in rag_file_paths and Path(p).suffix.lower() not in not_indexed
     ]
     return list(rag_file_paths) + extra
+
+
+def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """Every upload the chat's messages have linked so far, *attached* included.
+
+    A relayed flagship drops a document a turn leaves out, so a file dropped
+    into an earlier message must keep going with every later turn.
+    """
+    found = set(attached)
+    for message in db.get_messages(session_id, limit=-1):
+        if message["role"] == "user" and message.get("content"):
+            found.update(
+                attached_upload_paths(resolve_upload_links(message["content"]))
+            )
+    return sorted(found)
 
 
 def _extend_cached_scope(agent, allowed: list) -> None:
@@ -4637,7 +4657,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         model_id,
                         agent_type,
                         session_id=session_id,
-                        documents=_relayed_documents(rag_file_paths, attached),
+                        documents=_relayed_documents(
+                            rag_file_paths,
+                            _chat_upload_paths(db, session_id, attached),
+                        ),
                         allowed_paths=allowed,
                         folders=relayed_env["folders"],
                         withheld=relayed_env["withheld"],
