@@ -3006,8 +3006,8 @@ def _declined_call(event: dict) -> bool:
     return status == "denied" and not timed_out
 
 
-def _insert_skill_step(steps: list, step: dict) -> None:
-    """Put a skill step before the running tool call that brought the skill in."""
+def _insert_before_running_call(steps: list, step: dict) -> None:
+    """Put a step before the running tool call it happened inside (a skill it loaded, a download)."""
     for i in range(len(steps) - 1, -1, -1):
         if steps[i].get("type") == "tool":
             if steps[i].get("active"):
@@ -4999,7 +4999,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 elif event_type == "skill_use" and event.get("how") != "model":
                     # A load_skill call is already its own step.
                     step_id += 1
-                    _insert_skill_step(
+                    _insert_before_running_call(
                         captured_steps,
                         {
                             "id": step_id,
@@ -5125,7 +5125,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     and event.get("message")
                 ):
                     step_id += 1
-                    captured_steps.append(
+                    # It finished inside the running call; saved above that call's row.
+                    _insert_before_running_call(
+                        captured_steps,
                         {
                             "id": step_id,
                             "type": "status",
@@ -5134,7 +5136,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                             "success": True,
                             "kept": True,
                             "timestamp": int(asyncio.get_running_loop().time() * 1000),
-                        }
+                        },
                     )
                 elif event_type == "agent_error" and _echoes_failed_tool(
                     event, captured_steps

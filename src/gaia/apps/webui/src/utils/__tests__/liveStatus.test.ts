@@ -64,14 +64,17 @@ describe('localizeLiveStatus', () => {
 
     it('says the NPU part of the speech model in the chosen language', () => {
         const percent = 'Downloading the speech model, one time — 37% of 1.6 GB, then 0.7 GB for the NPU';
-        const npu = "Downloading the speech model's NPU part, one time (0.7 GB)";
-        for (const label of [percent, npu, 'Loading the speech model']) {
+        const npu = "Downloading the speech model's NPU part (0.7 GB), no progress shown";
+        const npuNoSize = "Downloading the speech model's NPU part, no progress shown";
+        for (const label of [percent, npu, npuNoSize, 'Loading the speech model']) {
             expect(localizeLiveStatus(tEn, label)).toBe(label);
             expect(ar(label)).toContain('نموذج الكلام');
         }
         expect(ar(percent)).toContain('37%');
         expect(ar(percent)).toContain('0.7');
         expect(ar(npu)).toContain('0.7');
+        // No percent to show for the NPU part, so it says why instead of a bare timer.
+        expect(ar(npu)).toContain('دون عرض للتقدّم');
     });
 
     it('shows a line it does not know as written', () => {

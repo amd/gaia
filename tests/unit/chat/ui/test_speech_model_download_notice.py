@@ -94,8 +94,17 @@ async def test_the_finished_download_is_saved_with_the_turns_steps(
     sid, _events = await _run(runtime, [tool, running, done, result])
 
     steps = runtime.get_messages(sid)[-1]["agent_steps"]
+    # In time order: the download finished inside the transcription call (#7865).
     assert [(s["type"], s["label"], s.get("success")) for s in steps] == [
-        ("tool", "Using transcribe_media", True),
         ("status", _DONE, True),
+        ("tool", "Using transcribe_media", True),
     ]
     assert not any(s["active"] for s in steps)
+
+
+def test_a_reopened_chat_keeps_the_finished_download():
+    from gaia.ui.models import AgentStepResponse
+
+    step = AgentStepResponse(id=1, type="status", label=_DONE, kept=True)
+    # Without the field the API dropped it, and the line vanished on reload.
+    assert step.model_dump()["kept"] is True

@@ -63,6 +63,7 @@ STAGE_RUNNING, STAGE_DONE, STAGE_SKIPPED = 0, 1, 2
 SPEECH_MODEL_DOWNLOAD_PHASE = "speech_model_download"
 SPEECH_MODEL_DOWNLOADED_PHASE = "speech_model_downloaded"
 SPEECH_MODEL_DOWNLOADING = "Downloading the speech model, one time"
+SPEECH_MODEL_NPU_NO_PROGRESS = ", no progress shown"
 
 # How often a stage that reports nothing itself gets an estimate.
 PROGRESS_TICK_SECONDS = 3.0
@@ -1684,8 +1685,10 @@ class AudioToolsMixin:
                 SPEECH_MODEL_DOWNLOAD_PHASE,
                 (
                     (
-                        "Downloading the speech model's NPU part, one time"
+                        "Downloading the speech model's NPU part"
                         + (f" ({npu_gb:.1f} GB)" if npu_gb else "")
+                        # Lemonade fetches it inside the load and reports nothing.
+                        + SPEECH_MODEL_NPU_NO_PROGRESS
                     )
                     if pulled
                     else "Loading the speech model"

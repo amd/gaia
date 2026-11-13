@@ -3117,6 +3117,42 @@ function streamThenWait(events: unknown[]): void {
     };
 }
 
+const SPEECH_NPU_PART = [
+    { type: 'tool_start', tool: 'transcribe_media', detail: 'standup.wav' },
+    { type: 'status', phase: 'speech_model_download', message: "Downloading the speech model's NPU part (0.7 GB), no progress shown" },
+];
+const SPEECH_DOWNLOADED = [
+    ...SPEECH_NPU_PART,
+    { type: 'status', phase: 'speech_model_downloaded', message: 'Downloaded the speech model (2.4 GB)' },
+    { type: 'status', phase: 'recording', message: 'Transcribing 14s of audio' },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`the speech model's NPU part says why it has no percent (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_NPU_PART);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.streaming-bubble')).toContainText(/no progress shown|دون عرض للتقدّم/);
+        await shot(page, `speech-npu-part-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a finished speech model download sits above the transcription still running (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, SPEECH_DOWNLOADED);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('Transcribe this recording');
+        await page.keyboard.press('Enter');
+        const live = page.locator('.streaming-bubble');
+        await expect(live.locator('.flow-done')).toBeVisible();
+        // In time order (#7865): the download finished first, so it is drawn first.
+        const [done, running] = [await live.locator('.flow-done').boundingBox(), await live.locator('.flow-tool.active').first().boundingBox()];
+        expect(done!.y).toBeLessThan(running!.y);
+        await shot(page, `speech-downloaded-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 const PYTHON_PROMPT = [{
     type: 'permission_request', tool: 'run_python', tool_label: 'running python', confirm_id: 'c-rtl',
     args: { code: 'p = r"C:\\Users\\you\\notes.txt"\nt = open(p, encoding="utf-8").read()\nprint(len(t))' },

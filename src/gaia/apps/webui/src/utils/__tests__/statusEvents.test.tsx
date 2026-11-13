@@ -58,16 +58,23 @@ it('shows the speech model download on the running call, as the sidecar relays i
     expect(screen.queryByText('Audio ready')).toBeNull();
 });
 
-it('keeps the finished download as a step of the turn', () => {
+it('keeps the finished download as a step of the turn, above the call still running', () => {
     const ids = { current: 0 };
     runningTranscription(ids);
     applyStatusEvent({ type: 'status', phase: 'speech_model_download', message: downloading } as StreamEvent, ids);
     applyStatusEvent({ type: 'status', phase: 'speech_model_downloaded', message: 'Downloaded the speech model (1.6 GB)' } as StreamEvent, ids);
 
     const steps = useChatStore.getState().agentSteps;
+    // In time order: the download finished before the transcription it was part of (#7865).
     expect(steps.map((s) => [s.type, s.label, s.active])).toEqual([
-        ['tool', 'Using tool', true],
         ['status', 'Downloaded the speech model (1.6 GB)', false],
+        ['tool', 'Using tool', true],
     ]);
     expect(useChatStore.getState().liveStatus).toBeNull();
+
+    const { container } = render(<AgentActivity steps={steps} isActive toolStatus="Transcribing 14s of audio" />);
+    const rows = [...container.querySelectorAll('.flow-done, .flow-tool')].map((el) => el.className);
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toContain('flow-done');
+    expect(rows[1]).toContain('flow-tool');
 });

@@ -661,6 +661,8 @@ class AgentStepResponse(BaseModel):
     # card from history.
     render: Optional[str] = None
     data: Optional[Any] = None
+    # A finished status the user waited on (a download); a reopened chat still shows it.
+    kept: Optional[bool] = None
 
 
 class InferenceStatsResponse(BaseModel):

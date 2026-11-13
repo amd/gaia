@@ -49,7 +49,8 @@ export function applyStatusEvent(event: StreamEvent, stepIdRef: { current: numbe
         const done = { label: localizeLiveStatus(getT(), msg), active: false, success: true, kept: true };
         const last = store.agentSteps[store.agentSteps.length - 1];
         if (last && last.type === 'status' && last.active) store.updateLastAgentStep({ ...done, detail: undefined });
-        else store.addAgentStep({ id: ++stepIdRef.current, type: 'status', timestamp: Date.now(), ...done });
+        // It finished inside the running call, so it goes above that call's row, not under it.
+        else store.addStepBeforeRunningCall({ id: ++stepIdRef.current, type: 'status', timestamp: Date.now(), ...done });
         store.setLiveStatus(null);
         return;
     }

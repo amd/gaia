@@ -37,8 +37,9 @@ export function localizeLiveStatus(t: Translate, label: string): string {
     if (m) return t('live.speechModelPercent', { percent: m[1], size: m[2] });
     m = /^Downloading the speech model, one time — (\d+)% of ([\d.]+) GB, then ([\d.]+) GB for the NPU$/.exec(label);
     if (m) return t('live.speechModelPercentNpu', { percent: m[1], size: m[2], npu: m[3] });
-    m = /^Downloading the speech model's NPU part, one time \(([\d.]+) GB\)$/.exec(label);
+    m = /^Downloading the speech model's NPU part \(([\d.]+) GB\), no progress shown$/.exec(label);
     if (m) return t('live.speechModelNpu', { size: m[1] });
+    if (label === "Downloading the speech model's NPU part, no progress shown") return t('live.speechModelNpuNoSize');
     if (label === 'Loading the speech model') return t('live.speechModelLoading');
     m = /^Downloaded the speech model \(([\d.]+) GB\)$/.exec(label);
     if (m) return t('live.speechModelDone', { size: m[1] });

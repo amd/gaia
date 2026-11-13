@@ -300,7 +300,8 @@ class TestTranscribeMedia:
             ),
             (
                 "speech_model_download",
-                "Downloading the speech model's NPU part, one time (0.7 GB)",
+                # No percent to give: the line says so rather than leave a bare timer.
+                "Downloading the speech model's NPU part (0.7 GB), no progress shown",
             ),
             ("load", ""),
             ("speech_model_downloaded", "Downloaded the speech model (2.4 GB)"),
@@ -345,7 +346,7 @@ class TestTranscribeMedia:
             "Downloading the speech model, one time (2.4 GB)",
             "Downloading the speech model, one time — 40% of 1.6 GB, "
             "then 0.7 GB for the NPU",
-            "Downloading the speech model's NPU part, one time (0.7 GB)",
+            "Downloading the speech model's NPU part (0.7 GB), no progress shown",
             "Downloaded the speech model (2.4 GB)",
         ]
 
