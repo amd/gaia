@@ -223,6 +223,15 @@ def ensure_daemon_owns_lemonade(kind: str = "cli", name: str = "") -> None:
     except DaemonError as e:
         log.warning("Could not start the GAIA background service: %s", e)
         started = False
+    if started and kind == "app":
+        # An app's chats run through the daemon: it must use the app's server.
+        try:
+            restarted = daemon_client.match_launch_lemonade()
+        except DaemonError as e:
+            log.warning("The GAIA background service was kept as it is: %s", e)
+        else:
+            if restarted:
+                log.info("Restarted the GAIA background service: %s", restarted)
     try:
         # Even without our own daemon: another home's may own the server.
         hold_lemonade_open(kind, name)
