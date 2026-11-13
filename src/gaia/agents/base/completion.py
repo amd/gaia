@@ -247,7 +247,7 @@ def _inside(path: str, folder: str) -> bool:
 
 
 def _changed_at(stamp: tuple) -> int:
-    # A copy keeps its source's mtime; its ctime is when the copy was made.
+    # A copy keeps its source's mtime; ctime is its creation (Windows) or\n    # metadata change (POSIX), which a copy made in the run also sets.
     return max(stamp[3], stamp[4])
 
 
@@ -640,10 +640,14 @@ class CompletionEvidence:
         return self.key(self._request_path(path))
 
     def _relative_parts(self, path: str) -> list[str]:
-        """The parts of a relative path the request left unanchored, else []."""
-        if ntpath.basename(path) == path or _absolute(self._request_path(path)):
+        """The parts of a relative path, credited wherever a write ends in them."""
+        if ntpath.basename(path) == path or _absolute(path):
             return []
         return _parts(path)
+
+    def _typed_only(self, path: str) -> bool:
+        """A relative path no named folder ties down: shown as the user typed it."""
+        return bool(self._relative_parts(path)) and self._request_path(path) == path
 
     def _stamp(self, path: str) -> tuple | None | object:
         try:
@@ -1122,7 +1126,7 @@ class CompletionEvidence:
         shown = {
             self.request_key(path): path
             for path in self.requested
-            if path and (ntpath.basename(path) == path or self._relative_parts(path))
+            if path and (ntpath.basename(path) == path or self._typed_only(path))
         }
         claimed: set[str] = set()
         claim_without_path = False
@@ -1163,7 +1167,7 @@ class CompletionEvidence:
             shown.update(
                 (self.request_key(p), p)
                 for p in paths
-                if ntpath.basename(p) == p or self._relative_parts(p)
+                if ntpath.basename(p) == p or self._typed_only(p)
             )
             claim_without_path |= not paths
         gaps = self.cleanup_gaps(answer)

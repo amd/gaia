@@ -1172,9 +1172,10 @@ are found only within the read boundary. A bare folder name in the answer
 name. Cached transcripts are not new writes.
 A relative output is resolved against the folder the request names, not the
 agent's working directory: "set it up in `C:\work\project\` ... write
-`project\data\stats.csv`" means `C:\work\project\data\stats.csv`. A relative
-output no named folder ties down is fulfilled by a write to any path ending in
-it, and a gap names it as the user typed it.
+`project\data\stats.csv`" means `C:\work\project\data\stats.csv`. A write to any
+path ending in a relative output also fulfils it, so a working folder that
+resolves it differently still counts; one no named folder ties down is named
+in a gap as the user typed it.
 Cleanup claims likewise need concrete paths observed disappearing during the
 turn; a general statement that everything was cleaned up is not proof. A claimed
 path that is absent and untouched already agrees with the claim, and removal from

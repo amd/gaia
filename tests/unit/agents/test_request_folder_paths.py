@@ -147,6 +147,26 @@ def test_a_relative_output_written_elsewhere_under_the_same_name_is_credited(tmp
     assert _no_write_gaps(ledger.gaps("Saved.", _claims_file_write)) == []
 
 
+def test_a_write_in_the_working_folder_still_counts_when_an_input_shares_the_name(
+    tmp_path,
+):
+    """``docs/report.md`` beside an input under ``upstream/docs``: either place counts."""
+    repo = tmp_path / "repo"
+    (repo / "docs").mkdir(parents=True)
+    upstream = tmp_path / "upstream" / "docs" / "y.md"
+    request = (
+        f"Compare docs{_SEP}x.md with {upstream} and save the comparison to "
+        f"docs{_SEP}report.md"
+    )
+    ledger = CompletionEvidence(request, str(repo))
+    report = repo / "docs" / "report.md"
+    report.write_text("same\n")
+    ledger.record(
+        "write_file", {"file_path": str(report)}, {"file_path": str(report)}, True
+    )
+    assert _no_write_gaps(ledger.gaps("Saved.", _claims_file_write)) == []
+
+
 def test_a_relative_output_nobody_wrote_is_flagged_as_the_user_typed_it(tmp_path):
     """GAIA's own folder is not somewhere the user or the model can act on."""
     host = tmp_path / ".gaia" / "host"
