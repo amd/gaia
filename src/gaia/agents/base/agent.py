@@ -1374,10 +1374,12 @@ _CUT_OFF_CONTINUE_PROMPT = (
     "answer if the task is complete."
 )
 _CUT_OFF_FAILURE_ANSWER = (
-    "I could not finish this task: my replies kept getting cut off at the "
-    "model's output-token limit, so the work they described was never carried "
-    "out. Retry with a higher output-token limit (max_tokens) or a model that "
-    "reasons more briefly."
+    "I couldn't finish this: my reply kept growing longer than the model can "
+    "send at once, so it was cut off before I could carry out the next step."
+)
+_CUT_OFF_NEXT_STEP = (
+    "To get the rest done, ask for it in smaller parts, for example half of the "
+    "items at a time, so each reply stays short."
 )
 
 # Unfinished-answer guard: a "final answer" that is really a plan,
@@ -8688,6 +8690,20 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Informative message about what was accomplished
         """
+        message = (
+            f"I ran out of steps before I could finish — I used {steps_taken} "
+            f"of the {steps_limit} I get per request.\n\n"
+        )
+        message += self._work_done_so_far(conversation, findings=findings)
+        message += (
+            "Ask me to continue and I'll pick up from here. From the command "
+            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
+        )
+
+        return message
+
+    def _work_done_so_far(self, conversation: List[Dict], findings: bool) -> str:
+        """The tools this turn ran and, with *findings*, the model's latest write-up."""
         # Every executed call leaves one ``role: tool`` entry, whatever loop
         # path ran it; assistant entries also hold calls that never ran.
         tools_used = [
@@ -8695,29 +8711,26 @@ Do NOT wrap conversational replies in JSON.
             for msg in conversation
             if msg.get("role") == "tool" and msg.get("name")
         ]
-
-        message = (
-            f"I ran out of steps before I could finish — I used {steps_taken} "
-            f"of the {steps_limit} I get per request.\n\n"
-        )
+        text = ""
         if tools_used:
             from collections import Counter
 
-            message += "Here's what I ran:\n"
+            text += "Here's what I ran:\n"
             for tool, count in Counter(tools_used).most_common(10):
-                message += f"  - {tool}: {count}x\n"
-            message += "\n"
-
+                text += f"  - {tool}: {count}x\n"
+            text += "\n"
         latest = self._latest_findings(conversation) if findings else ""
         if latest:
-            message += f"Where I'd got to:\n\n{latest}\n\n"
+            text += f"Where I'd got to:\n\n{latest}\n\n"
+        return text
 
-        message += (
-            "Ask me to continue and I'll pick up from here. From the command "
-            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
+    def _cut_off_failure_answer(self, conversation: List[Dict]) -> str:
+        """What a turn the output-token limit kept cutting off tells the user."""
+        return (
+            f"{_CUT_OFF_FAILURE_ANSWER}\n\n"
+            f"{self._work_done_so_far(conversation, findings=True)}"
+            f"{_CUT_OFF_NEXT_STEP}"
         )
-
-        return message
 
     _LATEST_FINDINGS_CHARS = 4000
 
@@ -12744,7 +12757,10 @@ Do NOT wrap conversational replies in JSON.
                         steps_limit,
                     )
                     self._turn_model_retries["failed"] = True
-                    final_answer = _CUT_OFF_FAILURE_ANSWER
+                    final_answer = self._cut_off_failure_answer(conversation)
+                    # Printed like the other give-ups, so it carries the turn's
+                    # token counts and the UI can price it.
+                    loop_break_answer_unprinted = True
                     break
                 cut_off_continuations += 1
                 logger.info(

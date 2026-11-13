@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A turn the output limit keeps cutting off says what to do next.** It told
+  the user to "retry with a higher output-token limit (max_tokens)", a setting
+  the apps don't have, dropped what the turn had done, and sent no token counts,
+  so its cost read "Not reported". It now names the tools it ran and its last
+  findings, suggests asking for the work in smaller parts, and carries the
+  turn's token counts.
 - **A run stopped for an approval nobody can give reads as not done.** Its
   `final` now carries `failed: true` and the `usage` spent before the stop, so
   `gaia -p` reports `is_error: true` with real step and token counts instead of
