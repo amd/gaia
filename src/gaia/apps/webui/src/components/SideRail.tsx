@@ -62,7 +62,8 @@ function costText(summary: TurnSummary, t: Translate = tEn, stopped = false): st
     if (cost.kind === 'unreported') return t(stopped ? 'rail.costUnreportedStopped' : 'rail.costUnreported');
     if (cost.kind === 'estimate' && typeof cost.usd === 'number') {
         const usd = cost.usd < 0.01 ? cost.usd.toFixed(4) : cost.usd.toFixed(2);
-        return t('rail.costAbout', { usd });
+        // The "$" rides inside the value so the bidi isolate keeps it left of the digits in Arabic.
+        return t('rail.costAbout', { usd: `$${usd}` });
     }
     return t(summary.model ? 'rail.costUnknownModel' : 'rail.costUnknown');
 }
