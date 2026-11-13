@@ -26,6 +26,7 @@ from gaia.agents.base.claims import (
     admits_unverified,
     claims_success,
     passing_test_claim,
+    read_claims,
 )
 from gaia.agents.base.completion import mentioned_paths
 from gaia.agents.base.grounding import (
@@ -480,6 +481,43 @@ def test_versions_code_and_ordinals_are_not_data(answer):
 )
 def test_action_claim_vocabulary(answer, kinds):
     assert [kind for kind, _ in action_claims(answer)] == kinds
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        # rc18 round 3: the drive colon ended the clause at "I read C".
+        "C:/gtest/h18-m1/Documents/t/orders.csv",
+        "C:\\gtest\\h18-m1\\Documents\\t\\orders.csv",
+        "`C:\\gtest\\h18-m1\\Documents\\t\\orders.csv`",
+        "docs\\orders.csv",
+        "~/Documents/orders.csv",
+        "data/orders.csv",
+    ],
+)
+def test_a_read_claim_names_its_file_however_the_path_is_written(path):
+    answer = f"I read {path} and it has 4 data rows."
+    assert [kind for kind, _ in action_claims(answer)] == ["read"]
+    assert any("orders.csv" in clause for clause in read_claims(answer))
+    query = f"Use no tools. How many data rows does {path.strip('`')} have?"
+    findings = look_findings(answer, query, [], lambda p: None)
+    assert [f.note for f in findings] == [
+        f"I didn't read `{path.strip('`')}` this turn"
+    ]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # A colon that opens a list or a clause still ends the claim.
+        "I checked one thing: C is not installed, so orders.csv was never built.",
+        "I didn't read C:/data/orders.csv, so I can't say how many rows it has.",
+        "Note: read C:/data/orders.csv before you trust this.",
+        "C:/data/orders.csv probably has a header row and four data rows.",
+    ],
+)
+def test_a_windows_path_alone_is_not_a_read_claim(answer):
+    assert not any("orders.csv" in clause for clause in read_claims(answer))
 
 
 def test_tested_without_a_test_run_is_caught():
@@ -1114,3 +1152,57 @@ def test_the_ask_leaves_room_to_admit_what_was_not_done():
 
     assert "what changed" not in ask
     assert "didn't" in correction[: correction.index(ask)]
+
+
+# ---------------------------------------------------------------------------
+# A turn the user barred tools on: the correction never asks for one
+# ---------------------------------------------------------------------------
+
+NO_TOOLS_QUERY = (
+    "Do NOT run anything in this turn and use no tools. I am testing a display: "
+    "answer with exactly this one sentence: I read toybox/dates.py and it has "
+    "4 data rows."
+)
+READ_CLAIM = "I read toybox/dates.py and it has 4 data rows."
+
+
+def test_a_read_claim_correction_asks_for_the_read_by_default():
+    (finding,) = ungrounded(READ_CLAIM, "Say it.", [], locate=lambda p: None)
+
+    assert finding.gate == ACTION
+    assert finding.correction.endswith("Do it now, or drop the claim.")
+
+
+def test_a_read_claim_correction_asks_for_no_tool_when_the_user_barred_them():
+    findings = ungrounded(
+        READ_CLAIM, NO_TOOLS_QUERY, [], locate=lambda p: None, may_act=False
+    )
+    (finding,) = [f for f in findings if f.gate == ACTION]
+
+    assert "Do it now" not in finding.correction
+    assert "don't call one" in finding.correction
+    assert "drop the claim or reword it" in finding.correction
+    assert finding.note.endswith("no file was read this turn")
+
+
+def test_a_no_tools_turn_is_only_asked_to_drop_the_read_claim(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _answer(READ_CLAIM))
+
+    result = agent.process_query(NO_TOOLS_QUERY, max_steps=10)
+
+    assert len(sent) == 2
+    correction = sent[1][-1]["content"]
+    assert correction.startswith("[check:grounding] ")
+    assert "Do it now" not in correction
+    assert "don't call one" in correction
+    assert "no file was read this turn" in result["result"]
+
+
+def test_an_edit_ban_on_an_investigation_still_asks_for_the_read(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _read_call(), _answer(GROUNDED))
+
+    agent.process_query(
+        "Why does toybox/dates.py fail? Don't touch anything.", max_steps=10
+    )
+
+    assert "Do it now, or drop the claim." in sent[1][-1]["content"]

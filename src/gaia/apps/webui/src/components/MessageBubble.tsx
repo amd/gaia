@@ -5,7 +5,7 @@ import React, { createContext, useCallback, useContext, useId, useLayoutEffect, 
 import type { Components } from 'react-markdown';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
+import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
@@ -22,7 +22,7 @@ import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
-import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, sizeLabel } from './LongContent';
+import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
@@ -66,6 +66,8 @@ interface MessageBubbleProps {
     /** Sends the edited text in place of this message and everything after it. */
     onEdit?: (message: Message, text: string) => void;
     onEditCancel?: () => void;
+    /** Later messages that Resend or Edit on this message delete for good; above zero, they ask first. */
+    laterCount?: number;
     /** Shows Continue under a stopped reply that wrote something. */
     onContinue?: () => void;
     /** The chat's latest answer, whose actions stay in view. */
@@ -494,9 +496,12 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
     onCancel: () => void;
 }) {
     const t = useT();
-    const [text, setText] = useState(draft ?? original);
+    // Attachments stay out of the text box and go back on when the edit is sent.
+    const { text: originalText, links } = useMemo(() => splitAttachmentLinks(original), [original]);
+    const [text, setText] = useState(() => (draft != null ? splitAttachmentLinks(draft).text : originalText));
     const ref = useRef<HTMLTextAreaElement>(null);
-    const changed = text.trim() !== '' && text !== original;
+    const changed = text.trim() !== '' && text !== originalText;
+    const send = () => onSend(joinAttachmentLinks(text, links));
 
     useLayoutEffect(() => {
         const el = ref.current;
@@ -518,7 +523,7 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
             onCancel();
         } else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            if (changed) onSend(text);
+            if (changed) send();
         }
     };
 
@@ -535,9 +540,19 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
                 dir="auto"
                 {...CLAIMS_ESCAPE}
             />
+            {links.length > 0 && (
+                <ul className="msg-edit-attachments" aria-label={t('composer.attached')}>
+                    {links.map((l, i) => (
+                        <li key={i} className="msg-edit-attachment">
+                            <FileText size={14} aria-hidden="true" />
+                            <span className="msg-edit-attachment-name" title={l.name} dir="auto">{l.name}</span>
+                        </li>
+                    ))}
+                </ul>
+            )}
             <div className="msg-edit-actions">
                 <button type="button" className="btn-secondary msg-edit-btn" onClick={onCancel}>{t('msg.editCancel')}</button>
-                <button type="button" className="btn-primary msg-edit-btn" onClick={() => onSend(text)} disabled={!changed}>
+                <button type="button" className="btn-primary msg-edit-btn" onClick={send} disabled={!changed}>
                     {t('msg.editSend')}
                 </button>
             </div>
@@ -545,7 +560,7 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
     );
 }
 
-export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
+export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActive, cards, onDelete, onResend, extraActions, onTryAgain, onContinue, onRegenerate, onEditStart, editing = false, editDraft = null, onEditDraft, onEdit, onEditCancel, laterCount = 0, latest = false, latencyMs, liveStatus, toolStatus, awaitingUser }: MessageBubbleProps) {
     const t = useT();
     useModelNames();
     const echo = useMemo(() => {
@@ -571,6 +586,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
         [message.content, message.role, isStreaming, cutOff],
     );
+    const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
     const readAloudId = `${message.session_id}:${message.id}`;
@@ -634,9 +650,15 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         onDelete?.(message.id);
     }, [confirmDelete, message.id, onDelete]);
 
+    const [pendingDrop, setPendingDrop] = useState<(() => void) | null>(null);
+    const askBeforeDropping = useCallback((go: () => void) => {
+        if (laterCount > 0) setPendingDrop(() => go);
+        else go();
+    }, [laterCount]);
+
     const handleResend = useCallback(() => {
-        onResend?.(message);
-    }, [message, onResend]);
+        askBeforeDropping(() => onResend?.(message));
+    }, [message, onResend, askBeforeDropping]);
 
     // Tooltip shown on hover anywhere over the bubble — full absolute
     // timestamp (e.g. "Apr 25, 2026, 11:02:04 PM"). Both user and assistant
@@ -690,17 +712,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
-                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                            {message.role === 'assistant' && !isError && hasAnswerText && (
                                 <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
                             )}
-                            <button
-                                className={`msg-copy ${copied ? 'copied' : ''}`}
-                                onClick={handleCopy}
-                                title={copied ? t('msg.copied') : t('msg.copy')}
-                                aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
-                            >
-                                {copied ? <Check size={12} /> : <Copy size={12} />}
-                            </button>
+                            {hasAnswerText && (
+                                <button
+                                    className={`msg-copy ${copied ? 'copied' : ''}`}
+                                    onClick={handleCopy}
+                                    title={copied ? t('msg.copied') : t('msg.copy')}
+                                    aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
+                                >
+                                    {copied ? <Check size={12} /> : <Copy size={12} />}
+                                </button>
+                            )}
                             {/* Delete button */}
                             {onDelete && (
                                 <button
@@ -749,8 +773,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             original={message.content}
                             draft={editDraft}
                             onDraft={onEditDraft}
-                            onSend={(text) => onEdit(message, text)}
-                            onCancel={() => onEditCancel?.()}
+                            onSend={(text) => askBeforeDropping(() => onEdit(message, text))}
+                            onCancel={() => { setPendingDrop(null); onEditCancel?.(); }}
                         />
                     ) : collapsibleUser ? (
                         <>
@@ -765,13 +789,26 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 expanded={userExpanded}
                                 onToggle={toggleUserExpanded}
                                 controls={userBodyId}
-                                collapsedLabel={t.hint(t('msg.showAll'), sizeLabel(message.content))}
+                                collapsedLabel={t.hint(t('msg.showAll'), sizeLabel(t, message.content))}
                                 expandedLabel={t('msg.showLess')}
                                 className="msg-expand-toggle"
                             />
                         </>
                     ) : !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT) && (
                         <RenderedContent content={cleanedContent} showCursor={isStreaming && !!cleanedContent && !agentStepsActive} isStreaming={isStreaming} writtenFiles={writtenFiles} />
+                    )}
+                    {pendingDrop && !isStreaming && (
+                        <div className="msg-drop-confirm" role="alertdialog" aria-labelledby={`${userBodyId}-drop`}>
+                            <span id={`${userBodyId}-drop`}>{t.plural('msg.dropLater', laterCount)}</span>
+                            <div className="msg-edit-actions">
+                                <button type="button" className="btn-secondary msg-edit-btn" onClick={() => setPendingDrop(null)} autoFocus>
+                                    {t('msg.editCancel')}
+                                </button>
+                                <button type="button" className="btn-primary msg-edit-btn" onClick={() => { setPendingDrop(null); pendingDrop(); }}>
+                                    {t('msg.dropLaterGo')}
+                                </button>
+                            </div>
+                        </div>
                     )}
                     {stopState && (
                         <div className={`msg-stopped${stopState === 'unconfirmed' || message.stopError ? ' is-unconfirmed' : ''}`} role="note">
@@ -905,8 +942,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
                     expanded={expanded}
                     onToggle={() => setExpanded((v) => !v)}
                     controls={bodyId}
-                    collapsedLabel={`Expand (${lines.toLocaleString('en-US')} lines)`}
-                    expandedLabel="Collapse"
+                    collapsedLabel={t('code.expand', { size: lineCount(t, lines) })}
+                    expandedLabel={t('code.collapse')}
                     className="code-expand-toggle"
                 />
             )}
@@ -1231,8 +1268,8 @@ const MARKDOWN_COMPONENTS: Components = {
     ol({ children, start }) {
         return <ol className="md-ol" start={start} dir="auto">{children}</ol>;
     },
-    li({ children }) {
-        return <li className="md-li" dir="auto"><Linkified>{children}</Linkified></li>;
+    li({ children, className }) {
+        return <li className={className ? `md-li ${className}` : 'md-li'} dir="auto"><Linkified>{children}</Linkified></li>;
     },
     // Blockquote
     blockquote({ children }) {

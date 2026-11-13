@@ -7,6 +7,7 @@ import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
+import newChatCss from '../NewChat.css?raw';
 import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
 
 vi.mock('../../services/api');
@@ -496,5 +497,13 @@ describe('NewChat after first-run setup failed', () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready', setup_error: null } as SystemStatus });
         render(<NewChat onSend={vi.fn()} />);
         expect(screen.queryByRole('alert')).toBeNull();
+    });
+});
+
+describe('the greeting gloss', () => {
+    it('is set smaller than the greeting, so the English never out-sizes the Arabic', () => {
+        const rule = newChatCss.match(/\.new-chat-greeting \.i18n-gloss\.i18n-gloss \{([^}]*)\}/);
+        expect(rule?.[1]).toMatch(/font-size:\s*0\.55em/);
+        expect(rule?.[1]).toMatch(/display:\s*block/);
     });
 });

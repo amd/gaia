@@ -61,7 +61,7 @@ import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
-import { lastSentMessage } from '../utils/editLast';
+import { laterTurns, lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
@@ -69,6 +69,7 @@ import { scrollBehavior } from '../utils/motion';
 import { setVisibleInterval } from '../utils/visibleInterval';
 import { ModelServerDownNotice } from './ModelServerDownNotice';
 import { useChatDraft } from '../hooks/useSavedDraft';
+import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
 import { useOpeningMessage } from '../hooks/useOpeningMessage';
 import { getT, useT } from '../i18n/useT';
 
@@ -186,6 +187,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [cards]);
     // Auto-read needs the saved choice before the first reply finishes.
     useReadAloudSettings();
+    // Leaving the chat ends its reading; the stop button lives only in this view.
+    useEffect(() => () => useReadAloudStore.getState().stop(), []);
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
@@ -549,6 +552,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
             // Don't double-attach if a stream is already live in this view.
             if (isStreaming && !reconnect) return false;
         } else if (!fromQueue && (text || hasAttachments) && !isInitializing && (isStreaming || comparingRef.current || waiting)) {
+            // Asked now: a queued send skips the check below, and the image would reach a turn that can't see it.
+            if (hasImage && !modelKnownReady('vision') && !(await ensureModel('vision'))) return false;
             // Its own turn by default: a model handed a message mid-turn may finish without answering it.
             const queued = takeDraft();
             setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
@@ -569,6 +574,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 if (!(await ensureModel('chat')) || (hasImage && !(await ensureModel('vision')))) return false;
             } finally {
                 checkingModelRef.current = false;
+            }
+            // The user opened another chat during the check: this chat's queue sends it, out of that chat's view.
+            if (isStale()) {
+                const queued = takeDraft();
+                if (fromComposer && !session?.private) clearSavedDraft(chatDraftKey(sessionId));
+                setQueue((q) => messageQueue.enqueue(q, queued, 'queued'));
+                return true;
             }
         }
 
@@ -1569,14 +1581,22 @@ export function ChatView({ sessionId }: ChatViewProps) {
         setActionError(null);
         const failures = await addDroppedFiles(sessionId, documents);
         if (failures.length > 0) {
-            setActionError(failures.map(({ name, stage, error }) => t(
-                stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
-                { name, error: requestErrorParam(error) },
-            )).join(' '));
+            setActionError(failures.map(({ name, stage, error }) => (stage === 'unreadable'
+                ? t('docsBar.failedTitle', { name })
+                : t(
+                    stage === 'attach' ? 'chat.dropAttachFailed' : 'chat.dropUploadFailed',
+                    { name, error: requestErrorParam(error) },
+                ))).join(' '));
         }
     }, [sessionId, attach, t]);
 
-    const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
+    const handleDragOver = (e: React.DragEvent) => {
+        // Dragged text is not a drop target for files.
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(true);
+    };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
 
     // Stale connector-reply cue (#2119): when the newest reply was a connector
@@ -1631,7 +1651,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onChange={(e) => setTitleDraft(e.target.value)}
                             onBlur={saveTitle}
                             onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveTitle();
+                                if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveTitle();
                                 if (e.key === 'Escape') { e.preventDefault(); setEditingTitle(false); }
                             }}
                             {...CLAIMS_ESCAPE}
@@ -1728,6 +1748,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onEditDraft={(text: string) => { editDraftRef.current = text; }}
                                     onEdit={handleEdit}
                                     onEditCancel={handleEditCancel}
+                                    laterCount={msg.role === 'user' ? laterTurns(messages, idx) : 0}
                                     onRegenerate={canRetry && !unsent ? () => handleRegenerate(msg) : undefined}
                                     extraActions={canRetry ? (
                                         <RetryWithMenu

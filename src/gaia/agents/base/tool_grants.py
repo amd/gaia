@@ -260,7 +260,7 @@ RESOLVED_PATH_ARG = "_resolved_file_path"
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
 _FAMILY_TOOLS = {
-    "run_python": "Python snippets (run_python)",
+    "run_python": "Python snippets",
     "execute_python_file": "running Python files",
     "notify_desktop": "desktop notifications",
 }
@@ -530,6 +530,27 @@ def _first_str(args: Dict[str, Any], names: Sequence[str]) -> str:
     return ""
 
 
+#: GAIA's CLI under each name it answers to: the entry points and ``-m``.
+_GAIA_CLI_NAMES = frozenset({"gaia", "gaia-cli", "gaia.cli"})
+
+
+def _runs_gaia_unattended_family(segment: Sequence[str]) -> bool:
+    """True when *segment* reaches ``gaia automation`` or ``gaia discord``,
+    however GAIA's CLI is spelled (``gaia-cli``, ``python -m gaia.cli``)."""
+    words = list(segment)
+    return any(
+        _names_gaia_cli(word) and words[i + 1].lower() in ("automation", "discord")
+        for i, word in enumerate(words[:-1])
+    )
+
+
+def _names_gaia_cli(word: str) -> bool:
+    if word.startswith("-m") and len(word) > 2:  # python -mgaia.cli
+        word = word[2:]
+    path = word.replace("\\", "/").lower()
+    return binary_name(word) in _GAIA_CLI_NAMES or path.endswith("gaia/cli.py")
+
+
 def _shell_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
     command = _first_str(args, _COMMAND_ARG_NAMES)
     if not command:
@@ -540,6 +561,11 @@ def _shell_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
         return None
     # A delete is never a standing grant: each one is answered on its own.
     if shell_command_risk(command) == DESTRUCTIVE:
+        return None
+
+    # Each automation or watch runs unattended from then on; "always" for the
+    # family would approve every later one, whatever it checks or says.
+    if any(_runs_gaia_unattended_family(s) for s in facts.segments):
         return None
 
     segments = [s for s in facts.segments if binary_name(s[0]) not in _TRANSPARENT]
