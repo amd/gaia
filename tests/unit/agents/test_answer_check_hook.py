@@ -207,3 +207,32 @@ def test_a_repair_near_the_step_limit_still_gets_room(monkeypatch, tmp_path):
     result = agent.process_query("research the finding")
     assert agent.fetched == [_PAGE]
     assert result["result"] == report
+
+
+class _FailingFetchAgent(_CitingAgent):
+    def _register_tools(self):
+        from gaia.agents.base.tools import tool
+
+        @tool
+        def fetch_page(url: str) -> dict:
+            """Read a web page."""
+            return {"status": "error", "error": f"404 Not Found for url: {url}"}
+
+
+def test_a_turn_the_failure_breaker_ends_still_names_its_unread_citations(
+    monkeypatch, tmp_path
+):
+    """A model whose every fetch 404s answered from memory, citing a dead page."""
+    agent = _make(_FailingFetchAgent, monkeypatch, tmp_path)
+    agent.fetched = []
+    agent._tool_requires_confirmation = lambda *a, **kw: False
+    fetches = [
+        {"tool": "fetch_page", "tool_args": {"url": f"https://example.org/p{i}"}}
+        for i in range(6)
+    ]
+    report = f"From what I know, the finding holds [source]({_PAGE})."
+    # Four failures, a refused fetch, then one more ends the turn: a closing answer.
+    _script_steps(agent, *fetches, {"answer": report})
+    result = agent.process_query("research the finding")
+    assert result["result"].startswith("From what I know")
+    assert f"This cited page was never opened: {_PAGE}." in result["result"]

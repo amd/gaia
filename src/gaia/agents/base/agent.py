@@ -14484,6 +14484,14 @@ Do NOT wrap conversational replies in JSON.
                     final_answer, model_failed=True
                 )
                 self._announce_turn_failed()
+            else:
+                # A turn the failure breaker ended still names what it cannot back.
+                break_issues = self.answer_problems(final_answer)
+                if break_issues:
+                    final_answer = caveated_answer(final_answer, break_issues)
+                    completion_gaps.extend(
+                        p for p in break_issues if p not in completion_gaps
+                    )
             final_answer = self._with_verification_scope(final_answer)
             verification_scope_applied = True
             _break_input_tokens, break_output_tokens = _sum_conversation_tokens(
