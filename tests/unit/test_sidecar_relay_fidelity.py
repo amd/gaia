@@ -983,7 +983,7 @@ def test_a_script_gaia_read_is_context_and_reaches_the_ui_prompt():
     assert "os.remove('a')" in event["summary"]
 
     handler = SSEOutputHandler()
-    handler.set_relay_confirmation = lambda _cid, _scope=None: None
+    handler.set_relay_confirmation = lambda _cid, _scope=None, _path=None: None
     relay._dispatch_one(handler, event, GAIA_PROFILE, answers_confirmations=True)
     (prompt,) = _drain(handler)
     assert prompt["args"] == {"file_path": "C:\\w\\job.py", SCRIPT_ARG: script}
