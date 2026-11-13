@@ -36,7 +36,11 @@ from gaia.agents.tools.file_edit import (
     stamp_of,
     turn_of,
 )
-from gaia.agents.tools.path_access import missing_file_error, readable_entry
+from gaia.agents.tools.path_access import (
+    missing_file_error,
+    read_refusal,
+    readable_entry,
+)
 from gaia.agents.tools.text_files import match_excerpt, read_text, text_encoding
 from gaia.agents.tools.workspace_paths import (
     _project_target_for,
@@ -464,7 +468,7 @@ class FileIOToolsMixin:
                 # a private key safe to read into the conversation.
                 is_allowed, reason = path_validator.validate_read(file_path)
                 if not is_allowed:
-                    return {**NOT_EXECUTED, "status": "error", "error": reason}
+                    return read_refusal(reason)
 
                 if not os.path.exists(file_path):
                     return missing_file_error(file_path)

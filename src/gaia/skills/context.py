@@ -684,15 +684,15 @@ class SkillPreferences:
         return self._store.get(self._call.skill_name)
 
     def _skipped(self) -> Optional[PreferenceWrite]:
-        agent = self._call.agent
-        if not getattr(agent, "_incognito", False):
-            return None
-        from gaia.agents.base.memory import memory_off_reason
+        from gaia.agents.base.memory_privacy import memory_writes_refused
 
+        reason = memory_writes_refused(self._call.agent)
+        if reason is None:
+            return None
         return PreferenceWrite(
             saved=False,
             preferences=self.get(),
-            note=f"{memory_off_reason(agent)} The preference was not saved.",
+            note=f"{reason} The preference was not saved.",
         )
 
     def update(self, changes: Dict[str, Any]) -> PreferenceWrite:
