@@ -565,8 +565,17 @@ def handle(args: argparse.Namespace) -> int:
         sys.stderr.write(f"❌ {exc}\n")
         return EXIT_INVALID
     except SkillError as exc:
-        sys.stderr.write(f"❌ {exc}\n")
+        sys.stderr.write(f"❌ {exc}{_local_copy_remedy(exc)}\n")
         return EXIT_INVALID
+
+
+def _local_copy_remedy(exc: SkillError) -> str:
+    """For a link with nothing behind it: how to add a copy from this command line."""
+    from gaia.skills.link import CLI_LOCAL_COPY_REMEDY, SkillLinkNotFoundError
+
+    return (
+        f" {CLI_LOCAL_COPY_REMEDY}" if isinstance(exc, SkillLinkNotFoundError) else ""
+    )
 
 
 def _manager() -> SkillManager:

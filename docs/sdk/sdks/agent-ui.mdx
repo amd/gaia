@@ -1595,6 +1595,15 @@ agent at once, so they take effect on its next step.
     the user removed.
   </Accordion>
 
+  <Accordion title="POST /api/environment/folders/check">
+    **Request:** `{"path": "C:\\work\\project"}`. **Response:**
+    `{"refusal": null}`, or why the folder itself can't be given to any chat
+    (not a folder, a filesystem root, the home folder or a protected folder).
+    It knows no chat, so a folder inside one removed from a chat passes here
+    and is refused when added. The desktop app asks this as soon as a folder is
+    picked in the system dialog.
+  </Accordion>
+
   <Accordion title="POST /api/sessions/{session_id}/environment/folders/remove">
     **Request:** `{"path": "..."}`. Take a folder or file away from the chat.
     The agent's path validator then refuses everything under it, even inside a
@@ -1851,7 +1860,11 @@ Used to reach the UI from a phone.
   <Accordion title="POST /api/documents/index-folder">
     Index the supported files in a folder (`recursive`, default `true`, also
     takes subfolders). Returns `indexed`, `failed` with one line per file in
-    `errors`, and `skipped`: files of a type GAIA doesn't index.
+    `errors`, `skipped`: files of a type GAIA doesn't index, and
+    `skipped_images`: images, which GAIA reads only when each is added on its
+    own. A file that fails, or yields no text, gets a `failed` library row with
+    its `last_error`, so it can be retried with `reindex`; it is not in
+    `documents`.
   </Accordion>
 
   <Accordion title="POST /api/documents/{doc_id}/reindex">
@@ -3152,14 +3165,16 @@ model with no known price reads as unknown, never $0. Cloud models from
 
   <Accordion title="GET /api/spending/chat/{session_id}">
     Takes `since` and `model` as query parameters.
-    What one chat's cloud answers cost, and every chat's answers since `since`
-    (an ISO instant: the start of the viewer's local day). Sums the cost each
-    answer's turn summary saved, cache discounts included; answers on this PC
+    What one chat's cloud answers cost, and every cloud turn billed since `since`
+    (an ISO instant: the start of the viewer's local day). The chat sums the
+    cost each answer's turn summary saved, cache discounts included; answers on this PC
     are left out. `paid` is true when `model` has a known cloud price, the only
     time the composer shows it. `chat` carries `usd`, `answers`,
     `unpriced_answers` (stopped or unpriced answers, counted apart, never as
     $0) and `items` (`message_id`, `created_at`, `model`, `kind`, `usd` per
-    answer); `today` carries `usd`, `answers`, `unpriced_answers` and `chats`.
+    answer); `today` carries `usd`, `answers` and `unpriced_answers` for every
+    cloud turn billed since `since` (the record the monthly total reads, so a
+    replaced answer still counts) and `chats`, the chats with an answer today.
     **404** for an unknown chat, **422** when `since` isn't an ISO timestamp,
     **500** when a saved answer's summary is unreadable.
   </Accordion>

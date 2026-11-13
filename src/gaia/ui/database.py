@@ -2022,6 +2022,18 @@ class ChatDatabase:
                 (month, model, provider, input_tokens, output_tokens, usd),
             )
 
+    def cloud_spend_since(self, since: datetime) -> List[Dict]:
+        """Every cloud turn recorded at or after the aware instant *since*."""
+        # Rows are SQLite's UTC "YYYY-MM-DD HH:MM:SS", so the bound is written alike.
+        bound = since.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT model, provider, input_tokens, output_tokens, usd "
+                "FROM cloud_spend WHERE created_at >= ? ORDER BY id",
+                (bound,),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def cloud_spend_for_month(self, month: str) -> List[Dict]:
         """Every cloud turn recorded in *month* (``YYYY-MM``)."""
         with self._lock:

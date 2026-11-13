@@ -522,6 +522,64 @@ def test_a_prompt_nobody_answers_refuses(repo):
     assert _staged(repo) == {"tracked.txt"}
 
 
+def test_a_timed_out_prompt_is_not_asked_again_in_the_same_turn(repo):
+    """One unanswered prompt held a chat for 20 minutes by being re-asked (#7999)."""
+    handler = SSEOutputHandler()
+    handler.confirm_timeout_seconds = 0.3
+    agent = _agent(handler)
+    _drive(agent, handler, _shell("git add a.txt", repo))
+
+    started = time.monotonic()
+    again, again_events = _drive(agent, handler, _shell("git add a.txt", repo))
+
+    assert _prompts(again_events) == []
+    assert time.monotonic() - started < 0.3
+    assert again["status"] == "denied" and again["timed_out"] is True
+    assert "Don't ask again" in again["error"] and "git add a.txt" in again["error"]
+    assert _staged(repo) == {"tracked.txt"}
+
+
+def test_a_timeout_does_not_stop_a_different_call_being_asked(repo):
+    """Nobody said no, so another action may still be put to the user."""
+    handler = SSEOutputHandler()
+    handler.confirm_timeout_seconds = 0.3
+    agent = _agent(handler)
+    _drive(agent, handler, _shell("git add a.txt", repo))
+
+    result, events = _drive(
+        agent, handler, _shell("git add b.txt", repo), on_prompt=_answer(handler)
+    )
+
+    assert len(_prompts(events)) == 1
+    assert result["status"] == "success", result
+
+
+def test_the_first_timeout_tells_the_model_to_stop_asking(repo):
+    handler = SSEOutputHandler()
+    handler.confirm_timeout_seconds = 0.3
+    agent = _agent(handler)
+
+    result, _ = _drive(agent, handler, _shell("git add a.txt", repo))
+
+    assert "Don't ask again in this request" in result["error"]
+
+
+def test_a_new_turn_asks_again_after_a_timeout(repo):
+    handler = SSEOutputHandler()
+    handler.confirm_timeout_seconds = 0.3
+    agent = _agent(handler)
+    _drive(agent, handler, _shell("git add a.txt", repo))
+
+    agent._turn_seq += 1  # what process_query does as a turn opens
+    result, events = _drive(
+        agent, handler, _shell("git add a.txt", repo), on_prompt=_answer(handler)
+    )
+
+    assert len(_prompts(events)) == 1
+    assert result["status"] == "success", result
+    assert _staged(repo) == {"tracked.txt", "a.txt"}
+
+
 def test_an_answer_to_a_different_prompt_is_not_consent(repo):
     handler = SSEOutputHandler()
     handler.confirm_timeout_seconds = 0.5
