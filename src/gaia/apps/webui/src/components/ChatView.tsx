@@ -187,6 +187,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [cards]);
     // Auto-read needs the saved choice before the first reply finishes.
     useReadAloudSettings();
+    // Leaving the chat ends its reading; the stop button lives only in this view.
+    useEffect(() => () => useReadAloudStore.getState().stop(), []);
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
