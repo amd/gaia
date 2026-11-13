@@ -11,7 +11,7 @@
  * for real so a selector that stops being cached crashes the suite, not a user.
  */
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotificationCenter } from '../NotificationCenter';
 import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
@@ -103,7 +103,7 @@ describe('NotificationCenter permission prompts follow the interface language', 
     it('words a tool prompt in Arabic, the tool kept left to right', () => {
         setUiLocale('ar');
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         const title = container.querySelector('.notification-title')!;
@@ -130,7 +130,7 @@ describe('NotificationCenter permission prompts follow the interface language', 
 
     it('reads the same as before in English', () => {
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow editing file?');
@@ -149,5 +149,27 @@ describe('a permission entry', () => {
 
     it('wraps its filter tabs instead of running them off the edge', () => {
         expect(notificationCss).toMatch(/\.notification-filter-bar \{[^}]*flex-wrap: wrap/);
+    });
+});
+
+describe('clicking a notification that names a chat', () => {
+    it('opens that chat and marks the notification read', () => {
+        const onOpenChat = vi.fn();
+        useNotificationStore.setState({
+            notifications: [{ ...notif('done-1', 'Three headlines today.'), title: 'Scheduled task "news" finished', sessionId: 'chat-1' }],
+        });
+        render(<NotificationCenter onClose={vi.fn()} onOpenChat={onOpenChat} />);
+        fireEvent.click(screen.getByText('Scheduled task "news" finished'));
+        expect(onOpenChat).toHaveBeenCalledExactlyOnceWith('chat-1');
+        expect(useNotificationStore.getState().notifications[0].read).toBe(true);
+    });
+
+    it('only marks it read when there is no chat to open', () => {
+        const onOpenChat = vi.fn();
+        useNotificationStore.setState({ notifications: [notif('plain-1', 'Document indexed')] });
+        render(<NotificationCenter onClose={vi.fn()} onOpenChat={onOpenChat} />);
+        fireEvent.click(screen.getByText('Document indexed'));
+        expect(onOpenChat).not.toHaveBeenCalled();
+        expect(useNotificationStore.getState().notifications[0].read).toBe(true);
     });
 });

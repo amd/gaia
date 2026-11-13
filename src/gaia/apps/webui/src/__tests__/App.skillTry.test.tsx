@@ -114,4 +114,97 @@ describe('trying a skill from Settings', () => {
         expect(mocked.createSession).not.toHaveBeenCalled();
         expect(mocked.sendMessageStream).not.toHaveBeenCalled();
     });
+
+    async function tryFromSettings(skill: string) {
+        act(() => useChatStore.getState().openSettings('skills'));
+        await advance(0);
+        const row = screen.getByText(skill).closest('li')!;
+        fireEvent.click(within(row).getByRole('button', { name: /Try .* in a new chat/ }));
+        await advance(0);
+    }
+
+    function withSkill() {
+        mocked.listSkills.mockResolvedValue({
+            skills: [{ name: 'calculators', description: 'Math', version: null, tier: null, tools: [], path: '/s/calculators/SKILL.md', source: 'agent-bundled' }],
+            invalid: {},
+        });
+        mocked.listFeaturedSkillLibraries.mockResolvedValue({ libraries: [] });
+    }
+
+    const PROMPT = 'Load the calculators skill, then tell me briefly what it lets you do.';
+
+    it('adds the prompt under a draft already typed in the new-chat box (#7997)', async () => {
+        withSkill();
+        render(<App />);
+        await advance(0);
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'half a thought' } });
+        await advance(0);
+
+        await tryFromSettings('calculators');
+
+        const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+        expect(box.value).toBe(`half a thought\n\n${PROMPT}`);
+        expect(mocked.createSession).not.toHaveBeenCalled();
+    });
+
+    it('fills the box again when the same skill is tried after the box was cleared (#7997)', async () => {
+        withSkill();
+        render(<App />);
+        await advance(0);
+        await tryFromSettings('calculators');
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: '' } });
+        await advance(0);
+
+        await tryFromSettings('calculators');
+
+        expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(PROMPT);
+    });
+
+    it('does not add the prompt a second time when it is still in the box', async () => {
+        withSkill();
+        render(<App />);
+        await advance(0);
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'half a thought' } });
+        await advance(0);
+
+        await tryFromSettings('calculators');
+        await tryFromSettings('calculators');
+
+        expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(`half a thought\n\n${PROMPT}`);
+    });
+
+    it('treats the prompt followed by trailing whitespace as already in the box', async () => {
+        withSkill();
+        render(<App />);
+        await advance(0);
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: `${PROMPT}  \n\n` } });
+        await advance(0);
+
+        await tryFromSettings('calculators');
+
+        expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe(`${PROMPT}  \n\n`);
+    });
+
+    it('still adds a different skill, and re-adds one that is no longer last', async () => {
+        mocked.listSkills.mockResolvedValue({
+            skills: [
+                { name: 'calculators', description: 'Math', version: null, tier: null, tools: [], path: '/s/calculators/SKILL.md', source: 'agent-bundled' },
+                { name: 'pdf-forms', description: 'Fill PDF forms', version: null, tier: null, tools: [], path: '/s/pdf-forms/SKILL.md', source: 'agent-bundled' },
+            ],
+            invalid: {},
+        });
+        mocked.listFeaturedSkillLibraries.mockResolvedValue({ libraries: [] });
+        const PDF = 'Load the pdf-forms skill, then tell me briefly what it lets you do.';
+        render(<App />);
+        await advance(0);
+
+        await tryFromSettings('calculators');
+        await tryFromSettings('pdf-forms');
+        await tryFromSettings('pdf-forms');
+        const box = () => (screen.getByLabelText('Message') as HTMLTextAreaElement).value;
+        expect(box()).toBe(`${PROMPT}\n\n${PDF}`);
+
+        await tryFromSettings('calculators');
+        expect(box()).toBe(`${PROMPT}\n\n${PDF}\n\n${PROMPT}`);
+    });
 });

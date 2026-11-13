@@ -339,8 +339,8 @@ order:
    requirements into a sibling.
 6. Grants the agent's path validator read-only access to the skill's folder, so
    the file tools can open the files its body references.
-7. Rebuilds the system prompt, injecting the body via
-   `get_skills_system_prompt()`.
+7. Rebuilds the prompt, injecting the body via `get_skills_system_prompt()`
+   into the session context at the start of the first user message.
 
 Loading is **idempotent** (a second `load_skill` of the same name returns the
 already-loaded `Skill`) and **reversible** — `unload_skill(name)` removes the
@@ -382,7 +382,7 @@ The capture lifecycle separates **instructions** from **code**:
 | Stage | Instructions (`SKILL.md` body) | Code (`tools.py` / `scripts/`) |
 |-------|-------------------------------|-------------------------------|
 | `capture_skill` | audited, copied in | audited, copied in — `code_trusted: false` |
-| `load_skill` | injected into the system prompt | **deferred** — never imported, tools never register |
+| `load_skill` | injected into the session context at the start of the first user message | **deferred** — never imported, tools never register |
 | `gaia skill promote <name>` (terminal) | unchanged | re-audited; on `ALLOW`, `code_trusted: true` bound to a content digest |
 | next `load_skill` | injected | registered under `<skill>/<tool>` |
 
@@ -811,7 +811,7 @@ adopted the blocks, whose behaviour is unchanged.
 
 <Note>
 **A skill body costs context.** Loading a set injects each skill's Markdown body
-into the system prompt, which is prompt budget the agent's own tool results no
+into the session context at the start of the first user message, which is prompt budget the agent's own tool results no
 longer have. An agent with a tight context envelope must account for the loaded
 set's cost, not assume it is free — the email agent's bulk-triage path subtracts
 it from its result-envelope budget for exactly this reason — and its three-skill

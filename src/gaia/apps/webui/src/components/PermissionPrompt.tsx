@@ -11,6 +11,7 @@ import {
     PATH_ACCESS_TOOL,
     PROJECT_TRUST_TOOL,
     permissionPromptText,
+    alwaysScopeText,
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -143,7 +144,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
-    const scopeText = notification.alwaysLabel ?? scope ?? '';
+    const scopeText = alwaysScopeText(notification, t) ?? notification.alwaysLabel ?? scope ?? '';
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
