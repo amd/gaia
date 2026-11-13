@@ -100,7 +100,7 @@
 }
 .flow-done > svg {
     flex-shrink: 0;
-    color: var(--accent-green, var(--text-muted));
+    color: var(--accent-green);
 }
 
 .flow-live-line {
