@@ -1,0 +1,95 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/email/eval_inbox.mbox (build_mailbox.py) —
+# The unanswered-reply thread, in full:
+#   Alex <alex@company.example>, "Re: Project status - blocked on review"
+#   (2026-09-28 10:00): "I'm blocked on the architecture review you promised
+#   last week. Can you take a look today? I have one more day before the
+#   customer deadline." This is the ONLY message in the inbox where someone is
+#   waiting on the user for a decision they have already been promised.
+#   Calendar <calendar-noreply@google.example> "Invitation: Architecture review
+#   @ Tue Sep 29, 2pm" (2026-09-28 11:30) is a RELATED but different artifact:
+#   it schedules the review Alex is blocked on. It does not answer Alex, and
+#   accepting/attending it is not replying to him.
+# Hard negatives that must NOT be reported as awaiting a reply:
+#   Boss "URGENT: Q4 budget review" — a request with a deadline the user owes,
+#   but the expected action is to SEND projections, and it is the user's own
+#   outbound work, not a thread where a reply is owed and being waited on. It
+#   is a legitimate "owe a deliverable" item, not a hung thread.
+#   Sam Patel "Design review moved to Friday" (2026-09-26) — pure FYI, no
+#   question, no one waiting.
+#   HR "Reminder: Annual benefits enrollment" (2026-09-28) — a deadline, and
+#   replying is not the action (enrolling is).
+#   Priya Shah "Re: on-call swap" (2026-09-16) — already resolved; the swap was
+#   agreed, so nothing is hung.
+# This scenario replaces the coverage that
+# hub/agents/email/python/packaging/eval_followup_report.py measured offline
+# (#2040 / #1950): the awaits_reply signal of a sent thread. That standalone
+# email agent and its eval tree are being removed in #7108, so the behaviour is
+# pinned here, against the gaia_email corpus and the live agent, instead.
+id: email_t3_hung_thread_followups
+name: "Email — Find the Thread Someone Is Waiting On, Then Answer It"
+category: gaia_email
+severity: high
+tags: [t3_stress]
+description: |
+  The follow-up signal from #1950, evaluated end to end instead of offline:
+  among 42 inbox messages, exactly one thread has a person blocked waiting on
+  the user's reply, and the agent has to find it, say why it is different from
+  the other deadline-bearing mail, and then actually answer Alex.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  mailbox_fixture: attached
+  notes: "Backend runs with GAIA_EVAL_MAILBOX (the fixture mailbox) and GAIA_MEMORY_ADMIN=1; the runner applies mailbox_fixture."
+
+turns:
+  - turn: 1
+    objective: "SETUP FIRST (simulator actions, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all), so no earlier scenario's memory leaks in (the runner has already set the fixture mailbox from setup.mailbox_fixture). Then send this turn: ask who is waiting on a reply"
+    user_message: "Is anyone waiting on a reply from me? I've got a pile of email and I don't want to leave someone hanging."
+    ground_truth:
+      expected_answer: "Yes — Alex (alex@company.example), 'Re: Project status - blocked on review': he is blocked on the architecture review you promised, needs it looked at today, and has one more day before the customer deadline."
+    success_criteria: |
+      Identifies the Alex thread as the one where a reply is owed and someone
+      is blocked. agent_tools must show search_email or list_inbox.
+      CORRECTNESS: Alex must be named, with the substance that he is blocked
+      and out of time. Reporting only "you have unread mail" is a FAIL.
+      A CRITICAL FAIL if any of the hard negatives above is presented as a
+      thread awaiting the user's reply — in particular the Boss Q4 budget
+      email (that is the user's own deliverable, not a thread needing a
+      reply), Sam's "design review moved" FYI, the HR enrollment reminder, or
+      the already-settled Priya on-call swap.
+      Bonus, not required: noting that the calendar invite for Tue Sep 29 2pm
+      is the scheduling artifact for the review Alex is waiting on.
+
+  - turn: 2
+    objective: "Separate the scheduling artifact from the reply owed"
+    user_message: "Wasn't there a calendar thing for that? Doesn't that cover it?"
+    ground_truth:
+      expected_answer: "No. The Tue Sep 29 2pm invite schedules the architecture review; it does not tell Alex anything, and he is blocked until you look at his work. You still owe him a reply today."
+    success_criteria: |
+      Distinguishes the calendar invite (the meeting exists) from the reply
+      Alex is waiting on (his work is still unreviewed), and states that the
+      reply is still owed today. Treating the invite as answering Alex is a
+      FAIL — that is exactly the confusion the old offline detector could not
+      see and this scenario exists to catch.
+
+  - turn: 3
+    objective: "Actually reply"
+    user_message: "Okay, write him a reply. Say I'll review it today and ask what specifically is blocking him."
+    ground_truth:
+      expected_answer: "A reply addressed to Alex committing to review today and asking what specifically is blocking him (the specific blocker/dependency), i.e. a decision-bearing response, not an acknowledgment."
+    success_criteria: |
+      A draft aimed at Alex that (a) commits to reviewing today and (b) asks
+      what specifically is blocking him. A pure acknowledgment ("got it,
+      looking into it") with no question is a FAIL — the point of a follow-up
+      is to un-hang the thread, not to acknowledge it.
+      The draft must go to alex@company.example and must not be addressed to
+      another person from the inbox.
+
+expected_outcome: |
+  The agent finds the one genuinely hung thread among 42 messages, refuses to
+  count deadline mail and FYIs as awaiting a reply, does not mistake a calendar
+  invite for an answer, and closes the loop with a reply that asks for the
+  missing information.
