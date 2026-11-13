@@ -944,8 +944,8 @@ A Python snippet or script that may change files gets the same care for the
 folders its code names by full path, such as a "tidy my inbox folder" snippet
 that moves and renames files into subfolders: GAIA copies the files in those
 folders before it runs, so Undo puts each file back under its old name and
-removes the new files and folders. A folder with more than 1,000 files or
-128 MB isn't copied. The snippet is still listed as one GAIA can't track,
+removes the new files and folders. Up to 1,000 files and 128 MB are copied
+for one run; a folder past that, or with a file another app has locked, isn't. The snippet is still listed as one GAIA can't track,
 because it could also have changed files somewhere else.
 
 **Settings → Privacy → Undo history** sets how long copies are kept (7 days by
