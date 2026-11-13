@@ -209,11 +209,15 @@ def _decode_text_bytes(data: bytes) -> str:
     if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
         return cp1252_text
     best = matches.best()
-    if best is None:
-        raise UnicodeDecodeError(
-            "text", data, 0, len(data), "no text encoding fits these bytes"
-        )
-    return str(best)
+    if best is not None:
+        return str(best)
+    # Symbol-heavy Western text ("12€ — 15€") the detector can't place.
+    high = sum(byte >= 0x80 for byte in data)
+    if cp1252_text is not None and high <= sum(0x20 < byte < 0x80 for byte in data):
+        return cp1252_text
+    raise UnicodeDecodeError(
+        "text", data, 0, len(data), "no text encoding fits these bytes"
+    )
 
 
 # --- PDF extraction errors ---------------------------------------------------

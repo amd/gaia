@@ -129,6 +129,14 @@ def test_csv_detects_windows_1256_arabic(rag, tmp_path):
     assert "الإيرادات: 5678" in extracted
 
 
+def test_symbol_heavy_cp1252_text_still_reads(rag, tmp_path):
+    document = tmp_path / "prices.txt"
+    expected = "Prix: 12€ — 15€ — 20€"
+    document.write_bytes(expected.encode("cp1252"))
+
+    assert rag._extract_text_from_text_file(str(document)) == expected
+
+
 def test_undetectable_bytes_fail_with_the_file_named(rag, tmp_path):
     document = tmp_path / "scrambled.txt"
     document.write_bytes(bytes(range(128, 256)) * 8)
