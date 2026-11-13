@@ -7,7 +7,7 @@ import { useChatStore } from '../stores/chatStore';
 import { useBackendStore } from '../stores/backendStore';
 import type { BackendLifecycle } from '../types/agent';
 import { useT } from '../i18n/useT';
-import { needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
+import { namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './settings/ErrorNotice';
 import { MIN_CONTEXT_SIZE, DEFAULT_MODEL_NAME } from '../utils/constants';
 import { useModelActions } from '../hooks/useModelActions';
 import { isStarting, modelServerHealth } from '../services/statusPoll';
@@ -397,25 +397,26 @@ export function ConnectionBanner({ onRetry, backendSlow = false, backendError = 
     if (systemStatus && !systemStatus.lemonade_running) {
         // Listening but failing its health check is often just busy; the backend can't yet say which.
         const unresponsive = modelServerHealth(systemStatus) === 'unresponsive';
-        const setupNeeded = needsLocalSetup(systemStatus);
+        // A server that listens is installed: setup can't fix a hang, so don't offer it.
+        const setupNeeded = !unresponsive && needsLocalSetup(systemStatus);
+        const startCommand = unresponsive && namesSetupCommand(systemStatus.start_command) ? null : systemStatus.start_command;
+        const startInstruction = unresponsive && namesSetupCommand(systemStatus.start_instruction) ? null : systemStatus.start_instruction;
         return (
             <div className="connection-banner connection-banner--warning" role="status">
                 <div className="connection-banner__icon">
                     <AlertTriangle size={16} />
                 </div>
                 <div className="connection-banner__text" dir="auto">
-                    {unresponsive
-                        ? `The model server is not answering (${systemStatus.lemonade_error}). It may be busy with another app or loading a model.`
-                        : t('banner.serverStopped')}{' '}
+                    {t(unresponsive ? 'banner.serverHung' : 'banner.serverStopped')}{' '}
                     {setupNeeded ? (
                         <span className="connection-banner__hint">{t('banner.finishSetup')}</span>
-                    ) : systemStatus.start_command ? (
+                    ) : startCommand ? (
                         <span className="connection-banner__hint">
-                            {unresponsive ? 'If it stays this way, restart it: ' : 'To start it by hand, run '}
-                            <code>{systemStatus.start_command}</code>
+                            {t(unresponsive ? 'banner.restartHint' : 'banner.startHint')}{' '}
+                            <code dir="ltr">{startCommand}</code>
                         </span>
-                    ) : systemStatus.start_instruction && (
-                        <span className="connection-banner__hint">{systemStatus.start_instruction}</span>
+                    ) : startInstruction && (
+                        <span className="connection-banner__hint">{startInstruction}</span>
                     )}
                 </div>
                 {setupNeeded && <SetUpLocalButton className="connection-banner__retry" />}
