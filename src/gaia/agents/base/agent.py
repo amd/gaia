@@ -3283,6 +3283,7 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn.
         self._denied_effects = DeniedEffects()
+        self._begin_turn_prompts()
         # (turn, path) for each access prompt declined or left unanswered.
         self._refused_paths: List[Tuple[int, Path]] = []
 
@@ -5602,6 +5603,15 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_incognito", False):
             return False
         return True
+
+    def _begin_turn_prompts(self) -> None:
+        """Open a turn in which an expired approval may be asked for again."""
+        self._turn_expired_calls: set = set()
+
+    @staticmethod
+    def _prompted_call_key(tool_name: str, tool_args: Any) -> str:
+        """One call's identity: its tool and exact arguments."""
+        return json.dumps([tool_name, tool_args], sort_keys=True, default=str)
 
     def _begin_turn_provenance(self) -> None:
         """Open a turn: only the user has spoken, unless a caller pushed content.
@@ -8274,6 +8284,21 @@ Do NOT wrap conversational replies in JSON.
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # Re-asking an unanswered prompt would hold the chat for another timeout.
+            call_key = self._prompted_call_key(tool_name, tool_args)
+            if call_key in getattr(self, "_turn_expired_calls", ()):
+                return {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "timed_out": True,
+                    "error": (
+                        "Not asked, so it did not run: the approval request for "
+                        f"`{render_call(tool_name, tool_args)}` already went "
+                        "unanswered in this request. Don't ask again in this "
+                        "request. Tell the user you waited for their approval and "
+                        "stopped, and that they can ask you to try again."
+                    ),
+                }
             # A policy client matches on what the model sent, not what the prompt adds.
             noting = getattr(self.console, "note_call_args", None)
             if callable(noting) and isinstance(tool_args, dict):
@@ -8310,6 +8335,9 @@ Do NOT wrap conversational replies in JSON.
                 if self.console.confirmation_timed_out(tool_name) is True:
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
+                    if not hasattr(self, "_turn_expired_calls"):
+                        self._begin_turn_prompts()
+                    self._turn_expired_calls.add(call_key)
                 else:
                     if denied_error == user_denial_message(tool_name):
                         denied["hint"] = DECLINED_HINT
@@ -11408,6 +11436,7 @@ Do NOT wrap conversational replies in JSON.
         self._single_tool_done = False
         self._turn_seq += 1
         self._denied_effects = DeniedEffects(os.getcwd())
+        self._begin_turn_prompts()
         self._begin_turn_provenance()
         self._turn_unasked_removals = []
         # Cleared per turn: a trace must never report the previous turn's
