@@ -384,6 +384,11 @@ func TestPaletteListsEverySubmitCommand(t *testing.T) {
 	if !known["/discord"] {
 		t.Error("paletteCommands does not offer /discord")
 	}
+	// /automations and its sub-forms go through handleAutomationsCommand.
+	seen["/automations"] = true
+	if !known["/automations"] {
+		t.Error("paletteCommands does not offer /automations")
+	}
 	// /read-aloud and /voice take arguments too (readaloud.go).
 	for _, cmd := range []string{"/read-aloud", "/voice"} {
 		seen[cmd] = true

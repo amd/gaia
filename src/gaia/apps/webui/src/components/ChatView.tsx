@@ -3,6 +3,7 @@
 
 import { useEffect, useRef, useCallback, useState, useMemo, type CSSProperties } from 'react';
 import { Activity, Edit3, Download, Upload, ArrowDown, FolderSearch, Clock } from 'lucide-react';
+import { TurnAnnouncer } from './TurnAnnouncer';
 import { MessageBubble, cleanToolCallContent, isErrorContent, turnEnding } from './MessageBubble';
 import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
@@ -62,7 +63,7 @@ import { CLAIMS_ESCAPE, isEscapeClaimed } from '../hooks/useEscapeToClose';
 import { usePolicyToast } from '../hooks/usePolicyToast';
 import { FLAGSHIP_AGENT_ID } from '../utils/newTask';
 import { isPlaceholderTitle } from '../utils/sessionTitle';
-import { lastSentMessage } from '../utils/editLast';
+import { laterTurns, lastSentMessage } from '../utils/editLast';
 import { addDroppedFiles, showAddedDocuments } from '../utils/chatDocuments';
 import { requestErrorParam } from '../utils/requestErrors';
 import { MAX_SESSION_TITLE_CHARS, STARTING_REASON } from '../utils/constants';
@@ -188,6 +189,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
     }, [cards]);
     // Auto-read needs the saved choice before the first reply finishes.
     useReadAloudSettings();
+    // Leaving the chat ends its reading; the stop button lives only in this view.
+    useEffect(() => () => useReadAloudStore.getState().stop(), []);
     useEffect(() => {
         if (!isStreaming && prevStreamingRef.current) {
             setStreamEnding(true);
@@ -990,6 +993,8 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         toolOccurredRef.current = true;
                         // The model's phase ended with the call; say a tool runs, not the model.
                         useChatStore.getState().setLiveStatus(toolRowText(step, getT()), 'tool');
+                        // A relayed agent sends no skill_use for load_skill; the panel still re-reads.
+                        if (event.tool === 'load_skill') useChatStore.getState().addSkillStep(null);
                     }
                 }
             },
@@ -1591,7 +1596,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
         }
     }, [sessionId, attach, t]);
 
-    const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(true); };
+    const handleDragOver = (e: React.DragEvent) => {
+        // Dragged text is not a drop target for files.
+        if (!e.dataTransfer?.types?.includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(true);
+    };
     const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragOver(false); };
 
     // Stale connector-reply cue (#2119): when the newest reply was a connector
@@ -1636,6 +1647,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             onDragLeave={handleDragLeave}
             aria-label={session?.title || 'Chat'}
         >
+            <TurnAnnouncer busy={busy} />
             <header className="task-header">
                 <div className="task-header-left">
                     {editingTitle ? (
@@ -1646,7 +1658,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             onChange={(e) => setTitleDraft(e.target.value)}
                             onBlur={saveTitle}
                             onKeyDown={(e) => {
-                                if (e.key === 'Enter') saveTitle();
+                                if (e.key === 'Enter' && !e.nativeEvent.isComposing) saveTitle();
                                 if (e.key === 'Escape') { e.preventDefault(); setEditingTitle(false); }
                             }}
                             {...CLAIMS_ESCAPE}
@@ -1673,10 +1685,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         <Activity size={15} aria-hidden="true" />
                     </button>
                     <PrivateChatButton isPrivate={!!session?.private} onToggle={handleTogglePrivate} />
-                    <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
+                    <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title={t('chat.browseFiles')} aria-label={t('chat.browseFiles')}>
                         <FolderSearch size={15} />
                     </button>
-                    <button className="btn-icon-sm" onClick={exportChat} title="Export as Markdown" aria-label="Export chat">
+                    <button className="btn-icon-sm" onClick={exportChat} title={t('chat.exportTitle')} aria-label={t('chat.exportLabel')}>
                         <Download size={15} />
                     </button>
                     <SessionPanelToggle messages={messages} busy={isStreaming} />
@@ -1690,7 +1702,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
                     {isLoadingMessages && !openingShown && (
-                        <div className="skeleton-messages" aria-label="Loading messages">
+                        <div className="skeleton-messages" aria-label={t('chat.loadingMessages')}>
                             {[0, 1, 2].map((i) => (
                                 <div key={i} className="skeleton-msg">
                                     <div className="skeleton-lines">
@@ -1743,6 +1755,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                     onEditDraft={(text: string) => { editDraftRef.current = text; }}
                                     onEdit={handleEdit}
                                     onEditCancel={handleEditCancel}
+                                    laterCount={msg.role === 'user' ? laterTurns(messages, idx) : 0}
                                     onRegenerate={canRetry && !unsent ? () => handleRegenerate(msg) : undefined}
                                     extraActions={canRetry ? (
                                         <RetryWithMenu
@@ -1809,7 +1822,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             />
 
             {showScrollBtn && (
-                <button className="scroll-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">
+                <button className="scroll-bottom-btn" onClick={scrollToBottom} title={t('chat.scrollBottom')} aria-label={t('chat.scrollBottom')}>
                     <ArrowDown size={16} />
                 </button>
             )}
@@ -1817,13 +1830,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
             {isDragOver && (
                 <div className="drag-overlay">
                     <Upload size={32} strokeWidth={1.5} aria-hidden="true" />
-                    <span>Drop files to index them for this chat</span>
+                    <span>{t('chat.dropOverlay')}</span>
                 </div>
             )}
 
             {policyToast && (
                 <div className="toast policy-alert-toast" role="alert">
-                    <span>Blocked: {policyToast.tool} is restricted by policy.</span>
+                    <span>{t('chat.policyBlocked', { tool: policyToast.tool })}</span>
                     {policyToast.receiptId ? (
                         <button
                             type="button"
@@ -1836,10 +1849,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 setPendingReceiptScroll(receiptId);
                             }}
                         >
-                            View receipt
+                            {t('chat.policyViewReceipt')}
                         </button>
                     ) : (
-                        <span className="policy-alert-toast-missing">Receipt unavailable</span>
+                        <span className="policy-alert-toast-missing">{t('activity.policy.receiptUnavailable')}</span>
                     )}
                 </div>
             )}
