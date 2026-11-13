@@ -219,6 +219,15 @@ describe('DiffCard', () => {
         expect(lines).toEqual(['-a', '+b']);
     });
 
+    it('marks a right-to-left override in the body as in the title', () => {
+        const unified = '--- /dev/null\n+++ b/report\u202Etxt.md\n@@ -0,0 +1 @@\n+hi \u202Eolleh\n';
+        const { container } = render(<DiffCard data={{ title: 'report\u202Etxt.md', unified }} />);
+        const lines = Array.from(container.querySelectorAll('.render-diff__line')).map((el) => el.textContent);
+        expect(lines).toEqual(['--- /dev/null', '+++ b/report[U+202E]txt.md', '@@ -0,0 +1 @@', '+hi [U+202E]olleh']);
+        expect(container.querySelectorAll('.render-diff__line--added')).toHaveLength(1);
+        expect(container.textContent).not.toContain('\u202E');
+    });
+
     it('shows a note and badge, and no body when there is no text diff', () => {
         const { container } = render(<DiffCard data={{ title: 'x.bin', badge: 'Deleted', note: 'Binary file', unified: '' }} />);
         expect(screen.getByText('Deleted')).toBeInTheDocument();

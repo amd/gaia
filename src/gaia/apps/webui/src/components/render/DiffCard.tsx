@@ -58,7 +58,7 @@ export function DiffCard({ data }: { data: unknown }) {
                 <pre className="render-diff__body">
                     {lines.map((line, i) => (
                         <div className={lineClass(line)} key={i}>
-                            {line}
+                            {fileText(line)}
                         </div>
                     ))}
                 </pre>

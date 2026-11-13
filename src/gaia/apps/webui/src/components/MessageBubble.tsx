@@ -33,7 +33,7 @@ import {
     type CitationIndex, type FoundPage, type LibraryDoc,
 } from '../utils/citations';
 import './MessageBubble.css';
-import { fileText } from './CalendarApproval';
+import { fileText, visibleText } from './CalendarApproval';
 
 interface MessageBubbleProps {
     message: Message;
@@ -447,6 +447,26 @@ export function escapeBareNumberLines(text: string): string {
     }).join('\n');
 }
 
+const OVERRIDES = /[\u202A-\u202E]/;
+const ISOLATE_OPEN = /[\u2066-\u2068]/;
+const ISOLATE_CLOSE = '\u2069';
+
+/** Marks overrides and unpaired isolates, which nobody types on purpose; paired isolates, marks and joiners stay. */
+export function markStrayDirection(text: string): string {
+    return text.split('\n').map((line) => {
+        const chars = [...line];
+        const stray = new Set<number>();
+        const open: number[] = [];
+        chars.forEach((char, at) => {
+            if (OVERRIDES.test(char)) stray.add(at);
+            else if (ISOLATE_OPEN.test(char)) open.push(at);
+            else if (char === ISOLATE_CLOSE && open.pop() === undefined) stray.add(at);
+        });
+        open.forEach((at) => stray.add(at));
+        return chars.map((char, at) => (stray.has(at) ? visibleText(char, false) : char)).join('');
+    }).join('\n');
+}
+
 /** Format a full absolute timestamp for the stats tooltip. */
 function formatFullTimestamp(iso: string, t: Translate): string {
     if (!iso) return '';
@@ -516,7 +536,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
         () => (message.role === 'user'
-            ? message.content
+            ? markStrayDirection(message.content)
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
         [message.content, message.role, isStreaming, cutOff],
     );
