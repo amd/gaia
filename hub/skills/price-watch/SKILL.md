@@ -2,7 +2,7 @@
 name: price-watch
 description: Check product pages for a price drop, comparing against the lowest price seen before and alerting only on a new low. Use when the user asks to watch a price, track a deal, or tell them when something gets cheaper.
 license: MIT
-version: 1.0.0
+version: 1.0.1
 metadata:
   gaia:
     security_tier: community
@@ -27,23 +27,37 @@ running extreme, not just a list of things already seen.
 - **Products** — a list of product URLs the user cares about.
 - **Memory key** — `price:<product-slug>`, one per product.
 - **Floor** (optional) — alert only below this price regardless of history.
+  Memory key `price-floor:<product-slug>`.
 
 ## Procedure
 
-For each product URL:
+For each product URL, in this order:
 
-1. **Recall the history.** `recall(query="price:<product-slug>", limit=20)` and
-   take the lowest price previously recorded.
-2. **Fetch the page.** `fetch_page(url)`.
-3. **Extract the current price.** Pull the number and its currency. Watch for
+1. **Save any price the user states — before anything else.** When the user
+   gives a price in their message (the lowest they have seen, what it costs
+   now, or a target to wait for), call `remember` for it **before** you fetch
+   the page, even if they have not asked you to check yet:
+   - lowest seen or current price →
+     `remember(fact="price:<product-slug>: <amount> <currency> on <YYYY-MM-DD> (stated by the user) — <url>", category="fact")`
+   - target price →
+     `remember(fact="price-floor:<product-slug>: <amount> <currency> — <url>", category="fact")`
+
+   The user's number is the baseline step 5 compares against. Saving it first
+   means a fetch that fails, or a later turn, cannot lose it. Do not save a
+   price the user did not state.
+2. **Recall the history.** `recall(query="price:<product-slug>", limit=20)` and
+   take the lowest price recorded, including one the user just stated. Also
+   `recall(query="price-floor:<product-slug>")` for a target.
+3. **Fetch the page.** `fetch_page(url)`.
+4. **Extract the current price.** Pull the number and its currency. Watch for
    the traps: a struck-through list price next to the real one, a subscription
    price next to the one-time price, and a per-unit price on a multipack. If you
    cannot find a price with confidence, say so — do **not** guess, and do not
    record a guessed number, because a wrong low poisons every future comparison.
-4. **Compare.** Alert when the current price is below the recorded low (or below
-   the configured floor). Otherwise report the current price and the delta in
+5. **Compare.** Alert when the current price is below the recorded low (or below
+   the floor). Otherwise report the current price and the delta in
    one line.
-5. **Record the observation.**
+6. **Record the observation.**
    `remember(fact="price:<product-slug>: <amount> <currency> on <YYYY-MM-DD> — <url>", category="fact")`.
    Record every observation, not only the lows, so the history is a real series.
 
