@@ -507,11 +507,12 @@ _RESTORABLE_FIELDS = ("content", "category", "domain", "context", "entity", "due
 
 
 @router.delete("/api/memory/knowledge/{knowledge_id}")
-def delete_knowledge(knowledge_id: str) -> Dict:
+def delete_knowledge(knowledge_id: str, db: ChatDatabase = Depends(get_db)) -> Dict:
     """Delete an entry; one about the user is also recorded as forgotten.
 
     Forgotten, it is not learned again from old chats. A tool lesson or
     session summary is the agent's own record, so deleting it forgets nothing.
+    A sensitive fact also stops naming chats: their auto titles are reset.
     """
     store = _get_store()
     item = store.get_item(knowledge_id)
@@ -534,6 +535,8 @@ def delete_knowledge(knowledge_id: str) -> Dict:
         deleted = []
     if not deleted:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
+    if sensitive:
+        db.hide_private_titles(store.names_private_fact)
     # "sensitive" covers the copies too; the page offers no undo when set.
     result: Dict[str, Any] = {
         "status": "deleted",

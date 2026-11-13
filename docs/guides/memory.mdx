@@ -347,6 +347,7 @@ Some knowledge is private -- email addresses, API tokens, health information, fi
 | `recall` results | Returned | Returned for any filtered call -- a bare `recall()` skips them |
 | Tool history args | Full args logged | Args redacted to keys only |
 | Memory page | Normal display | Hidden until clicked |
+| Chat titles in the sidebar | May name it | Never name it; a chat GAIA named after it goes back to "New Chat" when it is marked or forgotten (a title you typed is kept) |
 | Terminal `/memory` view | Normal display | Shown in full, tagged `sensitive` -- not blurred |
 
 The agent can still access sensitive data when you explicitly ask for it via `recall` -- it just will not be broadcast in the system prompt where it could leak into logs or debugging output.

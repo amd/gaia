@@ -585,6 +585,18 @@ _RELATION_WORDS = frozenset("""
     pet
 """.split())
 
+#: Stems that never name a forgotten sensitive fact: its kept stems lose
+#: which words were distinctive, so the frame, relation and note words go.
+_PLAIN_STEMS = (
+    frozenset(
+        stem
+        for word in (*_FRAME_WORDS, *_RELATION_WORDS)
+        if (stem := _stem(word)) is not None
+    )
+    | _NOTE_STEMS
+)
+
+
 #: Two capitals that are not an acronym naming something ("MS", "IQ" are).
 _COMMON_CAPS = frozenset("AM PM OK TV ID IT US UK EU".split())
 
@@ -669,6 +681,15 @@ def _fact_terms(text: str) -> _Terms:
         frozenset(people),
         frozenset(m.lower() for m in _ABOUT_THE_WORD_RE.findall(plain)),
     )
+
+
+def _names(text: str, fact: _Terms) -> bool:
+    """Whether *text* names the sensitive *fact*: one of its exact figures,
+    or at least half of its distinctive words."""
+    said = _fact_terms(text)
+    if fact.figures & said.figures:
+        return True
+    return bool(fact.key) and 2 * len(fact.key & said.said) >= len(fact.key)
 
 
 #: Words a row may add to a one-word fact and still be plainly about it.
@@ -3154,6 +3175,40 @@ class MemoryStore:
                         "UPDATE knowledge SET sensitive = 1 WHERE id = ?", (kid,)
                     )
         self._settle_sensitive_locked(knowledge_id, near=not cleared)
+
+    def names_private_fact(self, text: str, since: Optional[str] = None) -> bool:
+        """Whether *text*, such as a chat title, names a fact marked sensitive.
+
+        A current sensitive row is named by half its distinctive words or one
+        of its exact figures (``_names``). With *since* (ISO time), so is a
+        sensitive fact forgotten after it, by half the distinctive stems it
+        kept. Errs towards yes: a title wrongly hidden costs a name.
+        """
+        stems = content_stems(text)
+        with self._locked():
+            rows = self._conn.execute(
+                "SELECT content FROM knowledge WHERE sensitive = 1 "
+                "AND superseded_by IS NULL"
+            ).fetchall()
+            forgotten = (
+                self._conn.execute(
+                    "SELECT content, forgotten_at FROM forgotten WHERE sensitive = 1"
+                ).fetchall()
+                if since
+                else []
+            )
+        if any(_names(text, _fact_terms(content)) for (content,) in rows):
+            return True
+        after = _as_datetime(since) if since else None
+        for kept, when in forgotten:
+            words = set(kept.split()) - _PLAIN_STEMS
+            if (
+                words
+                and _as_datetime(when) >= after
+                and 2 * len(words & stems) >= len(words)
+            ):
+                return True
+        return False
 
     def copies_of(
         self, knowledge_id: str, contexts: Optional[Tuple[str, ...]] = None

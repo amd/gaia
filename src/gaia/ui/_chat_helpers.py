@@ -793,9 +793,28 @@ def _same_title(a: str, b: str) -> bool:
     return _norm(a or "") == _norm(b or "")
 
 
+def _private_title(title: str, created_at: Optional[str]) -> bool:
+    """Whether *title* names a fact the user marked sensitive."""
+    from gaia.ui.routers import memory as _mem_router
+
+    return _mem_router._get_store().names_private_fact(title, since=created_at)
+
+
+def _hide_private_titles(db: ChatDatabase) -> None:
+    """Rename every chat whose auto title names a fact marked sensitive."""
+    hidden = db.hide_private_titles(_private_title)
+    if hidden:
+        logger.info("Auto-title: renamed %d chat(s) that named a private fact", hidden)
+
+
 def _set_provisional_title(db: ChatDatabase, session_id: str, user_msg: str) -> None:
     """Name a still-untitled chat after the question the server just took."""
+    from gaia.agents.base.memory_store import says_sensitive
+
     title = _title_from_question(user_msg)
+    # A question that asks to keep something private is no name for its chat.
+    if title and (says_sensitive(user_msg) or _private_title(title, None)):
+        return
     if title and db.set_provisional_title(session_id, title):
         logger.info("Named session %s after its first question", session_id[:8])
 
@@ -1046,6 +1065,10 @@ async def _maybe_update_session_title(
     with its reason, and the chat keeps its provisional title until a later
     turn's try succeeds.
     """
+    from gaia.agents.base.memory_store import says_sensitive
+
+    # A fact marked or forgotten since (here or on the Memory page) stops naming chats.
+    _hide_private_titles(db)
     # Lookup current session.  If it's gone (deleted while we were
     # generating), bail silently.
     session = db.get_session(session_id)
@@ -1074,7 +1097,10 @@ async def _maybe_update_session_title(
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.llm.lemonade_manager import LemonadeManager
 
-    if at_turn_start and not _ui_cloud_provider(title_model):
+    if at_turn_start and (
+        not _ui_cloud_provider(title_model) or says_sensitive(latest_msg)
+    ):
+        # A private fact is saved by the turn: name the chat once it is.
         return
     # Use the same Lemonade endpoint the chat just used.
     base_url = LemonadeManager.get_base_url() or resolve_lemonade_base_url()
@@ -1120,6 +1146,12 @@ async def _maybe_update_session_title(
         # The model agrees with the name the chat has: that is its title.
         with _AUTO_TITLE_LOCK:
             _AUTO_TITLE_SETTLED.add(session_id)
+        return
+    if _private_title(new_title, session.get("created_at")):
+        logger.info(
+            "Auto-title: the title for session %s names a private fact; not used",
+            session_id[:8],
+        )
         return
     try:
         # A no-op when the user renamed the chat while the title was written.
