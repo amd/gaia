@@ -255,7 +255,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
             if (data.quick_links.length > 0) setQuickLinks(data.quick_links);
             log.ui.info(`Browsing: ${data.current_path} (${data.entries.length} items)`);
         } catch (err) {
-            if (path && (err as { httpStatus?: number }).httpStatus === 403) {
+            if (path && (err as { reason?: unknown }).reason === 'os_denied') {
                 const name = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;
                 setCurrentPath(path);
                 setParentPath(null);

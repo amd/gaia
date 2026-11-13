@@ -435,23 +435,33 @@ describe('FileBrowser dates follow the interface language', () => {
 });
 
 describe('unreadable folder', () => {
+    const osDenied = () => Object.assign(new Error('Permission denied for this directory'), { httpStatus: 403, reason: 'os_denied' });
+
     it('clears the previous folder and names the folder that could not be opened', async () => {
         render(<FileBrowser onStartChat={vi.fn()} />);
         await screen.findByText('report.pdf');
 
-        mockedApi.browseFiles.mockRejectedValueOnce(
-            Object.assign(new Error('Permission denied for this directory'), { httpStatus: 403 }),
-        );
+        mockedApi.browseFiles.mockRejectedValueOnce(osDenied());
         fireEvent.click(screen.getByRole('button', { name: 'docs' }));
+
+        expect(await screen.findByText(/cannot open the folder "docs"/)).toBeTruthy();
+        expect(screen.queryByText('report.pdf')).toBeNull();
+        expect(screen.queryByText('This folder is empty')).toBeNull();
+        expect(screen.getByRole('button', { name: 'docs' })).toBeTruthy();
+    });
+
+    it('keeps the backend text for the outside-home 403', async () => {
+        render(<FileBrowser onStartChat={vi.fn()} />);
+        await screen.findByText('report.pdf');
+
         mockedApi.browseFiles.mockRejectedValueOnce(
-            Object.assign(new Error('Permission denied for this directory'), { httpStatus: 403 }),
+            Object.assign(new Error('Access restricted to files under: /home/user'), { httpStatus: 403, reason: null }),
         );
         fireEvent.click(screen.getByRole('button', { name: 'user' }));
 
-        expect(await screen.findByText(/cannot open the folder "user"/)).toBeTruthy();
-        expect(screen.queryByText('report.pdf')).toBeNull();
-        expect(screen.queryByText('This folder is empty')).toBeNull();
-        expect(screen.getByRole('button', { name: 'user' })).toBeTruthy();
+        expect(await screen.findByText('Access restricted to files under: /home/user')).toBeTruthy();
+        expect(screen.queryByText(/cannot open the folder/)).toBeNull();
+        expect(screen.getByText('report.pdf')).toBeTruthy();
     });
 });
 
