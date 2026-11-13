@@ -2353,7 +2353,9 @@ def resolve_binary_policies(
                 f"Skill '{skill_name}' needs the '{policy.binary}' command, which "
                 f"is not on PATH. {policy.summary} {remedy}{policy.install_hint} "
                 "The skill is refused rather than loaded without the tool it "
-                "documents."
+                "documents. Tell the user plainly that you cannot do what they "
+                "asked right now and why; do not stand in another tool, such as "
+                "saving a memory, as if it did the job."
             )
         if policy not in policies:
             policies.append(policy)

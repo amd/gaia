@@ -1088,6 +1088,11 @@ version's backend, so the first launch afterwards downloads nothing for it. A re
 that would leave no working app, such as one with no disk space, is refused with the
 reason.
 
+**On a Mac** the app can't install updates itself yet, because its builds aren't
+signed with an Apple Developer ID ([#7061](https://github.com/amd/gaia/issues/7061)).
+A new release still shows, with a **Download** link to its release page instead of
+**Update now**; install the `.dmg` from there.
+
 **Pinning:** after installing a specific version, GAIA stays on it and offers no
 updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
 
@@ -1211,7 +1216,7 @@ Behavior notes:
 
 - Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
 - Nobody is there to approve a tool call during a scheduled run, so a run that reaches a step needing approval (a shell command, a file write) stops there and fails, naming the step. Do that work in a chat, where you can approve it.
-- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab.
+- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab. A run that finishes cleanly raises an unread notification with the start of its answer; runs that finished before the app opened don't.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
 - Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.

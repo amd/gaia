@@ -35,10 +35,25 @@ afterEach(() => {
     vi.useRealTimers();
 });
 
+// The switch is drawn disabled until the saved policy loads; a click before then is dropped.
+async function findReadySwitch(): Promise<HTMLElement> {
+    const toggle = await screen.findByRole('switch', { name: 'Local only' });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    return toggle;
+}
+
+function slowPolicyLoad(): () => void {
+    let finish: () => void = () => {};
+    mockedApi.getSettings.mockReturnValueOnce(new Promise((r) => {
+        finish = () => r({ network_policy: 'cloud_allowed' });
+    }) as never);
+    return () => finish();
+}
+
 describe('PrivacySettings local only', () => {
     it('shows the policy and switches it on from Settings', async () => {
         render(<PrivacySettings />);
-        const toggle = await screen.findByRole('switch', { name: 'Local only' });
+        const toggle = await findReadySwitch();
         expect(toggle).not.toBeChecked();
 
         fireEvent.click(toggle);
@@ -52,7 +67,7 @@ describe('PrivacySettings local only', () => {
 
     it('draws Local only as the same slider switch as the rest of Settings', async () => {
         render(<PrivacySettings />);
-        const toggle = await screen.findByRole('switch', { name: 'Local only' });
+        const toggle = await findReadySwitch();
         expect(toggle.closest('.toggle-switch')).not.toBeNull();
         expect(toggle.closest('.toggle-switch')?.querySelector('.toggle-track')).not.toBeNull();
         expect(screen.queryByText('Off', { exact: true })).not.toBeInTheDocument();
@@ -62,7 +77,7 @@ describe('PrivacySettings local only', () => {
         let finish: (v: unknown) => void = () => {};
         mockedApi.updateSettings.mockReturnValueOnce(new Promise((r) => { finish = r; }) as never);
         render(<PrivacySettings />);
-        const toggle = await screen.findByRole('switch', { name: 'Local only' });
+        const toggle = await findReadySwitch();
         toggle.focus();
         fireEvent.click(toggle);
         expect(toggle).not.toBeDisabled();
@@ -75,7 +90,36 @@ describe('PrivacySettings local only', () => {
     it('returns to the server policy when switching on fails', async () => {
         mockedApi.updateSettings.mockRejectedValueOnce(new Error('policy file is read-only'));
         render(<PrivacySettings />);
+        const toggle = await findReadySwitch();
+
+        fireEvent.click(toggle);
+
+        expect(await screen.findByRole('alert')).toHaveTextContent('policy file is read-only');
+        expect(toggle).not.toBeChecked();
+    });
+
+    it('ignores a click before the saved policy loads, then takes the next one', async () => {
+        const loaded = slowPolicyLoad();
+        render(<PrivacySettings />);
         const toggle = await screen.findByRole('switch', { name: 'Local only' });
+        expect(toggle).toBeDisabled();
+
+        fireEvent.click(toggle);
+        expect(mockedApi.updateSettings).not.toHaveBeenCalled();
+
+        await act(async () => { loaded(); });
+        expect(toggle).toBeEnabled();
+        fireEvent.click(toggle);
+        await waitFor(() => expect(mockedApi.updateSettings).toHaveBeenCalledTimes(1));
+        expect(await screen.findByRole('status')).toHaveTextContent('Cloud models are unavailable');
+    });
+
+    it('still reports a failed switch-on when the saved policy loads late', async () => {
+        const loaded = slowPolicyLoad();
+        mockedApi.updateSettings.mockRejectedValueOnce(new Error('policy file is read-only'));
+        render(<PrivacySettings />);
+        setTimeout(loaded, 50);
+        const toggle = await findReadySwitch();
 
         fireEvent.click(toggle);
 

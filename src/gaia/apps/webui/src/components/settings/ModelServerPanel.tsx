@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useState } from 'react';
 import { Loader2, ScrollText } from 'lucide-react';
 import * as api from '../../services/api';
@@ -217,7 +218,7 @@ export function ModelServerPanel() {
                     </span>
                 ) : (
                     <>
-                        <div className="segmented" role="radiogroup" aria-label={t('settings.server.backendShort')}>
+                        <RadioGroup className="segmented" aria-label={t('settings.server.backendShort')}>
                             {choices.map((name) => (
                                 <button
                                     key={name}
@@ -232,7 +233,7 @@ export function ModelServerPanel() {
                                     {backendLabel(name)}
                                 </button>
                             ))}
-                        </div>
+                        </RadioGroup>
                         <span className="settings-hint">
                             {t('settings.server.backendHint')}
                             {installable.length > 0 && ` ${t('settings.server.installable', { names: installable.join(', ') })}`}

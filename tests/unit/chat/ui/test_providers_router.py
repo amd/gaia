@@ -985,7 +985,12 @@ def test_active_restore_fails_for_a_local_model_not_downloaded(
 
 # Lemonade lists a registered ``user.X`` model as ``X`` (seen on v2026.40.0).
 _CUSTOM = "user.ggml-gpt-oss-20b-MXFP4-GGUF"
-_CUSTOM_LISTED = {"id": "ggml-gpt-oss-20b-MXFP4-GGUF", "downloaded": True, "labels": []}
+_CUSTOM_LISTED = {
+    "id": "ggml-gpt-oss-20b-MXFP4-GGUF",
+    "recipe": "llamacpp",
+    "downloaded": True,
+    "labels": [],
+}
 
 
 def test_active_custom_model_is_downloaded_under_its_listed_name(
@@ -1671,9 +1676,41 @@ def test_a_single_turn_flm_build_is_no_chat_model(client, lemonade):
     assert "gemma4e-flash-e4b-FLM" not in ids
 
 
+_UNPROVEN_FLM = ("gemma4-it-e2b-FLM", "lfm2-1.2b-FLM", "qwen3.5-4b-FLM")
+
+
+def _flm_on_disk(*ids):
+    return [
+        {"id": i, "downloaded": True, "labels": ["chat"], "recipe": "flm"} for i in ids
+    ]
+
+
+def test_downloaded_npu_models_gaia_has_not_proven_are_not_offered(client, lemonade):
+    """#7975: every FLM build on the PC was offered as Ready."""
+    lemonade.models = _flm_on_disk("gemma4-it-e4b-FLM", *_UNPROVEN_FLM)
+    lemonade.answers[("GET", "system-info")] = (200, _NPU_SYSTEM_INFO)
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert "gemma4-it-e4b-FLM" in ids
+    for unproven in _UNPROVEN_FLM:
+        assert unproven not in ids
+    refused = client.post("/api/providers/select", json={"model": "lfm2-1.2b-FLM"})
+    assert refused.status_code == 409
+
+
+def test_an_unproven_npu_model_the_user_already_chose_still_lists(client, lemonade):
+    """A choice saved before it was withdrawn still loads."""
+    _write_config({"last_model": "lfm2-1.2b-FLM", "default_model": "qwen3.5-4b-FLM"})
+    lemonade.models = _flm_on_disk(*_UNPROVEN_FLM)
+    lemonade.answers[("GET", "system-info")] = (200, _NPU_SYSTEM_INFO)
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert "lfm2-1.2b-FLM" in ids
+    assert "qwen3.5-4b-FLM" in ids
+    assert "gemma4-it-e2b-FLM" not in ids
+
+
 def test_local_models_keep_chat_models_that_also_take_audio(client, lemonade):
     lemonade.models = [
-        {"id": "gemma4-it-e2b-FLM", "downloaded": True, "labels": ["chat", "audio"]},
+        {"id": "gemma4-it-e4b-FLM", "downloaded": True, "labels": ["chat", "audio"]},
         {"id": "audio-only-FLM", "downloaded": True, "labels": ["audio"]},
         {
             "id": "Whisper-Large-v3-Turbo",
@@ -1684,7 +1721,7 @@ def test_local_models_keep_chat_models_that_also_take_audio(client, lemonade):
         {"id": "kokoro-v1", "downloaded": True, "labels": ["tts"]},
     ]
     ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
-    assert "gemma4-it-e2b-FLM" in ids
+    assert "gemma4-it-e4b-FLM" in ids
     for non_chat in (
         "audio-only-FLM",
         "Whisper-Large-v3-Turbo",
@@ -2656,9 +2693,50 @@ def test_selecting_a_listed_cloud_model_is_refused_under_local_only(
     resp = client.post("/api/providers/select", json={"model": _OTHER_CLOUD})
     assert resp.status_code == 409
     detail = resp.json()["detail"]
-    assert "Can't switch to big-model · othercloud: Local only is on." in detail
+    assert (
+        "Can't switch to big-model · othercloud: Local only is on, so it was blocked: it is a cloud model."
+        in detail
+    )
     assert "Settings > Privacy" in detail and "gaia config" not in detail
     assert lemonade.paths() == ["models?show_all=true"]
+    assert db.get_setting("custom_model") is None
+
+
+# ── A router collection under Local only (#7525) ─────────────────────────
+
+_ROUTER = "collection.x"
+_ROUTER_LISTED = {"id": _ROUTER, "recipe": "collection.router", "labels": []}
+
+
+@pytest.mark.parametrize("typed", ["collection.x", "COLLECTION.X", "user.collection.x"])
+def test_selecting_a_router_collection_is_refused_under_local_only(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models, typed
+):
+    # A router collection can forward to a cloud member, so Local only can't
+    # vouch for it, even though the model list never marks it "cloud".
+    lemonade.models = [_ROUTER_LISTED]
+    resp = client.post("/api/providers/select", json={"model": typed})
+    assert resp.status_code == 409, resp.json()
+    detail = resp.json()["detail"]
+    assert "Local only is on" in detail
+    assert (
+        "it is a 'collection.router' model, which can forward requests to the cloud"
+        in detail
+    )
+    assert "Settings > Privacy" in detail and "gaia config" not in detail
+    assert db.get_setting("custom_model") is None
+
+
+def test_selecting_an_unlisted_dotted_id_says_the_catalog_does_not_list_it(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    # A mistyped dotted id is not a privacy problem: the catalog simply
+    # doesn't list it, so the refusal must say that instead of pointing
+    # at the Local only setting.
+    resp = client.post("/api/providers/select", json={"model": "user.mistyped-model"})
+    assert resp.status_code == 409, resp.json()
+    detail = resp.json()["detail"]
+    assert "Lemonade's catalog doesn't list it" in detail
     assert db.get_setting("custom_model") is None
 
 
