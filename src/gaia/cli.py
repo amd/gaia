@@ -4899,7 +4899,11 @@ def _handle_schedule(args):
             sink=args.sink,
             sink_args=sink_args,
         )
-        store.add(schedule)
+        try:
+            store.add(schedule)
+        except ValueError as exc:
+            print(f"❌ Cannot add schedule {args.name!r}: {exc}", file=sys.stderr)
+            sys.exit(1)
         if schedule.one_shot:
             print(
                 f"✅ Added one-time schedule {schedule.name!r} "
@@ -6671,6 +6675,11 @@ Let me know your answer!
                 sys.exit(0)
             if status.stage == "load":
                 print(f"NOT READY: profile '{profile}' is downloaded but will not load")
+            elif status.model_list_unread:
+                print(
+                    f"NOT READY: profile '{profile}': the model server's model list "
+                    "can't be read"
+                )
             else:
                 print(f"NOT READY: profile '{profile}' needs setup")
             for reason in status.reasons:
@@ -9467,6 +9476,7 @@ def _diag_log_files(gaia_dir):
     files += [(p, "logs/") for p in sorted((gaia_dir / "logs").glob("*.log"))]
     files.append((daemon_paths.log_path(), "host/"))
     files.append((lemonade_home() / "lemonade" / "lemond.log", "lemonade/"))
+    files.append((gaia_dir / "discord" / "bridge.log", "discord/"))
     files += [
         (p, f"agents/{p.parent.parent.name}/logs/")
         for p in sorted(gaia_agents_dir().glob("*/logs/*.log"))

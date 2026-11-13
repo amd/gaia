@@ -229,6 +229,8 @@ describe('ModelStatusPill', () => {
         const memory = dialog.querySelectorAll('dd')[2].textContent ?? '';
         expect(memory).toContain('\u2068~8.2 GB\u2069');
         expect(memory).toContain('\u206880.5 GB\u2069');
+        expect(memory).toContain(' ·\u00A0');
+        expect(memory).not.toContain(' · ');
         const cloud = dialog.querySelector('.settings-hint')?.textContent ?? '';
         expect(cloud).toContain('\u2068DeepSeek V4\u2069');
         expect(stripIsolates(cloud)).toMatch(/^تستخدم الرسائل الجديدة DeepSeek V4 في السحابة\. النموذج المحلي أدناه\./);
