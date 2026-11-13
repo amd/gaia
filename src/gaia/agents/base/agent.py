@@ -5663,7 +5663,9 @@ Do NOT wrap conversational replies in JSON.
     @staticmethod
     def _prompted_call_key(tool_name: str, tool_args: Any) -> str:
         """One call's identity: its tool and exact arguments."""
-        return json.dumps([tool_name, tool_args], sort_keys=True, default=str)
+        return json.dumps(
+            [tool_name, tool_args], sort_keys=True, default=str, ensure_ascii=False
+        )
 
     def _begin_turn_provenance(self) -> None:
         """Open a turn: only the user has spoken, unless a caller pushed content.
