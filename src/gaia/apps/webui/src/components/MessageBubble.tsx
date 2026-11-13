@@ -172,12 +172,16 @@ const squash = (text: string) => text.replace(/\s+/g, ' ').trim();
  * error keeps the step, as does one ending with an error that isn't the
  * turn's last step.
  */
-export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): { steps: AgentStep[]; echoed: boolean } {
+export function dropErrorsEchoedInAnswer(
+    steps: AgentStep[],
+    content: string,
+): { steps: AgentStep[]; echoed: boolean; endedBy: string | null } {
     const answer = squash(content);
-    if (!answer) return { steps, echoed: false };
+    if (!answer) return { steps, echoed: false, endedBy: null };
     const tail = content.trimEnd();
     const last = steps[steps.length - 1];
     let echoed = false;
+    let endedBy: string | null = null;
     const kept = steps.filter((s) => {
         if (s.type !== 'error' || !s.detail?.trim()) return true;
         if (squash(s.detail) === answer) {
@@ -185,9 +189,11 @@ export function dropErrorsEchoedInAnswer(steps: AgentStep[], content: string): {
             return false;
         }
         // The server appends the error that ended the turn as its own paragraph.
-        return s !== last || !tail.endsWith(`\n\n${s.detail.trim()}`);
+        if (s !== last || !tail.endsWith(`\n\n${s.detail.trim()}`)) return true;
+        endedBy = s.detail.trim();
+        return false;
     });
-    return { steps: kept, echoed };
+    return { steps: kept, echoed, endedBy };
 }
 
 /**
@@ -572,9 +578,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const t = useT();
     useModelNames();
     const echo = useMemo(() => {
-        if (message.role !== 'assistant' || !agentSteps) return { steps: agentSteps, echoed: false };
+        if (message.role !== 'assistant' || !agentSteps) return { steps: agentSteps, echoed: false, endedBy: null };
         const steps = dropAnswerDrafts(agentSteps, message.content);
-        return isStreaming ? { steps, echoed: false } : dropErrorsEchoedInAnswer(steps, message.content);
+        return isStreaming ? { steps, echoed: false, endedBy: null } : dropErrorsEchoedInAnswer(steps, message.content);
     }, [agentSteps, message.content, message.role, isStreaming]);
     const isError = message.role === 'assistant' && (echo.echoed || message.failed === true || isErrorContent(message.content));
     const place = useInferencePlace();
@@ -586,13 +592,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         () => (message.role === 'assistant' && !isStreaming ? splitCutOff(message.content) : null),
         [message.content, message.role, isStreaming],
     );
+    // The error that ended a partly written answer, shown apart from the answer.
+    const endedBy = cutOff ? null : echo.endedBy;
     // What the user typed is never agent output — render it verbatim.
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
-        () => (message.role === 'user'
-            ? message.content
-            : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
-        [message.content, message.role, isStreaming, cutOff],
+        () => {
+            if (message.role === 'user') return message.content;
+            const body = cutOff
+                ? cutOff.body
+                : endedBy ? message.content.trimEnd().slice(0, -endedBy.length) : message.content;
+            return cleanToolCallContent(body, Boolean(isStreaming));
+        },
+        [message.content, message.role, isStreaming, cutOff, endedBy],
     );
     const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
@@ -844,6 +856,9 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 : say(cutOff.notice)))}
                         </p>
                     )}
+                    {endedBy && (
+                        <p className="msg-cut-off" role="note">{endedBy}</p>
+                    )}
                     {onContinue && stopState && !isStreaming && cleanedContent.trim() && cleanedContent.trim() !== SERVER_CANCELLED_TEXT && (
                         <button type="button" className="msg-try-again" onClick={onContinue}>
                             <Play size={12} aria-hidden="true" />
@@ -881,7 +896,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
-                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError)} />
+                            <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError || Boolean(endedBy))} />
                         </div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
