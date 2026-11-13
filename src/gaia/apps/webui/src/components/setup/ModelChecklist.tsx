@@ -173,7 +173,7 @@ export function SelectionSummary({ plan, selection }: SummaryProps) {
                     <bdi className="mc-stat-value">{downloadGb == null ? t('setup.summary.sizeUnknown') : formatSize(round1(shownDownload))}</bdi>
                 </span>
                 <span className="mc-stat">
-                    <span className="mc-stat-label"><HardDrive size={12} aria-hidden="true" /> {drive ? t('setup.summary.freeOn', { drive }) : t('setup.summary.free')}</span>
+                    <span className="mc-stat-label"><HardDrive size={12} aria-hidden="true" /> {drive ? <>{t('setup.summary.freeOn')} <bdi dir="ltr" className="mc-stat-path">{drive}</bdi></> : t('setup.summary.free')}</span>
                     <bdi className="mc-stat-value">{freeGb == null ? t('setup.summary.freeUnknown') : formatSize(freeGb)}</bdi>
                 </span>
                 {afterGb != null && !short && (
