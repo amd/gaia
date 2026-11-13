@@ -566,6 +566,8 @@ export const enMessages = {
     'activity.filter.all': 'All',
     'activity.filter.success': 'Success',
     'activity.filter.error': 'Error',
+    'activity.fetchBlocked': 'Site blocked it ({code})',
+    'activity.fetchFailed': 'Couldn\'t be loaded',
     'activity.identicalCalls': '{n} identical calls',
     'activity.detail.tool': 'Tool',
     'activity.detail.via': 'via {server}',
