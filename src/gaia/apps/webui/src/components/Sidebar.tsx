@@ -136,7 +136,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
     const waiting = failed > 0 ? `${failed} not sent` : unsent > 0 ? `${unsent} to send` : null;
     const note = [place, waiting].filter(Boolean).join(' · ');
     const snippetText = snippet ? `${snippet.before}${snippet.match}${snippet.after}` : null;
-    const title = <span className="sb-row-title">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
+    const title = <span className="sb-row-title" dir="auto">{titleMatch ? <Highlight parts={titleMatch} /> : session.title}</span>;
 
     return (
         <li
