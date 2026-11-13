@@ -1867,60 +1867,14 @@ def _credential_file_name(name: str) -> bool:
     """Whether a file called *name* is one ``security.is_read_blocked`` refuses."""
     from gaia import security
 
-    lowered = name.lower()
-    return (
-        lowered in {n.lower() for n in security.SENSITIVE_FILE_NAMES}
-        or os.path.splitext(lowered)[1] in security.SENSITIVE_EXTENSIONS
-    )
-
-
-def _named_credential(word: str) -> bool:
-    """Whether *word* names a credential file even when nothing is on disk yet.
-
-    A word with a folder in it is judged by its last part. A bare word must
-    look like a file name: ``getent passwd`` names a database, ``jq .a.key`` a
-    JSON field, and both are only refused when such a file is really there.
-    """
-    from gaia import security
-
-    stripped = word.rstrip("/\\")
-    name = re.split(r"[\\/]", stripped)[-1].lower()
-    if not name:
-        return False
-    if name != stripped.lower():
-        return _credential_file_name(name)
-    if name in {n.lower() for n in security.SENSITIVE_FILE_NAMES}:
-        return "." in name
-    ext = os.path.splitext(name)[1]
-    return ext in security.SENSITIVE_EXTENSIONS and not name.startswith(".")
+    return security.is_credential_file_name(name)
 
 
 def _credential_file(candidate_path: str, cwd: str) -> Optional[str]:
-    """The credential file *candidate_path* reads, or None.
+    """The credential file *candidate_path* reads from *cwd*, or None."""
+    from gaia import security
 
-    By name for what the word says, and by the real file for what it is: a
-    ``notes.txt`` symlinked to ``.env`` reads ``.env``. A folder is not a file,
-    so a virtualenv called ``.env`` stays listable.
-    """
-    if not candidate_path or "://" in candidate_path:
-        return None
-    expanded = os.path.expandvars(os.path.expanduser(candidate_path))
-    for word in dict.fromkeys((candidate_path, expanded)):
-        try:
-            target = Path(cwd).joinpath(word)
-            present = os.path.lexists(target)
-            is_dir = present and os.path.isdir(target)
-            real = os.path.realpath(target) if present else ""
-        except (OSError, ValueError) as exc:
-            logger.debug("Not a file on disk: %r (%s)", word, exc)
-            present, is_dir, real = False, False, ""
-        if is_dir:
-            continue
-        if _named_credential(word):
-            return word
-        if present and _credential_file_name(os.path.basename(real)):
-            return real
-    return None
+    return security.credential_file_read(candidate_path, cwd)
 
 
 #: Programs that print a file's contents, so a wildcard operand reads every match.

@@ -1,0 +1,182 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+"""Python code that names a credential file is refused before it runs.
+
+``run_python`` and ``execute_python_file`` run arbitrary code, so the paths
+that code spells out are held to ``security.is_read_blocked``. The refusal
+comes from ``Agent._policy_refusal``, before any prompt, so a blanket
+pre-approval (``auto_approve_gated_tools``) does not lift it.
+"""
+
+from __future__ import annotations
+
+import os
+from unittest.mock import patch
+
+import pytest
+
+from gaia.agents.base.agent import Agent
+from gaia.agents.base.credential_reads import (
+    credential_in_python,
+    python_credential_refusal,
+)
+from gaia.agents.base.tools import _TOOL_REGISTRY, tool
+
+
+@pytest.fixture
+def project(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    root = home / "project"
+    root.mkdir(parents=True)
+    (root / ".env").write_text("TOKEN=abc\n")
+    (root / "secrets.json").write_text("{}\n")
+    (root / "data.csv").write_text("a,b\n1,2\n")
+    (home / ".npmrc").write_text("//registry/:_authToken=x\n")
+    for var in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(var, str(home))
+    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia_home"))
+    monkeypatch.chdir(root)
+    return root
+
+
+class _PythonAgent(Agent):
+    """A base agent whose Python tools only record that they ran."""
+
+    ran: list = []
+
+    def _get_system_prompt(self):
+        return "probe"
+
+    def _register_tools(self):
+        ran = self.ran
+
+        @tool
+        def run_python(code: str) -> dict:
+            """Run a Python snippet."""
+            ran.append(code)
+            return {"status": "success", "stdout": ""}
+
+        @tool
+        def execute_python_file(file_path: str) -> dict:
+            """Run a Python file."""
+            ran.append(file_path)
+            return {"status": "success", "stdout": ""}
+
+
+@pytest.fixture
+def agent(project):
+    saved = dict(_TOOL_REGISTRY)
+    _PythonAgent.ran = []
+    with patch("gaia.agents.base.agent.AgentSDK"):
+        built = _PythonAgent(silent_mode=True, skip_lemonade=True)
+    built.console.auto_approve_gated_tools = True
+    try:
+        yield built
+    finally:
+        _TOOL_REGISTRY.clear()
+        _TOOL_REGISTRY.update(saved)
+
+
+REFUSED_SNIPPETS = [
+    "print(open('secrets.json').read())",
+    "from pathlib import Path\nprint(Path('~/.npmrc').expanduser().read_text())",
+    "print(open(r'C:\\x\\.env').read())",
+    "import os\nfd = os.open('x.pem', 0)",
+    "print(open('.env').read())",
+    "print(open('SECRETS.JSON').read())",
+    "import os\nprint(open(os.path.join('config', '.netrc')).read())",
+    "from pathlib import Path\nprint((Path.home() / '.npmrc').read_text())",
+    "name = '.env'\nprint(open(name).read())",
+    "print(open(f\"{'.'}env\").read())",
+    "import subprocess\nsubprocess.run('cat .env', shell=True)",
+    "import subprocess\nsubprocess.run(['type', 'secrets.json'])",
+    "import os\nos.system('more .env')",
+    "print(open('server.key', 'rb').read())",
+]
+
+
+@pytest.mark.parametrize("code", REFUSED_SNIPPETS)
+def test_run_python_naming_a_credential_file_is_refused(agent, code):
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result["executed"] is False, result
+    assert "credentials" in result["error"]
+    assert agent.ran == []
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "print(open('data.csv').read())",
+        "print('put your token in .env')",
+        "print('x'.endswith('.pem'))",
+        "import json\nprint(json.dumps({'key': 1}))",
+        "print(open('secrets.md', 'w').write('notes'))",
+        "print(1 + 1)",
+    ],
+)
+def test_ordinary_python_still_runs(agent, code):
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result.get("status") == "success", result
+    assert agent.ran == [code]
+
+
+def test_a_script_that_reads_a_credential_file_is_refused(agent, project):
+    script = project / "leak.py"
+    script.write_text("print(open('secrets.json').read())\n")
+
+    result = agent._execute_tool("execute_python_file", {"file_path": str(script)})
+
+    assert result["executed"] is False, result
+    assert agent.ran == []
+
+
+def test_a_script_that_reads_data_still_runs(agent, project):
+    script = project / "load.py"
+    script.write_text("print(open('data.csv').read())\n")
+
+    result = agent._execute_tool("execute_python_file", {"file_path": str(script)})
+
+    assert result.get("status") == "success", result
+
+
+def test_running_a_credential_file_as_a_script_is_refused(agent, project):
+    result = agent._execute_tool("execute_python_file", {"file_path": ".env"})
+
+    assert result["executed"] is False, result
+
+
+def test_the_refusal_carries_no_approval_tier(project):
+    refusal = python_credential_refusal(
+        "run_python", {"code": "open('.env')"}, [str(project)]
+    )
+
+    assert refusal is not None
+    assert "tier" not in refusal
+    assert refusal["executed"] is False
+
+
+def test_other_tools_are_not_checked(project):
+    assert python_credential_refusal("read_file", {"code": "open('.env')"}, []) is None
+
+
+def test_a_link_to_a_credential_file_is_refused(project, monkeypatch):
+    (project / "notes.txt").write_text("innocent\n")
+    real = os.path.realpath
+
+    def fake_realpath(path, *args, **kwargs):
+        if os.path.basename(os.fspath(path)) == "notes.txt":
+            return str(project / ".env")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os.path, "realpath", fake_realpath)
+
+    assert credential_in_python("open('notes.txt')", [str(project)]) is not None
+
+
+def test_a_computed_path_is_beyond_the_check(project):
+    """Documented limit: a path built only at run time is not seen."""
+    code = "print(open(''.join(['.', 'e', 'n', 'v'])).read())"
+
+    assert credential_in_python(code, [str(project)]) is None

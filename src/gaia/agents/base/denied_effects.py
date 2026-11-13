@@ -1332,6 +1332,41 @@ def effects_of_python_code(code: str, cwd: str, depth: int = 0) -> Set[Effect]:
     return effects
 
 
+def python_strings(code: str, cwd: str) -> List[str]:
+    """Every string a snippet spells out, with the paths it builds from them.
+
+    The reading :class:`_PyFiles` gives a file change — literals, names bound
+    to them, f-strings, ``os.path.join``, ``Path(...) / ...`` — applied to every
+    expression, plus the words of a command it hands to a shell. A string the
+    code only works out when it runs is not in the list.
+    """
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError):
+        # Python refuses to run it too, so it opens nothing.
+        return []
+    files = _PyFiles(tree, cwd)
+    found: List[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Constant, ast.JoinedStr, ast.BinOp, ast.Call)):
+            text = files.text(node)
+            if text:
+                found.append(text)
+        if not isinstance(node, ast.Call):
+            continue
+        module, name = files._callee(node)
+        if name in _SUBPROCESS_FUNCS or (
+            module == "os" and name in ("system", "popen")
+        ):
+            first = _arg(node, 0, "args")
+            command = files.text(first) if first is not None else None
+            if command:
+                found.extend(
+                    word for seg in _split_segments(command) for word in _tokens(seg)
+                )
+    return found
+
+
 def _effects_of_python_call(
     node: ast.Call,
     subprocess_names: Set[str],
