@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, ExternalLink, Link2, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
@@ -134,10 +134,17 @@ function openAuthUrl(url: string): void {
 
 const POLL_MS = 4000;
 
+/** Sign-in refused because this PC has no OAuth client for the provider yet. */
+function isUnconfigured(e: unknown): boolean {
+    const err = e as { httpStatus?: number; body?: Record<string, unknown> | null };
+    return err?.httpStatus === 503 && err.body?.error === 'not_configured';
+}
+
 function ProviderRow({
     connectorId,
     name,
     connected,
+    needsSetup,
     grantAgents,
     scopes,
     onOpened,
@@ -145,16 +152,31 @@ function ProviderRow({
     connectorId: string;
     name: string;
     connected: boolean;
+    /** No OAuth client on this PC yet, so sign-in cannot start. */
+    needsSetup: boolean;
     grantAgents: string[];
     scopes: string[];
     onOpened: () => void;
 }) {
     const t = useT();
     const openSettings = useChatStore((s) => s.openSettings);
+    const openConnectorSettings = useChatStore((s) => s.openConnectorSettings);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [setup, setSetup] = useState(false);
+
+    // Set up in Settings since: the sentence no longer applies.
+    useEffect(() => {
+        if (!needsSetup) setSetup(false);
+    }, [needsSetup]);
 
     const connect = useCallback(async () => {
+        if (needsSetup) {
+            setError(null);
+            setSetup(true);
+            return;
+        }
+        setSetup(false);
         // With no agent to size the request, Settings is where access is chosen.
         if (grantAgents.length === 0) {
             openSettings('connectors');
@@ -167,11 +189,12 @@ function ProviderRow({
             openAuthUrl(flow.authorization_url);
             onOpened();
         } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            if (isUnconfigured(e)) setSetup(true);
+            else setError(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(false);
         }
-    }, [connectorId, grantAgents, scopes, onOpened, openSettings]);
+    }, [connectorId, needsSetup, grantAgents, scopes, onOpened, openSettings]);
 
     const label = t(connected ? 'connectCard.reconnect' : 'connectCard.connect', { name });
     return (
@@ -195,6 +218,18 @@ function ProviderRow({
             )}
             {error && (
                 <div className="render-connect__error" role="alert">{error}</div>
+            )}
+            {setup && (
+                <div className="render-connect__setup" role="status">
+                    <span>{t('connectCard.needsSetup', { name })}</span>
+                    <button
+                        type="button"
+                        className="render-connect__settings"
+                        onClick={() => openConnectorSettings(connectorId)}
+                    >
+                        {t('connectCard.setUp', { name })}
+                    </button>
+                </div>
             )}
         </div>
     );
@@ -245,6 +280,14 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         return () => window.removeEventListener('focus', refresh);
     }, [valid, refresh]);
 
+    // Settings opens inside the app, so closing it brings no window focus back.
+    const settingsOpen = useChatStore((s) => s.settingsSection !== null);
+    const settingsWasOpen = useRef(settingsOpen);
+    useEffect(() => {
+        if (valid && settingsWasOpen.current && !settingsOpen) refresh();
+        settingsWasOpen.current = settingsOpen;
+    }, [valid, settingsOpen, refresh]);
+
     // While a sign-in tab is open, watch for the account to appear.
     useEffect(() => {
         if (!opened) return undefined;
@@ -263,6 +306,10 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
 
     const isConnected = (id: string) =>
         connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+    const needsSetup = (id: string) =>
+        connectors.some(
+            (c) => c.id === id && !('error' in c) && !c.configured && c.configurable === false,
+        );
     const displayName = (id: string) =>
         PROVIDER_NAMES[id]
         ?? connectors.find((c) => c.id === id && !('error' in c))?.display_name
@@ -292,6 +339,7 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         connectorId={id}
                         name={displayName(id)}
                         connected={isConnected(id)}
+                        needsSetup={needsSetup(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}
                         scopes={requestScopes(
                             data.scopes?.[id],

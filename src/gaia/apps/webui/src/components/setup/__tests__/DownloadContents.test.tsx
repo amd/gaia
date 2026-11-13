@@ -21,6 +21,14 @@ describe('Everything coming to this PC', () => {
         expect(document.body).not.toHaveTextContent('pypi.org');
     });
 
+    it('says a model server the installer carries is included, not "From included with GAIA"', () => {
+        const plan = P();
+        const components = plan.components!.map((c) => (c.id === 'server' ? { ...c, source: 'the GAIA installer', bundled: true } : c));
+        render(<DownloadContents plan={{ ...plan, components }} />);
+        expect(row('Model server')).toHaveTextContent('Included with GAIA');
+        expect(row('Model server')).not.toHaveTextContent('From');
+    });
+
     it('invents no size it cannot know', () => {
         const plan = P();
         render(<DownloadContents plan={{ ...plan, components: plan.components!.map((c) => (c.id === 'agent' ? { ...c, installed: false } : c)) }} />);
