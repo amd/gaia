@@ -933,6 +933,152 @@ class TestDaemonReconfigure:
                 client.reconfigure_lemonade()
 
 
+class TestAdoptedDaemonMatchesTheLaunch:
+    """#7976: a relaunch adopted a daemon left on another model server, so the
+    banner said the server was down while chats still answered through it."""
+
+    LAUNCH_URL = "http://127.0.0.1:49999/api/v1"
+
+    def _inst(self, pid=1):
+        from gaia.daemon.instance import DaemonInstance
+
+        return DaemonInstance(
+            pid=pid, port=5000 + pid, token="t", host="127.0.0.1", started_at=0.0,
+            api_version="1.5",
+        )  # fmt: skip
+
+    def _target(self, http, inst, body):
+        http.routes[f"{inst.base_url}/daemon/v1/lemonade/target"] = FakeResponse(
+            body=body
+        )
+
+    def test_a_daemon_on_the_launchs_server_is_kept(self, http, monkeypatch):
+        from gaia.daemon import client
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        inst = self._inst()
+        self._target(http, inst, {"mode": "external", "base_url": self.LAUNCH_URL})
+        with (
+            mock.patch.object(client, "attach", return_value=inst),
+            mock.patch.object(client, "request_shutdown") as shutdown,
+        ):
+            assert client.match_launch_lemonade() is None
+        shutdown.assert_not_called()
+        assert http.calls[0].headers == {"Authorization": "Bearer t"}
+
+    def test_an_idle_daemon_on_another_server_is_restarted(self, http, monkeypatch):
+        from gaia.daemon import client
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        old, fresh = self._inst(1), self._inst(2)
+        self._target(http, old, {"mode": "gaia", "base_url": None})
+        self._target(http, fresh, {"mode": "external", "base_url": self.LAUNCH_URL})
+        with (
+            mock.patch.object(client, "attach", return_value=old),
+            mock.patch.object(client, "outdated_daemon_busy", return_value=None),
+            mock.patch.object(
+                client, "request_shutdown", return_value=True
+            ) as shutdown,
+            mock.patch.object(client, "wait_until_gone", return_value=True),
+            mock.patch.object(client, "start_or_attach", return_value=fresh) as start,
+        ):
+            why = client.match_launch_lemonade()
+        shutdown.assert_called_once_with(old)
+        start.assert_called_once_with()
+        assert self.LAUNCH_URL in why and "GAIA's own server" in why
+
+    def test_a_busy_daemon_is_left_running_and_says_why(self, http, monkeypatch):
+        from gaia.daemon import client
+        from gaia.daemon.errors import DaemonError
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        inst = self._inst()
+        self._target(http, inst, {"mode": "gaia", "base_url": None})
+        with (
+            mock.patch.object(client, "attach", return_value=inst),
+            mock.patch.object(
+                client,
+                "outdated_daemon_busy",
+                return_value="gaia-cli is still using it",
+            ),
+            mock.patch.object(client, "request_shutdown") as shutdown,
+        ):
+            with pytest.raises(DaemonError, match="gaia-cli is still using it"):
+                client.match_launch_lemonade()
+        shutdown.assert_not_called()
+
+    def test_a_daemon_that_will_not_stop_is_an_error(self, http, monkeypatch):
+        from gaia.daemon import client
+        from gaia.daemon.errors import DaemonError
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        inst = self._inst()
+        self._target(http, inst, {"mode": "gaia", "base_url": None})
+        with (
+            mock.patch.object(client, "attach", return_value=inst),
+            mock.patch.object(client, "outdated_daemon_busy", return_value=None),
+            mock.patch.object(client, "request_shutdown", return_value=False),
+            mock.patch.object(client, "start_or_attach") as start,
+        ):
+            with pytest.raises(DaemonError, match="did not stop"):
+                client.match_launch_lemonade()
+        start.assert_not_called()
+
+    def test_a_restart_that_lands_on_another_server_is_an_error(
+        self, http, monkeypatch
+    ):
+        from gaia.daemon import client
+        from gaia.daemon.errors import DaemonError
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        old, fresh = self._inst(1), self._inst(2)
+        self._target(http, old, {"mode": "gaia", "base_url": None})
+        self._target(http, fresh, {"mode": "gaia", "base_url": None})
+        with (
+            mock.patch.object(client, "attach", return_value=old),
+            mock.patch.object(client, "outdated_daemon_busy", return_value=None),
+            mock.patch.object(client, "request_shutdown", return_value=True),
+            mock.patch.object(client, "wait_until_gone", return_value=True),
+            mock.patch.object(client, "start_or_attach", return_value=fresh),
+        ):
+            with pytest.raises(DaemonError, match="still uses another"):
+                client.match_launch_lemonade()
+
+    def test_a_daemon_too_old_to_name_its_server_is_restarted(self, http, monkeypatch):
+        from gaia.daemon import client
+        from gaia.daemon.instance import DaemonInstance
+
+        monkeypatch.setenv("LEMONADE_BASE_URL", self.LAUNCH_URL)
+        old = DaemonInstance(
+            pid=1, port=5001, token="t", host="127.0.0.1", started_at=0.0,
+            api_version="1.4",
+        )  # fmt: skip
+        fresh = self._inst(2)
+        self._target(http, fresh, {"mode": "external", "base_url": self.LAUNCH_URL})
+        with (
+            mock.patch.object(client, "attach", return_value=old),
+            mock.patch.object(client, "outdated_daemon_busy", return_value=None),
+            mock.patch.object(client, "request_shutdown", return_value=True),
+            mock.patch.object(client, "wait_until_gone", return_value=True),
+            mock.patch.object(client, "start_or_attach", return_value=fresh),
+        ):
+            why = client.match_launch_lemonade()
+        assert "too old to name" in why and "GAIA's own server" not in why
+
+    @pytest.mark.parametrize("kind, checked", [("app", True), ("cli", False)])
+    def test_only_an_app_launch_checks_the_daemon(self, kind, checked):
+        from gaia.daemon import client
+        from gaia.llm import lemonade_service
+
+        with (
+            mock.patch.object(client, "start_or_attach"),
+            mock.patch.object(client, "match_launch_lemonade") as match,
+            mock.patch.object(lemonade_service, "hold_lemonade_open"),
+        ):
+            lemonade_service.ensure_daemon_owns_lemonade(kind)
+        assert match.called is checked
+
+
 class TestReviewRegressions:
     def test_a_start_waiting_on_the_lock_sees_the_switch(self):
         """A boot-time ensure queued behind reconfigure() must not restart GAIA's."""
