@@ -547,3 +547,23 @@ describe('step icons', () => {
         expect(container.querySelector('.flow-tool-left > svg')?.getAttribute('class')).toContain('lucide-circle-alert');
     });
 });
+
+describe('consecutive thoughts', () => {
+    it('keeps a finished thought apart from the next one', () => {
+        const steps: AgentStep[] = [
+            { id: 1, type: 'thinking', label: 'Thinking', detail: 'Let me write it well.', active: false, timestamp: 1 },
+            { id: 2, type: 'thinking', label: 'Thinking', detail: 'General knowledge question.', active: false, timestamp: 2 },
+        ];
+        const [row] = consolidateSteps(steps, false);
+        expect(row.detail).toBe('Let me write it well.\n\nGeneral knowledge question.');
+    });
+
+    it('keeps joining a thought that is still streaming', () => {
+        const steps: AgentStep[] = [
+            { id: 1, type: 'thinking', label: 'Thinking', detail: 'Let me wri', active: true, timestamp: 1 },
+            { id: 2, type: 'thinking', label: 'Thinking', detail: 'te it well.', active: true, timestamp: 2 },
+        ];
+        const [row] = consolidateSteps(steps, true);
+        expect(row.detail).toBe('Let me write it well.');
+    });
+});

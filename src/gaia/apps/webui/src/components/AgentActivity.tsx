@@ -354,7 +354,9 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
 
         // Merge consecutive thinking steps; concatenate so accumulated text survives.
         if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-            const merged = (prev.detail || '') + (step.detail || '');
+            // A finished thought and the next one are separate thoughts; a streaming one continues.
+            const gap = prev.active === false && /\S$/.test(prev.detail || '') && /^\S/.test(step.detail || '') ? '\n\n' : '';
+            const merged = (prev.detail || '') + gap + (step.detail || '');
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
         }
