@@ -34,6 +34,7 @@ from ..lemonade_client import (
     CloudContextOverflowError,
     CloudModelUnavailableError,
     CloudProviderDisconnectedError,
+    CorruptedModelOutputError,
     GaiaLemonadeStartError,
     LemonadeAuthError,
     LemonadeClient,
@@ -428,6 +429,12 @@ class LemonadeStreamCutOffError(LemonadeError):
         "before the model finished. Send the message again. If it keeps "
         "happening, check the model server or gateway log for dropped streams."
     )
+
+
+class LemonadeCorruptedOutputError(LemonadeError):
+    """The model streamed garbage; the reply was stopped and never shown."""
+
+    user_message = CorruptedModelOutputError.MESSAGE
 
 
 class LemonadeModelNotFoundError(LemonadeError):
@@ -933,6 +940,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
             return LemonadeServerUnreachableError(str(cur), cur.endpoint)
         if isinstance(cur, LemonadeAuthError):
             return LemonadeAuthRejectedError(user_message=str(cur))
+        if isinstance(cur, CorruptedModelOutputError):
+            return LemonadeCorruptedOutputError()
         if isinstance(cur, CloudProviderDisconnectedError):
             return LemonadeCloudDisconnectedError(user_message=str(cur))
         if isinstance(cur, CloudModelUnavailableError):
@@ -947,6 +956,8 @@ def classify_lemonade_exception(exc: BaseException) -> Optional[LemonadeError]:
 
     raw = str(exc)
     text = raw.lower()
+    if CorruptedModelOutputError.MESSAGE in raw:
+        return LemonadeCorruptedOutputError()
     # A CloudDisabledError flattened to text by a wrapper: keep its own words,
     # or a "couldn't read the catalog" refusal reads as a network outage.
     local_only = re.search(r"Local only is on[^\n]*", "\n".join(chain_text))

@@ -3813,6 +3813,39 @@ def _chunk_carries_output(chunk: Any) -> bool:
     return False
 
 
+#: Gemma's reserved vocabulary; a healthy model never emits these.
+_RESERVED_TOKEN_RE = re.compile(r"<unused\d+>")
+
+
+def _reserved_token_in(chunk: Any, tail: str) -> Tuple[Optional[str], str]:
+    """The reserved token in *chunk*'s text, if any, and the new text tail.
+
+    *tail* is the end of the text seen so far, so a token split across two
+    chunks is still found.
+    """
+    if not isinstance(chunk, dict):
+        return None, tail
+    for choice in chunk.get("choices") or ():
+        delta = (choice or {}).get("delta") or {}
+        for key in ("content", "reasoning_content"):
+            text = delta.get(key)
+            if not text or not isinstance(text, str):
+                continue
+            window = tail + text
+            match = _RESERVED_TOKEN_RE.search(window)
+            if match:
+                return match.group(0), window[-16:]
+            tail = window[-16:]
+    return None, tail
+
+
+def _close_stream(stream: Any) -> None:
+    """Close *stream* now when it can be closed, ending its HTTP request."""
+    close = getattr(stream, "close", None)
+    if callable(close):
+        close()
+
+
 def _validate_profile_model_registry() -> None:
     """Fail loudly at import time if AGENT_PROFILES references an undeclared model."""
     for agent_name, profile in AGENT_PROFILES.items():
@@ -4109,6 +4142,20 @@ class LoadedModelMissingError(LemonadeClientError):
 
 class ContextReloadUnverifiedError(LemonadeClientError):
     """Reloads at a larger ``ctx_size`` keep reporting a smaller window."""
+
+
+class CorruptedModelOutputError(LemonadeClientError):
+    """The model streamed a token it can never emit when healthy.
+
+    The stream is stopped before that token reaches the caller.
+    """
+
+    MESSAGE = "The model's answer came back corrupted; send your message again."
+
+    def __init__(self, model: str, token: str):
+        super().__init__(self.MESSAGE)
+        self.model = model
+        self.token = token
 
 
 class UsersServerUnchangedError(LemonadeClientError):
@@ -7041,7 +7088,9 @@ class LemonadeClient:
                 return
 
             produced = False
-            for chunk in self._stream_chat_chunks(
+            guard = "gemma" in model.lower() and not is_cloud_model(model)
+            tail = ""
+            chunks = self._stream_chat_chunks(
                 model=model,
                 messages=messages,
                 temperature=temperature,
@@ -7051,9 +7100,20 @@ class LemonadeClient:
                 logprobs=logprobs,
                 tools=tools,
                 **kwargs,
-            ):
-                produced = True
-                yield chunk
+            )
+            # Closed inside the lease, so an NPU reply drains while still held.
+            try:
+                for chunk in chunks:
+                    if guard:
+                        token, tail = _reserved_token_in(chunk, tail)
+                        if token:
+                            _close_stream(chunks)
+                            self._discard_corrupted_model(model, messages, token)
+                            raise CorruptedModelOutputError(model, token)
+                    produced = True
+                    yield chunk
+            finally:
+                _close_stream(chunks)
 
             # A cloud model that streamed nothing has not "finished" — the
             # gateway accepted the request and sent no tokens. Falling back is
@@ -7078,6 +7138,39 @@ class LemonadeClient:
                     tools=tools,
                     **kwargs,
                 )
+
+    def _discard_corrupted_model(
+        self, model: str, messages: List[Dict[str, Any]], token: str
+    ) -> None:
+        """Log a corrupted stream and unload the model so the next turn reloads it.
+
+        The user's own server is left alone: GAIA never changes its setup.
+        """
+        prompt_chars = sum(len(str(m.get("content") or "")) for m in messages)
+        self.log.error(
+            "'%s' streamed the reserved token %s; stopped the reply "
+            "(%d messages, %d prompt chars).",
+            model,
+            token,
+            len(messages),
+            prompt_chars,
+        )
+        if self.is_users_server():
+            self.log.warning(
+                "Not unloading '%s' on your own Lemonade Server; unload or "
+                "restart it there if the next reply is corrupted too.",
+                model,
+            )
+            return
+        try:
+            self.unload_model(model, ignore_if_not_loaded=True)
+        except LemonadeClientError as e:
+            self.log.error(
+                "Could not unload '%s' after its corrupted reply, so the next "
+                "turn may reuse the same state: %s",
+                model,
+                e,
+            )
 
     def _chat_completion_as_single_chunk(
         self,
