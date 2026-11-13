@@ -76,11 +76,13 @@ function readShowAutomated(): boolean {
 
 const resultRowId = (id: string) => `sb-result-${id}`;
 
-function SessionRow({ session, active, phone, moved, status, queuePlace, unsent, failed, onSelect, onDelete, onPin, onRename, rowId, kbdActive, titleMatch, snippet }: {
+function SessionRow({ session, active, phone, moved, focusPin, status, queuePlace, unsent, failed, onSelect, onDelete, onPin, onRename, rowId, kbdActive, titleMatch, snippet }: {
     session: Session;
     active: boolean;
     /** Just pinned or unpinned from the phone menu: the row jumped groups, so scroll to it and mark it. */
     moved: boolean;
+    /** Pinned by keyboard and remounted in its new group: focus its pin button once. */
+    focusPin: boolean;
     /** Phone width: the row's actions sit behind one ⋯ menu instead of three icons. */
     phone: boolean;
     /** DOM id the search box points at while this row is the keyboard pick. */
@@ -97,7 +99,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
     failed: number;
     onSelect: (id: string) => void;
     onDelete: (id: string) => void;
-    onPin: (id: string, pinned: boolean, follow?: boolean) => void;
+    onPin: (id: string, pinned: boolean, follow?: boolean, byKeyboard?: boolean) => void;
     onRename: (id: string, title: string) => void;
 }) {
     const t = useT();
@@ -109,10 +111,14 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
     const editing = draft !== null;
     const settled = useRef(false);
     const startEdit = () => { settled.current = false; setDraft(session.title); };
-    const finishEdit = (save: boolean) => {
+    const mainRef = useRef<HTMLButtonElement>(null);
+    const pinRef = useRef<HTMLButtonElement>(null);
+    const refocus = useRef(false);
+    const finishEdit = (save: boolean, byKey = false) => {
         // Unmounting the focused input fires blur again; ignore it.
         if (draft === null || settled.current) return;
         settled.current = true;
+        refocus.current = byKey;
         setDraft(null);
         if (save) onRename(session.id, draft);
     };
@@ -121,6 +127,15 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
         const timer = setTimeout(() => setConfirm(false), 3000);
         return () => clearTimeout(timer);
     }, [confirm]);
+    useEffect(() => {
+        if (!editing && refocus.current) {
+            refocus.current = false;
+            mainRef.current?.focus();
+        }
+    }, [editing]);
+    useEffect(() => {
+        if (focusPin) pinRef.current?.focus();
+    }, [focusPin]);
     const rowRef = useRef<HTMLLIElement>(null);
     useEffect(() => {
         if (moved) rowRef.current?.scrollIntoView?.({ block: 'nearest' });
@@ -152,8 +167,11 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                     onChange={(e) => setDraft(e.target.value)}
                     onBlur={() => finishEdit(true)}
                     onKeyDown={(e) => {
-                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) finishEdit(true);
-                        if (e.key === 'Escape') { e.preventDefault(); finishEdit(false); }
+                        if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                            e.preventDefault(); // else the Enter also presses the button that takes focus
+                            finishEdit(true, true);
+                        }
+                        if (e.key === 'Escape') { e.preventDefault(); finishEdit(false, true); }
                     }}
                     {...CLAIMS_ESCAPE}
                     autoFocus
@@ -163,6 +181,7 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                 />
             ) : (
                 <button
+                    ref={mainRef}
                     type="button"
                     id={rowId}
                     className="sb-row-main"
@@ -258,9 +277,10 @@ function SessionRow({ session, active, phone, moved, status, queuePlace, unsent,
                         </button>
                     )}
                     <button
+                        ref={pinRef}
                         type="button"
                         className={`sb-row-pin${session.pinned ? ' is-pinned' : ''}`}
-                        onClick={() => onPin(session.id, !session.pinned)}
+                        onClick={(e) => onPin(session.id, !session.pinned, false, e.detail === 0)}
                         aria-label={t(session.pinned ? 'row.unpinAria' : 'row.pinAria', { title: session.title })}
                         aria-pressed={!!session.pinned}
                         title={session.pinned ? t('row.unpin') : t('row.pinToTop')}
@@ -431,6 +451,11 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
 
     // The row a phone user just pinned or unpinned; it changes groups, so it is followed and marked briefly.
     const [movedId, setMovedId] = useState<string | null>(null);
+    // Pinning regroups the row and remounts it; a keyboard user's focus goes back to its pin button.
+    const [pinFocusId, setPinFocusId] = useState<string | null>(null);
+    useEffect(() => {
+        if (pinFocusId) setPinFocusId(null);
+    }, [pinFocusId]);
     useEffect(() => {
         if (!movedId) return;
         const timer = setTimeout(() => setMovedId(null), 1200);
@@ -622,14 +647,16 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
                                         active={s.id === currentSessionId}
                                         phone={phone}
                                         moved={s.id === movedId}
+                                        focusPin={s.id === pinFocusId}
                                         status={sessionRowStatus(s, live)}
                                         queuePlace={queuedSessionIds.indexOf(s.id) + 1}
                                         unsent={messageQueues[s.id]?.length ?? 0}
                                         failed={messageQueues[s.id]?.filter((m) => m.state === 'failed').length ?? 0}
                                         onSelect={select}
                                         onDelete={remove}
-                                        onPin={(id, pinned, follow) => {
+                                        onPin={(id, pinned, follow, byKeyboard) => {
                                             if (follow) setMovedId(id);
+                                            if (byKeyboard) setPinFocusId(id);
                                             void pin(id, pinned);
                                         }}
                                         onRename={(id, title) => void rename(id, title)}
