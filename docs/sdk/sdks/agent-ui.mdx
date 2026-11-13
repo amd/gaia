@@ -3380,7 +3380,7 @@ CREATE TABLE unfinished_turns (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     owner TEXT NOT NULL,                       -- server process running the turn
     started_at TEXT NOT NULL,
-    partial_content TEXT NOT NULL DEFAULT '',  -- cleaned reply so far, saved every 2 s
+    partial_content TEXT NOT NULL DEFAULT '',  -- cleaned reply so far, saved every 0.5 s
     tools_run TEXT NOT NULL DEFAULT '[]',      -- tools the turn had started
     updated_at TEXT
 );
