@@ -792,7 +792,7 @@ async function withLongChat(page: Page): Promise<void> {
 }
 
 for (const locale of ['ar', 'en']) {
-    test(`jump to bottom sits on the composer's edge, clear of the text column's middle (${locale})`, async ({ page }, info) => {
+    test(`jump to bottom floats clear of the composer, away from the text column's middle (${locale})`, async ({ page }, info) => {
         await open(page, `#${ANSWER_SESSION}`, locale, withLongChat);
         await expect(page.getByText('Question 22')).toBeVisible();
         await page.locator('.messages-scroll').hover();
@@ -801,9 +801,9 @@ for (const locale of ['ar', 'en']) {
         await expect(button).toBeVisible();
         await button.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
         const [btn, composer] = [await button.boundingBox(), await page.locator('.input-column').boundingBox()];
-        // Astride the composer's top edge, at its end, never in the middle of a line.
-        expect(btn!.y).toBeLessThan(composer!.y);
-        expect(btn!.y + btn!.height).toBeGreaterThan(composer!.y);
+        // 12px above the composer, never over its border (#7864), at its end, never in the middle of a line.
+        expect(composer!.y - (btn!.y + btn!.height)).toBeGreaterThanOrEqual(11.5);
+        expect(composer!.y - (btn!.y + btn!.height)).toBeLessThanOrEqual(16);
         const end = locale === 'ar' ? btn!.x - composer!.x : composer!.x + composer!.width - (btn!.x + btn!.width);
         expect(end).toBeLessThanOrEqual(40);
         expect(await button.evaluate((el) => {
