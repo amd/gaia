@@ -416,10 +416,13 @@ def effective_skill_body(agent, skill) -> str:
                 len(resolved.applied),
                 resolved.token_delta,
             )
-            try:
-                store.touch_deltas(resolved.applied)
-            except Exception:  # noqa: BLE001 - telemetry must not break a turn
-                logger.debug("[SkillDeltas] touch_deltas failed", exc_info=True)
+            from gaia.agents.base.memory_privacy import memory_writes_refused
+
+            if not memory_writes_refused(agent):
+                try:
+                    store.touch_deltas(resolved.applied)
+                except Exception:  # noqa: BLE001 - telemetry must not break a turn
+                    logger.debug("[SkillDeltas] touch_deltas failed", exc_info=True)
 
         cache[key] = resolved.body
         return resolved.body
