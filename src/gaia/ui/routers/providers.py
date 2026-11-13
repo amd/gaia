@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from gaia.llm.local_only import (
+    blocked_reason,
     cloud_blocked,
     local_only_key_message,
     recipes_confirm_local,
@@ -1608,8 +1609,8 @@ def refuse_blocked_cloud_model(model_id: str) -> None:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Can't switch to {model_label(model_id)}: Local only is on. "
-                f"{AGENT_UI_LOCAL_ONLY_HINT}"
+                f"Can't switch to {model_label(model_id)}: Local only is on, so it "
+                f"was blocked: it is a cloud model. {AGENT_UI_LOCAL_ONLY_HINT}"
             ),
         )
     # A router collection can forward to a cloud member, so the catalog must
@@ -1619,8 +1620,8 @@ def refuse_blocked_cloud_model(model_id: str) -> None:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Can't switch to {model_id}: Local only is on. "
-                f"{AGENT_UI_LOCAL_ONLY_HINT}"
+                f"Can't switch to {model_id}: Local only is on, so it was blocked: "
+                f"{blocked_reason(recipes)}. {AGENT_UI_LOCAL_ONLY_HINT}"
             ),
         )
 

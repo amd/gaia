@@ -2661,7 +2661,10 @@ def test_selecting_a_listed_cloud_model_is_refused_under_local_only(
     resp = client.post("/api/providers/select", json={"model": _OTHER_CLOUD})
     assert resp.status_code == 409
     detail = resp.json()["detail"]
-    assert "Can't switch to big-model · othercloud: Local only is on." in detail
+    assert (
+        "Can't switch to big-model · othercloud: Local only is on, so it was blocked: it is a cloud model."
+        in detail
+    )
     assert "Settings > Privacy" in detail and "gaia config" not in detail
     assert lemonade.paths() == ["models?show_all=true"]
     assert db.get_setting("custom_model") is None
@@ -2684,7 +2687,24 @@ def test_selecting_a_router_collection_is_refused_under_local_only(
     assert resp.status_code == 409, resp.json()
     detail = resp.json()["detail"]
     assert "Local only is on" in detail
+    assert (
+        "it is a 'collection.router' model, which can forward requests to the cloud"
+        in detail
+    )
     assert "Settings > Privacy" in detail and "gaia config" not in detail
+    assert db.get_setting("custom_model") is None
+
+
+def test_selecting_an_unlisted_dotted_id_says_the_catalog_does_not_list_it(
+    client, lemonade, keys, db, local_only_on, forget_cloud_models
+):
+    # A mistyped dotted id is not a privacy problem: the catalog simply
+    # doesn't list it, so the refusal must say that instead of pointing
+    # at the Local only setting.
+    resp = client.post("/api/providers/select", json={"model": "user.mistyped-model"})
+    assert resp.status_code == 409, resp.json()
+    detail = resp.json()["detail"]
+    assert "Lemonade's catalog doesn't list it" in detail
     assert db.get_setting("custom_model") is None
 
 

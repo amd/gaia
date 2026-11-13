@@ -1233,7 +1233,10 @@ class TestCustomModelIsTheChosenModel:
 
         assert resp.status_code == 409
         detail = resp.json()["detail"]
-        assert "Can't switch to big-model · othercloud: Local only is on." in detail
+        assert (
+            "Can't switch to big-model · othercloud: Local only is on, so it was blocked: it is a cloud model."
+            in detail
+        )
         assert "Settings > Privacy" in detail and "gaia config" not in detail
         assert asked == [("GET", "models?show_all=true")]
         assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
