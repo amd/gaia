@@ -386,6 +386,45 @@ BLOCKED_DIRECTORIES: Set[str] = _get_blocked_directories()
 GAIA_STATE_DIRECTORIES: Set[str] = _gaia_state_dirs()
 SECRET_DIRECTORIES: Set[str] = _secret_directories()
 
+#: A credential folder with more entries than this is not searched for the
+#: file a hard link shares; the linked file is then treated as inside it.
+SECRET_LINK_SCAN_LIMIT = 5000
+
+
+def secret_folder_sharing(path: Any) -> Optional[str]:
+    """The credential folder holding the same file as *path* under another name.
+
+    A hard link is a second name for one file, so the folder check on the path
+    alone misses it. Only files with more than one name are looked up.
+
+    Args:
+        path: Path of the file about to be read or written.
+
+    Returns:
+        The credential folder, or None when *path* is not a second name for
+        one of its files.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink < 2:
+        return None
+    for folder in SECRET_DIRECTORIES:
+        seen = 0
+        for current, _dirs, files in os.walk(folder):
+            for name in files:
+                seen += 1
+                if seen > SECRET_LINK_SCAN_LIMIT:
+                    return folder
+                try:
+                    other = os.stat(os.path.join(current, name))
+                except OSError:
+                    continue
+                if (other.st_dev, other.st_ino) == (st.st_dev, st.st_ino):
+                    return folder
+    return None
+
 
 def _real_path(path: Any) -> str:
     """*path* with ``~`` expanded and every symlink and ``..`` resolved.
@@ -1483,6 +1522,15 @@ class PathValidator:
                         f"read from it.",
                     )
 
+            shared = secret_folder_sharing(real_path)
+            if shared:
+                return (
+                    True,
+                    f"Read blocked: '{real_path}' is the same file as one inside "
+                    f"'{shared}', which holds credentials. The agent is not "
+                    f"allowed to read it.",
+                )
+
             return (False, "")
 
         except Exception as e:
@@ -1643,6 +1691,14 @@ class PathValidator:
                         f"directory '{secret_dir}', which holds credentials and "
                         f"tool configuration. Edit it yourself if you need to.",
                     )
+            shared = secret_folder_sharing(real_path)
+            if shared:
+                return (
+                    True,
+                    f"Write blocked: '{real_path}' is the same file as one inside "
+                    f"'{shared}', which holds credentials and tool configuration. "
+                    f"Edit it yourself if you need to.",
+                )
 
             # Check sensitive file names
             if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:

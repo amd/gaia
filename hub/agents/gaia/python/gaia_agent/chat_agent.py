@@ -46,7 +46,12 @@ from gaia_agent.python_jobs import (
     stopped_job_result,
     watch_folders,
 )
-from gaia_agent.python_runner import BUNDLED_LIBRARIES, is_frozen, python_command
+from gaia_agent.python_runner import (
+    BUNDLED_LIBRARIES,
+    GUARDED_FOLDERS_ENV,
+    is_frozen,
+    python_command,
+)
 from gaia_agent.session import SessionManager
 from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent.tool_requests import requested_tools
@@ -352,6 +357,13 @@ def _python_run_result(
     return result
 
 
+def _guarded_folders() -> str:
+    """The credential folders a script may not open files in, for its environment."""
+    from gaia.security import SECRET_DIRECTORIES
+
+    return os.pathsep.join(sorted(SECRET_DIRECTORIES))
+
+
 def _python_script_run_context(
     script: Path, project_dir: os.PathLike | str | None
 ) -> tuple[Path, Dict[str, str]]:
@@ -370,6 +382,7 @@ def _python_script_run_context(
     env = child_env(relaunch_self=True)
     # The tools decode the output as UTF-8; the locale codec can't print a ✓.
     env["PYTHONIOENCODING"] = "utf-8"
+    env[GUARDED_FOLDERS_ENV] = _guarded_folders()
     if project_dir is None:
         return script.parent, env
     project = Path(project_dir).resolve()
@@ -2775,6 +2788,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     }
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
+                env[GUARDED_FOLDERS_ENV] = _guarded_folders()
                 if project:
                     existing = env.get("PYTHONPATH")
                     env["PYTHONPATH"] = (
