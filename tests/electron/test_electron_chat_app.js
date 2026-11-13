@@ -1181,8 +1181,8 @@ describe('Chat App Integration', () => {
       expectTranslated(composerContent, "aria-label={t('composer.stop')}", 'composer.stop', 'Stop');
       expectTranslated(composerContent, "aria-label={t('composer.attach')}", 'composer.attach', 'Attach files');
       expect(chatContent).toContain('aria-label="Chat title"');
-      expect(chatContent).toContain('aria-label="Export chat"');
-      expect(chatContent).toContain('aria-label="Browse files on this PC"');
+      expectTranslated(chatContent, "aria-label={t('chat.exportLabel')}", 'chat.exportLabel', 'Export chat');
+      expectTranslated(chatContent, "aria-label={t('chat.browseFiles')}", 'chat.browseFiles', 'Browse files on this PC');
     });
   });
 
