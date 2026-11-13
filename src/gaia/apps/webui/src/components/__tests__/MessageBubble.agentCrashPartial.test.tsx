@@ -11,6 +11,7 @@
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { MessageBubble, dropErrorsEchoedInAnswer } from '../MessageBubble';
+import { answerSummary } from '../AnswerStats';
 import type { AgentStep, Message } from '../../types';
 
 const NOTICE = 'GAIA stopped unexpectedly while answering. Anything it had already written is kept above. '
@@ -60,6 +61,25 @@ describe('an answer the agent died writing', () => {
     it('drops the step when the saved notice carries trailing whitespace', () => {
         const padded: AgentStep[] = [STEPS[0], { ...STEPS[1], detail: `${NOTICE}\n` }];
         expect(dropErrorsEchoedInAnswer(padded, `${ESSAY}\n\n${NOTICE}\n\n`).steps).toHaveLength(1);
+    });
+
+    it('sets the error apart from the answer, as a note below it', () => {
+        const { container } = render(<MessageBubble message={reply(`${ESSAY}\n\n${NOTICE}`)} agentSteps={STEPS} />);
+        const note = container.querySelector('.msg-cut-off');
+        expect(note?.textContent).toBe(NOTICE);
+        expect(container.querySelector('.md-content')?.textContent ?? '').not.toContain('GAIA stopped unexpectedly');
+    });
+
+    it('says the turn failed in the footer, not that it answered', () => {
+        const { container } = render(<MessageBubble message={reply(`${ESSAY}\n\n${NOTICE}`)} agentSteps={STEPS} latencyMs={10_000} />);
+        const footer = container.querySelector('.msg-stats-summary')?.textContent ?? '';
+        expect(footer).toBe(answerSummary(10_000, undefined, 'failed'));
+        expect(footer).not.toBe(answerSummary(10_000, undefined));
+    });
+
+    it('names the error that ended a partial answer', () => {
+        expect(dropErrorsEchoedInAnswer(STEPS, `${ESSAY}\n\n${NOTICE}`).endedBy).toBe(NOTICE);
+        expect(dropErrorsEchoedInAnswer(STEPS, NOTICE).endedBy).toBeNull();
     });
 
     it('does not call a partial answer an error reply', () => {
