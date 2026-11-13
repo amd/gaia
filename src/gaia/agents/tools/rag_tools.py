@@ -13,7 +13,6 @@ import re
 import threading
 import time
 import weakref
-from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
