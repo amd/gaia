@@ -1033,7 +1033,7 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
         const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText), [], parseErrorBody(errorText));
     }
 
     const data = await res.json();

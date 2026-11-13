@@ -891,6 +891,8 @@ const messages: Messages = {
     'docs.folder.noSubfolders': 'لا تُضمَّن المجلدات الفرعية.',
     'docs.notFound': '«{name}» غير موجود',
     'docs.notFoundDetail': 'تحقّق من المسار بحثًا عن خطأ إملائي، ثم أضفه مجددًا.',
+    'docs.tooLarge': '«{name}» كبير جدًا',
+    'docs.tooLargeDetail': 'تقبل المكتبة ملفات حتى {max} ميغابايت. قسّمه إلى ملفات أصغر، ثم أضفها.',
     'docs.failedAria': 'فشلت: {error}',
     'docs.indexingFailed': 'فشلت الفهرسة',
     'docs.retry': 'إعادة المحاولة',
