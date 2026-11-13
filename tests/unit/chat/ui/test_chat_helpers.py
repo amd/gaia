@@ -1192,6 +1192,35 @@ class TestSessionTitleRequest:
         title = self._title_for(question, "retention_days 改为 30")
         assert title == ch._title_from_question(question)
 
+    def test_a_german_title_for_an_english_request_falls_back(self):
+        """Same script, other language: 'todo.txt in Großbuchstaben schreiben' (#8038)."""
+        from gaia.ui import _chat_helpers as ch
+
+        question = "Read C:/t/todo.txt and write its items in upper case to a new file"
+        title = self._title_for(question, "todo.txt in Großbuchstaben schreiben")
+        assert title == ch._title_from_question(question)
+
+    def test_a_spanish_title_for_an_english_request_quoting_spanish_falls_back(self):
+        """'Traducir frase española al inglés' for an English request (#7436)."""
+        from gaia.ui import _chat_helpers as ch
+
+        question = (
+            "Translate this Spanish sentence to English and reply with only the "
+            "translation: Guardé el resumen en C:/t/report.md."
+        )
+        title = self._title_for(question, "Traducir frase española al inglés")
+        assert title == ch._title_from_question(question)
+
+    def test_an_accented_word_the_user_typed_is_kept(self):
+        question = "Translate: Guardé el resumen en report.md"
+        assert self._title_for(question, "Translate Guardé sentence") == (
+            "Translate Guardé sentence"
+        )
+
+    def test_a_spanish_title_for_a_spanish_request_is_kept(self):
+        question = "¿Cómo cambio la contraseña de mi cuenta?"
+        assert self._title_for(question, "Cambiar contraseña") == "Cambiar contraseña"
+
     def test_a_title_in_the_users_script_is_kept(self):
         assert self._title_for("خطط لرحلة إلى لشبونة", "رحلة لشبونة") == "رحلة لشبونة"
 
