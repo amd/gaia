@@ -695,6 +695,44 @@ def test_a_local_model_that_is_not_downloaded_is_refused_not_downloaded(
     ]
 
 
+def test_a_missing_last_model_names_last_model_not_default_model(
+    stub_env, monkeypatch, capsys
+):
+    """``last_model`` wins over ``default_model``, so setting the default can't help."""
+    _config(monkeypatch, last_model="Gemma-4-E4B-it-GGUF", default_model="other")
+    _Catalog.downloaded = False
+    assert print_mode.run("q") == 1
+    err = capsys.readouterr().err
+    assert err.startswith("❌ gaia -p: Gemma-4-E4B-it-GGUF is not downloaded")
+    assert "RuntimeError" not in err
+    assert "`gaia config set last_model <id>`" in err
+    assert '`gaia config set last_model ""`' in err
+    assert "default_model <id>" not in err
+    assert "--model" in err
+
+
+def test_a_missing_model_passed_with_model_names_only_what_helps(
+    stub_env, monkeypatch, capsys
+):
+    _config(monkeypatch, last_model="other")
+    _Catalog.downloaded = False
+    assert print_mode.run("q", model="cfg-model", output_format="json") == 1
+    out, err = capsys.readouterr()
+    error = json.loads(out)["error"]
+    assert error.startswith("cfg-model is not downloaded")
+    assert "gaia config set" not in error
+    assert "RuntimeError" not in err
+
+
+def test_a_missing_default_model_names_default_model(stub_env, monkeypatch, capsys):
+    _config(monkeypatch, default_model="cfg-model")
+    _Catalog.downloaded = False
+    assert print_mode.run("q") == 1
+    err = capsys.readouterr().err
+    assert "`gaia config set default_model <id>`" in err
+    assert "last_model" not in err
+
+
 def test_a_gateway_model_the_catalog_leaves_out_is_not_called_undownloaded(
     stub_env, monkeypatch
 ):

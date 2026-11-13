@@ -108,6 +108,10 @@ def summarize(
     return record
 
 
+class PrintModeError(RuntimeError):
+    """A refusal worded for the user, printed as it is."""
+
+
 def configure_console(console: Any, skip_permissions: bool, full_access: bool) -> None:
     """Set a headless console's permissions from the -p flags."""
     console.silence_final_answer = True
@@ -174,6 +178,8 @@ def run(
         )
     except KeyboardInterrupt:
         return _emit_failure(output_format, "interrupted", code=130)
+    except PrintModeError as exc:
+        return _emit_failure(output_format, str(exc))
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report, never a traceback
         # DEBUG, not INFO: the console handler prints INFO, traceback and all.
         log.debug("gaia -p failed", exc_info=True)
@@ -247,6 +253,7 @@ def _model_on_disk(model: Optional[str], base_url: Optional[str]) -> str:
         resolve_chat_model,
     )
 
+    requested = model
     model = model or resolve_chat_model()
     if cloud_model_provider(model):
         return model
@@ -257,13 +264,36 @@ def _model_on_disk(model: Optional[str], base_url: Optional[str]) -> str:
         return model
     info = client.get_model_info(model)
     if not info["downloaded"]:
-        raise RuntimeError(
+        raise PrintModeError(
             f"{model} is not downloaded ({info['size_gb']:.1f} GB), and gaia -p "
-            "does not download models. Pick a model you have with --model, "
-            "download this one from the GAIA app's Settings > Model, or set "
-            "the default with `gaia config set default_model <id>`."
+            f"does not download models. {_missing_model_remedy(model, requested)}"
         )
     return model
+
+
+def _missing_model_remedy(model: str, requested: Optional[str]) -> str:
+    """What makes the next run work, given where *model* came from.
+
+    The order is ``--model``, then ``last_model``, then ``default_model``, so a
+    remedy that changes a later one does nothing while an earlier one is set.
+    """
+    from gaia.config import GaiaConfig
+
+    download = "or download it from the GAIA app's Settings > Model."
+    if requested:
+        return f"Pass --model with a model you have, {download}"
+    if GaiaConfig.load().last_model == model:
+        return (
+            "It is the model the GAIA app last used (`last_model`), which wins "
+            "over `default_model`. Pass --model with a model you have, pick "
+            "one you have in the GAIA app, run `gaia config set last_model "
+            '<id>` (or `gaia config set last_model ""` to use '
+            f"`default_model`), {download}"
+        )
+    return (
+        "Pass --model with a model you have, run `gaia config set "
+        f"default_model <id>`, {download}"
+    )
 
 
 def _start_server(
@@ -277,7 +307,7 @@ def _start_server(
         "chat", quiet=True, base_url=base_url, model=model, preload=preload
     )
     if not success:
-        raise RuntimeError(
+        raise PrintModeError(
             "The model server could not be started. Run `gaia daemon status` for "
             "its state and `gaia init` if Lemonade is not installed."
         )
@@ -377,7 +407,7 @@ def _relay_turn(
             if full_access
             else "--dangerously-skip-permissions" if skip_permissions else "--base-url"
         )
-        raise RuntimeError(
+        raise PrintModeError(
             f"{flag} needs the GAIA agent in this process, and here it runs as "
             "its own program through GAIA's background service, which uses "
             "GAIA's model server and asks before gated tools. Run without "
