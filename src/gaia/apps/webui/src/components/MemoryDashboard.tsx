@@ -2734,6 +2734,9 @@ export function MemoryDashboard() {
                                                     <span className={`mem-goal-status-dot status-${goal.status.replace('_','-')}`} />
                                                     <bdi className="mem-goal-title">{goal.title}</bdi>
                                                     <span className={`mem-goal-priority mem-priority-${goal.priority}`}><Code value={goal.priority} keys={PRIORITY_KEYS} /></span>
+                                                    {goal.status === 'cancelled' && (
+                                                        <span className="mem-goal-priority mem-goal-cancelled-label">{t(STATUS_KEYS.cancelled)}</span>
+                                                    )}
                                                     {goal.source !== 'user' && (
                                                         <span className="mem-goal-source-badge">
                                                             <Zap size={10} /> <Code value={goal.source} keys={GOAL_SOURCE_KEYS} />
