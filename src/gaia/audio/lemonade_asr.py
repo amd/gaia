@@ -626,33 +626,6 @@ class LemonadeASRClient(LemonadeAudioService):
             return None
         return NpuPart(size_gb=NPU_PART_SIZES_GB.get(checkpoint))
 
-    def is_loaded(self) -> bool:
-        """Whether Lemonade has this model loaded now.
-
-        Raises:
-            ConnectionError: Lemonade Server is not reachable.
-            LemonadeASRError: Lemonade answered with an error.
-        """
-        health = self._get_json(f"{self.base_url}/health", what="health check")
-        return any(
-            isinstance(m, dict) and m.get("model_name") == self.model
-            for m in health.get("all_models_loaded") or []
-        )
-
-    def load(self) -> None:
-        """Load the model, waiting out any file Lemonade fetches to do it.
-
-        Raises:
-            ConnectionError: Lemonade Server is not reachable.
-            LemonadeASRError: The load failed.
-        """
-        self._post_json(
-            f"{self.base_url}/load",
-            {"model_name": self.model},
-            what=f"load of {self.model}",
-            timeout=MODEL_PULL_TIMEOUT,
-        )
-
     def transcribe(
         self,
         wav_path: os.PathLike | str,
