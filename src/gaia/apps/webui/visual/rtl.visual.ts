@@ -1891,11 +1891,46 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('#ctx-size')).toBeInViewport();
         const back = dialog.locator('.settings-back');
         await expect(back).toBeVisible();
+        // Nothing drawn over it: a sticky tab title once covered the link (#7699).
+        const link = await back.boundingBox();
+        if (!link) throw new Error('the Back link did not lay out');
+        expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-back'),
+            [link.x + link.width / 2, link.y + link.height / 2])).toBe(true);
         await shot(page, `setup-row-jump-${locale}`);
         expect(await audit(page)).toEqual([]);
         await back.click();
         await expect(dialog.locator('[data-section="setup"]')).toHaveAttribute('aria-current', 'page');
         await expect(back).toHaveCount(0);
+    });
+
+    test(`GPU memory row lands on it after a slow model list (${locale})`, async ({ page }) => {
+        // Enough downloaded models that the list runs well past the view.
+        const many = [...MODEL_LIST, ...Array.from({ length: 12 }, (_, i) => ({ ...(MODEL_LIST[1] as object), id: `Extra-${i}-GGUF`, display_name: `Extra ${i}`, downloaded: true, state: 'idle' }))];
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, many, SETUP_PLAN);
+            await p.route('**/api/gpu-memory', (route) => route.fulfill({ json: SETUP_GPU }));
+            await p.route('**/api/onboarding/preflight', (route) => route.fulfill({ json: { gpu_name: 'Radeon 8060S', npu_detected: true, ram_gb: 128 } }));
+            // A busy model server lists its models after GPU memory has drawn.
+            await p.route('**/api/providers/local/models', async (route) => {
+                await new Promise((done) => setTimeout(done, 6500));
+                await route.fallback();
+            });
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const dialog = page.getByRole('dialog');
+        await dialog.locator('[data-section="setup"]').click();
+        await dialog.locator('.settings-setup-row').filter({ hasText: /GPU memory|ذاكرة GPU/ }).click();
+        const summary = dialog.locator('summary').filter({ has: page.locator('#settings-gpu-title') });
+        await expect(summary).toBeFocused();
+        await expect(dialog.locator('[data-settings-target="models-on-pc"] .model-list')).toHaveCount(1, { timeout: 10_000 });
+        await page.waitForTimeout(300);
+        // Focused and in view, not focused somewhere below the list that arrived above it.
+        expect(await summary.evaluate((el) => {
+            const view = el.closest('.settings-scroll')!.getBoundingClientRect();
+            const box = el.getBoundingClientRect();
+            return box.top >= view.top && box.bottom <= view.bottom;
+        })).toBe(true);
+        await shot(page, `setup-row-gpu-memory-${locale}`);
     });
 
     test(`Local only blocks cloud model picker (${locale})`, async ({ page }) => {
