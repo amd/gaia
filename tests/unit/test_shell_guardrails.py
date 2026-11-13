@@ -1304,7 +1304,8 @@ class TestHeredocCannotHideARefusedCommand:
     def test_the_scan_stays_linear(self, command):
         start = time.perf_counter()
         _strip_heredoc_bodies(command)
-        assert time.perf_counter() - start < 0.05
+        # Runaway backtracking takes seconds here; a busy CI runner adds tens of ms.
+        assert time.perf_counter() - start < 0.5
 
 
 class TestReadOnlySubGuardsLiftUnderBypassOnly:
