@@ -8,10 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A run stopped for an approval nobody can give reads as not done.** Its
+  `final` now carries `failed: true` and the `usage` spent before the stop, so
+  `gaia -p` reports `is_error: true` with real step and token counts instead of
+  a free, zero-step success. A stopped turn's result now carries
+  the tokens it spent too.
+
 - **Files a Python run writes are UTF-8.** `run_python` and
   `execute_python_file` wrote a bare `open(path, "w")` in the Windows locale
   codec, so a degree sign landed as the cp1252 byte `0xB0`. Scripts now run in
   UTF-8 mode, in the packaged binary too.
+
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
   directory now go in the session context at the start of the first user
