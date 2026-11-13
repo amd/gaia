@@ -9,9 +9,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 - **More attached documents than one conversation searches.** A conversation
-  searches at most 100 documents at once. With more in `documents`, the agent
-  loads the first 100 instead of loading every one and pushing earlier ones
-  out, says in the `index_documents` step how many it left unloaded, and
+  searches at most 100 documents or 10,000 passages at once. With more in
+  `documents`, the agent loads up to that limit instead of loading every one
+  and pushing earlier ones out, says in the `index_documents` step how many it left unloaded, and
   never calls one of those "not attached": asking about one by name loads it.
 
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the

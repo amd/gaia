@@ -67,6 +67,9 @@ class _Rag:
             return {"success": False, "error": f"Access denied: {path}"}
         return {"success": True, "num_chunks": 1}
 
+    def is_full(self):
+        return False
+
 
 class _DocAgent:
     """Stands in for GaiaAgent: answers with the documents it can read."""

@@ -41,13 +41,20 @@ describe('the documents bar above the chat', () => {
     });
 
     it.each([
-        ['en', 'Only 100 of the 150 documents in this chat are searched at once. Ask about a file by name to search it.'],
-        ['ar', 'يُبحث في 100 فقط من مستندات هذه المحادثة البالغ عددها 150 في المرة الواحدة'],
+        ['en', 'Not all 150 documents in this chat are searched at once: a chat searches up to 100 documents or 10,000 passages. Ask about a file by name to search it.'],
+        ['ar', 'لا يُبحث في كل مستندات هذه المحادثة البالغ عددها 150 في المرة الواحدة'],
     ])('says when a chat has more documents than it searches at once (%s)', (locale, text) => {
         const many = Array.from({ length: 150 }, (_, i) => doc(i + 10));
         useChatStore.setState({ locale, sessions: [{ ...session, document_ids: many.map((d) => d.id) } as never], documents: many });
         render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
         expect(screen.getByRole('status').textContent).toContain(text);
+    });
+
+    it('says so for a few documents with more passages than a chat searches at once', () => {
+        const books = Array.from({ length: 9 }, (_, i) => ({ ...doc(i + 10), chunk_count: 1200 }));
+        useChatStore.setState({ sessions: [{ ...session, document_ids: books.map((d) => d.id) } as never], documents: books });
+        render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
+        expect(screen.getByRole('status').textContent).toContain('Not all 9 documents in this chat are searched at once');
     });
 
     it('says nothing about a limit at 100 documents', () => {

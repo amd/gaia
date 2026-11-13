@@ -1675,7 +1675,7 @@ def _index_rag_with_progress(
     each successfully indexed document (used for cache-hit incremental updates).
     Stops at the index's cap; the rest stay attached and load on request.
     """
-    from gaia.agents.tools.rag_tools import _forget_evicted
+    from gaia.agents.tools.rag_tools import _forget_evicted, index_limit
 
     n = len(fpath_list)
     sse_handler._emit(
@@ -1760,8 +1760,8 @@ def _index_rag_with_progress(
     if not_loaded:
         headline += (
             f". {not_loaded} more not loaded: a chat searches at most "
-            f"{agent.rag.config.max_indexed_files} documents at once. Ask about "
-            "one of them by name to search it."
+            f"{index_limit(agent.rag)} at once. Ask about one of them by name "
+            "to search it."
         )
     summary_lines = [
         headline,

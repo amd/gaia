@@ -10,8 +10,9 @@ import { middleTruncate } from '../utils/format';
 import { useT } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 
-/** Documents one chat searches at once: ``RAGConfig.max_indexed_files`` in ``gaia/rag/sdk.py``. */
+/** What one chat searches at once: ``RAGConfig.max_indexed_files`` and ``max_total_chunks`` in ``gaia/rag/sdk.py``. */
 export const SEARCHED_AT_ONCE = 100;
+export const PASSAGES_AT_ONCE = 10000;
 
 /** The documents indexed for this chat, shown under the header; renders nothing when there are none. */
 export function SessionDocsBar({ sessionId, onDetachFailed }: {
@@ -61,6 +62,8 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
     const hiddenCount = sorted.length - 3;
     const failedCount = sessionDocs.filter((d) => d.indexing_status === 'failed').length;
     const readableCount = sessionDocs.length - failedCount;
+    const passages = sessionDocs.reduce((sum, d) => sum + (d.indexing_status === 'failed' ? 0 : d.chunk_count), 0);
+    const pastCap = readableCount > SEARCHED_AT_ONCE || passages > PASSAGES_AT_ONCE;
     const label = t.compose((say) => [
         readableCount > 0 ? say(pluralKey('docsBar.count', readableCount), { n: readableCount }) : null,
         failedCount > 0 ? say(pluralKey('docsBar.failed', failedCount), { n: failedCount }) : null,
@@ -110,11 +113,11 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
                     {t('docsBar.less')}
                 </button>
             )}
-            {readableCount > SEARCHED_AT_ONCE && (
+            {pastCap && (
                 <p className="doc-context-past-cap" role="status">
                     <AlertCircle size={12} className="doc-context-icon doc-context-icon-warn" aria-hidden="true" />
                     <span className="doc-context-past-cap-text">
-                        {t('docsBar.pastCap', { limit: SEARCHED_AT_ONCE, n: readableCount })}
+                        {t('docsBar.pastCap', { limit: SEARCHED_AT_ONCE, passages: PASSAGES_AT_ONCE.toLocaleString(), n: readableCount })}
                     </span>
                 </p>
             )}

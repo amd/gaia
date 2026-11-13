@@ -308,12 +308,20 @@ def attached_not_loaded(host: Any, rag: Any) -> List[str]:
     return [p for p in attached if os.path.realpath(p) not in held]
 
 
+def index_limit(rag: Any) -> str:
+    """What one chat's index holds at once: a document count or a passage count."""
+    return (
+        f"{rag.config.max_indexed_files} documents or "
+        f"{rag.config.max_total_chunks:,} passages, whichever comes first"
+    )
+
+
 def not_loaded_note(count: int, rag: Any) -> str:
     """What the model must know about attached documents it cannot search at once."""
     return (
         f"{count} more document{'s are' if count != 1 else ' is'} attached to this "
         "chat but not searched by query_documents: a chat searches at most "
-        f"{rag.config.max_indexed_files} documents at once. They ARE attached; "
+        f"{index_limit(rag)} at once. They ARE attached; "
         "never say one is not attached or does not exist. To search one, call "
         "query_specific_file with its file name, which loads it. If the answer "
         "is not found, tell the user only part of the attached documents was "

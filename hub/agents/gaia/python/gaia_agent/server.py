@@ -66,7 +66,7 @@ from starlette.responses import StreamingResponse
 from gaia.agents.base import file_snapshots
 from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
-from gaia.agents.tools.rag_tools import _forget_evicted
+from gaia.agents.tools.rag_tools import _forget_evicted, index_limit
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.llm.surface_hints import surface_wording
@@ -202,9 +202,11 @@ class QueryRequest(_Strict):
         description=(
             "Absolute paths of the files the user attached to this conversation "
             "(contract >= 2.16). Each is granted as that exact file, never its "
-            "folder, and indexed before the turn runs. Send the full set every "
-            "turn: files already indexed in a retained session are skipped, so "
-            "one attached mid-conversation is picked up on the next turn."
+            "folder, and indexed before the turn runs, up to 100 documents or "
+            "10,000 passages; the rest load when the agent is asked about one. "
+            "Send the full set every turn: files already indexed in a retained "
+            "session are skipped, so one attached mid-conversation is picked up "
+            "on the next turn."
         ),
     )
 
@@ -901,8 +903,8 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             left = len(pending) - position
             lines.append(
                 f"{left} more not loaded: a conversation searches at most "
-                f"{rag.config.max_indexed_files} documents at once. Ask about one "
-                "of them by name to search it."
+                f"{index_limit(rag)} at once. Ask about one of them by name to "
+                "search it."
             )
             _grant_unloaded(agent, pending[position:])
             not_loaded = left

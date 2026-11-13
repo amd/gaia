@@ -117,7 +117,18 @@ def test_the_agent_ui_loads_up_to_the_cap_and_evicts_nothing(library):
     summary = handler.summary()
     assert summary["success"] is True
     assert "50 more not loaded" in summary["summary"]
-    assert "at most 100 documents at once" in summary["summary"]
+    assert "at most 100 documents or 10,000 passages" in summary["summary"]
+
+
+def test_a_full_passage_cap_stops_loading_and_says_so(library):
+    library.rag.config.max_total_chunks = 40
+    _, handler = _load_in_the_ui(library)
+
+    assert library.evicted == []
+    assert len(library.rag.chunks) == 40
+    summary = handler.summary()
+    assert "110 more not loaded" in summary["summary"]
+    assert "100 documents or 40 passages" in summary["summary"]
 
 
 def test_an_attached_document_past_the_cap_loads_when_asked_for(library):
@@ -195,5 +206,8 @@ def test_the_agent_ui_warns_at_the_same_cap():
         Path(__file__).parents[3]
         / "src/gaia/apps/webui/src/components/SessionDocsBar.tsx"
     )
-    shown = re.search(r"SEARCHED_AT_ONCE = (\d+);", bar.read_text(encoding="utf-8"))
-    assert int(shown.group(1)) == RAGConfig().max_indexed_files
+    source = bar.read_text(encoding="utf-8")
+    files = re.search(r"SEARCHED_AT_ONCE = (\d+);", source)
+    passages = re.search(r"PASSAGES_AT_ONCE = (\d+);", source)
+    assert int(files.group(1)) == RAGConfig().max_indexed_files
+    assert int(passages.group(1)) == RAGConfig().max_total_chunks
