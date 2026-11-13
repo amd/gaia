@@ -2174,6 +2174,11 @@
         "default": 0,
         "title": "Skipped",
         "type": "integer"
+      },
+      "skipped_images": {
+        "default": 0,
+        "title": "Skipped Images",
+        "type": "integer"
       }
     },
     "title": "IndexFolderResponse",

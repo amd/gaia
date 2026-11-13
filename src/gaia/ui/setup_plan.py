@@ -262,16 +262,19 @@ def _components(
 
     components: List[Dict[str, Any]] = []
     if lemonade["mode"] != "external":
+        bundled = bool(os.environ.get(BUNDLED_ARCHIVE_DIR_ENV))
         components.append(
             {
                 "id": "server",
                 "version": LEMONADE_VERSION,
                 "size_gb": 0.007,
+                # Read after "From " by a client that doesn't know ``bundled``.
                 "source": (
-                    "included with GAIA"
-                    if os.environ.get(BUNDLED_ARCHIVE_DIR_ENV)
+                    "the GAIA installer"
+                    if bundled
                     else GITHUB_RELEASE_BASE.removeprefix("https://")
                 ),
+                "bundled": bundled,
                 "installed": EmbeddedLemonade().is_installed(),
             }
         )

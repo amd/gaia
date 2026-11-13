@@ -885,6 +885,8 @@ class IndexFolderResponse(BaseModel):
     failed: int = 0
     # Files in the folder that aren't a type GAIA indexes.
     skipped: int = 0
+    # Images in the folder: GAIA reads them only when picked one by one.
+    skipped_images: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 
