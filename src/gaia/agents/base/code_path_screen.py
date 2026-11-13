@@ -129,6 +129,15 @@ def _name_reason(text: str) -> str:
     return ""
 
 
+def names_only_a_credential_file(text: str) -> bool:
+    """*text* names a credential file (``.env``, ``*.pem``) by name, in no credential folder."""
+    text = _with_home(text)
+    folders = _credential_folder_names()
+    if any(s.lower().rstrip(" .") in folders for s in _segments(text)):
+        return False
+    return bool(_name_reason(text))
+
+
 def _with_home(text: str) -> str:
     home = str(Path.home())
     for spelling in _HOME_SPELLINGS:

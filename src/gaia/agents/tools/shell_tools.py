@@ -5590,6 +5590,7 @@ class ShellToolsMixin:
         """
         from gaia.agents.base.code_path_screen import (
             code_refusal,
+            names_only_a_credential_file,
             protected_paths_in_code,
         )
 
@@ -5609,6 +5610,8 @@ class ShellToolsMixin:
                 cwd=cwd,
                 validator=getattr(self, "path_validator", None),
             )
+            # Reading a credential file is `_credential_read`'s to refuse; writing or naming one runs.
+            mentions = [m for m in mentions if not names_only_a_credential_file(m.text)]
             if mentions:
                 return {
                     **code_refusal(f"the {program} script", mentions),

@@ -77,7 +77,7 @@ def test_a_credential_file_is_refused_with_no_prompt_and_never_run(chat, name):
 
     assert agent.console.prompts == []
     assert result["status"] == "error" and result["executed"] is False, result
-    assert "No approval can grant it" in result["error"]
+    assert "even with full access or after approval" in result["error"]
     assert "envmark-4417" not in str(result)
     assert not marker.exists()
 

@@ -123,6 +123,8 @@ shell line that hands code to an interpreter (`python -c`, `powershell -Command`
 `node -e`) are screened before the approval card: code whose text names a credential
 folder, a credential file (`.env`, `id_rsa`, `*.pem`, …) or, when it may write, GAIA's
 own settings is refused outright, and an earlier "Always allow" does not cover it.
+In a shell line a credential file is refused only when the code reads it; code that
+writes or only names one (creating `.env` from a template) runs.
 Paths are judged in the canonical form above, after folding the plain ways of building
 one (`os.path.join`, `Path(...) / x`, `+`, f-strings, `"".join`, `$HOME`).
 `execute_python_file` is also refused, before the card and before the file is opened

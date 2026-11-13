@@ -299,7 +299,7 @@ def test_always_allow_does_not_cover_a_snippet_naming_a_protected_path(home):
 
     assert ordinary["status"] == "success"
     assert protected["status"] == "error"
-    assert "No approval can grant it" in protected["error"]
+    assert "even with full access or after approval" in protected["error"]
     assert agent.ran == ["print(1)"]
 
 
