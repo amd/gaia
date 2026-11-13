@@ -3096,8 +3096,9 @@ credential store (the slot the TUI uses). A key is never echoed back or logged.
     `started: false` with `reason` `already_loaded` (it is loaded at that size
     already), `busy` (a reply is running), `warm_up` (GAIA is preparing a new
     chat), `restarting`, or `not_gaias_server` (GAIA never reloads a model on a
-    server it doesn't run); in the last four cases the size applies on the next
-    load. **422** for a size not offered on this PC, or for a cloud model
+    server it doesn't run). After `busy` or `warm_up`, GAIA reloads the model
+    once the reply or warm-up ends; after the other two the size applies on the
+    next load. **422** for a size not offered on this PC, or for a cloud model
     (nothing is saved then). A saved size that stops
     fitting, or that can't be checked because this PC's memory can't be read,
     is refused at load with how to fix it; `GAIA_CTX_SIZE` still overrides it.

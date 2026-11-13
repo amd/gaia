@@ -215,6 +215,7 @@ export function ModelSettings() {
     }, [loadModels]);
 
     const remove = useCallback(async (model: string) => {
+        const modelBefore = useModelStore.getState().active?.model;
         setBusy(`rm:${model}`);
         setNotice(null);
         try {
@@ -225,7 +226,7 @@ export function ModelSettings() {
             setNotice({ ok: true, text: t(removed, { name: r.display_name }) });
             await loadModels('local', true);
             // Removing the model in use puts chat back on the default, which loads now.
-            await syncModelAfterSettingChange();
+            await syncModelAfterSettingChange(modelBefore);
         } catch (err) {
             setNotice({ ok: false, text: err instanceof Error ? err.message : String(err) });
         } finally {

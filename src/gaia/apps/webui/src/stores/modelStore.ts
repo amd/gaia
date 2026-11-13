@@ -242,10 +242,10 @@ export const useModelStore = create<ModelState>((set, get) => ({
 /**
  * A setting changed the model outside the picker (a custom model id, Local only):
  * re-read it everywhere a pick would, and follow the load the backend started.
+ * *before* is the model in use before the change was sent.
  */
-export async function syncModelAfterSettingChange(): Promise<void> {
+export async function syncModelAfterSettingChange(before?: string | null): Promise<void> {
     forgetModelChecks();
-    const before = useModelStore.getState().active?.model;
     await useModelStore.getState().refresh();
     const active = useModelStore.getState().active;
     // Only a change starts a load; an old warm-up's failure is not this one's.

@@ -7,7 +7,7 @@ import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
-import { syncModelAfterSettingChange } from '../../stores/modelStore';
+import { syncModelAfterSettingChange, useModelStore } from '../../stores/modelStore';
 import { formatGb } from '../../utils/modelLabels';
 import { useT, type Translate } from '../../i18n/useT';
 import { isolate, type MessageKey } from '../../i18n/registry';
@@ -102,6 +102,7 @@ export function AdvancedSettings() {
     const saveCustomModel = useCallback(async () => {
         const trimmed = customModel.trim();
         const payload = trimmed.length > 0 ? trimmed : '';
+        const modelBefore = useModelStore.getState().active?.model;
         setSavingModel(true);
         setSaveError(null);
         setSaveNote(null);
@@ -113,7 +114,7 @@ export function AdvancedSettings() {
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
             // The chip, the picker and this pane's own status still name the old model.
-            void syncModelAfterSettingChange();
+            void syncModelAfterSettingChange(modelBefore);
             api.getSystemStatus().then(setStatus).catch((err) => log.system.error('Failed to get system status', err));
             setSaveNote(customModelNote(nextValue, updated.model_status));
             setJustSaved(true);
