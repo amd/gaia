@@ -241,6 +241,23 @@ def test_use_mine_on_a_big_pc_names_the_large_model_and_its_real_size(running):
     assert plan["memory_gb"] == round(96 * GB_PER_GIB)
 
 
+def test_chat_on_a_cloud_model_plans_no_local_chat_download(running, config_file):
+    """Settings must not arm a 23 GB download nobody chose while chat runs in the cloud."""
+    running(BIG_GPU)
+    config_file.write_text(
+        json.dumps(
+            {"last_provider": "fireworks", "last_model": "fireworks.deepseek-v3p2"}
+        )
+    )
+    plan = sp.build_plan()
+    assert _plan_ids(plan) == [DEFAULT_EMBEDDING_MODEL]
+    assert [e["id"] for e in plan["catalog"] if e["selected"]] == [
+        DEFAULT_EMBEDDING_MODEL
+    ]
+    # Setup's own run says what it downloads; choosing local there still plans it.
+    assert LARGE_DEFAULT_MODEL_NAME in _plan_ids(sp.build_plan(skip_chat_model=False))
+
+
 def test_an_already_downloaded_model_costs_nothing(running):
     running(BIG_GPU, downloaded={LARGE_DEFAULT_MODEL_NAME, DEFAULT_MODEL_NAME})
     plan = sp.build_plan()
@@ -468,6 +485,16 @@ def test_plan_endpoint(client, running):
     r = client.get("/api/setup/plan", headers=UI)
     assert r.status_code == 200
     assert r.json()["chat_model"]["id"] == LARGE_DEFAULT_MODEL_NAME
+
+
+def test_plan_endpoint_ticks_nothing_new_while_chat_runs_in_the_cloud(
+    client, running, config_file
+):
+    running(BIG_GPU)
+    config_file.write_text(json.dumps({"last_model": "fireworks.deepseek-v3p2"}))
+    r = client.get("/api/setup/plan", headers=UI)
+    assert r.status_code == 200
+    assert _plan_ids(r.json()) == [DEFAULT_EMBEDDING_MODEL]
 
 
 def test_plan_endpoint_needs_the_ui_header(client, running):
