@@ -2868,6 +2868,7 @@ export const enMessages = {
     'schedules.card.next': 'Next: {when}',
     'schedules.card.lastFailed': 'Last run failed: {error}',
     'schedules.finished': 'Scheduled task "{name}" finished',
+    'schedules.failed': 'Scheduled task "{name}" failed',
     'schedules.card.openChat': 'Open Chat',
     'schedules.card.openChatTitle': 'Open chat session',
     'schedules.card.runNow': 'Run now',
