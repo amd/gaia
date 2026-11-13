@@ -274,7 +274,12 @@ model:
 ```bash
 gaia gateway use hybrid                       # make it the default for agent chats
 gaia -p "Summarize README.md" --model hybrid  # or for one headless run
+gaia-tui --model hybrid                       # or in the terminal UI
 ```
+
+In a running chat, `/model hybrid` turns routing on and `/model <id>` turns it
+off. The terminal UI checks the cheap, strong and classifier models before it
+starts, and names the `hybrid_*` setting to change if one is unavailable.
 
 Before each turn, the cheap model labels your request: what kind of work it is,
 how hard it is (1-5), and whether a wrong answer would be acted on directly

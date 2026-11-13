@@ -6,6 +6,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -93,6 +94,9 @@ func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, 
 	}
 	if err := sw.CheckModelSwitch(ctx); err != nil {
 		return "", err
+	}
+	if lemonade.IsHybridID(target) {
+		return checkHybridSwitch(ctx, sw, base)
 	}
 	models, err := lemonade.New(base).Models(ctx, provider)
 	if err != nil {
@@ -194,4 +198,25 @@ func (m *ChatModel) revertRelayedSwitch(err error) bool {
 		prev.modelID, prev.modelDisplay, prev.modelBackend, prev.modelRemote
 	m.relayedPending = nil
 	return true
+}
+
+// checkHybridSwitch checks every concrete model hybrid routes to, naming the
+// one that is missing and the key that picks another.
+func checkHybridSwitch(ctx context.Context, sw client.TurnModelSwitcher, base string) (string, error) {
+	models, err := lemonade.ReadHybridModels()
+	if err != nil {
+		return "", err
+	}
+	for _, r := range models.Roles() {
+		provider := "local"
+		if lemonade.IsCloudID(r.Model) {
+			provider = strings.SplitN(r.Model, ".", 2)[0]
+		}
+		if _, err := checkRelayedSwitch(ctx, sw, base, provider, r.Model); err != nil {
+			return "", fmt.Errorf("hybrid's %s model %s can't be used: %s. Choose another with "+
+				"`gaia config set %s <id>` — `gaia gateway models` lists the gateway's",
+				r.Role, r.Model, strings.TrimSuffix(err.Error(), "."), r.Key)
+		}
+	}
+	return lemonade.HybridModelID, nil
 }

@@ -996,8 +996,28 @@ def switch_model(
     GAIA's model server to come back after a restart.
 
     A session started on ``hybrid`` (see :mod:`gaia.llm.hybrid`) stops routing
-    here: the user picked *target* by name.
+    here: the user picked *target* by name. *target* ``hybrid`` starts routing,
+    on the cheap model until the next turn's route says otherwise.
     """
+    from gaia.llm.hybrid import (
+        HYBRID_MODEL_ID,
+        HybridRouter,
+        check_local_only,
+        is_hybrid_model,
+    )
+
+    if is_hybrid_model(target):
+        if not hasattr(agent, "reset_hybrid_route"):
+            raise RuntimeError(
+                "hybrid routing runs only in the GAIA agent. Pick a concrete "
+                "model with /model <id>, or switch to the GAIA agent first."
+            )
+        router = HybridRouter()
+        check_local_only(router.settings)
+        switch_concrete_model(agent, router.settings.cheap_model, on_status)
+        agent.hybrid_router = router
+        agent.last_route = None
+        return HYBRID_MODEL_ID
     display = switch_concrete_model(agent, target, on_status)
     if getattr(agent, "hybrid_router", None) is not None:
         agent.hybrid_router = None
@@ -1241,6 +1261,18 @@ def run_model_command(agent: Any, query: str, out) -> None:
 
     logger.info("switched model to %s (%s)", arg, display)
     _write(_model_state_event(agent), out)
+    router = getattr(agent, "hybrid_router", None)
+    if router is not None:
+        settings = router.settings
+        _write(
+            {
+                "type": "final",
+                "answer": f"Switched to **hybrid**: each turn runs on "
+                f"`{settings.cheap_model}` or `{settings.strong_model}`.",
+            },
+            out,
+        )
+        return
     # Pass the live client's classifier, as the system prompt does — the id
     # prefix knows only two providers, so a runtime-discovered one would be
     # called local here while the prompt calls it cloud.

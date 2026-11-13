@@ -214,6 +214,9 @@ func choiceLabel(provider, model string) string {
 	case "", "local":
 		return model
 	}
+	if lemonade.IsHybridID(model) {
+		return lemonade.Label(lemonade.HybridProvider) + " (cloud)"
+	}
 	return lemonade.Label(provider) + " · " + strings.TrimPrefix(model, provider+".")
 }
 

@@ -168,8 +168,9 @@ func (m Model) Window() int {
 	return m.ContextLength
 }
 
+// IsCloudID is true for hybrid too: it is virtual and never runs on this PC.
 func IsCloudID(id string) bool {
-	return strings.HasPrefix(id, "fireworks.") || strings.HasPrefix(id, "amd.")
+	return strings.HasPrefix(id, "fireworks.") || strings.HasPrefix(id, "amd.") || IsHybridID(id)
 }
 
 // ChatProviders are the places chat can run, in the order they are offered:
@@ -186,6 +187,8 @@ func Label(provider string) string {
 		return "Fireworks AI"
 	case "amd":
 		return "AMD LLM Gateway"
+	case HybridProvider:
+		return "Hybrid routing"
 	}
 	return provider
 }

@@ -13,7 +13,7 @@ from gaia_agent.agent import GaiaAgent
 from gaia_agent.chat_agent import ChatAgent
 
 from gaia.llm import hybrid
-from gaia.llm.hybrid import HybridRouter, HybridSettings
+from gaia.llm.hybrid import HybridRouter, HybridSettings, RouteDecision
 
 CHEAP = "amd.Cheap"
 STRONG = "amd.Claude-Strong"
@@ -259,3 +259,78 @@ def test_a_single_classifier_failure_does_not_warn_in_the_turn(monkeypatch):
     agent, _, _, _ = _agent(monkeypatch, ["not json"])
     result = agent.process_query("Write a note.")
     assert result["route"]["model"] == STRONG and agent.warnings == []
+
+
+def _named_agent(monkeypatch, switched):
+    agent = GaiaAgent.__new__(GaiaAgent)
+    agent.hybrid_router = None
+    agent.last_route = RouteDecision(model=STRONG)
+
+    def fake_switch(a, target, on_status=None):
+        switched.append(target)
+        return target
+
+    monkeypatch.setattr(stdio, "switch_concrete_model", fake_switch)
+    monkeypatch.setattr(
+        hybrid,
+        "HybridSettings",
+        SimpleNamespace(
+            load=lambda config=None: HybridSettings(
+                cheap_model=CHEAP, strong_model=STRONG
+            )
+        ),
+    )
+    return agent
+
+
+def test_switching_to_hybrid_starts_routing_on_the_cheap_model(monkeypatch):
+    monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
+    switched = []
+    agent = _named_agent(monkeypatch, switched)
+    assert stdio.switch_model(agent, "Hybrid") == "hybrid"
+    assert switched == [CHEAP]
+    assert agent.hybrid_router.settings.strong_model == STRONG
+    assert agent.last_route is None and not agent.hybrid_router.escalated
+
+
+def test_switching_to_hybrid_under_local_only_is_refused(monkeypatch):
+    monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: True)
+    switched = []
+    agent = _named_agent(monkeypatch, switched)
+    with pytest.raises(RuntimeError, match="Local only"):
+        stdio.switch_model(agent, "hybrid")
+    assert switched == [] and agent.hybrid_router is None
+
+
+def test_a_failed_switch_to_hybrid_leaves_the_session_unrouted(monkeypatch):
+    monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
+    agent = _named_agent(monkeypatch, [])
+
+    def refuse(a, target, on_status=None):
+        raise RuntimeError("unavailable")
+
+    monkeypatch.setattr(stdio, "switch_concrete_model", refuse)
+    with pytest.raises(RuntimeError, match="unavailable"):
+        stdio.switch_model(agent, "hybrid")
+    assert agent.hybrid_router is None
+
+
+def test_only_the_gaia_agent_can_switch_to_hybrid(monkeypatch):
+    with pytest.raises(RuntimeError, match="only in the GAIA agent"):
+        stdio.switch_model(SimpleNamespace(), "hybrid")
+
+
+def test_model_command_to_hybrid_says_what_it_routes_between(monkeypatch):
+    agent = SimpleNamespace(
+        hybrid_router=HybridRouter(
+            HybridSettings(cheap_model=CHEAP, strong_model=STRONG)
+        )
+    )
+    monkeypatch.setattr(stdio, "_switch_model", lambda a, t, on_status=None: "hybrid")
+    monkeypatch.setattr(stdio, "_model_state_event", lambda a: {"type": "status"})
+    out = io.StringIO()
+    stdio.run_model_command(agent, "/model hybrid", out)
+    final = json.loads(out.getvalue().strip().splitlines()[-1])
+    assert final["type"] == "final"
+    assert "hybrid" in final["answer"] and CHEAP in final["answer"]
+    assert STRONG in final["answer"]
