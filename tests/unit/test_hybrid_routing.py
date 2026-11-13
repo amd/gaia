@@ -86,6 +86,13 @@ def _cloud_allowed(monkeypatch):
     monkeypatch.setattr("gaia.llm.local_only.cloud_blocked", lambda: False)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_classifier_health():
+    hybrid.reset_classifier_health()
+    yield
+    hybrid.reset_classifier_health()
+
+
 # --- policy -----------------------------------------------------------------
 
 
@@ -541,6 +548,10 @@ def test_route_record_has_every_field():
         "seconds": record["seconds"],
         "sticky": False,
         "policy": "quality",
+        "fix": "",
+        "degraded": False,
+        "notice": "",
+        "classifier_format": "json_object",
     }
     assert isinstance(record["seconds"], float)
 
@@ -678,6 +689,8 @@ class _CountingRouter:
     """A HybridRouter double for print_mode: counts decisions, picks *model*."""
 
     instances = []
+    #: A fixed decision to return instead of the classified one.
+    route = None
 
     def __init__(self, model=STRONG):
         self.settings = HybridSettings(
@@ -689,6 +702,8 @@ class _CountingRouter:
 
     def decide(self, text, base_url=None):
         self.calls.append((text, base_url))
+        if _CountingRouter.route is not None:
+            return _CountingRouter.route
         return hybrid.RouteDecision(
             model=self.model,
             kind="find_defects",
@@ -757,6 +772,10 @@ def test_p_hybrid_records_the_route_and_runs_on_its_model(print_mode_doubles, ca
         "seconds",
         "sticky",
         "policy",
+        "fix",
+        "degraded",
+        "notice",
+        "classifier_format",
     }
     assert record["route"]["policy"] == "quality"
     assert "hybrid runs this turn on amd.Claude-Strong" in err
@@ -874,3 +893,327 @@ def test_gateway_use_hybrid_refuses_an_unlisted_model(monkeypatch, tmp_path, cap
         _gateway_use(monkeypatch, tmp_path, ["amd.DeepSeek-V4.1-Flash"])
     assert "amd.Claude-Opus-5-5" in capsys.readouterr().err
     assert not (tmp_path / "config.json").exists()
+
+
+# --- persistent classifier failure is surfaced, not silent --------------------
+
+
+def _lemonade_error(status):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    return LemonadeClientError(f"Error in chat completions (status {status}): bad")
+
+
+def _cloud_error(status):
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    error = LemonadeClientError("The selected cloud model is unavailable.")
+    error.http_status = status
+    return error
+
+
+@pytest.mark.parametrize(
+    "error,fix",
+    [
+        (_cloud_error(404), "`gaia gateway models`"),
+        (_http_error(404), "gaia config set hybrid_classifier_model"),
+        (_lemonade_error(401), "`gaia gateway auth`"),
+        (_http_error(403), "`gaia gateway auth`"),
+        (
+            ClassifierError("the classifier did not answer within 5s"),
+            "hybrid_classifier_timeout",
+        ),
+        (_lemonade_error(500), "HTTP 500"),
+        (ConnectionError("refused"), "`gaia gateway test`"),
+    ],
+)
+def test_first_failure_warns_with_its_cause_and_fix(error, fix, caplog):
+    router, _, _ = _router(error)
+    with caplog.at_level("WARNING", logger="gaia.llm.hybrid"):
+        route = router.decide("Write a short reply to Sam.")
+    assert fix in route.fix
+    assert not route.degraded and route.notice == ""
+    (warning,) = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert CLASSIFIER in warning.getMessage() and fix in warning.getMessage()
+
+
+def test_a_bad_label_names_the_classifier_setting():
+    router, _, _ = _router("not json")
+    route = router.decide("Write a short reply to Sam.")
+    assert "did not return a valid label" in route.fix
+    assert "hybrid_classifier_model" in route.fix
+
+
+def test_repeated_failures_across_sessions_degrade_loudly(caplog):
+    routes = []
+    with caplog.at_level("WARNING", logger="gaia.llm.hybrid"):
+        # Each session fails once (it then sticks to strong), so the count
+        # has to span sessions to notice a classifier that never works.
+        for _ in range(hybrid.DEGRADED_AFTER + 1):
+            router, _, _ = _router(_http_error(404))
+            routes.append(router.decide("Write a short reply to Sam."))
+    expected = [False] * (hybrid.DEGRADED_AFTER - 1) + [True, True]
+    assert [r.degraded for r in routes] == expected
+    notice = routes[-1].notice
+    assert CLASSIFIER in notice and STRONG in notice
+    assert f"failed {hybrid.DEGRADED_AFTER + 1} turns in a row" in notice
+    assert "gaia config set hybrid_classifier_model" in notice
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    # The first failure and the turn it became degraded, not every turn.
+    assert len(warnings) == 2
+    assert f"failed {hybrid.DEGRADED_AFTER} turns in a row" in warnings[1]
+
+
+def test_a_working_classifier_clears_the_failure_count():
+    for _ in range(hybrid.DEGRADED_AFTER - 1):
+        _router(_http_error(500))[0].decide("hi there")
+    assert _router(_label())[0].decide("hi there").model == CHEAP
+    route = _router(_http_error(500))[0].decide("hi there")
+    assert not route.degraded and route.notice == ""
+
+
+def test_sticky_and_empty_turns_neither_fail_nor_succeed():
+    for _ in range(hybrid.DEGRADED_AFTER - 1):
+        _router(_http_error(500))[0].decide("hi there")
+    router, client, _ = _router(_label("find_defects", 4, "high"))
+    router.escalated = True
+    router.decide("Summarise it.")
+    router.decide("   ")
+    assert client.calls == []
+    assert _router(_http_error(500))[0].decide("hi there").degraded
+
+
+class _JsonModeRejected(FakeClient):
+    """Answers *reply* to a plain request; a JSON-mode one gets *error*."""
+
+    def __init__(self, reply, error):
+        super().__init__(reply)
+        self.error = error
+
+    def chat(self, messages, **kwargs):
+        if "response_format" in kwargs:
+            self.calls.append({"messages": messages, **kwargs})
+            if self.delay:
+                time.sleep(self.delay)
+            raise self.error
+        return super().chat(messages, **kwargs)
+
+
+def _router_with(client, timeout=5.0):
+    settings = HybridSettings(
+        cheap_model=CHEAP,
+        strong_model=STRONG,
+        classifier_model=CLASSIFIER,
+        classifier_timeout_s=timeout,
+    )
+    return HybridRouter(settings, client_factory=lambda model, base_url: client)
+
+
+@pytest.mark.parametrize(
+    "error", [_http_error(400), _lemonade_error(400), _cloud_error(400)]
+)
+def test_json_mode_rejected_retries_once_in_plain_text(error):
+    client = _JsonModeRejected(_label(), error)
+    route = _router_with(client).decide("Summarise this note.")
+    assert route.model == CHEAP and route.classified
+    assert route.classifier_format == "plain"
+    first, second = client.calls
+    assert first["response_format"] == {"type": "json_object"}
+    assert "response_format" not in second
+    assert second["messages"] == first["messages"]
+    assert "tools" not in second
+
+
+def test_the_working_format_is_remembered_for_the_process():
+    client = _JsonModeRejected(_label(), _http_error(400))
+    _router_with(client).decide("Summarise this note.")
+    client.calls.clear()
+    route = _router_with(client).decide("Summarise another note.")
+    (call,) = client.calls
+    assert "response_format" not in call and route.classifier_format == "plain"
+
+
+def test_plain_text_rejected_too_fails_closed_after_one_retry():
+    client = _JsonModeRejected(_http_error(400), _http_error(400))
+    route = _router_with(client).decide("Summarise this note.")
+    assert route.model == STRONG and not route.classified
+    assert len(client.calls) == 2 and "HTTP 400" in route.fix
+
+
+def test_a_failed_plain_reply_does_not_switch_the_format():
+    client = _JsonModeRejected("not json", _http_error(400))
+    _router_with(client).decide("Summarise this note.")
+    client.calls.clear()
+    _router_with(client).decide("Summarise this note.")
+    assert client.calls[0]["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [_http_error(404), _http_error(429), _lemonade_error(500), ConnectionError("x")],
+)
+def test_only_a_rejected_request_is_retried_in_plain_text(error):
+    client = _JsonModeRejected(_label(), error)
+    route = _router_with(client).decide("Summarise this note.")
+    assert route.model == STRONG and len(client.calls) == 1
+
+
+def test_the_plain_text_retry_counts_against_the_deadline():
+    client = _JsonModeRejected(_label(), _http_error(400))
+    client.delay = 0.5
+    started = time.monotonic()
+    route = _router_with(client, timeout=0.2).decide("Summarise this note.")
+    assert time.monotonic() - started < 2.0
+    assert route.model == STRONG and "did not answer" in route.reason
+
+
+def test_plain_text_reply_may_be_one_fenced_object():
+    fenced = "```json\n" + _label() + "\n```"
+    client = _JsonModeRejected(fenced, _http_error(400))
+    assert _router_with(client).decide("Summarise this note.").model == CHEAP
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "Here you go:\n```json\n" + _label() + "\n```",
+        "```json\n" + _label() + "\n```\nHope that helps",
+        "```json\n" + _label() + "\n```\n```json\n" + _label() + "\n```",
+        "Sure! " + _label(),
+    ],
+)
+def test_plain_text_reply_with_anything_around_it_fails_closed(reply):
+    client = _JsonModeRejected(reply, _http_error(400))
+    route = _router_with(client).decide("Summarise this note.")
+    assert route.model == STRONG and not route.classified
+
+
+def test_json_mode_reply_may_not_be_fenced():
+    with pytest.raises(ClassifierError):
+        parse_label("```json\n" + _label() + "\n```")
+
+
+def test_p_prints_the_fix_for_a_failed_classification(print_mode_doubles, capsys):
+    print_mode, _, _ = print_mode_doubles
+    _CountingRouter.route = hybrid.RouteDecision(
+        model=STRONG, reason="classifier failed: HTTPError: 404", fix="do X"
+    )
+    try:
+        assert print_mode.run("hi", model="hybrid", output_format="json") == 0
+    finally:
+        _CountingRouter.route = None
+    out, err = capsys.readouterr()
+    assert "To fix: do X" in err
+    assert json.loads(out.strip().splitlines()[-1])["route"]["degraded"] is False
+
+
+def test_p_shows_the_degraded_notice(print_mode_doubles, capsys):
+    print_mode, _, _ = print_mode_doubles
+    _CountingRouter.route = hybrid.RouteDecision(
+        model=STRONG,
+        reason="classifier failed",
+        fix="do X",
+        degraded=True,
+        notice="N!",
+    )
+    try:
+        assert print_mode.run("hi", model="hybrid", output_format="json") == 0
+    finally:
+        _CountingRouter.route = None
+    out, err = capsys.readouterr()
+    assert "N!" in err
+    record = json.loads(out.strip().splitlines()[-1])
+    assert record["route"]["degraded"] is True and record["route"]["notice"] == "N!"
+
+
+# --- a failing routed model names the setting that chose it ------------------
+
+
+@pytest.mark.parametrize(
+    "model,key",
+    [
+        (CHEAP, "hybrid_cheap_model"),
+        (STRONG, "hybrid_strong_model"),
+        (CLASSIFIER, "hybrid_classifier_model"),
+    ],
+)
+def test_route_failure_names_the_config_key(model, key):
+    settings = _router(_label())[0].settings
+    message = hybrid.explain_route_failure(settings, model, _cloud_error(404))
+    assert message.startswith(f"hybrid routed this turn to {model} ({key})")
+    assert "unavailable" in message
+    assert f"`gaia config set {key} <model id>`" in message
+
+
+def test_route_failure_without_a_status_is_left_alone():
+    settings = _router(_label())[0].settings
+    assert hybrid.explain_route_failure(settings, CHEAP, "max steps reached") is None
+    assert hybrid.explain_route_failure(settings, "amd.Other", _http_error(404)) is None
+
+
+def test_p_turn_error_on_a_routed_model_names_its_setting(
+    print_mode_doubles, monkeypatch, capsys
+):
+    print_mode, _, _ = print_mode_doubles
+
+    def failing_turn(text, **kw):
+        return {
+            "type": "result",
+            "is_error": True,
+            "status": "error",
+            "error": "The selected cloud model is unavailable (HTTP 404).",
+            "result": "",
+        }
+
+    monkeypatch.setattr(print_mode, "_run_turn", failing_turn)
+    assert print_mode.run("hi", model="hybrid", output_format="json") == 1
+    record = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert record["error"].startswith(
+        f"hybrid routed this turn to {STRONG} (hybrid_strong_model)"
+    )
+    assert "gaia config set hybrid_strong_model" in record["error"]
+
+
+def test_p_unrelated_turn_error_is_not_blamed_on_the_route(
+    print_mode_doubles, monkeypatch, capsys
+):
+    print_mode, _, _ = print_mode_doubles
+
+    def failing_turn(text, **kw):
+        return {
+            "type": "result",
+            "is_error": True,
+            "status": "error",
+            "error": "the turn hit its step limit",
+            "result": "",
+        }
+
+    monkeypatch.setattr(print_mode, "_run_turn", failing_turn)
+    assert print_mode.run("hi", model="hybrid", output_format="json") == 1
+    record = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert record["error"] == "the turn hit its step limit"
+
+
+def test_p_exception_on_a_routed_model_names_its_setting(
+    print_mode_doubles, monkeypatch, capsys
+):
+    print_mode, _, _ = print_mode_doubles
+
+    def raising_turn(text, **kw):
+        raise _cloud_error(404)
+
+    monkeypatch.setattr(print_mode, "_run_turn", raising_turn)
+    assert print_mode.run("hi", model="hybrid", output_format="json") == 1
+    assert "(hybrid_strong_model)" in capsys.readouterr().out
+
+
+# --- a new conversation starts unescalated ------------------------------------
+
+
+def test_reset_forgets_sticky_escalation():
+    replies = iter([_label("find_defects", 4, "high"), _label()])
+    router, client, _ = _router(lambda _m: next(replies))
+    assert _turn(router, "Audit auth.py").model == STRONG
+    router.reset()
+    route = _turn(router, "Summarise the notes.")
+    assert route.model == CHEAP and not route.sticky and len(client.calls) == 2

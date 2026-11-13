@@ -157,9 +157,10 @@ def run(
             f"Unknown --output-format {output_format!r}; choose one of: "
             f"{', '.join(OUTPUT_FORMATS)}."
         )
+    route = settings = None
     try:
         text = read_prompt(prompt)
-        model, route = _route(text, model, base_url)
+        model, route, settings = _route(text, model, base_url)
         turn = dict(
             model=model,
             verbose=verbose,
@@ -175,12 +176,19 @@ def run(
         )
         if route is not None:
             record["route"] = route.as_record()
+            if record["is_error"] and record.get("error"):
+                record["error"] = (
+                    _explain_routed(settings, route, record["error"]) or record["error"]
+                )
     except KeyboardInterrupt:
         return _emit_failure(output_format, "interrupted", code=130)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report, never a traceback
         # DEBUG, not INFO: the console handler prints INFO, traceback and all.
         log.debug("gaia -p failed", exc_info=True)
-        return _emit_failure(output_format, f"{type(exc).__name__}: {exc}")
+        return _emit_failure(
+            output_format,
+            _explain_routed(settings, route, exc) or f"{type(exc).__name__}: {exc}",
+        )
 
     if output_format == "json":
         print(json.dumps(record, ensure_ascii=False))
@@ -239,7 +247,8 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
 
 
 def _route(text: str, model: Optional[str], base_url: Optional[str]):
-    """``(model to run, route)``: the hybrid router's pick, else *model* and None.
+    """``(model to run, route, settings)``: the hybrid router's pick, else
+    *model* and two Nones.
 
     Decided once, before any attempt starts, so every attempt and the final
     turn run on the same model.
@@ -248,7 +257,7 @@ def _route(text: str, model: Optional[str], base_url: Optional[str]):
 
     model = _resolve_model(model)
     if not is_hybrid_model(model):
-        return model, None
+        return model, None, None
     router = HybridRouter()
     detected = _start_server(router.settings.classifier_model, base_url)
     route = router.decide(text, base_url=base_url or detected)
@@ -258,7 +267,23 @@ def _route(text: str, model: Optional[str], base_url: Optional[str]):
         else route.reason
     )
     print(f"gaia -p: hybrid runs this turn on {route.model} ({label})", file=sys.stderr)
-    return route.model, route
+    if route.notice:
+        print(f"⚠️  gaia -p: {route.notice}", file=sys.stderr)
+    elif route.fix:
+        print(
+            f"⚠️  gaia -p: hybrid's classifier failed. To fix: {route.fix}",
+            file=sys.stderr,
+        )
+    return route.model, route, router.settings
+
+
+def _explain_routed(settings: Any, route: Any, error: Any) -> Optional[str]:
+    """*error* restated with the hybrid setting that chose the turn's model."""
+    if route is None:
+        return None
+    from gaia.llm.hybrid import explain_route_failure
+
+    return explain_route_failure(settings, route.model, error)
 
 
 def _resolve_model(model: Optional[str]) -> Optional[str]:

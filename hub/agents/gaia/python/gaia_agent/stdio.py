@@ -169,6 +169,13 @@ class _ClearHistory:
     """Queue sentinel: the turn loop (which owns the agent) performs the clear."""
 
 
+def _reset_hybrid_route(agent: Any) -> None:
+    """A cleared conversation forgets hybrid's sticky escalation too."""
+    reset = getattr(agent, "reset_hybrid_route", None)
+    if callable(reset):
+        reset()
+
+
 #: ``cancel`` stops the running turn but not the process, so loaded skills,
 #: "always" grants, history and full access all survive it.
 CONTROL_CANCEL = "cancel"
@@ -1958,6 +1965,7 @@ def dispatch_query(
             agent._engineering_reported_setup_status = setup_status
     if query == CLEAR_CONVERSATION_QUERY:
         agent.conversation_history.clear()
+        _reset_hybrid_route(agent)
         loader = getattr(agent, "tool_loader", None)
         if loader is not None:
             loader.reset_session()
@@ -2170,6 +2178,7 @@ def main(argv: Optional[list] = None) -> int:
             history = getattr(agent, "conversation_history", None)
             if history is not None:
                 history.clear()
+            _reset_hybrid_route(agent)
             if index is not None:
                 guarded(index, index.cleared)
             logger.info("conversation history cleared by host /clear")

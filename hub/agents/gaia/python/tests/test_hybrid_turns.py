@@ -3,6 +3,7 @@
 """A ``hybrid`` session routes each turn once, before it runs, and never
 falls back to the other model when the chosen one can't be reached."""
 
+import io
 import json
 from types import SimpleNamespace
 
@@ -11,7 +12,8 @@ from gaia_agent import stdio
 from gaia_agent.agent import GaiaAgent
 from gaia_agent.chat_agent import ChatAgent
 
-from gaia.llm.hybrid import HybridRouter, HybridSettings, RouteDecision
+from gaia.llm import hybrid
+from gaia.llm.hybrid import HybridRouter, HybridSettings
 
 CHEAP = "amd.Cheap"
 STRONG = "amd.Claude-Strong"
@@ -26,6 +28,13 @@ class _Client:
         self.calls += 1
         assert "tools" not in kwargs
         return next(self.replies)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_classifier_health():
+    hybrid.reset_classifier_health()
+    yield
+    hybrid.reset_classifier_health()
 
 
 def _label(kind, difficulty, stakes):
@@ -43,6 +52,8 @@ def _agent(monkeypatch, replies, switch=None):
     agent.hybrid_router = router
     agent.last_route = None
     agent.model_id = CHEAP
+    agent.warnings = []
+    agent.console = SimpleNamespace(print_warning=agent.warnings.append)
     agent.chat = SimpleNamespace(config=SimpleNamespace(base_url="http://l/api/v1"))
     steps = []
 
@@ -163,3 +174,88 @@ def test_agent_built_on_hybrid_starts_on_the_cheap_model(monkeypatch):
 
     agent = GaiaAgent(GaiaAgentConfig(model_id="hybrid"))
     assert seen["model_id"] == CHEAP and agent.hybrid_router is not None
+
+
+def test_clear_starts_the_next_turn_unescalated(monkeypatch):
+    agent, client, steps, switches = _agent(
+        monkeypatch,
+        [_label("find_defects", 4, "high"), _label("answer_question", 1, "low")],
+    )
+    agent.conversation_history = []
+    agent.process_query("Audit it.")
+    wire = io.StringIO()
+    stdio.dispatch_query(agent, stdio.CLEAR_CONVERSATION_QUERY, wire)
+    assert agent.last_route is None and not agent.hybrid_router.escalated
+    after = agent.process_query("What is 2+2?")
+    assert after["route"]["model"] == CHEAP and not after["route"]["sticky"]
+    assert switches == [STRONG, CHEAP] and client.calls == 2
+
+
+def test_host_clear_history_resets_routing_too(monkeypatch):
+    agent, _, _, _ = _agent(monkeypatch, [_label("find_defects", 4, "high")])
+    agent.process_query("Audit it.")
+    stdio._reset_hybrid_route(agent)
+    assert not agent.hybrid_router.escalated
+
+
+def test_clear_on_an_agent_without_routing_is_harmless():
+    stdio._reset_hybrid_route(SimpleNamespace())
+
+
+def test_routed_model_refusal_names_its_setting(monkeypatch):
+    from gaia.llm.lemonade_client import CloudModelUnavailableError
+
+    agent, _, _, _ = _agent(monkeypatch, [_label("answer_question", 1, "low")])
+    agent.process_query("What is 2+2?")
+    message = agent._cloud_account_refusal(
+        CloudModelUnavailableError(
+            "The selected cloud model is unavailable (HTTP 404).", model_id=CHEAP
+        )
+    )
+    assert message.startswith(
+        f"hybrid routed this turn to {CHEAP} (hybrid_cheap_model)"
+    )
+    assert "gaia config set hybrid_cheap_model" in message
+
+
+def test_refusal_without_routing_is_unchanged(monkeypatch):
+    from gaia.llm.lemonade_client import CloudModelUnavailableError
+
+    agent, _, _, _ = _agent(monkeypatch, [])
+    agent.hybrid_router = None
+    error = CloudModelUnavailableError(
+        "The selected cloud model is unavailable (HTTP 404).", model_id=CHEAP
+    )
+    assert "hybrid" not in (agent._cloud_account_refusal(error) or "")
+
+
+def test_a_refused_switch_names_the_setting(monkeypatch):
+    from gaia.llm.hybrid import HybridModelError
+    from gaia.llm.lemonade_client import CloudModelUnavailableError
+
+    def refuse(target):
+        raise CloudModelUnavailableError(
+            "The selected cloud model is unavailable (HTTP 404).", model_id=target
+        )
+
+    agent, _, _, _ = _agent(
+        monkeypatch, [_label("plan_or_design", 4, "high")], switch=refuse
+    )
+    with pytest.raises(HybridModelError, match=r"\(hybrid_strong_model\)"):
+        agent.process_query("Design the migration.")
+    assert not agent.hybrid_router.escalated
+
+
+def test_a_degraded_classifier_warns_in_the_turn(monkeypatch):
+    for _ in range(hybrid.DEGRADED_AFTER):
+        agent, _, _, _ = _agent(monkeypatch, ["not json"])
+        result = agent.process_query("Write a note.")
+    assert result["route"]["degraded"] is True
+    (warning,) = agent.warnings
+    assert warning == result["route"]["notice"] and "hybrid_classifier_model" in warning
+
+
+def test_a_single_classifier_failure_does_not_warn_in_the_turn(monkeypatch):
+    agent, _, _, _ = _agent(monkeypatch, ["not json"])
+    result = agent.process_query("Write a note.")
+    assert result["route"]["model"] == STRONG and agent.warnings == []

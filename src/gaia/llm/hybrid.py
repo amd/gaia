@@ -20,7 +20,7 @@ import re
 import threading
 import time
 from dataclasses import asdict, dataclass
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 
 from gaia.logger import get_logger
 
@@ -87,6 +87,16 @@ _GAIA_CONTEXT_BLOCK = re.compile(
     r".*?\[End GAIA (?P=name) Context[^\]\n]*\]\s*",
     re.S,
 )
+
+#: Consecutive failed classifications in this process before users are told.
+DEGRADED_AFTER = 3
+
+#: Classifier request formats: JSON mode, else plain text read as JSON.
+FORMAT_JSON = "json_object"
+FORMAT_PLAIN = "plain"
+
+_FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\n(?P<body>.*?)\n?```\s*\Z", re.S)
+_STATUS_IN_TEXT = re.compile(r"\b(?:status|HTTP) (\d{3})\b")
 
 
 def is_hybrid_model(model_id: Optional[str]) -> bool:
@@ -207,9 +217,141 @@ class RouteDecision:
     sticky: bool = False
     #: The ``hybrid_policy`` the decision was made under.
     policy: Optional[str] = None
+    #: What to change so the classifier works again; set when it failed.
+    fix: str = ""
+    #: True once the classifier has failed DEGRADED_AFTER turns in a row.
+    degraded: bool = False
+    #: The line to show the user while degraded.
+    notice: str = ""
+    #: The request format the classifier answered in (FORMAT_JSON / FORMAT_PLAIN).
+    classifier_format: Optional[str] = None
 
     def as_record(self) -> Dict[str, Any]:
         return asdict(self)
+
+
+def _http_status(error: BaseException) -> Optional[int]:
+    """The HTTP status *error* (or an error it was raised from) carries."""
+    seen = set()
+    current: Optional[BaseException] = error
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        for status in (
+            getattr(current, "http_status", None),
+            getattr(getattr(current, "response", None), "status_code", None),
+        ):
+            if isinstance(status, int) and not isinstance(status, bool):
+                return status
+        found = _STATUS_IN_TEXT.search(str(current))
+        if found:
+            return int(found.group(1))
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _is_timeout(error: BaseException) -> bool:
+    import requests
+
+    from gaia.llm.retry import StreamStalledError
+
+    if isinstance(error, (requests.exceptions.Timeout, StreamStalledError)):
+        return True
+    return isinstance(error, ClassifierError) and "did not answer" in str(error)
+
+
+def model_fix(key: str, model: str, error: BaseException) -> str:
+    """What to change when *model*, set by config *key*, failed with *error*."""
+    status = _http_status(error)
+    use_other = f"`gaia config set {key} <model id>`"
+    if status == 404:
+        return (
+            f"the model server reports {model} unavailable (HTTP 404). Run "
+            f"`gaia gateway models` to see what is deployed, then {use_other}."
+        )
+    if status in (401, 403):
+        return (
+            f"the request for {model} was refused (HTTP {status}). Run "
+            "`gaia gateway auth` to sign in again."
+        )
+    if _is_timeout(error):
+        return (
+            f"{model} answered too slowly. Raise the limit with `gaia config set "
+            f"hybrid_classifier_timeout <seconds>` (up to "
+            f"{MAX_CLASSIFIER_TIMEOUT_S}), or {use_other} for a faster model."
+            if key == "hybrid_classifier_model"
+            else f"{model} answered too slowly. Try again, or {use_other}."
+        )
+    if status == 400:
+        return f"{model} rejected the request (HTTP 400). Use {use_other}."
+    if isinstance(error, ClassifierError):
+        return f"{model} did not return a valid label. Use {use_other}."
+    if status is not None:
+        return f"{model} failed (HTTP {status}). Try again, or {use_other}."
+    return f"{model} could not be reached. Run `gaia gateway test`, or {use_other}."
+
+
+def _config_key(settings: "HybridSettings", model: str) -> Optional[str]:
+    for key, value in (
+        ("hybrid_cheap_model", settings.cheap_model),
+        ("hybrid_strong_model", settings.strong_model),
+        ("hybrid_classifier_model", settings.classifier_model),
+    ):
+        if value == model:
+            return key
+    return None
+
+
+class HybridModelError(RuntimeError):
+    """A model hybrid routed a turn to failed; names the setting that chose it."""
+
+
+def explain_route_failure(
+    settings: "HybridSettings", model: str, error: Union[BaseException, str]
+) -> Optional[str]:
+    """*error* from the model a route picked, restated with the setting that
+    chose it; None when *error* carries no HTTP status (not about the model)."""
+    if isinstance(error, str):
+        error = RuntimeError(error)
+    key = _config_key(settings, model)
+    if key is None or _http_status(error) is None:
+        return None
+    detail = str(error).strip()
+    return (
+        f"hybrid routed this turn to {model} ({key}), and it failed: {detail} "
+        f"To fix: {model_fix(key, model, error)}"
+    )
+
+
+class _ClassifierHealth:
+    """This process's classifier record: consecutive failures, working format."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self.consecutive_failures = 0
+        self._formats: Dict[str, str] = {}
+
+    def failed(self) -> int:
+        with self._lock:
+            self.consecutive_failures += 1
+            return self.consecutive_failures
+
+    def succeeded(self, model: str, request_format: str) -> None:
+        with self._lock:
+            self.consecutive_failures = 0
+            self._formats[model] = request_format
+
+    def format_for(self, model: str) -> str:
+        with self._lock:
+            return self._formats.get(model, FORMAT_JSON)
+
+
+_HEALTH = _ClassifierHealth()
+
+
+def reset_classifier_health() -> None:
+    """Forget this process's classifier failures and formats."""
+    global _HEALTH  # pylint: disable=global-statement
+    _HEALTH = _ClassifierHealth()
 
 
 def prepare_request(text: str) -> str:
@@ -228,14 +370,19 @@ def prepare_request(text: str) -> str:
     return "REQUEST:\n<<<\n" + text + "\n>>>"
 
 
-def parse_label(reply: Any) -> Dict[str, Any]:
+def parse_label(reply: Any, request_format: str = FORMAT_JSON) -> Dict[str, Any]:
     """The classifier's label from its reply, or ClassifierError.
 
     Strict on purpose: the reply must be exactly one JSON object with every
     field valid. Text around it, a quoted number or an unknown kind is an error.
+    A plain-text reply may also be that object inside one ```json fence.
     """
     if not isinstance(reply, str) or not reply.strip():
         raise ClassifierError("the classifier returned no text")
+    if request_format == FORMAT_PLAIN:
+        fenced = _FENCED_REPLY.match(reply)
+        if fenced:
+            reply = fenced.group("body")
     try:
         label = json.loads(reply)
     except json.JSONDecodeError as exc:
@@ -353,28 +500,59 @@ class HybridRouter:
         self.escalated = False
 
     def classify(self, text: str, base_url: Optional[str] = None) -> Dict[str, Any]:
-        """The classifier's validated label for *text*; ClassifierError otherwise."""
+        """The classifier's validated label for *text*; ClassifierError otherwise.
+
+        The label's ``format`` is the request format that worked. A server that
+        rejects JSON mode (HTTP 400) is asked once more in plain text, and this
+        process then asks that model in plain text from the start.
+        """
         settings = self.settings
+        model = settings.classifier_model
         messages = [
             {"role": "system", "content": CLASSIFIER_SYSTEM_PROMPT},
             {"role": "user", "content": prepare_request(text)},
         ]
 
-        def ask() -> Any:
-            client = self._client_factory(settings.classifier_model, base_url)
+        def ask(client: Any, request_format: str) -> Any:
+            extra = (
+                {"response_format": {"type": "json_object"}}
+                if request_format == FORMAT_JSON
+                else {}
+            )
             # No tools: the classifier only describes the request, it can't act on it.
             return client.chat(
                 messages,
-                model=settings.classifier_model,
+                model=model,
                 stream=False,
                 temperature=0,
                 max_tokens=CLASSIFIER_MAX_TOKENS,
-                response_format={"type": "json_object"},
                 reasoning_effort=None,
                 timeout=settings.classifier_timeout_s,
+                **extra,
             )
 
-        return parse_label(_call_with_deadline(ask, settings.classifier_timeout_s))
+        def attempts() -> Tuple[Any, str]:
+            client = self._client_factory(model, base_url)
+            request_format = _HEALTH.format_for(model)
+            try:
+                return ask(client, request_format), request_format
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                if request_format != FORMAT_JSON or _http_status(exc) != 400:
+                    raise
+                log.info(
+                    "hybrid: %s rejected JSON mode (%s); asking in plain text",
+                    model,
+                    exc,
+                )
+                return ask(client, FORMAT_PLAIN), FORMAT_PLAIN
+
+        reply, request_format = _call_with_deadline(
+            attempts, settings.classifier_timeout_s
+        )
+        label = parse_label(reply, request_format)
+        _HEALTH.succeeded(model, request_format)
+        label["format"] = request_format
+        return label
 
     def decide(self, text: str, base_url: Optional[str] = None) -> RouteDecision:
         """The model this turn runs on. Never raises for a classifier failure.
@@ -405,19 +583,7 @@ class HybridRouter:
                 label = self.classify(text, base_url)
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 # Fail closed: a turn we can't judge runs on the strong model.
-                log.warning(
-                    "hybrid: classifier %s failed (%s: %s); this turn runs on %s",
-                    settings.classifier_model,
-                    type(exc).__name__,
-                    exc,
-                    settings.strong_model,
-                )
-                decision = RouteDecision(
-                    model=settings.strong_model,
-                    reason=f"classifier failed: {type(exc).__name__}: {exc}"[:300],
-                    seconds=round(time.monotonic() - started, 2),
-                    policy=settings.policy,
-                )
+                decision = self._failed(exc, round(time.monotonic() - started, 2))
             else:
                 cheap = runs_cheap(
                     label["kind"], label["difficulty"], label["stakes"], settings.policy
@@ -431,6 +597,7 @@ class HybridRouter:
                     classified=True,
                     seconds=round(time.monotonic() - started, 2),
                     policy=settings.policy,
+                    classifier_format=label["format"],
                 )
         log.info(
             "hybrid: turn runs on %s (policy=%s kind=%s difficulty=%s stakes=%s "
@@ -446,6 +613,49 @@ class HybridRouter:
             decision.reason,
         )
         return decision
+
+    def _failed(self, error: BaseException, seconds: float) -> RouteDecision:
+        """The strong-model decision for a failed classification, counted."""
+        settings = self.settings
+        model = settings.classifier_model
+        failures = _HEALTH.failed()
+        fix = model_fix("hybrid_classifier_model", model, error)
+        cause = f"{type(error).__name__}: {error}"
+        degraded = failures >= DEGRADED_AFTER
+        notice = (
+            f"hybrid: the classifier {model} has failed {failures} turns in a "
+            f"row, so every turn runs on {settings.strong_model}. To fix: {fix}"
+            if degraded
+            else ""
+        )
+        if failures == 1:
+            log.warning(
+                "hybrid: classifier %s failed (%s); this turn runs on %s. To fix: %s",
+                model,
+                cause,
+                settings.strong_model,
+                fix,
+            )
+        elif failures == DEGRADED_AFTER:
+            log.warning("%s", notice)
+        else:
+            log.info(
+                "hybrid: classifier failed again (%d in a row): %s", failures, cause
+            )
+        return RouteDecision(
+            model=settings.strong_model,
+            reason=f"classifier failed: {cause}"[:300],
+            seconds=seconds,
+            policy=settings.policy,
+            fix=fix,
+            degraded=degraded,
+            notice=notice,
+        )
+
+    def reset(self) -> None:
+        """A new conversation: forget the session's sticky escalation."""
+        with self._lock:
+            self.escalated = False
 
     def ran(self, decision: RouteDecision) -> None:
         """Record that a turn ran on *decision*'s model: strong makes it sticky."""

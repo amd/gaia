@@ -152,7 +152,7 @@ subcommand instead.
 | `error` | Only when `is_error`: why the turn failed |
 | `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `error` (why it failed), `duration_s`, steps, tool calls and tokens. The top-level counts include them |
 | `conversation` | Only with `--verbose`: the turn's messages and tool calls |
-| `route` | Only with `--model hybrid`: the model the turn ran on and why — `model`, `kind`, `difficulty`, `stakes`, `reason`, `classified` (false when the classifier gave no valid label), `seconds`, `sticky`, `policy` (the `hybrid_policy` in effect) |
+| `route` | Only with `--model hybrid`: the model the turn ran on and why — `model`, `kind`, `difficulty`, `stakes`, `reason`, `classified` (false when the classifier gave no valid label), `seconds`, `sticky`, `policy` (the `hybrid_policy` in effect), `classifier_format` (`json_object` or `plain`), `fix` (what to change when the classifier failed), `degraded` and `notice` (true, with a message, once the classifier has failed 3 turns in a row) |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
 than `success`), when the model server could not be started, or when no prompt was

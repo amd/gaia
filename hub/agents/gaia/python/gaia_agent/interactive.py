@@ -233,6 +233,9 @@ def interactive_mode(agent: ChatAgent):
                             continue
                     # Create new session
                     agent.current_session = agent.session_manager.create_session()
+                    reset_route = getattr(agent, "reset_hybrid_route", None)
+                    if callable(reset_route):
+                        reset_route()
                     # Reset per-session tool activation (bundle state)
                     try:
                         if hasattr(agent, "tool_loader"):

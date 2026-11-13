@@ -773,8 +773,9 @@ grouped by provider, with `(default)` beside the configured default model;
 `/model <id>` switches the live client while preserving conversation and skills.
 A session built on the `hybrid` model id picks a cheap or strong model before
 each turn and runs the whole turn on it; once a turn ran on the strong model the
-session stays there, and a classifier failure means strong. `/model <id>` turns
-that off. `process_query`'s result then carries a `route` record (see the
+session stays there until `/clear`, and a classifier failure means strong.
+After 3 failed classifications in a row the turn prints a warning notice with
+the fix. `/model <id>` turns routing off. `process_query`'s result then carries a `route` record (see the
 gateway guide's Hybrid model section).
 The switch reply is one line naming the model, where it runs, and, for a cloud
 model, that messages and anything read from files or memory are sent there.
