@@ -1193,6 +1193,8 @@ const messages: Messages = {
     'prompt.allowOnce': 'السماح مرة واحدة',
     'prompt.allowForChat': 'السماح في هذه المحادثة',
     'prompt.alwaysAllow': 'السماح دائمًا بـ {scope} في هذه المحادثة',
+    'prompt.always.file': '{action} {name}',
+    'prompt.always.folder': '{action} في {folder}',
     'prompt.deny': 'رفض',
     'prompt.details': 'التفاصيل',
     'prompt.technicalDetails': 'التفاصيل التقنية',
