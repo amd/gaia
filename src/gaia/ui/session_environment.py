@@ -254,6 +254,12 @@ def note_approved_path(session_id: str, path: str) -> None:
             paths.append(path)
 
 
+def forget_session(session_id: str) -> None:
+    """Drop what *session_id*'s relayed agent was allowed at its prompts."""
+    with _approved_guard:
+        _approved_paths.pop(session_id, None)
+
+
 def _approved(session_id: str) -> List[str]:
     with _approved_guard:
         return list(_approved_paths.get(session_id, []))
