@@ -3578,7 +3578,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     Minimum: 30. Maximum: 86400 (24 hours).
                 goal_outcome: "done" when the goal you worked on is achieved,
                     "failed" when it cannot be done (say why in reason), or
-                    empty to try it again later.
+                    empty when unfinished. Unfinished with state "scheduled"
+                    checks back without cost; any other unfinished stop uses
+                    up one of the goal's three tries.
             """
             valid_states = {"idle", "scheduled", "paused"}
             if state not in valid_states:

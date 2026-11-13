@@ -789,6 +789,18 @@ class GoalStore:
             conn.commit()
         return self.get_goal(goal_id)
 
+    def defer_goal(self, goal_id: str, wait_s: int, note: str) -> Optional[Goal]:
+        """Hold a queued goal *wait_s* seconds without counting a try."""
+        with self._lock:
+            conn = self._get_conn()
+            conn.execute(
+                "UPDATE goals SET retry_at=?, progress_notes=?, updated_at=? "
+                "WHERE id=? AND status IN ('queued', 'in_progress')",
+                (time.time() + max(0, wait_s), note, _now_iso(), goal_id),
+            )
+            conn.commit()
+        return self.get_goal(goal_id)
+
     def end_goal(self, goal_id: str, status: GoalStatus, note: str) -> Optional[Goal]:
         """Mark a queued or in-progress goal ``completed`` or ``failed`` with *note*.
 

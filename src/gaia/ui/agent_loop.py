@@ -444,6 +444,9 @@ class AgentLoop:
             store.end_goal(goal.id, "completed", note)
         elif outcome == "failed":
             store.end_goal(goal.id, "failed", note)
+        elif directive.get("directive") == "scheduled":
+            # Checking back later is progress, not a failed try.
+            store.defer_goal(goal.id, int(directive.get("wake_in_seconds") or 0), note)
         else:
             store.record_unfinished_run(
                 goal.id,
@@ -503,7 +506,9 @@ class AgentLoop:
             "When you stop, call set_loop_state() to signal your status so the "
             "loop knows what to do next: goal_outcome='done' once that goal is "
             "achieved, or goal_outcome='failed' with the reason when it cannot "
-            "be done."
+            "be done. To check back on work still under way, use state "
+            "'scheduled'. Any other stop counts as one of "
+            f"{GOAL_MAX_TRIES} tries, after which the goal fails."
         )
 
         result_holder: Dict[str, Any] = {"error": None, "stats": {}}
@@ -661,6 +666,7 @@ class AgentLoop:
         try:
             deadline = time.monotonic() + _TICK_TIMEOUT
             done = set()
+            timed_out = ""  # why the run ended, once it ran out of time
             # Poll so a cancel or foreground turn is seen mid-tool, not at the timeout.
             while not done and not stopped_for_foreground.is_set():
                 remaining = deadline - time.monotonic()
@@ -673,6 +679,10 @@ class AgentLoop:
                     logger.info("AgentLoop: tick stopped for a user request")
                 else:
                     reason = "tick timed out"
+                    timed_out = (
+                        f"The run timed out after {_TICK_TIMEOUT // 60} min "
+                        "without finishing."
+                    )
                     logger.warning("AgentLoop: tick timed out after %ds", _TICK_TIMEOUT)
                 cancel_event.set()
                 sse_handler.cancelled.set()
@@ -687,6 +697,8 @@ class AgentLoop:
                         session_id[:8],
                     )
                     self._lingering_ticks[session_id] = worker
+                    if not stopped_for_foreground.is_set():
+                        self._settle_goal(goals[0], {"reason": timed_out}, None)
                     return LoopDirective("idle", reason=reason)
         except asyncio.CancelledError:
             cancel_event.set()
@@ -716,6 +728,10 @@ class AgentLoop:
             logger.warning("AgentLoop: goal not run: %s", result_holder["limit"])
             self._note_goals(goals[:1], f"Not run: {result_holder['limit']}")
             return LoopDirective("idle", reason="spending limit reached")
+        if timed_out:
+            # Stopped for running out of time, not failed: count it as a try.
+            self._settle_goal(goals[0], {"reason": timed_out}, None)
+            return LoopDirective("idle", reason="tick timed out")
         if result_holder["error"]:
             # The goals are still actionable, so continuing would rerun the
             # failure at once until the hourly budget is gone.

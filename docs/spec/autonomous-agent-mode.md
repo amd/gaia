@@ -283,7 +283,9 @@ def set_loop_state(
 
 **How a goal run ends (#7995).** A tick works on the first actionable goal.
 `goal_outcome="done"` completes it and `"failed"` fails it, with `reason` as
-its note. A run that reports neither is counted: the goal waits 5 minutes,
+its note. A run that stops with state `"scheduled"` holds the goal until
+its wake time without counting a try. Any other run that reports neither,
+including one that hits the tick timeout, is counted: the goal waits 5 minutes,
 then 10, before it is run again (`GoalStore.retry_at`), and the third such
 run fails it with "Stopped after 3 tries without finishing" and the last
 run's reason or answer. A goal that can't be done therefore stops instead of

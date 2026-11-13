@@ -150,6 +150,49 @@ def test_the_agent_can_finish_a_goal(loop, monkeypatch):
     assert GoalStore().get_goal(goal.id).status == "completed"
 
 
+def test_checking_back_later_is_not_a_failed_try(loop, monkeypatch):
+    goal = _goal()
+    _sidecar(
+        monkeypatch,
+        answer="Build still running.",
+        directive={
+            "directive": "scheduled",
+            "wake_in_seconds": 60,
+            "reason": "waiting for the build",
+        },
+    )
+
+    _tick(loop)
+
+    held = GoalStore().get_goal(goal.id)
+    assert held.status == "queued" and held.attempts == 0
+    assert time.time() + 50 < held.retry_at < time.time() + 70
+
+
+def test_a_run_that_times_out_counts_as_a_try_and_says_so(loop, monkeypatch):
+    import gaia.ui.agent_loop as agent_loop_mod
+
+    goal = _goal()
+    monkeypatch.setattr(agent_loop_mod, "_TICK_TIMEOUT", 0.3)
+
+    def slow_relay(handler, prompt, **kwargs):
+        time.sleep(0.6)
+        return "late"
+
+    monkeypatch.setattr(
+        helpers,
+        "_agent_registry",
+        SimpleNamespace(get=lambda _id: SimpleNamespace(is_sidecar=True)),
+    )
+    monkeypatch.setattr(helpers, "relay_one_prompt", slow_relay)
+
+    _tick(loop)
+
+    waiting = GoalStore().get_goal(goal.id)
+    assert waiting.status == "queued" and waiting.attempts == 1
+    assert "timed out" in waiting.progress_notes
+
+
 def test_a_goal_run_counts_toward_cloud_spending(loop, monkeypatch):
     _goal()
     _sidecar(monkeypatch)
