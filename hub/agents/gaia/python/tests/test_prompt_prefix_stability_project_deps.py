@@ -48,11 +48,11 @@ def test_an_install_and_a_grant_mid_session_leave_the_prompt_alone(
 
     assert len(model.requests) == 2
     system = [request[0][0]["content"] for request in model.requests]
-    assert "==== PROJECT MAP ====" in system[0]
-    assert "without asking only under:" in system[0]
+    opening = stability._first_user_text(model.requests[0])
+    assert "==== PROJECT MAP ====" in opening
+    assert "without asking only under:" in opening
     assert system[0] == system[1]
-    before, after = (stability._render(request) for request in model.requests)
-    assert after.startswith(before)
+    stability._assert_each_extends_the_last(model.requests)
 
     turn_one, turn_two = (request[0][-1]["content"] for request in model.requests)
     assert "NOT installed for `python`: asgiref (of 1 declared)" in turn_one

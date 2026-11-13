@@ -96,6 +96,7 @@ from gaia.agents.base.tool_outcome import (
 )
 from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import TOKEN_SHAPES
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     EMBED_MAX_CHARS,
@@ -4524,14 +4525,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     _CREDENTIAL_PATTERNS: ClassVar[tuple] = tuple(
         re.compile(p, re.IGNORECASE)
         for p in (
-            r"\bsk-ant-[a-zA-Z0-9_-]{10,}",  # Anthropic API key
-            r"\bsk-[a-zA-Z0-9_-]{20,}",  # OpenAI-style API key
-            r"\bgh[pousr]_[a-zA-Z0-9]{20,}",  # GitHub token (ghp_/gho_/ghu_/ghs_/ghr_)
-            r"\bgithub_pat_[a-zA-Z0-9_]{20,}",  # GitHub fine-grained PAT
-            r"\bAKIA[0-9A-Z]{16}\b",  # AWS access key id
-            r"\bAIza[0-9A-Za-z_-]{20,}",  # Google API key
-            r"\bxox[baprs]-[a-zA-Z0-9-]{10,}",  # Slack token
-            r"\bglpat-[a-zA-Z0-9_-]{20,}",  # GitLab PAT
+            *TOKEN_SHAPES,
             r"\bBearer\s+[a-zA-Z0-9._-]{20,}",  # raw Bearer token
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"

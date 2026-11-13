@@ -736,10 +736,12 @@ def _answers_in_question_language(mixin: Any):
 
 
 _SEARCH_AGAIN_NOTE = (
-    "\n\nIf these chunks do not answer the question, do not say so yet: search once "
-    "more with different words (other terms for the same thing, and the question's "
-    "words in the document's language). If that search misses too, say it is not "
-    "in the documents."
+    "\n\nIf these chunks do not answer the question, do not say so yet and do not "
+    "search the web: search the document again with different words (other terms "
+    "for the same thing, and the question's words in the document's language). If "
+    "that search misses too, say plainly that the answer is not in the document, "
+    "naming it. Only then offer the web, or search it if the user asked, and say "
+    "that answer is from the web."
 )
 
 
