@@ -61,7 +61,13 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import before_change, note_untracked
+from gaia.agents.base.file_snapshots import (
+    SnapshotError,
+    before_change,
+    note_folder_changes,
+    note_untracked,
+    watch_script_folders,
+)
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
@@ -2590,6 +2596,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         note_untracked("execute_python_file", str(p))
                     # The script's own output folders first: the search is bounded.
                     watch = watch_folders(*folders_named_in(source), run_dir, project)
+                    named = None
+                    if writes:
+                        try:
+                            # A file the script moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(source), "execute_python_file"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     started = time.time()
                     try:
                         job = run_python_job(
@@ -2605,6 +2625,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("execute_python_file", str(p))
                         raise
+                    finally:
+                        note_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2787,6 +2809,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 started = time.time()
                 start = time.monotonic()
                 try:
+                    named = None
+                    if writes:
+                        try:
+                            # A file the snippet moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(code), "run_python"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     try:
                         job = run_python_job(
                             cmd,
@@ -2801,6 +2837,8 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("run_python", detail)
                         raise
+                    finally:
+                        note_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(

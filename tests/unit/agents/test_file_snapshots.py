@@ -375,6 +375,85 @@ class TestListingAndReview:
         assert not root.exists()
 
 
+def _tree(folder):
+    return {
+        str(p.relative_to(folder)): p.read_bytes()
+        for p in sorted(folder.rglob("*"))
+        if p.is_file()
+    }
+
+
+class TestScriptMoves:
+    """A script that moves and renames files in a folder it names (#7286)."""
+
+    def _inbox(self, work, count=6):
+        inbox = work / "inbox"
+        inbox.mkdir()
+        for i in range(count):
+            (inbox / f"scan_{i}.pdf").write_bytes(f"invoice {i}".encode())
+        (inbox / "notes.txt").write_text("keep me")
+        return inbox
+
+    def _tidy(self, inbox):
+        for path in sorted(inbox.glob("scan_*.pdf")):
+            year = inbox / "invoices" / "2024"
+            year.mkdir(parents=True, exist_ok=True)
+            path.rename(year / f"invoice-{path.stem[5:]}.pdf")
+
+    def test_undo_moves_renamed_files_back_and_removes_new_folders(self, root, work):
+        inbox = self._inbox(work)
+        before = _tree(inbox)
+        with _record(root) as rec:
+            watch = fs.watch_script_folders([str(inbox)], "run_python")
+            self._tidy(inbox)
+            fs.note_folder_changes(watch)
+        assert _tree(inbox) != before
+
+        result = fs.restore_turn(SID, rec.turn_id, root=root)
+
+        assert _tree(inbox) == before
+        assert not (inbox / "invoices").exists()
+        assert len(result["restored"]) == 6
+        assert len(result["removed"]) == 6
+
+    def test_files_the_script_left_alone_are_not_listed_or_kept(self, root, work):
+        inbox = self._inbox(work)
+        with _record(root) as rec:
+            watch = fs.watch_script_folders([str(inbox)], "run_python")
+            self._tidy(inbox)
+            fs.note_folder_changes(watch)
+        (turn,) = fs.list_turns(SID, root=root)
+        paths = {f["path"] for f in turn["files"]}
+        assert str(inbox / "notes.txt") not in paths
+        assert {f["change"] for f in turn["files"]} == {"deleted", "created"}
+        blobs = list((rec.dir / "blobs").glob("*.before"))
+        assert len(blobs) == 6
+
+    def test_a_folder_past_the_bound_is_not_copied(self, root, work, monkeypatch):
+        inbox = self._inbox(work)
+        monkeypatch.setattr(fs, "MAX_WATCH_FILES", 3)
+        with _record(root):
+            assert fs.watch_script_folders([str(inbox)], "run_python") is None
+
+    def test_outside_a_turn_nothing_is_copied(self, root, work):
+        inbox = self._inbox(work)
+        assert fs.watch_script_folders([str(inbox)], "run_python") is None
+        assert not root.exists()
+
+    def test_a_folder_named_twice_is_copied_once(self, root, work):
+        inbox = self._inbox(work)
+        self._tidy(inbox)
+        with _record(root) as rec:
+            watch = fs.watch_script_folders(
+                [str(inbox), str(inbox / "invoices" / "2024")], "run_python"
+            )
+            (inbox / "invoices" / "2024" / "invoice-0.pdf").write_text("changed")
+            fs.note_folder_changes(watch)
+        (turn,) = fs.list_turns(SID, root=root)
+        assert [f["change"] for f in turn["files"]] == ["edited"]
+        assert len(list((rec.dir / "blobs").glob("*.before"))) == 1
+
+
 class TestRetention:
     def _turn(self, root, work, name, size=10):
         target = work / name
