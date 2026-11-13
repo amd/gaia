@@ -229,6 +229,7 @@ from gaia.utils.terminal import stdin_is_interactive
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
+    from gaia.agents.base.history import TurnMessages
     from gaia.connectors.providers.base import ConnectorRequirement
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
@@ -3835,6 +3836,25 @@ Do NOT wrap conversational replies in JSON.
             hook(record)
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("console rejected turn metrics: %s", e)
+
+    def _stage_final_model_messages(
+        self, messages: "TurnMessages", answer: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Seal the turn's record when the console carries it to the caller.
+
+        The daemon's ``final`` event must not wait on this thread's tail (memory
+        store, trace) to learn what later turns replay, so the record is sealed
+        at the answer and handed over. The sealed list is reused as
+        ``result["model_messages"]``, so the turn pays for one copy, not two.
+        """
+        hook = getattr(self.console, "stage_final_model_messages", None)
+        if hook is None:
+            return None
+        try:
+            return hook(answer, messages.finish(answer))
+        except Exception as e:  # noqa: BLE001 - the answer must still print
+            logger.warning("console could not stage the turn record: %s", e)
+            return None
 
     def _announce_turn_failed(self) -> None:
         """Tell the console the answer about to print ends a failed turn.
@@ -11539,6 +11559,8 @@ Do NOT wrap conversational replies in JSON.
         self._turn_recorder = self._begin_turn_record(user_input)
         # Set by whichever exit seals the record; read by the tail below.
         turn_record: Optional[Dict[str, Any]] = None
+        # Sealed at the answer when the console carries it; reused for the result.
+        model_messages: Optional[List[Dict[str, Any]]] = None
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
@@ -14342,6 +14364,9 @@ Do NOT wrap conversational replies in JSON.
                 # same event.
                 turn_record = self._finish_turn_record(final_answer, steps_taken)
                 self._publish_turn_metrics(turn_record)
+                model_messages = self._stage_final_model_messages(
+                    messages, final_answer
+                )
                 self.console.print_final_answer(
                     final_answer,
                     streaming=self.streaming,
@@ -14442,6 +14467,9 @@ Do NOT wrap conversational replies in JSON.
                     )
                     turn_record = self._finish_turn_record(final_answer, steps_taken)
                     self._publish_turn_metrics(turn_record)
+                    model_messages = self._stage_final_model_messages(
+                        messages, final_answer
+                    )
                     self.console.print_final_answer(
                         final_answer,
                         streaming=self.streaming,
@@ -14504,6 +14532,7 @@ Do NOT wrap conversational replies in JSON.
             )
             turn_record = self._finish_turn_record(final_answer, steps_taken)
             self._publish_turn_metrics(turn_record)
+            model_messages = self._stage_final_model_messages(messages, final_answer)
             self.console.print_final_answer(
                 final_answer,
                 streaming=self.streaming,
@@ -14605,7 +14634,11 @@ Do NOT wrap conversational replies in JSON.
             "verification": self.verification_state(),
         }
 
-        result["model_messages"] = messages.finish(result["result"])
+        result["model_messages"] = (
+            model_messages
+            if model_messages is not None
+            else messages.finish(result["result"])
+        )
 
         # Catches the exits that never printed an answer (max steps). Sealed
         # BEFORE the trace write — attached after, the artifact never saw it.
