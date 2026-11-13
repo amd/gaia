@@ -70,7 +70,9 @@ _NPX_PROGRAMS = frozenset({"npx", "npx.cmd", "npx.exe", "npx.ps1"})
 
 def npx_package(argv: List[str]) -> Optional[str]:
     """The package an ``npx`` launch runs, or None for any other program."""
-    if not argv or os.path.basename(argv[0]).lower() not in _NPX_PROGRAMS:
+    # Either separator: a Windows path names npx.cmd wherever this runs.
+    program = argv[0].replace("\\", "/").rsplit("/", 1)[-1] if argv else ""
+    if program.lower() not in _NPX_PROGRAMS:
         return None
     args = argv[1:]
     for i, arg in enumerate(args):
