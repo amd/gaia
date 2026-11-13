@@ -82,6 +82,21 @@ describe('Goals with a goal list GAIA cannot read', () => {
         expect(await screen.findByText(/goals\.db\.damaged-20261112-150000/)).toBeInTheDocument();
     });
 
+    it('a cancelled form opens again without the old error', async () => {
+        mockedApi.createGoal.mockRejectedValue(new Error(DAMAGED));
+        await openGoals();
+        fireEvent.click(await screen.findByRole('button', { name: /New Goal/ }));
+        fireEvent.change(screen.getByPlaceholderText(/title/i), { target: { value: 'Tidy my notes' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Create' }));
+        const form = () => document.querySelector('.mem-goals-add-form') as HTMLElement;
+        await within(form()).findByRole('alert');
+
+        fireEvent.click(within(form()).getByRole('button', { name: 'Cancel' }));
+        fireEvent.click(screen.getByRole('button', { name: /New Goal/ }));
+
+        expect(within(form()).queryByRole('alert')).toBeNull();
+    });
+
     it('drops the form\'s "damaged" error once a new goal list is started', async () => {
         mockedApi.getGoalStoreHealth.mockResolvedValue({ error: DAMAGED, damaged: true });
         useGoalHealthStore.setState({ error: DAMAGED, damaged: true });

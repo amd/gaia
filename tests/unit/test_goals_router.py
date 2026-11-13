@@ -161,6 +161,33 @@ class TestDamagedGoalStore:
         assert resp.status_code == 409
         assert (tmp_path / "home" / "goals.db").exists()
 
+    def test_a_goal_list_torn_past_its_header_can_be_replaced(
+        self, client, tmp_path, monkeypatch
+    ):
+        """Its schema reads, but a table page is garbage: still damaged."""
+        home = tmp_path / "home"
+        monkeypatch.setenv("GAIA_HOME", str(home))
+        store = GoalStore(db_path=home / "goals.db")
+        for i in range(40):
+            store.create_goal(title=f"goal {i}", description="x" * 400)
+        store.close()
+        path = home / "goals.db"
+        data = bytearray(path.read_bytes())
+        assert len(data) > 4 * 4096
+        data[2 * 4096 :] = b"\xff" * (len(data) - 2 * 4096)
+        path.write_bytes(bytes(data))
+
+        resp = client.post("/api/goals/store/reset")
+
+        assert resp.status_code == 200, resp.text
+        assert (home / resp.json()["kept"]).exists()
+
+    def test_no_goal_list_is_nothing_to_replace(self, client, tmp_path, monkeypatch):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+        resp = client.post("/api/goals/store/reset")
+        assert resp.status_code == 409
+        assert not (tmp_path / "home" / "goals.db").exists()
+
     def test_a_locked_goal_list_keeps_the_close_other_windows_remedy(self):
         import sqlite3
 

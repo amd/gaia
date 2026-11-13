@@ -2432,8 +2432,9 @@ with a `detail` that says why and what the user can do.
   <Accordion title="POST /api/goals/store/reset">
     Start a new, empty goal list when `goals.db` is damaged. The damaged file
     is renamed to `goals.db.damaged-<timestamp>` beside it, never deleted;
-    the response is `{"kept": "<that name>"}`. Answers `409` when the goal
-    list opens fine.
+    the response is `{"kept": "<that name>"}`. Damaged means a page of the
+    file fails SQLite's `quick_check`, not only an unreadable header. Answers
+    `409` when the goal list reads fine or there is none.
   </Accordion>
 
   <Accordion title="GET /api/goals/pending-approval">

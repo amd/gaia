@@ -239,19 +239,24 @@ def start_new_goal_list():
     from gaia.ui.agent_loop import agent_loop
 
     path = gaia_home() / "goals.db"
+    fine = HTTPException(
+        status_code=409,
+        detail="GAIA's goal list opens fine, so there is nothing to replace.",
+    )
+    if not path.exists():
+        raise fine
     probe = sqlite3.connect(str(path))
     try:
-        probe.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+        # quick_check reads every page: a header can open while a table is torn.
+        damaged = probe.execute("PRAGMA quick_check").fetchall() != [("ok",)]
     except sqlite3.Error as exc:
         if not is_damaged_store_error(exc):
             raise
-    else:
-        raise HTTPException(
-            status_code=409,
-            detail="GAIA's goal list opens fine, so there is nothing to replace.",
-        )
+        damaged = True
     finally:
         probe.close()
+    if not damaged:
+        raise fine
 
     close_store()
     kept = path.with_name(f"goals.db.damaged-{time.strftime('%Y%m%d-%H%M%S')}")
