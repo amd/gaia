@@ -139,6 +139,25 @@ def test_a_sharing_or_lock_violation_is_retried_a_bounded_number_of_times(
     assert sum(waits) <= 5
 
 
+@pytest.mark.parametrize("winerror, error_type", [(None, None), (33, "file_in_use")])
+def test_a_permission_error_mid_read_is_blamed_on_a_lock_only_if_one_shows(
+    read_file, csv, waits, monkeypatch, winerror, error_type
+):
+    def unreadable(*_a, **_kw):
+        raise PermissionError(13, "Permission denied: cache")
+
+    monkeypatch.setattr(path_access, "_ON_WINDOWS", True)
+    monkeypatch.setattr(path_access, "_open_winerror", lambda _p: winerror)
+    monkeypatch.setattr("gaia.agents.tools.file_io_tools.read_text", unreadable)
+
+    result = read_file(file_path=str(csv))
+
+    assert result["status"] == "error"
+    assert result.get("error_type") == error_type
+    if error_type is None:
+        assert "Permission denied: cache" in result["error"]
+
+
 def test_an_unlocked_file_reads_without_waiting(read_file, csv, waits):
     result = read_file(file_path=str(csv))
 

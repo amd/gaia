@@ -54,6 +54,9 @@ on:
       - 'tests/unit/conftest.py'
       - 'tests/unit/test_daemon_secret_acl.py'
       - 'tests/unit/test_schedule_lock.py'
+      - 'src/gaia/agents/tools/path_access.py'
+      - 'src/gaia/agents/tools/file_io_tools.py'
+      - 'tests/unit/test_read_file_locked.py'
       - 'tests/unit/test_llm.py'
       - 'tests/unit/test_asr.py'
       - 'tests/unit/test_lemonade_speech.py'
@@ -105,6 +108,9 @@ on:
       - 'tests/unit/conftest.py'
       - 'tests/unit/test_daemon_secret_acl.py'
       - 'tests/unit/test_schedule_lock.py'
+      - 'src/gaia/agents/tools/path_access.py'
+      - 'src/gaia/agents/tools/file_io_tools.py'
+      - 'tests/unit/test_read_file_locked.py'
       - 'tests/unit/test_llm.py'
       - 'tests/unit/test_asr.py'
       - 'tests/unit/test_lemonade_speech.py'
@@ -225,6 +231,20 @@ jobs:
           echo ----------------------------------------------------------------
 
           exit /b %lock_exit%
+
+      - name: Run Windows Locked-File Read Tests (CMD)
+        shell: cmd
+        env:
+          PYTHONUTF8: 1
+        run: |
+          REM Activate virtual environment
+          call "%GITHUB_WORKSPACE%\.venv\Scripts\activate.bat"
+
+          REM read_file's sharing-violation probe calls CreateFileW, and
+          REM tests/unit/ runs on ubuntu-latest only, where the real-lock tests
+          REM skip. -rs shows a skip here, which would mean no real coverage.
+          python -m pytest tests\unit\test_read_file_locked.py -v -rs --tb=short
+          exit /b %ERRORLEVEL%
 
       - name: Setup FFmpeg
         uses: ./.github/actions/setup-ffmpeg

@@ -119,14 +119,18 @@ def locked_file_error(path: Any) -> Optional[Dict[str, Any]]:
 def read_permission_error(path: Any) -> Optional[Dict[str, Any]]:
     """The error for a read that raised ``PermissionError`` after *path* opened.
 
-    On Windows that is a lock on part of the file, or a denial; elsewhere None,
-    and the caller reports the OS error as it is.
+    On Windows a lock or a denial *path* still shows; None when it now opens
+    cleanly (the error may not be about this file) and on other systems, so the
+    caller reports the OS error as it is.
     """
     if not _ON_WINDOWS:
         return None
-    if _open_winerror(str(path)) == _ERROR_ACCESS_DENIED:
+    code = _open_winerror(str(path))
+    if code == _ERROR_ACCESS_DENIED:
         return _denied_error(str(path))
-    return _in_use_error(str(path), 0)
+    if code in _IN_USE_WINERRORS:
+        return _in_use_error(str(path), 0)
+    return None
 
 
 def read_access_error(
