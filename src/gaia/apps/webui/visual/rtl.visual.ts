@@ -1199,15 +1199,22 @@ for (const locale of ['en', 'ar']) {
                 ? { documents: names.map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096, chunk_count: 2, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 })), total: 3, total_size_bytes: 1, total_chunks: 1 }
                 : { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 } }));
         });
+        // Read the top once the panel's slide-in (12px) has landed, or a slow runner measures mid-slide.
+        const settledTop = async () => {
+            const modal = page.locator('.doc-modal');
+            await modal.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+            return (await modal.boundingBox())!.y;
+        };
         await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
         await expect(page.locator('.empty-docs')).toBeVisible();
-        const topEmpty = (await page.locator('.doc-modal').boundingBox())!.y;
+        const topEmpty = await settledTop();
         listed = true;
         // Re-open, which lists again: the same dialog with three rows.
         await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toHaveCount(0);
         await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
         await expect(page.locator('.doc-row')).toHaveCount(3);
-        expect(Math.abs((await page.locator('.doc-modal').boundingBox())!.y - topEmpty)).toBeLessThan(1);
+        expect(Math.abs((await settledTop()) - topEmpty)).toBeLessThan(1);
         const tail = page.locator('.doc-name-tail').first();
         await expect(tail).toHaveText(/finance\)\.pdf$/);
         await expect(tail).toBeInViewport();
