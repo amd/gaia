@@ -338,6 +338,12 @@ class SpreadsheetReadError(ValueError):
         self.status = status
 
 
+class PresentationReadError(ValueError):
+    """A .pptx that is damaged or not a real presentation."""
+
+    status = "corrupted"
+
+
 # Legacy .xls and password-protected .xlsx are both OLE2 compound files.
 _OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
@@ -2106,7 +2112,7 @@ class RAGSDK:
             self._log_read_failure(
                 e, pptx_path, f"Corrupted PPTX (bad zip): {pptx_path}: {e}"
             )
-            raise ValueError(msg) from e
+            raise PresentationReadError(msg) from e
 
         try:
             # A stream, not the path: given a path, python-pptx's is_zipfile
@@ -2124,7 +2130,7 @@ class RAGSDK:
                 "  3. Save as PDF and index the PDF instead"
             )
             self._log_read_failure(e, pptx_path, f"Corrupted PPTX {pptx_path}: {e}")
-            raise ValueError(msg) from e
+            raise PresentationReadError(msg) from e
 
         try:
             extract_start = time_module.time()
@@ -4092,7 +4098,8 @@ These positions indicate where to split the text."""
                 "error_type": str (some failures: "file_locked",
                     "cache_busy" or "embedding_unavailable"),
                 "xlsx_status": str (an unreadable workbook: "corrupted",
-                    "unsupported_workbook" or "empty_file")
+                    "unsupported_workbook" or "empty_file"),
+                "pptx_status": str ("readable", or "corrupted" for a damaged file)
             }
 
         Raises:
@@ -4649,6 +4656,13 @@ These positions indicate where to split the text."""
             self.log.error(f"Excel extraction failed for {file_path}: {e.status}")
             stats["error"] = str(e)
             stats["xlsx_status"] = e.status
+            return stats
+        except PresentationReadError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"PowerPoint extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["pptx_status"] = e.status
             return stats
         except VisionModelFailedError as e:
             if self.config.show_stats:

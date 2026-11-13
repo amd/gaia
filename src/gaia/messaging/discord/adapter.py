@@ -41,7 +41,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence, Set, Tuple
 
+from gaia.automations import outbox
 from gaia.automations import runner as automations
+from gaia.automations import tick as automation_tick
 from gaia.logger import get_logger
 from gaia.messaging.bridge import (
     CONTROL_CLEAR_HISTORY,
@@ -705,6 +707,8 @@ class DiscordAdapter:
         self._in_flight: List[ReplyTarget] = []
         #: The last automations failure the user was told about.
         self._automation_error = ""
+        #: Queued deliveries whose turn failed to start.
+        self._stalled: Set[str] = set()
         #: The DM was searched for buttons a dead bridge left; done once.
         self._scanned = False
         #: The request an expired approval ended; "retry" runs it again.
@@ -755,7 +759,7 @@ class DiscordAdapter:
         self._channel = self._channel_factory(
             on_event=self._on_agent_event,
             argv=argv,
-            env=_agent_env(),
+            env=agent_env(),
             on_busy=self._on_busy,
             restart_hint=RESTART_HINT,
         )
@@ -839,6 +843,10 @@ class DiscordAdapter:
             self._untrack(message_id)
         if self._channel is not None:
             self._channel.close()
+        try:
+            automation_tick.release(automation_tick.OWNER_DISCORD)
+        except (state.StateFileError, OSError) as e:
+            log.error("Could not release the automations tick: %s", e)
 
     # ------------------------------------------------------------------
     # Open messages: placeholders and prompts that must not outlive the bridge
@@ -930,7 +938,7 @@ class DiscordAdapter:
         if self._state == state.STATE_CONNECTED:
             if self.claim_lease(force=False, heartbeat=True):
                 try:
-                    automations.run_due(_DiscordSink(self), self._clock())
+                    self._run_automations()
                     self._automation_error = ""
                 except state.DamagedStateFile as e:
                     self._report_damage(e, "Ask me to set up your automations again.")
@@ -951,6 +959,39 @@ class DiscordAdapter:
         elif self._state == state.STATE_TAKEN_OVER and self.claim_lease(force=False):
             # The other PC stopped refreshing its lease; answer again.
             self._set_state(state.STATE_CONNECTED)
+
+    def _run_automations(self) -> None:
+        """Deliver what the daemon queued; run what is due when no daemon does."""
+        now = self._clock()
+        if automation_tick.claim(automation_tick.OWNER_DISCORD, now):
+            automations.run_due(_DiscordSink(self), now)
+        sink = _DiscordSink(self)
+        for delivery in outbox.pending():
+            note = outbox.late_note(delivery, now)
+            late = f"\n{note}" if note else ""
+            if delivery.kind != outbox.KIND_TURN:
+                if not sink.post(delivery.text + late):
+                    # Kept for the next tick; the failed send is in the log.
+                    continue
+            else:
+                try:
+                    sink.start_turn(
+                        delivery.text,
+                        delivery.heading + late,
+                        # A retry shows no placeholder: one dead message is enough.
+                        quiet=delivery.quiet or delivery.id in self._stalled,
+                        answer_filter=outbox.answer_filter(delivery),
+                    )
+                except Exception as e:  # noqa: BLE001 - kept queued, said once
+                    self._stalled.add(delivery.id)
+                    log.exception("Queued automation %s did not start", delivery.name)
+                    # The rest waits too: the agent that failed would fail them.
+                    raise ValueError(
+                        f"{delivery.name} could not start: {e}. It runs when the "
+                        f"agent answers again. {RESTART_HINT}"
+                    ) from e
+            self._stalled.discard(delivery.id)
+            outbox.remove(delivery.id)
 
     def _always_keys(self) -> Set[str]:
         try:
@@ -1265,7 +1306,18 @@ class DiscordAdapter:
         )
         with self._lock:
             self._in_flight.append(target)
-        ahead = self._agent().submit(turn)
+        try:
+            ahead = self._agent().submit(turn)
+        except Exception:
+            # Nothing will ever answer under it: close it, then say why upstream.
+            with self._lock:
+                self._in_flight.remove(target)
+            if target.reply_id:
+                self._edit(
+                    channel_id, target.reply_id, INTERRUPTED_TEXT, clear_buttons=True
+                )
+                self._untrack(target.reply_id)
+            raise
         # Only typed messages are folded together; a schedule stands alone.
         with self._lock:
             self._waiting = (turn, target, [question]) if ahead and message_id else None
@@ -1858,7 +1910,7 @@ class _DiscordSink:
         )
 
     def check_env(self) -> Optional[Dict[str, str]]:
-        return _agent_env()
+        return agent_env()
 
 
 def _turn_text(questions: List[str]) -> str:
@@ -1872,7 +1924,7 @@ def _turn_text(questions: List[str]) -> str:
     )
 
 
-def _agent_env() -> Dict[str, str]:
+def agent_env() -> Dict[str, str]:
     """The agent's environment: this install's ``gaia`` on PATH, no bot token.
 
     The automations skill runs ``gaia automation ...``, and an app install
