@@ -16,6 +16,8 @@ describe('plainPreview', () => {
 
     it('leaves snake_case names and plain asterisk math alone', () => {
         expect(plainPreview('Saved my_file_name.txt, 2 * 3 = 6')).toBe('Saved my_file_name.txt, 2 * 3 = 6');
+        expect(plainPreview('Edited `__init__.py` and __main__.py')).toBe('Edited __init__.py and __main__.py');
+        expect(plainPreview('__bold__ text')).toBe('bold text');
         expect(plainPreview('files: *.py and *.ts')).toBe('files: *.py and *.ts');
     });
 });

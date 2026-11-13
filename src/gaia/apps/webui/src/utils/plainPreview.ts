@@ -7,9 +7,10 @@ export function plainPreview(markdown: string): string {
         .replace(/^\s*(```|~~~).*$/gm, '')
         .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
         .replace(/`([^`]+)`/g, '$1')
-        .replace(/(\*\*|__)(.+?)\1/g, '$2')
+        .replace(/\*\*(.+?)\*\*/g, '$1')
+        .replace(/(^|[^\w])__(?=\S)(.+?\S)__(?![\w.])/g, '$1$2')
         .replace(/(^|[^\w*])\*(?!\s)(.*?\S)\*(?!\w)/g, '$1$2')
-        .replace(/(^|[^\w])_(?!\s)(.+?)_(?!\w)/g, '$1$2')
+        .replace(/(^|[^\w])_(?![\s_])(.+?)_(?!\w)/g, '$1$2')
         .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+)/gm, '')
         .replace(/\s+/g, ' ')
         .trim();
