@@ -242,7 +242,10 @@ def test_upload_blob_oversized_returns_413(
         files={"file": ("huge.txt", oversized, "text/plain")},
     )
     assert response.status_code == 413
-    assert "too large" in response.json()["detail"].lower()
+    detail = response.json()["detail"]
+    assert detail["status"] == "too_large"
+    assert detail["max_mb"] == "20"
+    assert "too large" in detail["message"].lower()
 
     # Critical: no .partial files left on disk after the abort
     leftover = list(managed_docs_sandbox.iterdir())
