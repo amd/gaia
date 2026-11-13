@@ -305,9 +305,14 @@ def dashboard(store):
     from fastapi.testclient import TestClient
 
     import gaia.ui.routers.memory as memory_router
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.dependencies import get_db
 
     app = FastAPI()
     app.include_router(memory_router.router)
+    # Saving a sensitive fact renames the chats named after it.
+    db = ChatDatabase(":memory:")
+    app.dependency_overrides[get_db] = lambda: db
     previous = memory_router._store
     memory_router._store = store
     try:
