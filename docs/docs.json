@@ -417,7 +417,8 @@
               "plans/messaging-integrations-plan",
               "plans/discord-integration",
               "plans/daemon-convergence",
-              "plans/autonomy-engine"
+              "plans/autonomy-engine",
+              "plans/goal-mode"
             ]
           },
           {
