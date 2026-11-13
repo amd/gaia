@@ -1670,10 +1670,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                         <Activity size={15} aria-hidden="true" />
                     </button>
                     <PrivateChatButton isPrivate={!!session?.private} onToggle={handleTogglePrivate} />
-                    <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title="Browse files on this PC" aria-label="Browse files on this PC">
+                    <button className="btn-icon-sm" onClick={() => setShowFileBrowser(true)} title={t('chat.browseFiles')} aria-label={t('chat.browseFiles')}>
                         <FolderSearch size={15} />
                     </button>
-                    <button className="btn-icon-sm" onClick={exportChat} title="Export as Markdown" aria-label="Export chat">
+                    <button className="btn-icon-sm" onClick={exportChat} title={t('chat.exportTitle')} aria-label={t('chat.exportLabel')}>
                         <Download size={15} />
                     </button>
                     <SessionPanelToggle messages={messages} busy={isStreaming} />
@@ -1687,7 +1687,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             <div className="messages-scroll" ref={messagesScrollRef} {...followListProps}>
                 <div className="messages-column">
                     {isLoadingMessages && !openingShown && (
-                        <div className="skeleton-messages" aria-label="Loading messages">
+                        <div className="skeleton-messages" aria-label={t('chat.loadingMessages')}>
                             {[0, 1, 2].map((i) => (
                                 <div key={i} className="skeleton-msg">
                                     <div className="skeleton-lines">
