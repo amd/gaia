@@ -243,6 +243,7 @@ const messages: Messages = {
     'composer.uploadingPercent': 'جارٍ الرفع… {percent}%',
     'composer.upload.noExtension': 'هذا الملف بلا امتداد. أضف امتدادًا مثل .txt وحاول مرة أخرى.',
     'composer.upload.unsupported': 'لا يستطيع GAIA قراءة ملفات {ext}. أرفق صورة أو ملف PDF أو Word أو PowerPoint أو Excel أو نصًا أو CSV أو شيفرة برمجية.',
+    'composer.upload.legacyOffice': 'صيغة {ext} قديمة من Office ولا يستطيع GAIA قراءتها. افتح الملف واحفظه بصيغة {modern} ثم أرفقه.',
     'composer.upload.empty': 'هذا الملف فارغ.',
     'composer.upload.tooLarge': 'حجم هذا الملف {size} ميغابايت. الحد الأقصى {max} ميغابايت.',
     'composer.uploadFailed': 'فشل الرفع',
