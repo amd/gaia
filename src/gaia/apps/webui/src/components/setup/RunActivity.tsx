@@ -11,13 +11,15 @@ interface Props {
     plan?: SetupPlan | null;
     /** What to say when no part is reported active yet. */
     idle: string;
+    /** False where the screen already has a progress bar, so one screen shows one. */
+    bar?: boolean;
 }
 
 /**
  * A run with no model rows yet: the part being set up, how far its download
  * is when the run reports it, and how many parts are ready. Nothing estimated.
  */
-export function RunActivity({ run, plan, idle }: Props) {
+export function RunActivity({ run, plan, idle, bar = true }: Props) {
     const t = useT();
     const parts = plan?.components ?? [];
     const active = parts.find((c) => run.components?.[c.id] === 'active');
@@ -32,7 +34,7 @@ export function RunActivity({ run, plan, idle }: Props) {
                 {percent != null && <> · <bdi dir="ltr">{percent}%</bdi></>}
                 {parts.length > 0 && <> · {t('setup.download.partsReady', { done: String(ready), total: String(parts.length) })}</>}
             </p>
-            {percent != null && <progress className="setup-progress" max={100} value={percent} aria-label={label} />}
+            {bar && percent != null && <progress className="setup-progress" max={100} value={percent} aria-label={label} />}
         </div>
     );
 }
