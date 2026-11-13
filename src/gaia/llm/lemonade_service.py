@@ -150,6 +150,7 @@ def _ask_the_daemon(
     from gaia.llm.lemonade_client import (
         LemonadeClient,
         configured_lemonade_url,
+        resolve_lemonade_base_url,
         running_embedded_lemonade_url,
     )
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
@@ -166,7 +167,12 @@ def _ask_the_daemon(
         external_url = None
     elif base_url:
         client = LemonadeClient(base_url=base_url, keep_alive=True, verbose=False)
-        external_url = base_url
+        # Only an address other than GAIA's own default is a server the user named.
+        external_url = (
+            base_url
+            if resolve_lemonade_base_url(base_url) != resolve_lemonade_base_url()
+            else configured_lemonade_url()
+        )
     else:
         client = LemonadeClient(keep_alive=True, verbose=False)
         # No base_url still means the user's server when LEMONADE_BASE_URL or

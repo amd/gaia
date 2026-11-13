@@ -16,6 +16,7 @@ import pytest
 
 from gaia.llm import lemonade_service as service
 from gaia.llm.lemonade_choice import SWITCH_BACK_HINT
+from gaia.llm.lemonade_client import resolve_lemonade_base_url
 from gaia.llm.lemonade_service import (
     LemonadeStartError,
     ensure_lemonade_running,
@@ -195,6 +196,39 @@ def test_a_pinned_server_that_is_down_is_named_in_the_error(monkeypatch, down_cl
 
     assert url in str(e.value)
     assert SWITCH_BACK_HINT in str(e.value)
+
+
+def test_the_default_address_is_not_a_server_the_user_named(monkeypatch, down_client):
+    """#8122 review: the normal start path always passes the resolved default.
+
+    Treating that address as the user's choice made a stopped system Lemonade,
+    or a PC before ``gaia init``, fail as unreachable instead of letting the
+    daemon start a server. Only a non-default or configured address is external.
+    """
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_launcher.gaia_runs_lemonade",
+        lambda base_url=None: False,
+    )
+    asked = {}
+
+    def fake_post(payload, timeout):
+        asked.update(payload)
+        return {
+            "status": "started",
+            "base_url": "http://localhost:13305/api/v1",
+            "pid": 77,
+            "waited_seconds": 5.0,
+        }
+
+    monkeypatch.setattr(service, "_post_start", fake_post)
+
+    state = ensure_lemonade_running(
+        ctx_size=65536, base_url=resolve_lemonade_base_url()
+    )
+
+    assert asked == {"ctx_size": 65536}
+    assert state.started is True
+    assert down_client.probes == 1
 
 
 def test_no_daemon_tells_a_cli_user_to_start_it(monkeypatch, down_client):
