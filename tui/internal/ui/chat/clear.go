@@ -15,6 +15,8 @@ type conversationClearedMsg struct {
 
 func (m ChatModel) clearConversation() (tea.Model, tea.Cmd) {
 	m.clearSelection()
+	// A fresh conversation starts as a plain one.
+	m.researchMode = false
 	if resetter, ok := m.client.(client.ConversationResetter); ok && resetter.SupportsConversationReset() {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		m.cancelFn = cancel

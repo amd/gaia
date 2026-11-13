@@ -270,6 +270,27 @@ GaiaAgentConfig(skill_set="research")
 
 A name that isn't a declared set **fails at startup** naming the valid sets — the sidecar exits non-zero before it binds its port, and it never silently falls back to a default. Today, with no sets declared, any value fails; leave it unset.
 
+## Deep research
+
+Ask for research and GAIA writes a report you can check: it searches the web, reads the sources, and cites the page behind each claim.
+
+- **Agent UI:** turn on the **Research** chip next to the message box. Every message in that chat is researched until you turn it off.
+- **TUI:** type `/research <topic>` for one message, or `/research` alone to switch research mode on for every message.
+- **Headless:** `gaia -p "/research <topic>"`.
+
+All three send the turn as `/research <topic>`, and the agent handles it the same way whichever app sent it. It loads the [`research-report`](/guides/starter-skills#research-report) skill, keeps its instructions in the prompt for the turn, and adds a research brief to the turn, so memory keeps your topic as you wrote it. The brief asks for a report shaped like this:
+
+- the answer up front, then a section per part of the question;
+- every factual claim linked to a page GAIA fetched in this conversation, never to a search result it did not open;
+- a check for developments newer than its sources, with dates, so a superseded status is not reported as current;
+- what it could not confirm, and a Sources list at the end.
+
+Without research mode, a request that reads like research ("research X and write a report") is still matched to the skill, and the agent decides whether to load it.
+
+**Web search can run out.** `search_web` uses DuckDuckGo, which turns away automated searches after a burst. GAIA waits as DuckDuckGo asks, then reads the sources it knows by address and says in the report that search was unavailable. A [Tavily](/connectors/tavily) connector takes over when DuckDuckGo refuses.
+
+How well each model does this is measured by the [research task suite](/reference/eval#research-suite), which checks every citation against the pages the agent actually read.
+
 ## Driving it over HTTP
 
 The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemon spawns, health-checks, and tree-kills. It binds `127.0.0.1:8141` by default and is never exposed on a LAN interface: it speaks for your documents and your memory.

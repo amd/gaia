@@ -57,6 +57,13 @@ from gaia_agent.engineering_tools import (
     EngineeringToolsMixin,
 )
 from gaia_agent.profiles import get_profile_spec
+from gaia_agent.research import (
+    RESEARCH_SKILL,
+    RESEARCH_TOOLS,
+    research_brief,
+    research_message,
+    split_research_command,
+)
 
 from gaia.agents.base.agent import default_max_steps, parse_skill_manifest
 from gaia.agents.base.project_map import ProjectMapMixin, is_code_repository
@@ -493,6 +500,54 @@ class GaiaAgent(
         names = super()._always_on_skill_names
         return names | {ENGINEERING_SKILL} if self.config.developer_mode else names
 
+    def process_query(self, user_input, *args, **kwargs):
+        """Run a turn; a ``/research`` turn first loads the research skill.
+
+        The topic becomes the user's message, so memory and history keep what
+        the user asked; the research brief rides in the turn's context.
+        """
+        split = split_research_command(user_input)
+        if split is None:
+            return super().process_query(user_input, *args, **kwargs)
+        notes, topic = split
+        self._start_research_turn()
+        self._research_brief = research_brief(topic)
+        try:
+            return super().process_query(
+                research_message(notes, topic), *args, **kwargs
+            )
+        finally:
+            self._research_brief = None
+
+    def _start_research_turn(self) -> None:
+        """Load ``research-report`` and keep its instructions in this turn's prompt.
+
+        Raises:
+            RuntimeError: this agent has no web tools, or the skill would not load.
+        """
+        from gaia.skills.errors import SkillError
+
+        missing = [t for t in RESEARCH_TOOLS if t not in self.get_tools_info()]
+        if missing:
+            raise RuntimeError(
+                "Research needs web search and page reading, and this agent has "
+                f"no {', '.join(missing)} tool. Start a regular GAIA chat to "
+                "research a topic."
+            )
+        already = RESEARCH_SKILL in self.loaded_skills
+        if not already:
+            try:
+                self.load_skill(RESEARCH_SKILL)
+            except SkillError as exc:
+                raise RuntimeError(
+                    f"Research needs the {RESEARCH_SKILL} skill, and it could "
+                    f"not be loaded: {exc}"
+                ) from exc
+        # The per-turn selector must not collapse the body the user asked for.
+        self._pin_skill_body(RESEARCH_SKILL)
+        self._announce_skill(RESEARCH_SKILL, "loaded" if already else "auto")
+        self.rebuild_system_prompt()
+
     def close(self) -> None:
         """Release this agent's watchers, HTTP session and SQLite handles now.
 
@@ -650,7 +705,8 @@ class GaiaAgent(
         """
         query = getattr(self, "_memory_turn_query", None) or ""
         line = render_suggestion(self._select_skill_suggestions_for_turn(query))
-        parts = (super().get_memory_dynamic_context(), line)
+        brief = getattr(self, "_research_brief", None)
+        parts = (super().get_memory_dynamic_context(), brief, line)
         return "\n".join(part for part in parts if part)
 
     def _maybe_build_skill_loader(self) -> Optional[SkillLoader]:

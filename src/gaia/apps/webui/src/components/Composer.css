@@ -60,7 +60,8 @@
 }
 
 /* A narrow row gives way in this order before the model name is cut:
-   the day's spend, then the context bar (its % stays), then the folder's name (its icon stays). */
+   the Research label, the day's spend, then the context bar (its % stays),
+   then the folder's name (its icon stays). */
 @container composer-row (max-width: 600px) {
     .spend-meter-today { display: none; }
 }
@@ -68,6 +69,16 @@
 @container composer-row (max-width: 540px) {
     .context-meter .context-meter-bar { display: none; }
     .folder-chip .composer-chip-label { display: none; }
+}
+
+/* The Research chip goes first: its telescope and tooltip still say what it is.
+   Narrower still, it shows only while it is on (typing /research still works). */
+@container composer-row (max-width: 720px) {
+    .composer-chip-research .composer-chip-label { display: none; }
+}
+
+@container composer-row (max-width: 600px) {
+    .composer-chip-research:not(.is-on) { display: none; }
 }
 
 .composer-row-left,
@@ -265,6 +276,7 @@
 /* Too long to sit beside the other chips on a phone; the eye icon carries the state. */
 @media (max-width: 480px) {
     .composer-chip-memory .composer-chip-label { display: none; }
+    .composer-chip-research .composer-chip-label { display: none; }
 }
 
 .composer-chip.is-warning {

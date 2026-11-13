@@ -625,6 +625,14 @@ substitute a near-miss and report success. Those failures corrupt an answer
 whatever the task is, which is why it cannot live in an opt-in bundle. It
 declares no tools, and its body measures 789 tokens (tiktoken `cl100k`).
 
+**`/research` loads `research-report` for you.** A `query` that starts with
+`/research` (for example `"/research the EU AI Act timeline"`) is a research
+turn: the agent loads `research-report`, keeps its body rendered past the
+per-turn selection, and asks for a report that cites a fetched page for every
+claim. The Agent UI's Research switch and the TUI's `/research` both send this
+form, so a caller gets the same behavior by sending it too. See
+[`SPEC.md`](./SPEC.md#query-request-body) for the exact contract.
+
 **`document-extract` ships bundled but not enabled.** `gaia-voice` routes a
 request for every item in a document to it, and it drives
 `extract_document_items` and `save_extracted_items` so a long transcript yields

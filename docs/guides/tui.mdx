@@ -696,6 +696,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
 | `/model` | Switch the flagship agent's live model. Bare `/model` lists what you can switch to |
 | `/skills` | List installed skills. `/skills add <link>` shows what a GitHub repo, skills.sh page or `.zip` holds and what each skill may do, with a security warning; `/skills add <link> confirm` adds that version (a `confirm` with no preview previews first) (`--allow-code` to include skills that ship scripts) |
+| `/research <topic>` | Research a topic: GAIA searches the web, reads the sources and writes a report that cites each page it read. Bare `/research` switches research mode on, so every message is researched until you type `/research` again or `/clear`; the header shows `research` while it is on. A message you type while GAIA is still answering steers that answer and is not researched on its own. See [Deep research](/guides/gaia#deep-research) |
 | `/provider` | Choose where chat runs — Local, Fireworks AI, or the AMD LLM Gateway — and set its key. Under Local, **Ctrl+A** adds a model from a Hugging Face link. With [Local only](/reference/cli#local-only) on, connecting a cloud provider is refused. See [AI providers](/guides/ai-providers) |
 | `/gateway` | Connect the AMD LLM Gateway and pick which of its models GAIA uses. See [LLM gateway](/guides/llm-gateway) |
 | `/slack` | Connect this agent to Slack, or show the connection's status. See [Slack](/guides/slack) |
@@ -717,7 +718,7 @@ mouse at all with `Ctrl+Y`, `/copy` or `/copy all`. The status bar shows the
 | `/sessions all` | The same list with eval and scheduled runs included |
 
 Commands the current agent can't run drop out of `/help` and the `/` palette on
-their own — `/model`, `/skills`, `/setup`, `/models`, `/gpu` and `/provider` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
+their own — `/model`, `/skills`, `/research`, `/setup`, `/models`, `/gpu` and `/provider` are flagship-only (`/gpu` only on an integrated-GPU PC), and `/memory`
 needs a peer new enough to serve it (see the [memory guide](/guides/memory#terminal-ui-memory)).
 `/agents` is always available.
 

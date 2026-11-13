@@ -560,6 +560,8 @@ function App() {
         }
         store.clearDraftDocuments();
         store.setDraftPrivate(false);
+        // Not a chat opened from elsewhere (the file browser, a connector).
+        store.adoptDraftResearch(session.id, text);
         store.setDraftFolder(null);
         // Always sent, so the chat runs in exactly the mode its chip showed.
         // Set before the chat opens, so a refused message can wait in its box.

@@ -8,7 +8,8 @@ import { toolRowText } from './AgentActivity';
 import { agentEventToStep } from '../utils/streamSteps';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
-import { useChatStore } from '../stores/chatStore';
+import { researchOn, useChatStore } from '../stores/chatStore';
+import { withResearchCommand } from '../utils/research';
 import { useReadAloudStore } from '../stores/readAloudStore';
 import { readsAloudWhenDone } from '../utils/autoReadAloud';
 import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
@@ -35,6 +36,7 @@ import { Composer } from './Composer';
 import { ModelChip } from './ModelChip';
 import { SessionFolderChip } from './FolderChip';
 import { PermissionModeChip } from './PermissionModeChip';
+import { ResearchChip } from './ResearchChip';
 import { PermissionPrompt } from './PermissionPrompt';
 import { QueuedMessages } from './QueuedMessages';
 import { ContextMeter, ContextWarning } from './ContextMeter';
@@ -120,6 +122,7 @@ interface SendOptions {
 
 export function ChatView({ sessionId }: ChatViewProps) {
     const t = useT();
+    const researchMode = useChatStore((s) => researchOn(s, sessionId));
     const {
         sessions, messages, setMessages, addMessage, removeMessage, removeMessagesFrom, updateSessionInList,
         isStreaming, streamingContent, setStreaming, setStreamContent, clearStreamContent,
@@ -525,7 +528,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
         const hasImage = fromComposer && attach.hasImage;
         const takeDraft = () => {
             if (!fromComposer) return text;
-            const composed = attach.compose(text);
+            const composed = attach.compose(withResearchCommand(text, researchOn(useChatStore.getState(), sessionId)));
             setInput('');
             attach.clear();
             inputRef.current?.focus();
@@ -1886,8 +1889,15 @@ export function ChatView({ sessionId }: ChatViewProps) {
                             ? t('composer.answerQuestion')
                             : isStreaming
                             ? t('composer.queueNext')
+                            : researchMode
+                            ? t('composer.researchPlaceholder')
                             : messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}
-                        leftControls={<PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />}
+                        leftControls={(
+                            <>
+                                <PermissionModeChip sessionId={sessionId} disabled={!!retiredAgent} />
+                                <ResearchChip sessionId={sessionId} disabled={!!retiredAgent} compact />
+                            </>
+                        )}
                         rightControls={(
                             <>
                                 <ContextMeter

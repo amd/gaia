@@ -1,0 +1,87 @@
+---
+title: Deep Research
+description: Scope for GAIA writing accurate, cited research reports out of the box, and how it is measured
+---
+
+# Deep Research — Scope
+
+<Info>
+**Status:** Shipped: the [`research` task suite](/reference/eval#research-suite), research mode in both apps (`/research` and the Agent UI's Research switch), and a stricter `research-report` skill. Search reliability and a run-time citation check are open.
+</Info>
+
+## What a user expects
+
+A user who asks "research X and write me a report" expects the agent to do what a careful analyst would:
+
+1. Break the question into the parts it really asks.
+2. Search each part, more than once if the first results are thin.
+3. Read the best sources in full, preferring primary ones (the organisation itself, the paper, the court record, the regulation) over aggregators.
+4. Notice where sources disagree or have gone stale, and say so.
+5. Write a report a reader can use: the answer up front, a section per part, and every factual claim linked to the page it came from.
+
+The last property is the one that matters most. A report whose links look right but back nothing is worse than no report, because the reader trusts it.
+
+## What GAIA has today
+
+| Piece | What it does |
+|---|---|
+| `search_web` | DuckDuckGo search, paced and backed off when DuckDuckGo rate-limits; answered by the Tavily connector instead when the user has set one up |
+| `fetch_page` | Reads a page as text in windows (`offset`), or only the passages that mention a word (`find`); refuses private and blocked hosts |
+| `research-report` skill | The procedure above: decompose, search each part, read before citing, cite inline, say what could not be confirmed |
+| Skill suggestions | A research request matches `research-report`, and the agent is told it exists; the model decides whether to load it |
+| Research mode | `/research <topic>` (both apps, and `gaia -p`) or the Agent UI's Research switch loads the skill and frames the turn, so the user, not the model, decides it is research |
+| `index_document` / `query_documents` | Keep fetched pages for follow-up questions |
+
+Before this work the pieces existed, but whether a user got a good report depended on whether the model loaded the skill, whether search answered, and whether the model kept its citations honest. Nothing checked the last one.
+
+## What it takes to support it out of the box
+
+### 1. Measure it — done
+
+The `research` suite in `gaia eval tasks` gives the agent five research questions, each with an answer key researched by hand from primary sources: the points a correct report must make, the false claims it must not, a reference report, and the date the key was checked.
+
+A report fails before any model reads it when it:
+
+- cites a URL that appears nowhere in its tool record;
+- cites a page it only saw in a search result;
+- or reads too few sources.
+
+Then a judge decides whether it is correct, accurate and supported, and scores coverage, readability and citation quality. The same suite runs against any model and against a reference agent, so the gap between them is visible per topic. See [the eval reference](/reference/eval#research-suite).
+
+### 2. Let the user ask for research — done
+
+A research switch makes the choice explicit instead of leaving it to skill matching:
+
+- **Agent UI:** a **Research** chip beside the message box. While it is on, each message is sent as `/research <message>`, and the box asks "What should GAIA research?". It is kept per chat: turned on before a new chat's first message, it stays on in the chat that starts, and other chats are not affected.
+- **TUI:** `/research <topic>` researches one message; a bare `/research` switches research mode on for every message until `/research` or `/clear`, shown as `research` in the header. Offered only on the flagship agent.
+- **The agent does the rest**, so the apps cannot drift apart. A message that starts with `/research` loads `research-report`, keeps its instructions in the prompt for the turn (the per-turn skill selector cannot collapse them), and adds a research brief to the turn's context: answer first, every claim cited to a page fetched this conversation, a check for newer developments, a Sources list. The topic itself is the user's message, so memory and history keep what the user asked, not the brief. It still works when the app puts a note before the message (the Agent UI adds one naming the chat's folder). An agent without web tools refuses by name.
+
+### 3. Make the procedure reliable — done for the skill
+
+The first runs of the suite showed where reports go wrong, even on a capable model:
+
+- **The report went to a file.** The agent saved a fully cited report and replied with an uncited summary, so the reader in the chat got no sources.
+- **Stale status.** A report built on an encyclopedia page stopped years before the latest rulings and reported an old outcome as current.
+- **Secondary sources only.** Encyclopedias stood in for the primary sources they cite.
+- **Reading pages in small windows.** A long page read 5,000 characters at a time cost a step per window and filled the context.
+
+The `research-report` skill (1.1.0) now addresses each: the whole cited report goes in the reply; anything that can change gets a search for developments since the newest source, reported with its date; encyclopedias are a map to primary sources; long pages are read with `find`; and the report ends with a Sources list. It also says what to do when search is refused (below).
+
+### 4. Keep search answering
+
+A deep report needs a dozen or more searches, which is exactly where DuckDuckGo starts refusing automated queries. In the suite's runs it refused every search of a whole task more than once; the agent then fetched the pages it knew by address and said search was down, which is the right fallback but caps how far a report can reach. GAIA already paces searches, backs off, and tells the model how long to wait; it falls back to Tavily only when the user configured it. For research to work out of the box on any PC, the remaining options are:
+
+- a second keyless search backend tried before giving up;
+- or making the Tavily connector part of first-run setup, with the trade-off stated.
+
+Either is a product decision, not a code fix, and is tracked separately.
+
+### 5. Check citations at run time (next)
+
+The suite's source check (`gaia.eval.research_quality`) needs nothing but the report and the tool record, both of which the agent has. Exposed as a tool the skill calls before answering, it would let the agent repair an unread or invented citation before the user ever sees it. Adding a tool changes the prompt every model sees, so it waits for the suite to show the skill change alone is not enough.
+
+## Non-goals
+
+- A separate research agent. Research is a skill on the flagship, like every other task.
+- Browser automation for research. Pages behind a login are out of scope here; see [Browser Use](/plans/browser-use).
+- Gating releases on the suite. It reads the live web, so its results move with search engines and pages; it is a measuring tool, run on demand.

@@ -511,6 +511,7 @@ It needs the flagship installed (`pip install -e hub/agents/gaia/python`), a run
 | `full` | `core` and `adversarial`, plus: refactor to one shared implementation · code review · review a patch · write tests for an untested module (mutation-checked) | `workflow_dispatch` with `task_suite: full` |
 | `everyday` | The 14 tasks a developer actually asks for: explain a file · code review · refactor · bug fix · triage issues · find the duplicate · issue to fix · draft a reply · review a patch · write tests · weekly CSV report · fix a shell injection · label two issues · config from an environment variable | Release and RC tags; the harness × model comparison |
 | `therock` | Four real merged fixes in [TheRock](https://github.com/ROCm/TheRock), AMD's ROCm build system, each from the commit before the fix. Two of them also forbid the internet in the prompt. | Release and RC tags; the harness × model comparison |
+| `research` | Five open-web research reports: RISC-V's origins and governance · the CRISPR-Cas9 patent dispute · who invented email · the EU AI Act's timeline · the James Webb Space Telescope. Each needs a cited report from live web sources. | Manual: `--suite research`. It reads the live web, so it never gates a release |
 | `swebench` | Instances of [SWE-bench Verified](https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified), built from the dataset at run time (`--instances`; default: a five-instance pilot) and graded by the official harness in Docker. Not in `tasks.json`. | The harness × model comparison, against the public yardstick |
 
 The hanging suite stays out of `core`: every test run the agent tries costs a full command timeout.
@@ -522,6 +523,39 @@ Tasks and suites live in `eval/tasks/tasks.json`. Every task is checked in both 
 - Each question task carries a reference answer and plausible wrong answers. `GAIA_EVAL_LIVE_JUDGE=1 pytest tests/unit/eval/test_flagship_tasks.py -k live_judge` asks the judge about all of them in one call (about $0.15) and requires it to pass every reference and fail every wrong answer.
 - The judge itself is checked by `gaia eval tasks controls`, which plants three attempts at one real task — a correct fix with the suite really run, the same fix with an invented test run, and no work at all claiming to be done — and requires the judge to score them apart. If it cannot, the quality numbers mean less than they appear to.
 - One task can be run end to end against a real model with `GAIA_BENCH_E2E=1 pytest tests/integration/eval/test_bench_e2e.py`. Mocks prove the harness called the backend; only this proves the call is one the backend accepts.
+
+### Research suite
+
+The `research` suite measures research the way a reader judges it: is the report right, does it cover the question, can you follow it, and does every cited page actually back what it is cited for. Each task asks for a cited Markdown report on a real topic and lets the agent search the web and fetch pages.
+
+A report is scored in two stages.
+
+1. **Sources first, without a model.** The harness reads the report's citations (inline links and numbered `[1]` marks resolved through its sources list) and compares them with the agent's tool record. The report fails before the judge sees it when it:
+   - cites a URL that appears in no tool result at all: an invented source;
+   - cites a page the agent only saw in a search result and never fetched (`research.max_unread`, default 0);
+   - cites fewer fetched pages than `research.min_sources`, or from fewer sites than `research.min_domains`.
+
+   It also lists every figure (a year, an amount, a size) in a cited sentence that the cited page does not contain. That list is evidence for the judge, not a failure on its own, since a source can spell a number differently.
+2. **Then the judge.** It sees the required points (`must_establish`), the claims known to be false (`research.must_not_claim`), a reference answer with the date it was researched (`research.as_of`) and the pages it was checked against, the report, the source check, and each cited claim beside the passage of its page that best matches it. A report passes only when it is **correct** (every required point), **accurate** (no false statement), and **supported** (its citations back their claims). The judge also scores coverage, readability and citation quality from 1 to 5. A development newer than the reference's research date is not counted wrong when the report cites a fetched page for it.
+
+The run prints a `Research:` line with the totals: searches refused, fetched sources cited, citations never fetched, invented URLs, figures missing from their source, the three verdicts, and the three research scores. Read the refused searches first. DuckDuckGo turns away automated searches after a burst, and a run where most searches were refused measured research without search, whatever the model.
+
+A report counts as delivered when it is in the reply or in a Markdown or text file the agent saved in its working folder; the judge reads both together.
+
+`--research-command` sends each research task as `/research <prompt>`, the form the Agent UI's Research switch and the TUI's `/research` send, so a run measures GAIA's research mode rather than a plain request. It is for the `gaia` harness only, and `gaia eval tasks report` shows such a run as its own `GAIA /research` row.
+
+The answer keys were researched by hand from primary sources (official sites, journals, court and patent-office records, EUR-Lex) and record each source in `research.sources`. Topics were picked for stable facts plus one moving part each, so a stale report shows: the CRISPR appeal and the EU AI Act's postponed high-risk dates have both moved recently. When a topic moves again, re-research it, update its points and `as_of` together, and re-check the judge with `GAIA_EVAL_LIVE_JUDGE=1 pytest tests/unit/eval/test_research_tasks.py -k live_judge`, which requires every reference report to pass and every planted wrong report to fail.
+
+The suite reads the live web, so search results, pages and rate limits change between runs. Run it on demand, compare models within one session, and read the per-task `why` before trusting a difference:
+
+```bash
+gaia eval tasks run --suite research --model fireworks.deepseek-v4p1-flash --out runs/research-deepseek
+gaia eval tasks run --suite research --model Qwen3.6-35B-A3B-GGUF --out runs/research-qwen
+gaia eval tasks run --suite research --model Gemma-4-E4B-it-GGUF --out runs/research-gemma
+gaia eval tasks run --suite research --model Gemma-4-E4B-it-GGUF --research-command --out runs/research-gemma-cmd
+gaia eval tasks run --suite research --harness claude-code --model claude-opus-5 --out runs/research-reference
+gaia eval tasks report runs/research-reference runs/research-deepseek runs/research-qwen runs/research-gemma runs/research-gemma-cmd --out runs/research-report
+```
 
 ### Commands
 
@@ -565,6 +599,7 @@ gaia eval tasks report runs/cc-opus runs/gaia-glm runs/cc-glm --out runs/report
 | `--gateway-url URL` | A gateway already running; otherwise each run starts its own. |
 | `--fence` | Fences the agent off the answer keys with macOS `sandbox-exec`. Refused where it cannot be enforced — see below. |
 | `--full-access` | Gives GAIA no path boundary and no shell guardrails, the reach Claude Code has with its permissions skipped. |
+| `--research-command` | Sends each research task as `/research <prompt>`, GAIA's research mode. `gaia` harness only. |
 | `--meter fireworks` | Reads the run's real cost from the provider's billing meter. |
 | `--therock-url URL` | Where the `therock` suite clones from (default `https://github.com/ROCm/TheRock`). |
 | `--instances a,b` | The SWE-bench Verified instance ids the `swebench` suite is built from (default: the pilot). Only with `--suite swebench`. |

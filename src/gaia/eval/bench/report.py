@@ -68,11 +68,14 @@ class Row:
 
     model: str
     harness: str
+    #: Sent through GAIA's ``/research`` command (``--research-command``).
+    research_command: bool = False
     runs: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def label(self) -> str:
-        return HARNESS_LABEL.get(self.harness, self.harness)
+        name = HARNESS_LABEL.get(self.harness, self.harness)
+        return f"{name} /research" if self.research_command else name
 
 
 def run_metrics(card: Mapping[str, Any]) -> Dict[str, Any]:
@@ -110,11 +113,16 @@ def run_metrics(card: Mapping[str, Any]) -> Dict[str, Any]:
 
 def collect(run_dirs: Sequence[Path]) -> List[Row]:
     """Rows in the order their first run was named."""
-    rows: Dict[Tuple[str, str], Row] = {}
+    rows: Dict[Tuple[str, str, bool], Row] = {}
     for given in run_dirs:
         for run_dir in ft.run_dirs(Path(given)):
             card = ft.read_scorecard(run_dir)
-            key = (card["model"], card.get("harness") or "gaia")
+            # A /research run is a different agent setup from a plain one.
+            key = (
+                card["model"],
+                card.get("harness") or "gaia",
+                bool(card.get("research_command")),
+            )
             rows.setdefault(key, Row(*key)).runs.append(run_metrics(card))
     if not rows:
         raise ValueError("No runs to report.")

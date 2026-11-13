@@ -346,6 +346,10 @@ type ChatModel struct {
 	// kept in sync by every model-state ping thereafter (handleCanonicalEvent).
 	claudeMode bool
 
+	// researchMode is on after a bare /research: every message goes out as
+	// `/research <message>` until /research turns it off (research.go).
+	researchMode bool
+
 	// launchClaudeModel is the id --claude-model put on the child's argv, ""
 	// when the launch named none. Kept separate from modelID on purpose:
 	// modelID means "what the agent RESOLVED" and the restart detector keys
@@ -1887,6 +1891,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 	if isSkillsCommand(query) {
 		return m.submitSkillsCommand(query)
 	}
+	if isResearchCommand(query) {
+		return m.runResearchCommand(query)
+	}
 	if isConnectorsPersonalize(query) {
 		return m.startConnectorsPersonalize(query)
 	}
@@ -2091,7 +2098,7 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		return m.handleDiscordCommand(query)
 	}
 
-	return m.sendQuery(query)
+	return m.sendQuery(m.withResearch(query))
 }
 
 func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
@@ -3946,6 +3953,7 @@ func (m ChatModel) renderHeader() string {
 	}
 	rest += m.renderModelChip()
 	rest += m.renderLemonadeChip()
+	rest += m.renderResearchChip()
 
 	title := prefix + identity + rest
 	if m.width > 0 && ansi.StringWidth(title) > m.width {

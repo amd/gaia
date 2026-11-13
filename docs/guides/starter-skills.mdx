@@ -155,15 +155,18 @@ it names that the agent lacks is logged as unavailable.
 
 ### research-report
 
-Decomposes a topic into sub-questions, searches each, reads the best sources,
-and writes a Markdown report with inline citations and an explicit "what I could
-not confirm" section.
+Decomposes a topic into sub-questions, searches each, reads the best sources
+(primary ones over encyclopedias), checks for developments newer than its
+sources, and writes a Markdown report in the reply: every claim cited to a page
+it fetched, a "what I could not confirm" section, and a Sources list.
 
 - **Demonstrates** — multi-step planning, web search + fetch, optional RAG over
   what it fetched.
 - **Consumes** — `search_web`, `fetch_page`, `write_file`, `index_document`,
   `query_documents`.
-- **Configure** — nothing. Ask it for a report on anything.
+- **Configure** — nothing. Ask it for a report on anything, or start the
+  message with `/research` (or turn on **Research** in the Agent UI) to make
+  sure it is used. See [Deep research](/guides/gaia#deep-research).
 - **Note** — `search_web` is DuckDuckGo-backed; coverage is uneven and it is
   rate-limited.
 

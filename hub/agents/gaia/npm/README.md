@@ -188,6 +188,11 @@ await shutdown(proc);
 `/v1/gaia/query` streams Server-Sent Events terminated by exactly one `final` or
 `error`. `fetchAll()` also returns the TUI's path if you would rather launch that.
 
+**Want a researched, cited report?** Start the query with `/research`, as in
+`"query": "/research the history of RISC-V"`. The agent loads its
+`research-report` skill for the turn and answers with a report that links every
+claim to a page it fetched. See [`SPEC.md` §5.1](./SPEC.md#query-request-body).
+
 **Reuse the same `session_id` for every turn in a conversation.** It is what
 lets a document you had it index, or a skill you had it load, survive to the
 next question — drop it (or mint a new one per call) and the agent still

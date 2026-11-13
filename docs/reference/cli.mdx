@@ -2622,6 +2622,7 @@ Run an agent on real coding, data and Q&A tasks and score what the finished proj
 gaia eval tasks run --suite core                   # Run the core tasks, then judge them
 gaia eval tasks run --suite adversarial            # Only the trap tasks (red suite, flaky test, hang, ...)
 gaia eval tasks run --suite full --no-judge        # All tasks, skip the judge
+gaia eval tasks run --suite research --model <m>    # Cited web research reports, checked against what was fetched
 gaia eval tasks judge eval/results/eval-tasks-<ts> # Grade a finished run's quality
 gaia eval tasks gate eval/results/eval-tasks-<ts> --enforce  # Fail on a missed expectation
 gaia eval tasks propose runs/qwen-everyday --out eval/tasks/expectations/<model>.everyday.json  # Limits every repeat met
@@ -2648,6 +2649,7 @@ gaia eval tasks gateway --port 8788                # One model gateway for a who
 | `--gateway-url` | started per run | A model gateway already running |
 | `--fence` | off | Fence the agent off the answer keys (macOS only) |
 | `--full-access` | off | Give GAIA the reach Claude Code has with permissions skipped |
+| `--research-command` | off | Send each research task as `/research <prompt>` (GAIA's research mode) |
 | `--meter` | none | `fireworks`: read real cost from the provider's billing meter |
 | `--therock-url` | `https://github.com/ROCm/TheRock` | Source for the `therock` suite |
 

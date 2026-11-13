@@ -498,3 +498,32 @@ describe('NewChat after first-run setup failed', () => {
         expect(screen.queryByRole('alert')).toBeNull();
     });
 });
+
+describe('NewChat research mode', () => {
+    beforeEach(() => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, research: {} });
+    });
+    afterEach(() => {
+        useChatStore.setState({ research: {} });
+    });
+
+    it('sends the first message as a /research turn while Research is on', async () => {
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Research' }));
+        const box = screen.getByRole('textbox', { name: 'Message' });
+        expect(box).toHaveAttribute('placeholder', 'What should GAIA research?');
+        fireEvent.change(box, { target: { value: 'the history of RISC-V' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await waitFor(() => expect(onSend).toHaveBeenCalledWith('/research the history of RISC-V'));
+    });
+
+    it('sends the message as typed while Research is off', async () => {
+        const onSend = vi.fn().mockResolvedValue(undefined);
+        render(<NewChat onSend={onSend} />);
+        const box = await screen.findByRole('textbox', { name: 'Message' });
+        fireEvent.change(box, { target: { value: 'hello' } });
+        fireEvent.keyDown(box, { key: 'Enter' });
+        await waitFor(() => expect(onSend).toHaveBeenCalledWith('hello'));
+    });
+});
