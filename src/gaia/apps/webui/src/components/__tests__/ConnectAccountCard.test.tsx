@@ -22,6 +22,14 @@ import {
 
 vi.mock('../../services/api');
 
+// The card listens for a sign-in the backend gave up on; tests play that event.
+const sse = vi.hoisted(() => ({ listener: null as null | ((event: unknown) => void) }));
+vi.mock('../../hooks/useConnectorsSSE', () => ({
+    useConnectorsSSE: (onChange: (event: unknown) => void) => {
+        sse.listener = onChange;
+    },
+}));
+
 const mocked = vi.mocked(api);
 
 function connector(id: string, configured: boolean, over: Partial<ConnectorRow> = {}): ConnectorRow {
@@ -55,6 +63,7 @@ const shown = () => stripIsolates(document.body.textContent ?? '');
 
 beforeEach(() => {
     vi.clearAllMocks();
+    sse.listener = null;
     mocked.listConnectors.mockResolvedValue({ connectors: [connector('google', false), connector('microsoft', false)] });
     mocked.getConnector.mockImplementation(async (id: string) => connector(id, false));
     mocked.authorizeConnector.mockResolvedValue({ flow_id: 'f', authorization_url: 'https://accounts.example/auth' });
@@ -124,6 +133,25 @@ describe('ConnectAccountCard', () => {
         expect(mocked.getConnector).not.toHaveBeenCalled();
         expect(window.open).toHaveBeenCalledWith('https://accounts.example/auth', '_blank', 'noopener');
         expect(await screen.findByText(/A browser tab opened for sign-in/)).toBeTruthy();
+    });
+
+    it('says sign-in did not finish when the backend gives up on the tab, and offers it again', async () => {
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
+        expect(await screen.findByText(/A browser tab opened for sign-in/)).toBeTruthy();
+        expect(sse.listener).not.toBeNull();
+
+        // Another account's failure is not this card's.
+        act(() => sse.listener!({ connectorId: 'microsoft', reason: 'oauth_error', payload: {} }));
+        expect(shown()).toContain('A browser tab opened for sign-in');
+
+        act(() => sse.listener!({ connectorId: 'google', reason: 'oauth_error', payload: { error: 'timed out' } }));
+        expect(await screen.findByText('Sign-in did not finish. Press the button below to try again.')).toBeTruthy();
+        expect(shown()).not.toContain('A browser tab opened for sign-in');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        expect(await screen.findByText(/A browser tab opened for sign-in/)).toBeTruthy();
+        expect(mocked.authorizeConnector).toHaveBeenCalledTimes(2);
     });
 
     it('reconnects with the same request: the agent, and no scopes', async () => {

@@ -332,6 +332,7 @@ export const enMessages = {
     'connectCard.label': 'Connect an account',
     'connectCard.prompt': 'GAIA needs you to connect an account for this.',
     'connectCard.opened': 'A browser tab opened for sign-in. Come back here when you have finished.',
+    'connectCard.notFinished': 'Sign-in did not finish. Press the button below to try again.',
     'connectCard.askAgain': 'Your account is connected. Ask again and GAIA will carry on.',
     'connectCard.connect': 'Connect {name}',
     'connectCard.reconnect': 'Reconnect {name}',

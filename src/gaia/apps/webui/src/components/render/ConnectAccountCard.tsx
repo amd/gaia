@@ -4,6 +4,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, ExternalLink, Link2, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
+import { useConnectorsSSE, type ConnectorChangeEvent } from '../../hooks/useConnectorsSSE';
 import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
 import { log } from '../../utils/logger';
@@ -174,12 +175,28 @@ function ProviderRow({
     );
 }
 
+/** While a sign-in tab is open, hear when the backend gives up on it. */
+function SignInWatcher({ providers, onFailed }: { providers: string[]; onFailed: () => void }) {
+    useConnectorsSSE(
+        useCallback(
+            (event: ConnectorChangeEvent) => {
+                if (event.reason === 'oauth_error' && event.connectorId && providers.includes(event.connectorId)) {
+                    onFailed();
+                }
+            },
+            [providers, onFailed],
+        ),
+    );
+    return null;
+}
+
 export function ConnectAccountCard({ data }: { data: unknown }) {
     const t = useT();
     const agents = useChatStore((s) => s.agents);
     const openSettings = useChatStore((s) => s.openSettings);
     const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
     const [opened, setOpened] = useState(false);
+    const [failed, setFailed] = useState(false);
     const valid = isConnectAccountPayload(data);
 
     const refresh = useCallback(() => {
@@ -203,6 +220,15 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         return () => clearInterval(timer);
     }, [opened, refresh]);
 
+    const onOpened = useCallback(() => {
+        setOpened(true);
+        setFailed(false);
+    }, []);
+    const onFailed = useCallback(() => {
+        setOpened(false);
+        setFailed(true);
+    }, []);
+
     if (!isConnectAccountPayload(data)) {
         return <UnsupportedCard variant="invalid" render={CONNECT_ACCOUNT_RENDER} data={data} />;
     }
@@ -218,9 +244,11 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
     let prompt = t('connectCard.prompt');
     if (anyConnected) prompt = t('connectCard.askAgain');
     else if (opened) prompt = t('connectCard.opened');
+    else if (failed) prompt = t('connectCard.notFinished');
 
     return (
         <div className="render-connect" role="group" aria-label={t('connectCard.label')}>
+            {opened && !anyConnected && <SignInWatcher providers={data.providers} onFailed={onFailed} />}
             <div className="render-connect__text">
                 <Link2 size={14} className="render-connect__icon" aria-hidden="true" />
                 <span>{prompt}</span>
@@ -233,7 +261,7 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         name={displayName(id)}
                         connected={isConnected(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}
-                        onOpened={() => setOpened(true)}
+                        onOpened={onOpened}
                     />
                 ))}
             </div>

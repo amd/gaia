@@ -332,6 +332,7 @@ const messages: Messages = {
     'connectCard.label': 'ربط حساب',
     'connectCard.prompt': 'يحتاج GAIA إلى أن تربط حسابًا لإتمام هذا.',
     'connectCard.opened': 'فُتحت علامة تبويب في المتصفح لتسجيل الدخول. عُد إلى هنا عند الانتهاء.',
+    'connectCard.notFinished': 'لم يكتمل تسجيل الدخول. اضغط الزر أدناه للمحاولة مرة أخرى.',
     'connectCard.askAgain': 'تم ربط حسابك. اسأل مرة أخرى وسيكمل GAIA.',
     'connectCard.connect': 'ربط {name}',
     'connectCard.reconnect': 'إعادة ربط {name}',

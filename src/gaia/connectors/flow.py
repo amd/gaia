@@ -108,6 +108,8 @@ class _PendingFlow:
     # (#2117). Maps a namespaced agent id → the scopes to grant for this
     # connector. Empty means "connect only" — the legacy behaviour.
     grant_agents: Dict[str, list[str]] = field(default_factory=dict)
+    # Fires at the deadline even when nobody awaits the flow (the apps don't).
+    expiry: Optional[asyncio.TimerHandle] = None
 
 
 # v1 single-flow constraint per the plan: only one flow can be pending at
@@ -322,7 +324,7 @@ async def start_authorization(
         scopes=scopes_list,
     )
 
-    _pending[flow_id] = _PendingFlow(
+    flow = _PendingFlow(
         flow_id=flow_id,
         provider_id=provider_id,
         scopes=scopes_list,
@@ -336,6 +338,11 @@ async def start_authorization(
             for agent_id, agent_scopes in (grant_agents or {}).items()
         },
     )
+    flow.expiry = loop.call_later(
+        _FLOW_TIMEOUT_SECONDS,
+        lambda: asyncio.ensure_future(_expire_flow(flow_id)),
+    )
+    _pending[flow_id] = flow
 
     # Fire-and-forget the browser launch — A8: do not block the event
     # loop on a slow browser-launch (5s on some Linux setups freezes
@@ -394,17 +401,36 @@ async def complete_authorization(flow_id: str) -> Dict[str, Any]:
         )
 
     try:
-        try:
-            return await asyncio.wait_for(flow.future, timeout=_FLOW_TIMEOUT_SECONDS)
-        except asyncio.TimeoutError as e:
-            raise FlowTimeoutError(
-                f"Sign-in to {flow.provider_id} was not finished within "
-                f"{_FLOW_TIMEOUT_SECONDS // 60} minutes, so the sign-in link you "
-                "were given no longer works. Run `gaia connectors connect "
-                f"{flow.provider_id}` (or click Connect again) for a fresh link."
-            ) from e
+        # The deadline armed in start_authorization fails the future.
+        return await flow.future
     finally:
         await _teardown_flow(flow_id)
+
+
+def _flow_timeout_error(provider_id: str) -> FlowTimeoutError:
+    return FlowTimeoutError(
+        f"Sign-in to {provider_id} was not finished within "
+        f"{_FLOW_TIMEOUT_SECONDS // 60} minutes, so the sign-in link you "
+        "were given no longer works. Run `gaia connectors connect "
+        f"{provider_id}` (or click Connect again) for a fresh link."
+    )
+
+
+async def _expire_flow(flow_id: str) -> None:
+    """Fail a flow nobody finished, close its listener and tell the apps."""
+    flow = _pending.get(flow_id)
+    if flow is None or flow.future.done():
+        return
+    error = _flow_timeout_error(flow.provider_id)
+    flow.future.set_exception(error)
+    # Mark retrieved: the apps never await the future, the CLI still sees it.
+    flow.future.exception()
+    logger.info("flow: sign-in timed out flow_id=%s", flow_id)
+    await _teardown_flow(flow_id)
+    await emit(
+        "connector.oauth.error",
+        {"connector_id": flow.provider_id, "error": str(error)},
+    )
 
 
 async def cancel_flow(flow_id: str) -> None:
@@ -416,6 +442,8 @@ async def _teardown_flow(flow_id: str) -> None:
     flow = _pending.pop(flow_id, None)
     if flow is None:
         return
+    if flow.expiry is not None:
+        flow.expiry.cancel()
     try:
         await flow.runner.cleanup()
     except Exception as e:

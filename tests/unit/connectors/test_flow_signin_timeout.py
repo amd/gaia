@@ -48,29 +48,14 @@ def _mock_token_endpoint():
     respx.route(host="127.0.0.1").pass_through()
 
 
-def _record_wait_for(monkeypatch):
-    seen = []
-    real_wait_for = asyncio.wait_for
-    flow_futures = {id(f.future) for f in flow._pending.values()}
-
-    # flow.asyncio is the global module, so only the flow's own wait is touched.
-    async def _wait_for(aw, timeout=None, **kwargs):
-        if id(aw) not in flow_futures:
-            return await real_wait_for(aw, timeout, **kwargs)
-        seen.append(timeout)
-        return await real_wait_for(aw, timeout=5.0)
-
-    monkeypatch.setattr(flow.asyncio, "wait_for", _wait_for)
-    return seen
-
-
 @respx.mock
 async def test_a_callback_after_the_old_two_minutes_still_completes(
     google_provider, monkeypatch
 ):
     _mock_token_endpoint()
     info = await flow.start_authorization("google", scopes=["openid"])
-    seen = _record_wait_for(monkeypatch)
+    expiry = flow._pending[info["flow_id"]].expiry
+    window = expiry.when() - asyncio.get_running_loop().time()
     params = parse_qs(urlparse(info["authorization_url"]).query)
     callback = f"{params['redirect_uri'][0]}?code=c&state={params['state'][0]}"
 
@@ -83,8 +68,8 @@ async def test_a_callback_after_the_old_two_minutes_still_completes(
     )
     assert resp.status_code == 200
     assert result["account_email"] == "alice@example.com"
-    assert seen == [flow._FLOW_TIMEOUT_SECONDS]
-    assert seen[0] >= 12 * 60 + 10, "shorter than the measured first-time consent"
+    assert window >= 12 * 60 + 10, "shorter than the measured first-time consent"
+    assert expiry.cancelled(), "a finished flow must not expire later"
 
 
 @respx.mock
@@ -123,3 +108,52 @@ async def test_expiry_says_the_link_is_dead_and_how_to_get_a_new_one(
         # Windows reports a closed loopback port as a connect timeout.
         with pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
             await c.get(f"{redirect}?code=c&state=x", timeout=2.0)
+
+
+async def test_a_closed_tab_expires_with_nobody_awaiting_the_flow(
+    google_provider, monkeypatch
+):
+    # The apps start a flow and never await it; the deadline must still fire.
+    events = []
+
+    async def _emit(event_type, payload):
+        events.append((event_type, payload))
+
+    monkeypatch.setattr(flow, "emit", _emit)
+    monkeypatch.setattr(flow, "_FLOW_TIMEOUT_SECONDS", 0.3)
+    info = await flow.start_authorization("google", scopes=["openid"])
+    pending = flow._pending[info["flow_id"]]
+    redirect = parse_qs(urlparse(info["authorization_url"]).query)["redirect_uri"][0]
+
+    for _ in range(50):
+        if info["flow_id"] not in flow._pending and events:
+            break
+        await asyncio.sleep(0.05)
+
+    assert info["flow_id"] not in flow._pending
+    assert isinstance(pending.future.exception(), FlowTimeoutError)
+    assert events == [
+        (
+            "connector.oauth.error",
+            {"connector_id": "google", "error": str(pending.future.exception())},
+        )
+    ]
+    async with httpx.AsyncClient() as c:
+        with pytest.raises((httpx.ConnectError, httpx.ConnectTimeout)):
+            await c.get(f"{redirect}?code=c&state=x", timeout=2.0)
+
+
+async def test_an_evicted_flow_does_not_expire_later(google_provider, monkeypatch):
+    events = []
+
+    async def _emit(event_type, payload):
+        events.append((event_type, payload))
+
+    monkeypatch.setattr(flow, "emit", _emit)
+    monkeypatch.setattr(flow, "_FLOW_TIMEOUT_SECONDS", 0.3)
+    first = await flow.start_authorization("google", scopes=["openid"])
+    first_expiry = flow._pending[first["flow_id"]].expiry
+    await flow.cancel_flow(first["flow_id"])
+    assert first_expiry.cancelled()
+    await asyncio.sleep(0.5)
+    assert events == []
