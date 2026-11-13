@@ -512,10 +512,15 @@ class SidecarRegistry:
         self._spec(agent_id)
         with self._lock:
             holder = self._managers.get(agent_id)
-        if holder is None or not holder[0].is_running:
+        if holder is None:
             return {"agent_id": agent_id, "state": "stopped"}
         manager, agent_lock = holder
+        if not manager.is_running and not manager.exited_unexpectedly:
+            return {"agent_id": agent_id, "state": "stopped"}
         with agent_lock:
+            if not manager.is_running and manager.exited_unexpectedly:
+                # Reaps the crashed one, so restart_if_crashed leaves it stopped.
+                manager.shutdown()
             self._stop_locked(agent_id, manager)
         return {"agent_id": agent_id, "state": "stopped"}
 

@@ -259,6 +259,7 @@ class _FakeManager:
         return self._mode_override or os.environ.get(self.spec.mode_env_var) or "user"
 
     uses_ignored_lemonade = False
+    exited_unexpectedly = False
 
     @property
     def is_running(self):

@@ -14,7 +14,9 @@ import sys
 from pathlib import Path
 
 import pytest
-from gaia_agent import entry, platform_guard
+from gaia_agent import entry
+
+from gaia import platform_guard
 
 PACKAGING_SERVER = Path(__file__).resolve().parents[1] / "packaging" / "server.py"
 # Taken at collection, before any test runs entry.main() and installs the guard.
@@ -29,7 +31,7 @@ needs_wmi = pytest.mark.skipif(
 @pytest.fixture
 def cold_platform(monkeypatch):
     """Empty platform's caches, and put them back after the test."""
-    monkeypatch.setattr(platform, "_wmi_query", _CPYTHON_WMI_QUERY)
+    monkeypatch.setattr(platform, "_wmi_query", _CPYTHON_WMI_QUERY, raising=False)
     monkeypatch.setattr(platform, "_uname_cache", None)
     monkeypatch.setattr(platform, "_platform_cache", {})
 
@@ -98,6 +100,7 @@ def test_a_prompt_build_and_system_facts_never_reach_wmi(
     assert any(f["content"].startswith("Operating system: Windows") for f in facts)
 
 
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="no _wmi_query before 3.12")
 def test_the_guard_makes_wmi_look_unavailable(cold_platform):
     platform_guard.avoid_wmi()
     with pytest.raises(OSError):
@@ -106,7 +109,7 @@ def test_the_guard_makes_wmi_look_unavailable(cold_platform):
 
 
 def test_a_python_without_the_hook_fails_loudly(monkeypatch):
-    monkeypatch.delattr(platform, "_wmi_query")
+    monkeypatch.delattr(platform, "_wmi_query", raising=False)
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(sys, "version_info", (3, 12, 10))
     with pytest.raises(RuntimeError, match="platform._wmi_query is gone"):

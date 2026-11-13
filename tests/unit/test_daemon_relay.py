@@ -398,6 +398,16 @@ def test_restart_if_crashed_leaves_a_stopped_sidecar_alone(monkeypatch):
         reg.connection("toy")
 
 
+def test_stopping_a_crashed_sidecar_keeps_it_stopped(monkeypatch):
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _toy_registry()
+    reg.ensure("toy")
+    manager, _ = reg._managers["toy"]
+    manager.crash()
+    reg.stop("toy")
+    assert reg.restart_if_crashed("toy") is False
+
+
 def test_restart_if_crashed_starts_a_crashed_sidecar_again():
     reg = _toy_registry()
     reg.ensure("toy")
@@ -585,7 +595,10 @@ def test_relay_restart_failure_is_loud():
         "/v1/email/query", json={"query": "hi"}, headers=_auth()
     )
     assert r.status_code == 502
-    assert "could not start again: port 1 in use" in r.json()["detail"]
+    detail = r.json()["detail"]
+    assert "could not start again" in detail and "port 1 in use" in detail
+    # The TUI tells a dead agent from a refusing mailbox by these words.
+    assert "sidecar for agent 'email'" in detail
 
 
 @pytest.fixture()

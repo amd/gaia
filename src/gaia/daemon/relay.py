@@ -321,9 +321,11 @@ def build_relay_router(token: str, registry, turns: Optional[RelayTurns] = None)
         except SidecarError as e:
             raise HTTPException(
                 status_code=502,
+                # The TUI matches "sidecar for agent" in this text.
                 detail=(
                     f"{_agent_name(agent_id)} stopped unexpectedly and could not "
-                    f"start again: {e}"
+                    f"start again: the sidecar for agent '{agent_id}' did not "
+                    f"answer a restart ({e.__class__.__name__}: {e})."
                 ),
             ) from cause
 

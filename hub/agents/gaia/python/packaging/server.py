@@ -45,7 +45,7 @@ if __name__ == "__main__":
     if _python_exit is not None:
         sys.exit(_python_exit)
 
-from gaia_agent.platform_guard import avoid_wmi  # noqa: E402
+from gaia.platform_guard import avoid_wmi  # noqa: E402
 
 # Before anything asks `platform`: a timed-out WMI query crashes the process.
 avoid_wmi()

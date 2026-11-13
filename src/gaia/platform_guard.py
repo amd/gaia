@@ -1,6 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Keep the agent process off CPython's WMI query.
+"""Keep GAIA's processes off CPython's WMI query.
 
 On Windows, Python 3.12+ answers ``platform.uname()``, ``system()``,
 ``version()``, ``machine()``, ``processor()``, ``win32_ver()`` and
@@ -20,7 +20,7 @@ from __future__ import annotations
 import platform
 import sys
 
-_GUARD_MESSAGE = "GAIA's agent reads platform facts without WMI"
+_GUARD_MESSAGE = "GAIA reads platform facts without WMI"
 
 
 def _no_wmi_query(*_args, **_kwargs):
@@ -33,9 +33,9 @@ def avoid_wmi() -> None:
         if sys.platform == "win32" and sys.version_info >= (3, 12):
             raise RuntimeError(
                 "platform._wmi_query is gone from this Python "
-                f"({sys.version.split()[0]}), so GAIA can no longer keep the "
-                "agent off WMI, whose timed-out queries crash the process. "
-                "Update gaia_agent/platform_guard.py for this Python."
+                f"({sys.version.split()[0]}), so GAIA can no longer keep "
+                "itself off WMI, whose timed-out queries crash the process. "
+                "Update src/gaia/platform_guard.py for this Python."
             )
         return
     platform._wmi_query = _no_wmi_query  # pylint: disable=protected-access

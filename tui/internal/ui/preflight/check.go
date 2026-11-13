@@ -1483,13 +1483,14 @@ func finishMailboxRow(row Row, res probeResult, p *connectorEntry, cfg Config) R
 // answering it with a browser sign-in hides the one fix that works.
 //
 // The relay names itself in every body it authors, and this depends on that
-// wording: its two 502s say "sidecar for agent '<id>'" (relay.py), its 503 for a
-// dead sidecar says the agent "has no running sidecar to relay to", and its 503
-// for a live one that stopped serving says the process "is alive but did not
-// answer" its own health route (sidecars/manager.check_responsive). Nothing on
-// the Python side pins those strings, so the fixtures in check_test.go carry
-// them VERBATIM — a reword there breaks a test here rather than silently turning
-// a wedged sidecar into a dead mailbox.
+// wording: its 502s, including a restart that failed, say "sidecar for agent
+// '<id>'" (relay.py), its 503 for a dead sidecar says the agent "has no running
+// sidecar to relay to", and its 503 for a live one that stopped serving says the
+// process "is alive but did not answer" its own health route
+// (sidecars/manager.check_responsive). tests/unit/test_daemon_relay.py pins the
+// 502 wording, and the fixtures in check_test.go carry these strings VERBATIM —
+// a reword breaks a test rather than silently turning a wedged sidecar into a
+// dead mailbox.
 func relayGaveUp(detail string) bool {
 	d := strings.ToLower(detail)
 	return strings.Contains(d, "sidecar for agent") ||
