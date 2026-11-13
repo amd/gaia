@@ -33,6 +33,7 @@ const PILL_ARIA: Record<Dot, MessageKey> = {
 };
 
 // Sizes go in as string params, so an rtl line keeps each one whole and left to right.
+// The no-break space keeps the dot with the part after it when the line wraps.
 function memoryText(s: LocalModelStatus, t: Translate): string | null {
     const m = s.memory;
     if (!m) return s.memory_error;
@@ -40,7 +41,7 @@ function memoryText(s: LocalModelStatus, t: Translate): string | null {
     return t.compose((say) => [
         m.model_gb ? say('modelStatus.memoryUsed', { size: `~${m.model_gb} GB` }) : null,
         m.free_gb != null ? say('modelStatus.memoryFree', { size: `${m.free_gb} GB` }) : null,
-    ].filter(Boolean).join(' · '));
+    ].filter(Boolean).join(' ·\u00A0'));
 }
 
 function placementLabel(p: ModelPlacement, t: Translate): string | null {
