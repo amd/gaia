@@ -2604,13 +2604,15 @@ def relay_one_prompt(
     model_id: str | None,
     memory: str,
     max_steps: int | None,
+    stats: dict | None = None,
 ) -> str | None:
     """One prompt through *agent_type*'s installed binary, with no chat history.
 
     Returns the answer, or None when the run ended without one. An error the
     agent reported, or a failed run, raises :class:`RuntimeError` with its text.
     *handler* must be a background-mode ``SSEOutputHandler``: its events are
-    read back here once the turn ends.
+    read back here once the turn ends. *stats* receives the answer's token
+    counts, failed runs included, so a caller can price the run.
     """
     _dispatch_sidecar_query(
         handler,
@@ -2632,6 +2634,8 @@ def relay_one_prompt(
             failure = str(event.get("content") or "The GAIA agent reported an error.")
         elif event.get("type") == "answer":
             answer = event
+    if stats is not None and answer is not None:
+        stats.update(_turn_inference_stats(None, answer) or {})
     if failure:
         raise RuntimeError(failure)
     if answer is None:
