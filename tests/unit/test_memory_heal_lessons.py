@@ -248,20 +248,6 @@ class TestConfirmAndRetire:
         finally:
             second.close()
 
-    def test_the_fix_running_into_failing_tests_keeps_the_lesson(
-        self, db_path, workspace
-    ):
-        """The command worked; the project's tests failing says nothing about it."""
-        _learn(db_path, workspace)
-        tests_fail = (SHELL, FIX[1], _tests_failed("1 failed, 4 passed in 0.12s"))
-
-        second = _Session(db_path, workspace)
-        try:
-            second.turn([tests_fail])
-            assert len(second.lessons()) == 1
-        finally:
-            second.close()
-
 
 def _tests_failed(summary: str) -> Dict[str, Any]:
     """What run_shell_command returns when pytest ran and counted failures."""
@@ -319,6 +305,20 @@ class TestFailingTestsAreNotAMistake:
 
         assert session.lessons() == []
         assert session._memory_store.get_by_category("error") == []
+
+    def test_a_changed_command_that_makes_failing_tests_pass_still_teaches(
+        self, session
+    ):
+        """Tests that fail until the command sets what they need are a lesson."""
+        session.turn(
+            [
+                (SHELL, {"command": "pytest -q"}, _tests_failed("3 failed in 0.2s")),
+                (FIX[0], FIX[1], _tests_passed("5 passed in 0.1s")),
+            ]
+        )
+
+        [lesson] = session.lessons()
+        assert "env TOYBOX_CLOCK=frozen" in lesson["content"]
 
     def test_a_runner_that_never_got_to_count_still_teaches(self, session):
         """No summary means the call itself went wrong, which is worth a lesson."""
