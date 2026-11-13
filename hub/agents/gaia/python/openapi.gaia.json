@@ -636,7 +636,7 @@
   "info": {
     "description": "REST surface for the GAIA flagship agent sidecar (/v1/gaia/*). Cross-implementation contract for embedders and typed clients.",
     "title": "GAIA Agent API",
-    "version": "2.27"
+    "version": "2.28"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -747,7 +747,7 @@
                 }
               }
             },
-            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, level?, phase?, queue?, retracts_answer?} | token {delta} | reasoning {delta, retracts_answer?} | tool_call {tool, args} | tool_result {tool, data, render?} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?, file_path?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`: status {message, level?, phase?, queue?, retracts_answer?} | token {delta} | reasoning {delta, retracts_answer?} | tool_call {tool, args} | tool_result {tool, data, render?} | context_usage {window, used, ...} | needs_confirmation {run_id, action, summary, confirm_id?, always_scope?, risk?, tool_label?, args?, args_truncated?, prompt_context?} | needs_input {run_id, request_id, question, options, allow_free_text, sensitive, respond_url, timeout_seconds?} | final {answer, usage?, failed?, failure?, performance?, context?, context_error?, model_messages?} | error {detail, status}. A needs_confirmation's `args` are exactly the arguments the model sent for the gated call, each value capped at 64,000 characters (`args_truncated: true` when one was cut); what the agent adds to its prompt is in `prompt_context` {working_directory?, risk_note?, file_path?}, never in `args`. The stream ends with exactly one `final` or `error`. `:`-prefixed heartbeat comments carry no payload."
           },
           "422": {
             "content": {
