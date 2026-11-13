@@ -131,7 +131,8 @@ function DocName({ name }: { name: string }) {
     // Code points, so an emoji at the cut isn't split into two broken halves.
     const chars = Array.from(name);
     if (chars.length <= NAME_TAIL_CHARS * 2) {
-        return <span className="doc-name" dir="auto">{name}</span>;
+        // Left to right, so the extension stays last whatever the script.
+        return <span className="doc-name" dir="ltr">{name}</span>;
     }
     // dir="auto" picks the direction from the first strong letter; the CSS needs to know it too.
     const firstStrong = name.match(/\p{L}/u)?.[0] ?? '';
@@ -411,14 +412,16 @@ export function DocumentLibrary() {
             return true;
         } catch (err) {
             // ApiError's fields, read by shape: the class itself is mocked in tests.
-            const { httpStatus, reason } = (err ?? {}) as { httpStatus?: number; reason?: string | null };
+            const { httpStatus, reason, body } = (err ?? {}) as { httpStatus?: number; reason?: string | null; body?: Record<string, unknown> | null };
             if (reason === 'is_folder' && onFolder) {
                 return await onFolder();
             }
             log.doc.error(`Failed to index "${filename}"`, err);
-            const errMsg = httpStatus === 400 && unsupportedMessage
-                ? unsupportedMessage
-                : err instanceof Error ? err.message : 'Upload failed';
+            const errMsg = reason === 'too_large'
+                ? t('docs.tooLargeDetail', { max: String(body?.max_mb) })
+                : httpStatus === 400 && unsupportedMessage
+                    ? unsupportedMessage
+                    : err instanceof Error ? err.message : 'Upload failed';
             setUploadError({ filename, error: errMsg, status: httpStatus, kind: reason });
             setUploadStatus('');
             return false;

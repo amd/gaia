@@ -555,6 +555,9 @@ class SSEOutputHandler(OutputHandler):
     #: What "always" would grant on that prompt; ``None`` when not offered.
     _relay_always_scope: Optional[str] = None
 
+    #: The path that prompt asks to open, when it is a path-access prompt.
+    _relay_path_access: Optional[str] = None
+
     #: Answers that prompt "timeout" when the confirm window runs out.
     _relay_confirm_timer: Optional[threading.Timer] = None
 
@@ -667,6 +670,7 @@ class SSEOutputHandler(OutputHandler):
         # Only this id may be answered, so a late click cannot approve a newer one.
         self._relay_confirm_id = None
         self._relay_always_scope = None
+        self._relay_path_access = None
         # A relayed needs_input question the sidecar run is parked on.
         self._relay_question_id: Optional[str] = None
         # What the sidecar measured fills its context, from its ``final`` event.
@@ -678,6 +682,10 @@ class SSEOutputHandler(OutputHandler):
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # The turn's answer and record for later turns, sealed when the answer
+        # prints so a daemon's final event need not wait on the run thread's tail.
+        self.staged_answer: Optional[str] = None
+        self.staged_model_messages: Optional[List[Dict[str, Any]]] = None
         # Set by mark_turn_failed; the next answer event carries ``failed``.
         self._turn_failed = False
         self._turn_failure: Optional[str] = None
@@ -991,13 +999,16 @@ class SSEOutputHandler(OutputHandler):
         # For file search results, include structured file list
         if isinstance(data, dict) and ("files" in data or "file_list" in data):
             files = data.get("file_list", data.get("files", []))
+            folders = data.get("directories")
             if isinstance(files, list):
                 # Keep the UI contract honest: "total" should never claim more accessible
                 # files than we actually include in the event payload.
                 # list_files reports bare names; the UI renders entries.
-                limited_files = [
-                    {"name": f} if isinstance(f, str) else f for f in files[:20]
-                ]
+                entries = [
+                    {"name": _entry_name(d), "kind": "folder"}
+                    for d in (folders if isinstance(folders, list) else [])
+                ] + [{"name": f} if isinstance(f, str) else f for f in files]
+                limited_files = entries[:20]
                 event["result_data"] = {
                     "type": "file_list",
                     "files": limited_files,  # Limit to 20 files
@@ -1305,6 +1316,20 @@ class SSEOutputHandler(OutputHandler):
     def print_turn_metrics(self, record: Dict[str, Any]):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
+
+    def stage_final_model_messages(
+        self, answer: str, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Keep the turn's answer and record sealed at the answer for ``final``.
+
+        The agent seals them before ``print_final_answer``; the daemon reads them
+        from here so ``final`` carries the measurement and what later turns
+        replay without waiting on the run thread (which may still be storing
+        memory or writing a trace).
+        """
+        self.staged_answer = answer
+        self.staged_model_messages = messages
+        return messages
 
     def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The answer that follows ends a turn a model failure cut short."""
@@ -2637,15 +2662,20 @@ class SSEOutputHandler(OutputHandler):
             self._relay_question_id = request_id
 
     def set_relay_confirmation(
-        self, confirm_id: Optional[str], always_scope: Optional[str] = None
+        self,
+        confirm_id: Optional[str],
+        always_scope: Optional[str] = None,
+        path_access: Optional[str] = None,
     ) -> None:
         """Record (or clear, with ``None``) the sidecar prompt now pending.
 
         *always_scope* is what an "always" answer grants, when one is offered.
+        *path_access* is the path a path-access prompt asks to open.
         """
         with self._confirm_lock:
             self._relay_confirm_id = confirm_id
             self._relay_always_scope = always_scope if confirm_id else None
+            self._relay_path_access = path_access if confirm_id else None
             if self._relay_confirm_timer is not None:
                 self._relay_confirm_timer.cancel()
                 self._relay_confirm_timer = None
@@ -2686,6 +2716,13 @@ class SSEOutputHandler(OutputHandler):
                 return None
             return self._relay_always_scope
 
+    def relay_path_access(self, confirm_id: Optional[str]) -> Optional[str]:
+        """The path the pending prompt *confirm_id* asks to open, or None."""
+        with self._confirm_lock:
+            if not confirm_id or confirm_id != self._relay_confirm_id:
+                return None
+            return self._relay_path_access
+
     def resolve_relay_confirmation(
         self,
         approved: bool,
@@ -2714,6 +2751,7 @@ class SSEOutputHandler(OutputHandler):
                 return False
             self._relay_confirm_id = None
             self._relay_always_scope = None
+            self._relay_path_access = None
         if timed_out:
             decision = "timeout"
         elif always:
@@ -2830,6 +2868,68 @@ def _first_line_summary(text: str) -> str:
     return f"{first} (+{len(lines) - 1} more lines)" if len(lines) > 1 else first
 
 
+def _entry_name(entry: Any) -> str:
+    """A listed file's display name: ``{"name": "a.py", "directory": "/src"}`` -> ``"a.py (/src)"``."""
+    if not isinstance(entry, dict):
+        return str(entry)
+    name = entry.get("name", entry.get("filename", entry.get("file_name", "")))
+    if not name and entry.get("file_path"):
+        name = str(entry["file_path"]).replace("\\", "/").rsplit("/", 1)[-1]
+    directory = entry.get("directory", "")
+    if directory and name:
+        return f"{name} ({directory})"
+    return str(name or directory)
+
+
+def _listing_summary(data: Dict[str, Any]) -> str:
+    """``{"files": [...], "directories": [...]}`` -> ``"Found 3 files and 2 folders: ..."``."""
+    files = data.get("file_list", data.get("files"))
+    files = files if isinstance(files, list) else []
+    folders = data.get("directories")
+    folders = folders if isinstance(folders, list) else []
+    count = data.get("count")
+    # "count" is the files a search matched, which may exceed the names it returned.
+    file_count = (
+        max(count, len(files))
+        if isinstance(count, int) and not isinstance(count, bool)
+        else len(files)
+    )
+    folder_count = len(folders)
+    total = data.get("total")
+    other = (
+        total - file_count - folder_count
+        if isinstance(total, int) and not isinstance(total, bool)
+        else 0
+    )
+    parts = [
+        format_count(n, noun)
+        for n, noun in (
+            (file_count, "files"),
+            (folder_count, "folders"),
+            (other, "other entries"),
+        )
+        if n > 0
+    ]
+    if not parts:
+        found = "no files or folders" if "directories" in data else "no files"
+    elif len(parts) == 1:
+        found = parts[0]
+    else:
+        found = ", ".join(parts[:-1]) + f" and {parts[-1]}"
+
+    names = [f"{_entry_name(d)}/" for d in folders[:5]]
+    names += [_entry_name(f) for f in files[: 5 - len(names)]]
+    names = [n for n in names if n and n != "/"]
+    display_msg = data.get("display_message", "")
+    if not names:
+        return display_msg or f"Found {found}"
+    listed = "\n".join(f"  {name}" for name in names)
+    hidden = file_count + folder_count - len(names)
+    if hidden > 0:
+        listed += f"\n  ... +{hidden} more"
+    return f"{display_msg}\n{listed}" if display_msg else f"Found {found}:\n{listed}"
+
+
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
@@ -2855,39 +2955,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
             return preview
         return "Command completed (no output)"
 
-    # File search results
+    # File search and folder listing results
     if "files" in data or "file_list" in data:
-        files = data.get("file_list", data.get("files", []))
-        count = data.get("count", len(files) if isinstance(files, list) else 0)
-        display_msg = data.get("display_message", "")
-        if isinstance(files, list) and files:
-            file_names = []
-            for f in files[:5]:
-                if isinstance(f, dict):
-                    name = f.get("name", f.get("filename", f.get("file_name", "")))
-                    # Fallback: extract filename from file_path if name keys are missing
-                    if not name and f.get("file_path"):
-                        name = f["file_path"].replace("\\", "/").rsplit("/", 1)[-1]
-                    directory = f.get("directory", "")
-                    if directory and name:
-                        file_names.append(f"{name} ({directory})")
-                    elif name:
-                        file_names.append(name)
-                    elif directory:
-                        file_names.append(directory)
-                else:
-                    file_names.append(str(f))
-            result = "\n".join(f"  {name}" for name in file_names)
-            if count > 5:
-                result += f"\n  ... +{count - 5} more"
-            return (
-                (display_msg + "\n" + result)
-                if display_msg
-                else f"Found {count} file(s):\n{result}"
-            )
-        if display_msg:
-            return display_msg
-        return f"Found {count} file(s)"
+        return _listing_summary(data)
 
     # Search/query results with chunks
     if "chunks" in data:

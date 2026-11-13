@@ -76,8 +76,13 @@ Once a connector is connected, GAIA offers **Personalize GAIA** (TUI:
 `/connectors personalize <id>`). It's optional. GAIA reads your recent
 activity there (for Google, the last two weeks of Gmail and Calendar), saves
 the lasting facts to [memory](/guides/memory), and suggests up to five
-automations you could schedule. It only reads, and it creates no schedules
-until you pick which ones you want.
+automations you could schedule. It is told only to read, and it creates no
+schedules until you pick which ones you want.
+
+GAIA keeps access to the connector after the pass. To turn that off, open the
+connector under **Connectors** in the Agent UI and switch GAIA off there, or
+run `/connectors revoke <id>` in the TUI. `/connectors` in the TUI shows which
+connectors GAIA can use.
 
 Run `gaia connectors list` to see every connector the catalog currently
 ships — it is the source of truth for what you can configure today.

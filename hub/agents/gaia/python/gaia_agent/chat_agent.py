@@ -62,6 +62,7 @@ from gaia.agents.base.context_eviction import (
 )
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import before_change, note_untracked
+from gaia.agents.base.goal_store import GOAL_OUTCOMES
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
@@ -634,6 +635,11 @@ class ChatAgent(
 
     # Dynamic MCP loader — registry exposes this for the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = True
+
+    # This session's folders and scratch directory differ per session.
+    VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = Agent.VOLATILE_PROMPT_FRAGMENTS | {
+        "get_session_folders_system_prompt"
+    }
 
     # Tool-list bookkeeping for the session; reset by ``_on_task_start`` when the
     # conversation is empty.
@@ -1886,7 +1892,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
 
 1. **FACTUAL ACCURACY RULE — always retrieve before answering.** Any factual question about indexed documents (numbers, dates, names, policies, sections) → call `query_specific_file` or `query_documents` first, then answer from the retrieved chunks. Don't answer from training knowledge, even if you "know" the topic. This applies on every turn — "indexed" means stored in the RAG index, NOT in your context window.
 
-2. **Never invent content.** Quote numbers / dates / section refs verbatim from the chunks. Don't round, don't extrapolate, don't cite a section number no chunk shows. If no chunk answers it, search once more in other words; if that misses too, say "That's not in the document" and STOP — never supplement with "but approximately X" or "typically Y".
+2. **Never invent content.** Quote numbers / dates / section refs verbatim from the chunks. Don't round, don't extrapolate, don't cite a section number no chunk shows. If no chunk answers it, search the document again, reworded (not the web); still missing → say "That's not in <document>", never "approximately X". Only then offer the web, labeled as such.
 
 3. **Multi-fact requests → one query per fact.** If asked for 3 things, issue at least 3 targeted queries. Don't combine into one fuzzy query.
 
@@ -1985,18 +1991,22 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             "load_tools_menu": load_tools_menu,
         }
         prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
-        if not spec.early_return:
-            prompt += self._session_folders_line()
         if self._offers_scheduling():
             prompt += _AGENT_UI_SCHEDULE_LINE
+        return prompt
+
+    def get_session_folders_system_prompt(self) -> str:
+        """This session's folders and scratch directory, in ``session_context``."""
+        spec = get_profile_spec(getattr(self.config, "prompt_profile", "full"))
+        text = "" if spec.early_return else self._session_folders_line()
         scratch_dir = getattr(self, "scratch_dir", None)
         if scratch_dir is not None:
-            prompt += (
+            text += (
                 f"\nScratch directory for temporary files: {scratch_dir} — put "
                 "throwaway scripts and intermediate files here, never in the "
                 "user's project.\n"
             )
-        return prompt
+        return text.strip()
 
     def _session_folders_line(self) -> str:
         """One prompt line naming the folders this session can work in.
@@ -3561,6 +3571,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             state: str,
             reason: str = "",
             wake_in_seconds: int = 0,
+            goal_outcome: str = "",
         ) -> str:
             """Signal the autonomous loop what to do next.
 
@@ -3574,11 +3585,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 reason: Human-readable explanation (shown in activity log).
                 wake_in_seconds: Seconds until next wakeup (only for "scheduled").
                     Minimum: 30. Maximum: 86400 (24 hours).
+                goal_outcome: "done" if the goal is achieved, "failed" if it
+                    can't be (say why in reason), "" if unfinished. Unfinished
+                    uses one of 3 tries unless state is "scheduled".
             """
             valid_states = {"idle", "scheduled", "paused"}
             if state not in valid_states:
                 return (
                     f"Invalid state '{state}'. Must be one of: {sorted(valid_states)}"
+                )
+            if goal_outcome not in GOAL_OUTCOMES:
+                return (
+                    f"Invalid goal_outcome '{goal_outcome}'. Must be one of: "
+                    f"{sorted(GOAL_OUTCOMES)}"
                 )
 
             # Clamp wake_in_seconds for "scheduled" state
@@ -3590,9 +3609,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     "directive": state,
                     "reason": reason,
                     "wake_in_seconds": wake_in_seconds,
+                    "goal_outcome": goal_outcome,
                 }
 
             msg = f"Loop state set to '{state}'."
+            if goal_outcome:
+                msg += f" Goal marked {goal_outcome}."
             if reason:
                 msg += f" Reason: {reason}"
             if state == "scheduled":
