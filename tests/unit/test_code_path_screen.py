@@ -97,7 +97,11 @@ def _named(code, home, *, python=True, may_write=True):
         "import glob\nprint(glob.glob('~/.ssh/*'))",
         "print(open('id_rsa').read())",
         "print(open('server.pem').read())",
-        "open(r'{home}\\.gaia\\mcp_servers.json', 'w').write('{{}}')",
+        # Backslashes separate folders only on Windows.
+        pytest.param(
+            "open(r'{home}\\.gaia\\mcp_servers.json', 'w').write('{{}}')",
+            marks=windows_only,
+        ),
         "import urllib.request\nurllib.request.urlopen('file:///{ssh_fwd}/id_test')",
     ],
 )

@@ -20,7 +20,6 @@ declining ``cd repo && pytest | tail`` blocks the test run and nothing else.
 from __future__ import annotations
 
 import ast
-import functools
 import ipaddress
 import logging
 import os

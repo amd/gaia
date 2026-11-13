@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import ntpath
 import os
 import socket
 from pathlib import Path
@@ -86,9 +87,10 @@ def _short_name(path: Path) -> str:
 def _spellings(path: Path) -> dict:
     """Other names Windows opens *path* by."""
     plain = str(path)
-    drive, rest = os.path.splitdrive(plain)
+    # ntpath, not os.path: parametrize builds these names at collection on POSIX too.
+    drive, rest = ntpath.splitdrive(plain)
     share = f"{drive[0]}$"
-    parent, leaf = os.path.split(plain)
+    parent, leaf = ntpath.split(plain)
     spellings = {
         "extended": "\\\\?\\" + plain,
         "extended-unc-localhost": f"\\\\?\\UNC\\localhost\\{share}{rest}",
@@ -106,11 +108,13 @@ def _spellings(path: Path) -> dict:
         "parent-trailing-dot": parent + ".\\" + leaf,
         "extended-parent-trailing-dot": "\\\\?\\" + parent + ".\\" + leaf,
         "data-stream": plain + "::$DATA",
-        "dot-segments": os.path.join(parent, "..", os.path.basename(parent), leaf),
+        "dot-segments": ntpath.join(parent, "..", ntpath.basename(parent), leaf),
     }
+    if os.name != "nt":
+        return spellings
     short = _short_name(path.parent)
     if short and short.lower() != str(path.parent).lower():
-        spellings["short-name"] = os.path.join(short, leaf)
+        spellings["short-name"] = ntpath.join(short, leaf)
     return spellings
 
 

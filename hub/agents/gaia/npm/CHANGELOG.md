@@ -159,7 +159,7 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   `{ unreadable }` (`missing`, `not_text`, `too_large`, `unreadable`) when there
   is nothing to show. `summary` shows the first lines under the path and, when
   it leaves lines out, the file's full path to read them at. If the
-  file changes after the prompt was built, the run is refused and the agent
+  file differs from what the prompt showed when the run starts, the run is refused and the agent
   asks again with the new content. `args` still holds exactly the model's
   arguments.
 
