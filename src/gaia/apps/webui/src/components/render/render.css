@@ -228,6 +228,12 @@
     font-size: 13px;
 }
 
+.render-diff__path {
+    color: var(--text-secondary);
+    margin: -4px 0 6px;
+    overflow-wrap: anywhere;
+}
+
 .render-diff__body {
     margin: 0;
     overflow-x: auto;
