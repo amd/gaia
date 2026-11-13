@@ -115,7 +115,7 @@ After adoption the record keeps counting. In a turn that recalled a procedure, t
 
 ### get_memory_system_prompt()
 
-Returns the **stable frozen prefix** for the system prompt. Always includes proactive usage instructions for the LLM, plus any stored preferences, facts, skills, and error patterns. Nothing time-sensitive. This method is called automatically by `Agent._get_mixin_prompts()`.
+Returns the **stable memory section**, frozen for the session. Always includes proactive usage instructions for the LLM, plus any stored preferences, facts, skills, and error patterns. Nothing time-sensitive. This method is called automatically by `Agent._get_mixin_prompts()`. It is in `Agent.VOLATILE_PROMPT_FRAGMENTS`, so it is sent in the session context at the start of the first user message, not in the system prompt (see [Session context](#kv-cache-frozen-prefix-design)).
 
 ```python
 def get_memory_system_prompt(self) -> str
@@ -215,7 +215,7 @@ Reply with just: restored
 
 **Recalled procedures** (procedural memory) ride here too, under a `=== RECALLED PROCEDURES (learned from past successful runs) ===` heading, whenever a stored procedure matches the goal. The matched set changes from turn to turn, so it never goes in the system prompt. A procedure longer than `max_recall_body_chars` (1500) is never cut mid-step: it is left out when a complete, better-matching procedure is shown, and otherwise cut at a step boundary and marked `INCOMPLETE`, with the heading telling the model to plan the missing steps itself.
 
-**Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error. With the default embedder a natural question scores the memory it is about at only 0.35-0.55 and unrelated ones at 0.25-0.40, so no fixed floor works. A match passes on a cosine of at least 0.5, or, once the store holds 8 or more memories, on clearing all three of 0.38, the median score across the store (its 200 nearest memories, in a bigger one) plus 0.08, and the best match minus 0.06. Up to two more memories (cosine 0.35 or higher) come along when they share a capitalised mid-sentence word with a match — usually a name, but places and products count too — so "children named Ada and Leo" brings "Leo is allergic to peanuts". Sensitive items, items already in the stable system prompt, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Lessons (`domain='lesson'`) are skipped here whatever the scope — they are filed as notes but belong to one workspace, and their own path scopes them and frames their raw tool output against injection. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
+**Relevant memories** come from a vector search on the user's message: at most `TURN_RECALL_TOP_K` (3) items of category fact, preference, note, skill or error. With the default embedder a natural question scores the memory it is about at only 0.35-0.55 and unrelated ones at 0.25-0.40, so no fixed floor works. A match passes on a cosine of at least 0.5, or, once the store holds 8 or more memories, on clearing all three of 0.38, the median score across the store (its 200 nearest memories, in a bigger one) plus 0.08, and the best match minus 0.06. Up to two more memories (cosine 0.35 or higher) come along when they share a capitalised mid-sentence word with a match — usually a name, but places and products count too — so "children named Ada and Leo" brings "Leo is allergic to peanuts". Sensitive items, items already in the stable memory section, and items from other contexts are skipped; a default `global` session is unscoped and reads every context. Lessons (`domain='lesson'`) are skipped here whatever the scope — they are filed as notes but belong to one workspace, and their own path scopes them and frames their raw tool output against injection. Credential-shaped content is masked. Surfacing a memory here does not bump its confidence or use count. If the embedding call fails, the section is left out and a warning is logged. Returns an empty string only if `init_memory()` has not been called.
 
 The upcoming/overdue section is **rate-limited, not per-turn**. It rides the first turn of a session and the first turn after `REMINDER_PAUSE_SECONDS` (30 min) of silence — a natural pause — so an `[OVERDUE ...]` block never lands on an unrelated turn.
 
@@ -530,14 +530,29 @@ For turns of at least `MIN_EXTRACTION_WORDS` (5) words, the scheduled job fetche
 
 ## KV-Cache Frozen Prefix Design
 
-The system prompt is deliberately split into two parts:
+Memory reaches the model in two parts, and neither is in the system prompt:
 
 | Part | Method | Where injected | Changes between turns? |
 |------|--------|----------------|----------------------|
-| **Stable prefix** | `get_memory_system_prompt()` | System prompt via `_get_mixin_prompts()` | No -- frozen for KV-cache reuse |
+| **Stable section** | `get_memory_system_prompt()` | Session context, at the start of the session's first user message | No -- frozen for the session; a forget or edit of a shown item re-renders it |
 | **Dynamic context** | `get_memory_dynamic_context()` | Prepended to user message each turn | Yes -- current time, upcoming items, relevant memories, recalled procedures |
 
-This design allows LLM inference engines (like Lemonade Server) to cache the attention computations for the system prompt and reuse them across conversation turns. Only the small dynamic section (typically 2-5 lines) changes per turn.
+The system prompt and tool list then stay byte-identical across fresh sessions of the same agent, so an inference engine (like Lemonade Server) reuses its cache for them even when memory changed since the last chat. Hybrid models such as Qwen3.6 can resume only from a checkpoint at a user-message start, never from inside the system prompt, so per-session text there would make every new chat re-read the whole prompt.
+
+The session context holds every fragment named in `Agent.VOLATILE_PROMPT_FRAGMENTS` — memory, loaded skills, the project map or working directory, and (for the chat agents) the session's folders and scratch directory. `Agent.session_context` returns it; every request carries it, fenced, at the start of its first user message:
+
+```
+[GAIA Session Context]
+=== MEMORY (Persistent Second Brain) ===
+...
+[End GAIA Session Context — the rest of this message is from the user]
+
+[GAIA Memory Context]
+Current time: 2026-03-25T10:30:00-0700 (Tuesday)
+...
+```
+
+It is added per request and never stored in history, so a cut of older turns moves it to the oldest question still in view.
 
 ```python
 # Simplified flow inside MemoryMixin.process_query():
@@ -1142,7 +1157,7 @@ These map to CRUD operations: `remember` = create, `recall` = read, `update_memo
 | Method | Description |
 |--------|-------------|
 | `init_memory(db_path, context)` | Initialize memory subsystem (v2: includes embedding validation, FAISS rebuild, reconciliation, consolidation) |
-| `get_memory_system_prompt()` | Stable frozen prefix for system prompt (includes Skills section) |
+| `get_memory_system_prompt()` | Stable memory section, sent in the session context (includes Skills section) |
 | `get_memory_dynamic_context()` | Per-turn time + upcoming items |
 | `register_memory_tools()` | Register 5 LLM-facing tools |
 | `run_bootstrap_conversation(prompt_fn, output_fn)` | Adaptive day-zero onboarding; stores approved answers as `source="user"` |

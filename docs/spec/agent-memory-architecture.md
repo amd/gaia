@@ -860,11 +860,11 @@ First query: _run_memory_post_init() [deferred until the LLM is available]
 
 ## System Prompt Architecture
 
-The system prompt is split into two parts to allow LLM inference engines to reuse their KV-cache across conversation turns.
+Memory is split into two parts to allow LLM inference engines to reuse their KV-cache across conversation turns. Neither part is in the system prompt itself, which stays byte-identical across fresh sessions of one agent.
 
 ### Stable Prefix
 
-`get_memory_system_prompt()` -- injected once via `Agent._get_mixin_prompts()`. Contains nothing time-sensitive (no timestamps, no due dates). Stays frozen for the entire session so KV-cache can be reused: rendered once after the first turn's upkeep, and re-rendered only on a context switch, a session reset, or a `forget`/`update_memory` of an item it shows. Memories stored mid-session reach the model through the dynamic suffix.
+`get_memory_system_prompt()` -- collected via `Agent._get_mixin_prompts()` and, as a `VOLATILE_PROMPT_FRAGMENTS` entry, sent in `Agent.session_context` at the start of the session's first user message. Contains nothing time-sensitive (no timestamps, no due dates). Stays frozen for the entire session so KV-cache can be reused: rendered once after the first turn's upkeep, and re-rendered only on a context switch, a session reset, or a `forget`/`update_memory` of an item it shows. Memories stored mid-session reach the model through the dynamic suffix.
 
 ```python
 def get_memory_system_prompt(self) -> str:

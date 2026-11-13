@@ -130,7 +130,7 @@ In chat, ask the agent to use a skill by name. From code, load it with
 from gaia_agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(GaiaAgentConfig())
-agent.load_skill("research-report")     # body joins the system prompt
+agent.load_skill("research-report")     # body joins the prompt
 
 print(agent.process_query("What's the current state of NPU support in llama.cpp?"))
 ```

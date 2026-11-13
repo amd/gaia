@@ -635,6 +635,11 @@ class ChatAgent(
     # Dynamic MCP loader — registry exposes this for the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = True
 
+    # This session's folders and scratch directory differ per session.
+    VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = Agent.VOLATILE_PROMPT_FRAGMENTS | {
+        "get_session_folders_system_prompt"
+    }
+
     # Tool-list bookkeeping for the session; reset by ``_on_task_start`` when the
     # conversation is empty.
     _tool_notice_due: bool = False
@@ -1985,18 +1990,22 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             "load_tools_menu": load_tools_menu,
         }
         prompt = base_prompt + "".join(blocks[key] for key in spec.prompt_blocks)
-        if not spec.early_return:
-            prompt += self._session_folders_line()
         if self._offers_scheduling():
             prompt += _AGENT_UI_SCHEDULE_LINE
+        return prompt
+
+    def get_session_folders_system_prompt(self) -> str:
+        """This session's folders and scratch directory, in ``session_context``."""
+        spec = get_profile_spec(getattr(self.config, "prompt_profile", "full"))
+        text = "" if spec.early_return else self._session_folders_line()
         scratch_dir = getattr(self, "scratch_dir", None)
         if scratch_dir is not None:
-            prompt += (
+            text += (
                 f"\nScratch directory for temporary files: {scratch_dir} — put "
                 "throwaway scripts and intermediate files here, never in the "
                 "user's project.\n"
             )
-        return prompt
+        return text.strip()
 
     def _session_folders_line(self) -> str:
         """One prompt line naming the folders this session can work in.
