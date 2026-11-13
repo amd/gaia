@@ -106,7 +106,7 @@ export function UndoHistorySettings() {
                             {' '}<bdi dir="ltr"><code className="setting-path">{settings.path}</code></bdi>
                         </span>
                     </div>
-                    <button type="button" className="btn-model-save" onClick={() => void save()} disabled={!dirty || saving || daysInvalid || mbInvalid}>
+                    <button type="button" className="btn-primary" onClick={() => void save()} disabled={!dirty || saving || daysInvalid || mbInvalid}>
                         {saving ? t('settings.models.applying') : t('settings.advanced.save')}
                     </button>
                 </>

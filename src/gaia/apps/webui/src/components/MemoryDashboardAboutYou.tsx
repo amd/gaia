@@ -366,7 +366,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                     onChange={e => setDraft(e.target.value)}
                                                     onKeyDown={e => {
                                                         if (e.key === 'Escape') { e.stopPropagation(); setEditingId(null); }
-                                                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(item); }
+                                                        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); saveEdit(item); }
                                                     }}
                                                 />
                                                 {item.category === 'reminder' && (
@@ -409,7 +409,8 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                     <button
                                                         className="mem-about-btn"
                                                         aria-label={t('mem.about.editAria', { name })}
-                                                        title={t('mem.about.edit')}
+                                                        title={t(hidden ? 'mem.about.editHidden' : 'mem.about.edit')}
+                                                        disabled={hidden}
                                                         onClick={() => { setEditingId(item.id); setDraft(item.content); setDraftDue(dueInputValue(item.due_at)); }}
                                                     >
                                                         <Pencil size={14} />

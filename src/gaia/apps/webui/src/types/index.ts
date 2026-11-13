@@ -699,6 +699,8 @@ export interface BrowseResponse {
     parent_path: string | null;
     entries: FileEntry[];
     quick_links: QuickLink[];
+    /** Why a chat can't be given this folder; absent when it can. */
+    folder_refusal?: string | null;
 }
 
 /** Response from the /documents/index-folder endpoint. */
