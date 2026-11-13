@@ -422,12 +422,14 @@ async def upload_document_blob(
                         break
                     bytes_written += len(chunk)
                     if bytes_written > MAX_DOCUMENT_UPLOAD_SIZE:
+                        max_mb = f"{MAX_DOCUMENT_UPLOAD_SIZE // (1024 * 1024)}"
                         raise HTTPException(
                             status_code=413,
-                            detail=(
-                                f"File too large. Maximum size is "
-                                f"{MAX_DOCUMENT_UPLOAD_SIZE // (1024 * 1024)} MB."
-                            ),
+                            detail={
+                                "status": "too_large",
+                                "message": f"File too large. Maximum size is {max_mb} MB.",
+                                "max_mb": max_mb,
+                            },
                         )
                     hasher.update(chunk)
                     out.write(chunk)
