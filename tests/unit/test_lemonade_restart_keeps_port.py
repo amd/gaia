@@ -97,7 +97,12 @@ def lab(tmp_path, monkeypatch):
         live = state and state.get("port") == port and state.get("api_key") == key
         return {"status": "ok", "all_models_loaded": []} if live else None
 
+    real_popen = embedded_mod.subprocess.Popen
+
     def popen(argv, **kwargs):
+        # Popen is patched process-wide: let other commands (macOS sysctl) run.
+        if "--port" not in argv:
+            return real_popen(argv, **kwargs)
         lab.spawned_ports.append(int(argv[argv.index("--port") + 1]))
         # This process's pid, so pid checks see a live server.
         return SimpleNamespace(pid=os.getpid(), poll=lambda: None, returncode=None)
@@ -335,3 +340,226 @@ class TestGaiaLlmAdvice:
 
         assert _lemonade_answers() is True
         assert probed == [running.port]
+
+
+def _kill(lab, monkeypatch):
+    """GAIA's lemond ended from outside: its record stays, its pid is gone."""
+    running = lab.owner.ensure()
+    monkeypatch.setattr(embedded_mod, "pid_exists", lambda pid: False)
+    assert lc.running_embedded_lemonade_url() is None
+    return running.port
+
+
+_CHAT = {
+    "model": "Gemma-4-E4B-it-GGUF",
+    "messages": [{"role": "user", "content": "hi"}],
+}
+
+
+class TestADeadOwnServerIsNeverSwappedForAnother:
+    """An install that runs GAIA's own server never resolves to anyone else's."""
+
+    def test_a_running_own_server_is_the_address(self, lab, stranger):
+        running = lab.owner.ensure()
+
+        assert lc.resolve_lemonade_base_url() == running.base_url
+
+    def test_killed_with_another_lemonade_on_the_default_port(
+        self, lab, stranger, monkeypatch
+    ):
+        port = _kill(lab, monkeypatch)
+
+        assert lc.resolve_lemonade_base_url() == f"http://localhost:{port}/api/v1"
+        assert lc.resolve_lemonade_api_key() is None
+
+    def test_a_dead_own_server_is_still_called_gaias(self, lab, stranger, monkeypatch):
+        from gaia.ui.routers.providers import _server_owner
+
+        _kill(lab, monkeypatch)
+
+        assert _server_owner(lc.resolve_lemonade_base_url()) == "gaia"
+        assert _server_owner(lc.DEFAULT_LEMONADE_URL) == "user"
+
+    def test_killed_with_nothing_on_the_default_port(
+        self, lab, no_stranger, monkeypatch
+    ):
+        port = _kill(lab, monkeypatch)
+
+        assert lc.resolve_lemonade_base_url() == f"http://localhost:{port}/api/v1"
+
+    def test_stopped_cleanly_with_another_lemonade_on_the_default_port(
+        self, lab, stranger
+    ):
+        port = _first_start(lab)
+
+        assert lc.resolve_lemonade_base_url() == f"http://localhost:{port}/api/v1"
+
+    def test_a_server_the_user_runs_on_the_default_port_is_used(
+        self, lab, stranger, monkeypatch
+    ):
+        _kill(lab, monkeypatch)
+        monkeypatch.setenv("LEMONADE_BASE_URL", f"http://localhost:{stranger.port}")
+
+        assert lc.resolve_lemonade_base_url() == lc.DEFAULT_LEMONADE_URL
+
+    def test_a_saved_choice_of_the_users_server_is_used(
+        self, lab, stranger, monkeypatch
+    ):
+        _kill(lab, monkeypatch)
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_choice.external_lemonade_url",
+            lambda: lc.DEFAULT_LEMONADE_URL,
+        )
+
+        assert lc.resolve_lemonade_base_url() == lc.DEFAULT_LEMONADE_URL
+
+    def test_without_gaias_own_installed_the_default_port_is_the_address(
+        self, lab, stranger, monkeypatch
+    ):
+        monkeypatch.setattr(EmbeddedLemonade, "is_installed", lambda self: False)
+
+        assert lc.resolve_lemonade_base_url() == lc.DEFAULT_LEMONADE_URL
+
+    def test_a_chat_sent_while_it_is_dead_goes_to_the_restarted_server(
+        self, lab, stranger, monkeypatch
+    ):
+        port = _kill(lab, monkeypatch)
+        sent = []
+
+        def restart(*args, **kwargs):
+            monkeypatch.setattr(embedded_mod, "pid_exists", lambda pid: True)
+            return lab.owner.ensure().to_dict()
+
+        def post(url, json=None, headers=None, timeout=None):
+            sent.append(url)
+            answer = {"choices": [{"message": {"content": "hi"}}]}
+            return SimpleNamespace(status_code=200, json=lambda: answer)
+
+        monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", restart)
+        monkeypatch.setattr(lc.requests, "post", post)
+        monkeypatch.setattr(
+            lc.LemonadeClient, "_ensure_model_loaded", lambda *a, **k: None
+        )
+        client = lc.LemonadeClient(
+            base_url=lc.resolve_lemonade_base_url(), keep_alive=True, verbose=False
+        )
+        assert client.follows_gaia_lemonade
+
+        client.chat_completions(**_CHAT)
+
+        assert sent == [f"http://localhost:{port}/api/v1/chat/completions"]
+        assert stranger.requests == []
+
+    def test_a_chat_sent_while_it_cannot_restart_fails_and_reaches_nobody(
+        self, lab, stranger, monkeypatch
+    ):
+        from gaia.daemon.errors import DaemonError
+
+        _kill(lab, monkeypatch)
+        sent = []
+
+        def no_restart(*args, **kwargs):
+            raise DaemonError("the background service could not start lemond")
+
+        monkeypatch.setattr("gaia.daemon.client.ensure_lemonade", no_restart)
+        monkeypatch.setattr(lc.requests, "post", lambda url, **k: sent.append(url))
+        monkeypatch.setattr(
+            lc.LemonadeClient, "_ensure_model_loaded", lambda *a, **k: None
+        )
+        client = lc.LemonadeClient(keep_alive=True, verbose=False)
+
+        with pytest.raises(lc.LemonadeClientError):
+            client.chat_completions(**_CHAT)
+
+        assert sent == [] and stranger.requests == []
+
+
+class TestStatusReportsADeadOwnServer:
+    """/api/system/status says GAIA's server is down and has it restarted."""
+
+    @pytest.fixture
+    def status(self, lab, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from gaia.llm.lemonade_manager import LemonadeManager
+        from gaia.ui.routers import system
+        from gaia.ui.server import create_app
+
+        restarts = []
+        monkeypatch.setattr(
+            LemonadeManager,
+            "start_embedded_if_stopped",
+            classmethod(lambda cls: restarts.append(1) or True),
+        )
+        monkeypatch.setattr(system, "_own_server_restart", None)
+        monkeypatch.setattr(system, "_own_server_restart_failed_at", None)
+        http = TestClient(create_app(db_path=":memory:"))
+
+        def read():
+            body = http.get("/api/system/status").json()
+            if system._own_server_restart is not None:
+                system._own_server_restart.join(timeout=10)
+            return body
+
+        read.restarts = restarts
+        return read
+
+    def test_killed_with_another_lemonade_on_the_default_port(
+        self, lab, stranger, status, monkeypatch
+    ):
+        port = _kill(lab, monkeypatch)
+
+        body = status()
+
+        assert body["lemonade_running"] is False
+        assert body["lemonade_probe"] == "down"
+        assert body["model_loaded"] is None
+        assert body["lemonade_url"] == f"http://localhost:{port}"
+        assert stranger.requests == [], "the status poll asked someone else's server"
+        assert status.restarts == [1]
+
+    def test_killed_with_nothing_on_the_default_port(
+        self, lab, no_stranger, status, monkeypatch
+    ):
+        _kill(lab, monkeypatch)
+
+        body = status()
+
+        assert body["lemonade_running"] is False
+        assert body["lemonade_probe"] == "down"
+        assert status.restarts == [1]
+
+    def test_a_failed_restart_is_not_retried_on_every_poll(
+        self, lab, stranger, status, monkeypatch
+    ):
+        from gaia.daemon.errors import DaemonError
+        from gaia.llm.lemonade_manager import LemonadeManager
+
+        _kill(lab, monkeypatch)
+        attempts = []
+
+        def fails(cls):
+            attempts.append(1)
+            raise DaemonError("the background service could not start lemond")
+
+        monkeypatch.setattr(
+            LemonadeManager, "start_embedded_if_stopped", classmethod(fails)
+        )
+
+        first, second = status(), status()
+
+        assert attempts == [1]
+        assert first["lemonade_probe"] == second["lemonade_probe"] == "down"
+
+    def test_a_server_the_user_runs_is_probed_and_never_restarted(
+        self, lab, stranger, status, monkeypatch
+    ):
+        _kill(lab, monkeypatch)
+        monkeypatch.setenv("LEMONADE_BASE_URL", f"http://localhost:{stranger.port}")
+
+        body = status()
+
+        assert body["lemonade_running"] is True
+        assert body["lemonade_probe"] == "ok"
+        assert "/api/v1/health" in stranger.requests
+        assert status.restarts == []
