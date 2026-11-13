@@ -162,7 +162,7 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
                         <li key={d.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={d.name} dir="auto">{d.name}</span>
+                                <span className="side-rail-name" title={d.name} dir="ltr">{d.name}</span>
                                 <span className="side-rail-meta">
                                     {t.compose((say) => documentMeta(say, d.pages, count))}
                                 </span>
