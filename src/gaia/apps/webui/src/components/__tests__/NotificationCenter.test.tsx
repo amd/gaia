@@ -18,6 +18,7 @@ import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificatio
 import type { GaiaNotification } from '../../types/agent';
 import { stripIsolates } from '../../i18n/registry';
 import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
+import notificationCss from '../NotificationCenter.css?raw';
 
 const notif = (id: string, message: string): GaiaNotification => ({
     id,
@@ -102,12 +103,12 @@ describe('NotificationCenter permission prompts follow the interface language', 
     it('words a tool prompt in Arabic, the tool kept left to right', () => {
         setUiLocale('ar');
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         const title = container.querySelector('.notification-title')!;
         expect(title.textContent).toContain('هل تسمح بـ');
-        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^running python$/);
+        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^editing file$/);
         expect(container.querySelector('.notification-message')).toHaveTextContent('يحتاج GAIA إلى موافقتك قبل');
     });
 
@@ -129,10 +130,24 @@ describe('NotificationCenter permission prompts follow the interface language', 
 
     it('reads the same as before in English', () => {
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
-        expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow running python?');
-        expect(stripIsolates(container.querySelector('.notification-message')!.textContent!)).toBe('GAIA needs your OK before running python.');
+        expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow editing file?');
+        expect(stripIsolates(container.querySelector('.notification-message')!.textContent!)).toBe('GAIA needs your OK before editing file.');
+    });
+});
+
+describe('a permission entry', () => {
+    it('says what it was in words, with no raw tool id', () => {
+        useNotificationStore.setState({
+            notifications: [{ ...notif('perm-9', 'GAIA needs your OK before running Python.'), type: 'permission_request', tool: 'run_python', toolLabel: 'running Python', toolArgs: { code: 'print(1)' } }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-item')).not.toHaveTextContent('run_python');
+    });
+
+    it('wraps its filter tabs instead of running them off the edge', () => {
+        expect(notificationCss).toMatch(/\.notification-filter-bar \{[^}]*flex-wrap: wrap/);
     });
 });
