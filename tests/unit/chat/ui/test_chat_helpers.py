@@ -1217,6 +1217,19 @@ class TestSessionTitleRequest:
             "Translate Guardé sentence"
         )
 
+    def test_letters_typed_decomposed_still_count_as_typed(self):
+        question = "Translate: Guardé el resumen"
+        assert self._title_for(question, "Translate Guardé") == "Translate Guardé"
+
+    def test_a_title_with_a_letter_the_user_never_typed_falls_back(self):
+        """The accepted cost: same language, but the user typed no "ñ"."""
+        from gaia.ui import _chat_helpers as ch
+
+        question = "Necesito cambiar mi clave"
+        assert self._title_for(question, "Cambiar contraseña") == (
+            ch._title_from_question(question)
+        )
+
     def test_a_spanish_title_for_a_spanish_request_is_kept(self):
         question = "¿Cómo cambio la contraseña de mi cuenta?"
         assert self._title_for(question, "Cambiar contraseña") == "Cambiar contraseña"
