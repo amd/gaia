@@ -3542,6 +3542,8 @@ gaia schedule {add,list,show,remove,pause,resume,run,daemon} [OPTIONS]
 | `run <name>` | Fire a schedule once now (for testing). A pending one-time schedule is used up by this; one that already ran is refused |
 | `daemon` | Run the long-lived scheduler (blocks until interrupted) |
 
+Every run answers on the model the Agent UI and TUI reopen on (`last_model`), else `default_model` from `gaia config`, else GAIA's default model. A local model that is not downloaded is refused with a message, never downloaded.
+
 ### `add` Options
 
 | Option | Type | Default | Description |

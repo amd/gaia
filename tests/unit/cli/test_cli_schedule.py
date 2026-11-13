@@ -377,6 +377,42 @@ def test_run_fires_schedule_and_marks_run_with_next_fire_time(
     )
 
 
+def _model_refused():
+    from gaia.schedule.runner import ScheduleModelError
+
+    return ScheduleModelError("Gemma-4-E4B-it-GGUF is not downloaded (5.6 GB).")
+
+
+def _server_failed():
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    return LemonadeClientError("Failed to load model Gemma-4-E4B-it-GGUF")
+
+
+@pytest.mark.parametrize("error", [_model_refused, _server_failed])
+@pytest.mark.parametrize("one_shot", [False, True])
+def test_a_run_that_cannot_reach_its_model_exits_1_with_one_line(
+    parser, mock_store, mocker, capsys, error, one_shot
+):
+    """A refused or unloadable model is a message, not a traceback (#7974)."""
+    schedule = Schedule(name="t", cron="0 7 1 1 *", prompt="hi")
+    if one_shot:
+        schedule = Schedule(name="t", at="2026-07-18T07:00:00+00:00", prompt="hi")
+        mock_store.claim_one_shot.return_value = schedule
+    mock_store.get.return_value = schedule
+    mocker.patch("gaia.schedule.runner.fire", side_effect=error())
+
+    with pytest.raises(SystemExit) as excinfo:
+        _handle_schedule(_parse(parser, ["run", "t"]))
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("❌ Schedule 't' did not run: ")
+    assert "Gemma-4-E4B-it-GGUF" in err
+    assert "Traceback" not in err
+    mock_store.mark_run.assert_not_called()
+
+
 # ---- daemon ----
 
 

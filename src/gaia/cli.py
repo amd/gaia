@@ -4984,10 +4984,13 @@ def _handle_schedule(args):
     if action == "run":
         from datetime import datetime, timezone
 
+        from gaia.llm.lemonade_client import LemonadeClientError
+
         try:
             schedule = store.get(args.name)
         except KeyError as exc:
             _exit_unknown_schedule(exc)
+        cannot_run = (schedule_runner.ScheduleModelError, LemonadeClientError)
         if schedule.one_shot:
             claimed = store.claim_one_shot(
                 schedule.name, datetime.now(timezone.utc), due_only=False
@@ -5000,9 +5003,19 @@ def _handle_schedule(args):
                     file=sys.stderr,
                 )
                 sys.exit(1)
-            schedule_daemon.run_one_shot(claimed, store)
+            try:
+                schedule_daemon.run_one_shot(claimed, store)
+            except cannot_run as exc:
+                print(
+                    f"❌ Schedule {schedule.name!r} did not run: {exc}", file=sys.stderr
+                )
+                sys.exit(1)
             return
-        schedule_runner.fire(schedule)
+        try:
+            schedule_runner.fire(schedule)
+        except cannot_run as exc:
+            print(f"❌ Schedule {schedule.name!r} did not run: {exc}", file=sys.stderr)
+            sys.exit(1)
         store.mark_run(
             schedule.name,
             datetime.now(timezone.utc).isoformat(),
