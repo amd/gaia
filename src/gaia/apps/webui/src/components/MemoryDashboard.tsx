@@ -2689,8 +2689,7 @@ export function MemoryDashboard() {
                                             <option value="medium">{t.bare('mem.goals.priorityMedium')}</option>
                                             <option value="high">{t.bare('mem.goals.priorityHigh')}</option>
                                         </select>
-                                        <button className="btn-primary" onClick={() => {
-                                            if (!goalForm.title.trim()) return;
+                                        <button className="btn-primary" disabled={!goalForm.title.trim()} onClick={() => {
                                             runGoalAction(async () => {
                                                 await memoryApi.createGoal(goalForm);
                                                 setGoalForm({ title: '', description: '', priority: 'medium' });
