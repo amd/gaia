@@ -867,6 +867,43 @@ test('the Connect card fits a phone', async ({ page }, info) => {
     await shot(page, 'connect-card-phone');
 });
 
+async function withLongChat(page: Page): Promise<void> {
+    const messages = Array.from({ length: 24 }, (_, i) => ({
+        id: i + 1, session_id: ANSWER_SESSION, role: i % 2 ? 'assistant' : 'user', created_at: NOW.toISOString(), rag_sources: null,
+        content: i % 2 ? `Answer ${i}: ${'The canal carried water to the fields long before it carried boats. '.repeat(6)}` : `Question ${i}`,
+    }));
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({ json: { messages, total: messages.length } }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`jump to bottom floats clear of the composer, away from the text column's middle (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongChat);
+        await expect(page.getByText('Question 22')).toBeVisible();
+        await page.locator('.messages-scroll').hover();
+        await page.mouse.wheel(0, -20_000);
+        const button = page.locator('.scroll-bottom-btn');
+        await expect(button).toBeVisible();
+        await button.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+        const [btn, composer] = [await button.boundingBox(), await page.locator('.input-column').boundingBox()];
+        // 12px above the composer, never over its border (#7864), at its end, never in the middle of a line.
+        expect(composer!.y - (btn!.y + btn!.height)).toBeGreaterThanOrEqual(11.5);
+        expect(composer!.y - (btn!.y + btn!.height)).toBeLessThanOrEqual(16);
+        const end = locale === 'ar' ? btn!.x - composer!.x : composer!.x + composer!.width - (btn!.x + btn!.width);
+        expect(end).toBeLessThanOrEqual(40);
+        expect(await button.evaluate((el) => {
+            const b = el.getBoundingClientRect();
+            const middle = b.left + b.width / 2;
+            return document.elementFromPoint(middle, b.top + b.height / 2) === el
+                || el.contains(document.elementFromPoint(middle, b.top + b.height / 2));
+        })).toBe(true);
+        // No fade over the list: over a dark code block it showed as a pale band.
+        expect(await page.locator('.messages-scroll').evaluate((el) => getComputedStyle(el).maskImage)).toBe('none');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`jump-to-bottom-${locale}.png`) });
+    });
+}
+
 async function withLongCode(page: Page): Promise<void> {
     const code = Array.from({ length: 24 }, (_, i) => `    total += row[${i}]  # add column ${i}`).join('\n');
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
