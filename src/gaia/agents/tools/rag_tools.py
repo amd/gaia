@@ -550,44 +550,33 @@ def _spread_over_documents(
     owner: Dict[str, List[int]],
     rag: Any,
     limit: int,
-) -> List[tuple]:
-    """The top *limit* of *ranked*, with documents it leaves out given a passage.
+) -> Tuple[List[tuple], int]:
+    """*ranked* with other documents' passages added, and how many to keep.
 
-    Each document missing from the top gets its best passage from *extra*,
-    best first: into a free slot, or in place of the weakest passage of a
-    document that has several. At most half of *limit* changes this way, so a
-    question about one document keeps most of its passages.
+    Keeps the top *limit* by score, then adds the best passage of each document
+    that top leaves out, best first, up to half of *limit* more. Nothing the
+    search ranked is pushed out, so a question about one document keeps all its
+    passages, and "list X from each" still sees every document.
     """
 
     def doc_of(chunk: str) -> Optional[str]:
         return rag.chunk_to_file.get((owner.get(chunk) or [-1])[0])
 
     top, rest = list(ranked[:limit]), list(ranked[limit:])
-    counts = Counter(doc_of(chunk) for chunk, _ in top)
+    docs = {doc_of(chunk) for chunk, _ in top}
     held = {chunk for chunk, _ in top}
-    changes = limit // 2
+    added: List[tuple] = []
     for chunk, score in sorted(extra, key=lambda item: item[1], reverse=True):
-        if changes == 0:
+        if len(added) == limit // 2:
             break
         doc = doc_of(chunk)
-        if doc is None or counts[doc] or chunk in held:
+        if doc is None or doc in docs or chunk in held:
             continue
-        if len(top) < limit:
-            top.append((chunk, score))
-        else:
-            crowded = [i for i, (c, _) in enumerate(top) if counts[doc_of(c)] > 1]
-            if not crowded:
-                break
-            weakest = min(crowded, key=lambda i: top[i][1])
-            counts[doc_of(top[weakest][0])] -= 1
-            held.discard(top[weakest][0])
-            rest.append(top[weakest])
-            top[weakest] = (chunk, score)
-        counts[doc] += 1
+        added.append((chunk, score))
+        docs.add(doc)
         held.add(chunk)
-        changes -= 1
     rest = [item for item in rest if item[0] not in held]
-    return top + sorted(rest, key=lambda item: item[1], reverse=True)
+    return top + added + rest, len(top) + len(added)
 
 
 def _chunk_positions(rag: Any, left_out=None) -> Dict[str, List[int]]:
@@ -956,15 +945,20 @@ _CHUNK_CHARS = 2000
 
 
 def top_or_whole_index(
-    ranked: List[tuple], candidates: List[str], limit: int, chunk_chars: int
+    ranked: List[tuple],
+    candidates: List[str],
+    limit: int,
+    chunk_chars: int,
+    keep: Optional[int] = None,
 ) -> List[tuple]:
-    """Return the top ``limit`` (chunk, score) pairs, or every candidate when
-    all of them fit in the text ``limit`` full-size chunks would take.
+    """Return the top ``limit`` (chunk, score) pairs (``keep`` when given), or
+    every candidate when all of them fit in the text ``limit`` full-size chunks
+    would take.
 
     A rollup over eight one-paragraph reports must see all eight.
     """
     if sum(len(chunk) for chunk in candidates) > limit * chunk_chars:
-        return ranked[:limit]
+        return ranked[: keep or limit]
     seen = {chunk for chunk, _ in ranked}
     rest = []
     for chunk in candidates:
@@ -1352,17 +1346,19 @@ class RAGToolsMixin:
 
                 # A twin chunk in a left-out file must not be cited.
                 positions = _chunk_positions(rag, left_out)
+                spread, keep = _spread_over_documents(
+                    sorted_items,
+                    list(zip(per_doc_chunks, per_doc_scores)),
+                    positions,
+                    rag,
+                    adaptive_max,
+                )
                 kept = top_or_whole_index(
-                    _spread_over_documents(
-                        sorted_items,
-                        list(zip(per_doc_chunks, per_doc_scores)),
-                        positions,
-                        rag,
-                        adaptive_max,
-                    ),
+                    spread,
                     _served_chunks(rag, left_out),
                     adaptive_max,
                     _CHUNK_CHARS,
+                    keep,
                 )
                 kept.sort(key=lambda item: item[1], reverse=True)
                 top_chunks = [chunk for chunk, score in kept]

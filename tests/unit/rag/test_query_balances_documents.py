@@ -129,8 +129,8 @@ def test_a_search_over_six_quotes_reads_all_six(quotes):
 def test_the_balanced_search_stays_within_its_budget(quotes):
     result = _TOOL_REGISTRY["query_documents"]["function"](query=QUERY)
 
-    # The loud document puts the library on the 10- or 20-chunk tier.
-    assert result["num_chunks"] <= 20
+    # The 10- or 20-chunk tier, plus at most half again for other documents.
+    assert result["num_chunks"] <= 30
     scores = [c["relevance_score"] for c in result["chunks"]]
     assert scores == sorted(scores, reverse=True)
 
