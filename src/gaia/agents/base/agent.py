@@ -2832,6 +2832,9 @@ class Agent(abc.ABC):
     # Which mixin contributed each system-prompt fragment.
     _mixin_prompt_origins: "Optional[Dict[str, Any]]" = None
 
+    # The volatile fragments, composed with the system prompt; see session_context.
+    _session_context_cache: str = ""
+
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
@@ -2996,11 +2999,11 @@ class Agent(abc.ABC):
     #: than by remembering to copy an override.
     CONFIRMATION_HOOKS: ClassVar[tuple] = ()
 
-    # ``get_*_system_prompt`` fragments whose text changes during a session.
-    # ``_compose_system_prompt`` emits these LAST so a mid-session change never
-    # invalidates the backend's KV-cache prefix for the static text above them.
-    # Add a name here only if its fragment genuinely varies within one session —
-    # a static fragment listed here just loses its position, harmlessly.
+    # ``get_*_system_prompt`` fragments whose text differs between sessions or
+    # changes during one. They ride at the start of the first user message
+    # (``session_context``), so every fresh session shares one cached system
+    # prompt; hybrid models can't resume mid-system-prompt. Listing a static
+    # fragment here only moves it, harmlessly.
     VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = frozenset(
         {
             "get_memory_system_prompt",  # re-rendered on forget/update of a shown item
@@ -3657,13 +3660,10 @@ Do NOT wrap conversational replies in JSON.
         ):
             parts.append(self._response_format_template)
 
-        # Volatile last. llama.cpp reuses the KV cache only up to the first
-        # differing token, so anything that changes mid-session — memory after a
-        # remember(), the per-turn skill-body selection, a filtered tool list —
-        # placed ABOVE the static text invalidates all of it. Tail position
-        # keeps the static head cached across turns.
-        parts.extend(volatile_mixins)
+        # Out of the system prompt entirely: see ``session_context``.
+        self._session_context_cache = "\n\n".join(p for p in volatile_mixins if p)
 
+        # A filtered text tool list grows as tools are selected, so it goes last.
         if tool_filter is not None and tools_block is not None:
             parts.append(tools_block)
 
@@ -3685,6 +3685,9 @@ Do NOT wrap conversational replies in JSON.
         if turn_log_path() is None:
             return None
         try:
+            from gaia.agents.base.history import prompt_text
+
+            sent = prompt_text(self)
             recorder = TurnRecorder(
                 query=user_input,
                 agent_name=type(self).__name__,
@@ -3703,7 +3706,7 @@ Do NOT wrap conversational replies in JSON.
                     origin: len(text)
                     for text, origin in (self._mixin_prompt_origins or {}).items()
                     # A subclass may filter a fragment out of the final prompt.
-                    if text in self.system_prompt
+                    if text in sent
                 },
             )
             for name, t0, t1 in pre_spans:
@@ -3895,6 +3898,32 @@ Do NOT wrap conversational replies in JSON.
     def system_prompt(self, value: str):
         """Allow setting system prompt (used when appending tool descriptions)."""
         self._system_prompt_cache = value
+
+    @property
+    def session_context(self) -> str:
+        """The ``VOLATILE_PROMPT_FRAGMENTS`` text, composed with the system prompt.
+
+        Memory, loaded skills and the project map / working directory differ
+        from one session to the next. Every request carries them at the start
+        of its first user message instead (``_with_session_context``), so the
+        system prompt and tool list stay byte-identical across fresh sessions.
+        """
+        _ = self.system_prompt  # composes both on first access
+        return self._session_context_cache
+
+    def _with_session_context(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """*messages* as sent: the session context opens the first user message."""
+        from gaia.agents.base.history import with_session_context
+
+        return with_session_context(messages, self.session_context)
+
+    def _prompt_text(self) -> str:
+        """What the agent adds to every request: system prompt + session context."""
+        from gaia.agents.base.history import prompt_text
+
+        return prompt_text(self)
 
     def _get_system_prompt(self) -> str:
         """
@@ -8773,7 +8802,7 @@ Do NOT wrap conversational replies in JSON.
         stats = None
         if self.streaming:
             stream = self.chat.send_messages_stream(
-                messages=request,
+                messages=self._with_session_context(request),
                 system_prompt=self.system_prompt,
                 tools=tools,
                 **no_calls,
@@ -8794,7 +8823,7 @@ Do NOT wrap conversational replies in JSON.
             self.console.start_progress(self._progress_label())
             try:
                 reply = self.chat.send_messages(
-                    messages=request,
+                    messages=self._with_session_context(request),
                     system_prompt=self.system_prompt,
                     tools=tools,
                     **no_calls,
@@ -9908,7 +9937,7 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.artifacts import ArtifactStore
 
-        system_prompt, tools = self.system_prompt, self._openai_tools
+        system_prompt, tools = self._prompt_text(), self._openai_tools
         before = request_tokens(messages, system_prompt, tools)
         # Sized in a throwaway store first: nothing is archived for a retry that won't run.
         # Its stubs can run a few chars longer than the real store's; the 95% margin covers it.
@@ -11083,7 +11112,9 @@ Do NOT wrap conversational replies in JSON.
         """One warm-up request with the live prompt and tools; *request* adds kwargs."""
         if cancel is None:
             self.chat.send_messages(
-                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                self._with_session_context(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}]
+                ),
                 system_prompt=self.system_prompt,
                 tools=self._openai_tools,
                 max_tokens=1,
@@ -11102,7 +11133,9 @@ Do NOT wrap conversational replies in JSON.
         """
         self._warm_up_cancellable(
             lambda: self.chat.send_messages(
-                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                self._with_session_context(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}]
+                ),
                 system_prompt=self.system_prompt,
                 tools=self._openai_tools,
                 max_tokens=1,
@@ -12120,7 +12153,7 @@ Do NOT wrap conversational replies in JSON.
                     try:
                         self._before_model_call(messages)
                         response_stream = self.chat.send_messages_stream(
-                            messages=messages,
+                            messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
@@ -12375,7 +12408,7 @@ Do NOT wrap conversational replies in JSON.
                     try:
                         self._before_model_call(messages)
                         chat_response = self.chat.send_messages(
-                            messages=messages,
+                            messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
@@ -12756,7 +12789,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for streaming plan response
                     stream_gen = self.chat.send_messages_stream(
-                        messages=messages,
+                        messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
@@ -12802,7 +12835,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for non-streaming plan response
                     chat_response = self.chat.send_messages(
-                        messages=messages,
+                        messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),

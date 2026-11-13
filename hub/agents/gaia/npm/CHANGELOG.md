@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A new chat starts faster on hybrid models.** Memory, loaded skills, the
+  project map or working directory, and the session's folders and scratch
+  directory now go in the session context at the start of the first user
+  message instead of the system prompt. The system prompt and tool list stay
+  identical across new chats, so a model like Qwen3.6 no longer re-reads the
+  whole prompt before its first reply.
+
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the
   `hint` read "The model X is not downloaded. X is not downloaded, and no
   Lemonade client CLI was found …, then re-check." It is now the one sentence.

@@ -652,7 +652,8 @@ a default. Beyond
 ## 11. The project map — two things it costs you
 
 When the agent's working directory is a code repository, every task starts with
-a **project map** in the system prompt: the root, the directory shape, the
+a **project map** in the session context at the start of the first user
+message: the root, the directory shape, the
 likely entry points, which commands are installed, and the three platform
 differences that change command syntax. It exists so the agent stops burning
 round trips on "no such file" and "command not found".
