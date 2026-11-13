@@ -775,7 +775,7 @@ def test_agent_init_loads_the_resolved_set(tmp_path, bundled):
         agent = _Harness()
         assert agent.active_skill_set == "personal"
         assert list(agent.loaded_skills) == ["newsletter-digest"]
-        assert "Body of newsletter-digest" in agent.system_prompt
+        assert "Body of newsletter-digest" in agent._prompt_text()
 
         override = _Harness(skill_set="work")
         assert override.active_skill_set == "work"
