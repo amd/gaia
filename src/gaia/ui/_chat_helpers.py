@@ -761,6 +761,24 @@ def _scripts(text: str) -> set:
     return found
 
 
+def _foreign_accents(title: str, source: str) -> set:
+    """Accented Latin letters in *title* that *source* never uses.
+
+    Scripts can't tell German or Spanish from English; a "ß" or "ñ" the user
+    never typed can, without a language detector. The cost: a title in the
+    user's own language with a letter their message lacks falls back too.
+    """
+    seen = unicodedata.normalize("NFC", source).lower()
+    return {
+        ch
+        for ch in unicodedata.normalize("NFC", title).lower()
+        if ch.isalpha()
+        and ord(ch) > 127
+        and unicodedata.name(ch, "").startswith("LATIN")
+        and ch not in seen
+    }
+
+
 def _title_from_question(user_msg: str) -> Optional[str]:
     """The first question itself, cut at a word boundary, as a title.
 
@@ -964,11 +982,12 @@ async def _generate_session_title(
     # Exact match: a real title can start with "None" ("None values in pandas").
     if title.lower() == "none":
         raise _NoTopicYet
-    foreign = _scripts(title) - _scripts(f"{user_msg} {latest_msg}")
+    source = f"{user_msg} {latest_msg}"
+    foreign = (_scripts(title) - _scripts(source)) or _foreign_accents(title, source)
     if foreign:
         logger.info(
-            "Auto-title: %s titled the chat in %s, which the user did not write "
-            "in; titling from the first question",
+            "Auto-title: %s's title uses %s, which the user did not write; "
+            "titling from the first question",
             model_id,
             "/".join(sorted(foreign)).lower(),
         )

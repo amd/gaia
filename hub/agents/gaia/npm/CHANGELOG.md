@@ -14,6 +14,13 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   a free, zero-step success. A stopped turn's result now carries
   the tokens it spent too.
 
+- **Scratch folders no longer pile up in the temp folder.** A `gaia-scratch-…`
+  folder was removed only when its agent was closed, so a sidecar that was
+  killed or exited left it behind (one PC held about 2,900). The agent now
+  removes the scratch folders it holds when its process exits normally, and
+  the next agent to start clears any no agent has used for a day, including
+  ones a killed process left.
+
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
   directory now go in the session context at the start of the first user

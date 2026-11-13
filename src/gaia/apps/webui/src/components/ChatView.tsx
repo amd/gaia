@@ -1785,12 +1785,6 @@ export function ChatView({ sessionId }: ChatViewProps) {
                 onJumpToMessage={jumpToMessage}
             />
 
-            {showScrollBtn && (
-                <button className="scroll-bottom-btn" onClick={scrollToBottom} title={t('chat.scrollBottom')} aria-label={t('chat.scrollBottom')}>
-                    <ArrowDown size={16} />
-                </button>
-            )}
-
             {isDragOver && (
                 <div className="drag-overlay">
                     <Upload size={32} strokeWidth={1.5} aria-hidden="true" />
@@ -1822,6 +1816,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
             )}
 
             <div className="input-area">
+                {showScrollBtn && (
+                    <button className="scroll-bottom-btn" onClick={scrollToBottom} title={t('chat.scrollBottom')} aria-label={t('chat.scrollBottom')}>
+                        <ArrowDown size={16} />
+                    </button>
+                )}
                 <div className="input-column">
                     <ExportErrorBar message={exportError} onDismiss={clearExportError} dismissLabel={t('chat.dismissExportError')} />
                     <ExportErrorBar message={actionError} onDismiss={() => setActionError(null)} dismissLabel={t('chat.dismissError')} />
