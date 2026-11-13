@@ -1798,6 +1798,7 @@ const messages: Messages = {
     'setup.unknown.retry': 'التحقق مرة أخرى',
     'setup.serverDown.notice': 'خادم النماذج في GAIA لا يستجيب، لذا لا يمكنه الرد الآن. محادثاتك ما زالت هنا.',
     'setup.serverDown.setup': 'فتح الإعداد',
+    'setup.modelListUnread.notice': 'خادم النماذج في GAIA يستجيب، لكن قائمة النماذج وصلت بشكل لا يستطيع GAIA قراءته. محادثاتك ونماذجك ما زالت هنا.',
     'setup.check.title': 'فحص هذا الجهاز',
     'setup.where.title': 'اختر مكان تشغيل GAIA',
     'setup.where.local': 'على هذا الجهاز',

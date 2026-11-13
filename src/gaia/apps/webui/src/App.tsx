@@ -61,7 +61,7 @@ type SetupGate =
     | { state: 'ready' }
     | { state: 'needed'; check: SetupCheck }
     /** Set up before, but its model server isn't answering: the app, with a notice. */
-    | { state: 'serverDown' }
+    | { state: 'serverDown'; modelListUnread?: boolean }
     | { state: 'addingLocal' }
     /** `upgradeFailed`: the check answered, but updating GAIA's own model server failed. */
     | { state: 'unknown'; error: string; upgradeFailed?: boolean };
@@ -218,7 +218,9 @@ function App() {
                 setNoAgentBuild(!!check.no_agent_build);
                 // Seen ready before: an unreachable server is an outage, not a first run.
                 const serverDown = !check.ready && check.stage === 'server' && !!check.initialized;
-                setSetup(check.ready ? { state: 'ready' } : serverDown ? { state: 'serverDown' } : { state: 'needed', check });
+                setSetup(check.ready ? { state: 'ready' }
+                    : serverDown ? { state: 'serverDown', modelListUnread: !!check.model_list_unread }
+                    : { state: 'needed', check });
                 return;
             }
         } catch (err) {
@@ -840,9 +842,10 @@ ${prompt}` : prompt);
                 {(setup.state === 'ready' || setup.state === 'checking' || (setup.state === 'serverDown' && serverHung)) && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
                 {setup.state === 'serverDown' && !serverHung && (
                     <div className="app-notice is-warning" role="status">
-                        <span>{t('setup.serverDown.notice')}</span>
+                        <span>{t(setup.modelListUnread ? 'setup.modelListUnread.notice' : 'setup.serverDown.notice')}</span>
                         <button type="button" className="link-btn" onClick={() => void checkSetup(true)}>{t('setup.unknown.retry')}</button>
-                        <button type="button" className="link-btn" onClick={() => runSetupAgain(true)}>{t('setup.serverDown.setup')}</button>
+                        {/* Setup can't fix a list the server sends in the wrong shape. */}
+                        {!setup.modelListUnread && <button type="button" className="link-btn" onClick={() => runSetupAgain(true)}>{t('setup.serverDown.setup')}</button>}
                     </div>
                 )}
                 {setup.state === 'unknown' && (setup.upgradeFailed ? (
