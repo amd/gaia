@@ -214,11 +214,6 @@ function Folders({ sessionId }: { sessionId: string }) {
                             {showAllFiles ? t('env.fewerFiles') : t('env.allFiles', { n: files.length })}
                         </button>
                     )}
-                    {!env.enforced && (
-                        <span className="sp-meta">
-                            {t('env.ownProcess')}
-                        </span>
-                    )}
                     {env.removed.length > 0 && (
                         <span className="sp-meta">
                             {t('env.removed', { names: env.removed.map(baseName).join(', ') })}

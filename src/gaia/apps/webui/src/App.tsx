@@ -30,7 +30,7 @@ import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
-import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
+import { createStatusPoller, modelServerHealth, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
 import { announceMobileAccess, useMobileAccessRequests } from './utils/mobileAccessEvents';
 import { getSessionHash } from './utils/format';
@@ -234,6 +234,8 @@ function App() {
         }
     }, []);
 
+    // Listening but hung: the connection banner already says so; a second notice would replace it.
+    const serverHung = useChatStore((s) => !!s.systemStatus && modelServerHealth(s.systemStatus) === 'unresponsive');
     // The status poll sees the model server again: ask whether GAIA is ready now.
     const lemonadeRunning = useChatStore((s) => s.systemStatus?.lemonade_running === true);
     useEffect(() => {
@@ -616,6 +618,13 @@ function App() {
         }
         setCurrentSession(id);
     }, [setCurrentSession, setMessages]);
+    const openChatFromNotification = useCallback((id: string) => {
+        const store = useChatStore.getState();
+        store.setShowMemoryDashboard(false);
+        store.setShowSchedules(false);
+        setShowNotificationPanel(false);
+        openChatFromTray(id);
+    }, [openChatFromTray]);
     const newChatFromTray = useCallback(() => {
         useChatStore.getState().closeSettings();
         newChat();
@@ -828,8 +837,8 @@ ${prompt}` : prompt);
 
             <div className="main-content">
                 {/* The setup check can wait a minute on a hung model server; the chat shows meanwhile, so the warning must too. */}
-                {(setup.state === 'ready' || setup.state === 'checking') && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
-                {setup.state === 'serverDown' && (
+                {(setup.state === 'ready' || setup.state === 'checking' || (setup.state === 'serverDown' && serverHung)) && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
+                {setup.state === 'serverDown' && !serverHung && (
                     <div className="app-notice is-warning" role="status">
                         <span>{t('setup.serverDown.notice')}</span>
                         <button type="button" className="link-btn" onClick={() => void checkSetup(true)}>{t('setup.unknown.retry')}</button>
@@ -877,7 +886,7 @@ ${prompt}` : prompt);
             {showFileBrowser && <Suspense fallback={null}><FileBrowser onStartChat={startChat} /></Suspense>}
             {showNotificationPanel && (
                 <div className="notification-center-popover">
-                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} />
+                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} onOpenChat={openChatFromNotification} />
                 </div>
             )}
             {showMobileAccess && (

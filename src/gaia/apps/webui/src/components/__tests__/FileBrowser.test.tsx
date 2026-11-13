@@ -465,6 +465,26 @@ describe('unreadable folder', () => {
     });
 });
 
+describe('FileBrowser relative dates', () => {
+    async function dateFor(msAgo: number): Promise<string> {
+        mockedApi.browseFiles.mockResolvedValue({
+            ...BROWSE_RESPONSE,
+            entries: [{ ...BROWSE_RESPONSE.entries[0], modified: new Date(Date.now() - msAgo).toISOString() }],
+        });
+        const { unmount } = render(<FileBrowser onStartChat={vi.fn()} />);
+        const name = await screen.findByText('report.pdf');
+        const text = stripIsolates(name.closest('.fb-entry')!.querySelector('.fb-entry-date')!.textContent ?? '');
+        unmount();
+        return text;
+    }
+
+    it('counts minutes under an hour instead of saying just now', async () => {
+        expect(await dateFor(20_000)).toBe('just now');
+        expect(await dateFor(40 * 60_000)).toBe('40m ago');
+        expect(await dateFor(3 * 3_600_000)).toBe('3h ago');
+    });
+});
+
 describe('FileBrowser in Arabic', () => {
     afterEach(resetUiLocale);
 
