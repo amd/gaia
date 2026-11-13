@@ -68,7 +68,8 @@ jobs:
     # Forks keep the schedule off; a fork's maintainer can still dispatch it.
     if: github.event_name != 'schedule' || github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # verified-run may wait up to an hour for the shared API budget to reset.
+    timeout-minutes: 75
     permissions:
       contents: read
       actions: read   # gh run list, to find a passing run of this commit
