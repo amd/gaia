@@ -319,3 +319,19 @@ describe('a persisted policy block after reload', () => {
         expect(within(card).getByText('Receipt unavailable')).toBeInTheDocument();
     });
 });
+
+describe('in Arabic', () => {
+    afterEach(() => act(() => useChatStore.getState().setLocale('en')));
+
+    it('words the policy toast and the drag overlay in Arabic', async () => {
+        render(<Harness />);
+        await send();
+        act(() => useChatStore.getState().setLocale('ar'));
+        emit(policyAlert('run_shell_command', 'rcpt-1'));
+        expect(toast()!.textContent).toContain('محظور');
+        expect(within(toast()!).getByRole('button', { name: /عرض الإيصال/ })).toBeInTheDocument();
+
+        fireEvent.dragOver(document.querySelector('.task-view')!, { dataTransfer: { types: ['Files'] } });
+        expect(document.querySelector('.drag-overlay')!.textContent).toContain('أفلت الملفات');
+    });
+});

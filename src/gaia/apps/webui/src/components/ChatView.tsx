@@ -1819,7 +1819,7 @@ export function ChatView({ sessionId }: ChatViewProps) {
             />
 
             {showScrollBtn && (
-                <button className="scroll-bottom-btn" onClick={scrollToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">
+                <button className="scroll-bottom-btn" onClick={scrollToBottom} title={t('chat.scrollBottom')} aria-label={t('chat.scrollBottom')}>
                     <ArrowDown size={16} />
                 </button>
             )}
@@ -1827,13 +1827,13 @@ export function ChatView({ sessionId }: ChatViewProps) {
             {isDragOver && (
                 <div className="drag-overlay">
                     <Upload size={32} strokeWidth={1.5} aria-hidden="true" />
-                    <span>Drop files to index them for this chat</span>
+                    <span>{t('chat.dropOverlay')}</span>
                 </div>
             )}
 
             {policyToast && (
                 <div className="toast policy-alert-toast" role="alert">
-                    <span>Blocked: {policyToast.tool} is restricted by policy.</span>
+                    <span>{t('chat.policyBlocked', { tool: policyToast.tool })}</span>
                     {policyToast.receiptId ? (
                         <button
                             type="button"
@@ -1846,10 +1846,10 @@ export function ChatView({ sessionId }: ChatViewProps) {
                                 setPendingReceiptScroll(receiptId);
                             }}
                         >
-                            View receipt
+                            {t('chat.policyViewReceipt')}
                         </button>
                     ) : (
-                        <span className="policy-alert-toast-missing">Receipt unavailable</span>
+                        <span className="policy-alert-toast-missing">{t('activity.policy.receiptUnavailable')}</span>
                     )}
                 </div>
             )}
