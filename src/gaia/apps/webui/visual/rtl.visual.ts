@@ -475,6 +475,31 @@ for (const locale of ['en', 'ar']) {
 }
 
 for (const locale of ['en', 'ar']) {
+    test(`research mode: the chip, the box's prompt, and a chat's compact chip (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        const chip = page.locator('.new-chat .composer-chip-research');
+        await expect(chip).toBeVisible();
+        await chip.click();
+        await expect(chip).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('.new-chat textarea').first()).toHaveAttribute('placeholder', /research|يبحث/);
+        await shot(page, `research-on-new-chat-${locale}`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page, '.new-chat .composer-row')).toEqual([]);
+
+        // Another chat is not affected; its own chip is an icon in the crowded box.
+        await page.goto(`/#${ANSWER_SESSION}`);
+        const inChat = page.locator('main .composer-chip-research').first();
+        await expect(inChat).toHaveAttribute('aria-pressed', 'false');
+        await expect(inChat.locator('.composer-chip-label')).toHaveCount(0);
+        await inChat.click();
+        await expect(inChat).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('main textarea').first()).toHaveAttribute('placeholder', /research|يبحث/);
+        await shot(page, `research-on-chat-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+for (const locale of ['en', 'ar']) {
     test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
         await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
             json: { cards: [], working_folder: { path: '/home/you/.gaia/documents', name: 'documents', gaia_folder: true, choosable: true } },

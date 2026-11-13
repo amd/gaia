@@ -43,6 +43,7 @@ var paletteCommands = []paletteCommand{
 	{"/automations", "List reminders, alerts and triggers; pause, resume or remove one"},
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 	{"/skills", "List skills, or add one or a library: /skills add <GitHub or skills.sh link>"},
+	{"/research", "Research a topic on the web for a cited report: /research <topic>; alone, switches research mode"},
 	{"/provider", "Choose Local, Fireworks AI, or AMD LLM Gateway; configure a key"},
 	{"/gateway", "Connect GAIA to the AMD LLM gateway and pick its models"},
 	{"/cost", "What this session has spent; /cost help for rates"},

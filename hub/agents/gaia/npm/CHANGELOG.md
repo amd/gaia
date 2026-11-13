@@ -8,6 +8,17 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Ask for research with `/research`.** A query that starts with `/research`
+  loads the `research-report` skill for the turn and asks for a report that
+  cites, for every claim, a page the agent fetched, with a check for newer
+  developments and a Sources list. The Agent UI's Research switch and the TUI's
+  `/research` send this form. A profile without web tools refuses it by name.
+- **`research-report` 1.1.0.** The whole cited report now goes in the reply
+  (not only in a saved file), encyclopedias lead to primary sources instead of
+  standing in for them, long pages are read with `find`, anything that can
+  change gets a search for newer developments, and a refused web search is
+  stated in the report.
+
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the
   `hint` read "The model X is not downloaded. X is not downloaded, and no
   Lemonade client CLI was found …, then re-check." It is now the one sentence.

@@ -300,6 +300,19 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 `documents`, `allowed_paths`, `working_directory`, `memory`, `internet_off`,
 `changes_turn_id`, `surface`) is optional.
 
+A `query` that starts with `/research` is a research turn: the agent loads its
+`research-report` skill (or reuses it) and keeps the skill's instructions in the
+prompt for the turn and the next few. The topic after `/research` becomes the
+user's message, so memory and the conversation keep what the user asked, and
+the turn's context gets a research brief: cite, inline, a page fetched in the
+conversation for every factual claim, and end with a Sources list. Bracketed
+notes a caller puts before the command (the Agent UI's `[This chat is working
+in the folder …]`) stay in front of the topic. A bare `/research` asks the user
+for a topic.
+The agent needs `search_web` and `fetch_page` for it; a profile without them
+ends the turn with an `error` naming the missing tools. Any other `query` runs
+unchanged.
+
 `max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
 is **1000** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
 `GAIA_AGENT_MAX_STEPS` in the sidecar's launch environment, still wins.
