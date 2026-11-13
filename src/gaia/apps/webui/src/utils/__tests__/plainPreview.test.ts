@@ -16,5 +16,6 @@ describe('plainPreview', () => {
 
     it('leaves snake_case names and plain asterisk math alone', () => {
         expect(plainPreview('Saved my_file_name.txt, 2 * 3 = 6')).toBe('Saved my_file_name.txt, 2 * 3 = 6');
+        expect(plainPreview('files: *.py and *.ts')).toBe('files: *.py and *.ts');
     });
 });
