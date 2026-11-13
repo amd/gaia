@@ -10,6 +10,8 @@ from uuid import uuid4
 
 #: Most characters one ``read`` returns; a longer span continues at ``next_offset``.
 PAGE_CHARS = 8000
+#: Most expired handles remembered, so a long session's list stays bounded.
+EXPIRED_HANDLES_KEPT = 4096
 
 
 def _encode(text: str) -> bytes:
@@ -28,16 +30,29 @@ class ArtifactStore:
         self._indexes = {}
         #: Handles holding one whole tool result, which a bare ``read`` pages from 0.
         self._whole = set()
+        #: Handles dropped by the TTL, so a late use can say "expired", not "unknown".
+        self._expired = {}
         self._lock = threading.Lock()
+
+    def _sweep(self, now: float) -> None:
+        """Drop handles past the TTL; caller holds the lock."""
+        stale = [k for k, v in self._items.items() if now - v[0] >= self.ttl]
+        for k in stale:
+            del self._items[k]
+            self._mark_expired(k)
+        self._indexes = {k: v for k, v in self._indexes.items() if k in self._items}
+
+    def _mark_expired(self, handle: str) -> None:
+        """Remember ``handle`` as expired, dropping the oldest past the cap."""
+        self._expired[handle] = None
+        while len(self._expired) > EXPIRED_HANDLES_KEPT:
+            del self._expired[next(iter(self._expired))]
 
     def put(self, text: str) -> str:
         size = len(text.encode("utf-8"))
         with self._lock:
             now = time.monotonic()
-            self._items = {
-                k: v for k, v in self._items.items() if now - v[0] < self.ttl
-            }
-            self._indexes = {k: v for k, v in self._indexes.items() if k in self._items}
+            self._sweep(now)
             if size + sum(v[2] for v in self._items.values()) > self.max_bytes:
                 raise ValueError(
                     "Tool output archive is full (64 MiB default); request smaller output or start a new session."
@@ -56,10 +71,7 @@ class ArtifactStore:
         handle = "output_" + hashlib.sha256(data).hexdigest()[:32]
         with self._lock:
             now = time.monotonic()
-            self._items = {
-                k: v for k, v in self._items.items() if now - v[0] < self.ttl
-            }
-            self._indexes = {k: v for k, v in self._indexes.items() if k in self._items}
+            self._sweep(now)
             self._whole &= self._items.keys()
             if (
                 handle not in self._items
@@ -93,6 +105,23 @@ class ArtifactStore:
         with self._lock:
             item = self._items.get(handle) if isinstance(handle, str) else None
             return item is not None and time.monotonic() - item[0] < self.ttl
+
+    def resolve(self, handle: str) -> str:
+        """The whole text behind ``handle``, for a tool given it as an argument."""
+        with self._lock:
+            item = self._items.get(handle)
+            if item is not None and time.monotonic() - item[0] < self.ttl:
+                return item[1]
+            expired = item is not None or handle in self._expired
+        if expired:
+            raise ValueError(
+                f"Expired output handle {handle}; rerun the tool that produced it "
+                "and pass the new handle."
+            )
+        raise ValueError(
+            f"Unknown output handle {handle}; pass a handle from a result in this "
+            "session, copied exactly."
+        )
 
     def text(self, handle: str) -> str:
         """The whole archived text, for indexing it; the model pages via ``read``."""
@@ -148,6 +177,7 @@ class ArtifactStore:
             created, text, _ = item
             if time.monotonic() - created >= self.ttl:
                 del self._items[handle]
+                self._mark_expired(handle)
                 raise ValueError(
                     f"Expired output handle {handle}; rerun the source tool to refresh it."
                 )
