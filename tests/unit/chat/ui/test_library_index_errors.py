@@ -149,6 +149,111 @@ class TestBothRoutesShareOneRootCheck:
         assert from_file_route.json()["detail"] == from_folder_route.json()["detail"]
 
 
+class TestFolderFailuresGetARow:
+    """A file a folder add couldn't index shows in the library, to retry from."""
+
+    def _index_folder(self, client, folder, fake_index):
+        with patch("gaia.ui.server._index_document", fake_index):
+            return client.post(
+                "/api/documents/index-folder",
+                json={"folder_path": str(folder), "recursive": False},
+            )
+
+    def _library(self, client):
+        documents = client.get("/api/documents").json()["documents"]
+        return {d["filename"]: d for d in documents}
+
+    def test_a_failed_file_gets_a_failed_row_with_its_reason(self, home, client):
+        folder = home / "crowd"
+        folder.mkdir()
+        (folder / "report.md").write_text("# Report")
+        (folder / "contract_summary.txt").write_text("Price 31,880 USD/t")
+
+        async def fake_index(path, **_kwargs):
+            if Path(path).name == "contract_summary.txt":
+                raise RuntimeError("the embedder was restarting")
+            return 2
+
+        body = self._index_folder(client, folder, fake_index).json()
+
+        assert (body["indexed"], body["failed"]) == (1, 1)
+        assert [d["filename"] for d in body["documents"]] == ["report.md"]
+        row = self._library(client)["contract_summary.txt"]
+        assert row["indexing_status"] == "failed"
+        assert "embedder was restarting" in row["last_error"]
+
+    def test_a_file_that_yields_nothing_is_failed_not_complete(self, home, client):
+        folder = home / "weird"
+        folder.mkdir()
+        (folder / "zero.txt").write_text(" ")
+
+        async def fake_index(_path, **_kwargs):
+            return 0
+
+        body = self._index_folder(client, folder, fake_index).json()
+
+        assert (body["indexed"], body["failed"], body["documents"]) == (0, 1, [])
+        assert self._library(client)["zero.txt"]["indexing_status"] == "failed"
+
+    def test_a_failed_row_can_be_retried(self, home, client):
+        folder = home / "crowd"
+        folder.mkdir()
+        (folder / "contract_summary.txt").write_text("Price 31,880 USD/t")
+
+        async def failing(_path, **_kwargs):
+            raise RuntimeError("the embedder was restarting")
+
+        async def working(_path, **_kwargs):
+            return 1
+
+        self._index_folder(client, folder, failing)
+        doc_id = self._library(client)["contract_summary.txt"]["id"]
+        with patch("gaia.ui.server._index_document", working):
+            resp = client.post(f"/api/documents/{doc_id}/reindex")
+
+        assert resp.status_code == 200
+        assert resp.json()["indexing_status"] == "complete"
+
+    def test_a_row_that_cannot_be_written_keeps_the_rest_of_the_folder(
+        self, home, client
+    ):
+        folder = home / "crowd"
+        folder.mkdir()
+        (folder / "a_report.md").write_text("# Report")
+        (folder / "b_contract.txt").write_text("Price 31,880 USD/t")
+
+        async def fake_index(path, **_kwargs):
+            if Path(path).name == "b_contract.txt":
+                raise RuntimeError("the embedder was restarting")
+            return 2
+
+        with patch(
+            "gaia.ui.routers.documents._record_failed_document",
+            side_effect=RuntimeError("database is locked"),
+        ):
+            resp = self._index_folder(client, folder, fake_index)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [d["filename"] for d in body["documents"]] == ["a_report.md"]
+        assert "no library row: database is locked" in body["errors"][0]
+
+    def test_images_are_counted_apart_from_unsupported_files(self, home, client):
+        folder = home / "scan"
+        folder.mkdir()
+        (folder / "letter.md").write_text("# Letter")
+        (folder / "photo_receipt.png").write_bytes(b"\x89PNG")
+        (folder / "photo_notice.JPG").write_bytes(b"\xff\xd8")
+        (folder / "setup.exe").write_bytes(b"MZ")
+
+        async def fake_index(_path, **_kwargs):
+            return 1
+
+        body = self._index_folder(client, folder, fake_index).json()
+
+        assert (body["indexed"], body["skipped"], body["skipped_images"]) == (1, 1, 2)
+
+
 class TestMissingAndOutOfScope:
     def test_missing_file_inside_the_roots_says_it_does_not_exist(self, home, client):
         resp = _upload(client, home / "nope" / "missing.pdf")
