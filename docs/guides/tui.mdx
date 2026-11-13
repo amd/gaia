@@ -811,7 +811,8 @@ approving runs that exact line once, and the next one asks again.
 ```
 
 A few stay refused with no prompt: a PowerShell `-EncodedCommand` or a line
-with invisible or line-break characters (the prompt couldn't show what runs), a
+with invisible characters or a carriage return (the prompt couldn't show what runs),
+a command of several lines on Windows (the command prompt runs only the first), a
 line whose quoting GAIA can't split the way the shell would, a line its checks
 don't cover that also deletes or discards work (`git push --force`, `git reset
 --hard`, `git clean`, `rm` outside the project), a granted CLI's actions that
