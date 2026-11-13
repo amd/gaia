@@ -62,6 +62,7 @@ from gaia.agents.base.context_eviction import (
 )
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import before_change, note_untracked
+from gaia.agents.base.goal_store import GOAL_OUTCOMES
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
     FEATURE_TOOLS,
@@ -3570,6 +3571,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             state: str,
             reason: str = "",
             wake_in_seconds: int = 0,
+            goal_outcome: str = "",
         ) -> str:
             """Signal the autonomous loop what to do next.
 
@@ -3583,11 +3585,19 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 reason: Human-readable explanation (shown in activity log).
                 wake_in_seconds: Seconds until next wakeup (only for "scheduled").
                     Minimum: 30. Maximum: 86400 (24 hours).
+                goal_outcome: "done" if the goal is achieved, "failed" if it
+                    can't be (say why in reason), "" if unfinished. Unfinished
+                    uses one of 3 tries unless state is "scheduled".
             """
             valid_states = {"idle", "scheduled", "paused"}
             if state not in valid_states:
                 return (
                     f"Invalid state '{state}'. Must be one of: {sorted(valid_states)}"
+                )
+            if goal_outcome not in GOAL_OUTCOMES:
+                return (
+                    f"Invalid goal_outcome '{goal_outcome}'. Must be one of: "
+                    f"{sorted(GOAL_OUTCOMES)}"
                 )
 
             # Clamp wake_in_seconds for "scheduled" state
@@ -3599,9 +3609,12 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     "directive": state,
                     "reason": reason,
                     "wake_in_seconds": wake_in_seconds,
+                    "goal_outcome": goal_outcome,
                 }
 
             msg = f"Loop state set to '{state}'."
+            if goal_outcome:
+                msg += f" Goal marked {goal_outcome}."
             if reason:
                 msg += f" Reason: {reason}"
             if state == "scheduled":

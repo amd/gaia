@@ -606,6 +606,22 @@ def test_a_tree_link_that_404s_explains_slashed_branch_names(monkeypatch):
     assert "branch name" not in str(exc.value)
 
 
+def test_a_404_names_no_surfaces_remedy(monkeypatch):
+    """Each surface adds the remedy its own user can follow (#7973)."""
+    import requests
+
+    class _Missing:
+        def download(self, *args, **kwargs):
+            response = requests.Response()
+            response.status_code = 404
+            raise requests.HTTPError(response=response)
+
+    monkeypatch.setattr("gaia.web.client.WebClient", _Missing)
+    with pytest.raises(skill_link.SkillLinkNotFoundError) as exc:
+        skill_link._download("https://x/y.zip", Path(tempfile.mkdtemp()) / "a.zip")
+    assert "gaia skill" not in str(exc.value)
+
+
 # --- gaia skill add ----------------------------------------------------------
 
 
@@ -618,6 +634,22 @@ def _cli(argv, monkeypatch, manager):
     parser = argparse.ArgumentParser()
     skill_cli.add_subparser(parser.add_subparsers(dest="command"))
     return skill_cli.handle(parser.parse_args(["skill", *argv]))
+
+
+def test_cli_add_of_a_missing_link_points_at_skill_import(
+    monkeypatch, tmp_path, capsys
+):
+    def missing(*args, **kwargs):
+        raise skill_link.SkillLinkNotFoundError("Nothing found at https://x/y.")
+
+    monkeypatch.setattr(skill_link, "preview_link", missing)
+    manager = SkillManager(
+        agent_skill_dirs=[], user_skills_root=tmp_path, include_claude_roots=False
+    )
+    code = _cli(["add", "acme/none"], monkeypatch, manager)
+
+    assert code != 0
+    assert "gaia skill import <folder>" in capsys.readouterr().err
 
 
 def test_cli_list_shows_permissions_findings_and_description(
