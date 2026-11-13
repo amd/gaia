@@ -99,7 +99,7 @@ triggering event.
   ┌──────────────────────────── Usage surfaces (§9) ────────────────────────────┐
   │ INTERACTIVE                                    HEADLESS                       │
   │  Agent UI (browser) ─┐                          CI workflow.yml ─┐           │
-  │  Go TUI (gaia-tui) ──┤─▶ daemon /api/chat/send  Webhook service ─┤─▶ gaia-   │
+  │  Go TUI (gaia-cli) ──┤─▶ daemon /api/chat/send  Webhook service ─┤─▶ gaia-   │
   │                       │   → registry.create_agent  Local CLI ─────┘  github  │
   └───────────────────────┼──────────────────────────────────────────┼──────────┘
                           └───────────────┬──────────────────────────┘
@@ -460,7 +460,7 @@ carries the output.
 | Surface | Reaches the agent via | Output sink | Auth |
 |---------|----------------------|-------------|------|
 | **Agent UI** (browser) | daemon `POST /api/chat/send` → `registry.create_agent` → `process_query` | SSE events (`SSEOutputHandler`) | `mcp-github` PAT connector (per-agent grant) |
-| **Go TUI** (`gaia-tui`) | daemon HTTP/SSE *(target)* or subprocess JSONL *(today)* | terminal render of the same events | same connector |
+| **Go TUI** (`gaia-cli`) | daemon HTTP/SSE *(target)* or subprocess JSONL *(today)* | terminal render of the same events | same connector |
 | **CI `workflow.yml`** | reusable action → `gaia-github` single-shot CLI → `process_query` | posts comment/label/PR via GitHub tools | `GITHUB_TOKEN` |
 | **Local CLI / service** | `gaia-github "<nl>"` · webhook → dispatch | stdout / GitHub API | PAT connector / `GITHUB_TOKEN` |
 | **Chat app** (Slack/Teams, opt · §9.8) | outbound: `sinks.py` POST · inbound: messaging adapter → `process_query` | channel message / threaded reply | webhook (out) · bot/app token (in) |
@@ -493,7 +493,7 @@ add label, open PR) *asks the user*, while in CI the same tool is governed by th
 **UX target:** pick the GitHub Agent card → type *"review PR 123 in amd/gaia"* → watch the tools
 stream → approve the post. That is the Pi `/skill:` experience, in the browser.
 
-### 9.3 Interactive — Go TUI (`gaia-tui`)
+### 9.3 Interactive — Go TUI (`gaia-cli`)
 
 > ⚠️ **Updated by §14.2:** the email pattern is HTTP/SSE, so path (b) `--json-events` is dropped —
 > do the shared daemon→SSE `AgentClient` in the TUI (path a), which is the only pattern-faithful
@@ -731,7 +731,7 @@ beats per-repo YAML that can drift:
 | **1-UI** | **Agent UI surface (§9.2):** ship the `gaia.agent` entry point + hub card metadata (icon, category, conversation_starters) → auto-appears, runs via the generic registry branch, streams over SSE, interactive write-approval via `permission_request` | interactive use in the browser |
 | **2** | Eval transport adapter + seed scenarios from real history (incl. repo-manager's data); wire `--compare` CI gate | quality gate on all Phase-1 prompts |
 | **3** | `auto_fix`, `release_notes`, `postmortem`, `audit` (findings-only); load repo-manager's `commit-review`/`release-review`/`release-announcement` skills | full parity with `claude.yml` + weekly audit + repo-manager |
-| **3-TUI** | **Go TUI surface (§9.3):** preferred — add the daemon HTTP/SSE `AgentClient` to `gaia-tui` (shared infra, unblocks all Python agents); bridge — `--json-events` `AgentServer` pipe + catalog entry | interactive use in the terminal |
+| **3-TUI** | **Go TUI surface (§9.3):** preferred — add the daemon HTTP/SSE `AgentClient` to `gaia-cli` (shared infra, unblocks all Python agents); bridge — `--json-events` `AgentServer` pipe + catalog entry | interactive use in the terminal |
 | **4** | `EscalatingProvider` + service/webhook mode + `gaia-github init` scaffolder | local-triage/cloud-escalate; repo-manager parity |
 | **skills** | Swap the interim loader for the real `gaia.skills` loader (#888) + `skill_sets` (#2466); enables per-repo skill override + portability | *gated on #888 / #2466 landing* |
 | **notify** | **Outbound chat-app notifications (§9.8a):** add `_to_slack`/`_to_teams` to `sinks.py` + a `notify:` config block; deliver review/audit/announcement to a channel | reuses `schedule/sinks.py`; small |
@@ -768,7 +768,7 @@ beats per-repo YAML that can drift:
 8. **Sequencing with the email reference (#2466):** the email agent is #888's first consumer and
    owns the `skill_sets` mechanism. Do we wait for it to land `skill_sets`, or co-develop it so the
    GitHub agent is the second consumer in the same cycle?
-9. **TUI enablement (§9.3):** invest in the shared daemon HTTP/SSE `AgentClient` for `gaia-tui`
+9. **TUI enablement (§9.3):** invest in the shared daemon HTTP/SSE `AgentClient` for `gaia-cli`
    (fixes the TUI for *every* Python agent, aligns with the "no shell-out" target) vs. a new
    per-agent `--json-events` subprocess emitter (a small shim — the event vocabulary already matches
    `SSEOutputHandler`, but it must be written + auto-deny confirmations; **it does not work today**).
@@ -1015,7 +1015,7 @@ PR review with reviewer suggestions — in CI **and** in the Agent UI. TUI is ex
 | **P2** | Issue Review | `issue_triage`/`issue_review` (goodness + auto-guidance), duplicate detection (#1134), relevance/resolved/obsoleted |
 | **P3** | Discord + maintainer-table automation | Discord `#dev` hot-issue notify, auto-assign from maintainer table + Discord tag, community-activity alerts (#1129) |
 | **P4** | Release + proactive | release-prep/notes (#1128), proactive audit (G7), digest/poller (#1130/#1131), perf-intelligence read |
-| **TUI** | Shared surface | daemon→SSE `AgentClient` in `gaia-tui` (§14.2) — lights up email + github |
+| **TUI** | Shared surface | daemon→SSE `AgentClient` in `gaia-cli` (§14.2) — lights up email + github |
 | **Skills** | Milestone **#60** (separate) | if it lands first, author modes as `SKILL.md` from the start (G12); else interim in-package |
 
 ### 14.6 Skills = milestone #60 (separate; may go first)

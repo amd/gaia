@@ -61,7 +61,7 @@ def _lock(version=VERSION, sha="a", tui_sha="b", sidecar_version=None):
                 "platforms": {
                     "linux-x64": {
                         "filename": "gaia-linux-x64",
-                        "executable": "gaia-tui",
+                        "executable": "gaia-cli",
                         "sha256": tui_sha * 64 if len(tui_sha) == 1 else tui_sha,
                         "size": 50,
                     }

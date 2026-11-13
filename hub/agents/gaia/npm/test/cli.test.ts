@@ -99,9 +99,9 @@ describe("executable names", () => {
     expect(sidecarExecutableName("win32")).toBe("gaia-agent.exe");
   });
 
-  it("names the TUI gaia-tui — never `gaia`, which is the npm bin shim", () => {
-    expect(tuiExecutableName("linux")).toBe("gaia-tui");
-    expect(tuiExecutableName("win32")).toBe("gaia-tui.exe");
+  it("names the TUI gaia-cli — never `gaia`, which is the npm bin shim", () => {
+    expect(tuiExecutableName("linux")).toBe("gaia-cli");
+    expect(tuiExecutableName("win32")).toBe("gaia-cli.exe");
     expect(tuiExecutableName("linux")).not.toBe("gaia");
   });
 });

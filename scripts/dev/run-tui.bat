@@ -13,9 +13,9 @@ set REPO=%~dp0..\..\
 set PYTHONPATH=%REPO%src;%REPO%hub\agents\gaia\python
 set PATH=%REPO%scripts\dev\bin;%PATH%
 cd /d "%REPO%"
-if not exist "%REPO%tui\bin\gaia-tui.exe" (
+if not exist "%REPO%tui\bin\gaia-cli.exe" (
   echo Terminal UI not built. Run:
-  echo     cd tui ^&^& go build -o bin/gaia-tui.exe ./cmd/gaia
+  echo     cd tui ^&^& go build -o bin/gaia-cli.exe ./cmd/gaia
   exit /b 1
 )
-"%REPO%tui\bin\gaia-tui.exe" %*
+"%REPO%tui\bin\gaia-cli.exe" %*

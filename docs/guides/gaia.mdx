@@ -53,14 +53,14 @@ Inference runs locally by default. The sidecar's `/query` endpoint accepts `prov
 
     The daemon comes from the `gaia` Python CLI (0.26.0 or newer), which `npx` does not install. Install it first with `curl -fsSL https://amd-gaia.ai/install.sh | sh` (Windows: `irm https://amd-gaia.ai/install.ps1 | iex`).
 
-    The [terminal UI](/guides/tui) (`gaia-tui`) now boots straight into this agent — there is nothing to browse or pick.
+    The [terminal UI](/guides/tui) (`gaia-cli`) now boots straight into this agent — there is nothing to browse or pick.
   </Tab>
   <Tab title="From source">
     Run the agent from your own checkout, so prompt and tool edits take effect without a freeze-and-publish cycle.
 
     ```bash
     uv pip install -e hub/agents/gaia/python    # once
-    GAIA_GAIA_AGENT_MODE=dev gaia-tui
+    GAIA_GAIA_AGENT_MODE=dev gaia-cli
     ```
 
     Set `GAIA_GAIA_AGENT_MODE=dev` on the TUI launch as well as on any manual

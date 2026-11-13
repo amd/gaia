@@ -24,7 +24,8 @@ func TestHelpNamesTheInvokedBinary(t *testing.T) {
 		suffix = ".exe"
 	}
 
-	for _, name := range []string{"gaia-tui", "gaia", "gaia-hub"} {
+	// gaia-tui is the link the one-line installer keeps for earlier installs.
+	for _, name := range []string{"gaia-cli", "gaia-tui", "gaia", "gaia-hub"} {
 		t.Run(name, func(t *testing.T) {
 			installed := filepath.Join(t.TempDir(), name+suffix)
 			copyExecutable(t, gaiaBin, installed)
@@ -59,7 +60,7 @@ func TestLeadingTUIWordStillAccepted(t *testing.T) {
 		suffix = ".exe"
 	}
 
-	for _, name := range []string{"gaia-tui", "gaia"} {
+	for _, name := range []string{"gaia-cli", "gaia"} {
 		t.Run(name, func(t *testing.T) {
 			installed := filepath.Join(t.TempDir(), name+suffix)
 			copyExecutable(t, gaiaBin, installed)
@@ -92,10 +93,10 @@ func TestSymlinkedBinaryNamesTheLink(t *testing.T) {
 	}
 	gaiaBin, _ := buildBinaries(t)
 
-	target := filepath.Join(t.TempDir(), "gaia-tui-v2")
+	target := filepath.Join(t.TempDir(), "gaia-cli-v2")
 	copyExecutable(t, gaiaBin, target)
 
-	link := filepath.Join(t.TempDir(), "gaia-tui")
+	link := filepath.Join(t.TempDir(), "gaia-cli")
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatalf("symlink: %v", err)
 	}
@@ -104,7 +105,7 @@ func TestSymlinkedBinaryNamesTheLink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%s --help: %v\n%s", link, err, out)
 	}
-	if !strings.Contains(string(out), "gaia-tui [flags]") {
+	if !strings.Contains(string(out), "gaia-cli [flags]") {
 		t.Errorf("help names the symlink target, not the link the user invoked:\n%s", out)
 	}
 }

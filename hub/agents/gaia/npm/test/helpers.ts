@@ -43,7 +43,7 @@ function tuiEntries(sha256: string): Record<string, BinaryLockEntry> {
     const win = p.startsWith("win32");
     out[p] = {
       filename: TUI_ARTIFACT_NAMES[p]!,
-      executable: `gaia-tui${win ? ".exe" : ""}`,
+      executable: `gaia-cli${win ? ".exe" : ""}`,
       sha256,
       size: 0,
     };

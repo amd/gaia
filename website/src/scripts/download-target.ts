@@ -243,17 +243,26 @@ export function pickInstallTarget<T>(
 }
 
 // The raw terminal binaries as publish.yml attaches them to the GitHub release:
-// build_tui.yml names them `gaia-<goos>-<goarch>`, so Go's names (windows,
-// amd64), not the site's keys (win, x64). Spelled out per key rather than
-// translated, so a key with no published name cannot produce one.
+// `gaia-cli-<goos>-<goarch>`, so Go's names (windows, amd64), not the site's
+// keys (win, x64). Spelled out per key rather than translated, so a key with
+// no published name cannot produce one.
 const BINARY_FILENAMES: Record<PlatformKey, string> = {
-  'win-x64': 'gaia-windows-amd64.exe',
-  'win-arm64': 'gaia-windows-arm64.exe',
-  'darwin-x64': 'gaia-darwin-amd64',
-  'darwin-arm64': 'gaia-darwin-arm64',
-  'linux-x64': 'gaia-linux-amd64',
-  'linux-arm64': 'gaia-linux-arm64',
+  'win-x64': 'gaia-cli-windows-amd64.exe',
+  'win-arm64': 'gaia-cli-windows-arm64.exe',
+  'darwin-x64': 'gaia-cli-darwin-amd64',
+  'darwin-arm64': 'gaia-cli-darwin-arm64',
+  'linux-x64': 'gaia-cli-linux-amd64',
+  'linux-arm64': 'gaia-cli-linux-arm64',
 };
+
+/**
+ * A raw terminal binary's name on releases from before it became `gaia-cli`,
+ * e.g. `gaia-linux-amd64`. The site offers it only where the release carries
+ * no `gaia-cli-` build.
+ */
+export function legacyBinaryFileName(platform: PlatformKey): string {
+  return BINARY_FILENAMES[platform].replace(/^gaia-cli-/, 'gaia-');
+}
 
 // The installer filenames, as installer/tui/artifacts.py names them — each
 // carries the version, and each follows its own platform's convention rather
@@ -268,7 +277,7 @@ const INSTALLER_FILENAMES: Record<InstallerKey, (version: string) => string> = {
 
 /**
  * The GitHub release asset name for a download key, e.g. `win-x64` ->
- * `gaia-windows-amd64.exe`, `win-x64-setup` -> `gaia-0.23.0-win-x64-setup.exe`.
+ * `gaia-cli-windows-amd64.exe`, `win-x64-setup` -> `gaia-0.23.0-win-x64-setup.exe`.
  *
  * The site resolves key -> asset name and looks that up in the assets the
  * release actually carries, never asset name -> key: a release also carries

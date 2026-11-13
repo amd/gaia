@@ -27,6 +27,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   the next agent to start clears any no agent has used for a day, including
   ones a killed process left.
 
+- **The terminal UI's executable is `gaia-cli`, not `gaia-tui`.** It is the same
+  rename a full GAIA install makes. The package writes the binary as
+  `gaia-cli[.exe]` in its cache; `npx @amd-gaia/gaia` starts it as before. A
+  `gaia-tui` left in an older cache folder is unused.
+
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
   directory now go in the session context at the start of the first user
@@ -60,7 +65,7 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   (with `--history-file`) keeps a listing beside the session's transcript:
   its title, whether it is running, waiting on a permission prompt, done or
   failed, and each finished turn in readable form. `/sessions` and
-  `gaia-tui --resume` list and reopen sessions from it. Nothing changes for the
+  `gaia-cli --resume` list and reopen sessions from it. Nothing changes for the
   HTTP surface, or for a launch without the flag.
 - **One MCP server with a bad repeat-call declaration no longer takes the
   others down.** An MCP server tool can name the arguments the repeat-call

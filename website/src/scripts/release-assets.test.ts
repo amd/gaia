@@ -70,12 +70,14 @@ describe('the terminal installers', () => {
 });
 
 describe('the raw terminal binaries', () => {
-  // build_tui.yml names each `gaia-<goos>-<goarch>[.exe]`; publish.yml attaches
-  // those files as they are.
+  // build_tui.yml names each `gaia-cli-<goos>-<goarch>[.exe]`; publish.yml
+  // attaches those files as they are.
   it('are the names the build matrix produces', () => {
-    expect(BUILD_TUI).toContain('-o ../bin/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}');
+    expect(BUILD_TUI).toContain(
+      '-o ../bin/gaia-cli-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}',
+    );
     const built = [...BUILD_TUI.matchAll(/- goos: (\w+)\n\s+goarch: (\w+)/g)].map(
-      ([, os, arch]) => `gaia-${os}-${arch}${os === 'windows' ? '.exe' : ''}`,
+      ([, os, arch]) => `gaia-cli-${os}-${arch}${os === 'windows' ? '.exe' : ''}`,
     );
     expect(built).toHaveLength(6);
     expect(PLATFORM_ORDER.map((p) => artifactFileName(p, V)).sort()).toEqual(built.sort());

@@ -5,7 +5,7 @@
 ;
 ; GAIA runs as two binaries and this lays down both:
 ;
-;   gaia-tui.exe    the terminal UI, installed to a per-user directory that
+;   gaia-cli.exe    the terminal UI, installed to a per-user directory that
 ;                   is added to the user's PATH
 ;   gaia-agent.exe  the frozen flagship, installed into the hub install root
 ;                   (~/.gaia/agents/gaia/) where the TUI looks for it
@@ -36,7 +36,7 @@ ManifestDPIAware true
   !error "GAIA_VERSION is not defined. Build via installer\scripts\build-gaia-installer.ps1 (it reads src/gaia/version.py), or pass -DGAIA_VERSION=x.y.z to makensis."
 !endif
 !ifndef TUI_BINARY
-  !error "TUI_BINARY is not defined — the path to gaia-tui.exe. Build it with `cd tui && go build -o bin/gaia-tui.exe ./cmd/gaia`, then pass -DTUI_BINARY=<path> (build-gaia-installer.ps1 does this for you)."
+  !error "TUI_BINARY is not defined — the path to gaia-cli.exe. Build it with `cd tui && go build -o bin/gaia-cli.exe ./cmd/gaia`, then pass -DTUI_BINARY=<path> (build-gaia-installer.ps1 does this for you)."
 !endif
 !ifndef AGENT_BINARY
   !error "AGENT_BINARY is not defined — the path to gaia-agent.exe. Build it with `python hub/agents/gaia/python/packaging/freeze.py --onefile`, then pass -DAGENT_BINARY=<path> (build-gaia-installer.ps1 does this for you)."
@@ -96,11 +96,11 @@ InstallDirRegKey HKCU "${SETTINGS_KEY}" "InstallDir"
 !define MUI_UNWELCOMEFINISHPAGE_BITMAP "${ASSET_DIR}\installer-sidebar.bmp"
 
 !define MUI_WELCOMEPAGE_TITLE "Install ${PRODUCT_NAME} ${GAIA_VERSION}"
-!define MUI_WELCOMEPAGE_TEXT "This installs the GAIA terminal UI and the GAIA agent for your user account only — no administrator rights needed.$\r$\n$\r$\nThe language model server (Lemonade) and the models are not included. Open GAIA (gaia-tui) after this finishes: on first launch it sets those up and lets you choose which models to download. For a scripted install, run 'gaia init --yes' instead.$\r$\n$\r$\nClose any GAIA terminal windows before continuing."
+!define MUI_WELCOMEPAGE_TEXT "This installs the GAIA terminal UI and the GAIA agent for your user account only — no administrator rights needed.$\r$\n$\r$\nThe language model server (Lemonade) and the models are not included. Open GAIA (gaia-cli) after this finishes: on first launch it sets those up and lets you choose which models to download. For a scripted install, run 'gaia init --yes' instead.$\r$\n$\r$\nClose any GAIA terminal windows before continuing."
 
 !define MUI_FINISHPAGE_TITLE "${PRODUCT_NAME} is installed"
-!define MUI_FINISHPAGE_TEXT "Open a NEW terminal window (PATH changes do not reach terminals that are already open) and run:$\r$\n$\r$\n    gaia-tui$\r$\n$\r$\nOn first launch GAIA sets up Lemonade and lets you choose which models to download. For a scripted install, run 'gaia init --yes' instead."
-!define MUI_FINISHPAGE_RUN "$INSTDIR\gaia-tui.exe"
+!define MUI_FINISHPAGE_TEXT "Open a NEW terminal window (PATH changes do not reach terminals that are already open) and run:$\r$\n$\r$\n    gaia-cli$\r$\n$\r$\nOn first launch GAIA sets up Lemonade and lets you choose which models to download. For a scripted install, run 'gaia init --yes' instead."
+!define MUI_FINISHPAGE_RUN "$INSTDIR\gaia-cli.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Start ${PRODUCT_NAME} now"
 !define MUI_FINISHPAGE_LINK "GAIA documentation"
 !define MUI_FINISHPAGE_LINK_LOCATION "${PRODUCT_WEB_SITE}"
@@ -131,17 +131,25 @@ Section "GAIA" SecCore
   SetShellVarContext current
 
   ; `try` makes a locked target set the error flag instead of tearing down the
-  ; install with NSIS's own generic message — a running gaia-tui.exe is the
+  ; install with NSIS's own generic message — a running gaia-cli.exe is the
   ; likely failure here and it deserves an instruction, not an error code.
   SetOverwrite try
 
   SetOutPath "$INSTDIR"
 
-  DetailPrint "Installing gaia-tui..."
+  DetailPrint "Installing gaia-cli..."
   ClearErrors
-  File "/oname=gaia-tui.exe" "${TUI_BINARY}"
+  File "/oname=gaia-cli.exe" "${TUI_BINARY}"
   ${If} ${Errors}
-    MessageBox MB_OK|MB_ICONSTOP "Could not write $INSTDIR\gaia-tui.exe.$\r$\n$\r$\nIt is almost certainly running. Close every GAIA terminal window, end any leftover gaia-tui.exe in Task Manager, then run this installer again." /SD IDOK
+    MessageBox MB_OK|MB_ICONSTOP "Could not write $INSTDIR\gaia-cli.exe.$\r$\n$\r$\nIt is almost certainly running. Close every GAIA terminal window, end any leftover gaia-cli.exe in Task Manager, then run this installer again." /SD IDOK
+    Abort "gaia-cli.exe is in use — install stopped."
+  ${EndIf}
+  ; The terminal UI's exe before it became gaia-cli. Left behind, it stays on
+  ; PATH as the old version.
+  ClearErrors
+  Delete "$INSTDIR\gaia-tui.exe"
+  ${If} ${Errors}
+    MessageBox MB_OK|MB_ICONSTOP "Could not remove $INSTDIR\gaia-tui.exe, the terminal UI's earlier name.$\r$\n$\r$\nIt is almost certainly running. Close every GAIA terminal window, end any leftover gaia-tui.exe in Task Manager, then run this installer again." /SD IDOK
     Abort "gaia-tui.exe is in use — install stopped."
   ${EndIf}
 
@@ -181,7 +189,7 @@ Section "GAIA" SecCore
   nsExec::ExecToLog 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\gaia-path.ps1" -Action Add -Directory "$INSTDIR"'
   Pop $0
   ${If} $0 != "0"
-    MessageBox MB_OK|MB_ICONEXCLAMATION "${PRODUCT_NAME} is installed, but your PATH could not be updated (the helper exited with '$0').$\r$\n$\r$\nAdd this folder to your user PATH by hand, or gaia-tui will only run from its install folder:$\r$\n$\r$\n$INSTDIR" /SD IDOK
+    MessageBox MB_OK|MB_ICONEXCLAMATION "${PRODUCT_NAME} is installed, but your PATH could not be updated (the helper exited with '$0').$\r$\n$\r$\nAdd this folder to your user PATH by hand, or gaia-cli will only run from its install folder:$\r$\n$\r$\n$INSTDIR" /SD IDOK
   ${Else}
     ; Tell the shell the environment changed; new processes pick it up without
     ; a sign-out. Already-open terminals keep their old PATH regardless.
@@ -195,7 +203,7 @@ Section "GAIA" SecCore
   CreateDirectory "$SMPROGRAMS\${PRODUCT_NAME}"
   SetOutPath "$PROFILE"
   CreateShortcut "$SMPROGRAMS\${PRODUCT_NAME}\${PRODUCT_NAME}.lnk" \
-      "$INSTDIR\gaia-tui.exe" "" "$INSTDIR\gaia.ico" 0 SW_SHOWNORMAL "" \
+      "$INSTDIR\gaia-cli.exe" "" "$INSTDIR\gaia.ico" 0 SW_SHOWNORMAL "" \
       "GAIA — chat, documents, data and web research in your terminal"
   SetOutPath "$INSTDIR"
 
@@ -309,6 +317,7 @@ Section "Uninstall"
   ${EndIf}
 
   ; ── Program files ─────────────────────────────────────────────────────
+  Delete "$INSTDIR\gaia-cli.exe"
   Delete "$INSTDIR\gaia-tui.exe"
   Delete "$INSTDIR\gaia-path.ps1"
   Delete "$INSTDIR\gaia.ico"

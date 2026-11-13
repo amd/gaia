@@ -32,8 +32,8 @@
 #                 test, runs it, or a dispatch that asks for it with
 #                 setup_journey. test_setup_journey.yml covers the screens on
 #                 PRs, and test_setup_real_download.yml a real download nightly.
-#   terminal      `gaia-tui version` reports the release, and one non-interactive
-#                 turn (`gaia-tui chat --agent gaia --query ...`) completes
+#   terminal      `gaia-cli version` reports the release, and one non-interactive
+#                 turn (`gaia-cli chat --agent gaia --query ...`) completes
 #                 through the installed gaia-agent against a fake model server
 #                 (installer/headless/fake_model_server.py). Then, with no
 #                 Lemonade, the same command must refuse within 120 s and name
@@ -42,7 +42,7 @@
 # A final release, and every release candidate from v0.25.1-rc4 on, carries
 # the terminal .pkg/.deb/.rpm, and those rows install the published files; one
 # that does not fails `resolve`. Older candidates published none, so for them
-# `rebuild-packages` builds them in this run from the candidate's own gaia-tui
+# `rebuild-packages` builds them in this run from the candidate's own gaia-cli
 # and gaia-agent binaries, and those rows say "rebuilt" in the table
 # (TUI_PACKAGES_ON_RC_SINCE in installer/headless/resolve_release.py).
 #
@@ -194,11 +194,11 @@ jobs:
           url() { python3 -c "import json,sys; d=json.load(open('release.json')); print(d['urls'][d['assets'][sys.argv[1]]])" "$1"; }
           stage() {  # stage <platform> <tui asset id> <sidecar asset id or 'stub'> <dir> [prev]
             mkdir -p "$4"
-            curl -fL --retry 3 -sS -o "$4/gaia-tui" "$(url "$2")"
-            if [ "$3" = stub ]; then cp "$4/gaia-tui" "$4/gaia-agent"
+            curl -fL --retry 3 -sS -o "$4/gaia-cli" "$(url "$2")"
+            if [ "$3" = stub ]; then cp "$4/gaia-cli" "$4/gaia-agent"
             else curl -fL --retry 3 -sS -o "$4/gaia-agent" "$(url "$3")"; fi
             cp LICENSE.md "$4/LICENSE.md"
-            chmod +x "$4/gaia-tui" "$4/gaia-agent"
+            chmod +x "$4/gaia-cli" "$4/gaia-agent"
             ls -l "$4"
           }
           if [ "${LABEL}" = macos ]; then
@@ -237,7 +237,7 @@ jobs:
         with:
           name: release-json
       # The previous release's own .deb when it published one. If it
-      # published none, it is rebuilt from its own gaia-tui with a
+      # published none, it is rebuilt from its own gaia-cli with a
       # stand-in sidecar and, as that release did, no gaia core: the upgrade row
       # checks the package upgrade and the user's data, and runs only the NEW
       # version's agent.
@@ -257,12 +257,12 @@ jobs:
               subprocess.check_call("sudo apt-get update -q && sudo apt-get install -y -q --no-install-recommends rpm ruby ruby-dev build-essential && sudo gem install --no-document fpm", shell=True)
               bin_name = d["prev_assets"].get("tui-bin-linux-x64")
               if not bin_name:
-                  sys.exit(f"::error::{d['prev_tag']} publishes neither a terminal .deb nor gaia-linux-amd64")
+                  sys.exit(f"::error::{d['prev_tag']} publishes neither a terminal .deb nor a gaia-cli-linux-amd64 binary")
               subprocess.check_call(["mkdir", "-p", "prev-stage"])
-              subprocess.check_call(["curl", "-fL", "--retry", "3", "-sS", "-o", "prev-stage/gaia-tui", d["prev_urls"][bin_name]])
-              subprocess.check_call(["cp", "prev-stage/gaia-tui", "prev-stage/gaia-agent"])
+              subprocess.check_call(["curl", "-fL", "--retry", "3", "-sS", "-o", "prev-stage/gaia-cli", d["prev_urls"][bin_name]])
+              subprocess.check_call(["cp", "prev-stage/gaia-cli", "prev-stage/gaia-agent"])
               subprocess.check_call(["cp", "LICENSE.md", "prev-stage/LICENSE.md"])
-              subprocess.check_call(["chmod", "+x", "prev-stage/gaia-tui", "prev-stage/gaia-agent"])
+              subprocess.check_call(["chmod", "+x", "prev-stage/gaia-cli", "prev-stage/gaia-agent"])
               core = d["prev_version"].split("-")[0]
               subprocess.check_call(["installer/tui/linux/build-packages.sh", "--version", core,
                                      "--payload", "prev-stage", "--out", "prev-out", "--without-core"])
@@ -502,7 +502,7 @@ jobs:
           python "$J" init --results "$R" --row "${ROW}" --title "${TITLE}" --os-label "${OS_LABEL}" \
             --installer "${KIND}" --release "$(python -c "import json;print(json.load(open('${RELEASE_JSON}'))['tag'])")" --source "${source}"
           if [ "${KIND}" = tui-deb-upgrade ]; then
-            python "$J" note --results "$R" --text "Upgrades from $(ls "${PREV_PKG_DIR}") ($(python -c "import json;print(json.load(open('${RELEASE_JSON}'))['prev_tag'])"); a previous release with no .deb is rebuilt from its own gaia-tui)."
+            python "$J" note --results "$R" --text "Upgrades from $(ls "${PREV_PKG_DIR}") ($(python -c "import json;print(json.load(open('${RELEASE_JSON}'))['prev_tag'])"); a previous release with no .deb is rebuilt from its own gaia-cli)."
           fi
           skip=()
           if [ "${source}" != release ]; then

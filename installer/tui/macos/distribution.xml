@@ -15,7 +15,7 @@
     @CORE_COMPONENT_PKG@  filename of the core component productbuild locates
 
   Three components, not one: each is rooted at a directory holding only its own
-  files, so its install location (/usr/local/bin, /usr/local/lib/gaia, /usr/local/share/doc/gaia-tui)
+  files, so its install location (/usr/local/bin, /usr/local/lib/gaia, /usr/local/share/doc/gaia-cli)
   is never a payload entry. A package that shipped a /usr/local directory entry
   would reset it to root:wheel and break Homebrew on an Intel Mac.
 -->
@@ -59,7 +59,7 @@
 
     <choice id="@DOCS_IDENTIFIER@"
             title="GAIA Terminal UI licence"
-            description="Installs LICENSE.md into /usr/local/share/doc/gaia-tui."
+            description="Installs LICENSE.md into /usr/local/share/doc/gaia-cli."
             visible="false"
             selected="true"
             enabled="false">
@@ -77,7 +77,7 @@
 
     <choice id="@PKG_IDENTIFIER@"
             title="GAIA Terminal UI"
-            description="Installs the gaia-tui and gaia-agent command-line tools, and a gaia link, into /usr/local/bin."
+            description="Installs the gaia-cli and gaia-agent command-line tools, and a gaia link, into /usr/local/bin."
             visible="false"
             selected="true"
             enabled="false">

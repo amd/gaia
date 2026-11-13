@@ -6,12 +6,12 @@
     Build the GAIA Windows installer from already-built binaries.
 
 .DESCRIPTION
-    Packages gaia-tui.exe and gaia-agent.exe into a single per-user .exe you
+    Packages gaia-cli.exe and gaia-agent.exe into a single per-user .exe you
     can hand to someone else (installer/nsis/gaia.nsi does the laying down).
 
     It does NOT build the binaries — it packages them. Build them first:
 
-        cd tui; go build -o bin/gaia-tui.exe ./cmd/gaia
+        cd tui; go build -o bin/gaia-cli.exe ./cmd/gaia
         python hub/agents/gaia/python/packaging/freeze.py --onefile
 
     Both binaries are verified to exist and to be real Windows executables
@@ -20,7 +20,7 @@
     installs nothing.
 
 .PARAMETER TuiBinary
-    Path to gaia-tui.exe. Defaults to tui\bin\gaia-tui.exe.
+    Path to gaia-cli.exe. Defaults to tui\bin\gaia-cli.exe.
 
 .PARAMETER AgentBinary
     Path to the frozen gaia-agent.exe. Defaults to the one-file output of
@@ -68,7 +68,7 @@ function Fail {
 $REPO_ROOT = (Resolve-Path "$PSScriptRoot\..\..").Path
 $NSIS_SCRIPT = Join-Path $REPO_ROOT "installer\nsis\gaia.nsi"
 
-if (-not $TuiBinary)   { $TuiBinary   = Join-Path $REPO_ROOT "tui\bin\gaia-tui.exe" }
+if (-not $TuiBinary)   { $TuiBinary   = Join-Path $REPO_ROOT "tui\bin\gaia-cli.exe" }
 if (-not $AgentBinary) { $AgentBinary = Join-Path $REPO_ROOT "hub\agents\gaia\python\packaging\dist\gaia-agent.exe" }
 if (-not $OutputDir)   { $OutputDir   = Join-Path $REPO_ROOT "dist\installer" }
 
@@ -106,8 +106,8 @@ function Assert-Executable {
     Write-Host "  $Label`: $Path ($sizeMb MB)" -ForegroundColor Green
 }
 
-Assert-Executable -Path $TuiBinary -Label "gaia-tui.exe" `
-    -BuildCommand "cd tui; go build -o bin/gaia-tui.exe ./cmd/gaia"
+Assert-Executable -Path $TuiBinary -Label "gaia-cli.exe" `
+    -BuildCommand "cd tui; go build -o bin/gaia-cli.exe ./cmd/gaia"
 Assert-Executable -Path $AgentBinary -Label "gaia-agent.exe" `
     -BuildCommand "python hub/agents/gaia/python/packaging/freeze.py --onefile"
 
@@ -210,5 +210,5 @@ Write-Host "  $installerSize MB" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "Send that file. On the target machine it installs per-user (no" -ForegroundColor Gray
-Write-Host "admin rights), puts gaia-tui on PATH, and leaves Lemonade and the" -ForegroundColor Gray
+Write-Host "admin rights), puts gaia-cli on PATH, and leaves Lemonade and the" -ForegroundColor Gray
 Write-Host "models to 'gaia init'." -ForegroundColor Gray

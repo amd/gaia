@@ -330,7 +330,7 @@ Findings:
   by the SignPath Foundation CA at no cost. **But it's scoped narrowly:**
   `artifact_types: [nsis-installer]`, and `trusted_build_systems` only accepts
   requests from `build-installers.yml` on a `refs/tags/v*` push. A bare `.exe`
-  submitted from anywhere else — including `gaia-agent.exe` or `gaia-tui.exe` from
+  submitted from anywhere else — including `gaia-agent.exe` or `gaia-cli.exe` from
   `release_agent_gaia.yml` — would be **rejected by this policy as written**, not
   silently signed.
 - **`release_agent_gaia.yml` has no signing step of any kind**, and couldn't use the
@@ -340,7 +340,7 @@ Findings:
   has. This is a real gap, not a "handled elsewhere" situation.
 
 **What this means for users:** Windows SmartScreen will flag `gaia-agent.exe` and
-`gaia-tui.exe` as from an unrecognized publisher on first run — a "Windows protected
+`gaia-cli.exe` as from an unrecognized publisher on first run — a "Windows protected
 your PC" interstitial the user has to click through ("More info" → "Run anyway").
 macOS Gatekeeper will refuse to open an unsigned/unnotarized binary at all without an
 explicit right-click → Open, or a `xattr -d com.apple.quarantine` workaround, which is
@@ -385,15 +385,15 @@ Two docs are stale relative to the code and are fixed as part of this change:
   email agent as the sidecar+npm precedent. Added gaia as the second instance,
   matching §7's "extract shared tooling" note.
 - **`docs/reference/cli.mdx`**'s `gaia init` section never mentioned the flagship
-  agent or `gaia-tui` at all — a reader following the CLI reference alone would have
+  agent or `gaia-cli` at all — a reader following the CLI reference alone would have
   no path from `gaia init` to actually getting the flagship running. Added a short
   cross-reference to `/guides/gaia` and this plan.
 
-### 9.3.1 `gaia-tui --version` was broken — fixed as part of this change
+### 9.3.1 `gaia-cli --version` was broken — fixed as part of this change
 
 Found while re-verifying §8's binary build: `rootCmd.Version` was never set in
 `tui/internal/cli/root.go`/`version.go`, so cobra never registered the `--version`
-flag at all (`gaia-tui --version` exited 1, `unknown flag: --version`, while the
+flag at all (`gaia-cli --version` exited 1, `unknown flag: --version`, while the
 `version` subcommand worked fine). This is unrelated to anything else in this
 document — a pre-existing bug this session's own build-and-run verification (§8)
 happened to surface, not something introduced by the packaging work above.
@@ -406,8 +406,8 @@ byte-identical output. The `version` subcommand's `Run` now writes through
 from anything that redirects `cmd.SetOut` — including the new test.
 
 Verified: rebuilt the TUI (`go build ./cmd/gaia`, then again with the same
-`-ldflags -X ...version=...` `build_tui.yml` uses), confirmed `gaia-tui --version`
-and `gaia-tui version` now print the same line, added
+`-ldflags -X ...version=...` `build_tui.yml` uses), confirmed `gaia-cli --version`
+and `gaia-cli version` now print the same line, added
 `TestVersionFlagIsRegistered`/`TestVersionFlagPrintsVersion`/
 `TestVersionSubcommandMatchesFlag` to `tui/internal/cli/root_test.go` (alongside the
 pre-existing `TestBinaryName*` tests already in that file), and ran the full `tui/`

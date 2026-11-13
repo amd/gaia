@@ -46,7 +46,7 @@ type liveOneShot struct {
 	started time.Time
 }
 
-// startOneShot runs `gaia-tui run gaia --query <query>` against the mock agent
+// startOneShot runs `gaia-cli run gaia --query <query>` against the mock agent
 // in the released binary's shape, a bootloader whose child runs the turn, and
 // returns once that child is mid-tool-call.
 func startOneShot(t *testing.T, query string) *liveOneShot {

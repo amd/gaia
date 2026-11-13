@@ -4,7 +4,7 @@
 
 The TUI spawns the flagship as a child and resolves ``gaia-agent`` from PATH
 before ``~/.gaia/agents/``. The repo's own install does not create that
-executable — ``setup.py`` ships ``gaia``, ``gaia-cli`` and ``gaia-mcp`` only —
+executable — ``setup.py`` ships ``gaia`` and ``gaia-mcp`` only —
 so without a shim on PATH a developer runs the last *installed* build and
 concludes their new tool "doesn't work". PYTHONPATH cannot rescue that: the
 installed agent is a frozen binary and ignores it.

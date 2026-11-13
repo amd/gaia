@@ -35,7 +35,7 @@ import {
 } from "./helpers.js";
 
 const SIDECAR_BYTES = Buffer.from("#!/fake-frozen-gaia-agent\n");
-const TUI_BYTES = Buffer.from("#!/fake-gaia-tui\n");
+const TUI_BYTES = Buffer.from("#!/fake-gaia-cli\n");
 const sha = (b: Buffer): string => crypto.createHash("sha256").update(b).digest("hex");
 const SIDECAR_SHA = sha(SIDECAR_BYTES);
 const TUI_SHA = sha(TUI_BYTES);
@@ -179,7 +179,7 @@ describe("fetchBinary", () => {
     expect(urls).toEqual([`${TUI_BASE}/gaia-win-x64.exe`]);
     expect(res.sha256).toBe(TUI_SHA);
     // Installed under OUR name: a cached file called `gaia` would shadow the shim.
-    expect(path.basename(res.binaryPath)).toBe("gaia-tui.exe");
+    expect(path.basename(res.binaryPath)).toBe("gaia-cli.exe");
   });
 
   it("FAILS LOUDLY (IntegrityError) on a tampered download and leaves nothing behind", async () => {
@@ -357,7 +357,7 @@ describe("fetchAll", () => {
         }),
       }),
     ).rejects.toBeInstanceOf(IntegrityError);
-    expect(fs.existsSync(path.join(tuiDir, "gaia-tui"))).toBe(false);
+    expect(fs.existsSync(path.join(tuiDir, "gaia-cli"))).toBe(false);
   });
 });
 

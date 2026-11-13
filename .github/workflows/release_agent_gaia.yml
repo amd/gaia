@@ -17,7 +17,7 @@
 #             `terminal-hub` component at agents/terminal-hub/<tuiVersion>/:
 #               gaia-{win-x64,win-arm64,darwin-arm64,darwin-x64,
 #                     linux-x64,linux-arm64}[.exe]
-#             Installed executable name: gaia-tui[.exe]
+#             Installed executable name: gaia-cli[.exe]
 #
 # This workflow does NOT build or publish a TUI. release_components.yml already
 # builds `tui/cmd/gaia` from the same source with the same flags and publishes it
@@ -686,7 +686,7 @@ jobs:
                   "component": "tui",
                   "platform": platform,
                   "filename": filename,
-                  "executable": "gaia-tui.exe" if filename.endswith(".exe") else "gaia-tui",
+                  "executable": "gaia-cli.exe" if filename.endswith(".exe") else "gaia-cli",
                   "sha256": got_sha,
                   "size": len(data),
               })

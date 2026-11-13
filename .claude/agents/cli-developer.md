@@ -38,7 +38,7 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 | Script | Entry | Purpose |
 |--------|-------|---------|
-| `gaia` / `gaia-cli` | `gaia.cli:main` | Main dispatcher |
+| `gaia` | `gaia.cli:main` | Main dispatcher |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge |
 
 **Hub-package binaries** (NOT core `setup.py` entries — they ship from their own hub wheels under `hub/agents/<id>/python/`). None ship today: per-task agents were collapsed into skills, so a new capability is a `SKILL.md`, not a new binary.

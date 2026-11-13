@@ -54,7 +54,7 @@ def _record(component: str, platform: str, filename: str) -> dict:
         "component": component,
         "platform": platform,
         "filename": filename,
-        "executable": ("gaia-agent" if component == "sidecar" else "gaia-tui")
+        "executable": ("gaia-agent" if component == "sidecar" else "gaia-cli")
         + (".exe" if filename.endswith(".exe") else ""),
         "sha256": _sha(body),
         "size": len(body),
@@ -143,8 +143,8 @@ def test_full_release_writes_both_lanes(tmp_path, capsys):
         assert entry["sha256"] == _sha(f"tui-{platform}")
         assert entry["size"] > 0
     # Installed under our own name, never the hub's `gaia`.
-    assert tui["platforms"]["win32-x64"]["executable"] == "gaia-tui.exe"
-    assert tui["platforms"]["linux-x64"]["executable"] == "gaia-tui"
+    assert tui["platforms"]["win32-x64"]["executable"] == "gaia-cli.exe"
+    assert tui["platforms"]["linux-x64"]["executable"] == "gaia-cli"
 
 
 def test_win32_key_maps_onto_terminal_hubs_win_artifact(tmp_path):
@@ -177,10 +177,10 @@ def test_partial_metas_keep_the_other_platforms(tmp_path):
 
 def test_rejects_a_tui_filename_terminal_hub_does_not_publish(tmp_path):
     # The regression this whole change is guarding: the old release published
-    # `gaia-tui-<platform>` under our own lane. Feeding that name now must fail —
+    # `gaia-cli-<platform>` under our own lane. Feeding that name now must fail —
     # it would 404 against terminal-hub.
     lock = _seed_lock(tmp_path)
-    bad = _write_meta(tmp_path, _record("tui", "win32-x64", "gaia-tui-win32-x64.exe"))
+    bad = _write_meta(tmp_path, _record("tui", "win32-x64", "gaia-cli-win32-x64.exe"))
     with pytest.raises(SystemExit) as e:
         _run(lock, [bad])
     assert "gaia-win-x64.exe" in str(e.value)
@@ -194,7 +194,7 @@ def test_rejects_a_stale_committed_entry_no_meta_overwrites(tmp_path):
     data = json.loads(lock.read_text(encoding="utf-8"))
     data["components"]["tui"]["platforms"]["linux-x64"][
         "filename"
-    ] = "gaia-tui-linux-x64"
+    ] = "gaia-cli-linux-x64"
     lock.write_text(json.dumps(data), encoding="utf-8")
     only_sidecar = _write_meta(
         tmp_path, _record("sidecar", "linux-x64", "gaia-agent-linux-x64")

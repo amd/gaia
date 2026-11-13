@@ -85,7 +85,7 @@ jobs:
               return (
                 /\.(exe|bin)$/i.test(base) ||
                 base === "gaia-agent" ||
-                base === "gaia-tui" ||
+                base === "gaia-cli" ||
                 /^gaia-(agent|tui)(-|\.)/i.test(base)
               );
             });

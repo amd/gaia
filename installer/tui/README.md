@@ -1,9 +1,9 @@
 # GAIA Terminal UI installers
 
-Native double-click installers for the GAIA Terminal UI (`gaia-tui`). Each one
+Native double-click installers for the GAIA Terminal UI (`gaia-cli`). Each one
 puts two executables on disk and on `PATH`:
 
-- **`gaia-tui`** — the Terminal UI itself (built from [`tui/`](../../tui))
+- **`gaia-cli`** — the Terminal UI itself (built from [`tui/`](../../tui))
 - **`gaia-agent`** — the flagship agent the Terminal UI spawns as a child process
   (`TransportSubprocess` in `tui/internal/catalog/catalog.go`)
 
@@ -17,7 +17,7 @@ desktop app by running the unmodified electron-builder
 owner (files, Installed-apps entry, shortcuts, uninstaller) because
 electron-updater re-runs exactly that file. The terminal shows as
 `GAIA Terminal UI` and installs to `%LOCALAPPDATA%\Programs\gaia-tui` under
-`gaia-tui` registry ids. Upgrading an install an earlier setup made under the
+`gaia-cli` registry ids. Upgrading an install an earlier setup made under the
 legacy `GAIA Terminal Hub` folder and `TerminalHub` ids moves it there and
 removes the old folder, keys, PATH entry and shortcuts. Silent installs take `/S /COMPONENTS=ui,tui`; the
 exit codes are listed in `gaia-setup.nsi` and [Install GAIA](../../docs/guides/install.mdx).
@@ -34,7 +34,7 @@ those platform keys rather than let a half-empty installer get built.
 
 ## Staging a payload
 
-All three builders take `--payload <dir>` holding `gaia-tui` and `gaia-agent`
+All three builders take `--payload <dir>` holding `gaia-cli` and `gaia-agent`
 (with `.exe` suffixes on Windows), and `core/`: the frozen `gaia` and its
 `_internal` folder, unpacked from a `gaia-core-<platform>` build of
 [`build_core.yml`](../../.github/workflows/build_core.yml). The terminal UI runs
@@ -45,7 +45,7 @@ Stage all three and every builder is satisfied. Build the first, fetch the
 second:
 
 ```bash
-cd tui && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../stage/gaia-tui ./cmd/gaia && cd ..
+cd tui && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o ../stage/gaia-cli ./cmd/gaia && cd ..
 cp LICENSE.md stage/
 python installer/tui/fetch_sidecar.py --platform linux-x64 --out stage
 ```
@@ -84,7 +84,7 @@ it from a named source and checks its name, PE header and size — never "latest
 python installer/tui/fetch_agent_ui_setup.py --release v0.24.1 --out stage/agent-ui
 ```
 
-On Windows the payload also needs `gaia-tui.exe` to carry its icon, which the Go
+On Windows the payload also needs `gaia-cli.exe` to carry its icon, which the Go
 linker only embeds when a resource object sits beside the main package:
 
 ```bash

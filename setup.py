@@ -382,7 +382,6 @@ setup(
     entry_points={
         "console_scripts": [
             "gaia = gaia.cli:main",
-            "gaia-cli = gaia.cli:main",
             "gaia-mcp = gaia.mcp.mcp_bridge:main",
         ]
     },

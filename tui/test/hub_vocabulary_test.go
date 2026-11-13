@@ -79,7 +79,7 @@ func TestNoSourceStillSpeaksHub(t *testing.T) {
 	}
 }
 
-// The dev build output is `gaia-tui`, never `gaia` — the Python CLI owns that
+// The dev build output is `gaia-cli`, never `gaia` — the Python CLI owns that
 // name, the two have entirely different subcommands, and a build called `gaia`
 // shadows the real CLI on PATH. That reads as the Python CLI having silently
 // lost every command it has, which is exactly the confusion this rename fixes.
@@ -94,8 +94,8 @@ func TestNoDocTellsYouToBuildTheBinaryAsGaia(t *testing.T) {
 		filepath.Join(repo, "docs", "reference", "cli.mdx"),
 		filepath.Join(repo, "tui", "Makefile"),
 	}
-	// `bin/gaia` NOT followed by another name-forming character: bin/gaia-tui,
-	// bin/gaia-agent and bin/gaia-linux-amd64 are all fine.
+	// `bin/gaia` NOT followed by another name-forming character: bin/gaia-cli,
+	// bin/gaia-agent and bin/gaia-cli-linux-amd64 are all fine.
 	bare := regexp.MustCompile(`bin/gaia(?:[^-\w]|$)`)
 	// The desktop app's ~/.local/bin/gaia shim is the Python CLI, however the
 	// sentence goes on after it — a backtick or comma as much as a space.
