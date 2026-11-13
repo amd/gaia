@@ -1035,7 +1035,8 @@ choice: the provider's top pick is marked **Default** and picked, and the
 model you pick is the one chat uses. Once the key works, setup says so and
 names that model. The AMD LLM Gateway is listed only on a network that can
 reach it, unless you picked it before. **Settings → Model** also shows what
-this month's cloud chats have cost and lets you set a monthly limit. GAIA warns
+this month's cloud chats (background goal runs included) have cost and lets
+you set a monthly limit; once it is reached, goals wait instead of running. GAIA warns
 when you're close, and once you reach it, it stops before sending a chat to the
 cloud and tells you how to go on: raise the limit, allow more for this month,
 or use a model on this PC. The total is an estimate at list price, with cached
@@ -1216,7 +1217,7 @@ Behavior notes:
 
 - Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
 - Nobody is there to approve a tool call during a scheduled run, so a run that reaches a step needing approval (a shell command, a file write) stops there and fails, naming the step. Do that work in a chat, where you can approve it.
-- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab.
+- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab. A run that finishes cleanly raises an unread notification with the start of its answer; runs that finished before the app opened don't.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
 - Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.

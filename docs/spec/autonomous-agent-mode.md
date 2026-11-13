@@ -254,6 +254,7 @@ def set_loop_state(
     state: str,          # "idle" | "scheduled" | "paused"
     reason: str = "",
     wake_in_seconds: int = 0,   # required when state="scheduled"
+    goal_outcome: str = "",     # "done" | "failed" | "" (not finished)
 ) -> str:
     """Signal the autonomous loop what to do next.
 
@@ -268,6 +269,9 @@ def set_loop_state(
         reason: Human-readable explanation (shown in activity log).
         wake_in_seconds: Seconds until next wake-up (only for "scheduled").
                          Minimum: 30. Maximum: 86400 (24 hours).
+        goal_outcome: "done" when the goal worked on is achieved, "failed"
+                      when it cannot be done (reason says why), or empty to
+                      try it again later.
     """
 ```
 
@@ -275,6 +279,23 @@ def set_loop_state(
 - `wake_in_seconds` floor: 30 seconds (prevents infinite loops)
 - `wake_in_seconds` ceiling: 86400 seconds (prevents absurdly far scheduling)
 - If `wake_in_seconds` is below floor, clamp to 30 and log a warning
+- An unknown `goal_outcome` is refused, and the relay reads it as empty
+
+**How a goal run ends (#7995).** A tick works on the first actionable goal.
+`goal_outcome="done"` completes it and `"failed"` fails it, with `reason` as
+its note. A run that stops with state `"scheduled"` holds the goal until
+its wake time without counting a try. Any other run that reports neither,
+including one that hits the tick timeout, is counted: the goal waits 5 minutes,
+then 10, before it is run again (`GoalStore.retry_at`), and the third such
+run fails it with "Stopped after 3 tries without finishing" and the last
+run's reason or answer. A goal that can't be done therefore stops instead of
+being re-run every tick.
+
+**Spending.** A goal run on a cloud model is added to the month's cloud
+spending like a chat turn, including a run that failed after the model
+answered. Once the monthly limit is reached, no goal run starts: the goal
+stays queued with the limit message as its note, and runs again once the
+limit is raised or more is allowed for the month.
 
 ### 5.3 `request_user_input` Tool
 
