@@ -34,8 +34,8 @@ from gaia.llm.lemonade_client import (
     resolve_lemonade_base_url,
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
-from gaia.llm.reasoning import ReasoningStreamFilter
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
+from gaia.llm.reasoning import ReasoningStreamFilter
 from gaia.log_rotation import log_family
 from gaia.logger import get_logger
 from gaia.login_path import apply_login_path
