@@ -1671,9 +1671,41 @@ def test_a_single_turn_flm_build_is_no_chat_model(client, lemonade):
     assert "gemma4e-flash-e4b-FLM" not in ids
 
 
+_UNPROVEN_FLM = ("gemma4-it-e2b-FLM", "lfm2-1.2b-FLM", "qwen3.5-4b-FLM")
+
+
+def _flm_on_disk(*ids):
+    return [
+        {"id": i, "downloaded": True, "labels": ["chat"], "recipe": "flm"} for i in ids
+    ]
+
+
+def test_downloaded_npu_models_gaia_has_not_proven_are_not_offered(client, lemonade):
+    """#7975: every FLM build on the PC was offered as Ready."""
+    lemonade.models = _flm_on_disk("gemma4-it-e4b-FLM", *_UNPROVEN_FLM)
+    lemonade.answers[("GET", "system-info")] = (200, _NPU_SYSTEM_INFO)
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert "gemma4-it-e4b-FLM" in ids
+    for unproven in _UNPROVEN_FLM:
+        assert unproven not in ids
+    refused = client.post("/api/providers/select", json={"model": "lfm2-1.2b-FLM"})
+    assert refused.status_code == 409
+
+
+def test_an_unproven_npu_model_the_user_already_chose_still_lists(client, lemonade):
+    """A choice saved before it was withdrawn still loads."""
+    _write_config({"last_model": "lfm2-1.2b-FLM", "default_model": "qwen3.5-4b-FLM"})
+    lemonade.models = _flm_on_disk(*_UNPROVEN_FLM)
+    lemonade.answers[("GET", "system-info")] = (200, _NPU_SYSTEM_INFO)
+    ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
+    assert "lfm2-1.2b-FLM" in ids
+    assert "qwen3.5-4b-FLM" in ids
+    assert "gemma4-it-e2b-FLM" not in ids
+
+
 def test_local_models_keep_chat_models_that_also_take_audio(client, lemonade):
     lemonade.models = [
-        {"id": "gemma4-it-e2b-FLM", "downloaded": True, "labels": ["chat", "audio"]},
+        {"id": "gemma4-it-e4b-FLM", "downloaded": True, "labels": ["chat", "audio"]},
         {"id": "audio-only-FLM", "downloaded": True, "labels": ["audio"]},
         {
             "id": "Whisper-Large-v3-Turbo",
@@ -1684,7 +1716,7 @@ def test_local_models_keep_chat_models_that_also_take_audio(client, lemonade):
         {"id": "kokoro-v1", "downloaded": True, "labels": ["tts"]},
     ]
     ids = [m["id"] for m in client.get("/api/providers/local/models").json()["models"]]
-    assert "gemma4-it-e2b-FLM" in ids
+    assert "gemma4-it-e4b-FLM" in ids
     for non_chat in (
         "audio-only-FLM",
         "Whisper-Large-v3-Turbo",
