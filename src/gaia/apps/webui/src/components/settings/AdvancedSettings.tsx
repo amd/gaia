@@ -14,7 +14,7 @@ import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
 import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
-import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
+import { ErrorNotice, namesEmbeddedStart, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
@@ -184,7 +184,7 @@ export function AdvancedSettings() {
                                 hint={!status.lemonade_running
                                     ? (needsLocalSetup(status) ? t('settings.advanced.notInstalledHint')
                                         : status.lemonade_error ? t('settings.advanced.queryFailed', { reason: status.lemonade_error })
-                                        : status.start_instruction && !namesSetupCommand(status.start_instruction) ? status.start_instruction : t('settings.advanced.notRunningHint'))
+                                        : status.start_instruction && !namesSetupCommand(status.start_instruction) && !namesEmbeddedStart(status.start_instruction) ? status.start_instruction : t('settings.advanced.notRunningHint'))
                                     : undefined}
                             />
                             {needsLocalSetup(status) && <SetUpLocalButton className="btn-primary" />}
@@ -193,7 +193,7 @@ export function AdvancedSettings() {
                                 value={status.model_loaded || t('settings.advanced.noneLoaded')}
                                 ok={!!status.model_loaded && (cloudModel || status.expected_model_loaded !== false)}
                                 hint={!status.model_loaded
-                                    ? t('settings.advanced.loadsFirst')
+                                    ? t(status.lemonade_running ? 'settings.advanced.loadsFirst' : 'settings.advanced.waitsForServer')
                                     : !cloudModel && status.expected_model_loaded === false
                                     ? t('settings.advanced.expected', { name: modelName ?? '' })
                                     : undefined}

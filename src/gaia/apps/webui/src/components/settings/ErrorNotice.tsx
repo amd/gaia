@@ -16,6 +16,11 @@ export function namesSetupCommand(text: string | null | undefined): boolean {
     return /gaia init/i.test(text ?? '');
 }
 
+/** True for a start hint naming GAIA's own server, which the daemon restarts without being asked. */
+export function namesEmbeddedStart(text: string | null | undefined): boolean {
+    return /gaia lemonade embedded start/i.test(text ?? '');
+}
+
 /** True when this PC has no model server yet, the one case setup, not waiting, fixes. */
 export function needsLocalSetup(status: SystemStatus | null | undefined): boolean {
     return !!status && !status.lemonade_running

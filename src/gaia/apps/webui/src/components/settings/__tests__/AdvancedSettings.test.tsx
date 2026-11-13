@@ -192,6 +192,19 @@ describe('AdvancedSettings', () => {
         expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
     });
 
+    it('names no terminal command when GAIA runs its own server', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            lemonade_running: false, model_loaded: null, start_command: 'gaia lemonade embedded start',
+            start_instruction: 'GAIA starts its Lemonade Server when it needs it. To start it now, run: gaia lemonade embedded start',
+        }));
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('It normally starts on its own. Chats wait until it is back, cloud ones too.')).toBeInTheDocument();
+        expect(screen.queryByText(/gaia lemonade embedded start/)).not.toBeInTheDocument();
+        expect(screen.getByText('None loaded yet — it loads once the model server is back.')).toBeInTheDocument();
+        expect(screen.queryByText(/loads with the first message/)).not.toBeInTheDocument();
+    });
+
     describe('Custom model ID', () => {
         async function save(id: string, modelStatus: { found: boolean; checked: boolean }) {
             mockedApi.getSystemStatus.mockResolvedValue(status({}));
