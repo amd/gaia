@@ -118,6 +118,9 @@ echo "List the Python files here" | gaia -p --output-format json
 | `--verbose` | With `--output-format json`: add the turn's full `conversation` (every model message and tool call) |
 | `--max-steps <n>` | Cap on agent steps for this run, at least 1. Default: the agent's own limit ([Agent step limit](#agent-step-limit)) |
 | `--attempts <n>` | Run `n` (up to 4) independent attempts, then one turn that checks and combines them ([below](#independent-attempts)). Default: 1 |
+| `--goal <condition>` | Keep working in rounds until the condition is checked and holds ([below](#working-until-a-goal-holds)). Can't be combined with `--attempts` |
+| `--check <command>` | With `--goal`: a command run in the current folder after every round; the goal isn't met while it exits non-zero. Repeatable |
+| `--max-rounds <n>` | With `--goal`: stop after `n` rounds and report what's left. Default: 20 |
 | `--dangerously-skip-permissions` | Run confirmation-gated tools (shell commands, file writes) without asking |
 | `--full-access` | Full access, as the TUI's `/full-access`: lifts the shell guardrails, so test runners, build tools and other commands outside the no-prompt list run, and grants paths outside the current folder without asking. Implies `--dangerously-skip-permissions` |
 | `--base-url <url>` | Use a remote Lemonade server instead of the local one |
@@ -151,7 +154,8 @@ subcommand instead.
 | `error_count` | Errors the agent recorded during the turn |
 | `error` | Only when `is_error`: why the turn failed |
 | `attempts` | Only with `--attempts` above 1: each attempt's `is_error`, `status`, `error` (why it failed), `duration_s`, steps, tool calls and tokens. The top-level counts include them |
-| `conversation` | Only with `--verbose`: the turn's messages and tool calls |
+| `goal` | Only with `--goal`: `condition`, `outcome` (`met`, `needs_user`, `stalled`, `budget`, or `error` when the model or the check could not run), `rounds`, the last `verdict` (`met`, `missing`, `evidence`, `blocked`, `question`, `decided_by`, `checks_passed`) and a one-line `message`. Steps, tool calls and tokens are summed across rounds |
+| `conversation` | Only with `--verbose`: the turn's messages and tool calls (with `--goal`, the last round's) |
 
 **Exit codes.** `0` when the turn succeeded; `1` when it did not (any status other
 than `success`), when the model server could not be started, or when no prompt was
@@ -200,6 +204,47 @@ catches what the first missed.
 
 ```bash
 gaia -p "Review the change on this branch against main" --attempts 2 --full-access
+```
+
+#### Working until a goal holds
+
+`--goal` keeps the agent working until the goal is checked and holds, instead of
+stopping at its first confident answer. After each round the goal is checked,
+in this order:
+
+1. Each `--check` command runs in the current folder. A non-zero exit means the
+   goal isn't met, whatever the agent says.
+2. Files the goal names as outputs ("write totals.csv") must exist.
+3. The agent's own model reads the round's tool results in a separate call and
+   judges the goal from them. The agent's answer, and what the agent passed to
+   its tools, reach it only as claims. It can call the goal met only by quoting
+   tool output that really shows it, including at least one quote from the
+   latest round. Quotes proven in earlier rounds stay valid, so finished work
+   doesn't have to be redone.
+
+When the goal isn't met yet, the next round starts with what's still missing. The
+run ends in one of these states, written to stderr and to `goal.outcome`:
+
+| Outcome | When | Exit |
+|---------|------|------|
+| `met` | The checks pass and the tool results show the goal holds | 0 |
+| `needs_user` | Only you can unblock it, for example a missing file; the message is the question to answer | 1 |
+| `stalled` | Three rounds in a row made no progress | 1 |
+| `budget` | `--max-rounds` rounds, or two hours, ran out; the message says what's left | 1 |
+
+`--goal` needs the agent package installed, as in a source checkout: each round
+runs on the same agent, so the next round remembers the last. A `--check`
+command is your own command line and runs as written, without the shell
+guardrails. It gets no input, and one that runs past 10 minutes is stopped
+together with everything it started and counts as failed. Confirmation-gated
+tools inside a round still follow the rules below. A round that fails because
+the model couldn't be reached ends the run with `goal.outcome` `error`; a tool
+error inside a round doesn't, since the next round can work around it.
+
+```bash
+gaia -p "Convert every CSV in data/raw to parquet in data/clean" \
+  --goal "every CSV in data/raw has a parquet twin in data/clean" \
+  --check "python check_counts.py" --dangerously-skip-permissions
 ```
 
 **Permissions and file access.** With nobody at the terminal to approve them,

@@ -1273,6 +1273,32 @@ def build_parser():
         "reviews and answers for about N+1 times the tokens",
     )
     parser.add_argument(
+        "--goal",
+        dest="print_goal",
+        default=None,
+        metavar="CONDITION",
+        help="With -p: keep working in rounds until CONDITION is checked and "
+        "holds. After each round the goal is checked from tool results and any "
+        "--check command, not from the answer. Exits 0 only when it holds",
+    )
+    parser.add_argument(
+        "--check",
+        dest="print_goal_checks",
+        action="append",
+        default=None,
+        metavar="COMMAND",
+        help="With --goal: a command run in the current folder after each round; "
+        "the goal is not met while it exits non-zero. Repeatable",
+    )
+    parser.add_argument(
+        "--max-rounds",
+        dest="print_goal_max_rounds",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="With --goal: stop after N rounds, reporting what's left (default 20)",
+    )
+    parser.add_argument(
         "--dangerously-skip-permissions",
         dest="print_skip_permissions",
         action="store_true",
@@ -5151,6 +5177,9 @@ def main():
         "--verbose": args.print_verbose,
         "--max-steps": args.print_max_steps is not None,
         "--attempts": args.print_attempts is not None,
+        "--goal": args.print_goal is not None,
+        "--check": bool(args.print_goal_checks),
+        "--max-rounds": args.print_goal_max_rounds is not None,
         "--dangerously-skip-permissions": args.print_skip_permissions,
         "--full-access": args.print_full_access,
     }
@@ -5182,6 +5211,24 @@ def main():
 
             if args.print_attempts > MAX_ATTEMPTS:
                 parser.error(f"--attempts takes 1 to {MAX_ATTEMPTS}.")
+        if args.print_goal is None:
+            goal_only = [
+                flag
+                for flag, given in (
+                    ("--check", bool(args.print_goal_checks)),
+                    ("--max-rounds", args.print_goal_max_rounds is not None),
+                )
+                if given
+            ]
+            if goal_only:
+                parser.error(f"{', '.join(goal_only)} only applies with --goal.")
+        else:
+            if not args.print_goal.strip():
+                parser.error("--goal needs a condition: say what must be true.")
+            if args.print_attempts:
+                parser.error("--goal and --attempts cannot be combined.")
+            if any(not check.strip() for check in args.print_goal_checks or ()):
+                parser.error("--check needs a command to run.")
         from gaia.print_mode import run as run_print_mode
 
         sys.exit(
@@ -5192,6 +5239,9 @@ def main():
                 verbose=args.print_verbose,
                 max_steps=args.print_max_steps,
                 attempts=args.print_attempts or 1,
+                goal=args.print_goal,
+                goal_checks=tuple(args.print_goal_checks or ()),
+                goal_max_rounds=args.print_goal_max_rounds,
                 skip_permissions=args.print_skip_permissions,
                 full_access=args.print_full_access,
                 base_url=args.base_url,

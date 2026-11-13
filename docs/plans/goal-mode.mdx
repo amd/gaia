@@ -6,7 +6,10 @@ icon: "flag-checkered"
 
 # Goal mode: work until it's actually done
 
-> **Status:** Proposed. Nothing below is built unless marked *exists today*.
+> **Status:** Phase 1 is built: the policy (`goal_run.py`), the checker
+> (`goal_check.py`) and `gaia -p --goal` in-process
+> ([CLI reference](/reference/cli#working-until-a-goal-holds)). Phases 2–5 are
+> proposed. Elsewhere, nothing below is built unless marked *exists today*.
 >
 > **Priority:** P1. Long jobs that stop early or claim false completion are the largest
 > correction cluster measured in [Agent-loop gaps](https://github.com/amd/gaia/blob/main/docs/plans/agent-loop-gaps-from-session-mining.md).
@@ -181,6 +184,31 @@ stops at the first that decides:
 
 Prose goals with no runnable check are legitimate (tier 3 only). The final message then
 says the outcome was judged from evidence, not proven by a test.
+
+**Proof has to outlive its round.** The first real run of Phase 1 showed this: the
+evaluator saw only the current round's tool results, so files read in round 4 no
+longer counted in round 6. The agent re-read files every round and the goal never
+closed, even though the answer was right. So the evaluator quotes proof for each
+part that already holds, even when the whole goal doesn't hold yet. Each quote is
+checked against real tool output, kept in the ledger, and shown to later rounds as
+evidence that may be cited again. New proof also counts as progress for stall
+detection. A `met` still needs at least one quote from the latest round, because
+later work can break what an earlier round proved. Tool arguments are shown to the
+evaluator but never accepted as proof, since the agent wrote them.
+
+**Stall detection ignores rewording.** The evaluator rewords its missing list every
+round and test runners print new timings, so changed text alone isn't progress. A
+round counts when it writes a new file, proves something new, leaves fewer items
+missing, or, for a failing check, changes the failure with its durations removed.
+
+**A quote proves where, not what.** The citation guard stops an evaluator from
+inventing evidence. It doesn't check that a quote such as `"sum": 80.0` belongs to
+the right file. That semantic gap is what tier 1 exists for: a goal that matters
+should carry a `--check`.
+
+In `gaia -p`, a `--check` command is the user's own command line, typed at launch,
+so it runs as written, without a separate confirmation. The confirmed session grant
+above is for the TUI and Agent UI, where the goal's text can come from the model.
 
 **Sharing the model between rounds.** Memory extraction starts about 3 s after
 `process_query` returns, so it competes with the evaluator for the model. It also stores

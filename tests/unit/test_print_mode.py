@@ -178,6 +178,9 @@ def test_main_forwards_flags_and_exits_with_runs_code(monkeypatch):
         verbose=False,
         max_steps=3,
         attempts=2,
+        goal=None,
+        goal_checks=(),
+        goal_max_rounds=None,
         skip_permissions=True,
         full_access=False,
         base_url="http://h:1/api/v1",
@@ -1188,3 +1191,254 @@ def test_one_attempt_never_copies_the_folder(monkeypatch):
         },
     )
     assert print_mode.run("t", attempts=1) == 0
+
+
+# ---------------------------------------------------------------------------
+# --goal: rounds until the goal is checked and holds
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv, message",
+    [
+        (["-p", "x", "--check", "pytest"], "only applies with --goal"),
+        (["-p", "x", "--max-rounds", "3"], "only applies with --goal"),
+        (["-p", "x", "--goal", "  "], "needs a condition"),
+        (["-p", "x", "--goal", "y", "--attempts", "2"], "cannot be combined"),
+        (["-p", "x", "--goal", "y", "--check", " "], "--check needs a command"),
+    ],
+)
+def test_goal_flag_misuse_is_a_usage_error(monkeypatch, capsys, argv, message):
+    run = MagicMock()
+    monkeypatch.setattr(print_mode, "run", run)
+    assert _run_main(monkeypatch, argv) == 2
+    assert message in capsys.readouterr().err
+    run.assert_not_called()
+
+
+def test_goal_flags_without_p_are_a_usage_error(monkeypatch, capsys):
+    run = MagicMock()
+    monkeypatch.setattr(print_mode, "run", run)
+    assert _run_main(monkeypatch, ["--goal", "x"]) == 2
+    assert "only applies to -p" in capsys.readouterr().err
+
+
+def test_main_forwards_goal_flags(monkeypatch):
+    run = MagicMock(return_value=0)
+    monkeypatch.setattr(print_mode, "run", run)
+    argv = ["-p", "go", "--goal", "tests pass", "--check", "pytest", "--check", "ruff"]
+    _run_main(monkeypatch, argv + ["--max-rounds", "4"])
+    kwargs = run.call_args.kwargs
+    assert kwargs["goal"] == "tests pass"
+    assert kwargs["goal_checks"] == ("pytest", "ruff")
+    assert kwargs["goal_max_rounds"] == 4
+
+
+class _GoalAgent(_StubAgent):
+    """Answers each round from a script; the evaluator replies from another."""
+
+    rounds = []
+    verdicts = []
+
+    def __init__(self, config):
+        super().__init__(config)
+        self.external_marks = 0
+        self.turns_in_flight = 0
+        self.conversation_history = []
+        self.evaluator_calls = []
+
+    def process_query(self, text):
+        self.queries.append(text)
+        return type(self).rounds[len(self.queries) - 1]
+
+    def mark_external_content(self):
+        self.external_marks += 1
+
+    def _note_user_turn_started(self):
+        self.turns_in_flight += 1
+
+    def _note_user_turn_finished(self):
+        self.turns_in_flight -= 1
+
+    def _make_extraction_chat(self):
+        agent = self
+
+        class _Chat:
+            def send_messages(self, **kwargs):
+                agent.evaluator_calls.append(kwargs)
+                reply = type(agent).verdicts[len(agent.evaluator_calls) - 1]
+                text = reply if isinstance(reply, str) else json.dumps(reply)
+                return types.SimpleNamespace(text=text, finish_reason="stop")
+
+        return _Chat()
+
+
+def _round(answer, tool_output, status="success"):
+    return {
+        "status": status,
+        "result": answer,
+        "steps_taken": 2,
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "conversation": [
+            {"role": "tool", "name": "run_shell_command", "content": tool_output}
+        ],
+    }
+
+
+def _goal_verdict(met=False, missing=(), evidence=(), blocked=False, question=""):
+    return {
+        "met": met,
+        "missing": list(missing),
+        "evidence": list(evidence),
+        "blocked": blocked,
+        "question": question,
+    }
+
+
+@pytest.fixture
+def goal_env(stub_env, monkeypatch, tmp_path):
+    monkeypatch.setattr(sys.modules["gaia_agent.agent"], "GaiaAgent", _GoalAgent)
+    _GoalAgent.instances = []
+    monkeypatch.setattr(_StubAgent, "instances", _GoalAgent.instances)
+    monkeypatch.setattr(
+        "gaia.llm.lemonade_client.cloud_model_provider", lambda model: None
+    )
+    monkeypatch.chdir(tmp_path)
+    return tmp_path
+
+
+def test_goal_runs_rounds_until_the_evaluator_cites_proof(goal_env, capsys):
+    _GoalAgent.rounds = [
+        _round("Done!", "converted 150 of 300"),
+        _round("Done, all verified.", "converted 300 of 300 files"),
+    ]
+    _GoalAgent.verdicts = [
+        _goal_verdict(missing=["150 files not converted"]),
+        _goal_verdict(met=True, evidence=["converted 300 of 300 files"]),
+    ]
+    code = print_mode.run(
+        "convert the CSVs", model="m1", output_format="json", goal="all 300 converted"
+    )
+    captured = capsys.readouterr()
+    assert code == 0
+    record = json.loads(captured.out)
+    assert record["goal"]["outcome"] == "met"
+    assert record["goal"]["rounds"] == 2
+    assert record["is_error"] is False
+    # Steps and tokens add up across rounds.
+    assert record["num_steps"] == 4 and record["input_tokens"] == 20
+    agent = _GoalAgent.instances[0]
+    assert agent.queries[0] == "convert the CSVs"
+    assert "150 files not converted" in agent.queries[1]
+    assert agent.external_marks == 1  # round 2's prompt is not the user's
+    assert agent.turns_in_flight == 0  # the extraction hold was released
+    assert agent.drained
+    # Round 1 is in the history round 2 runs with.
+    assert any("Done!" in str(m) for m in agent.conversation_history)
+    assert "Goal met after 2 round(s)" in captured.err
+
+
+def test_an_uncited_met_keeps_the_goal_running(goal_env, capsys):
+    # Round 1 claims success; no tool output supports it.
+    _GoalAgent.rounds = [
+        _round("All tests pass, verified.", "3 failed, 9 passed"),
+        _round("Fixed.", "12 passed in 0.4s"),
+    ]
+    _GoalAgent.verdicts = [
+        _goal_verdict(met=True, evidence=["All tests pass, verified."]),
+        _goal_verdict(met=True, evidence=["12 passed in 0.4s"]),
+    ]
+    assert print_mode.run("fix tests", model="m1", goal="the tests pass") == 0
+    assert len(_GoalAgent.instances[0].queries) == 2
+
+
+def test_a_blocked_goal_stops_and_exits_1_with_the_question(goal_env, capsys):
+    _GoalAgent.rounds = [_round("Could not open it.", "Not found: Q:/plan.txt")]
+    _GoalAgent.verdicts = [
+        _goal_verdict(missing=["the file"], blocked=True, question="Where is plan.txt?")
+    ]
+    code = print_mode.run("summarize", model="m1", goal="plan summarized")
+    captured = capsys.readouterr()
+    assert code == 1
+    assert "Goal not done: it needs you. Where is plan.txt?" in captured.err
+    assert len(_GoalAgent.instances[0].queries) == 1
+
+
+def test_a_goal_out_of_rounds_says_it_is_not_done(goal_env, capsys):
+    _GoalAgent.rounds = [_round("ok", f"step {n}") for n in range(2)]
+    _GoalAgent.verdicts = [
+        _goal_verdict(missing=["a"]),
+        _goal_verdict(missing=["b"]),
+    ]
+    code = print_mode.run(
+        "go", model="m1", output_format="json", goal="x", goal_max_rounds=2
+    )
+    record = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert record["goal"]["outcome"] == "budget"
+    assert record["is_error"] is True
+    assert record["error"].startswith("Goal not done")
+
+
+def test_a_failing_check_overrides_a_confident_evaluator(goal_env, capsys):
+    _GoalAgent.rounds = [_round("Tests pass.", "12 passed")]
+    _GoalAgent.verdicts = []  # the evaluator must not be asked
+    code = print_mode.run(
+        "fix",
+        model="m1",
+        output_format="json",
+        goal="tests pass",
+        goal_checks=[f'"{sys.executable}" -c "raise SystemExit(2)"'],
+        goal_max_rounds=1,
+    )
+    record = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert record["goal"]["verdict"]["decided_by"] == "check"
+    assert _GoalAgent.instances[0].evaluator_calls == []
+
+
+def test_a_round_the_model_never_answered_ends_the_goal_as_an_error(goal_env, capsys):
+    _GoalAgent.rounds = [
+        {"status": "failed", "result": "", "error": "model down", "model_failed": True}
+    ]
+    _GoalAgent.verdicts = []
+    code = print_mode.run("go", model="m1", output_format="json", goal="x")
+    captured = capsys.readouterr()
+    record = json.loads(captured.out)
+    assert code == 1
+    assert record["goal"]["outcome"] == "error"
+    assert record["error"] == "model down"
+    assert "could not be checked. model down" in captured.err
+
+
+def test_a_round_with_a_tool_error_is_still_checked(goal_env, capsys):
+    # One failed read leaves the turn "failed"; the goal judges what was done.
+    tool_error = _round("Read most of them.", "sum=6 for a.csv", status="failed")
+    _GoalAgent.rounds = [tool_error, _round("Done.", "sum=9 for b.csv")]
+    _GoalAgent.verdicts = [
+        _goal_verdict(missing=["b.csv"], evidence=["sum=6 for a.csv"]),
+        _goal_verdict(met=True, evidence=["sum=9 for b.csv"]),
+    ]
+    assert print_mode.run("sum", model="m1", goal="both summed") == 0
+    assert len(_GoalAgent.instances[0].queries) == 2
+
+
+def test_an_unreadable_verdict_keeps_the_partial_record(goal_env, capsys):
+    _GoalAgent.rounds = [_round("ok", "a"), _round("ok", "b")]
+    _GoalAgent.verdicts = [_goal_verdict(missing=["a"]), "not json"]
+    code = print_mode.run("go", model="m1", output_format="json", goal="x")
+    record = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert record["goal"]["outcome"] == "error"
+    assert record["goal"]["rounds"] == 1
+    assert record["num_steps"] == 4
+    assert "not JSON" in record["error"]
+
+
+def test_goal_refuses_when_the_agent_only_ships_as_a_binary(monkeypatch, capsys):
+    monkeypatch.setattr(print_mode, "_build_agent", lambda **kw: None)
+    monkeypatch.setattr(print_mode, "_resolve_model", lambda model: model)
+    code = print_mode.run("go", model="m1", goal="x")
+    assert code == 1
+    assert "--goal needs the GAIA agent in this process" in capsys.readouterr().err
