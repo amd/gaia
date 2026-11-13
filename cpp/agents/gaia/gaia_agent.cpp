@@ -904,9 +904,11 @@ std::string GaiaAgent::pastedDataRefusal(const std::string& command, const std::
     std::istringstream in(text);
     for (std::string line; std::getline(in, line);) {
         while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
-        if (std::count(line.begin(), line.end(), ',') + std::count(line.begin(), line.end(), '\t') >= 2) lines.insert(line);
+        if (std::count(line.begin(), line.end(), ',') + std::count(line.begin(), line.end(), '\t') >= 1) lines.insert(line);
     }
-    if (lines.size() < kMinPastedRows) return "";
+    // A small file has few rows to paste: most of a 5-row file is as telling as 5 rows of a big one.
+    constexpr size_t kMinPastedRowsSmallFile = 3;
+    if (lines.size() < kMinPastedRowsSmallFile) return "";
     std::error_code ec;
     for (const auto& r : roots) {
         fs::recursive_directory_iterator it(fs::u8path(r), fs::directory_options::skip_permission_denied, ec), end;
@@ -919,12 +921,16 @@ std::string GaiaAgent::pastedDataRefusal(const std::string& command, const std::
             if (!it->is_regular_file(ec) || (ext != ".csv" && ext != ".tsv" && ext != ".txt")) continue;
             if (it->file_size(ec) > 4 * 1024 * 1024) continue;
             std::ifstream f(it->path(), std::ios::binary);
-            size_t found = 0;
-            for (std::string row; std::getline(f, row) && found < kMinPastedRows;) {
+            size_t found = 0, rows = 0;
+            for (std::string row; std::getline(f, row);) {
                 while (!row.empty() && row.back() == '\r') row.pop_back();
-                if (!row.empty() && lines.count(row)) ++found;
+                if (row.empty()) continue;
+                ++rows;
+                if (lines.count(row)) ++found;
             }
-            if (found >= kMinPastedRows) {
+            // The header and the last row are often glued to the quotes around the pasted block.
+            const size_t needed = std::max(kMinPastedRowsSmallFile, std::min(kMinPastedRows, rows > 2 ? rows - 2 : rows));
+            if (found >= needed) {
                 return "This command pastes rows of " + it->path().filename().u8string() +
                        " into the script. Copied data is easy to get wrong or cut short. Read the file by its "
                        "path inside the script instead (for example pandas.read_csv or the csv module), or write the "

@@ -1139,3 +1139,21 @@ TEST(AgentResilience, AReplyOfPlaceholderTokensStopsTheTurnWithoutRetrying) {
     EXPECT_NE(r["result"].get<std::string>().find("placeholder tokens"), std::string::npos) << r.dump();
     EXPECT_EQ(mock.requestCount(), 1) << "the same server would return the same noise";
 }
+
+TEST(AgentResilience, ACallCutOffWhilePastingRowsGetsAScriptExample) {
+    bench::MockLlmServer mock;
+    std::string rows = "python -c \\\"import io\\ndata='''region,product,revenue\\n";
+    for (int i = 0; i < 40; ++i) rows += "North,P" + std::to_string(i) + "," + std::to_string(i * 10) + "\\n";
+    const json fn = {{"name", "add"}, {"arguments", "{\"command\": \"" + rows}};
+    const json call = {{"id", "c1"}, {"type", "function"}, {"function", fn}};
+    const json msg = {{"role", "assistant"}, {"content", nullptr}, {"tool_calls", json::array({call})}};
+    const json cut = {{"choices", json::array({{{"message", msg}, {"finish_reason", "length"}}})}};
+    mock.pushResponse(cut.dump());
+    mock.pushResponse(answer("ok"));
+    ResilienceAgent agent(cfgFor(mock));
+    agent.initForTest();
+    agent.processQuery("total the revenue");
+    ASSERT_EQ(mock.receivedBodies().size(), 2u);
+    EXPECT_NE(mock.receivedBodies()[1].find("pasting rows of data"), std::string::npos);
+    EXPECT_NE(mock.receivedBodies()[1].find("pd.read_csv"), std::string::npos);
+}
