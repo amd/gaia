@@ -283,6 +283,10 @@ func TestMain(m *testing.M) {
 	newSetupAPI = func() setupapi.API {
 		return &setupapitest.Fake{PlanErr: errors.New("no daemon in tests")}
 	}
+	// Nor attach to the developer's real daemon to read NPU readiness.
+	readNPUVerdict = func(context.Context) (setupapi.NPU, bool) {
+		return setupapi.NPU{}, false
+	}
 	// Nor read the developer's own Lemonade choice, or find their server.
 	cfgDir, err := os.MkdirTemp("", "gaia-preflight-config-")
 	if err != nil {

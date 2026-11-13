@@ -618,7 +618,8 @@ def test_fast_mode_keeps_the_voice():
     """
     with _agent(fast=True) as agent:
         assert "gaia-voice" in (agent.loaded_skills or [])
-        assert "gaia-voice" in agent._compose_system_prompt()
+        agent._compose_system_prompt()
+        assert "gaia-voice" in agent.session_context
 
 
 def test_fast_mode_does_not_advertise_tools_it_removed():
