@@ -682,6 +682,10 @@ class SSEOutputHandler(OutputHandler):
         # Sealed turn record for the turn in flight, stashed by
         # print_turn_metrics and consumed by the next print_final_answer.
         self._turn_metrics: Optional[Dict[str, Any]] = None
+        # The turn's answer and record for later turns, sealed when the answer
+        # prints so a daemon's final event need not wait on the run thread's tail.
+        self.staged_answer: Optional[str] = None
+        self.staged_model_messages: Optional[List[Dict[str, Any]]] = None
         # Set by mark_turn_failed; the next answer event carries ``failed``.
         self._turn_failed = False
         self._turn_failure: Optional[str] = None
@@ -1312,6 +1316,20 @@ class SSEOutputHandler(OutputHandler):
     def print_turn_metrics(self, record: Dict[str, Any]):
         """Stash the sealed turn record for the answer event that follows."""
         self._turn_metrics = record
+
+    def stage_final_model_messages(
+        self, answer: str, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Keep the turn's answer and record sealed at the answer for ``final``.
+
+        The agent seals them before ``print_final_answer``; the daemon reads them
+        from here so ``final`` carries the measurement and what later turns
+        replay without waiting on the run thread (which may still be storing
+        memory or writing a trace).
+        """
+        self.staged_answer = answer
+        self.staged_model_messages = messages
+        return messages
 
     def mark_turn_failed(self, failure: Optional[str] = None) -> None:
         """The answer that follows ends a turn a model failure cut short."""

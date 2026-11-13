@@ -261,7 +261,7 @@ the header.
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
 | Reserved port      | `4001` — refused with a `RangeError`    |
-| Contract version   | `API_VERSION = "2.27"`                  |
+| Contract version   | `API_VERSION = "2.28"`                  |
 | Agent id / prefix  | `gaia` → `/v1/gaia/...`                 |
 
 ### 5.1 Endpoints
@@ -417,9 +417,20 @@ out. Sent, it replaces `context`, which must then be `[]` (anything else is a
 `422`); `turns: []` means no earlier turns, and clears a retained session's
 history. A request that sent `turns`, even `[]`, gets `model_messages` on its
 `final` so the caller can store it with the reply; a request without `turns`
-never does, because the record holds every tool result in full. It is also
-absent when the run had not finished 15 s after its answer, and that turn then
-replays as text only. Pre-2.25 binaries `422` `turns`.
+never does, because the record holds every tool result in full. The record is
+sealed as the agent prints the answer, so a run still storing memory when
+`final` goes out still carries it, and that turn does not replay as text only.
+`performance` is the one part that needs the loop to return, so it is absent
+when the run had not finished 15 s after its answer. Pre-2.25 binaries `422`
+`turns`.
+
+A caller that sends `turns` is also streamed a `context_usage` event before the
+answer (contract ≥ 2.28):
+`{ "type": "context_usage", "window", "used", "turns_in_view", "turns_hidden", ... }`.
+It is the same event an in-process turn streams at turn start, so a composer's
+context meter fills during a long turn instead of staying blank until `final`.
+The counts are the shared estimate; the `final.context` copy that follows is
+measured with the loaded model's own tokenizer when it can be.
 
 `reasoning` (contract ≥ 2.22), when `true`, streams the model's reasoning as
 `reasoning` events, `{ "type": "reasoning", "delta": "…" }`, so a client can
@@ -516,9 +527,11 @@ A caller that sends `turns` gets it measured over those turns plus this turn's
 `model_messages`, tool results included, so `turns_in_view` and `turns_hidden`
 count whole turns; turns the caller left out itself are not in either count.
 A turn that was stopped or ended on a model failure carries no `context`; a
-measurement that failed carries `context_error`, one sentence saying why, and
-the answer still stands. Older binaries send neither, so read `context` only
-when `/version` reports 2.21 or later.
+measurement that failed, or did not finish within 15 s, carries
+`context_error`, one sentence saying why, and the answer still stands. The
+measurement runs over the record sealed at the answer, so a run still storing
+memory when `final` goes out still gets one. Older binaries send neither, so
+read `context` only when `/version` reports 2.21 or later.
 
 `final` also carries `performance`: the turn's step timings, as
 `{ "timing_summary", "conversation" }`. `timing_summary` holds the run's model
@@ -527,6 +540,8 @@ and tool seconds and its model call count; `conversation` holds one
 call, with that call's token counts and speed. The Agent UI turns it into the
 Context panel's "Under the hood" figures. A run that timed nothing
 carries none, and older binaries never send it, so read it only when present.
+A request without `turns` does not wait for timings: its `final` carries them
+only when the loop had already returned.
 
 A `final` with `failed: true` ends a turn a model call broke; its `answer` says
 what was and wasn't done. When the cause is one a front-end can fix, `failure`
