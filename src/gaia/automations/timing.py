@@ -158,6 +158,8 @@ def in_quiet_hours(quiet: str, local: datetime) -> bool:
     if not quiet:
         return False
     start, end = parse_quiet(quiet)
+    if end == 23 * 60 + 59:
+        end = 24 * 60  # "-23:59" means to the end of the day, not a loud last minute.
     minute = local.hour * 60 + local.minute
     if start <= end:
         return start <= minute < end

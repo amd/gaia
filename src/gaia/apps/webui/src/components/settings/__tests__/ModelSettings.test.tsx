@@ -3,7 +3,7 @@
 
 import { StrictMode } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelSettings } from '../ModelSettings';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
@@ -492,5 +492,28 @@ describe('ModelSettings: an unreachable AMD gateway (#5604)', () => {
         });
         fireEvent.click(within(card).getByRole('button', { name: 'Check again' }));
         expect(await within(card).findByLabelText('AMD LLM Gateway API key')).toBeInTheDocument();
+    });
+});
+
+describe('ModelSettings in Arabic', () => {
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it('names Local in Arabic and says in Arabic that chat history leaves the PC', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listProviders.mockResolvedValue({
+            providers: [
+                { ...LOCAL, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
+                fireworks({ privacy_notice: 'Chat history is sent to Fireworks AI. Usage may incur charges.' }),
+            ],
+            active: LOCAL_ACTIVE,
+            lemonade_error: null,
+        });
+        render(<ModelSettings />);
+        expect(await screen.findByRole('radio', { name: 'محلي' })).toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: 'Local' })).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('radio', { name: /Fireworks AI/ }));
+        const card = await screen.findByRole('region', { name: 'Fireworks AI' });
+        expect(card).toHaveTextContent('يُرسَل سجل المحادثة إلى Fireworks AI. قد يترتب على الاستخدام رسوم.');
     });
 });
