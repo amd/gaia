@@ -92,6 +92,7 @@ from gaia.agents.base.tool_outcome import (
 )
 from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import TOKEN_SHAPES
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     EMBED_MAX_CHARS,
@@ -309,7 +310,11 @@ _STABLE_PERSONAL_SECTIONS = (
     ("preference", "Preferences"),
     ("fact", "Known facts"),
     ("skill", "Skills"),
-    ("error", "Problems seen before (may be fixed since; check again when asked)"),
+    (
+        "error",
+        "Problems seen before (GAIA's own notes, not about the user; "
+        "may be fixed since; check again when asked)",
+    ),
     ("reminder", "Reminders on file (bring up only when relevant)"),
     ("note", "Notes"),
 )
@@ -4510,14 +4515,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     _CREDENTIAL_PATTERNS: ClassVar[tuple] = tuple(
         re.compile(p, re.IGNORECASE)
         for p in (
-            r"\bsk-ant-[a-zA-Z0-9_-]{10,}",  # Anthropic API key
-            r"\bsk-[a-zA-Z0-9_-]{20,}",  # OpenAI-style API key
-            r"\bgh[pousr]_[a-zA-Z0-9]{20,}",  # GitHub token (ghp_/gho_/ghu_/ghs_/ghr_)
-            r"\bgithub_pat_[a-zA-Z0-9_]{20,}",  # GitHub fine-grained PAT
-            r"\bAKIA[0-9A-Z]{16}\b",  # AWS access key id
-            r"\bAIza[0-9A-Za-z_-]{20,}",  # Google API key
-            r"\bxox[baprs]-[a-zA-Z0-9-]{10,}",  # Slack token
-            r"\bglpat-[a-zA-Z0-9_-]{20,}",  # GitLab PAT
+            *TOKEN_SHAPES,
             r"\bBearer\s+[a-zA-Z0-9._-]{20,}",  # raw Bearer token
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
@@ -5913,7 +5911,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             With query=, runs hybrid semantic + keyword search. Without it,
             lists every entry matching the filters — use that to list, browse,
             or count rather than to find one specific memory. A bare recall()
-            lists recent non-sensitive rows.
+            lists the recent non-sensitive memories about the user, the ones
+            Memory > About you shows.
 
             Args:
                 query: Free-text search; enables hybrid search mode.
@@ -6049,6 +6048,8 @@ class MemoryMixin(ProceduralMemoryMixin):
                 page = mixin._memory_store.get_all_knowledge(
                     context=context or None,
                     sensitive=False if unfiltered else None,
+                    # Matches Memory > About you, which the user can see and forget.
+                    about_user=unfiltered,
                     limit=limit,
                     offset=offset,
                 )
@@ -6059,7 +6060,10 @@ class MemoryMixin(ProceduralMemoryMixin):
                 results = page.get("items", [])
                 if unfiltered:
                     withheld = mixin._memory_store.get_all_knowledge(
-                        context=context or None, sensitive=True, limit=1
+                        context=context or None,
+                        sensitive=True,
+                        about_user=True,
+                        limit=1,
                     ).get("total", 0)
 
             total_ms = (time.perf_counter() - _recall_t0) * 1000

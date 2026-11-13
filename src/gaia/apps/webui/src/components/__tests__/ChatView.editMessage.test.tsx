@@ -120,6 +120,85 @@ describe('editing a sent message', () => {
     });
 });
 
+describe('editing a message with an attachment', () => {
+    const LINK = '[standup.wav](/api/files/uploads/standup-25a14da6.wav)';
+
+    beforeEach(() => {
+        server[2] = row(3, 'user', `Transcribe this recording\n\n${LINK}`);
+        useChatStore.setState({ messages: [...server] });
+    });
+
+    it('shows only the typed text, with the file as a chip', async () => {
+        await show();
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'ArrowUp' });
+        expect(editor().value).toBe('Transcribe this recording');
+        const chips = screen.getByRole('list', { name: 'Attached files' });
+        expect(chips.textContent).toBe('standup.wav');
+    });
+
+    it('sends the file again with the edited text', async () => {
+        await show();
+        fireEvent.keyDown(screen.getByRole('textbox', { name: 'Message' }), { key: 'ArrowUp' });
+        fireEvent.change(editor(), { target: { value: 'Summarize this recording' } });
+        await act(async () => {
+            fireEvent.keyDown(editor(), { key: 'Enter' });
+        });
+        await waitFor(() => expect(sends).toEqual([`Summarize this recording\n\n${LINK}`]));
+    });
+});
+
+describe('resending an earlier message', () => {
+    it('says how many later messages go away, and deletes nothing until confirmed', async () => {
+        await show();
+        fireEvent.click(screen.getAllByRole('button', { name: 'Resend message' })[0]);
+
+        const ask = screen.getByRole('alertdialog');
+        expect(ask.textContent).toContain('This also deletes the 2 later messages in this chat.');
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+        fireEvent.click(within(ask).getByRole('button', { name: 'Cancel' }));
+        expect(screen.queryByRole('alertdialog')).toBeNull();
+        expect(screen.getByText('About 82 km.')).toBeTruthy();
+        expect(sends).toEqual([]);
+
+        fireEvent.click(screen.getAllByRole('button', { name: 'Resend message' })[0]);
+        await act(async () => {
+            fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete and send' }));
+        });
+        await waitFor(() => expect(sends).toEqual(['Name a canal.']));
+        expect(mockedApi.deleteMessagesFrom).toHaveBeenCalledWith(SESSION.id, 1);
+    });
+
+    it('asks the same before sending an edit of an earlier message', async () => {
+        await show();
+        fireEvent.click(screen.getAllByRole('button', { name: 'Edit message' })[0]);
+        fireEvent.change(editor(), { target: { value: 'Name a long canal.' } });
+        await act(async () => {
+            fireEvent.keyDown(editor(), { key: 'Enter' });
+        });
+
+        expect(screen.getByRole('alertdialog').textContent).toContain('2 later messages');
+        expect(screen.getAllByRole('button', { name: 'Cancel' })).toHaveLength(1);
+        expect(document.querySelectorAll('.msg-edit .msg-edit-actions')).toHaveLength(0);
+        expect(editor().value).toBe('Name a long canal.');
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+        expect(sends).toEqual([]);
+
+        await act(async () => {
+            fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete and send' }));
+        });
+        await waitFor(() => expect(sends).toEqual(['Name a long canal.']));
+    });
+
+    it('resends the last question without asking', async () => {
+        await show();
+        await act(async () => {
+            fireEvent.click(screen.getAllByRole('button', { name: 'Resend message' })[1]);
+        });
+        expect(screen.queryByRole('alertdialog')).toBeNull();
+        await waitFor(() => expect(sends).toEqual(['How long is the Panama canl?']));
+    });
+});
+
 describe('an edit is never lost', () => {
     async function editAndSend(text: string) {
         fireEvent.click(screen.getAllByRole('button', { name: 'Edit message' })[1]);
