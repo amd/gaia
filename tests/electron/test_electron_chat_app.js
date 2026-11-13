@@ -967,7 +967,7 @@ describe('Chat App Integration', () => {
     it('should have keyboard accessibility on session items', () => {
       // Session rows are native buttons, so Tab/Enter/Space work without handlers.
       expect(sidebarContent).toMatch(
-        /<button\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
+        /<button\s+ref=\{mainRef\}\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
       );
       expect(sidebarContent).not.toContain('role="button"');
     });
