@@ -137,8 +137,18 @@ function DocName({ name }: { name: string }) {
     // dir="auto" picks the direction from the first strong letter; the CSS needs to know it too.
     const firstStrong = name.match(/\p{L}/u)?.[0] ?? '';
     const rtlText = /[֐-ࣿיִ-﷿ﹰ-﻿]/.test(firstStrong);
+    if (rtlText) {
+        const ext = name.match(/\.[^.\s]{1,10}$/)?.[0] ?? '';
+        // Splitting inside right-to-left words puts "docx." at the front; cut only the base name instead.
+        return (
+            <span className="doc-name doc-name-split is-rtl-text" dir="auto" title={name}>
+                <span className="doc-name-head">{name.slice(0, name.length - ext.length)}</span>
+                {ext && <span className="doc-name-tail" dir="ltr">{ext}</span>}
+            </span>
+        );
+    }
     return (
-        <span className={`doc-name doc-name-split${rtlText ? ' is-rtl-text' : ''}`} dir="auto" title={name}>
+        <span className="doc-name doc-name-split" dir="auto" title={name}>
             <span className="doc-name-head">{chars.slice(0, -NAME_TAIL_CHARS).join('')}</span>
             <span className="doc-name-tail">{chars.slice(-NAME_TAIL_CHARS).join('')}</span>
         </span>

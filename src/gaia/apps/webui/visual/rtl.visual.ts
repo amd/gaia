@@ -1223,6 +1223,29 @@ for (const locale of ['en', 'ar']) {
         });
         if (locale === 'ar') expect(Math.abs(textBox.right - infoBox.right)).toBeLessThan(2);
         else expect(Math.abs(textBox.left - infoBox.left)).toBeLessThan(2);
+        // A long Arabic name ends with ".docx" read left to right, never "docx." at its front.
+        const arabic = page.locator('.doc-name-split').nth(1);
+        const ext = await arabic.evaluate((el) => {
+            const last = el.lastElementChild!;
+            const text = last.firstChild!;
+            const box = (from: number, to: number) => {
+                const r = document.createRange();
+                r.setStart(text, from);
+                r.setEnd(text, to);
+                return r.getBoundingClientRect();
+            };
+            const at = (text.textContent ?? '').lastIndexOf('.');
+            return {
+                text: last.textContent,
+                box: last.getBoundingClientRect(),
+                dot: box(at, at + 1), word: box(at + 1, at + 5),
+            };
+        });
+        expect(ext.dot.right, 'the dot should come before "docx", read left to right').toBeLessThanOrEqual(ext.word.left + 0.5);
+        expect(ext.text).toBe('.docx');
+        // The name runs right to left, so its end, the extension, is its left-most part.
+        const headBox = await arabic.locator('.doc-name-head').boundingBox();
+        expect(ext.box.right).toBeLessThanOrEqual(headBox!.x + 0.5);
         await shot(page, `documents-${locale}-long-names`);
         expect(await audit(page)).toEqual([]);
     });
