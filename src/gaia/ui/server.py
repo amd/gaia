@@ -478,7 +478,7 @@ class _ScheduledRuns:
             )
             raise asyncio.TimeoutError(
                 f"This scheduled task took longer than {limit} and was stopped. "
-                "Run it again, or try it when the model is less busy."
+                "Try a shorter or simpler task, or run it again."
             )
         finally:
             turn_queue.release()
