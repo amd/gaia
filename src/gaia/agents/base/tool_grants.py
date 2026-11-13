@@ -260,7 +260,7 @@ RESOLVED_PATH_ARG = "_resolved_file_path"
 #: Tools whose every call is the same kind of action, so the family IS the
 #: tool. The label says how wide that is.
 _FAMILY_TOOLS = {
-    "run_python": "Python snippets (run_python)",
+    "run_python": "Python snippets",
     "execute_python_file": "running Python files",
     "notify_desktop": "desktop notifications",
 }

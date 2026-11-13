@@ -11,11 +11,13 @@ import asyncio
 import json
 import logging
 import sqlite3
+from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from gaia.agents.base import file_snapshots
 from gaia.config import GaiaConfigError
+from gaia.llm.lemonade_client import cloud_model_provider
 from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
 
 from .. import answer_retry, followups
@@ -51,7 +53,7 @@ from ..models import (
 )
 from ..run_manager import run_manager
 from ..security import flagship_only
-from ..utils import message_to_response, session_to_response
+from ..utils import UPLOAD_LINK_RE, message_to_response, session_to_response
 from .memory import _get_store as get_memory_store
 
 logger = logging.getLogger(__name__)
@@ -583,6 +585,24 @@ def _answer_model(msg: dict) -> str | None:
     return stats.get("model") if isinstance(stats, dict) else None
 
 
+def _model_label(model: str) -> str:
+    """The model as the app shows it: no cloud provider prefix, no catalogue path."""
+    if cloud_model_provider(model):
+        model = model.partition(".")[2]
+    return model.rsplit("/", 1)[-1]
+
+
+def _local_time(stamp: str) -> str:
+    """A stored UTC timestamp as local time, e.g. "November 12, 2026, 2:21 PM"."""
+    t = datetime.fromisoformat(stamp).astimezone()
+    return f"{t:%B} {t.day}, {t.year}, {t.hour % 12 or 12}:{t:%M} {t:%p}"
+
+
+def _plain_attachments(content: str) -> str:
+    """Name each attachment instead of linking a file that exists only inside the app."""
+    return UPLOAD_LINK_RE.sub(lambda m: f"Attached: {m['label']}", content)
+
+
 @router.get("/api/sessions/{session_id}/export")
 async def export_session(
     session_id: str,
@@ -610,23 +630,25 @@ async def export_session(
             _answer_model(msg) for msg in messages if msg["role"] == "assistant"
         ]
         if answer_models and all(answer_models):
-            used = list(dict.fromkeys(answer_models))
+            used = list(dict.fromkeys(_model_label(m) for m in answer_models))
             label = "Models" if len(used) > 1 else "Model"
             model_line = f"*{label}: {', '.join(used)}*"
         else:
             # An answer saved before its model was recorded can't say what wrote it.
-            model_line = f"*Model (current setting): {effective_model}*"
+            model_line = f"*Model (current setting): {_model_label(effective_model)}*"
 
         lines = [f"# {session['title']}\n"]
-        lines.append(f"*Created: {session['created_at']}*\n")
+        lines.append(f"*Created: {_local_time(session['created_at'])}*\n")
         lines.append(f"{model_line}\n\n---\n")
 
         for msg in messages:
             role_label = "User" if msg["role"] == "user" else "Assistant"
             answer_model = _answer_model(msg)
             if answer_model:
-                role_label = f"{role_label} ({answer_model})"
-            lines.append(f"**{role_label}:**\n\n{msg['content']}\n\n---\n")
+                role_label = f"{role_label} ({_model_label(answer_model)})"
+            lines.append(
+                f"**{role_label}:**\n\n{_plain_attachments(msg['content'])}\n\n---\n"
+            )
 
         content = "\n".join(lines)
         return {"content": content, "format": "markdown"}

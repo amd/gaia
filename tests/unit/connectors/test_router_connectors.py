@@ -677,6 +677,78 @@ class TestSidecarRegistrationEndToEnd:
             self._GOOGLE_ALL_SCOPES
         )
 
+    @pytest.mark.parametrize(
+        "connector_id, declared",
+        [
+            (
+                "google",
+                [
+                    "https://www.googleapis.com/auth/calendar.events",
+                    "https://www.googleapis.com/auth/gmail.compose",
+                    "https://www.googleapis.com/auth/gmail.readonly",
+                ],
+            ),
+            (
+                "microsoft",
+                [
+                    "https://graph.microsoft.com/Calendars.ReadWrite",
+                    "https://graph.microsoft.com/Mail.ReadWrite",
+                    "https://graph.microsoft.com/Mail.Send",
+                ],
+            ),
+        ],
+    )
+    def test_no_scopes_plus_the_flagship_asks_only_for_what_it_declares(
+        self, monkeypatch, connector_id, declared
+    ):
+        """The in-chat Connect card's request: no scopes, grant the flagship.
+        Sign-in must ask for the flagship's declared scopes and nothing else
+        from the connector's catalog (gmail.modify, Drive)."""
+        from starlette.testclient import TestClient
+
+        from gaia.connectors.catalog.google import GOOGLE_SPEC
+        from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
+        from gaia.connectors.registry import ConnectorRegistry
+        from gaia.hub.installer import ARTIFACT_KIND_BINARY, InstalledAgent
+        from gaia.ui.server import create_app
+
+        # The real catalog, so the declared scopes are checked against the
+        # ceiling a user's install has.
+        real = ConnectorRegistry()
+        real.register(GOOGLE_SPEC)
+        real.register(MICROSOFT_SPEC)
+        monkeypatch.setattr("gaia.connectors.registry.REGISTRY", real)
+        monkeypatch.setattr("gaia.ui.routers.connectors.REGISTRY", real)
+        monkeypatch.setattr(
+            "gaia.hub.installer.list_installed",
+            lambda *a, **kw: {
+                "gaia": InstalledAgent(
+                    id="gaia",
+                    version="0.1.0",
+                    language="python",
+                    installed_at="2026-01-01T00:00:00Z",
+                    artifact_kind=ARTIFACT_KIND_BINARY,
+                )
+            },
+        )
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+
+        with TestClient(create_app(db_path=":memory:")) as client:
+            resp = client.post(
+                f"/api/connectors/{connector_id}/authorize",
+                json={"scopes": [], "grant_agents": ["installed:gaia"]},
+                headers=UI_HEADER,
+            )
+
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        assert kwargs["scopes"] == declared
+        assert sorted(kwargs["grant_agents"]["installed:gaia"]) == declared
+        assert not any("gmail.modify" in s or "drive" in s for s in kwargs["scopes"])
+
     def test_authorize_404s_when_the_bridge_is_not_wired(self, monkeypatch):
         """Sibling with the bridge itself disabled (not just 'not
         installed') — proves the 200 above comes from server.py's wiring
