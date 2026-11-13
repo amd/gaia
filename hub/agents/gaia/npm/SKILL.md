@@ -577,8 +577,10 @@ those from your own code.
 
 The agent also gets its own scratch directory for throwaway scripts and
 intermediate files, so they stay out of the user's project. It is created per
-agent under the system temp dir, deleted when the agent closes, and is the only
-part of the temp dir the agent may use.
+agent under the system temp dir, deleted when the agent closes or its process
+exits, and is the only part of the temp dir the agent may use. Scratch
+directories no run has written to for a day are removed when the next agent
+starts.
 
 **To narrow it for a run, set `GAIA_ALLOWED_PATHS`** in the environment the
 sidecar starts in — absolute folders joined with `;` on Windows and `:` elsewhere.

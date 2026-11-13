@@ -867,6 +867,43 @@ test('the Connect card fits a phone', async ({ page }, info) => {
     await shot(page, 'connect-card-phone');
 });
 
+async function withLongChat(page: Page): Promise<void> {
+    const messages = Array.from({ length: 24 }, (_, i) => ({
+        id: i + 1, session_id: ANSWER_SESSION, role: i % 2 ? 'assistant' : 'user', created_at: NOW.toISOString(), rag_sources: null,
+        content: i % 2 ? `Answer ${i}: ${'The canal carried water to the fields long before it carried boats. '.repeat(6)}` : `Question ${i}`,
+    }));
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({ json: { messages, total: messages.length } }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`jump to bottom floats clear of the composer, away from the text column's middle (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongChat);
+        await expect(page.getByText('Question 22')).toBeVisible();
+        await page.locator('.messages-scroll').hover();
+        await page.mouse.wheel(0, -20_000);
+        const button = page.locator('.scroll-bottom-btn');
+        await expect(button).toBeVisible();
+        await button.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+        const [btn, composer] = [await button.boundingBox(), await page.locator('.input-column').boundingBox()];
+        // 12px above the composer, never over its border (#7864), at its end, never in the middle of a line.
+        expect(composer!.y - (btn!.y + btn!.height)).toBeGreaterThanOrEqual(11.5);
+        expect(composer!.y - (btn!.y + btn!.height)).toBeLessThanOrEqual(16);
+        const end = locale === 'ar' ? btn!.x - composer!.x : composer!.x + composer!.width - (btn!.x + btn!.width);
+        expect(end).toBeLessThanOrEqual(40);
+        expect(await button.evaluate((el) => {
+            const b = el.getBoundingClientRect();
+            const middle = b.left + b.width / 2;
+            return document.elementFromPoint(middle, b.top + b.height / 2) === el
+                || el.contains(document.elementFromPoint(middle, b.top + b.height / 2));
+        })).toBe(true);
+        // No fade over the list: over a dark code block it showed as a pale band.
+        expect(await page.locator('.messages-scroll').evaluate((el) => getComputedStyle(el).maskImage)).toBe('none');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`jump-to-bottom-${locale}.png`) });
+    });
+}
+
 async function withLongCode(page: Page): Promise<void> {
     const code = Array.from({ length: 24 }, (_, i) => `    total += row[${i}]  # add column ${i}`).join('\n');
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
@@ -932,6 +969,43 @@ for (const locale of ['ar', 'en']) {
         await expect(chips).toHaveText([SPACED_PATH, MULTI_SPACE_PATH, SPACED_ANSWER_PATH]);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('spaced-paths.png') });
+    });
+}
+
+/** A dropped file (stored with an id in front) and two same-named files, each cited by its path. */
+const CITED_DOCS = [
+    { id: 'drop', filename: 'notes.md', filepath: 'C:\\Users\\me\\.gaia\\documents\\0123456789ab_notes.md' },
+    { id: 'r23', filename: 'report.pdf', filepath: 'C:\\Users\\me\\Finance\\2023\\report.pdf' },
+    { id: 'r24', filename: 'report.pdf', filepath: 'C:\\Users\\me\\Finance\\2024\\report.pdf' },
+].map((d) => ({ ...d, file_size: 2048, chunk_count: 3, indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1, indexing_status: 'complete' }));
+
+async function withCitedDocuments(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === '/api/documents', (route) =>
+        route.fulfill({ json: { documents: CITED_DOCS, total: 3, total_size_bytes: 6144, total_chunks: 9 } }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Compare revenue in both reports', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: `According to ${CITED_DOCS[1].filepath} (page 2), revenue was 5M; according to ${CITED_DOCS[2].filepath} (page 4), 7M. ${CITED_DOCS[0].filepath}, page 1, lists the reasons.`,
+                    },
+                ],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`citations open the right file and tell same-named files apart (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCitedDocuments);
+        const cites = page.locator('a.citation-link');
+        await expect(cites).toHaveText(['2023/report.pdf', '2024/report.pdf', 'notes.md']);
+        expect(await cites.evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.docId))).toEqual(['r23', 'r24', 'drop']);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`cited-documents-${locale}.png`) });
     });
 }
 
@@ -3865,6 +3939,21 @@ for (const locale of ['ar', 'en']) {
         // Agent names, titles, bodies and policy reasons are the notification's own text, not the panel's.
         if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
         await shot(page, `notification-panel-${locale}`);
+    });
+
+    test(`the notification panel hides what is under it in the dark theme (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, undefined, 'dark');
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // A see-through panel shows the side panel's text inside the list.
+        const background = await panel.evaluate((el) => getComputedStyle(el).backgroundColor);
+        expect(background).toMatch(/^rgb\(/);
+        await shot(page, `notification-panel-dark-${locale}`);
     });
 }
 
