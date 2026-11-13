@@ -746,6 +746,7 @@ def _turn_preview(turn: list[dict[str, Any]], limit: int = 60) -> str:
     for message in turn:
         content = message.get("content")
         if message.get("role") == "user" and isinstance(content, str) and content:
+            content = content.removeprefix(HIDDEN_TURNS_NOTE).lstrip("\n")
             text = " ".join(user_text_of(content).split())
             if not text:
                 continue
