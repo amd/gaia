@@ -1048,10 +1048,12 @@ def match_launch_lemonade() -> Optional[str]:
     if theirs is not None and (theirs.get("mode"), theirs.get("base_url")) == wanted:
         return None
     own = "GAIA's own server"
-    why = (
-        f"it uses Lemonade at {(theirs or {}).get('base_url') or own}, and this "
-        f"launch uses {mine['base_url'] or own}"
+    used = (
+        "a server it is too old to name"
+        if theirs is None
+        else theirs.get("base_url") or own
     )
+    why = f"it uses Lemonade at {used}, and this launch uses {mine['base_url'] or own}"
     busy = outdated_daemon_busy(inst)
     if busy is not None:
         raise DaemonError(
