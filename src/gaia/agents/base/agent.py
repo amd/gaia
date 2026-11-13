@@ -769,6 +769,15 @@ TOOLS_REQUIRING_CONFIRMATION = {
     "forget_everything",
 }
 
+
+def _argument_shape(name: str, param: inspect.Parameter) -> str:
+    """``name (type)`` for a missing-argument error; just the name when untyped."""
+    annotation = param.annotation
+    if annotation is inspect.Parameter.empty:
+        return name
+    return f"{name} ({getattr(annotation, '__name__', annotation)})"
+
+
 #: Put on a call the user declined, so the model stops instead of rerouting.
 DECLINED_HINT = (
     "The user declined this. Do not try to get the same result another way "
@@ -2078,21 +2087,35 @@ def _is_jsonc(path: Path) -> bool:
     return any(part.lower() == ".vscode" for part in path.parts[:-1])
 
 
-def _parse_problem(path: Path, text: str) -> Optional[str]:
-    """Why *text* does not parse as *path*'s type, or None (unchecked types pass)."""
+def _parse_problem(path: Path, text: str, new: bool = False) -> Optional[str]:
+    """Why *text* does not parse as *path*'s type, or None (unchecked types pass).
+
+    *new*: the file did not exist before the turn, so it never parsed.
+    """
     suffix = path.suffix.lower()
     if suffix in (".py", ".pyi"):
         try:
             ast.parse(text)
         except (SyntaxError, ValueError) as e:
-            return f"`{path}` no longer parses as Python: {e}"
+            verb = "doesn't parse" if new else "no longer parses"
+            return f"`{path}` {verb} as Python: {e}"
     elif suffix == ".json" and not _is_jsonc(path):
         try:
             json.loads(text)
         except ValueError as e:
-            return f"`{path}` is no longer valid JSON: {e}"
+            state = "isn't" if new else "is no longer"
+            return f"`{path}` {state} valid JSON: {e}"
     return None
 
+
+def _user_supplied(text: str, request: Optional[str]) -> bool:
+    """Whether the request itself holds *text*: the user dictated the content."""
+    content = " ".join(text.split())
+    return bool(content and request) and content in " ".join(request.split())
+
+
+#: Parse baseline for a file the turn created: no earlier version to compare.
+_NEW_FILE = "new"
 
 _EDIT_VERIFICATION_PROMPT = (
     "[check:edits] The files you changed this turn were read back off disk "
@@ -3293,6 +3316,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn.
         self._denied_effects = DeniedEffects()
+        # (turn, call) for each approval prompt nobody answered.
+        self._expired_calls: set = set()
         # (turn, path) for each access prompt declined or left unanswered.
         self._refused_paths: List[Tuple[int, Path]] = []
 
@@ -4193,6 +4218,17 @@ Do NOT wrap conversational replies in JSON.
             )
             if not granted:
                 refused.append((turn, target))
+            timed_out = getattr(self.console, "confirmation_timed_out", None)
+            note = getattr(self._read_validator(), "note_access_answer", None)
+            if callable(note):
+                note(
+                    target,
+                    declined=not granted
+                    and not (
+                        callable(timed_out)
+                        and timed_out(PATH_ACCESS_PROMPT_TOOL) is True
+                    ),
+                )
             return granted
         finally:
             if clock is not None:
@@ -5657,6 +5693,13 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_incognito", False):
             return False
         return True
+
+    @staticmethod
+    def _prompted_call_key(tool_name: str, tool_args: Any) -> str:
+        """One call's identity: its tool and exact arguments."""
+        return json.dumps(
+            [tool_name, tool_args], sort_keys=True, default=str, ensure_ascii=False
+        )
 
     def _begin_turn_provenance(self) -> None:
         """Open a turn: only the user has spoken, unless a caller pushed content.
@@ -8350,6 +8393,29 @@ Do NOT wrap conversational replies in JSON.
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # Re-asking an unanswered prompt would hold the chat for another timeout.
+            call_key = (
+                getattr(self, "_turn_seq", 0),
+                self._prompted_call_key(tool_name, tool_args),
+            )
+            if call_key in getattr(self, "_expired_calls", ()):
+                # A draft prepared for this prompt must not outlive it.
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
+                return {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "timed_out": True,
+                    "error": (
+                        "Not asked, so it did not run: the approval request for "
+                        f"`{render_call(tool_name, tool_args)}` already went "
+                        "unanswered in this request. Don't ask again in this "
+                        "request. Tell the user you waited for their approval and "
+                        "stopped, and that they can ask you to try again."
+                    ),
+                }
             # A policy client matches on what the model sent, not what the prompt adds.
             noting = getattr(self.console, "note_call_args", None)
             if callable(noting) and isinstance(tool_args, dict):
@@ -8386,6 +8452,9 @@ Do NOT wrap conversational replies in JSON.
                 if self.console.confirmation_timed_out(tool_name) is True:
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
+                    if not hasattr(self, "_expired_calls"):
+                        self._expired_calls = set()
+                    self._expired_calls.add(call_key)
                 else:
                     if denied_error == user_denial_message(tool_name):
                         denied["hint"] = DECLINED_HINT
@@ -8427,8 +8496,12 @@ Do NOT wrap conversational replies in JSON.
         # Check for missing required arguments
         missing_args = [arg for arg in required_args if arg not in tool_args]
         if missing_args:
+            wanted = ", ".join(
+                _argument_shape(name, required_args[name]) for name in required_args
+            )
             error_msg = (
-                f"Missing required arguments for {tool_name}: {', '.join(missing_args)}"
+                f"Missing required arguments for {tool_name}: {', '.join(missing_args)}. "
+                f"Call it again with every argument filled in: {wanted}."
             )
             logger.error(error_msg)
             # Tagged so callers can tell a malformed call (retryable — the model
@@ -11002,10 +11075,16 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     problems.append(f"`{path}` is empty after this turn's edit.")
                 continue
-            problem = _parse_problem(path, text)
+            before = self._parsed_before(path)
+            problem = _parse_problem(path, text, new=before == _NEW_FILE)
             # A file that already failed to parse before the turn touched it
-            # is not this turn's breakage to repair.
-            if problem and self._parsed_before(path) is not False:
+            # is not this turn's breakage to repair, nor is content the user
+            # dictated word for word.
+            if (
+                problem
+                and before is not False
+                and not _user_supplied(text, getattr(self, "_current_query", None))
+            ):
                 problems.append(problem)
         return problems
 
@@ -11017,7 +11096,7 @@ Do NOT wrap conversational replies in JSON.
             return None
         return os.path.normcase(str(key))
 
-    def _parsed_before(self, path: Path) -> Optional[bool]:
+    def _parsed_before(self, path: Path) -> Optional[Union[bool, str]]:
         key = self._baseline_key(str(path))
         baseline = getattr(self, "_edit_parse_baseline", None) or {}
         return baseline.get(key) if key is not None else None
@@ -11045,7 +11124,7 @@ Do NOT wrap conversational replies in JSON.
                 if not allowed:
                     return
             if not path.is_file():
-                baseline[key] = True  # a new file
+                baseline[key] = _NEW_FILE
                 return
             if path.stat().st_size > _VERIFY_MAX_BYTES:
                 return
@@ -14491,12 +14570,18 @@ Do NOT wrap conversational replies in JSON.
         # non-empty "here's what I accomplished" message.
         if cancelled_by_console:
             logger.info("Agent run cancelled mid-generation via console.cancelled")
+            # A stopped turn was still billed for the model calls it made.
+            spent_in, spent_out = _sum_conversation_tokens(
+                conversation, self._tool_reported_usage
+            )
             self.last_result = {
                 "status": "cancelled",
                 "result": "",
                 "system_prompt": self.system_prompt,
                 "conversation": conversation,
                 "steps_taken": steps_taken,
+                "input_tokens": spent_in,
+                "output_tokens": spent_out,
                 "timing_summary": timing_summary,
                 "duration": time.time() - start_time,
                 "error_count": len(self._turn_errors()),
