@@ -342,6 +342,10 @@ _UNSERVABLE = {
         "{name} may have changed since it was indexed, but another program has it "
         "open, so it cannot be checked. Ask the user to close it and search again"
     ),
+    "denied": (
+        "{name} can no longer be read: permission to open {path} was removed "
+        "since it was indexed. Tell the user GAIA can't read it now"
+    ),
     "unreadable": (
         "{name} may have changed since it was indexed, but it cannot be read "
         "to check"
