@@ -18,6 +18,12 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **`provider: "lemonade"` with no `model` uses the configured default.** A
   session moved back from Claude went to Gemma 4 E4B even when `default_model`
   named another model.
+- **A run stopped for an approval nobody can give reads as not done.** Its
+  `final` now carries `failed: true` and the `usage` spent before the stop, so
+  `gaia -p` reports `is_error: true` with real step and token counts instead of
+  a free, zero-step success. A stopped turn's result now carries
+  the tokens it spent too.
+
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
   directory now go in the session context at the start of the first user

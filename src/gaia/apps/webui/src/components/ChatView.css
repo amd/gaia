@@ -369,9 +369,6 @@
 .streaming-bubble.stream-active {
     animation: streamBubbleIn var(--duration-slow) var(--ease);
 }
-.streaming-bubble.stream-ending {
-    pointer-events: none;
-}
 @keyframes streamBubbleIn {
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
