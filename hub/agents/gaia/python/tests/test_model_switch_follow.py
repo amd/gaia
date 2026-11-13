@@ -130,3 +130,20 @@ def test_a_vision_model_chosen_in_settings_reaches_an_open_chat(server, tmp_path
         assert agent._rag_config.vlm_model == "Qwen3-VL-4B-Instruct-GGUF"
     finally:
         close_agent(agent)
+
+
+def test_image_reading_follows_the_agents_own_model_not_the_saved_pick(
+    server, tmp_path
+):
+    """Tools re-register every in-process turn; the pick saved elsewhere must not win."""
+    from gaia_agent.session_registry import build_session_agent, close_agent
+
+    from gaia.config import GaiaConfig
+
+    agent = build_session_agent(model_id=NPU, allowed_paths=[str(tmp_path / "work")])
+    try:
+        GaiaConfig.save_keys({"last_model": GPU})
+        agent._register_tools()
+        assert agent.vlm_model is None, "chat on the NPU reads no images"
+    finally:
+        close_agent(agent)

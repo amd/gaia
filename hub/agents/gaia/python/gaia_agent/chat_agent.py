@@ -2907,7 +2907,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             # getattr: tools can register from super().__init__(), before
             # _base_url is assigned. None then falls through to the resolver.
             self.init_vlm(
-                model=resolve_default_vision_model(),
+                model=resolve_default_vision_model(getattr(self, "model_id", None)),
                 base_url=resolve_lemonade_base_url(getattr(self, "_base_url", None)),
             )
             logger.debug(

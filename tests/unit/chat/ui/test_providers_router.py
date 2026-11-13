@@ -821,6 +821,34 @@ def test_active_restores_the_last_model_once_per_run(client, lemonade, keys, db)
     assert len(lemonade.calls) == calls
 
 
+def test_a_model_picked_elsewhere_is_restored_as_the_pick(client, lemonade, keys, db):
+    """Not as a Custom model ID, which Settings would then show in that field."""
+    from gaia.ui.routers.providers import PICKED_MODEL_SETTING, custom_model_override
+
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    db.set_setting(PICKED_MODEL_SETTING, "Qwen3-4B-GGUF")
+    db.set_setting("custom_model", "Qwen3-4B-GGUF")
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+
+    assert client.get("/api/providers/active").json()["model"] == model
+    assert db.get_setting(PICKED_MODEL_SETTING) == model
+    assert custom_model_override(db) is None
+
+
+def test_a_restore_keeps_a_custom_model_id_in_force_as_one(client, lemonade, keys, db):
+    from gaia.ui.routers.providers import PICKED_MODEL_SETTING
+
+    model = "fireworks.accounts/fireworks/models/glm-5p3-flash"
+    db.set_setting(PICKED_MODEL_SETTING, "Qwen3-4B-GGUF")
+    db.set_setting("custom_model", "Phi-4-mini-instruct-GGUF")
+    _write_config({"last_model": model})
+    lemonade.models = _cloud_models()
+
+    client.get("/api/providers/active")
+    assert db.get_setting(PICKED_MODEL_SETTING) == "Qwen3-4B-GGUF"
+
+
 def test_active_never_switches_model_when_the_saved_one_cannot_run(
     client, lemonade, keys, db
 ):
@@ -2338,6 +2366,52 @@ def test_remove_deletes_by_the_name_lemonade_lists(
     assert db.get_setting("custom_model") is None
     # Chat is back on the default, which loads now rather than with a message.
     assert asked == [(True, DEFAULT_MODEL_NAME)]
+
+
+def test_removing_the_custom_model_goes_back_to_the_pick_and_loads_it(
+    client, custom_server, hf_web, custom_config, db, monkeypatch
+):
+    """Clearing the field returns to the pick; removing the model did not."""
+    from gaia.ui import warmup
+    from gaia.ui.routers.providers import PICKED_MODEL_SETTING
+
+    asked = []
+    monkeypatch.setattr(
+        warmup,
+        "request_warm_up",
+        lambda reason, fresh=False, model=None: asked.append((fresh, model)),
+    )
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    db.set_setting(PICKED_MODEL_SETTING, "Qwen3-4B-GGUF")
+    db.set_setting("custom_model", "user.Tiny-Q4_K_M-GGUF")
+
+    resp = client.delete("/api/providers/local/custom/user.Tiny-Q4_K_M-GGUF")
+
+    assert resp.status_code == 200, resp.text
+    assert db.get_setting("custom_model") == "Qwen3-4B-GGUF"
+    saved = json.loads(custom_config.read_text())
+    assert saved["last_model"] == "Qwen3-4B-GGUF", "the next start restores the pick"
+    assert asked == [(True, "Qwen3-4B-GGUF")]
+
+
+def test_removing_a_model_that_runs_nowhere_loads_nothing(
+    client, custom_server, hf_web, custom_config, db, monkeypatch
+):
+    from gaia.ui import warmup
+
+    asked = []
+    monkeypatch.setattr(
+        warmup,
+        "request_warm_up",
+        lambda reason, fresh=False, model=None: asked.append(model),
+    )
+    client.post("/api/providers/local/custom", json={"url": CUSTOM_URL})
+    db.set_setting("custom_model", "Qwen3-4B-GGUF")
+
+    client.delete("/api/providers/local/custom/user.Tiny-Q4_K_M-GGUF")
+
+    assert db.get_setting("custom_model") == "Qwen3-4B-GGUF"
+    assert asked == []
 
 
 def test_remove_before_download_skips_the_server_delete(

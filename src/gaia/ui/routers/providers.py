@@ -918,6 +918,9 @@ def restore_last_model(db: ChatDatabase, load: bool = True) -> Dict[str, Any]:
 
             current = (db.get_setting("custom_model") or "").strip()
             unchanged = _model_ids_match(last, current or resolve_default_chat_model())
+            if custom_model_override(db) is None:
+                # Picked elsewhere (the TUI): it is the pick, not a Custom model ID.
+                db.set_setting(PICKED_MODEL_SETTING, last)
             db.set_setting("custom_model", last)
             if load and not unchanged and provider_of(last) == LOCAL:
                 from gaia.ui import warmup
@@ -1878,7 +1881,18 @@ def apply_pending_context_reload() -> List[str]:
         return []
     started = []
     for model_id in sorted(_pending_context_reload):
-        view = _context_view(model_id)
+        try:
+            view = _context_view(model_id)
+        except HTTPException as e:
+            # Said once, not after every turn: the size applies at its next load.
+            logger.warning(
+                "Not reloading %s for its new context size: %s. The size "
+                "applies the next time the model loads.",
+                model_id,
+                e.detail,
+            )
+            _pending_context_reload.discard(model_id)
+            continue
         wanted = view["chosen"] or view["automatic"]
         if not view["loaded_ctx"] or view["loaded_ctx"] == wanted:
             _pending_context_reload.discard(model_id)
@@ -2000,6 +2014,7 @@ def remove_custom_model(
     from gaia.llm.custom_models import remove_custom_model as forget
     from gaia.llm.lemonade_client import _model_ids_match
 
+    before = _running_model(db)
     try:
         result = forget(model_id, _delete_from_lemonade)
     except CustomModelError as e:
@@ -2011,21 +2026,38 @@ def remove_custom_model(
     if _model_ids_match(db.get_setting(PICKED_MODEL_SETTING), result["removed"]):
         db.set_setting(PICKED_MODEL_SETTING, None)
     if _model_ids_match(db.get_setting("custom_model"), result["removed"]):
-        db.set_setting("custom_model", None)
+        # Back to the model picked under Model, as clearing the field does.
+        after = model_after_clearing_custom(db)
+        db.set_setting("custom_model", after)
+        if after:
+            try:
+                _write_config_keys(
+                    {"last_provider": provider_of(after), "last_model": after}
+                )
+            except ProviderError as e:
+                _raise(e)
+    now = _running_model(db)
+    if now and provider_of(now) == LOCAL and not _model_ids_match(now, before):
         from gaia.ui import warmup
 
-        from ..database import resolved_default_model
-
-        try:
-            default = resolved_default_model()
-        except GaiaConfigError as e:
-            # The removal is done; the model list reports the config.
-            logger.warning("Not loading the default after a removal: %s", e)
-            return result
-        if provider_of(default) == LOCAL:
-            # Chat is back on the default: load it, as picking it would.
-            warmup.request_warm_up("model removed", fresh=True, model=default)
+        # Chat moved to another model: load it, as picking it would.
+        warmup.request_warm_up("model removed", fresh=True, model=now)
     return result
+
+
+def _running_model(db: ChatDatabase) -> Optional[str]:
+    """The model new turns run on; None when the config can't say."""
+    from gaia.config import GaiaConfigError
+
+    from ..database import resolved_default_model
+
+    chosen = (db.get_setting("custom_model") or "").strip()
+    try:
+        return chosen or resolved_default_model()
+    except GaiaConfigError as e:
+        # The model list reports the config; nothing is loaded meanwhile.
+        logger.warning("Can't tell which model chat runs on: %s", e)
+        return None
 
 
 # ── Live status of the local model (sidebar popover) ──────────────────────

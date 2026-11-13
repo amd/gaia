@@ -1682,7 +1682,8 @@ async def query(request: QueryRequest):
             # A vision model chosen in Settings since the last turn applies now.
             follow = getattr(agent, "follow_model_switch", None)
             if callable(follow):
-                follow()
+                # Off the loop: it reads config.json and may ask Lemonade.
+                await asyncio.to_thread(follow)
             if request.working_directory is not None:
                 config = getattr(agent, "config", None)
                 if config is not None:
