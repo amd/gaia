@@ -1095,7 +1095,7 @@ const messages: Messages = {
     'env.noPhone': 'لا يوجد هاتف متصل بعد',
     'env.qr': 'إظهار رمز QR',
     'env.permission': 'وضع الأذونات',
-    'env.ask': 'السؤال',
+    'env.ask': 'اسأل',
     'env.fullAccessWarn': 'يتيح الوصول الكامل لـ GAIA تغيير الملفات وتشغيل الأوامر على هذا الجهاز دون استئذان.',
     'env.turnOn': 'تفعيله',
     'perm.ask': 'السؤال قبل التنفيذ',
