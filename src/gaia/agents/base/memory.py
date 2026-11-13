@@ -69,6 +69,7 @@ from uuid import uuid4
 import numpy as np
 
 from gaia.agents.base import turn_metrics
+from gaia.agents.base.checks import CheckResult, summary_reports_failure
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.history import MEMORY_CONTEXT_HEADER, frame_user_message
 from gaia.agents.base.memory_store import (
@@ -5084,9 +5085,10 @@ class MemoryMixin(ProceduralMemoryMixin):
     ) -> None:
         """Remember a real failure for this turn; retire a lesson whose fix failed.
 
-        A refusal is neither: the call never ran.
+        A refusal is neither: the call never ran. Nor is a check that ran and
+        counted failures: the call worked.
         """
-        if self._was_refused(result):
+        if self._was_refused(result) or self._check_reported_failures(result):
             return
         operation = self._failure_operation(tool_name, tool_args, error_msg)
         failures = getattr(self, "_turn_failures", None)
@@ -5267,6 +5269,20 @@ class MemoryMixin(ProceduralMemoryMixin):
         )
 
     @staticmethod
+    def _check_reported_failures(result: Any) -> bool:
+        """Whether *result* failed only because the check it ran counted failures.
+
+        Failing tests or lint findings are about the project, not the call, so
+        nothing about the call is learned from them.
+        """
+        check = CheckResult.from_result(tool_result_dict(result))
+        return (
+            check is not None
+            and not check.passed
+            and summary_reports_failure(check.summary)
+        )
+
+    @staticmethod
     def _was_refused(result: Any) -> bool:
         """Whether *result*, a dict or a JSON envelope, says the call never ran."""
         data = tool_result_dict(result)
@@ -5295,6 +5311,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             if self._was_refused(result):
                 logger.debug(
                     "[MemoryMixin] not persisting a refusal for '%s': %s",
+                    tool_name,
+                    error_msg[:80],
+                )
+                return
+            if self._check_reported_failures(result):
+                logger.debug(
+                    "[MemoryMixin] not persisting a check's findings for '%s': %s",
                     tool_name,
                     error_msg[:80],
                 )
