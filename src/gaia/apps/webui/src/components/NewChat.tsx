@@ -111,7 +111,7 @@ function LibraryDocuments() {
                     {attached.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
-                            <span dir="auto">{d.filename}</span>
+                            <span dir="ltr">{d.filename}</span>
                             <button
                                 type="button"
                                 className="new-chat-doc-remove"

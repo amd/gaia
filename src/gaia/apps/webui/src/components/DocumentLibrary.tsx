@@ -879,7 +879,7 @@ export function DocumentLibrary() {
                         {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
                             <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <span className="doc-name" dir="auto" title={doc.filename}>{middleTruncate(doc.filename, 48)}</span>
+                                    <span className="doc-name" dir="ltr" title={doc.filename}>{middleTruncate(doc.filename, 48)}</span>
                                     {renderDocStatus(doc)}
                                 </div>
                                 <div className="doc-row-actions">
