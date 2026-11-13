@@ -48,6 +48,11 @@ function placeParam(place: string): Param {
     return place;
 }
 
+/** A failed turn's first token is the error, not a word of an answer. */
+function wroteFirstWord(stats: InferenceStats | undefined, ended: TurnEnding | undefined): stats is InferenceStats {
+    return ended !== 'failed' && stats?.time_to_first_token != null && stats.time_to_first_token > 0;
+}
+
 function summaryLine(
     latencyMs: number | undefined,
     stats: InferenceStats | undefined,
@@ -65,7 +70,7 @@ function summaryLine(
     } else if (place) {
         parts.push(say(ended ? 'answer.ranPlace' : 'answer.answeredPlace', { place }));
     }
-    if (stats?.time_to_first_token != null && stats.time_to_first_token > 0) {
+    if (wroteFirstWord(stats, ended)) {
         const time = spokenDuration(stats.time_to_first_token * 1000, say, mark);
         parts.push(say(parts.length ? 'answer.firstWord' : 'answer.firstWordLead', { time }));
     }
@@ -106,6 +111,7 @@ export function exactStats(
     stats: InferenceStats | undefined,
     t: Translate = tEn,
     mark: Mark = plain,
+    ended?: TurnEnding,
 ): string[] {
     const lines: string[] = [];
     if (latencyMs != null && latencyMs > 0) {
@@ -113,7 +119,7 @@ export function exactStats(
             time: mark(say('answer.duration.sec', { n: (latencyMs / 1000).toFixed(1) })),
         })));
     }
-    if (stats?.time_to_first_token != null && stats.time_to_first_token > 0) {
+    if (wroteFirstWord(stats, ended)) {
         const ms = (stats.time_to_first_token * 1000).toFixed(0);
         lines.push(t.compose((say) => say('answer.exact.firstToken', { time: mark(say('answer.duration.ms', { n: ms })) })));
     }
@@ -133,7 +139,7 @@ export function AnswerStats({ latencyMs, stats, ended }: { latencyMs?: number; s
     const [open, setOpen] = useState(false);
     const summary = composeSummary(latencyMs, stats, ended, t, marked, !open);
     const full = composeSummary(latencyMs, stats, ended, t, plain);
-    const exact = exactStats(latencyMs, stats, t, marked);
+    const exact = exactStats(latencyMs, stats, t, marked, ended);
     if (!summary && exact.length === 0) return null;
     return (
         <>
@@ -142,7 +148,7 @@ export function AnswerStats({ latencyMs, stats, ended }: { latencyMs?: number; s
                     type="button"
                     className="msg-stats-summary"
                     aria-expanded={open}
-                    title={[full, ...exactStats(latencyMs, stats, t)].filter(Boolean).join('\n')}
+                    title={[full, ...exactStats(latencyMs, stats, t, plain, ended)].filter(Boolean).join('\n')}
                     onClick={() => setOpen((v) => !v)}
                 >
                     {summary ? <MarkedText text={summary} /> : t('answer.details')}

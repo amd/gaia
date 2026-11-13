@@ -168,7 +168,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                     return (
                         <li key={f.path} className="sp-change">
                             <div className="sp-item-text">
-                                <span className="sp-item-name" dir="auto" title={f.path}>{baseName(f.path)}</span>
+                                <span className="sp-item-name" dir="ltr" title={f.path}>{baseName(f.path)}</span>
                                 <span className="sp-meta">
                                     {t(CHANGE_LABEL[f.change])}
                                     {f.additions != null && <> · <span className="sp-add">+{f.additions}</span> <span className="sp-del">−{f.deletions}</span></>}
@@ -268,7 +268,7 @@ function ChatChangesReview({ changes, onClose }: { changes: SessionChanges; onCl
                         <section key={file.path} className="changes-review-file">
                             <DiffCard
                                 data={{
-                                    title: file.path,
+                                    path: file.path,
                                     badge: CHANGE_BADGE[file.change],
                                     note: note(file),
                                     unified: file.binary || file.too_large ? '' : file.unified,
