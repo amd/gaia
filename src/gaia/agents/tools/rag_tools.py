@@ -30,6 +30,7 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 from gaia.rag.keyword_search import keyword_index
+from gaia.rag.normalize import search_form
 from gaia.rag.sdk import (
     EmbeddingUnavailableError,
     folder_index_skip_reason,
@@ -1958,7 +1959,8 @@ class RAGToolsMixin:
                 # so exact matches retain their source file and PDF page.
                 matching_chunks = []
                 matching_details = []
-                pattern_lower = pattern.lower()
+                # Digits, vowel marks and compatibility forms written either way match.
+                pattern_lower = search_form(pattern).lower()
 
                 if debug_info:
                     debug_info["total_chunks_searched"] = len(searched)
@@ -1967,7 +1969,7 @@ class RAGToolsMixin:
                     )
 
                 for index, chunk, source_file in searched:
-                    if pattern_lower in chunk.lower():
+                    if pattern_lower in search_form(chunk).lower():
                         matching_chunks.append(chunk)
                         matching_details.append((index, chunk, source_file))
 
@@ -1976,7 +1978,9 @@ class RAGToolsMixin:
                             # Find the line containing the pattern
                             lines = chunk.split("\n")
                             matching_lines = [
-                                line for line in lines if pattern_lower in line.lower()
+                                line
+                                for line in lines
+                                if pattern_lower in search_form(line).lower()
                             ]
                             debug_info["chunks_with_matches"].append(
                                 {
@@ -2035,7 +2039,7 @@ class RAGToolsMixin:
                         matching_entries = [
                             entry
                             for entry in page_entries
-                            if pattern_lower in entry["content"].lower()
+                            if pattern_lower in search_form(entry["content"]).lower()
                         ]
                         if matching_entries:
                             matched_content = matching_entries[0]["content"]

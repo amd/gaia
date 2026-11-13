@@ -6,6 +6,7 @@ Handles path validation, user prompting, persistent allow-lists,
 blocked path enforcement, write guardrails, and audit logging.
 """
 
+import atexit
 import contextlib
 import datetime
 import hashlib
@@ -602,10 +603,93 @@ def stable_scratch_dir(anchor: str) -> Path:
 
 _scratch_holders: Dict[str, int] = {}
 _scratch_lock = threading.Lock()
+_scratch_swept = False
+_scratch_sweeper: Optional[threading.Thread] = None
+
+#: A scratch folder no run has written to for this long belongs to no live run.
+SCRATCH_STALE_SECONDS = 24 * 3600
 
 
 def _scratch_key(path: Path) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _last_activity(path: str) -> float:
+    """The newest mtime of *path* and the entries directly in it."""
+    newest = os.lstat(path).st_mtime
+    with os.scandir(path) as entries:
+        for entry in entries:
+            newest = max(newest, entry.stat(follow_symlinks=False).st_mtime)
+    return newest
+
+
+def sweep_stale_scratch_dirs() -> int:
+    """Remove this user's scratch folders untouched for a day; how many went.
+
+    A run that ended without ``cleanup()`` (the app was closed, the process was
+    killed) left its folder behind. One this process holds is kept whatever its
+    age, and one another live process still uses is re-created on its next run
+    (:func:`ensure_scratch_dir`).
+    """
+    temp = tempfile.gettempdir()
+    cutoff = datetime.datetime.now().timestamp() - SCRATCH_STALE_SECONDS
+    removed, failures = 0, []
+    with os.scandir(temp) as entries:
+        candidates = [
+            entry.path
+            for entry in entries
+            if entry.name.startswith(SCRATCH_PREFIX)
+            and entry.is_dir(follow_symlinks=False)
+        ]
+    for path in candidates:
+        with _scratch_lock:
+            if _scratch_key(Path(path)) in _scratch_holders:
+                continue
+        try:
+            info = os.lstat(path)
+            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+                continue
+            if _last_activity(path) > cutoff:
+                continue
+            shutil.rmtree(path)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failures.append(f"{path}: {exc}")
+    if removed:
+        logger.info("Removed %d stale scratch folder(s) from %s", removed, temp)
+    if failures:
+        logger.warning(
+            "Could not remove %d stale scratch folder(s), first: %s",
+            len(failures),
+            failures[0],
+        )
+    return removed
+
+
+def _sweep_in_background() -> None:
+    try:
+        sweep_stale_scratch_dirs()
+    except OSError as exc:
+        logger.warning("Stale scratch folder sweep failed: %s", exc)
+
+
+def _remove_held_scratch_dirs() -> None:
+    """At exit: remove every scratch folder this process still holds."""
+    with _scratch_lock:
+        held = list(_scratch_holders)
+        _scratch_holders.clear()
+    for path in held:
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Could not remove scratch folder %s at exit: %s", path, exc)
+
+
+atexit.register(_remove_held_scratch_dirs)
 
 
 def acquire_scratch_dir(anchor: str) -> Path:
@@ -613,11 +697,23 @@ def acquire_scratch_dir(anchor: str) -> Path:
 
     Every chat in a long-lived sidecar that shares a project shares this path,
     so one chat's cleanup must not delete it while another is still using it.
+    The first call in a process also clears stale folders, off the caller's
+    thread.
     """
+    global _scratch_swept, _scratch_sweeper
     path = stable_scratch_dir(anchor)
+    # A folder in use must not look stale to another process's sweep.
+    os.utime(path)
     with _scratch_lock:
         key = _scratch_key(path)
         _scratch_holders[key] = _scratch_holders.get(key, 0) + 1
+        start_sweep = not _scratch_swept
+        _scratch_swept = True
+    if start_sweep:
+        _scratch_sweeper = threading.Thread(
+            target=_sweep_in_background, name="gaia-scratch-sweep", daemon=True
+        )
+        _scratch_sweeper.start()
     return path
 
 
