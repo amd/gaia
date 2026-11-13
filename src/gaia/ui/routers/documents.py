@@ -24,7 +24,11 @@ from typing import List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from .._chat_helpers import UnreadableDocumentError, index_progress
+from .._chat_helpers import (
+    ModelServerIndexError,
+    UnreadableDocumentError,
+    index_progress,
+)
 from ..database import ChatDatabase
 from ..dependencies import get_db, get_indexing_tasks, get_upload_locks
 from ..models import (
@@ -504,6 +508,18 @@ async def upload_document_blob(
         logger.warning("Uploaded document %s can't be read: %s", display_name, e)
         raise HTTPException(
             status_code=422, detail={"status": e.kind, "message": str(e)}
+        ) from e
+    except ModelServerIndexError as e:
+        _cleanup_temp(final_path)
+        # The connection error stays in the log; the client words the reason.
+        logger.warning("Could not index uploaded document %s: %s", display_name, e)
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "status": e.kind,
+                "message": "GAIA's model server isn't answering, so the "
+                "document couldn't be added. Retry once it's back.",
+            },
         ) from e
     except Exception as e:
         _cleanup_temp(final_path)

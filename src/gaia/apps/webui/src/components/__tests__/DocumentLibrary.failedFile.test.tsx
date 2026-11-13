@@ -147,6 +147,22 @@ describe('a file the model server could not embed', () => {
         expect(screen.getByLabelText(/^File path to/)).toHaveValue('/tmp/third.md');
     });
 
+    it('says so when the server refuses the add with a 503', async () => {
+        const refused = Object.assign(new Error('Server error 503'), {
+            httpStatus: 503, reason: 'model_server_down', body: null,
+        });
+        mockedApi.uploadDocumentByPath.mockRejectedValue(refused);
+        render(<DocumentLibrary />);
+
+        addByPath('/tmp/third.md');
+
+        await waitFor(() => expect(document.querySelector('.upload-error-toast')).not.toBeNull());
+        const toast = document.querySelector('.upload-error-toast')!;
+        expect(toast).toHaveTextContent("GAIA's model server isn't answering");
+        expect(toast).not.toHaveTextContent('Server error 503');
+        expect(screen.getByLabelText(/^File path to/)).toHaveValue('/tmp/third.md');
+    });
+
     it('says so on its row without the connection error', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [DOWN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
         render(<DocumentLibrary />);

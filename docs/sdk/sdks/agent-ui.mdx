@@ -1830,7 +1830,10 @@ Used to reach the UI from a phone.
     takes its place. A file that can't be read is a **422** whose
     `detail.status` is one of the `error_kind` values listed under
     `upload-path` and whose
-    `detail.message` says what to do.
+    `detail.message` says what to do. When the model server didn't answer,
+    it is a **503** with `detail.status` `model_server_down` or
+    `model_server_busy`: the file is fine, and sending it again works once
+    the server is back.
   </Accordion>
 
   <Accordion title="GET /api/documents/{doc_id}/status">

@@ -370,3 +370,26 @@ class TestIndexDocumentKinds:
 
         assert getattr(exc_info.value, "kind", None) == kind
         assert not isinstance(exc_info.value, UnreadableDocumentError)
+
+
+def test_a_dropped_file_the_model_server_could_not_embed_is_a_503(client):
+    """A drag-and-drop add showed a 500 carrying the raw connection error."""
+    from gaia.ui._chat_helpers import ModelServerIndexError
+
+    async def down(*_args, **_kwargs):
+        raise ModelServerIndexError(
+            "RAG indexing failed for notes.md: HTTPConnectionPool(...) [WinError 10061]",
+            "model_server_down",
+        )
+
+    with patch("gaia.ui.server._index_document", down):
+        resp = client.post(
+            "/api/documents/upload",
+            files={"file": ("notes.md", b"# Notes")},
+            headers={"x-gaia-ui": "1", "x-gaia-client": "agent-ui"},
+        )
+
+    assert resp.status_code == 503, resp.text
+    detail = resp.json()["detail"]
+    assert detail["status"] == "model_server_down"
+    assert "HTTPConnectionPool" not in detail["message"]

@@ -19,10 +19,8 @@ import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
+import { serverFailureText } from '../utils/documentFailure';
 import './DocumentLibrary.css';
-
-/** Failures of the model server, not the file: Retry works once it answers. */
-const SERVER_FAILURES = new Set(['model_server_down', 'model_server_busy']);
 
 /** Split a stored indexing error into a one-line summary and the rest. */
 function splitFailureReason(lastError: string): { summary: string; more: string } {
@@ -375,7 +373,7 @@ export function DocumentLibrary() {
                 // Its row carries the reason and Retry; attaching it would promise a chat a file it can't search.
                 log.doc.warn(`"${filename}" couldn't be added (${doc.error_kind ?? 'unreadable'}); not attaching it`);
                 const name = doc.filename || filename;
-                setActionError(doc.error_kind && SERVER_FAILURES.has(doc.error_kind)
+                setActionError(serverFailureText(doc.error_kind, t)
                     ? t('docs.notAddedServer', { name })
                     : t('docs.notAdded', { name }));
             } else if (doc?.id) {
@@ -405,9 +403,9 @@ export function DocumentLibrary() {
             log.doc.error(`Failed to index "${filename}"`, err);
             const errMsg = reason === 'too_large'
                 ? t('docs.tooLargeDetail', { max: String(body?.max_mb) })
-                : httpStatus === 400 && unsupportedMessage
+                : serverFailureText(reason, t) ?? (httpStatus === 400 && unsupportedMessage
                     ? unsupportedMessage
-                    : err instanceof Error ? err.message : 'Upload failed';
+                    : err instanceof Error ? err.message : 'Upload failed');
             setUploadError({ filename, error: errMsg, status: httpStatus, kind: reason });
             setUploadStatus('');
             return false;
@@ -650,10 +648,7 @@ export function DocumentLibrary() {
             }
             case 'failed': {
                 const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
-                // The connection error stays in the log; the row says what to do.
-                const serverReason = doc.error_kind === 'model_server_down'
-                    ? t('docs.serverDown')
-                    : doc.error_kind === 'model_server_busy' ? t('docs.serverBusy') : null;
+                const serverReason = serverFailureText(doc.error_kind, t);
                 const lastError = serverReason ?? doc.last_error;
                 const reason = lastError ? splitFailureReason(lastError) : null;
                 return (
