@@ -1098,8 +1098,10 @@ def run_skills_command(agent: Any, query: str, out) -> None:
     """
     from gaia.skills.errors import SkillError
     from gaia.skills.link import (
+        APP_LOCAL_COPY_REMEDY,
         SECURITY_WARNING,
         SkillLinkChangedError,
+        SkillLinkNotFoundError,
         add_from_link,
         preview_link,
     )
@@ -1167,7 +1169,10 @@ def run_skills_command(agent: Any, query: str, out) -> None:
             # A stale pin can never match again; the next confirm previews anew.
             pins.pop(link, None)
         logger.warning("/skills add %s failed: %s", link, exc)
-        _write({"type": "error", "detail": str(exc)}, out)
+        detail = str(exc)
+        if isinstance(exc, SkillLinkNotFoundError):
+            detail = f"{detail} {APP_LOCAL_COPY_REMEDY}"
+        _write({"type": "error", "detail": detail}, out)
         return
     # One preview covers one add; a later add of the same link previews again.
     pins.pop(link, None)
