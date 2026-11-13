@@ -177,8 +177,16 @@ describe('resending an earlier message', () => {
         });
 
         expect(screen.getByRole('alertdialog').textContent).toContain('2 later messages');
+        expect(screen.getAllByRole('button', { name: 'Cancel' })).toHaveLength(1);
+        expect(document.querySelectorAll('.msg-edit .msg-edit-actions')).toHaveLength(0);
+        expect(editor().value).toBe('Name a long canal.');
         expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
         expect(sends).toEqual([]);
+
+        await act(async () => {
+            fireEvent.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Delete and send' }));
+        });
+        await waitFor(() => expect(sends).toEqual(['Name a long canal.']));
     });
 
     it('resends the last question without asking', async () => {

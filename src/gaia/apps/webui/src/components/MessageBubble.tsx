@@ -488,12 +488,14 @@ export function turnEnding(content: string, stopState: Message['stopState'], fai
 const EDITOR_MAX_HEIGHT = 320;
 
 /** A sent message opened for editing: Enter sends it again, Escape puts it back. */
-function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
+function MessageEditor({ original, draft, onDraft, onSend, onCancel, confirming = false }: {
     original: string;
     draft?: string | null;
     onDraft?: (text: string) => void;
     onSend: (text: string) => void;
     onCancel: () => void;
+    /** The delete-later-messages question is open and owns the buttons. */
+    confirming?: boolean;
 }) {
     const t = useT();
     // Attachments stay out of the text box and go back on when the edit is sent.
@@ -523,7 +525,7 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
             onCancel();
         } else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            if (changed) send();
+            if (changed && !confirming) send();
         }
     };
 
@@ -536,6 +538,7 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
                 onChange={(e) => { setText(e.target.value); onDraft?.(e.target.value); }}
                 onKeyDown={handleKeyDown}
                 aria-label={t('msg.editLabel')}
+                readOnly={confirming}
                 rows={1}
                 dir="auto"
                 {...CLAIMS_ESCAPE}
@@ -550,12 +553,14 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
                     ))}
                 </ul>
             )}
-            <div className="msg-edit-actions">
-                <button type="button" className="btn-secondary msg-edit-btn" onClick={onCancel}>{t('msg.editCancel')}</button>
-                <button type="button" className="btn-primary msg-edit-btn" onClick={send} disabled={!changed}>
-                    {t('msg.editSend')}
-                </button>
-            </div>
+            {!confirming && (
+                <div className="msg-edit-actions">
+                    <button type="button" className="btn-secondary msg-edit-btn" onClick={onCancel}>{t('msg.editCancel')}</button>
+                    <button type="button" className="btn-primary msg-edit-btn" onClick={send} disabled={!changed}>
+                        {t('msg.editSend')}
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
@@ -775,6 +780,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             onDraft={onEditDraft}
                             onSend={(text) => askBeforeDropping(() => onEdit(message, text))}
                             onCancel={() => { setPendingDrop(null); onEditCancel?.(); }}
+                            confirming={pendingDrop !== null && !isStreaming}
                         />
                     ) : collapsibleUser ? (
                         <>
