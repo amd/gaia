@@ -525,11 +525,28 @@ class MCPClient:
     def connect(self) -> bool:
         """Connect to the MCP server and initialize.
 
-        On failure, stores the error message in ``self.last_error``.
+        A server started through ``npx`` that dies before its first answer is
+        started once more: its first start may have raced another install of
+        the same package. On failure, stores the error message in
+        ``self.last_error``.
 
         Returns:
             bool: True if connection and initialization successful
         """
+        if self._connect_once():
+            return True
+        package = getattr(self.transport, "died_installing", None)
+        if not isinstance(package, str):
+            return False
+        logger.info(
+            "MCP server '%s' exited on its first start through npx (%s); "
+            "starting it once more",
+            self.name,
+            package,
+        )
+        return self._connect_once()
+
+    def _connect_once(self) -> bool:
         self.last_error = None
         logger.debug(f"Connecting to MCP server '{self.name}'...")
 
