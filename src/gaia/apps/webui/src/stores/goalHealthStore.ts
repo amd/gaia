@@ -17,7 +17,16 @@ interface GoalHealthState {
     check: () => Promise<void>;
 }
 
+const NOTIFICATION_ID = 'goal-store-error-';
 let failures = 0;
+
+/** A failure that has ended needs no one's attention: read its notifications. */
+function readFailureNotifications() {
+    const notes = useNotificationStore.getState();
+    for (const n of notes.notifications) {
+        if (n.id.startsWith(NOTIFICATION_ID) && !n.read) notes.markRead(n.id);
+    }
+}
 
 export const useGoalHealthStore = create<GoalHealthState>((set, get) => ({
     error: null,
@@ -37,7 +46,7 @@ export const useGoalHealthStore = create<GoalHealthState>((set, get) => ({
         if (error && error !== get().error) {
             failures += 1;
             useNotificationStore.getState().addNotification({
-                id: `goal-store-error-${failures}`,
+                id: `${NOTIFICATION_ID}${failures}`,
                 type: 'error',
                 agentId: 'goals',
                 agentName: 'GAIA',
@@ -49,6 +58,7 @@ export const useGoalHealthStore = create<GoalHealthState>((set, get) => ({
                 priority: 'high',
             });
         }
+        if (!error) readFailureNotifications();
         set({ error, damaged: !!damaged });
     },
 }));

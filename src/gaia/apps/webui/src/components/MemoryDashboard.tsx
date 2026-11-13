@@ -641,6 +641,11 @@ export function MemoryDashboard() {
         loadGoals();
     }, [goalForm, loadGoals, t]);
 
+    // A goal list that reads again makes a "list is damaged" form error stale.
+    useEffect(() => {
+        if (!goalStoreError) setGoalFormError(null);
+    }, [goalStoreError]);
+
     const startNewGoalList = useCallback(async () => {
         setResettingGoalStore(true);
         try {

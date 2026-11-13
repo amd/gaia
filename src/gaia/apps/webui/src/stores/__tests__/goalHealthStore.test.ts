@@ -45,6 +45,21 @@ describe('unreadable goal store', () => {
         expect(errors()).toHaveLength(2);
     });
 
+    it('marks its notifications read once the store opens again', async () => {
+        serve(BROKEN);
+        await useGoalHealthStore.getState().check();
+        serve('Could not read approved goals from goals.db: database is locked.');
+        await useGoalHealthStore.getState().check();
+        useNotificationStore.getState().addNotification({
+            id: 'other', type: 'error', agentId: 'x', agentName: 'X', title: 't',
+            message: 'm', timestamp: 0, read: false, dismissed: false, priority: 'high',
+        });
+        serve(null);
+        await useGoalHealthStore.getState().check();
+        const unread = errors().filter((n) => !n.read).map((n) => n.id);
+        expect(unread).toEqual(['other']);
+    });
+
     it('notifies again when the failure changes to a different reason', async () => {
         serve(BROKEN);
         await useGoalHealthStore.getState().check();
