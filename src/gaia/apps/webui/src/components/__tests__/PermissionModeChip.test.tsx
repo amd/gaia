@@ -1,11 +1,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionModeChip } from '../PermissionModeChip';
 import { useChatStore } from '../../stores/chatStore';
 import { useNotificationStore } from '../../stores/notificationStore';
+import { readsAs } from '../../test/readsAs';
 import * as api from '../../services/api';
 
 vi.mock('../../services/api');
@@ -111,5 +112,15 @@ describe('PermissionModeChip before the chat exists', () => {
         expect(mockedApi.setPermissionMode).not.toHaveBeenCalled();
         expect(mockedApi.getPermissions).not.toHaveBeenCalled();
         expect(screen.getByRole('button', { name: 'Permission mode: full access' })).toBeInTheDocument();
+    });
+});
+
+describe('PermissionModeChip in Arabic', () => {
+    afterEach(() => act(() => useChatStore.getState().setLocale('en')));
+
+    it('labels the ask mode with a verb, not "the question"', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        render(<PermissionModeChip sessionId={null} />);
+        expect(screen.getByText(readsAs('اسأل (Ask)'))).toBeInTheDocument();
     });
 });

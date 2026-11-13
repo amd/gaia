@@ -142,9 +142,15 @@ def _ask_the_daemon(
     otherwise need) just to be told so. While GAIA runs its own server, only
     that server's recorded address is probed; a stopped one is always started
     by the daemon, on its recorded port.
+
+    A server the user named is authoritative: when it does not answer, this
+    raises instead of asking the daemon for GAIA's own. Starting a different
+    server on another port would be a substitution the user did not choose.
     """
     from gaia.llm.lemonade_client import (
         LemonadeClient,
+        configured_lemonade_url,
+        resolve_lemonade_base_url,
         running_embedded_lemonade_url,
     )
     from gaia.llm.lemonade_launcher import gaia_runs_lemonade
@@ -158,10 +164,20 @@ def _ask_the_daemon(
             if own
             else None
         )
+        external_url = None
     elif base_url:
         client = LemonadeClient(base_url=base_url, keep_alive=True, verbose=False)
+        # Only an address other than GAIA's own default is a server the user named.
+        external_url = (
+            base_url
+            if resolve_lemonade_base_url(base_url) != resolve_lemonade_base_url()
+            else configured_lemonade_url()
+        )
     else:
         client = LemonadeClient(keep_alive=True, verbose=False)
+        # No base_url still means the user's server when LEMONADE_BASE_URL or
+        # the saved external choice names one.
+        external_url = configured_lemonade_url()
     if client is not None and _probe(client):
         return LemonadeState(
             base_url=client.base_url,
@@ -170,6 +186,11 @@ def _ask_the_daemon(
             pid=None,
             waited_seconds=0.0,
         )
+
+    if external_url:
+        from gaia.llm.lemonade_choice import unreachable_server_message
+
+        raise LemonadeStartError(unreachable_server_message(external_url))
 
     payload = {"ctx_size": ctx_size} if ctx_size else {}
     body = _post_start(payload, timeout)
