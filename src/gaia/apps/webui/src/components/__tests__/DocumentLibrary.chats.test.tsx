@@ -64,7 +64,7 @@ describe('the library says where each document is used', () => {
         render(<DocumentLibrary />);
         await screen.findByText('budget.xlsx');
 
-        expect(within(row('lease.pdf')).getByRole('button', { name: 'Attach lease.pdf to “Budget review”' })).toHaveTextContent('Add to this chat');
+        expect(within(row('lease.pdf')).getByRole('button', { name: 'Add lease.pdf to “Budget review”' })).toHaveTextContent('Add to this chat');
         expect(within(row('budget.xlsx')).queryByText('Add to this chat')).toBeNull();
     });
 
@@ -73,7 +73,7 @@ describe('the library says where each document is used', () => {
         render(<DocumentLibrary />);
         await screen.findByText('lease.pdf');
 
-        fireEvent.click(within(row('lease.pdf')).getByRole('button', { name: 'Attach lease.pdf to “Budget review”' }));
+        fireEvent.click(within(row('lease.pdf')).getByRole('button', { name: 'Add lease.pdf to “Budget review”' }));
 
         expect(await within(row('lease.pdf')).findByText('In this chat and 3 others')).toBeInTheDocument();
     });

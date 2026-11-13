@@ -121,10 +121,10 @@ describe('DocumentLibrary with no chat open', () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
         render(<DocumentLibrary />);
 
-        fireEvent.click(await screen.findByRole('button', { name: 'Attach good.pdf to your next chat' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Add good.pdf to your next chat' }));
 
         expect(useChatStore.getState().draftDocumentIds).toEqual(['doc-ok-1']);
-        expect(screen.queryByRole('button', { name: 'Attach good.pdf to your next chat' })).toBeNull();
+        expect(screen.queryByRole('button', { name: 'Add good.pdf to your next chat' })).toBeNull();
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
     });
 
@@ -184,7 +184,7 @@ describe('DocumentLibrary says where documents go', () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
         render(<DocumentLibrary />);
 
-        const button = await screen.findByRole('button', { name: 'Attach good.pdf to “Budget review”' });
+        const button = await screen.findByRole('button', { name: 'Add good.pdf to “Budget review”' });
         expect(button.getAttribute('title')).toBe('Use in “Budget review”');
     });
 
