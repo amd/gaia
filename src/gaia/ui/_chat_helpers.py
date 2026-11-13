@@ -1556,10 +1556,17 @@ def _canonical_agent_type(agent_type: str) -> str:
     return registry.canonical_id(agent_type)
 
 
-def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
+def _get_cached_agent(
+    session_id: str,
+    model_id: str,
+    agent_type: str = "chat",
+    document_ids: list | None = None,
+):
     """Return the cached agent for *session_id* if model and agent_type match, else None.
 
-    Evicts the entry when the model or agent type has changed. Legacy
+    Evicts the entry when the model or agent type has changed, or when a
+    document it was given is no longer in *document_ids* (detached, or deleted
+    from the library): its index still holds that document. Legacy
     agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``) are normalised
     before comparison so stored sessions that pre-date a rename continue to
     hit the cache instead of reconstructing the agent on every turn.
@@ -1583,6 +1590,16 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
             return None
+        if document_ids is not None:
+            if set(entry["document_ids"]) - set(document_ids):
+                old_entry = _agent_cache.pop(session_id)
+                _disconnect_cached_agent(old_entry)
+                logger.debug(
+                    "Agent cache miss (document removed) for session %s",
+                    session_id[:8],
+                )
+                return None
+            entry["document_ids"] = list(document_ids)
         _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
@@ -2752,8 +2769,9 @@ def _dispatch_sidecar_query(
         return
 
     relayed_documents = None
-    if documents and profile.min_documents_api_version is not None:
-        if not documents_supported(profile, handle.api_version):
+    takes_documents = documents_supported(profile, handle.api_version)
+    if documents is not None and profile.min_documents_api_version is not None:
+        if documents and not takes_documents:
             logger.warning(
                 "%s agent at contract %s can't read documents (needs %s)",
                 agent_type,
@@ -2764,7 +2782,9 @@ def _dispatch_sidecar_query(
                 {"type": "agent_error", "content": profile.documents_upgrade_message}
             )
             return
-        relayed_documents = [str(Path(p).resolve()) for p in documents]
+        if takes_documents:
+            # Even an empty list: it is how a detached document leaves.
+            relayed_documents = [str(Path(p).resolve()) for p in documents]
 
     if withheld:
         logger.warning(
@@ -4076,7 +4096,7 @@ async def _get_chat_response(
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
         wait_for_warm_up(model=model_id)
-        cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+        cached_agent = _get_cached_agent(session_id, model_id, agent_type, document_ids)
         working_directory = _session_working_directory(
             load_environment(db, session_id)["folders"]
         )
@@ -4544,7 +4564,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 wait_for_warm_up(handler=sse_handler, model=model_id)
                 if sse_handler.cancelled.is_set():
                     return
-                cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+                cached_agent = _get_cached_agent(
+                    session_id, model_id, agent_type, document_ids
+                )
                 working_directory = _session_working_directory(
                     load_environment(db, session_id)["folders"]
                 )

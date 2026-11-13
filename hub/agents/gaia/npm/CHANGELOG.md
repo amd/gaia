@@ -8,6 +8,11 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A detached document is no longer searched.** A file an earlier turn sent in
+  `documents` and this turn leaves out (the user detached it, or deleted it from
+  the library) is dropped from the session's index, so answers stop quoting it.
+  An empty `documents` list drops them all.
+
 - **`/init` says a missing model once.** On a PC with no Lemonade client, the
   `hint` read "The model X is not downloaded. X is not downloaded, and no
   Lemonade client CLI was found …, then re-check." It is now the one sentence.
