@@ -14,7 +14,8 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.rag.arabic_text import normalize_arabic_pdf_text
 from gaia.rag.keyword_search import KeywordIndex
-from gaia.rag.sdk import RAGSDK, RAGConfig
+from gaia.rag.normalize import search_form
+from gaia.rag.sdk import EMBED_MAX_CHARS, RAGSDK, RAGConfig
 
 
 def _top(query, texts):
@@ -134,3 +135,22 @@ def test_upload_name_is_stored_composed(tmp_path, monkeypatch):
     body = resp.json()
     assert body["filename"] == unicodedata.normalize("NFC", decomposed)
     assert unicodedata.is_normalized("NFC", body["filepath"])
+
+
+# U+FDFA is one character that NFKC writes as 18.
+_EXPANDING = chr(0xFDFA)
+
+
+def test_a_chunk_that_grows_when_normalized_still_fits_the_embedder(sdk):
+    text = (f"{_EXPANDING} " * EMBED_MAX_CHARS)[: EMBED_MAX_CHARS - 1]
+
+    chunks = sdk._fit_chunks_to_embedder([text])
+    sdk._encode_texts(chunks)
+
+    assert all(len(search_form(chunk)) <= EMBED_MAX_CHARS for chunk in chunks)
+    assert all(len(sent) <= EMBED_MAX_CHARS for sent in sdk.embedder.inputs)
+
+
+def test_text_too_long_once_normalized_is_refused(sdk):
+    with pytest.raises(ValueError, match=str(EMBED_MAX_CHARS)):
+        sdk._encode_texts([_EXPANDING * 200])

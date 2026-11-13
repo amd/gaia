@@ -604,7 +604,7 @@ EMBED_WARMUP_ATTEMPTS = 3
 EMBED_WARMUP_PAUSE_S = 2
 
 
-def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+def _split_at_whitespace(text: str, max_chars: int) -> List[str]:
     """Split *text* into pieces of at most *max_chars*, dropping nothing but whitespace.
 
     Breaks at the last newline, else the last space, in the back half of each
@@ -629,6 +629,23 @@ def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str
     if rest:
         pieces.append(rest)
     return pieces
+
+
+def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+    """Split *text* into pieces whose embedded form is at most *max_chars* long.
+
+    The embedder reads :func:`search_form`, which a ligature such as U+FDFA
+    lengthens, so a piece that grows past the limit is cut finer.
+    """
+    fitted = []
+    for piece in _split_at_whitespace(text, max_chars):
+        size = max_chars
+        parts = [piece]
+        while size > 1 and any(len(search_form(p)) > max_chars for p in parts):
+            size = max(1, size * 3 // 4)
+            parts = _split_at_whitespace(piece, size)
+        fitted.extend(parts)
+    return fitted
 
 
 def default_rag_cache_dir() -> str:
@@ -1489,18 +1506,18 @@ class RAGSDK:
             numpy array of embeddings with shape (num_texts, embedding_dim)
         """
 
+        # Documents and queries are embedded in one search form; NFKC also turns
+        # no-break spaces, which can exceed one token per character, into spaces.
+        safe_texts = [search_form(text) for text in texts]
         # Chunks are cut to fit, so a longer text here is a caller bug that
         # the embedder would answer with a 500.
-        oversized = [len(t) for t in texts if len(t) > EMBED_MAX_CHARS]
+        oversized = [len(t) for t in safe_texts if len(t) > EMBED_MAX_CHARS]
         if oversized:
             raise ValueError(
                 f"{len(oversized)}/{len(texts)} texts exceed the embedder's "
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        # Documents and queries are embedded in one search form; NFKC also turns
-        # no-break spaces, which can exceed one token per character, into spaces.
-        safe_texts = [search_form(text) for text in texts]
 
         all_embeddings = []
 
@@ -3472,7 +3489,7 @@ These positions indicate where to split the text."""
         fitted = []
         split = pieces = 0
         for chunk in chunks:
-            if len(chunk) <= EMBED_MAX_CHARS:
+            if len(search_form(chunk)) <= EMBED_MAX_CHARS:
                 fitted.append(chunk)
                 continue
             parts = split_for_embedding(chunk)
