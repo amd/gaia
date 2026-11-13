@@ -8,6 +8,7 @@ import type { Schedule, ScheduleResult } from '../types';
 import * as api from '../services/api';
 import { getT } from '../i18n/useT';
 import { log } from '../utils/logger';
+import { plainPreview } from '../utils/plainPreview';
 import { useNotificationStore } from './notificationStore';
 
 /** Extract a human-readable message from an API error. */
@@ -63,7 +64,7 @@ function notifyNewFinishes(seenErrors: Record<string, number>, seenFinished: Rec
             agentId: 'scheduler',
             agentName: 'GAIA',
             title: getT()('schedules.finished', { name: s.name }),
-            message: s.last_result ?? '',
+            message: plainPreview(s.last_result ?? ''),
             timestamp: Date.now(),
             read: false,
             dismissed: false,
