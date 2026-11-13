@@ -18,8 +18,10 @@ const UPLOADED_IMAGE_LINE = /^!\[([^\]]*)\]\((\/api\/files\/uploads\/[^)\s]+)\)$
 export function splitUploadedImages(content: string): { text: string; images: MessageImage[] } {
     const images: MessageImage[] = [];
     const kept: string[] = [];
+    let inFence = false;
     for (const line of content.split('\n')) {
-        const match = UPLOADED_IMAGE_LINE.exec(line.trim());
+        if (line.trim().startsWith('```')) inFence = !inFence;
+        const match = inFence ? null : UPLOADED_IMAGE_LINE.exec(line.trim());
         const src = match ? safeUrlTransform(match[2]) : '';
         if (match && src) images.push({ src, name: match[1] || match[2].split('/').pop() || '' });
         else kept.push(line);
