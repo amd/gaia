@@ -860,9 +860,14 @@ def _report_live_context(run: "_QueryRun") -> None:
 
 
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
-    """Terminal refusal for a confirmation-gated tool (the stateless D1 stub)."""
+    """Terminal refusal for a confirmation-gated tool (the stateless D1 stub).
+
+    ``failed``: the request was not done, so a scripted caller must not read
+    it as a success.
+    """
     return {
         "type": "final",
+        "failed": True,
         "answer": (
             f"I stopped before running '{action}' because it needs your explicit "
             "approval, and this streaming surface cannot collect that yet. "
@@ -2033,9 +2038,19 @@ async def query(request: QueryRequest):
                         # ever see.
                         for warning in await _finish_changes(run):
                             yield _emit(warning)
-                        yield _emit(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
+                        refusal = _confirmation_refusal(canonical.get("action", ""))
+                        # The steps and tokens spent before the stop are known
+                        # once the cancelled loop returns.
+                        await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
+                        if not thread.is_alive():
+                            from gaia_agent.stdio import _usage_from_result
+
+                            usage = _usage_from_result(run.result)
+                            if usage:
+                                refusal["usage"] = usage
+                        yield _emit(refusal)
                         terminated = True
                         return
                     if ctype in TERMINAL_TYPES:
