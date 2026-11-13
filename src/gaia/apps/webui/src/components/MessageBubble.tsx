@@ -606,7 +606,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     }, []);
 
     const handleCopy = useCallback(() => {
-        const text = message.role === 'assistant' ? plainAnswerText(message.content) : message.content;
+        const text = message.role === 'assistant' ? plainAnswerText(cleanedContent) : message.content;
         if (navigator.clipboard?.writeText) {
             navigator.clipboard.writeText(text).catch(() => {});
         } else {
@@ -623,7 +623,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         setCopied(true);
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
         copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [message.content, message.role]);
+    }, [cleanedContent, message.content, message.role]);
 
     const handleDelete = useCallback(() => {
         if (!confirmDelete) {

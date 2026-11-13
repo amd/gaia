@@ -34,4 +34,12 @@ describe('plainAnswerText', () => {
         expect(plainAnswerText('Use `[a](b)` here')).toBe('Use [a](b) here');
         expect(plainAnswerText('a 5*3 = 15\nand 4*2 = 8')).toBe('a 5*3 = 15\nand 4*2 = 8');
     });
+
+    it('drops backslash escapes and keeps the escaped character', () => {
+        expect(plainAnswerText('Escaped \\*star\\* and 1\\. item')).toBe('Escaped *star* and 1. item');
+    });
+
+    it('handles an empty code block without swallowing the text after it', () => {
+        expect(plainAnswerText('```\n```\nSome **bold** text')).toBe('Some bold text');
+    });
 });

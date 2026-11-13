@@ -3,12 +3,13 @@
 
 /** A markdown answer as the plain text a person sees, for the clipboard. */
 
-const FENCE = /(^|\n)[ \t]*```[^\n]*\n([\s\S]*?)(?:\n[ \t]*```[ \t]*(?=\n|$)|$)/g;
+const FENCE = /(^|\n)[ \t]*```[^\n]*\n([\s\S]*?)(?:(?:(?<=\n)|\n)[ \t]*```[ \t]*(?=\n|$)|$)/g;
 
 function proseToPlain(prose: string): string {
     const code: string[] = [];
     const plain = prose
         .replace(/`([^`\n]+)`/g, (_, text: string) => `\u0000${code.push(text) - 1}\u0000`)
+        .replace(/\\([\\`*_{}[\]()#+\-.!|~>])/g, (_, ch: string) => `\u0000${code.push(ch) - 1}\u0000`)
         .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
         .replace(/\[([^\]]+)\]\(([^)]*)\)/g, (_, text: string, url: string) => (text === url || !url ? text : `${text} (${url})`))
         .replace(/^[ \t]*([-*_][ \t]*){3,}$/gm, '')

@@ -32,4 +32,9 @@ describe('Copy message', () => {
         const text = copied({ ...base, role: 'user', content: 'make **this** bold' });
         expect(text).toBe('make **this** bold');
     });
+
+    it('leaves out the model reasoning the bubble hides', () => {
+        const text = copied({ ...base, content: '<think>plan</think>Answer **hi**' });
+        expect(text).toBe('Answer hi');
+    });
 });
