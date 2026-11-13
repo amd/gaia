@@ -21,6 +21,7 @@ var (
 	addLink          = gaiamodel.Add
 	removeModel      = gaiamodel.Remove
 	readCustomModels = lemonade.ReadCustomModels
+	readChosenModels = lemonade.ReadChosenModels
 )
 
 type customCheckedMsg struct {

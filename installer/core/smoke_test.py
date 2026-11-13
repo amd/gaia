@@ -149,8 +149,6 @@ NEVER_STARTED = {
 #: Commands that fail the walk today, each with its issue. Strict: once one
 #: starts cleanly the walk fails until its line is deleted.
 KNOWN_BROKEN = {
-    "mcp engineering": "amd/gaia#7335",
-    "mcp code-index": "amd/gaia#7335",
     "youtube": "amd/gaia#7337",
     "perf-vis": "amd/gaia#7337",
     "agent init": "amd/gaia#7337",
