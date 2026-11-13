@@ -3144,22 +3144,28 @@ class ReadToolsMixin:
               - a sender / brand name → ``from:netflix`` (e.g. "the Netflix
                 promo" → ``from:netflix``)
               - words expected in the subject → ``subject:invoice``
-              - status / recency → ``is:unread``, ``newer_than:7d``,
-                ``label:promotions``
+              - status / recency → ``is:unread``, ``newer_than:7d`` (on
+                Gmail, ``label:promotions`` also works for a category)
 
-            On an Outlook-only mailbox, only ``from:``, ``subject:``,
-            ``is:unread``, ``is:read``, ``newer_than:``, and ``older_than:``
-            are supported; any other operator (``label:``, ``has:``,
+            On Outlook, only ``from:``, ``subject:``, ``is:unread``,
+            ``is:read``, ``newer_than:``, and ``older_than:`` are supported,
+            and one query cannot combine the first two with the rest: Graph
+            rejects a search that mixes a from:/subject:/text term with an
+            unread, read, or recency filter, so run
+            ``"from:boss@example.com"`` and ``"is:unread newer_than:7d"`` as
+            two separate searches. Any other operator (``label:``, ``has:``,
             ``after:``, ``before:``, ``in:``, ``is:starred``, ...) raises an
             error naming the unsupported operator instead of matching
             nothing silently.
 
-            Combine them: ``"from:boss@example.com is:unread newer_than:7d"``.
-            Date operators require ``YYYY/MM/DD`` — e.g. ``after:2026/07/01
-            before:2026/07/08``, never ``after:July 1``. If a bare phrase is
-            passed and returns nothing, the tool retries once as an operator
-            query automatically, but forming the operator query yourself is
-            more reliable.
+            On Gmail, combine them freely:
+            ``"from:boss@example.com is:unread newer_than:7d"``. Gmail date
+            operators require ``YYYY/MM/DD``, e.g. ``after:2026/07/01
+            before:2026/07/08`` and never ``after:July 1``. On Outlook, use
+            the ``newer_than:`` / ``older_than:`` durations instead. If a bare
+            phrase is passed and returns nothing, the tool retries once as an
+            operator query automatically, but forming the operator query
+            yourself is more reliable.
 
             By DEFAULT (``include_bodies`` omitted/``None``) this AUTO-DECIDES
             from ``query`` (#3773): a pure filter query (only ``from:``/

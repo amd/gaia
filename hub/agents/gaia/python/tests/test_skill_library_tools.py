@@ -4,9 +4,9 @@
 
 Two things these tests refuse to take on faith.
 
-**Activation is asserted on the composed system prompt, never on a flag.**
+**Activation is asserted on the composed prompt, never on a flag.**
 ``load_skill`` returning ``{"status": "success"}`` proves a dict was built; only
-the skill's body appearing in ``agent.system_prompt`` — and disappearing again
+the skill's body appearing in ``agent._prompt_text()`` — and disappearing again
 on unload — proves the model will actually see it.
 
 **The install path is exercised, not mocked.** ``install_skill`` runs against a
@@ -226,7 +226,7 @@ def session(library):
 
     return SimpleNamespace(
         agent=agent,
-        baseline_prompt=agent.system_prompt,
+        baseline_prompt=agent._prompt_text(),
         # The always-on set (gaia-voice, per gaia-agent.yaml) loads during
         # construction, so "clean" is this set — not an empty one.
         baseline_skills=frozenset(agent.loaded_skills),
@@ -404,7 +404,7 @@ def test_load_injects_the_skill_body_into_the_system_prompt(session):
 
     assert result["status"] == "success", result
     assert result["already_loaded"] is False
-    prompt = session.agent.system_prompt
+    prompt = session.agent._prompt_text()
     assert SKILLS_PROMPT_HEADER in prompt
     assert NOTE_TAKER_MARKER in prompt, (
         "load_skill reported success but the body never reached the composed "
@@ -415,12 +415,12 @@ def test_load_injects_the_skill_body_into_the_system_prompt(session):
 
 def test_unload_removes_the_body_from_the_system_prompt(session):
     call(session, "load_skill", name="note-taker")
-    assert NOTE_TAKER_MARKER in session.agent.system_prompt
+    assert NOTE_TAKER_MARKER in session.agent._prompt_text()
 
     result = call(session, "unload_skill", name="note-taker")
 
     assert result["status"] == "success", result
-    prompt = session.agent.system_prompt
+    prompt = session.agent._prompt_text()
     assert NOTE_TAKER_MARKER not in prompt, (
         "unload_skill reported success but the body is still in the prompt — the "
         "skill was un-flagged, not unloaded."
@@ -438,7 +438,7 @@ def test_loading_twice_is_idempotent(session):
     second = call(session, "load_skill", name="note-taker")
 
     assert second["already_loaded"] is True
-    assert session.agent.system_prompt.count(NOTE_TAKER_MARKER) == 1
+    assert session.agent._prompt_text().count(NOTE_TAKER_MARKER) == 1
 
 
 def test_load_names_companions_that_are_not_loaded_yet(session):
@@ -511,7 +511,7 @@ def test_load_refuses_a_skill_that_asks_for_shell_execute(session):
     assert "shell" in result["error"]
     # gaia-voice is always-on, so the claim is that no TASK skill loaded.
     assert set(session.agent.loaded_skills) == session.baseline_skills
-    assert SHELL_RUNNER_MARKER not in session.agent.system_prompt
+    assert SHELL_RUNNER_MARKER not in session.agent._prompt_text()
 
 
 @pytest.mark.parametrize(
@@ -578,7 +578,7 @@ def test_load_refuses_code_from_an_ungated_claude_import(session):
     assert Path(parsed.source) == session.library.claude / "imported-code"
     # gaia-voice is always-on, so the claim is that no TASK skill loaded.
     assert set(session.agent.loaded_skills) == session.baseline_skills
-    assert IMPORTED_CODE_MARKER not in session.agent.system_prompt
+    assert IMPORTED_CODE_MARKER not in session.agent._prompt_text()
     assert "imported-code/imported_probe" not in session.agent._tools_registry
 
 
@@ -636,7 +636,7 @@ def test_instruction_only_imports_still_load(session):
     result = call(session, "load_skill", name="imported-prose")
 
     assert result["status"] == "success", result
-    assert IMPORTED_PROSE_MARKER in session.agent.system_prompt
+    assert IMPORTED_PROSE_MARKER in session.agent._prompt_text()
 
 
 def test_install_refuses_an_unsigned_skill(session, hub, tmp_path):
@@ -714,19 +714,19 @@ def test_install_then_load_a_signed_community_skill(session, hub, tmp_path):
     assert "load_skill('trusted-brief')" in installed["next_step"]
     assert (session.library.user / "trusted-brief" / "SKILL.md").is_file()
     # Installing is not activating.
-    assert PUBLISHED_MARKER not in session.agent.system_prompt
+    assert PUBLISHED_MARKER not in session.agent._prompt_text()
 
     loaded = call(session, "load_skill", name="trusted-brief")
 
     assert loaded["status"] == "success", loaded
-    assert PUBLISHED_MARKER in session.agent.system_prompt
+    assert PUBLISHED_MARKER in session.agent._prompt_text()
 
     removed = call(session, "remove_skill", name="trusted-brief")
 
     assert removed["status"] == "success", removed
     assert removed["unloaded_from_session"] is True
     assert not (session.library.user / "trusted-brief").exists()
-    assert PUBLISHED_MARKER not in session.agent.system_prompt
+    assert PUBLISHED_MARKER not in session.agent._prompt_text()
 
 
 def test_install_honours_a_version_pin(session, hub, tmp_path):
@@ -797,8 +797,8 @@ def test_installing_a_skill_the_agent_bundles_says_the_bundled_copy_loads(
 
         loaded = call(session, "load_skill", name="note-taker")
         assert loaded["status"] == "success", loaded
-        assert NOTE_TAKER_MARKER in session.agent.system_prompt
-        assert PUBLISHED_MARKER not in session.agent.system_prompt
+        assert NOTE_TAKER_MARKER in session.agent._prompt_text()
+        assert PUBLISHED_MARKER not in session.agent._prompt_text()
     finally:
         call(session, "remove_skill", name="note-taker")
 
@@ -1011,7 +1011,7 @@ def test_load_surfaces_a_tools_required_gap(session):
     assert result["status"] == "success"
     assert result["unmet_tools_required"] == ["launch_the_missiles"]
     assert "launch_the_missiles" in result["warning"]
-    assert NEEDS_TOOLS_MARKER in session.agent.system_prompt
+    assert NEEDS_TOOLS_MARKER in session.agent._prompt_text()
 
 
 def test_load_surfaces_a_missing_command_that_has_a_substitute(session, monkeypatch):
@@ -1325,7 +1325,7 @@ class TestCaptureSkillTool:
 
         loaded = call(session, "load_skill", name="captured-notes")
         assert loaded["status"] == "success"
-        assert CAPTURED_MARKER in session.agent.system_prompt
+        assert CAPTURED_MARKER in session.agent._prompt_text()
 
     def test_captured_code_is_inert_until_promoted(self, session, tmp_path):
         """The full lifecycle: capture → load (tools deferred, said honestly)
@@ -1341,7 +1341,7 @@ class TestCaptureSkillTool:
         loaded = call(session, "load_skill", name="shouter")
         assert loaded["status"] == "success"
         # Instructions in, code out — and the payload says so.
-        assert CAPTURED_MARKER in session.agent.system_prompt
+        assert CAPTURED_MARKER in session.agent._prompt_text()
         assert "shouter/shout" not in session.agent._tools_registry
         assert loaded["registered_tools"] == []
         assert loaded["deferred_tools"] == ["shout"]
