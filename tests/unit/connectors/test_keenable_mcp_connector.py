@@ -63,3 +63,4 @@ def test_keenable_text_results_parse():
         "https://example.com/lemonade",
     ]
     assert results[0]["title"] == "GAIA on Ryzen AI"
+    assert results[0]["snippet"] == "Run local LLMs."
