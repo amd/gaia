@@ -226,6 +226,7 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 		}
 	}
 	heads := RecommendedFor(provider)
+	_, hasNPUMemory := capacity.NPU()
 	if provider == "local" {
 		heads = append(heads, added...)
 	}
@@ -249,6 +250,10 @@ func BuildEntries(provider string, models []Model, capacity Capacity, capErr err
 		case rec.Device == "npu" && !rec.Custom && npu.Known && !npu.Present:
 			// A confirmed-absent NPU is not a broken option to explain; it is
 			// not an option. A custom model stays so the user can remove it.
+			continue
+		case rec.Device == "npu" && !rec.Custom && !npu.Known && (capErr != nil || !hasNPUMemory):
+			// An unknown verdict cannot vouch for an NPU, and with no NPU memory
+			// reported the row could never be selected. Hide it as before.
 			continue
 		case rec.Device == "npu":
 			// Lemonade lists FLM models only once its NPU backend is in; Pull

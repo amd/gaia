@@ -145,6 +145,26 @@ func TestAConfirmedAbsentNPUHidesAnUnlistedNPURecommendation(t *testing.T) {
 	}
 }
 
+// An unknown verdict and no NPU memory is what an older daemon leaves on a PC
+// whose NPU cannot be measured: the row could never be selected, so hide it.
+func TestAnUnknownVerdictWithNoNPUMemoryHidesTheRecommendation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		capacity Capacity
+		capErr   error
+	}{
+		{"no NPU memory", Capacity{MemoryGB: 64, DiskFreeGB: 500}, nil},
+		{"unreadable memory", Capacity{}, fmt.Errorf("no system info")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			by := entriesByID(BuildEntries("local", nil, tc.capacity, tc.capErr, verdict(false, false, false)))
+			if e, ok := by["gemma4-it-e4b-FLM"]; ok {
+				t.Fatalf("a recommendation that can never be selected must be hidden: %+v", e)
+			}
+		})
+	}
+}
+
 // A downloaded GGUF is untouched: the verdict is about the NPU, not about
 // every model on the PC.
 func TestAVerdictLeavesNonNPUModelsAlone(t *testing.T) {
