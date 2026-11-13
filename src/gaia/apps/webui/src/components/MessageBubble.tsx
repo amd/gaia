@@ -573,6 +573,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
         [message.content, message.role, isStreaming, cutOff],
     );
+    const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
     const readAloudId = `${message.session_id}:${message.id}`;
@@ -698,17 +699,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
-                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                            {message.role === 'assistant' && !isError && hasAnswerText && (
                                 <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
                             )}
-                            <button
-                                className={`msg-copy ${copied ? 'copied' : ''}`}
-                                onClick={handleCopy}
-                                title={copied ? t('msg.copied') : t('msg.copy')}
-                                aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
-                            >
-                                {copied ? <Check size={12} /> : <Copy size={12} />}
-                            </button>
+                            {hasAnswerText && (
+                                <button
+                                    className={`msg-copy ${copied ? 'copied' : ''}`}
+                                    onClick={handleCopy}
+                                    title={copied ? t('msg.copied') : t('msg.copy')}
+                                    aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
+                                >
+                                    {copied ? <Check size={12} /> : <Copy size={12} />}
+                                </button>
+                            )}
                             {/* Delete button */}
                             {onDelete && (
                                 <button
@@ -1252,8 +1255,8 @@ const MARKDOWN_COMPONENTS: Components = {
     ol({ children, start }) {
         return <ol className="md-ol" start={start} dir="auto">{children}</ol>;
     },
-    li({ children }) {
-        return <li className="md-li" dir="auto"><Linkified>{children}</Linkified></li>;
+    li({ children, className }) {
+        return <li className={className ? `md-li ${className}` : 'md-li'} dir="auto"><Linkified>{children}</Linkified></li>;
     },
     // Blockquote
     blockquote({ children }) {

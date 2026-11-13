@@ -35,7 +35,7 @@ function notifyNewFailures(seen: Record<string, number>, list: Schedule[]): void
             type: 'error',
             agentId: 'scheduler',
             agentName: 'GAIA',
-            title: `Scheduled task "${s.name}" failed`,
+            title: getT()('schedules.failed', { name: s.name }),
             message: s.last_error,
             timestamp: Date.now(),
             read: false,

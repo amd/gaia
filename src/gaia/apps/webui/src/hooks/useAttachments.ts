@@ -25,13 +25,19 @@ export interface UseAttachments {
     compose: (text: string) => string;
 }
 
+const MODERN_OFFICE: Record<string, string> = { '.doc': '.docx', '.xls': '.xlsx', '.ppt': '.pptx' };
+
 /** The upload refusal in the chosen language; a refusal this build doesn't know shows the server's own words. */
 function uploadErrorText(err: unknown, t: Translate): string {
     if (!(err instanceof api.ApiError)) return err instanceof Error ? err.message : t('composer.uploadFailed');
     const { extension, size_mb: size, max_mb: max } = err.body ?? {};
     switch (err.reason) {
         case 'no_extension': return t('composer.upload.noExtension');
-        case 'unsupported_type': return t('composer.upload.unsupported', { ext: String(extension) });
+        case 'unsupported_type': {
+            const modern = MODERN_OFFICE[String(extension)];
+            if (modern) return t('composer.upload.legacyOffice', { ext: String(extension), modern });
+            return t('composer.upload.unsupported', { ext: String(extension) });
+        }
         case 'empty_file': return t('composer.upload.empty');
         case 'too_large': return t('composer.upload.tooLarge', { size: String(size), max: String(max) });
         default: return err.message;
