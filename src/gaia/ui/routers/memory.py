@@ -455,8 +455,15 @@ def _embed_row(store, knowledge_id: str) -> Dict[str, Any]:
     return {"embedded": True}
 
 
+def _hide_titles_if_private(store: Any, knowledge_id: str, db: ChatDatabase) -> None:
+    """Rename chats GAIA named after *knowledge_id* once it is sensitive."""
+    item = store.get_item(knowledge_id)
+    if item is not None and item.get("sensitive"):
+        db.hide_private_titles(store.private_fact_matcher())
+
+
 @router.post("/api/memory/knowledge")
-def create_knowledge(body: KnowledgeCreate) -> Dict:
+def create_knowledge(body: KnowledgeCreate, db: ChatDatabase = Depends(get_db)) -> Dict:
     """Create a knowledge entry from the dashboard and embed it."""
     store = _get_store()
     try:
@@ -474,6 +481,7 @@ def create_knowledge(body: KnowledgeCreate) -> Dict:
         )
     except MemoryContentError as exc:
         raise HTTPException(422, str(exc)) from exc
+    _hide_titles_if_private(store, knowledge_id, db)
     return {
         "status": "created",
         "knowledge_id": knowledge_id,
@@ -482,7 +490,9 @@ def create_knowledge(body: KnowledgeCreate) -> Dict:
 
 
 @router.put("/api/memory/knowledge/{knowledge_id}")
-def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
+def edit_knowledge(
+    knowledge_id: str, body: KnowledgeUpdate, db: ChatDatabase = Depends(get_db)
+) -> Dict:
     """Edit a knowledge entry from the dashboard; re-embed changed content."""
     kwargs = {k: v for k, v in body.model_dump().items() if v is not None}
     if not kwargs:
@@ -495,6 +505,7 @@ def edit_knowledge(knowledge_id: str, body: KnowledgeUpdate) -> Dict:
         raise HTTPException(422, str(exc)) from exc
     if not success:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
+    _hide_titles_if_private(store, knowledge_id, db)
     result: Dict[str, Any] = {"status": "updated", "knowledge_id": knowledge_id}
     # A content change cleared the old vector; other edits keep it.
     if "content" in kwargs:
@@ -536,7 +547,7 @@ def delete_knowledge(knowledge_id: str, db: ChatDatabase = Depends(get_db)) -> D
     if not deleted:
         raise HTTPException(404, f"Knowledge entry {knowledge_id} not found")
     if sensitive:
-        db.hide_private_titles(store.names_private_fact)
+        db.hide_private_titles(store.private_fact_matcher())
     # "sensitive" covers the copies too; the page offers no undo when set.
     result: Dict[str, Any] = {
         "status": "deleted",

@@ -3184,31 +3184,38 @@ class MemoryStore:
         sensitive fact forgotten after it, by half the distinctive stems it
         kept. Errs towards yes: a title wrongly hidden costs a name.
         """
-        stems = content_stems(text)
+        return self.private_fact_matcher()(text, since)
+
+    def private_fact_matcher(self) -> Callable[[str, Optional[str]], bool]:
+        """``names_private_fact`` over one read of the store, for many texts."""
         with self._locked():
-            rows = self._conn.execute(
-                "SELECT content FROM knowledge WHERE sensitive = 1 "
-                "AND superseded_by IS NULL"
-            ).fetchall()
-            forgotten = (
-                self._conn.execute(
+            facts = [
+                _fact_terms(content)
+                for (content,) in self._conn.execute(
+                    "SELECT content FROM knowledge WHERE sensitive = 1 "
+                    "AND superseded_by IS NULL"
+                ).fetchall()
+            ]
+            forgotten = [
+                (words, _as_datetime(when))
+                for kept, when in self._conn.execute(
                     "SELECT content, forgotten_at FROM forgotten WHERE sensitive = 1"
                 ).fetchall()
-                if since
-                else []
-            )
-        if any(_names(text, _fact_terms(content)) for (content,) in rows):
-            return True
-        after = _as_datetime(since) if since else None
-        for kept, when in forgotten:
-            words = set(kept.split()) - _PLAIN_STEMS
-            if (
-                words
-                and _as_datetime(when) >= after
-                and 2 * len(words & stems) >= len(words)
-            ):
+                if (words := set(kept.split()) - _PLAIN_STEMS)
+            ]
+
+        def names(text: str, since: Optional[str] = None) -> bool:
+            if any(_names(text, fact) for fact in facts):
                 return True
-        return False
+            if not since:
+                return False
+            after, stems = _as_datetime(since), content_stems(text)
+            return any(
+                when >= after and 2 * len(words & stems) >= len(words)
+                for words, when in forgotten
+            )
+
+        return names
 
     def copies_of(
         self, knowledge_id: str, contexts: Optional[Tuple[str, ...]] = None

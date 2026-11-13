@@ -9,6 +9,7 @@ after the memory was forgotten. A title the user typed is never touched.
 """
 
 import asyncio
+import sqlite3
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -176,6 +177,42 @@ def test_forgetting_on_the_memory_page_renames_the_chats_it_named(store, client)
     assert db.get_session(named)["updated_at"] == before
     assert db.get_session(typed)["title"] == "Sertraline notes"
     assert db.get_session(other)["title"] == "Weekend plans"
+
+
+def test_marking_a_fact_sensitive_on_the_memory_page_renames_its_chats(store, client):
+    db = client.db
+    named = _chat(db, NAMED)
+    kid = store.store(category="fact", content=FACT)
+
+    client.put(f"/api/memory/knowledge/{kid}", json={"sensitive": True})
+
+    assert db.get_session(named)["title"] == HIDDEN_TITLE
+
+
+def test_adding_a_sensitive_fact_on_the_memory_page_renames_its_chats(store, client):
+    db = client.db
+    named = _chat(db, NAMED)
+    other = _chat(db, "Weekend plans")
+
+    client.post(
+        "/api/memory/knowledge",
+        json={"content": FACT, "category": "fact", "sensitive": True},
+    )
+
+    assert db.get_session(named)["title"] == HIDDEN_TITLE
+    assert db.get_session(other)["title"] == "Weekend plans"
+
+
+def test_a_memory_error_does_not_stop_the_send(store):
+    db = ChatDatabase(":memory:")
+    sid = _chat(db)
+    with patch.object(
+        MemoryStore,
+        "names_private_fact",
+        side_effect=sqlite3.OperationalError("locked"),
+    ):
+        ch._set_provisional_title(db, sid, "Plan my weekend")
+    assert db.get_session(sid)["title"] == "New Task"
 
 
 def test_forgetting_a_plain_fact_renames_nothing(store, client):

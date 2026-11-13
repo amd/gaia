@@ -802,7 +802,9 @@ def _private_title(title: str, created_at: Optional[str]) -> bool:
 
 def _hide_private_titles(db: ChatDatabase) -> None:
     """Rename every chat whose auto title names a fact marked sensitive."""
-    hidden = db.hide_private_titles(_private_title)
+    from gaia.ui.routers import memory as _mem_router
+
+    hidden = db.hide_private_titles(_mem_router._get_store().private_fact_matcher())
     if hidden:
         logger.info("Auto-title: renamed %d chat(s) that named a private fact", hidden)
 
@@ -812,10 +814,20 @@ def _set_provisional_title(db: ChatDatabase, session_id: str, user_msg: str) -> 
     from gaia.agents.base.memory_store import says_sensitive
 
     title = _title_from_question(user_msg)
-    # A question that asks to keep something private is no name for its chat.
-    if title and (says_sensitive(user_msg) or _private_title(title, None)):
+    if not title or says_sensitive(user_msg):
+        # A question that asks to keep something private is no name for its chat.
         return
-    if title and db.set_provisional_title(session_id, title):
+    try:
+        private = _private_title(title, None)
+    except sqlite3.Error as exc:
+        # The chat stays unnamed until its after-turn title; the send goes on.
+        logger.warning(
+            "Auto-title: could not check session %s's question against memory: %s",
+            session_id[:8],
+            exc,
+        )
+        return
+    if not private and db.set_provisional_title(session_id, title):
         logger.info("Named session %s after its first question", session_id[:8])
 
 
