@@ -426,6 +426,18 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
             instruction="Start the Lemonade app from Applications, then retry."
         )
 
+    from gaia.llm.lemonade_client import configured_lemonade_url
+
+    chosen = configured_lemonade_url()
+    if chosen:
+        # Installing a server here would not bring back the one GAIA is set to use.
+        return StartHint(
+            instruction=(
+                f"GAIA is set to use the Lemonade Server at {chosen}, which GAIA "
+                "doesn't run. Start it where it runs, then retry."
+            )
+        )
+
     return StartHint(
         instruction=(
             "Lemonade Server is not installed. Run `gaia init` to install it, "
