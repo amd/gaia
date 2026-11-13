@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdvancedSettings } from '../AdvancedSettings';
 import * as api from '../../../services/api';
 import { useChatStore } from '../../../stores/chatStore';
@@ -277,5 +277,26 @@ describe('AdvancedSettings', () => {
             fireEvent.change(screen.getByRole('textbox', { name: 'Custom model override' }), { target: { value: 'x' } });
             expect(screen.queryByText(/Saved, but/)).not.toBeInTheDocument();
         });
+    });
+});
+
+describe('AdvancedSettings capabilities', () => {
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    /** The text a reader sees, without the bidi isolate marks around each half. */
+    const seen = (text: string | null) => (text ?? '').replace(/[⁦-⁩]/g, '');
+
+    it('names capabilities in words, not Lemonade ids', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({ model_labels: ['cloud', 'chat', 'vision', 'tool-calling'] }));
+        render(<AdvancedSettings />);
+        expect(await screen.findByText('cloud, chat, vision, tool calling')).toBeInTheDocument();
+    });
+
+    it('names capabilities in Arabic, keeping a label it has no word for', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.getSystemStatus.mockResolvedValue(status({ model_labels: ['chat', 'tool-calling', 'mtp'] }));
+        render(<AdvancedSettings />);
+        const row = await screen.findByText((_, el) => el?.classList.contains('status-value') === true && seen(el.textContent).startsWith('محادثة'));
+        expect(seen(row.textContent)).toBe('محادثة، استدعاء الأدوات، mtp (chat, tool calling, mtp)');
     });
 });

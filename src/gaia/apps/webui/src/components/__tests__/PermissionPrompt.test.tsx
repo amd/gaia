@@ -178,7 +178,7 @@ describe('PermissionPrompt', () => {
         render(<PermissionPrompt sessionId="chat-1" />);
         const dialog = screen.getByRole('alertdialog');
         expect(screen.getByRole('heading')).toHaveTextContent('Allow writing file?');
-        expect(screen.getByRole('button', { name: 'Always allow writing prompt-test.txt in this chat' })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: 'Always allow writing file prompt-test.txt in this chat' })).toBeInTheDocument();
         expect(dialog).not.toHaveTextContent('write_file on');
     });
 
@@ -460,10 +460,12 @@ describe('PermissionPrompt', () => {
     });
 });
 
+const stripIsolates = (text: string) => text.replace(/[\u2066-\u2069\u200e\u200f]/g, '');
+
 describe('PermissionPrompt heading and question in the UI language', () => {
     afterEach(() => { useChatStore.setState({ locale: 'en' }); });
 
-    const tool = { tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } };
+    const tool = { tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } };
     const path = { tool: PATH_ACCESS_TOOL, toolArgs: { path: 'C:\\Users\\me\\sales.csv', kind: 'file' } };
 
     it.each([
@@ -496,6 +498,27 @@ describe('PermissionPrompt heading and question in the UI language', () => {
         expect(sentence).toHaveTextContent(question);
         expect(sentence.querySelector('bdi[dir="ltr"]')).toHaveTextContent('C:\\Users\\me\\sales.csv');
         if (locale === 'en') expect(sentence.textContent).toBe(question);
+    });
+
+    it.each([
+        ['file', 'write_file on notes.txt', 'السماح دائمًا بـ كتابة ملف notes.txt في هذه المحادثة'],
+        ['folder', 'write_file on files in /private/tmp/plans', 'السماح دائمًا بـ كتابة ملف في /private/tmp/plans في هذه المحادثة'],
+    ])('words the file-write question and its always button in Arabic with no English (%s)', (_kind, alwaysScope, button) => {
+        useChatStore.setState({ locale: 'ar' });
+        useNotificationStore.getState().addNotification(request({
+            tool: 'write_file',
+            toolLabel: 'writing file',
+            toolArgs: { file_path: '/private/tmp/plans/notes.txt', content: 'hi' },
+            alwaysScope,
+            alwaysLabel: 'writing notes.txt',
+        }));
+        render(<PermissionPrompt sessionId="chat-1" />);
+        // The UI's bracketed English gloss sits in <small>; the sentence itself must be Arabic.
+        const title = screen.getByRole('heading').cloneNode(true) as HTMLElement;
+        title.querySelectorAll('small').forEach((g) => g.remove());
+        expect(stripIsolates(title.textContent!).trim()).toBe('هل تسمح بـ كتابة ملف؟');
+        const always = screen.getAllByRole('button').map((b) => { const c = b.cloneNode(true) as HTMLElement; c.querySelectorAll('small').forEach((g) => g.remove()); return stripIsolates(c.textContent!).trim(); }).find((x) => x.startsWith('السماح دائمًا'));
+        expect(always).toBe(button);
     });
 
     it('words a path prompt that backs an allowed call as a follow-up', () => {
