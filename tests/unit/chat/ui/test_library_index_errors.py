@@ -214,6 +214,30 @@ class TestFolderFailuresGetARow:
         assert resp.status_code == 200
         assert resp.json()["indexing_status"] == "complete"
 
+    def test_a_row_that_cannot_be_written_keeps_the_rest_of_the_folder(
+        self, home, client
+    ):
+        folder = home / "crowd"
+        folder.mkdir()
+        (folder / "a_report.md").write_text("# Report")
+        (folder / "b_contract.txt").write_text("Price 31,880 USD/t")
+
+        async def fake_index(path, **_kwargs):
+            if Path(path).name == "b_contract.txt":
+                raise RuntimeError("the embedder was restarting")
+            return 2
+
+        with patch(
+            "gaia.ui.routers.documents._record_failed_document",
+            side_effect=RuntimeError("database is locked"),
+        ):
+            resp = self._index_folder(client, folder, fake_index)
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert [d["filename"] for d in body["documents"]] == ["a_report.md"]
+        assert "no library row: database is locked" in body["errors"][0]
+
     def test_images_are_counted_apart_from_unsupported_files(self, home, client):
         folder = home / "scan"
         folder.mkdir()

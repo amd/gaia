@@ -726,8 +726,10 @@ def _record_failed_document(
         chunk_count=0,
         file_mtime=file_stat.st_mtime if file_stat else None,
     )
-    # The same bytes indexed fine from elsewhere: that row stays searchable.
-    if doc.get("indexing_status") == "complete" and doc.get("chunk_count"):
+    # The same bytes indexed fine, or are indexing, from elsewhere: leave that row.
+    if doc.get("indexing_status") in ("pending", "indexing") or (
+        doc.get("indexing_status") == "complete" and doc.get("chunk_count")
+    ):
         return
     db.update_document_status(
         doc["id"],
@@ -853,7 +855,17 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
                 errors.append(error_msg)
                 # Unhashable means unreadable: no content key to file a row under.
                 if file_hash is not None:
-                    _record_failed_document(db, filepath, file_hash, e)
+                    try:
+                        _record_failed_document(db, filepath, file_hash, e)
+                    except Exception as record_err:  # pylint: disable=broad-except
+                        # One file's failure must not lose the folder's results.
+                        logger.error(
+                            "Could not record the failed row for %s: %s",
+                            filepath,
+                            record_err,
+                            exc_info=True,
+                        )
+                        errors[-1] += f" (no library row: {record_err})"
 
     logger.info(
         "Folder indexing complete: %d indexed, %d failed",
