@@ -98,7 +98,11 @@ def _record_copy(
     managed = managed_documents_dir()
     managed.mkdir(parents=True, exist_ok=True)
     copy = reserve_copy_path(managed, _sanitize_stem(path.stem), path.suffix.lower())
-    shutil.copyfile(path, copy)
+    try:
+        shutil.copyfile(path, copy)
+    except OSError:
+        copy.unlink(missing_ok=True)
+        raise
     file_stat = copy.stat()
     doc = db.add_document(
         filename=path.name,

@@ -178,7 +178,7 @@ class TestFileUpload:
         assert data["content_type"] == "text/plain"
         assert data["is_image"] is False
         assert data["url"].startswith("/api/files/uploads/")
-        # A random ID, then the name the user knows the file by.
+        # The name the user knows the file by, with an id only on a clash.
         assert re.fullmatch(r"(?:[0-9a-f]{12}_)?test\.txt", data["filename"])
         logger.info("Upload text file response: %s", data)
 
