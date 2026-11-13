@@ -409,7 +409,8 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                     <button
                                                         className="mem-about-btn"
                                                         aria-label={t('mem.about.editAria', { name })}
-                                                        title={t('mem.about.edit')}
+                                                        title={t(hidden ? 'mem.about.editHidden' : 'mem.about.edit')}
+                                                        disabled={hidden}
                                                         onClick={() => { setEditingId(item.id); setDraft(item.content); setDraftDue(dueInputValue(item.due_at)); }}
                                                     >
                                                         <Pencil size={14} />
