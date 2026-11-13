@@ -37,9 +37,6 @@ RUN_PYTHON_FILE_FLAG = "--gaia-run-python-file"
 #: tools set it to the credential folders the file tools refuse.
 GUARDED_FOLDERS_ENV = "GAIA_GUARDED_FOLDERS"
 
-#: Entries searched per guarded folder for the file a hard link shares.
-_LINK_SCAN_LIMIT = 5000
-
 #: Install name -> import name of what the frozen binary bundles for scripts.
 #: The run_python / execute_python_file descriptions name the same set.
 BUNDLED_LIBRARIES: Dict[str, str] = {
@@ -243,26 +240,27 @@ def _within(path: str, folder: str) -> bool:
     return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
 
 
-def _shares_a_file_in(st: os.stat_result, folders: Sequence[str]) -> bool:
-    """*st* is a second name (a hard link) for a file in one of *folders*."""
+def _file_ids(folders: Sequence[str]) -> set:
+    """``(device, inode)`` of every file in *folders*."""
+    ids = set()
     for folder in folders:
-        seen = 0
         for current, _dirs, files in os.walk(folder):
             for name in files:
-                seen += 1
-                if seen > _LINK_SCAN_LIMIT:
-                    return True
                 try:
-                    other = os.stat(os.path.join(current, name))
+                    st = os.stat(os.path.join(current, name))
                 except OSError:
-                    continue
-                if (other.st_dev, other.st_ino) == (st.st_dev, st.st_ino):
-                    return True
-    return False
+                    continue  # removed or locked mid-walk
+                ids.add((st.st_dev, st.st_ino))
+    return ids
 
 
-def guarded_open_refusal(path: object, folders: Sequence[str]) -> Optional[str]:
-    """Why opening *path* is refused: it is in, or a hard link into, *folders*."""
+def guarded_open_refusal(
+    path: object, folders: Sequence[str], ids: Optional[set] = None
+) -> Optional[str]:
+    """Why opening *path* is refused: it is in, or a hard link into, *folders*.
+
+    *ids* are the folders' :func:`_file_ids`, read once by the caller.
+    """
     if isinstance(path, int) or path is None:
         return None
     try:
@@ -276,8 +274,9 @@ def guarded_open_refusal(path: object, folders: Sequence[str]) -> Optional[str]:
         st = os.stat(real)
     except OSError:
         return None
-    if stat.S_ISREG(st.st_mode) and st.st_nlink > 1 and _shares_a_file_in(st, folders):
-        return f"{real} is the same file as one in a folder that holds credentials"
+    if stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
+        if (st.st_dev, st.st_ino) in (_file_ids(folders) if ids is None else ids):
+            return f"{real} is the same file as one in a folder that holds credentials"
     return None
 
 
@@ -291,11 +290,13 @@ def guard_folders(folders: Sequence[str]) -> None:
     folders = [os.path.realpath(f) for f in folders if f]
     if not folders:
         return
+    # A link made later shares an inode already listed here.
+    ids = _file_ids(folders)
 
     def hook(event: str, args: tuple) -> None:
         if event != "open" or not args:
             return
-        why = guarded_open_refusal(args[0], folders)
+        why = guarded_open_refusal(args[0], folders, ids)
         if why:
             raise PermissionError(
                 f"GAIA does not let scripts open this file: {why}. "

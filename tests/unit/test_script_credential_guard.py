@@ -149,9 +149,35 @@ class TestFileToolsJudgeTheFile:
             "",
         )
 
-    def test_a_folder_too_large_to_search_refuses_the_linked_file(
-        self, home, validator, monkeypatch
+    def test_a_large_credential_folder_refuses_only_its_own_files(
+        self, home, validator
     ):
-        monkeypatch.setattr(security, "SECRET_LINK_SCAN_LIMIT", 0)
+        for i in range(300):
+            (home / ".keys" / f"cache_{i}").write_text("x")
         os.link(home / "work" / "notes.txt", home / "work" / "copy.txt")
-        assert validator.is_read_blocked(str(home / "work" / "copy.txt"))[0]
+        assert not validator.is_read_blocked(str(home / "work" / "copy.txt"))[0]
+        os.link(home / ".keys" / "id_decoy", home / "work" / "hl.txt")
+        assert validator.is_read_blocked(str(home / "work" / "hl.txt"))[0]
+
+    def test_a_link_made_after_a_check_is_still_caught(self, home, validator):
+        assert not validator.is_read_blocked(str(home / "work" / "notes.txt"))[0]
+        os.link(home / ".keys" / "id_decoy", home / "work" / "late.txt")
+        assert validator.is_read_blocked(str(home / "work" / "late.txt"))[0]
+
+
+def test_the_open_guard_reads_the_folders_once(home, monkeypatch):
+    from gaia_agent import python_runner
+
+    calls = []
+    real = python_runner._file_ids
+    monkeypatch.setattr(
+        python_runner, "_file_ids", lambda f: calls.append(f) or real(f)
+    )
+    ids = python_runner._file_ids([str(home / ".keys")])
+    calls.clear()
+    os.link(home / ".keys" / "id_decoy", home / "work" / "hl.txt")
+    for _ in range(5):
+        assert python_runner.guarded_open_refusal(
+            str(home / "work" / "hl.txt"), [str(home / ".keys")], ids
+        )
+    assert calls == []
