@@ -13,6 +13,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   the tool limit now also reaches the model each turn, so asked about one it
   says it is set up but unavailable rather than that nothing by that name
   exists. A corrupt `mcp_servers.json` is described in plain words.
+- **A run stopped for an approval nobody can give reads as not done.** Its
+  `final` now carries `failed: true` and the `usage` spent before the stop, so
+  `gaia -p` reports `is_error: true` with real step and token counts instead of
+  a free, zero-step success. A stopped turn's result now carries
+  the tokens it spent too.
 
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
