@@ -1683,7 +1683,7 @@ async def query(request: QueryRequest):
             follow = getattr(agent, "follow_model_switch", None)
             if callable(follow):
                 # Off the loop: it reads config.json and may ask Lemonade.
-                await asyncio.to_thread(follow)
+                await _off_loop(follow)
             if request.working_directory is not None:
                 config = getattr(agent, "config", None)
                 if config is not None:

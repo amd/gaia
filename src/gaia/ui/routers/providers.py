@@ -1884,6 +1884,8 @@ def apply_pending_context_reload() -> List[str]:
         try:
             view = _context_view(model_id)
         except HTTPException as e:
+            if e.status_code == 503:
+                continue  # Lemonade is briefly unreadable; try after the next turn.
             # Said once, not after every turn: the size applies at its next load.
             logger.warning(
                 "Not reloading %s for its new context size: %s. The size "
