@@ -6,7 +6,7 @@ description: Scope for GAIA writing accurate, cited research reports out of the 
 # Deep Research — Scope
 
 <Info>
-**Status:** Shipped: the [`research` task suite](/reference/eval#research-suite), research mode in both apps (`/research` and the Agent UI's Research switch), and a stricter `research-report` skill. Search reliability and a run-time citation check are open.
+**Status:** Shipped: the [`research` task suite](/reference/eval#research-suite), research mode in both apps (`/research` and the Agent UI's Research switch), and a stricter `research-report` skill. Research turns check their citations before answering. Search reliability is open.
 </Info>
 
 ## What a user expects
@@ -87,9 +87,13 @@ A deep report needs a dozen or more searches, which is exactly where DuckDuckGo 
 
 Either is a product decision, not a code fix, and is tracked separately.
 
-### 5. Check citations at run time — next
+### 5. Check citations at run time — done
 
-The suite's source check (`gaia.eval.research_quality`) needs nothing but the report and the tool record, both of which the agent has. Exposed as a tool the skill calls before answering, it would let the agent repair an unread or invented citation before the user ever sees it. The runs above show the skill alone is not enough on smaller models: unread and altered links are exactly what this check catches and a model cannot see in its own report. Adding a tool changes the prompt every model sees, so it ships with an eval run of its own.
+A research turn now checks its own report before the user sees it, with the same code the suite grades with (`gaia.web.citations`). Every cited link is compared with the conversation's `search_web` and `fetch_page` results, and with any file `download_file` saved that was then read (how a PDF is read). A link the agent only saw in a search result, or one that matches nothing it read (the retyped `crispr_cas9` link above), goes back to the model once, with the links named, to fetch or drop. Anything still unbacked after that is listed under the report, so the reader knows which links to doubt.
+
+In the suite, Qwen3.6's reports in research mode then cited only pages it had fetched; on one topic the check caught a link the model had broken with a stray bracket, and the model fixed every instance. What the check cannot fix is search: with every search refused, Gemma-4-E4B had nothing to read and cited nothing, which is why section 4 still matters most for small models.
+
+It runs only on research turns and adds nothing to the system prompt, so ordinary turns and the prompt every model sees are unchanged. The base agent's `answer_problems` hook carries it, so other agents can add checks of their own.
 
 ## Non-goals
 

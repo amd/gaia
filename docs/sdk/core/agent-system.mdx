@@ -1126,6 +1126,25 @@ the model not to report computed figures. A failed shell command, or a script
 that printed results before it crashed, gets no note: those are for the model
 to fix and run again.
 
+### Your own answer check
+
+A subclass can add a check of its own. Override `answer_problems(answer)` to
+return what is wrong with a final answer as plain sentences; the loop sends
+them back once per turn with `answer_repair_prompt(problems)` (override it to
+word the request), and lists any still present after that in the "not
+confirmed" note. The default returns nothing.
+
+```python
+class ReportAgent(Agent):
+    def answer_problems(self, answer: str) -> list[str]:
+        if "## Sources" not in answer:
+            return ["The report has no Sources list."]
+        return []
+```
+
+The flagship uses it on `/research` turns to check that every cited link is a
+page it fetched (`gaia.web.citations`).
+
 ### Saved output and cleanup evidence
 
 File completion is checked separately from the test/lint/build note. A save

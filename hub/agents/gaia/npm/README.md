@@ -191,7 +191,9 @@ await shutdown(proc);
 **Want a researched, cited report?** Start the query with `/research`, as in
 `"query": "/research the history of RISC-V"`. The agent loads its
 `research-report` skill for the turn and answers with a report that links every
-claim to a page it fetched. See [`SPEC.md` §5.1](./SPEC.md#query-request-body).
+claim to a page it fetched. Before the answer is final, every cited link is
+checked against the pages the agent opened; any it could not back is listed
+under the report. See [`SPEC.md` §5.1](./SPEC.md#query-request-body).
 
 **Reuse the same `session_id` for every turn in a conversation.** It is what
 lets a document you had it index, or a skill you had it load, survive to the

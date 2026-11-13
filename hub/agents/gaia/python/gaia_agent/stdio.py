@@ -2152,6 +2152,10 @@ def main(argv: Optional[list] = None) -> int:
             history = getattr(agent, "conversation_history", None)
             if history is not None:
                 history.clear()
+            # Pages read before /clear no longer back a citation.
+            web_calls = getattr(agent, "_web_calls", None)
+            if web_calls is not None:
+                web_calls.clear()
             if index is not None:
                 guarded(index, index.cleared)
             logger.info("conversation history cleared by host /clear")

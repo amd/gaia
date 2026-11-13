@@ -14,8 +14,11 @@ apart.
 
 from __future__ import annotations
 
+import os
 import re
-from typing import Optional, Tuple
+from typing import Any, Iterable, List, Optional, Tuple
+
+from gaia.web.citations import cited_urls, evidence_from_calls, uncited_reads
 
 #: What the user types, and what the Agent UI's switch prepends.
 RESEARCH_COMMAND = "/research"
@@ -86,3 +89,96 @@ def research_brief(topic: str) -> str:
 def research_message(notes: str, topic: str) -> str:
     """The user's message for the turn: the topic, behind any app notes."""
     return "\n\n".join(part for part in (notes, topic or RESEARCH_COMMAND) if part)
+
+
+#: Tools whose calls a research report's citations are checked against.
+WEB_RECORD_TOOLS = frozenset(RESEARCH_TOOLS) | {"download_file"}
+#: Reads that open a downloaded file; one counts only for a downloaded path.
+DOWNLOAD_READ_TOOLS = frozenset({"read_file", "index_document"})
+#: ``download_file``'s receipt names where the file went.
+_SAVED_TO = re.compile(r"^\s*Saved to:\s*(.+?)\s*$", re.MULTILINE)
+#: Web calls kept per conversation: well past a deep report's few dozen.
+WEB_CALLS_KEPT = 300
+#: Links shown per problem: enough to act on, short enough to read.
+_SHOWN = 5
+
+CITATION_REPAIR = (
+    "[check:citations] {problems} Open each page you have not read with "
+    "fetch_page (download_file, then read_file, for a PDF) and keep only what "
+    "it says, or drop that citation. Copy every "
+    "link exactly as a tool result gave it; never retype or shorten one. Cite "
+    "only pages you fetched. This check is internal: write to the user without "
+    "mentioning it. Then give your complete report again: it replaces the one "
+    "above, which the user will not see."
+)
+
+
+def _listed(urls: List[str]) -> str:
+    shown = ", ".join(urls[:_SHOWN])
+    more = len(urls) - _SHOWN
+    return f"{shown} and {more} more" if more > 0 else shown
+
+
+def _path_key(path: str) -> str:
+    return os.path.normcase(os.path.abspath(os.path.expanduser(path.strip())))
+
+
+def downloaded_path(result: Any) -> Optional[str]:
+    """Where a ``download_file`` call saved its file, or ``None`` if it did not."""
+    match = _SAVED_TO.search(result) if isinstance(result, str) else None
+    return _path_key(match.group(1)) if match else None
+
+
+def file_read_path(args: Any) -> Optional[str]:
+    """The file a ``read_file`` / ``index_document`` call opened."""
+    path = args.get("file_path") if isinstance(args, dict) else None
+    return _path_key(path) if isinstance(path, str) and path.strip() else None
+
+
+def _as_page_reads(calls: Iterable[Tuple[str, Any, Any]]) -> List[Tuple[str, Any, Any]]:
+    """Calls with each read of a downloaded file turned into a read of its URL.
+
+    A download alone is a receipt, not a reading: the link it fetched counts
+    as opened only once ``read_file`` or ``index_document`` opens the file.
+    """
+    sources: dict = {}
+    out = []
+    for name, args, result in calls:
+        if name == "download_file":
+            path = downloaded_path(result)
+            url = args.get("url") if isinstance(args, dict) else None
+            if path and isinstance(url, str):
+                sources[path] = url
+            out.append((name, args, None))
+            continue
+        if name in DOWNLOAD_READ_TOOLS:
+            url = sources.get(file_read_path(args) or "")
+            if url:
+                out.append(("fetch_page", {"url": url}, result))
+            continue
+        out.append((name, args, result))
+    return out
+
+
+def citation_problems(report: str, calls: Iterable[Tuple[str, Any, Any]]) -> List[str]:
+    """What is wrong with a research report's citations, as plain sentences.
+
+    *calls* are the conversation's web tool calls as ``(name, args, result)``,
+    including ``download_file`` and the reads of the files it saved.
+    """
+    evidence = evidence_from_calls(_as_page_reads(calls))
+    unread, invented = uncited_reads(report, evidence)
+    problems = []
+    if invented:
+        problems.append(
+            "These cited links appear in no search result or page read in this "
+            f"conversation, so they may be wrong: {_listed(invented)}."
+        )
+    if unread:
+        problems.append(
+            "These cited pages were never opened, so they may not say what they "
+            f"are cited for: {_listed(unread)}."
+        )
+    if evidence.pages and not cited_urls(report):
+        problems.append("The report cites none of the pages that were read.")
+    return problems

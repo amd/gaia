@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import os
 import sys
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, FrozenSet, List, Optional, Tuple
@@ -58,8 +59,16 @@ from gaia_agent.engineering_tools import (
 )
 from gaia_agent.profiles import get_profile_spec
 from gaia_agent.research import (
+    CITATION_REPAIR,
+    DOWNLOAD_READ_TOOLS,
+    RESEARCH_BRIEF,
     RESEARCH_SKILL,
     RESEARCH_TOOLS,
+    WEB_CALLS_KEPT,
+    WEB_RECORD_TOOLS,
+    citation_problems,
+    downloaded_path,
+    file_read_path,
     research_brief,
     research_message,
     split_research_command,
@@ -454,6 +463,8 @@ class GaiaAgent(
                 "[gaia] fast mode: conversational profile only — no documents, "
                 "files, web or skills this session"
             )
+        self._research_brief: Optional[str] = None
+        self._web_calls: deque = deque(maxlen=WEB_CALLS_KEPT)
         super().__init__(config=resolved)
         if self.config.developer_mode:
             self.load_skill(ENGINEERING_SKILL)
@@ -518,6 +529,30 @@ class GaiaAgent(
             )
         finally:
             self._research_brief = None
+
+    def _execute_tool_timed(self, tool_name, tool_args):
+        result = super()._execute_tool_timed(tool_name, tool_args)
+        # What a research report's citations are checked against.
+        if tool_name in WEB_RECORD_TOOLS:
+            self._web_calls.append((tool_name, tool_args, result))
+        elif tool_name in DOWNLOAD_READ_TOOLS and any(
+            name == "download_file"
+            and downloaded_path(saved) == file_read_path(tool_args)
+            for name, _args, saved in self._web_calls
+        ):
+            self._web_calls.append((tool_name, tool_args, result))
+        return result
+
+    def answer_problems(self, answer):
+        problems = super().answer_problems(answer)
+        if self._research_brief != RESEARCH_BRIEF:
+            return problems
+        return problems + citation_problems(answer or "", list(self._web_calls))
+
+    def answer_repair_prompt(self, problems):
+        if self._research_brief != RESEARCH_BRIEF:
+            return super().answer_repair_prompt(problems)
+        return CITATION_REPAIR.format(problems=" ".join(problems))
 
     def _start_research_turn(self) -> None:
         """Load ``research-report`` and keep its instructions in this turn's prompt.

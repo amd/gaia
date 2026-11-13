@@ -2053,6 +2053,8 @@ _MAX_CHECKED_DELIVERABLES = 8
 # Post-edit read-back. Repair steps are granted on top of max_steps, so a model
 # under budget pressure has no reason to skip fixing what it broke.
 _VERIFY_REPAIR_STEPS = 2
+#: Steps an answer check's repair gets: a few page reads, then the answer.
+_ANSWER_REPAIR_STEPS = 6
 # Rounds per turn; past that the turn is looping and the gaps go into the answer.
 _MAX_EDIT_VERIFICATIONS = 2
 # Past this size a file is checked for presence only.
@@ -10522,6 +10524,23 @@ Do NOT wrap conversational replies in JSON.
         """
         return answer
 
+    def answer_problems(self, answer: str) -> List[str]:
+        """What a subclass's own check finds wrong with *answer*, or nothing.
+
+        The loop sends the problems back once per turn for the model to repair,
+        then names any left over in the answer. Empty by default.
+        """
+        return []
+
+    def answer_repair_prompt(self, problems: List[str]) -> str:
+        """The message that asks the model to repair :meth:`answer_problems`."""
+        return (
+            "[check:answer] "
+            + " ".join(problems)
+            + " This check is internal: answer the user without mentioning it. "
+            + _GIVE_ANSWER_AGAIN
+        )
+
     def _note_verification_signal(
         self,
         tool_name: str,
@@ -11006,6 +11025,8 @@ Do NOT wrap conversational replies in JSON.
         unsupported = unsupported_test_claim(answer or "", self._turn_tool_executions)
         if unsupported:
             gaps.append(unsupported[1] + ".")
+        if answer and answer.strip():
+            gaps.extend(p for p in self.answer_problems(answer) if p not in gaps)
         if gaps:
             report = incomplete_answer(gaps)
             # The turn ended early, so it is unfinished; whatever it said stays.
@@ -11536,6 +11557,7 @@ Do NOT wrap conversational replies in JSON.
         cut_off_continuations = 0
         stream_cut_offs = 0
         completion_corrections = 0
+        answer_repaired = False
         # The answer a completion correction asked to replace.
         answer_before_completion_check: Optional[str] = None
         completion_gaps = []
@@ -14233,6 +14255,28 @@ Do NOT wrap conversational replies in JSON.
                         conversation.append({"role": "user", "content": correction})
                         continue
                     completion_gaps.extend(artifact_gaps)
+                answer_issues = self.answer_problems(answer_candidate)
+                if answer_issues:
+                    if not answer_repaired:
+                        answer_repaired = True
+                        # An acknowledgement-only reply must not replace the report.
+                        answer_before_completion_check = unfinalized_answer
+                        steps_limit += _ANSWER_REPAIR_STEPS
+                        repair = self.answer_repair_prompt(answer_issues)
+                        self._turn_scope.widen(repair)
+                        self._reopen_turn_scope(conversation)
+                        messages.append({"role": "user", "content": repair})
+                        conversation.append({"role": "user", "content": repair})
+                        logger.info(
+                            "Answer check found %d problem(s); asked once for a "
+                            "repair (step limit now %d)",
+                            len(answer_issues),
+                            steps_limit,
+                        )
+                        continue
+                    completion_gaps.extend(
+                        p for p in answer_issues if p not in completion_gaps
+                    )
                 # Validate after subclass rewriting, before console/SSE emission.
                 final_test_claim = unsupported_test_claim(
                     answer_candidate, self._turn_tool_executions
@@ -14345,12 +14389,18 @@ Do NOT wrap conversational replies in JSON.
             if self._turn_recorder is not None and self.chat is not None:
                 self.chat.turn_step = steps_taken
             self.execution_state = self.STATE_COMPLETION
+            # A repair that ran out of steps keeps the report it was repairing.
+            repair_draft = answer_before_completion_check if answer_repaired else None
             try:
-                cap_answer = self._closing_answer(
-                    messages,
-                    conversation,
-                    _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
-                    steps_taken,
+                cap_answer = (
+                    repair_draft
+                    if repair_draft is not None
+                    else self._closing_answer(
+                        messages,
+                        conversation,
+                        _STEP_CAP_ANSWER_PROMPT.format(steps=steps_limit),
+                        steps_taken,
+                    )
                 )
             except Exception as e:  # noqa: BLE001 - the reason goes in the answer
                 logger.warning("Could not write the step-limit summary: %s", e)

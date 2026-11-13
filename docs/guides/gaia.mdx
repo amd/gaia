@@ -285,6 +285,8 @@ All three send the turn as `/research <topic>`, and the agent handles it the sam
 - a check for developments newer than its sources, with dates, so a superseded status is not reported as current;
 - what it could not confirm, and a Sources list at the end.
 
+**Citations are checked before you see the report.** GAIA compares every link in the report with the pages it actually opened. A link it only saw in search results, or one that matches nothing it read (often a link the model retyped wrong), goes back to the model once to open or remove. Anything still unchecked after that is listed under the report, so you know which links to treat with care.
+
 Without research mode, a request that reads like research ("research X and write a report") is still matched to the skill, and the agent decides whether to load it.
 
 **Web search can run out.** `search_web` uses DuckDuckGo, which turns away automated searches after a burst. GAIA waits as DuckDuckGo asks, then reads the sources it knows by address and says in the report that search was unavailable. A [Tavily](/connectors/tavily) connector takes over when DuckDuckGo refuses.

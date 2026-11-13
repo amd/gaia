@@ -309,6 +309,12 @@ conversation for every factual claim, and end with a Sources list. Bracketed
 notes a caller puts before the command (the Agent UI's `[This chat is working
 in the folder …]`) stay in front of the topic. A bare `/research` asks the user
 for a topic.
+Before a research turn's answer is final, its cited links are checked against
+the conversation's `search_web`, `fetch_page` and `download_file` results (a
+PDF counts once its downloaded file is read): a link that was never fetched, or that appears in
+no result at all, is sent back to the model once to fetch or drop. Links still
+unbacked after that are listed in the `final` answer under "I couldn't confirm
+all of this".
 The agent needs `search_web` and `fetch_page` for it; a profile without them
 ends the turn with an `error` naming the missing tools. Any other `query` runs
 unchanged.

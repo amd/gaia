@@ -629,7 +629,9 @@ declares no tools, and its body measures 789 tokens (tiktoken `cl100k`).
 `/research` (for example `"/research the EU AI Act timeline"`) is a research
 turn: the agent loads `research-report`, keeps its body rendered past the
 per-turn selection, and asks for a report that cites a fetched page for every
-claim. The Agent UI's Research switch and the TUI's `/research` both send this
+claim. Its cited links are then checked against the pages it fetched, and any
+it could not back are listed under the report. The Agent UI's Research switch
+and the TUI's `/research` both send this
 form, so a caller gets the same behavior by sending it too. See
 [`SPEC.md`](./SPEC.md#query-request-body) for the exact contract.
 

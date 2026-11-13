@@ -13,6 +13,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   cites, for every claim, a page the agent fetched, with a check for newer
   developments and a Sources list. The Agent UI's Research switch and the TUI's
   `/research` send this form. A profile without web tools refuses it by name.
+- **Research citations are checked before the answer is final.** A cited link
+  the agent never fetched, or one that matches no search result or page (a
+  retyped link), goes back to the model once to fetch or drop; any left is
+  listed under the report.
 - **`research-report` 1.1.0.** The whole cited report now goes in the reply
   (not only in a saved file), encyclopedias lead to primary sources instead of
   standing in for them, long pages are read with `find`, anything that can
