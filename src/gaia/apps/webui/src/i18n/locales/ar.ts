@@ -1475,7 +1475,7 @@ const messages: Messages = {
     'setup.plan.customize': 'تخصيص',
     'setup.plan.cloud': 'استخدام نموذج سحابي',
     'setup.plan.cloudLabel': 'نموذج سحابي',
-    'setup.plan.cloudWhy.noDownload': 'لا شيء للتنزيل: يعمل النموذج على حواسيب المزوّد.',
+    'setup.plan.cloudWhy.stillLocal': 'يعمل نموذج المحادثة على حواسيب المزوّد. ما زال GAIA يجهّز دعم الرسومات ونموذجًا صغيرًا على هذا الجهاز للبحث في ملفاتك وتذكّر الأشياء.',
     'setup.plan.cloudWhy.key': 'يحتاج إلى مفتاح API من المزوّد، الذي يحاسبك على ما تستخدمه.',
     'setup.plan.cloudWhy.sent': 'تُرسل كل رسالة وسجل المحادثة إلى المزوّد.',
     'setup.plan.whatDownloads': 'عرض كل ما سيتم تنزيله',
