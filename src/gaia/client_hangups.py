@@ -33,7 +33,10 @@ def quiet_client_hangups(loop: asyncio.AbstractEventLoop) -> None:
 
     def handle(loop: asyncio.AbstractEventLoop, context: Dict[str, Any]) -> None:
         error = context.get("exception")
-        if isinstance(error, _HANGUPS):
+        # A task or future that died on a reset is GAIA's own call failing.
+        if isinstance(error, _HANGUPS) and not (
+            "task" in context or "future" in context
+        ):
             logger.info("A client closed its connection: %s", error)
             return
         if previous is not None:

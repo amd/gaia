@@ -11,7 +11,6 @@ a traceback, though nothing went wrong on this side.
 
 import asyncio
 import logging
-from types import SimpleNamespace
 
 import pytest
 
@@ -63,6 +62,17 @@ def test_a_client_hanging_up_is_logged_quietly(loop, caplog, error):
         {"message": "Task exception was never retrieved", "exception": ValueError("x")},
         {"message": "Exception in callback job()", "exception": OSError(5, "I/O")},
         {"message": "no exception at all"},
+        # GAIA's own outgoing call that dropped: a real failure, not a client.
+        {
+            "message": "Task exception was never retrieved",
+            "exception": ConnectionResetError(10054, "reset"),
+            "task": object(),
+        },
+        {
+            "message": "Future exception was never retrieved",
+            "exception": BrokenPipeError(32, "Broken pipe"),
+            "future": object(),
+        },
     ],
 )
 def test_anything_else_is_still_an_error(loop, caplog, context):
@@ -109,24 +119,19 @@ def test_the_daemon_installs_it_when_it_starts(caplog):
     assert seen["levels"] == [logging.INFO]
 
 
-def test_the_listener_guard_still_drops_its_own_accept_reset(caplog):
-    """Installed as the servers do, the guard sees its re-armed accept first."""
-    from gaia import listener_guard
+def test_the_agent_ui_server_installs_it_when_it_starts(caplog):
+    from fastapi.testclient import TestClient
 
-    loop = (
-        asyncio.ProactorEventLoop() if hasattr(asyncio, "ProactorEventLoop") else None
-    )
-    if loop is None:
-        pytest.skip("only a proactor loop has the accept guard")
-    try:
-        quiet_client_hangups(loop)
-        assert listener_guard.keep_listening_after_client_resets(loop)
+    from gaia.ui.server import create_app
 
-        accept_coro = SimpleNamespace(__qualname__=listener_guard._ACCEPT_TASK)
-        task = SimpleNamespace(get_coro=lambda: accept_coro)
-        reset = OSError(None, "reset", None, 10054)
+    async def report_a_hangup():
+        asyncio.get_running_loop().call_exception_handler(
+            {"message": "m", "exception": ConnectionResetError(10054, "reset")}
+        )
+
+    with TestClient(create_app(db_path=":memory:")) as client:
         with caplog.at_level(logging.DEBUG, logger="gaia.client_hangups"):
-            _report(loop, {"message": "m", "exception": reset, "future": task})
-        assert [r for r in caplog.records if r.name == "gaia.client_hangups"] == []
-    finally:
-        loop.close()
+            client.portal.call(report_a_hangup)
+
+    hangups = [r for r in caplog.records if r.name == "gaia.client_hangups"]
+    assert [r.levelno for r in hangups] == [logging.INFO]
