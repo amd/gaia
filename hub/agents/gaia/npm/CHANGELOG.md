@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The agent knows an MCP server it set up didn't start.** The notice the
+  user sees about MCP servers that couldn't start, couldn't load or went over
+  the tool limit now also reaches the model each turn, so asked about one it
+  says it is set up but unavailable rather than that nothing by that name
+  exists. A corrupt `mcp_servers.json` is described in plain words.
+
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
   directory now go in the session context at the start of the first user
