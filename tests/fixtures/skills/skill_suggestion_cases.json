@@ -64,6 +64,9 @@
     {"request": "Reply to Sam's email and tell him Thursday works", "expected": ["send-email"], "acceptable": ["inbox-triage"]},
     {"request": "Draft an email to my landlord asking about the broken heater", "expected": ["send-email"], "acceptable": []},
     {"request": "Forward the invoice email from Acme to my accountant", "expected": ["send-email"], "acceptable": ["inbox-triage"]},
+    {"request": "Remind me at 6pm to call the dentist", "expected": ["automations"], "acceptable": []},
+    {"request": "Every morning, send me a summary of my open pull requests", "expected": ["automations"], "acceptable": ["github-triage", "daily-brief"]},
+    {"request": "What reminders and alerts do you have set up for me? Pause the weather one.", "expected": ["automations"], "acceptable": []},
     {"request": "Who composed the Moonlight Sonata?", "expected": [], "acceptable": []},
     {"request": "What's a polite way to end a work email?", "expected": [], "acceptable": []},
     {"request": "Is a slide rule still useful now that everyone has a calculator?", "expected": [], "acceptable": []},
@@ -78,6 +81,7 @@
     {"request": "How many slides should a ten-minute talk have?", "expected": [], "acceptable": []},
     {"request": "What does an HTTP 502 error usually mean?", "expected": [], "acceptable": []},
     {"request": "Any tips for running shorter meetings?", "expected": [], "acceptable": []},
-    {"request": "What's the difference between a memo and a report?", "expected": [], "acceptable": []}
+    {"request": "What's the difference between a memo and a report?", "expected": [], "acceptable": []},
+    {"request": "What's a good way to remember friends' birthdays without an app?", "expected": [], "acceptable": []}
   ]
 }

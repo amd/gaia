@@ -12,7 +12,7 @@
 
 import { expect, test, type Page } from '@playwright/test';
 
-import { ANSWER_SESSION, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
+import { ANSWER_SESSION, AUTOMATIONS, DISCORD_STATES, MESSAGES, MODEL_LIST, NOW, RESOURCES, SESSIONS, SYSTEM_STATUS, TOOL_STATUS, holdOnToolStatus, mockApi, shownText, useLocale, useTheme, withAutomations, withConnectors, withCrashedBackend, withDesktopBridges, withDiscord, withMemory, withModelPage, withSettingsPanes, withoutFlagship, type MemoryState } from './fixtures';
 import { NARROW_SCENES, SETUP_SCENES, scene, withSetup } from './setup-scenes';
 
 test.use({ viewport: { width: 1400, height: 900 } });
@@ -408,6 +408,29 @@ for (const [title, locale] of [
     });
 }
 
+test('a rejected attachment keeps its message whole and leaves the other chips alone', async ({ page }) => {
+    await open(page, '', 'en');
+    await page.route((url) => url.pathname === '/api/files/upload', async (route) => {
+        const body = route.request().postData() ?? '';
+        if (body.includes('notes.xyz')) {
+            await route.fulfill({ status: 400, json: { detail: "File type '.xyz' is not allowed. Supported types: images (png, jpg, jpeg, gif, webp, bmp, svg) and documents (pdf, pptx, docx, txt, md, csv, json, xlsx, html, code files, etc.)." } });
+        } else {
+            await route.fulfill({ json: { filename: 'q.txt', original_name: 'Quarterly notes.txt', url: '/api/files/uploads/q.txt', size: 5, content_type: 'text/plain', is_image: false } });
+        }
+    });
+    await page.locator('input[type="file"]').first().setInputFiles([
+        { name: 'Quarterly notes.txt', mimeType: 'text/plain', buffer: Buffer.from('notes') },
+        { name: 'notes.xyz', mimeType: 'application/octet-stream', buffer: Buffer.from('x') },
+    ]);
+    const bad = page.locator('.composer-attachment.has-error');
+    await expect(bad).toHaveCount(1);
+    const message = bad.locator('.composer-attachment-state');
+    expect(await message.evaluate((el) => el.scrollHeight <= el.clientHeight + 1)).toBe(true);
+    const good = page.locator('.composer-attachment:not(.has-error)').first();
+    expect((await good.boundingBox())!.height).toBeLessThan(40);
+    await shot(page, 'attachment-rejected');
+});
+
 for (const [title, locale, name] of [
     ['recording ready to send', 'ar', 'Quarterly business review recording with a very long file name 2026.mp4'],
     ['recording with an Arabic name, in English', 'en', 'تسجيل مراجعة الأعمال الفصلية.m4a'],
@@ -609,6 +632,43 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** The server's crash notice is English; it ends a partial answer and repeats as the last error step. */
+const CRASH_NOTICE = 'GAIA stopped unexpectedly while answering. Anything it had already written is kept above. Send your message again.';
+
+async function withCrashedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write me an essay about rivers.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: `Rivers shape the land they cross. They carve valleys and carry silt to the sea.\n\n${CRASH_NOTICE}`,
+                        inference_stats: { seconds: 7, place: 'via Fireworks AI' },
+                        agent_steps: [
+                            { id: 1, type: 'thinking', label: 'Thinking', detail: 'Let me write.', active: false, timestamp: 1 },
+                            { id: 2, type: 'error', label: 'Error', detail: CRASH_NOTICE, active: false, success: false, timestamp: 2 },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a crash notice under a partial answer reads left to right (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCrashedAnswer);
+        const note = page.locator('.msg-assistant .msg-cut-off', { hasText: 'GAIA stopped unexpectedly' });
+        await expect(note).toHaveCount(1);
+        expect(await note.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        await expect(page.locator('.msg-assistant .msg-stats-summary')).toContainText(locale === 'en' ? 'Failed after' : 'فشلت بعد');
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`crashed-answer-${locale}.png`) });
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     test(`the latest answer's actions sit under its text, at the start edge (${locale})`, async ({ page }, info) => {
         await open(page, `#${ANSWER_SESSION}`, locale);
@@ -697,6 +757,31 @@ for (const locale of ['ar', 'en']) {
         await page.screenshot({ path: info.outputPath(`checked-answer-${locale}.png`) });
     });
 }
+
+async function withArabicTable(page: Page): Promise<void> {
+    const table = '| الاسم | المبلغ |\n| --- | --- |\n| إيجار | 1200 |\n| طعام | 450 |';
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'اعرض مصاريفي', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: table, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+test('an Arabic answer table reads right to left', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withArabicTable);
+    const table = page.locator('.md-table');
+    await expect(table).toHaveCount(1);
+    expect(await table.evaluate((t) => getComputedStyle(t).direction)).toBe('rtl');
+    const wrap = (await page.locator('.md-table-wrap').boundingBox())!;
+    const header = (await page.locator('.md-table th').first().boundingBox())!;
+    expect(header.x + header.width).toBeGreaterThan(wrap.x + wrap.width - 2);
+});
 
 async function withStoppedAnswer(page: Page): Promise<void> {
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
@@ -1776,6 +1861,19 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`a skills search that matches nothing says so (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="skills"]').click();
+        const search = page.locator('.settings-pane input[type="search"]');
+        await search.fill('zzzz');
+        // Not a blank pane (#7410).
+        await expect(page.locator('.settings-pane [role="status"]')).toBeVisible();
+        await expect(page.locator('.settings-pane .link-btn')).toBeVisible();
+        await shot(page, `skills-search-none-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`Mobile access without ngrok (${locale})`, async ({ page }) => {
         const missing = { active: false, url: null, token: null, startedAt: null, publicIp: null, reason: 'ngrok_not_installed', installCommands: ['choco install ngrok'], error: 'ngrok is not installed. Install it from https://ngrok.com/download or run:\n    choco install ngrok' };
         await open(page, '', locale, (p) => p.route('**/api/tunnel/start', (route) => route.fulfill({ json: missing })));
@@ -1941,7 +2039,7 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.settings-disclosure:not([open]) > summary').evaluateAll((els) => els.forEach((el) => (el as HTMLElement).click()));
             await page.locator('.connector-tile-header', { hasText: 'Brave Search' }).click();
             await page.locator('.mcp-key-input').fill('BSA-not-a-real-key');
-            await page.locator('.btn-model-save').click();
+            await page.locator('.configure-actions .btn-primary').click();
             const offer = page.locator('.connector-personalize--offer');
             await expect(offer).toBeVisible();
             await offer.scrollIntoViewIfNeeded();
@@ -2089,6 +2187,78 @@ for (const locale of ['ar', 'en']) {
         await page.getByRole('dialog').locator('[data-section="messaging"]').click();
         await page.locator('.messaging-code').scrollIntoViewIfNeeded();
         await shot(page, `messaging-${locale}-phone`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
+const openAutomations = async (page: Page) => {
+    await page.getByRole('button', { name: /Settings/ }).first().click();
+    await page.getByRole('dialog').locator('[data-section="automations"]').click();
+};
+
+for (const locale of ['ar', 'en']) {
+    test(`settings automations: list (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS));
+        await openAutomations(page);
+        await expect(page.locator('.automation-card')).toHaveCount(AUTOMATIONS.length);
+        await shot(page, `automations-${locale}-list`);
+        await scrollPane(page, 'bottom');
+        await shot(page, `automations-${locale}-list-end`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: nothing delivers them (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS.slice(0, 2), false));
+        await openAutomations(page);
+        await expect(page.locator('.settings-warning')).toBeVisible();
+        await shot(page, `automations-${locale}-no-delivery`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: delivery not checked (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS.slice(0, 1), null));
+        await openAutomations(page);
+        await expect(page.locator('.automation-unchecked')).toBeVisible();
+        await shot(page, `automations-${locale}-unchecked`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: empty (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, []));
+        await openAutomations(page);
+        await expect(page.locator('.automation-empty')).toBeVisible();
+        await shot(page, `automations-${locale}-empty`);
+        expect(await audit(page)).toEqual([]);
+        if (locale === 'ar') expect(await untranslated(page)).toEqual([]);
+    });
+
+    test(`settings automations: load failed (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => { await p.route('**/api/automations', (route) => route.fulfill({ status: 500, json: { detail: 'automations.json is not usable: unexpected keyword. Delete it to clear your automations.' } })); });
+        await openAutomations(page);
+        await expect(page.locator('.settings-pane .settings-error')).toBeVisible();
+        await shot(page, `automations-${locale}-failed`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings automations: remove confirmation (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS));
+        await openAutomations(page);
+        await page.locator('.automation-card').first().locator('.btn-danger').click();
+        await expect(page.getByRole('alertdialog')).toBeVisible();
+        await shot(page, `automations-${locale}-remove`);
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`settings automations: phone width (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await open(page, '', locale, (p) => withAutomations(p, AUTOMATIONS));
+        await page.getByRole('button', { name: /Open sidebar/ }).click();
+        await openAutomations(page);
+        await expect(page.locator('.automation-card').first()).toBeVisible();
+        await shot(page, `automations-${locale}-phone`);
         expect(await audit(page)).toEqual([]);
     });
 }
@@ -2379,12 +2549,16 @@ const SCHEDULE_ROWS = [
         description: 'Every 2 hours, 8:00 AM - 6:00 PM, weekdays',
         description_parts: { ...NO_PARTS, kind: 'window', count: 2, unit: 'hour', start_hour: 8, end_hour: 18, days: [0, 1, 2, 3, 4] },
     },
+    {
+        ...SCHEDULE_ROW, id: 's4', name: 'Long instructions', last_error: null, error_count: 0, session_id: null,
+        prompt: 'لخّص رسائل البريد الإلكتروني غير المقروءة وأحداث التقويم لهذا اليوم، ثم رتّبها حسب الأهمية، وأضف إلى كل عنصر سطراً يوضّح الإجراء المطلوب منّي، وإن وجدت اجتماعات متعارضة فاذكرها أولاً مع اقتراح لحلّ التعارض، وأنهِ الملخص بقائمة قصيرة بما يمكن تأجيله إلى الأسبوع القادم دون أي ضرر على العمل. ثم أرسل الملخص إليّ في الصباح وذكّرني بأي موعد نهائي يقترب خلال الأيام الثلاثة القادمة، واقترح وقتاً هادئاً للتركيز في كل يوم، وراجع المهام المتأخرة من الأسبوع الماضي، واكتب لكل واحدة منها خطوة صغيرة تالية يمكنني إنجازها في أقل من ربع ساعة، ثم اختم بجملة واحدة تلخّص أهم ما يجب إنجازه اليوم.',
+    },
 ];
 
 /** Titles, labels and placeholders in the schedules dialog that carry no Arabic. */
 const untranslatedAttributes = (page: Page): Promise<string[]> =>
     page.locator('.schedule-modal').evaluate((root) =>
-        [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
+        [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title]:not([dir="auto"]), [aria-label], [placeholder]')].flatMap((el) =>
             ['aria-label', 'placeholder', 'title']
                 .map((a) => el.getAttribute(a) ?? '')
                 .filter((v) => /[A-Za-z]{3}/.test(v) && !/[؀-ۿ]/.test(v))));
@@ -2416,6 +2590,22 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.schedule-card').first().click();
             await expect(page.locator('.schedule-result-item')).toHaveCount(2);
             await check(page, 'list');
+        });
+
+        test('a long prompt stops at three lines inside its card', async ({ page }) => {
+            await openSchedules(page);
+            const card = page.locator('.schedule-card', { hasText: 'Long instructions' });
+            const prompt = card.locator('.schedule-card-prompt');
+            await expect(prompt).toBeVisible();
+            const m = await prompt.evaluate((el) => ({
+                scroll: el.scrollHeight, client: el.clientHeight,
+                line: parseFloat(getComputedStyle(el).lineHeight) || parseFloat(getComputedStyle(el).fontSize) * 1.5,
+                inside: el.getBoundingClientRect().bottom <= el.closest('.schedule-card')!.getBoundingClientRect().bottom + 1,
+            }));
+            expect(m.scroll).toBeGreaterThan(m.client);
+            expect(m.client).toBeLessThanOrEqual(m.line * 3 + 2);
+            expect(m.inside).toBe(true);
+            await shot(page, `schedules-${locale}-long-prompt`);
         });
 
         test('new schedule, nothing typed yet', async ({ page }) => {
@@ -2809,6 +2999,32 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+const MODEL_SERVER_STATES = [
+    { name: 'hung', status: { lemonade_error: 'Lemonade did not answer in time' }, hint: { ar: 'فأعد تشغيله', en: 'restart it:' } },
+    { name: 'stopped', status: { lemonade_error: null }, hint: { ar: 'لتشغيله يدويًا', en: 'To start it by hand' } },
+] as const;
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const { name, status, hint } of MODEL_SERVER_STATES) {
+        test(`a ${name} model server's banner reads in the interface language, its command left to right (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route('**/api/system/status', (route) => route.fulfill({
+                    json: { ...SYSTEM_STATUS, lemonade_running: false, model_loaded: null, start_command: 'C:\\Program Files\\Lemonade\\lemond.exe', ...status },
+                }));
+            });
+            const banner = page.locator('.connection-banner');
+            await expect(banner).toContainText(hint[locale]);
+            await expect(banner).not.toContainText('did not answer in time');
+            const code = banner.locator('code');
+            await expect(code).toHaveText('C:\\Program Files\\Lemonade\\lemond.exe');
+            expect(await code.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            await shot(page, `model-server-${name}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.connection-banner', 'code')).toEqual([]);
+        });
+    }
+}
+
 for (const locale of ['ar', 'en']) {
     test(`a server LEMONADE_BASE_URL picks offers GAIA's own and names no command (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {
@@ -2946,6 +3162,14 @@ for (const locale of ['ar', 'en']) {
                 expect(await audit(page)).toEqual([]);
             });
         }
+
+        test('short window: the download summary scrolls with the list', async ({ page }) => {
+            await page.setViewportSize({ width: 800, height: 600 });
+            const s = scene('models');
+            await open(page, '', locale, (p) => withSetup(p, s.answers));
+            await s.reach(page);
+            await expect(page.locator('.setup-models-footer')).toHaveCSS('position', 'static');
+        });
 
         test('narrow window: no sideways scroll', async ({ page }) => {
             await page.setViewportSize({ width: 320, height: 720 });
@@ -3341,6 +3565,29 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en'] as const) {
+    test(`a file-write prompt words its heading and always button in the UI language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [{
+            type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-always',
+            args: { file_path: '/private/tmp/plans/weekly-grocery-plan.md', content: '# Weekly grocery plan\n' },
+            always_scope: 'write_file on files in /private/tmp/plans', always_label: 'writing files in /private/tmp/plans',
+        }]);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('save my grocery plan');
+        await page.keyboard.press('Enter');
+        const card = page.locator('.perm-card');
+        await expect(card).toBeVisible();
+        if (locale === 'ar') {
+            await expect(card.locator('.perm-card-title')).toContainText('كتابة ملف');
+            await expect(card.locator('.perm-btn').nth(1)).toContainText('السماح دائمًا بـ');
+            expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+        } else {
+            await expect(card.locator('.perm-card-title')).toHaveText('Allow writing file?');
+        }
+        await shot(page, `permission-always-${locale}`);
+    });
+}
+
 const FOLDER = 'C:\\Users\\you\\Documents\\uxa';
 const STEPS_THEN_PROMPT = [
     ...['expenses_oct.csv', 'expenses_nov.csv', 'notes.txt', 'draft_old.txt', 'a.txt', 'b.txt', 'c.txt', 'd.txt'].flatMap((f) => [
@@ -3569,11 +3816,43 @@ for (const locale of ['ar', 'en']) {
         await expect(panel.locator('.notification-center-title')).toContainText(ar ? 'الإشعارات' : 'Notifications');
         await expect(panel.getByRole('tab').first()).toContainText(ar ? 'الكل' : 'All');
         await expect(panel.locator('.notification-response-badge')).toContainText(ar ? 'تم الرفض' : 'Denied');
-        await expect(panel.locator('.notification-footer-btn').first()).toContainText(ar ? 'تعليم الكل كمقروء' : 'Mark All Read');
+        await expect(panel.locator('.notification-footer-btn').first()).toContainText(ar ? 'تعليم الكل كمقروء' : 'Mark all read');
         expect(await audit(page)).toEqual([]);
         // Agent names, titles, bodies and policy reasons are the notification's own text, not the panel's.
         if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
         await shot(page, `notification-panel-${locale}`);
+    });
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a scheduled task's failed and finished notices are in the UI language (${locale})`, async ({ page }) => {
+        const before = { ...SCHEDULE_ROW, run_count: 8, error_count: 0, last_error: null };
+        let loads = 0;
+        await open(page, '', locale, async (p) => {
+            await withSchedules(p);
+            await p.route('**/api/schedules', (route) => {
+                loads += 1;
+                const rows = loads === 1
+                    ? [before, { ...SCHEDULE_ROW, id: 's3', name: 'Inbox sweep', run_count: 4, error_count: 0, last_error: null }]
+                    : [{ ...before, run_count: 9, error_count: 1, last_error: 'The model server stopped.' }, { ...SCHEDULE_ROW, id: 's3', name: 'Inbox sweep', run_count: 5, error_count: 0, last_error: null }];
+                return route.fulfill({ json: { schedules: rows, total: rows.length } });
+            });
+        });
+        await page.locator('.sb').getByRole('button', { name: locale === 'ar' ? /المهام المجدولة/ : /Scheduled tasks/ }).click();
+        await expect(page.locator('.schedule-modal')).toBeVisible();
+        await page.keyboard.press('Escape');
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const titles = page.locator('.notification-center .notification-title');
+        await expect(titles).toHaveCount(2);
+        if (locale === 'ar') {
+            await expect(titles.filter({ hasText: 'فشلت المهمة المجدولة' })).toHaveCount(1);
+            await expect(titles.filter({ hasText: 'انتهت المهمة المجدولة' })).toHaveCount(1);
+            expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-message, .i18n-gloss, bdi')).toEqual([]);
+        } else {
+            await expect(titles.filter({ hasText: 'Scheduled task "Morning brief" failed' })).toHaveCount(1);
+        }
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `schedule-notices-${locale}`);
     });
 }
 
@@ -3726,6 +4005,25 @@ for (const locale of ['en', 'ar']) {
         const shown = await label.evaluate((el) => el.clientWidth);
         const full = await label.evaluate((el) => el.scrollWidth);
         expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
+        expect(await audit(page)).toEqual([]);
+    });
+
+    test(`a narrow window hides the chat's spend before it cuts a cloud model's name (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 820, height: 640 });
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await withMeasuredContext(p);
+            await withCloudSpending(p);
+        });
+        await expect(page.locator('button.context-meter:not(.spend-meter)')).toBeVisible();
+        await expect(page.locator('.spend-meter')).toBeAttached();
+        const label = page.locator('.composer-row .composer-chip-label').last();
+        await expect(label).toBeVisible();
+        await shot(page, `composer-narrow-cloud-${locale}`);
+        const shown = await label.evaluate((el) => el.clientWidth);
+        const full = await label.evaluate((el) => el.scrollWidth);
+        expect(shown, `model name cut to ${shown}px of ${full}px`).toBeGreaterThanOrEqual(Math.min(full, 140));
+        const icon = label.locator('xpath=preceding-sibling::*[local-name()="svg"][1]');
+        expect((await icon.boundingBox())?.width ?? 0, 'the cloud icon was squeezed').toBeGreaterThanOrEqual(12);
         expect(await audit(page)).toEqual([]);
     });
 }

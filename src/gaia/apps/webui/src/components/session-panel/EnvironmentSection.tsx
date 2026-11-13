@@ -7,6 +7,7 @@
  * backend enforces it in the agent's path checks and tool policy.
  */
 
+import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useState } from 'react';
 import { Cloud, File, Folder, FolderPlus, Monitor, ShieldAlert, ShieldCheck, Smartphone, X } from 'lucide-react';
 import * as api from '../../services/api';
@@ -174,7 +175,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                 ? <Folder size={13} className="sp-item-icon" aria-hidden="true" />
                 : <File size={13} className="sp-item-icon" aria-hidden="true" />}
             <div className="sp-item-text">
-                <span className="sp-item-name" dir="auto" title={entry.path}>{entry.name || baseName(entry.path)}</span>
+                <span className="sp-item-name" dir="ltr" title={entry.path}>{entry.name || baseName(entry.path)}</span>
                 <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span className="sp-item-path" dir="ltr">{entry.path}</span></span>
             </div>
             {entry.removable && !locked && (
@@ -212,11 +213,6 @@ function Folders({ sessionId }: { sessionId: string }) {
                         <button type="button" className="link-btn sp-more" onClick={() => setShowAllFiles((v) => !v)}>
                             {showAllFiles ? t('env.fewerFiles') : t('env.allFiles', { n: files.length })}
                         </button>
-                    )}
-                    {!env.enforced && (
-                        <span className="sp-meta">
-                            {t('env.ownProcess')}
-                        </span>
                     )}
                     {env.removed.length > 0 && (
                         <span className="sp-meta">
@@ -356,7 +352,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     const note = MODES.find((m) => m.mode === mode)?.note;
     return (
         <Row label={t('env.permission')}>
-            <div className="sp-segmented" role="radiogroup" aria-label={t('env.permission')}>
+            <RadioGroup className="sp-segmented" aria-label={t('env.permission')}>
                 {MODES.map((m) => (
                     <button
                         key={m.mode}
@@ -373,7 +369,7 @@ function Permission({ sessionId }: { sessionId: string }) {
                         {m.mode === 'ask' ? t('env.ask') : t(m.label)}
                     </button>
                 ))}
-            </div>
+            </RadioGroup>
             {note && <span className="sp-meta">{t(note)}</span>}
             {mode === 'full_access' && promptWaiting && <span className="sp-meta" role="status">{t('perm.fullPendingNote')}</span>}
             {confirming && (
