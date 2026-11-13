@@ -487,9 +487,7 @@ class _EmbedderSwapLock:
     @contextlib.contextmanager
     def request(self):
         with self._cond:
-            self._cond.wait_for(
-                lambda: not self._swapping and not self._swaps_waiting
-            )
+            self._cond.wait_for(lambda: not self._swapping and not self._swaps_waiting)
             self._requests += 1
         try:
             yield
