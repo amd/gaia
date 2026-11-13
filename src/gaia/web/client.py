@@ -320,6 +320,20 @@ def _cap_timeout(timeout, remaining: float):
     return timeout
 
 
+class BlockedHostError(ValueError):
+    """A URL whose host is a private, link-local, loopback or reserved address.
+
+    Attributes:
+        host: The host as the URL named it.
+        address: The address it resolved to, or the literal it already was.
+    """
+
+    def __init__(self, message: str, host: str, address: str):
+        super().__init__(message)
+        self.host = host
+        self.address = address
+
+
 def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
     """Return True if ``ip`` points at a private/internal range we must not fetch."""
     # ::ffff:10.0.0.1 reaches 10.0.0.1 -- judge the IPv4 address it carries.
@@ -364,8 +378,10 @@ def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     except ValueError:
         # Not parseable as an IP — treat as unsafe rather than letting an
         # unvalidated value reach the socket layer (fail loudly).
-        raise ValueError(
-            f"Blocked: {hostname} resolved to unparseable address {ip_str!r}."
+        raise BlockedHostError(
+            f"Blocked: {hostname} resolved to unparseable address {ip_str!r}.",
+            hostname,
+            ip_str,
         )
     # Opt-in affordance: loopback ONLY, for a host the operator named. Not
     # `is_private` — that covers 169.254.0.0/16, so it would reopen the cloud
@@ -373,9 +389,11 @@ def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     if hostname in _loopback_allowed_hosts() and ip.is_loopback:
         return
     if _is_blocked_ip(ip):
-        raise ValueError(
+        raise BlockedHostError(
             f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
-            "Cannot fetch internal network addresses."
+            "Cannot fetch internal network addresses.",
+            hostname,
+            str(ip),
         )
 
 
@@ -840,9 +858,11 @@ class WebClient:
                 continue
 
             if _is_blocked_ip(ip):
-                raise ValueError(
+                raise BlockedHostError(
                     f"Blocked: {hostname} resolves to private/reserved IP {ip}. "
-                    "Cannot fetch internal network addresses."
+                    "Cannot fetch internal network addresses.",
+                    hostname,
+                    str(ip),
                 )
 
     # -- Rate Limiting -------------------------------------------------------
