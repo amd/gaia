@@ -902,6 +902,8 @@ const messages: Messages = {
     'docs.folder.none': 'لا يحتوي «{name}» على مستندات يستطيع GAIA فهرستها.',
     'docs.folder.skipped.one': 'الملفات المتخطّاة لأن GAIA لا يفهرس نوعها: {n}.',
     'docs.folder.skipped.other': 'الملفات المتخطّاة لأن GAIA لا يفهرس نوعها: {n}.',
+    'docs.folder.images.one': 'الصور المستبعدة: {n}. أضِف كل صورة وحدها ليقرأها GAIA.',
+    'docs.folder.images.other': 'الصور المستبعدة: {n}. أضِف كل صورة وحدها ليقرأها GAIA.',
     'docs.folder.failed.one': 'الملفات التي تعذّرت فهرستها: {n}.',
     'docs.folder.failed.other': 'الملفات التي تعذّرت فهرستها: {n}.',
     'docs.folder.noSubfolders': 'لا تُضمَّن المجلدات الفرعية.',
