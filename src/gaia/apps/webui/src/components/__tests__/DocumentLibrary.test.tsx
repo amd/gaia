@@ -1,9 +1,9 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { DocumentLibrary } from '../DocumentLibrary';
+import { DocumentLibrary, REMOVE_UNDO_MS } from '../DocumentLibrary';
 import { useChatStore } from '../../stores/chatStore';
 import * as api from '../../services/api';
 import type { Document } from '../../types';
@@ -100,6 +100,37 @@ describe('DocumentLibrary with no chat open', () => {
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
     });
 
+    it('keeps a typed path in the box when adding it fails, and clears it on success', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockRejectedValueOnce(new Error('File not found'));
+        mockedApi.uploadDocumentByPath.mockResolvedValueOnce(COMPLETE_DOC);
+        render(<DocumentLibrary />);
+        const box = screen.getByLabelText('File path to add') as HTMLInputElement;
+
+        fireEvent.change(box, { target: { value: '/tmp/q3/reprot.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+        await waitFor(() => expect(screen.getByText(/File not found/)).toBeInTheDocument());
+        expect(box.value).toBe('/tmp/q3/reprot.pdf');
+
+        fireEvent.change(box, { target: { value: '/tmp/q3/report.pdf' } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+        await waitFor(() => expect(box.value).toBe(''));
+    });
+
+    it.each([
+        ['"C:\\Reports\\q3.pdf"', 'C:\\Reports\\q3.pdf'],
+        ['file:///Users/sam/My%20Docs/q3.pdf', '/Users/sam/My Docs/q3.pdf'],
+    ])('adds a pasted path written as %s', async (pasted, expected) => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 });
+        mockedApi.uploadDocumentByPath.mockResolvedValue(COMPLETE_DOC);
+        render(<DocumentLibrary />);
+
+        fireEvent.change(screen.getByLabelText('File path to add'), { target: { value: pasted } });
+        fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+
+        await waitFor(() => expect(mockedApi.uploadDocumentByPath).toHaveBeenCalledWith(expected));
+    });
+
     it('offers an existing document for the next chat, once', async () => {
         mockedApi.listDocuments.mockResolvedValue({ documents: [COMPLETE_DOC], total: 1, total_size_bytes: 2048, total_chunks: 5 });
         render(<DocumentLibrary />);
@@ -117,7 +148,11 @@ describe('DocumentLibrary with no chat open', () => {
         useChatStore.setState({ draftDocumentIds: ['doc-ok-1'] });
         render(<DocumentLibrary />);
 
-        fireEvent.click(await screen.findByRole('button', { name: 'Remove good.pdf' }));
+        const remove = await screen.findByRole('button', { name: 'Remove good.pdf' });
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        fireEvent.click(remove);
+        act(() => { vi.advanceTimersByTime(REMOVE_UNDO_MS); });
+        vi.useRealTimers();
 
         await waitFor(() => expect(useChatStore.getState().draftDocumentIds).toEqual([]));
     });
@@ -489,5 +524,55 @@ describe('DocumentLibrary dates follow the interface language', () => {
             expect(stripIsolates(text)).toMatch(ARABIC_MONTH);
             expect(stripIsolates(text)).not.toMatch(ENGLISH_MONTH);
         }
+    });
+});
+
+describe('DocumentLibrary notices follow the interface language', () => {
+    afterEach(resetUiLocale);
+    const emptyList = { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 };
+
+    function submitPath(container: HTMLElement, path: string) {
+        const input = container.querySelector('.path-input') as HTMLInputElement;
+        fireEvent.change(input, { target: { value: path } });
+        fireEvent.submit(input.form!);
+    }
+
+    it('says in Arabic what a folder added and skipped', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('is a folder'), { httpStatus: 400, reason: 'is_folder' }),
+        );
+        mockedApi.indexFolder.mockResolvedValue({
+            indexed: 2, failed: 0, skipped: 1, errors: [],
+            documents: [COMPLETE_DOC, { ...COMPLETE_DOC, id: 'doc-ok-2', filename: 'b.md' }],
+        });
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/trip');
+
+        const text = stripIsolates((await screen.findByRole('status')).textContent ?? '');
+        expect(text).toContain('الملفات المفهرسة من «trip»: 2.');
+        expect(text).toContain('الملفات المتخطّاة لأن GAIA لا يفهرس نوعها: 1.');
+        expect(text).toContain('لا تُضمَّن المجلدات الفرعية.');
+        expect(text.indexOf('الملفات المفهرسة')).toBe(0);
+    });
+
+    it('says in Arabic that a mistyped path does not exist', async () => {
+        setUiLocale('ar');
+        mockedApi.listDocuments.mockResolvedValue(emptyList);
+        mockedApi.uploadDocumentByPath.mockRejectedValue(
+            Object.assign(new Error('File not found: there is no file at /home/me/tirp.pdf. Check the path for typos.'), {
+                httpStatus: 404, reason: null,
+            }),
+        );
+        const { container } = render(<DocumentLibrary />);
+
+        submitPath(container, '/home/me/tirp.pdf');
+
+        const text = stripIsolates((await screen.findByRole('alert')).textContent ?? '');
+        expect(text).toContain('«tirp.pdf» غير موجود');
+        expect(text).toContain('تحقّق من المسار');
+        expect(text).not.toContain('there is no file');
     });
 });

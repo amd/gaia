@@ -25,9 +25,10 @@ except ImportError:
     anthropic = None  # type: ignore[assignment]
 
 from ..base_client import LLMClient
+from ..lemonade_client import is_provider_context_overflow
 from ..local_only import assert_provider_permitted
 from ..surface_hints import TUI_MODEL_SWITCH_HINT
-from .lemonade import _NATIVE_TC_KEY
+from .lemonade import _NATIVE_TC_KEY, LemonadeContextOverflowError
 
 logger = logging.getLogger(__name__)
 
@@ -873,8 +874,16 @@ class ClaudeProvider(LLMClient):
 
     # ── error translation ───────────────────────────────────────────────
 
+    def _raise_if_overflow(self, exc: Exception) -> None:
+        """A too-long prompt becomes the typed overflow the agent trims and retries."""
+        if isinstance(exc, self._anthropic.APIStatusError) and (
+            is_provider_context_overflow(exc.status_code, getattr(exc, "body", None))
+        ):
+            raise LemonadeContextOverflowError() from exc
+
     def _raise_actionable(self, exc: Exception) -> None:
         anthropic = self._anthropic
+        self._raise_if_overflow(exc)
         if isinstance(exc, anthropic.AuthenticationError):
             raise RuntimeError(
                 "Anthropic rejected the credential (401). Check ANTHROPIC_API_KEY "
@@ -1279,6 +1288,7 @@ class GatewayClaudeProvider(ClaudeProvider):
             ) from exc
         if not isinstance(exc, sdk.APIStatusError):
             raise exc
+        self._raise_if_overflow(exc)
         status = exc.status_code
         if status in (401, 403):
             from gaia.llm import gateway  # pylint: disable=import-outside-toplevel

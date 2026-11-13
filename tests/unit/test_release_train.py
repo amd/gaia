@@ -16,6 +16,7 @@ import json
 import lzma
 import sys
 import tarfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -551,12 +552,44 @@ def test_no_passing_run_means_build():
 
 def test_gh_failures_fail_loudly(monkeypatch):
     def run(args, **kw):
-        assert kw["timeout"] == rt.GH_TIMEOUT_S
+        if args[:3] != ["gh", "api", "rate_limit"]:
+            assert kw["timeout"] == rt.GH_TIMEOUT_S
         return rt.subprocess.CompletedProcess(args, 1, "", "HTTP 502")
 
     monkeypatch.setattr(rt.subprocess, "run", run)
     with pytest.raises(rt.VerifyError, match="HTTP 502"):
         rt.verified_run("o/r", SHA)
+
+
+def _refused_once(monkeypatch, reset_in):
+    """gh is refused once on a spent budget, then answers; returns the waits."""
+    waits, reset = [], int(time.time()) + reset_in
+
+    def run(args, **kw):
+        if args[:3] == ["gh", "api", "rate_limit"]:
+            core = {"remaining": 0, "reset": reset}
+            return rt.subprocess.CompletedProcess(args, 0, json.dumps(core), "")
+        if not waits:
+            msg = "gh: API rate limit exceeded for installation ID 1 (HTTP 403)"
+            return rt.subprocess.CompletedProcess(args, 1, "", msg)
+        return rt.subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(rt.subprocess, "run", run)
+    monkeypatch.setattr(time, "sleep", waits.append)
+    return waits
+
+
+def test_a_spent_budget_is_waited_out_not_reported_as_no_run(monkeypatch):
+    waits = _refused_once(monkeypatch, reset_in=100)
+    assert rt._passing_runs("o/r", SHA) == []
+    assert len(waits) == 1 and 95 <= waits[0] <= 110
+
+
+def test_a_budget_that_outlasts_the_bound_fails_naming_the_rate_limit(monkeypatch):
+    waits = _refused_once(monkeypatch, reset_in=2 * rt.GH_RATE_LIMIT_WAIT_S)
+    with pytest.raises(rt.VerifyError, match="rate limited"):
+        rt._passing_runs("o/r", SHA)
+    assert waits == []
 
 
 def test_runs_are_read_from_every_page(monkeypatch):

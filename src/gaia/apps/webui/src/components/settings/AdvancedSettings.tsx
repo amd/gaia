@@ -12,12 +12,20 @@ import { useT } from '../../i18n/useT';
 import { isolate } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
-import type { SystemStatus, MCPServerStatus } from '../../types';
+import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
+
+type CustomModelNote = { kind: 'unlisted' | 'unchecked'; id: string };
+
+/** The warning a saved custom ID carries: the model server doesn't list it, or couldn't be asked. */
+function customModelNote(id: string, status: ModelStatus | null | undefined): CustomModelNote | null {
+    if (!id || !status || status.found) return null;
+    return { kind: status.checked ? 'unlisted' : 'unchecked', id };
+}
 
 /** Model server status and choice, context size, custom model id, beta flags, MCP status, version. */
 export function AdvancedSettings() {
@@ -75,6 +83,8 @@ export function AdvancedSettings() {
                 const value = s.custom_model ?? '';
                 setCustomModel(value);
                 setSavedCustomModel(value);
+                // The saved ID's state, not only the last save's.
+                setSaveNote(customModelNote(value, s.model_status));
                 setDynamicTools(s.dynamic_tools);
                 setDynamicToolsLocked(s.dynamic_tools_locked);
             })
@@ -101,10 +111,7 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
-            const checked = updated.model_status;
-            if (nextValue && checked && !checked.found) {
-                setSaveNote({ kind: checked.checked ? 'unlisted' : 'unchecked', id: nextValue });
-            }
+            setSaveNote(customModelNote(nextValue, updated.model_status));
             setJustSaved(true);
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
             justSavedTimerRef.current = setTimeout(() => setJustSaved(false), 2200);
@@ -208,7 +215,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--download"
+                                    className="btn-primary"
                                     onClick={() => downloadModel(false, undefined, !status.model_loaded)}
                                     disabled={isDownloadingModel}
                                 >
@@ -233,7 +240,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--load"
+                                    className="btn-primary"
                                     onClick={() => loadModel()}
                                     disabled={isLoadingModel}
                                 >
@@ -278,7 +285,7 @@ export function AdvancedSettings() {
                                 <div className="force-redownload-row">
                                     <span className="force-redownload-label">{t('settings.advanced.corrupted')}</span>
                                     <button
-                                        className="btn-force-redownload"
+                                        className="btn-secondary"
                                         onClick={() => downloadModel(true, undefined, !status.model_loaded)}
                                         disabled={isDownloadingModel}
                                     >
@@ -302,7 +309,7 @@ export function AdvancedSettings() {
 
             <LogsCard />
 
-            <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')}>
+            <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')} targetId="model-server">
                 <ModelServerPanel />
                 <LemonadeServerSection />
             </SettingsDisclosure>
@@ -331,7 +338,7 @@ export function AdvancedSettings() {
                     />
                     <div className="model-btn-group">
                         <button
-                            className={`btn-model-save${justSaved ? ' saved' : ''}`}
+                            className="btn-primary"
                             onClick={() => { void saveCustomModel(); }}
                             disabled={!settingsLoaded || savingModel || (!customModelDirty && !justSaved)}
                             aria-label={t('settings.advanced.customSave')}
