@@ -9,8 +9,12 @@ import unicodedata
 
 # Tashkeel, dagger alef and tatweel: vowel marks and stretching, not letters.
 _ARABIC_MARKS = re.compile("[\u064b-\u065f\u0670\u0640]")
-# Alef wasla is an alef with a mark on it; Arabic decimal and thousands marks.
-_FOLDS = str.maketrans({"\u0671": "\u0627", "\u066b": ".", "\u066c": ","})
+# Alef wasla is an alef with a mark on it; Arabic decimal and thousands marks;
+# Persian and Sindhi kaf and Persian yeh are the Arabic letters.
+_FOLDS = str.maketrans(
+    {"\u0671": "\u0627", "\u066b": ".", "\u066c": ","}
+    | {"\u06a9": "\u0643", "\u06aa": "\u0643", "\u06cc": "\u064a"}
+)
 _NON_ASCII_DIGIT = re.compile(r"(?![0-9])\d")
 
 

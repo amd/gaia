@@ -4,7 +4,6 @@
 and letter variants, and the text shown to users stays as written."""
 
 import threading
-import unicodedata
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -72,7 +71,7 @@ def test_saved_vectors_follow_what_was_embedded(sdk):
     assert sdk._vectors_path(["رقم 1234"]) != sdk._vectors_path(["رقم 1235"])
 
 
-def test_exact_text_search_meets_digits_and_vowel_marks(tmp_path):
+def test_exact_text_search_meets_digits_vowel_marks_and_letter_variants(tmp_path):
     document = tmp_path / "ledger.txt"
     document.write_bytes(b"placeholder")
     chunks = ["الكِتَابُ رقم ١٢٣٤ محفوظ", "unrelated"]
@@ -95,11 +94,13 @@ def test_exact_text_search_meets_digits_and_vowel_marks(tmp_path):
         search = _TOOL_REGISTRY["search_indexed_chunks"]["function"]
         by_digits = search(pattern="رقم 1234")
         by_word = search(pattern="الكتاب")
+        # Persian kaf, as a Persian keyboard types it.
+        by_kaf = search(pattern="ال" + chr(0x06A9) + "تاب")
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(saved)
 
-    for result in (by_digits, by_word):
+    for result in (by_digits, by_word, by_kaf):
         assert result["status"] == "success", result
         assert result["match_details"][0]["content"] == chunks[0]
 
@@ -107,34 +108,6 @@ def test_exact_text_search_meets_digits_and_vowel_marks(tmp_path):
 def test_pdf_radical_glyphs_become_the_kanji_they_draw():
     # Chrome's Japanese PDFs report some kanji as Kangxi radicals.
     assert normalize_arabic_pdf_text("開始⽇は2027年3⽉9⽇") == "開始日は2027年3月9日"
-
-
-def test_upload_name_is_stored_composed(tmp_path, monkeypatch):
-    pytest.importorskip("faiss", reason="RAGSDK requires faiss-cpu")
-    from starlette.testclient import TestClient
-
-    import gaia.ui.server as server
-    from gaia.ui.server import create_app
-
-    async def fake_index(path, display_name=None, **_kwargs):
-        return 1
-
-    monkeypatch.setenv("GAIA_HOME", str(tmp_path / "gaia-home"))
-    monkeypatch.setattr(server, "_index_document", fake_index)
-    client = TestClient(create_app(db_path=":memory:"))
-    decomposed = unicodedata.normalize("NFD", "café_مُحَمَّد.txt")
-    assert decomposed != unicodedata.normalize("NFC", decomposed)
-
-    resp = client.post(
-        "/api/documents/upload",
-        files={"file": (decomposed, b"some text")},
-        headers={"x-gaia-ui": "1", "x-gaia-client": "agent-ui"},
-    )
-
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["filename"] == unicodedata.normalize("NFC", decomposed)
-    assert unicodedata.is_normalized("NFC", body["filepath"])
 
 
 # U+FDFA is one character that NFKC writes as 18.

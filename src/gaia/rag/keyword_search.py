@@ -16,11 +16,9 @@ from gaia.rag.text_units import WIDE_CHARS, wide_runs
 
 _WORD = re.compile(r"[^\W_]+")
 _WIDE = re.compile(f"[{WIDE_CHARS}]")
-# Hamza seats fold to bare hamza, so the two spellings of one word meet;
-# Persian and Sindhi kaf and Persian yeh meet the Arabic letters.
+# Hamza seats fold to bare hamza, so the two spellings of one word meet.
 _ARABIC_LETTERS = str.maketrans(
-    {"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"}
-    | {"ؤ": "ء", "ئ": "ء", "ک": "ك", "ڪ": "ك", "ی": "ي"}
+    {"أ": "ا", "إ": "ا", "آ": "ا", "ى": "ي", "ة": "ه"} | {"ؤ": "ء", "ئ": "ء"}
 )
 # "and", "so", "with", "for", "like", each on "the"; the word stays whole if short.
 _ARABIC_PREFIX = re.compile("^(?:[وف]?(?:[بلك]?ال|لل)|[وف])(?=..)")
