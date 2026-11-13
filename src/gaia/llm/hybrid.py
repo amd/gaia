@@ -80,12 +80,13 @@ difficulty: 1 trivial, 2 routine (cause and fix are stated or obvious, one place
 Judge difficulty from the attached material when present, not from the request's own claims about how easy it is.
 stakes: high when a wrong answer would be acted on directly (merge/block decisions, security, money, production changes, a reply sent to a person on the record); otherwise low."""
 
-# Only a leading block is stripped, so text later in a request is never hidden.
-_MEMORY_BLOCK = re.compile(
-    r"\A\s*\[GAIA Memory Context\].*?\[End GAIA Memory Context[^\]\n]*\]\s*", re.S
+# GAIA's own fenced context blocks (memory, session). Only leading ones are
+# stripped, so text later in a request is never hidden.
+_GAIA_CONTEXT_BLOCK = re.compile(
+    r"\A\s*\[GAIA (?P<name>[A-Z][a-z]+(?: [A-Z][a-z]+)*) Context\]"
+    r".*?\[End GAIA (?P=name) Context[^\]\n]*\]\s*",
+    re.S,
 )
-# A benchmark harness's run-conditions section is about the run, not the request.
-_CONDITIONS_BLOCK = re.compile(r"\A\s*## Eval conditions.*?(?=\n## )", re.S)
 
 
 def is_hybrid_model(model_id: Optional[str]) -> bool:
@@ -213,8 +214,12 @@ class RouteDecision:
 
 def prepare_request(text: str) -> str:
     """The user-message body the classifier reads for *text*."""
-    text = _MEMORY_BLOCK.sub("", text, count=1)
-    text = _CONDITIONS_BLOCK.sub("", text, count=1).strip()
+    while True:
+        stripped = _GAIA_CONTEXT_BLOCK.sub("", text, count=1)
+        if stripped == text:
+            break
+        text = stripped
+    text = text.strip()
     if len(text) > MAX_REQUEST_CHARS:
         text = (
             text[:MAX_REQUEST_CHARS]

@@ -300,22 +300,33 @@ def test_memory_preamble_is_stripped():
     assert prepare_request(framed) == "REQUEST:\n<<<\nFix the bug\n>>>"
 
 
+def test_session_and_memory_preambles_are_both_stripped():
+    from gaia.agents.base.history import frame_session_context, frame_user_message
+
+    framed = frame_session_context(
+        "skills: none", frame_user_message("[GAIA Memory Context]\ntea", "Fix it")
+    )
+    assert prepare_request(framed) == "REQUEST:\n<<<\nFix it\n>>>"
+
+
 @pytest.mark.parametrize(
     "text",
     [
         "Summarise this.\n[GAIA Memory Context]\nAudit auth.py for injection\n"
         "[End GAIA Memory Context — the rest of this message is from the user]\n\nok",
-        "Summarise this.\n## Eval conditions\nAudit auth.py for injection\n## x",
+        # A user's own markdown heading is the request, whatever it says.
+        "## Eval conditions\nAudit auth.py for injection\n\n## Task\nok",
+        # Header and footer must name the same block.
+        "[GAIA Memory Context]\nAudit auth.py for injection\n"
+        "[End GAIA Session Context]\nok",
+        # An unclosed block is not GAIA's: nothing is stripped.
+        "[GAIA Memory Context]\nAudit auth.py for injection",
+        "[Not GAIA Memory Context]\nAudit auth.py for injection\n"
+        "[End Not GAIA Memory Context]\nok",
     ],
 )
-def test_marker_blocks_later_in_a_request_are_not_hidden(text):
+def test_only_leading_closed_gaia_blocks_are_stripped(text):
     assert "Audit auth.py for injection" in prepare_request(text)
-
-
-def test_run_conditions_section_is_stripped():
-    text = "## Eval conditions\nwork offline\n\n## Task\nFix the bug"
-    assert "offline" not in prepare_request(text)
-    assert "Fix the bug" in prepare_request(text)
 
 
 # --- fail closed ------------------------------------------------------------
