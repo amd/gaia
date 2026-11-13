@@ -1933,7 +1933,7 @@ const messages: Messages = {
     'setup.summary.label': 'إجمالي التنزيل',
     'setup.summary.download': 'التنزيل',
     'setup.summary.free': 'المساحة الحرة',
-    'setup.summary.freeOn': 'المساحة الحرة على {drive}',
+    'setup.summary.freeOn': 'المساحة الحرة على',
     'setup.summary.after': 'بعد التنزيل',
     'setup.summary.sizeUnknown': 'الحجم غير معروف',
     'setup.summary.freeUnknown': 'المساحة الحرة غير معروفة',
