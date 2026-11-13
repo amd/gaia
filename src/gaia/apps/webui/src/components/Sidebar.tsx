@@ -22,6 +22,7 @@ import { cleanupAbandonedDraft } from '../utils/sessionCleanup';
 import { MAX_SESSION_TITLE_CHARS } from '../utils/constants';
 import { CLAIMS_ESCAPE } from '../hooks/useEscapeToClose';
 import { useMediaQuery } from '../hooks/useMediaQuery';
+import { useToday } from '../hooks/useToday';
 import { Popover } from './Popover';
 import gaiaRobot from '../assets/gaia-robot.png';
 import { useSidebarWidth } from './SidebarResizer';
@@ -377,13 +378,14 @@ export function Sidebar({ onNewChat, onMobileAccess, tunnelActive }: SidebarProp
     );
 
     const hiddenCount = hiddenAutomatedCount(sessions);
+    const today = useToday();
     const groups = useMemo(() => {
         const needle = foldText(q);
         const list = q
             ? sessions.filter((s) => foldText(s.title).includes(needle) || contentHits.has(s.id))
             : sessions;
-        return groupSessionsForList(list, live, { showAutomated });
-    }, [sessions, q, contentHits, live, showAutomated]);
+        return groupSessionsForList(list, live, { showAutomated, now: today });
+    }, [sessions, q, contentHits, live, showAutomated, today]);
     const results = useMemo(() => (q ? groups.flatMap((g) => g.sessions) : []), [q, groups]);
     const picked = activeIdx >= 0 && results.length > 0 ? results[Math.min(activeIdx, results.length - 1)] : undefined;
 
