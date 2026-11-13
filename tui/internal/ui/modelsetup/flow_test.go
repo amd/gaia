@@ -1649,3 +1649,198 @@ func TestFinishedModelsDownloadDropsTheEmptyOverallLine(t *testing.T) {
 	h.expectNot("Overall")
 	h.expectNot("0/0 MB")
 }
+
+// --- a model the NPU can't run yet -------------------------------------------
+
+// The NPU isn't set up, so the FLM model is hard-blocked: the backend marks it
+// unfit with the "npu" code and no memory numbers, and refuses the pull.
+func TestUnreadyNPUModelIsBlockedNotAcknowledged(t *testing.T) {
+	api := &f.Fake{P: flmBlocked(), G: discreteGPU()}
+	h := newHarness(t, ModeFirstRun, api)
+	h.key("l")
+	h.focusID(flm)
+	h.expect("[!] won't fit")
+	if m := h.m.marks(h.m.items()[h.m.focus], 80); strings.Contains(m, markRecommended) {
+		t.Fatalf("a blocked NPU model kept the recommendation star: %q", m)
+	}
+	h.expect(npuBlockedLine(f.Str(notReadyReason)))
+	if s := h.screen(); strings.Contains(s, "Needs about") {
+		t.Fatalf("a blocked NPU model was given a memory warning:\n%s", s)
+	}
+}
+
+// Every NPU reason is shown as its own clause with exactly one full stop:
+// no NPU is a hardware statement, not ready names a fix, an unavailable
+// backend starts with "this", and a driver message may already end in a stop.
+func TestUnreadyNPUModelShowsEachReasonVerbatim(t *testing.T) {
+	for _, tc := range []struct{ name, reason, want string }{
+		{
+			"not ready",
+			notReadyReason,
+			"This model can't be used on this PC: Needs this PC's NPU set up first: " +
+				"Locked-memory limit is too low. Raise the limit.",
+		},
+		{
+			"no NPU",
+			noNpuReason,
+			"This model can't be used on this PC: Runs on a Ryzen AI NPU, " +
+				"and Lemonade reports none on this PC.",
+		},
+		{
+			"backend cannot run FLM",
+			"this Lemonade cannot run flm models on this PC",
+			"This model can't be used on this PC: This Lemonade cannot run flm models on this PC.",
+		},
+		{
+			"driver message ends in a full stop",
+			"needs an AMD Ryzen AI NPU and its driver (install the driver.)",
+			"This model can't be used on this PC: Needs an AMD Ryzen AI NPU " +
+				"and its driver (install the driver).",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &f.Fake{P: flmBlockedWith(tc.reason), G: discreteGPU()}
+			h := newHarness(t, ModeFirstRun, api)
+			h.key("l")
+			h.focusID(flm)
+			h.expect(tc.want)
+			if s := flat(h.screen()); strings.Contains(s, "..") {
+				t.Fatalf("the reason was punctuated twice:\n%s", s)
+			}
+			// Still blocked, whichever reason it is.
+			if h.m.sel.canChat(flm) {
+				t.Fatal("a blocked NPU model was a chat candidate")
+			}
+		})
+	}
+}
+
+// The caption must not read as a model that runs on the NPU now.
+func TestUnreadyNPUModelCaptionDoesNotSayItRuns(t *testing.T) {
+	api := &f.Fake{P: flmBlocked(), G: discreteGPU()}
+	h := newHarness(t, ModeFirstRun, api)
+	h.key("l")
+	h.focusID(flm)
+	h.expect(npuBlockedPurpose)
+	h.expectNot("Answers your chats. Runs on the NPU")
+}
+
+// Pressing space on a blocked model can't make it the chat model, whether it
+// is already in Lemonade or would have to download first.
+func TestUnreadyNPUModelIsNeverTheChatModel(t *testing.T) {
+	// Downloaded but not planned, so it sits in "Already in Lemonade" and space
+	// would otherwise make it the chat model.
+	p := flmBlocked()
+	for i := range p.Catalog {
+		if sameID(p.Catalog[i].ID, flm) {
+			p.Catalog[i].Planned, p.Catalog[i].Selected = false, false
+		}
+	}
+	api := &f.Fake{P: p, G: discreteGPU()}
+	h := newHarness(t, ModeFirstRun, api)
+	if !h.m.sel.canChat(gemma) {
+		t.Fatal("the fixture's working chat model must be selectable")
+	}
+	if h.m.sel.canChat(flm) {
+		t.Fatal("a blocked NPU model was a chat candidate")
+	}
+	for _, c := range h.m.sel.chatCandidates() {
+		if sameID(c.id, flm) {
+			t.Fatal("a blocked NPU model was offered in the chat picker")
+		}
+	}
+	h.key("l")
+	h.focusID(flm)
+	h.key("space")
+	if sameID(h.m.sel.chat, flm) {
+		t.Fatal("a blocked NPU model became the chat model")
+	}
+	h.key("enter")
+	if api.Called("chat " + flm) {
+		t.Fatalf("a blocked NPU model was saved as chat: %v", api.CallList())
+	}
+}
+
+// The tick is the download set: space must not add a blocked model to it, nor
+// leave one there when it arrived ticked (recommended, or from a kept model).
+func TestUnreadyNPUModelCannotEnterTheDownloadSet(t *testing.T) {
+	api := &f.Fake{P: flmBlocked(), G: discreteGPU()}
+	h := newHarness(t, ModeFirstRun, api)
+	h.key("l")
+	h.focusID(flm)
+	h.key("space")
+	for _, r := range h.m.sel.pending() {
+		if sameID(r.id, flm) {
+			t.Fatalf("a blocked NPU model was queued to download: %v", h.m.sel.pending())
+		}
+	}
+	if h.m.sel.ticked[flm] {
+		t.Fatal("a blocked NPU model was ticked for download")
+	}
+
+	// Already ticked before it was blocked: newSelection ticks every selected
+	// model, so pending must still keep it out and space must not re-add it.
+	// Not downloaded, so it has a real tick rather than being installed.
+	p := flmBlocked()
+	for i := range p.Catalog {
+		if sameID(p.Catalog[i].ID, flm) {
+			p.Catalog[i].Selected, p.Catalog[i].Downloaded = true, f.Bool(false)
+		}
+	}
+	api2 := &f.Fake{P: p, G: discreteGPU()}
+	h2 := newHarness(t, ModeFirstRun, api2)
+	if !h2.m.sel.ticked[flm] {
+		t.Fatal("the fixture must arrive ticked, to prove pending skips it")
+	}
+	for _, r := range h2.m.sel.pending() {
+		if sameID(r.id, flm) {
+			t.Fatalf("a ticked blocked NPU model stayed in the download set: %v", h2.m.sel.pending())
+		}
+	}
+	h2.key("l")
+	h2.focusID(flm)
+	h2.key("space")
+	for _, r := range h2.m.sel.pending() {
+		if sameID(r.id, flm) {
+			t.Fatalf("unticking reinstated a blocked NPU model: %v", h2.m.sel.pending())
+		}
+	}
+}
+
+// A cloud chat downloads no chat model, and a blocked NPU model must not
+// appear among its candidates either.
+func TestCloudPickerUnaffectedByNPUBlock(t *testing.T) {
+	p := flmBlocked()
+	api := &f.Fake{P: p, G: discreteGPU()}
+	h := newHarness(t, ModeFirstRun, api, func(o *Options) { o.Cloud = true })
+	h.expect(cloudNoDownload)
+	for _, c := range h.m.sel.chatCandidates() {
+		if sameID(c.id, flm) {
+			t.Fatal("a blocked NPU model was offered to a cloud chat")
+		}
+	}
+	h.expect("embeddinggemma-300m")
+	h.expectNot(flm)
+	h.key("enter")
+	if !api.Called("run cloud=true") {
+		t.Fatalf("a cloud run must skip the chat model: %v", api.CallList())
+	}
+}
+
+// The memory path is unchanged: an unfit model with numbers still asks, and
+// acknowledging it still lets the download go ahead.
+func TestMemoryUnfitModelStillAsksAndCanBeConfirmed(t *testing.T) {
+	api := &f.Fake{P: small16(), G: discreteGPU()}
+	h := newHarness(t, ModeFirstRun, api)
+	h.focusID(qwen)
+	h.expect("won't fit")
+	h.key("space", "enter")
+	h.expect(noFitAsk(27.1, 16))
+	if api.Called("run") {
+		t.Fatal("a memory-unfit model downloaded before it was confirmed")
+	}
+	h.key("y")
+	if !api.Called("run") {
+		t.Fatalf("an acknowledged memory-unfit model must go ahead: %v", api.CallList())
+	}
+}

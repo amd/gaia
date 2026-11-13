@@ -23,6 +23,9 @@ export interface AboutYouItem {
     due_at?: string | null;
 }
 
+/** Rows per request; the knowledge endpoint serves at most 200. */
+const PAGE_SIZE = 200;
+
 /** Categories that describe the user, grouped under a plain heading. */
 const GROUPS: { title: MessageKey; categories: string[] }[] = [
     { title: 'mem.about.group.preferences', categories: ['preference'] },
@@ -55,11 +58,25 @@ function relativeDay(iso: string, t: Translate): MessageRef | string | null {
     return then.toLocaleDateString(dateLocale(t), { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-/** "Due Fri, Oct 30", or "Was due …" once past; a midnight due date counts as the whole day. */
-export function dueLabel(iso: string, now: Date = new Date(), t: Translate = tEn): { text: string; past: boolean } | null {
+/** A stored due date; a bare "YYYY-MM-DD" is local midnight, not UTC. */
+function parseDue(iso: string): Date | null {
     const bare = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
     const due = bare ? new Date(+bare[1], +bare[2] - 1, +bare[3]) : new Date(iso);
-    if (Number.isNaN(due.getTime())) return null;
+    return Number.isNaN(due.getTime()) ? null : due;
+}
+
+/** A stored due date as a date-and-time field shows it, in local time. */
+export function dueInputValue(iso: string | null | undefined): string {
+    const due = iso ? parseDue(iso) : null;
+    if (!due) return '';
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${due.getFullYear()}-${pad(due.getMonth() + 1)}-${pad(due.getDate())}T${pad(due.getHours())}:${pad(due.getMinutes())}`;
+}
+
+/** "Due Fri, Oct 30", or "Was due …" once past; a midnight due date counts as the whole day. */
+export function dueLabel(iso: string, now: Date = new Date(), t: Translate = tEn): { text: string; past: boolean } | null {
+    const due = parseDue(iso);
+    if (!due) return null;
     const allDay = due.getHours() === 0 && due.getMinutes() === 0 && due.getSeconds() === 0;
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const past = allDay ? due.getTime() < startOfToday : due.getTime() < now.getTime();
@@ -86,28 +103,56 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     const [loadError, setLoadError] = useState<string | null>(null);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [draft, setDraft] = useState('');
+    const [draftDue, setDraftDue] = useState('');
     const [forgotten, setForgotten] = useState<AboutYouItem[]>([]);
     const [revealed, setRevealed] = useState<Set<string>>(new Set());
     const [newText, setNewText] = useState('');
     const [newCategory, setNewCategory] = useState('fact');
+    const [newDue, setNewDue] = useState('');
     const [busyId, setBusyId] = useState<string | null>(null);
+    const [total, setTotal] = useState(0);
+    const [loadingMore, setLoadingMore] = useState(false);
     // Bumped by every load and every change, so an older load that lands late
     // cannot put back an item the user just forgot.
     const generation = useRef(0);
+    // How many rows to show; a reload after an edit keeps the pages already open.
+    const wanted = useRef(PAGE_SIZE);
 
-    const load = useCallback(async () => {
+    const load = useCallback(async (want?: number) => {
         const mine = ++generation.current;
+        const count = want ?? wanted.current;
         try {
-            // Filtered on the server, so paging never fills up with GAIA's own notes.
-            const data = await memoryApi.getKnowledge({
-                about_user: true,
-                include_sensitive: true,
-                sort_by: 'updated_at',
-                order: 'desc',
-                limit: 200,
-            });
-            if (mine !== generation.current) return;
-            setItems(data.items as AboutYouItem[]);
+            const rows: AboutYouItem[] = [];
+            const seen = new Set<string>();
+            // Rows read from the server, duplicates included, so the next page starts after them.
+            let offset = 0;
+            let found = 0;
+            for (;;) {
+                const limit = Math.min(PAGE_SIZE, count - rows.length);
+                // Filtered on the server, so paging never fills up with GAIA's own notes.
+                const data = await memoryApi.getKnowledge({
+                    about_user: true,
+                    include_sensitive: true,
+                    sort_by: 'updated_at',
+                    order: 'desc',
+                    offset,
+                    limit,
+                });
+                if (mine !== generation.current) return;
+                offset += data.items.length;
+                // A memory saved between two pages shifts the rows, repeating one at the page edge.
+                for (const item of data.items as AboutYouItem[]) {
+                    if (seen.has(item.id)) continue;
+                    seen.add(item.id);
+                    rows.push(item);
+                }
+                found = typeof data.total === 'number' ? data.total : rows.length;
+                // A short page is the end of what the store holds right now.
+                if (data.items.length < limit || rows.length >= Math.min(count, found)) break;
+            }
+            wanted.current = count;
+            setItems(rows);
+            setTotal(found);
             setLoadError(null);
         } catch (err) {
             if (mine !== generation.current) return;
@@ -118,12 +163,27 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
 
     useEffect(() => { load(); }, [load, reloadKey]);
 
+    const showMore = useCallback(async () => {
+        setLoadingMore(true);
+        // Set before loading, so a reload that lands mid-way fetches the new page too.
+        wanted.current = Math.max(wanted.current, items?.length ?? 0) + PAGE_SIZE;
+        try {
+            await load();
+        } finally {
+            setLoadingMore(false);
+        }
+    }, [load, items]);
+
     const saveEdit = useCallback(async (item: AboutYouItem) => {
         const content = draft.trim();
-        if (!content || content === item.content) { setEditingId(null); return; }
+        const dueChanged = item.category === 'reminder' && !!draftDue && draftDue !== dueInputValue(item.due_at);
+        if (!content || (content === item.content && !dueChanged)) { setEditingId(null); return; }
         setBusyId(item.id);
         try {
-            await memoryApi.editKnowledge(item.id, { content });
+            await memoryApi.editKnowledge(item.id, {
+                ...(content !== item.content ? { content } : {}),
+                ...(dueChanged ? { due_at: draftDue } : {}),
+            });
             setEditingId(null);
             showToast(t('mem.about.updated'), 'success');
             await load();
@@ -134,7 +194,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         } finally {
             setBusyId(null);
         }
-    }, [draft, load, onChanged, showToast, t]);
+    }, [draft, draftDue, load, onChanged, showToast, t]);
 
     const forget = useCallback(async (item: AboutYouItem) => {
         setBusyId(item.id);
@@ -142,6 +202,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
             await memoryApi.deleteKnowledge(item.id);
             generation.current++;
             setItems(prev => (prev ?? []).filter(i => i.id !== item.id));
+            setTotal(prev => Math.max(prev - 1, 0));
             setForgotten(prev => [item, ...prev]);
             onChanged();
         } catch (err) {
@@ -177,11 +238,13 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
 
     const add = useCallback(async () => {
         const content = newText.trim();
-        if (!content) return;
+        const reminder = newCategory === 'reminder';
+        if (!content || (reminder && !newDue)) return;
         setBusyId('new');
         try {
-            await memoryApi.createKnowledge({ content, category: newCategory });
+            await memoryApi.createKnowledge({ content, category: newCategory, ...(reminder ? { due_at: newDue } : {}) });
             setNewText('');
+            setNewDue('');
             showToast(t('mem.about.saved'), 'success');
             await load();
             onChanged();
@@ -191,7 +254,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         } finally {
             setBusyId(null);
         }
-    }, [newText, newCategory, load, onChanged, showToast, t]);
+    }, [newText, newCategory, newDue, load, onChanged, showToast, t]);
 
     if (!memoryEnabled) {
         return (
@@ -236,15 +299,28 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                     <option value="reminder">{t.bare('mem.about.kind.reminder')}</option>
                     <option value="note">{t.bare('mem.about.kind.note')}</option>
                 </select>
-                <button className="btn-primary" type="submit" disabled={!newText.trim() || busyId === 'new'}>
+                {newCategory === 'reminder' && (
+                    <input
+                        type="datetime-local"
+                        className="mem-input mem-about-when"
+                        aria-label={t('mem.about.when')}
+                        value={newDue}
+                        onChange={e => setNewDue(e.target.value)}
+                    />
+                )}
+                <button
+                    className="btn-primary"
+                    type="submit"
+                    disabled={!newText.trim() || (newCategory === 'reminder' && !newDue) || busyId === 'new'}
+                >
                     <Plus size={14} /> {t('mem.about.add')}
                 </button>
             </form>
 
             {forgotten.map(item => (
                 <div key={item.id} className="mem-about-forgotten" role="status">
-                    <span>
-                        {item.sensitive ? t('mem.about.forgottenSensitive') : t('mem.about.forgotten', { content: item.content })}
+                    <span title={item.sensitive ? undefined : item.content}>
+                        {item.sensitive ? t('mem.about.forgottenSensitive') : t('mem.about.forgotten', { content: oneLineQuote(item.content) })}
                     </span>
                     <button className="mem-about-link" disabled={busyId === item.id} onClick={() => undoForget(item)}>
                         <Undo2 size={12} /> {t('mem.about.undo')}
@@ -255,7 +331,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
             {loadError ? (
                 <div className="mem-about-empty">
                     <p>{t('mem.about.loadFailed', { error: loadError })}</p>
-                    <button className="btn-secondary" onClick={load}>{t('mem.about.retry')}</button>
+                    <button className="btn-secondary" onClick={() => load()}>{t('mem.about.retry')}</button>
                 </div>
             ) : items === null ? (
                 <div className="mem-loading"><div className="mem-spinner" /> {t('mem.loading')}</div>
@@ -290,9 +366,18 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                     onChange={e => setDraft(e.target.value)}
                                                     onKeyDown={e => {
                                                         if (e.key === 'Escape') { e.stopPropagation(); setEditingId(null); }
-                                                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(item); }
+                                                        if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); saveEdit(item); }
                                                     }}
                                                 />
+                                                {item.category === 'reminder' && (
+                                                    <input
+                                                        type="datetime-local"
+                                                        className="mem-input mem-about-when"
+                                                        aria-label={t('mem.about.when')}
+                                                        value={draftDue}
+                                                        onChange={e => setDraftDue(e.target.value)}
+                                                    />
+                                                )}
                                                 <div className="mem-about-edit-actions">
                                                     <button className="btn-primary" type="submit" disabled={busyId === item.id}>{t('mem.about.save')}</button>
                                                     <button className="btn-secondary" type="button" onClick={() => setEditingId(null)}>{t('mem.about.cancel')}</button>
@@ -324,8 +409,9 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                                                     <button
                                                         className="mem-about-btn"
                                                         aria-label={t('mem.about.editAria', { name })}
-                                                        title={t('mem.about.edit')}
-                                                        onClick={() => { setEditingId(item.id); setDraft(item.content); }}
+                                                        title={t(hidden ? 'mem.about.editHidden' : 'mem.about.edit')}
+                                                        disabled={hidden}
+                                                        onClick={() => { setEditingId(item.id); setDraft(item.content); setDraftDue(dueInputValue(item.due_at)); }}
                                                     >
                                                         <Pencil size={14} />
                                                     </button>
@@ -348,10 +434,28 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                     </section>
                 ))
             )}
+            {!loadError && items !== null && items.length < total && (
+                <div className="mem-about-more">
+                    <span>{t('mem.about.showing', { shown: items.length, total })}</span>
+                    <button className="btn-secondary" disabled={loadingMore} onClick={showMore}>
+                        {t('mem.about.showMore')}
+                    </button>
+                </div>
+            )}
         </div>
     );
 }
 
 function errorText(err: unknown): string {
     return err instanceof Error ? err.message : String(err);
+}
+
+/** How many characters of a forgotten memory the Undo bar quotes. */
+export const FORGOTTEN_QUOTE_CHARS = 80;
+
+/** A memory quoted on one line: its start, then an ellipsis when it is long. */
+export function oneLineQuote(text: string): string {
+    const flat = text.replace(/\s+/g, ' ').trim();
+    if (flat.length <= FORGOTTEN_QUOTE_CHARS) return flat;
+    return `${flat.slice(0, FORGOTTEN_QUOTE_CHARS - 1).trimEnd()}…`;
 }

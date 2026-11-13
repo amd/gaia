@@ -8,15 +8,24 @@ import { log } from '../../utils/logger';
 import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
 import { formatGb } from '../../utils/modelLabels';
-import { useT } from '../../i18n/useT';
+import { useT, type Translate } from '../../i18n/useT';
+import { isolate, type MessageKey } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
-import type { SystemStatus, MCPServerStatus } from '../../types';
+import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
 import { ModelServerPanel } from './ModelServerPanel';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import '../SettingsModal.css';
+
+type CustomModelNote = { kind: 'unlisted' | 'unchecked'; id: string };
+
+/** The warning a saved custom ID carries: the model server doesn't list it, or couldn't be asked. */
+function customModelNote(id: string, status: ModelStatus | null | undefined): CustomModelNote | null {
+    if (!id || !status || status.found) return null;
+    return { kind: status.checked ? 'unlisted' : 'unchecked', id };
+}
 
 /** Model server status and choice, context size, custom model id, beta flags, MCP status, version. */
 export function AdvancedSettings() {
@@ -31,6 +40,8 @@ export function AdvancedSettings() {
     const [settingsLoaded, setSettingsLoaded] = useState(false);
     const [savingModel, setSavingModel] = useState(false);
     const [saveError, setSaveError] = useState<string | null>(null);
+    /** A saved ID the model server doesn't list ('unlisted') or couldn't be asked about ('unchecked'). */
+    const [saveNote, setSaveNote] = useState<{ kind: 'unlisted' | 'unchecked'; id: string } | null>(null);
     const [justSaved, setJustSaved] = useState(false);
     const justSavedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -72,6 +83,8 @@ export function AdvancedSettings() {
                 const value = s.custom_model ?? '';
                 setCustomModel(value);
                 setSavedCustomModel(value);
+                // The saved ID's state, not only the last save's.
+                setSaveNote(customModelNote(value, s.model_status));
                 setDynamicTools(s.dynamic_tools);
                 setDynamicToolsLocked(s.dynamic_tools_locked);
             })
@@ -90,6 +103,7 @@ export function AdvancedSettings() {
         const payload = trimmed.length > 0 ? trimmed : '';
         setSavingModel(true);
         setSaveError(null);
+        setSaveNote(null);
         setJustSaved(false);
         try {
             log.system.info('Saving custom_model override', { custom_model: payload });
@@ -97,6 +111,7 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
+            setSaveNote(customModelNote(nextValue, updated.model_status));
             setJustSaved(true);
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
             justSavedTimerRef.current = setTimeout(() => setJustSaved(false), 2200);
@@ -200,7 +215,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--download"
+                                    className="btn-primary"
                                     onClick={() => downloadModel(false, undefined, !status.model_loaded)}
                                     disabled={isDownloadingModel}
                                 >
@@ -225,7 +240,7 @@ export function AdvancedSettings() {
                                     </span>
                                 </div>
                                 <button
-                                    className="btn-model-action btn-model-action--load"
+                                    className="btn-primary"
                                     onClick={() => loadModel()}
                                     disabled={isLoadingModel}
                                 >
@@ -251,7 +266,7 @@ export function AdvancedSettings() {
                                     <StatusRow label={t('settings.advanced.context')} value={t('settings.ctx.tokens', { size: `${(status.model_context_size / 1024).toFixed(0)}K` })} ok={status.context_size_sufficient} />
                                 )}
                                 {status.model_labels && status.model_labels.length > 0 && (
-                                    <StatusRow label={t('settings.advanced.capabilities')} value={status.model_labels.join(', ')} ok={true} />
+                                    <StatusRow label={t('settings.advanced.capabilities')} value={capabilitiesText(t, status.model_labels)} ok={true} />
                                 )}
                                 <StatusRow label={t('settings.advanced.embedding')} value={status.embedding_model_loaded ? t('settings.advanced.available') : t('settings.advanced.notLoaded')} ok={status.embedding_model_loaded} />
                                 {status.gpu_name && (
@@ -270,7 +285,7 @@ export function AdvancedSettings() {
                                 <div className="force-redownload-row">
                                     <span className="force-redownload-label">{t('settings.advanced.corrupted')}</span>
                                     <button
-                                        className="btn-force-redownload"
+                                        className="btn-secondary"
                                         onClick={() => downloadModel(true, undefined, !status.model_loaded)}
                                         disabled={isDownloadingModel}
                                     >
@@ -294,12 +309,12 @@ export function AdvancedSettings() {
 
             <LogsCard />
 
-            <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')}>
+            <SettingsDisclosure title={t('settings.advanced.serverTitle')} hint={t('settings.advanced.serverHint')} targetId="model-server">
                 <ModelServerPanel />
                 <LemonadeServerSection />
             </SettingsDisclosure>
 
-            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel || t('settings.advanced.customHint')}>
+            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel ? isolate(savedCustomModel, 'ltr') : t('settings.advanced.customHint')}>
                 <p className="model-override-desc">{t('settings.advanced.customDesc')}</p>
                 <div className="model-input-row">
                     <input
@@ -307,7 +322,8 @@ export function AdvancedSettings() {
                         className={`model-input${savedCustomModel ? ' has-override' : ''}`}
                         placeholder={t.bare('settings.advanced.customPlaceholder')}
                         value={customModel}
-                        onChange={(e) => { setCustomModel(e.target.value); setSaveError(null); setJustSaved(false); }}
+                        dir={customModel ? 'ltr' : undefined}
+                        onChange={(e) => { setCustomModel(e.target.value); setSaveError(null); setSaveNote(null); setJustSaved(false); }}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && !savingModel && customModelDirty && settingsLoaded) {
                                 e.preventDefault();
@@ -322,7 +338,7 @@ export function AdvancedSettings() {
                     />
                     <div className="model-btn-group">
                         <button
-                            className={`btn-model-save${justSaved ? ' saved' : ''}`}
+                            className="btn-primary"
                             onClick={() => { void saveCustomModel(); }}
                             disabled={!settingsLoaded || savingModel || (!customModelDirty && !justSaved)}
                             aria-label={t('settings.advanced.customSave')}
@@ -339,6 +355,18 @@ export function AdvancedSettings() {
                 </div>
                 <p className="model-status-hint">{t('settings.advanced.customIds')}</p>
                 {saveError && <SaveError message={saveError} />}
+                {saveNote && (
+                    <div className="model-warning" role="status">
+                        <AlertCircle size={14} />
+                        <div className="model-warning-content">
+                            <p>
+                                {saveNote.kind === 'unlisted'
+                                    ? t('settings.advanced.customNotListed', { id: saveNote.id })
+                                    : t('settings.advanced.customNotChecked')}
+                            </p>
+                        </div>
+                    </div>
+                )}
             </SettingsDisclosure>
 
             <SettingsDisclosure title={t('settings.advanced.dynamicTitle')}>
@@ -427,6 +455,27 @@ function SaveError({ message }: { message: string }) {
             </div>
         </div>
     );
+}
+
+// Lemonade's model labels; one it adds later shows as sent.
+const CAPABILITIES: Record<string, MessageKey> = {
+    cloud: 'settings.advanced.capability.cloud',
+    chat: 'settings.advanced.capability.chat',
+    vision: 'settings.advanced.capability.vision',
+    'tool-calling': 'settings.advanced.capability.toolCalling',
+    reasoning: 'settings.advanced.capability.reasoning',
+    embeddings: 'settings.advanced.capability.embeddings',
+    reranking: 'settings.advanced.capability.reranking',
+    coding: 'settings.advanced.capability.coding',
+    audio: 'settings.advanced.capability.audio',
+    image: 'settings.advanced.capability.image',
+    tts: 'settings.advanced.capability.tts',
+    stt: 'settings.advanced.capability.stt',
+    transcription: 'settings.advanced.capability.transcription',
+};
+
+function capabilitiesText(t: Translate, labels: string[]): string {
+    return t.compose((say) => labels.map((l) => (CAPABILITIES[l] ? say(CAPABILITIES[l]) : l)).join(say('mem.listSeparator')));
 }
 
 function StatusRow({ label, value, ok, hint }: { label: string; value: ReactNode; ok: boolean; hint?: string }) {

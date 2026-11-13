@@ -192,7 +192,7 @@ def test_run_python_offers_always_for_snippets(folders):
     )
     again, more = _drive(agent, handler, "run_python", {"code": "print(2)"})
 
-    assert prompts[0]["always_scope"] == "Python snippets (run_python)"
+    assert prompts[0]["always_scope"] == "Python snippets"
     assert more == []
     assert again["status"] == "success"
 

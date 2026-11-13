@@ -241,6 +241,30 @@ def _computed_scope(db: ChatDatabase, session: Dict[str, Any]) -> List[str]:
     return _compute_allowed_paths(rag + library)
 
 
+# Paths approved at a relayed agent's prompt; its sidecar holds the grant itself.
+_approved_paths: Dict[str, List[str]] = {}
+_approved_guard = threading.Lock()
+
+
+def note_approved_path(session_id: str, path: str) -> None:
+    """Record that the user let *session_id*'s relayed agent open *path*."""
+    with _approved_guard:
+        paths = _approved_paths.setdefault(session_id, [])
+        if path not in paths:
+            paths.append(path)
+
+
+def forget_session(session_id: str) -> None:
+    """Drop what *session_id*'s relayed agent was allowed at its prompts."""
+    with _approved_guard:
+        _approved_paths.pop(session_id, None)
+
+
+def _approved(session_id: str) -> List[str]:
+    with _approved_guard:
+        return list(_approved_paths.get(session_id, []))
+
+
 def _env_scope_entries() -> List[Path]:
     """The ``GAIA_ALLOWED_PATHS`` entries, or none when it is unset or invalid."""
     try:
@@ -267,17 +291,21 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     else:
         # What a new agent's validator would hold, GAIA_ALLOWED_PATHS applied.
         scope = _effective_scope(_computed_scope(db, session) + list(env["folders"]))
+        scope += _approved(session_id)
         scratch = None
 
     added = {_norm(p) for p in env["folders"]}
     managed = _norm(str(_managed_documents_dir()))
-    doc_paths = {
-        _norm(d["filepath"])
+    # A library copy's file name carries an id prefix; the person knows the original.
+    doc_names = {
+        _norm(d["filepath"]): d.get("filename")
         for d in db.get_session_documents(session_id)
         if d.get("filepath")
     }
+    doc_paths = set(doc_names)
     cwd = _norm(os.getcwd())
     from_env = {_norm(str(p)) for p in _env_scope_entries()}
+    approved = {_norm(p) for p in _approved(session_id)}
     entries: Dict[str, Dict[str, Any]] = {}
     for path in scope:
         key = _norm(path)
@@ -295,12 +323,13 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
             source = "working_folder"
         elif key in from_env:
             source = "allowed_paths"
-        elif validator is not None:
+        elif validator is not None or key in approved:
             source = "approved"
         else:
             source = "document"
         entries[key] = {
             "path": str(Path(path)),
+            "name": doc_names.get(key) or None,
             "kind": "file" if Path(path).is_file() else "folder",
             "source": source,
             # An attached document is removed from the chat's documents, which
@@ -310,7 +339,12 @@ def describe(db: ChatDatabase, session: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "session_id": session_id,
         "folders": sorted(
-            entries.values(), key=lambda e: (e["kind"] != "folder", e["path"].lower())
+            entries.values(),
+            key=lambda e: (
+                e["kind"] != "folder",
+                (e["name"] or Path(e["path"]).name).lower(),
+                e["path"].lower(),
+            ),
         ),
         "removed": list(env["withheld"]),
         "internet": not env["internet_off"],

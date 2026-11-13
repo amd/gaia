@@ -5,7 +5,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ConnectionBanner } from '../ConnectionBanner';
 import { useChatStore } from '../../stores/chatStore';
-import { followBackendLifecycle, useBackendStore } from '../../stores/backendStore';
+import { followBackendLifecycle, resyncBackend, useBackendStore } from '../../stores/backendStore';
 import { getApiBase } from '../../utils/apiBase';
 import type { BackendLifecycle } from '../../types/agent';
 
@@ -89,6 +89,38 @@ describe('followBackendLifecycle', () => {
         act(() => push({ ...base, port: 6123, apiBase: 'http://127.0.0.1:6123/api' }));
         expect(getApiBase()).toBe('http://127.0.0.1:6123/api');
         expect(onBack).toHaveBeenCalledTimes(1);
+    });
+
+    it('re-reads the port from the desktop app when asked, after a missed push (#7284)', async () => {
+        window.gaiaAPI = {
+            backend: {
+                getState: vi.fn(async () => ({ ...base, port: 7321, apiBase: 'http://127.0.0.1:7321/api' })),
+                restart: vi.fn(),
+                onState: vi.fn(),
+            },
+        } as never;
+        resyncBackend();
+        await act(async () => {});
+        expect(getApiBase()).toBe('http://127.0.0.1:7321/api');
+    });
+
+    it('keeps the current port when the re-read fails or names a non-loopback host', async () => {
+        useBackendStore.getState().apply({ ...base, port: 7400, apiBase: 'http://127.0.0.1:7400/api' });
+        const getState = vi.fn()
+            .mockRejectedValueOnce(new Error('IPC gone'))
+            .mockResolvedValueOnce({ ...base, port: 80, apiBase: 'http://evil.example:80/api' })
+            .mockResolvedValueOnce({ ...base, status: 'restarting', port: null, apiBase: null });
+        window.gaiaAPI = { backend: { getState, restart: vi.fn(), onState: vi.fn() } } as never;
+        for (let i = 0; i < 3; i++) {
+            resyncBackend();
+            await act(async () => {});
+            expect(getApiBase()).toBe('http://127.0.0.1:7400/api');
+        }
+        expect(getState).toHaveBeenCalledTimes(3);
+    });
+
+    it('does nothing outside the desktop app', () => {
+        expect(() => resyncBackend()).not.toThrow();
     });
 
     it('refuses an API base that is not loopback', () => {

@@ -26,12 +26,14 @@ from typing import List, Tuple
 from gaia.agents.base.untrusted_text import (
     UNTRUSTED_FIELD_CLOSE,
     UNTRUSTED_FIELD_OPEN,
+    neutralize_marker_names,
     strip_untrusted_field_markers,
     wrap_untrusted_field,
 )
 
 UNTRUSTED_BODY_OPEN = "<<<UNTRUSTED_EMAIL_BODY_START>>>"
 UNTRUSTED_BODY_CLOSE = "<<<UNTRUSTED_EMAIL_BODY_END>>>"
+_BODY_MARKER_NAMES = ("UNTRUSTED_EMAIL_BODY_START", "UNTRUSTED_EMAIL_BODY_END")
 
 
 # What the model must do with a flagged message. Stated on the tool result,
@@ -140,8 +142,16 @@ _DOMAIN_RE = re.compile(r"@([\w.\-]+)")
 
 
 def wrap_untrusted_body(body: str) -> str:
-    """Fence a message body so the model reads it as data, not instructions."""
-    return f"{UNTRUSTED_BODY_OPEN}\n{body}\n{UNTRUSTED_BODY_CLOSE}"
+    """Fence a message body so the model reads it as data, not instructions.
+
+    Fence-like runs and any spelling of a marker's name are cut first, so the
+    body can't close the fence early.
+    """
+    body = neutralize_marker_names(body, _BODY_MARKER_NAMES)
+    return (
+        f"{UNTRUSTED_BODY_OPEN}\n{strip_untrusted_field_markers(body)}\n"
+        f"{UNTRUSTED_BODY_CLOSE}"
+    )
 
 
 def _subject_reason(subject_lower: str) -> str:

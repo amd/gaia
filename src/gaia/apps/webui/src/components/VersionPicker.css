@@ -251,6 +251,11 @@
     transition: opacity var(--duration-fast) var(--ease);
 }
 
+a.vp-btn-confirm {
+    display: inline-block;
+    text-decoration: none;
+}
+
 .vp-btn-confirm:hover:not(:disabled) {
     opacity: 0.85;
 }

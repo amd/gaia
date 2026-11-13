@@ -1202,3 +1202,21 @@ def test_agent_loop_shares_the_connection_pattern() -> None:
     from gaia.agents.base.agent import Agent
 
     assert Agent._LOOP_CONNECTION_RE is CONNECTION_FAILURE_RE
+
+
+# ---------------------------------------------------------------------------
+# A 401 from the model server's own key check is not a cloud auth failure
+# ---------------------------------------------------------------------------
+
+
+def test_the_servers_own_key_refusal_is_told_apart_from_a_providers():
+    from gaia.llm.lemonade_client import _own_key_refused
+
+    # Lemonade's own check: a bare string, before or after the SDK unwraps it.
+    assert _own_key_refused({"error": "Invalid or missing API key"})
+    assert _own_key_refused("Invalid or missing API key")
+    # A provider's 401 that Lemonade forwards is a structured envelope.
+    assert not _own_key_refused(
+        {"error": {"message": "unauthorized", "details": {"status_code": 401}}}
+    )
+    assert not _own_key_refused(None)

@@ -7,6 +7,7 @@
  * backend enforces it in the agent's path checks and tool policy.
  */
 
+import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useState } from 'react';
 import { Cloud, File, Folder, FolderPlus, Monitor, ShieldAlert, ShieldCheck, Smartphone, X } from 'lucide-react';
 import * as api from '../../services/api';
@@ -15,6 +16,7 @@ import { requestErrorText } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useInferencePlace, useModelStore, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
+import { useNotificationStore, selectSessionPermissionPrompt } from '../../stores/notificationStore';
 import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { useSessionEnvironment } from '../../hooks/useSessionEnvironment';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
@@ -47,7 +49,9 @@ function baseName(path: string): string {
 
 export function EnvironmentSection({ sessionId, busy }: { sessionId: string; busy: boolean }) {
     const t = useT();
-    const { env } = useSessionEnvironment(sessionId);
+    const { env, refresh } = useSessionEnvironment(sessionId);
+    // A turn can add a document or folder to what the chat reaches.
+    useTurnEnd(busy, () => { void refresh(); });
     const summary = env && !env.internet ? t('env.offline') : null;
     return (
         <PanelSection id="environment" title={t('env.title')} summary={summary}>
@@ -171,7 +175,7 @@ function Folders({ sessionId }: { sessionId: string }) {
                 ? <Folder size={13} className="sp-item-icon" aria-hidden="true" />
                 : <File size={13} className="sp-item-icon" aria-hidden="true" />}
             <div className="sp-item-text">
-                <span className="sp-item-name" dir="auto" title={entry.path}>{baseName(entry.path)}</span>
+                <span className="sp-item-name" dir="ltr" title={entry.path}>{entry.name || baseName(entry.path)}</span>
                 <span className="sp-meta" title={entry.path}>{t(SOURCE_LABEL[entry.source])} · <span className="sp-item-path" dir="ltr">{entry.path}</span></span>
             </div>
             {entry.removable && !locked && (
@@ -209,11 +213,6 @@ function Folders({ sessionId }: { sessionId: string }) {
                         <button type="button" className="link-btn sp-more" onClick={() => setShowAllFiles((v) => !v)}>
                             {showAllFiles ? t('env.fewerFiles') : t('env.allFiles', { n: files.length })}
                         </button>
-                    )}
-                    {!env.enforced && (
-                        <span className="sp-meta">
-                            {t('env.ownProcess')}
-                        </span>
                     )}
                     {env.removed.length > 0 && (
                         <span className="sp-meta">
@@ -312,7 +311,8 @@ function PhoneAccess() {
                     {t('env.qr')}
                 </button>
             )}
-            {(error || status?.error) && <span className="sp-error">{error ?? status?.error}</span>}
+            {/* A failed start is explained in the Mobile access dialog; it isn't this switch's error. */}
+            {(error || (active && status?.error)) && <span className="sp-error">{error ?? status?.error}</span>}
         </Row>
     );
 }
@@ -323,6 +323,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     const [mode, setMode] = useState<PermissionMode | null>(null);
     const [confirming, setConfirming] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const promptWaiting = useNotificationStore((s) => selectSessionPermissionPrompt(sessionId)(s) !== null);
 
     useEffect(() => {
         let live = true;
@@ -351,7 +352,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     const note = MODES.find((m) => m.mode === mode)?.note;
     return (
         <Row label={t('env.permission')}>
-            <div className="sp-segmented" role="radiogroup" aria-label={t('env.permission')}>
+            <RadioGroup className="sp-segmented" aria-label={t('env.permission')}>
                 {MODES.map((m) => (
                     <button
                         key={m.mode}
@@ -368,8 +369,9 @@ function Permission({ sessionId }: { sessionId: string }) {
                         {m.mode === 'ask' ? t('env.ask') : t(m.label)}
                     </button>
                 ))}
-            </div>
+            </RadioGroup>
             {note && <span className="sp-meta">{t(note)}</span>}
+            {mode === 'full_access' && promptWaiting && <span className="sp-meta" role="status">{t('perm.fullPendingNote')}</span>}
             {confirming && (
                 <span className="sp-confirm" role="alert">
                     {t('env.fullAccessWarn')}

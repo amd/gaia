@@ -769,6 +769,7 @@ class AudioToolsMixin:
             raise_if_cancelled()
             self._report_stage("decode", "Audio ready", state=STAGE_DONE)
             client = LemonadeASRClient(model=model or DEFAULT_ASR_MODEL)
+            self._download_speech_model(client)
             expected = media_seconds / REALTIME_FACTOR
             self._report_stage(
                 "transcribe",
@@ -1627,6 +1628,44 @@ class AudioToolsMixin:
         if lemonade_error:
             result["lemonade_error"] = lemonade_error
         return result
+
+    def _download_speech_model(self, client) -> None:
+        """Download and load the speech model as their own visible steps.
+
+        Lemonade would otherwise do both inside the first transcription
+        request, behind a "Transcribing" line that knows nothing of them.
+        """
+        from gaia.agents.base.tools import raise_if_cancelled
+
+        line = [""]
+
+        def say(message: str) -> None:
+            size = re.search(r"\(~[\d.]+ GB\)", message)
+            line[0] = (
+                f"Downloading the speech model {client.model}"
+                + (f" {size.group(0)}" if size else "")
+                + ", one time"
+            )
+            self._report_progress(line[0])
+
+        def on_percent(percent: int) -> None:
+            raise_if_cancelled()
+            self._report_progress(f"{line[0]} — {percent}%")
+
+        pulled = client.ensure_model(say=say, on_percent=on_percent)
+        if client.is_loaded():
+            return
+        # Its load time, and any file Lemonade fetches at load (the NPU
+        # encoder cache), must not run under the transcription estimate.
+        raise_if_cancelled()
+        if pulled:
+            self._report_progress(
+                f"Preparing the speech model {client.model}, one time — "
+                "this can download more files"
+            )
+        else:
+            self._report_progress(f"Loading the speech model {client.model}")
+        client.load()
 
     def _report_download(self, message: str) -> None:
         """Turn the downloader's progress lines into the download stage."""

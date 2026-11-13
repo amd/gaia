@@ -301,13 +301,18 @@ UUID (`uuid.UUID(v)`); a non-UUID string is also `422`. Everything else
 `changes_turn_id`, `surface`) is optional.
 
 `max_steps` (≥ 1) caps agent-loop steps for this turn. Omit it and the default
-is **150** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
+is **1000** (`FLAGSHIP_MAX_STEPS`). A value in this body, or
 `GAIA_AGENT_MAX_STEPS` in the sidecar's launch environment, still wins.
 
 `context` is the transcript you push. It replaces the agent's history for the
 turn. If it doesn't fit beside the agent's prompt and tools in the model's
 window, the agent drops the oldest whole turns until it does, and streams a
-`status` event saying older messages are out of the model's view. A single turn
+`status` event saying older messages are out of the model's view. The model is
+told as well: the oldest user message it still reads opens with one bracketed
+sentence saying earlier turns exist and are no longer shown, so it says it can
+no longer see them instead of denying them. `turns` is fitted the same way. The
+agent only knows about turns it was sent: a caller that leaves turns out before
+calling (the Agent UI does) adds the same sentence itself. A single turn
 bigger than the whole budget is kept, not dropped: its longest messages are cut
 with a note saying how many characters are missing, so its answer stays in view.
 
@@ -507,6 +512,9 @@ UI's Context panel shows. `window` is the model's context window in tokens,
 by kind; `categories` lists the panel's rows (their tokens add up to `used`),
 `tool_loading` which tools ride every request, and `tokenizer.exact` whether
 the counts came from the loaded model's own tokenizer or the shared estimate.
+A caller that sends `turns` gets it measured over those turns plus this turn's
+`model_messages`, tool results included, so `turns_in_view` and `turns_hidden`
+count whole turns; turns the caller left out itself are not in either count.
 A turn that was stopped or ended on a model failure carries no `context`; a
 measurement that failed carries `context_error`, one sentence saying why, and
 the answer still stands. Older binaries send neither, so read `context` only
@@ -735,6 +743,12 @@ original spelling), and `provider: "claude"`. What remains stdio-only is the
 already off, `--accept-edits` starts it in accept-edits mode, and `--use-claude` / `--claude-model` pin the backend for the life
 of the process (embeddings stay on Lemonade either way).
 
+Sessions a host can list and reopen are stdio-only too: `--history-file` plus
+`--session-kind` keeps the session's title, status (`running`, `waiting` on a
+permission prompt, `done`, `failed`) and a readable transcript beside the
+transcript file. The terminal UI's `/sessions` and `--resume` read it. The
+layout is §10.4 of `docs/spec/agent-ui-query-sse-contract.md`.
+
 The stdio TUI also supports Local, Fireworks AI, and AMD LLM Gateway through
 Lemonade. `/model` lists downloaded local and discovered cloud chat models,
 grouped by provider, with `(default)` beside the configured default model;
@@ -743,6 +757,18 @@ The switch reply is one line naming the model, where it runs, and, for a cloud
 model, that messages and anything read from files or memory are sent there.
 Cloud IDs (`fireworks.*`, `amd.*`) route through Lemonade without local model
 loading. Model-state status events identify the provider and remote inference.
+
+`/skills` is answered by the stdio loop too, never by the model. Bare `/skills`
+lists the installed skills. `/skills add <link>` reads a GitHub repository or
+folder, an `owner/repo` shorthand, a skills.sh page, or an https `.zip`, and
+replies with every `SKILL.md` it holds, each skill's declared permissions in
+plain words, its audit result, and a security warning; it adds nothing and
+remembers the version it read. `/skills add <link> confirm` adds that version —
+a `confirm` with no earlier preview of the link previews instead, a link that
+changed since its preview is refused, and each preview covers one add — to
+`~/.gaia/skills` at the `experimental` tier and recomposes the system prompt so
+the session can use them. Skills that ship code are refused unless the line
+carries `--allow-code`. Each command ends in exactly one `final` or `error` event.
 The TUI's `/provider` panel configures credentials directly with local Lemonade;
 keys never travel through stdio queries. These controls are not exposed over
 `/v1/gaia/query`. Lemonade may independently be configured to route a model

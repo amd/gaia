@@ -303,6 +303,7 @@ def look_findings(
     records: Sequence[Dict[str, Any]],
     locate: Optional[Callable[[str], Optional[str]]] = None,
     history: str = "",
+    plan_only: bool = False,
 ) -> List[Finding]:
     """The request's files and symbols nothing read, and unbacked "not found"s.
 
@@ -320,7 +321,8 @@ def look_findings(
     Once the turn has read one of the request's targets, the others are
     candidates it chose to leave: they count only when the answer says it read
     them or says they don't exist. An answer that says it read a target counts
-    whether or not the file is on disk.
+    whether or not the file is on disk. The same holds for every target when
+    the user asked for a plan only (*plan_only*): it names files still to read.
     """
     targets = named_targets(query)
     if not targets:
@@ -334,7 +336,7 @@ def look_findings(
     found: List[str] = []
     where_is = {t: locate(t) if locate else None for t in targets if _is_file_name(t)}
     about_project = any(where_is.values()) or any(_ran(r) for r in records)
-    engaged = any(_read_it(t, records) for t in targets)
+    engaged = plan_only or any(_read_it(t, records) for t in targets)
     for target in targets:
         if _read_it(target, records) or _slashed(target) in earlier:
             continue
@@ -896,8 +898,20 @@ _ACTION_EVIDENCE: Dict[str, "tuple[Callable[[Dict[str, Any]], bool], str]"] = {
 }
 
 
-def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Finding]:
-    """Work the answer reports that no tool of that kind did."""
+def action_findings(
+    answer: str, records: Sequence[Dict[str, Any]], may_act: bool = True
+) -> List[Finding]:
+    """Work the answer reports that no tool of that kind did.
+
+    With *may_act* false the user barred tools this turn, so the correction
+    asks only for the claim to go, never for the work to be done.
+    """
+    remedy = (
+        "Do it now, or drop the claim."
+        if may_act
+        else "The user asked for no tools this turn, so don't call one: drop "
+        "the claim or reword it so it doesn't say you did."
+    )
     findings: List[Finding] = []
     for kind, phrase in action_claims(answer):
         backed, why = _ACTION_EVIDENCE[kind]
@@ -906,7 +920,7 @@ def action_findings(answer: str, records: Sequence[Dict[str, Any]]) -> List[Find
         findings.append(
             Finding(
                 ACTION,
-                f'Your answer says "{phrase}", but {why}. Do it now, or drop the claim.',
+                f'Your answer says "{phrase}", but {why}. {remedy}',
                 f'I said "{phrase}", but {why}',
             )
         )
@@ -982,21 +996,25 @@ def ungrounded(
     *,
     history: str = "",
     locate: Optional[Callable[[str], Optional[str]]] = None,
+    plan_only: bool = False,
+    may_act: bool = True,
 ) -> List[Finding]:
     """Every gap between *answer* and this turn's tool record, look first.
+
+    *may_act* is false when the user barred tools this turn.
 
     *history* is the text of earlier turns. An answer that already says it did
     not look, or that its figures are unverified, has nothing left to correct
     about looking or figures — only a false report of work done still counts.
     """
-    findings = look_findings(answer, query, records, locate, history)
+    findings = look_findings(answer, query, records, locate, history, plan_only)
     if admits_unverified(answer):
         findings = [f for f in findings if f.note == _ABSENT_NOTE]
     else:
         findings += content_findings(answer, records, history + "\n" + query)
     return (
         findings
-        + action_findings(answer, records)
+        + action_findings(answer, records, may_act)
         + request_findings(answer, query, records)
     )
 

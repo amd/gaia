@@ -1,10 +1,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PermissionModeChip } from '../PermissionModeChip';
 import { useChatStore } from '../../stores/chatStore';
+import { useNotificationStore } from '../../stores/notificationStore';
+import { readsAs } from '../../test/readsAs';
 import * as api from '../../services/api';
 
 vi.mock('../../services/api');
@@ -14,6 +16,7 @@ const mockedApi = vi.mocked(api);
 beforeEach(() => {
     vi.clearAllMocks();
     useChatStore.setState({ draftPermissionMode: 'ask' });
+    useNotificationStore.setState({ notifications: [] });
     mockedApi.getPermissions.mockResolvedValue({ session_id: 'chat-1', mode: 'ask', grants: [] });
     mockedApi.setPermissionMode.mockResolvedValue({ session_id: 'chat-1', mode: 'full_access', grants: [] });
 });
@@ -44,6 +47,23 @@ describe('PermissionModeChip on an existing chat', () => {
         await waitFor(() => expect(mockedApi.setPermissionMode).toHaveBeenCalledExactlyOnceWith('chat-1', 'full_access'));
         expect(await screen.findByRole('button', { name: 'Permission mode: full access' })).toBeInTheDocument();
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('says the question already waiting still needs an answer after switching to full access', async () => {
+        useNotificationStore.setState({
+            notifications: [{
+                id: 'n-1', type: 'permission_request', agentId: 'gaia', agentName: 'GAIA', title: 'Allow?', message: '',
+                timestamp: 0, read: false, dismissed: false, priority: 'high', tool: 'run_shell_command', sessionId: 'chat-1', confirmId: 'c-1',
+            }],
+        });
+        render(<PermissionModeChip sessionId="chat-1" />);
+        await waitFor(() => expect(mockedApi.getPermissions).toHaveBeenCalled());
+        const menu = openMenu();
+        fireEvent.click(within(menu).getByRole('button', { name: /Full access/ }));
+        fireEvent.click(within(menu).getByRole('button', { name: 'Turn it on' }));
+
+        expect(await within(menu).findByRole('status')).toHaveTextContent('still needs your answer');
+        expect(screen.getByRole('dialog', { name: 'Permission mode' })).toBeInTheDocument();
     });
 
     it('turns full access off without a confirmation', async () => {
@@ -92,5 +112,15 @@ describe('PermissionModeChip before the chat exists', () => {
         expect(mockedApi.setPermissionMode).not.toHaveBeenCalled();
         expect(mockedApi.getPermissions).not.toHaveBeenCalled();
         expect(screen.getByRole('button', { name: 'Permission mode: full access' })).toBeInTheDocument();
+    });
+});
+
+describe('PermissionModeChip in Arabic', () => {
+    afterEach(() => act(() => useChatStore.getState().setLocale('en')));
+
+    it('labels the ask mode with a verb, not "the question"', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        render(<PermissionModeChip sessionId={null} />);
+        expect(screen.getByText(readsAs('اسأل (Ask)'))).toBeInTheDocument();
     });
 });

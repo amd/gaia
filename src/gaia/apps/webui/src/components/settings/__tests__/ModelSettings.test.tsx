@@ -3,7 +3,7 @@
 
 import { StrictMode } from 'react';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelSettings } from '../ModelSettings';
 import { useModelStore } from '../../../stores/modelStore';
 import { useChatStore } from '../../../stores/chatStore';
@@ -209,6 +209,30 @@ describe('ModelSettings provider keys', () => {
         expect(within(card).getByText(/asking GAIA for keychain access/)).toBeInTheDocument();
         expect(within(card).queryByText('No key yet.')).not.toBeInTheDocument();
         expect(await within(card).findByText('Not connected', {}, { timeout: 4000 })).toBeInTheDocument();
+    });
+
+    it('says the key store is locked and asks the OS again only on Try again', async () => {
+        const locked = {
+            providers: [LOCAL, fireworks({
+                key_state: 'store_locked' as const,
+                key_message: 'The OS credential store is locked: its unlock prompt was closed.',
+            })],
+            active: LOCAL_ACTIVE,
+            lemonade_error: null,
+        };
+        mockedApi.listProviders.mockResolvedValue(locked);
+        mockedApi.retryKeyStore.mockResolvedValue({ retrying: true });
+        const card = await openFireworks();
+        expect(within(card).getByText(/key store is locked/)).toBeInTheDocument();
+        expect(within(card).queryByText('No key yet.')).not.toBeInTheDocument();
+        const reads = mockedApi.listProviders.mock.calls.length;
+        // A locked store is not polled: polling would reopen the prompt the user closed.
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        expect(mockedApi.listProviders.mock.calls.length).toBe(reads);
+
+        fireEvent.click(within(card).getByRole('button', { name: 'Try again' }));
+        await waitFor(() => expect(mockedApi.retryKeyStore).toHaveBeenCalledTimes(1));
+        await waitFor(() => expect(mockedApi.listProviders.mock.calls.length).toBe(reads + 1));
     });
 
     it('connects with the typed key and clears the field', async () => {
@@ -468,5 +492,28 @@ describe('ModelSettings: an unreachable AMD gateway (#5604)', () => {
         });
         fireEvent.click(within(card).getByRole('button', { name: 'Check again' }));
         expect(await within(card).findByLabelText('AMD LLM Gateway API key')).toBeInTheDocument();
+    });
+});
+
+describe('ModelSettings in Arabic', () => {
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it('names Local in Arabic and says in Arabic that chat history leaves the PC', async () => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listProviders.mockResolvedValue({
+            providers: [
+                { ...LOCAL, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' },
+                fireworks({ privacy_notice: 'Chat history is sent to Fireworks AI. Usage may incur charges.' }),
+            ],
+            active: LOCAL_ACTIVE,
+            lemonade_error: null,
+        });
+        render(<ModelSettings />);
+        expect(await screen.findByRole('radio', { name: 'محلي' })).toBeInTheDocument();
+        expect(screen.queryByRole('radio', { name: 'Local' })).not.toBeInTheDocument();
+
+        fireEvent.click(screen.getByRole('radio', { name: /Fireworks AI/ }));
+        const card = await screen.findByRole('region', { name: 'Fireworks AI' });
+        expect(card).toHaveTextContent('يُرسَل سجل المحادثة إلى Fireworks AI. قد يترتب على الاستخدام رسوم.');
     });
 });
