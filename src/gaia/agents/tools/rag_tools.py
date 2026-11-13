@@ -784,7 +784,7 @@ def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     if has_pages:
         instruction += (
             "Format: 'According to <absolute_path> (page X):'\n"
-            "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
+            "Example in English: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
             "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf (pages 2, 5):'\n"
             "Write these words in the language of your answer (Arabic: "
             "'وفق <absolute_path> (الصفحة X):'); only the path and page "
@@ -798,7 +798,7 @@ def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     else:
         instruction += (
             "Format: 'According to <absolute_path>:'\n"
-            "Example: 'According to C:\\Users\\john\\docs\\notes.md:'\n"
+            "Example in English: 'According to C:\\Users\\john\\docs\\notes.md:'\n"
             "Write these words in the language of your answer (Arabic: "
             "'وفق <absolute_path>:'); only the path stays as given.\n"
             "These chunks have no page numbers, so cite none and don't mention pages.\n\n"
@@ -827,7 +827,7 @@ def _file_instruction(file_name: str, num_chunks: int, has_pages: bool) -> str:
         f"language of your answer: 'According to {file_name}, page X:' in English, "
         f"'وفق {file_name}، الصفحة X:' in Arabic, where X is the page number from "
         "the chunk's 'page' field.\n\n"
-        f"Example: If chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
+        f"Example in English: if chunk has 'page': 2, say 'According to {file_name}, page 2:'\n"
         f"If info from multiple pages, say 'According to {file_name}, pages 2 and 5:'"
     )
 

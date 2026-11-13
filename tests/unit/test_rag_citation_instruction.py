@@ -29,7 +29,7 @@ def test_paged_file_instruction():
         "Your answer MUST start by citing report.pdf and the page, worded in the "
         "language of your answer: 'According to report.pdf, page X:' in English, "
         "'وفق report.pdf، الصفحة X:' in Arabic, where X is the page number from "
-        "the chunk's 'page' field.\n\nExample: If chunk has "
+        "the chunk's 'page' field.\n\nExample in English: if chunk has "
         "'page': 2, say 'According to report.pdf, page 2:'\nIf info from multiple "
         "pages, say 'According to report.pdf, pages 2 and 5:'"
     )
@@ -43,7 +43,7 @@ def test_paged_documents_instruction():
         "from the 'source_file' field of each chunk. This allows the user to click "
         "and open the file directly.\n\n"
         "Format: 'According to <absolute_path> (page X):'\n"
-        "Example: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
+        "Example in English: 'According to C:\\Users\\john\\docs\\report.pdf (page 2):'\n"
         "If multiple pages: 'According to C:\\Users\\john\\docs\\report.pdf "
         "(pages 2, 5):'\n"
         "Write these words in the language of your answer (Arabic: "
