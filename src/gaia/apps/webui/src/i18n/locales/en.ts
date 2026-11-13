@@ -348,6 +348,8 @@ export const enMessages = {
     'connectCard.reconnect': 'Reconnect {name}',
     'connectCard.connected': '{name} is connected',
     'connectCard.settings': 'Open Connectors in Settings',
+    'connectCard.needsSetup': '{name} needs a one-time setup before GAIA can connect to it. The steps are in Settings.',
+    'connectCard.setUp': 'Set up {name}',
     'connectCard.cancelled': 'Sign-in was cancelled. Press Connect to try again.',
     'connectCard.failed': 'Sign-in did not finish. Press Connect to try again.',
     'msg.continue': 'Continue',

@@ -348,6 +348,8 @@ const messages: Messages = {
     'connectCard.reconnect': 'إعادة ربط {name}',
     'connectCard.connected': 'تم ربط {name}',
     'connectCard.settings': 'فتح «الموصلات» في الإعدادات',
+    'connectCard.needsSetup': 'يحتاج {name} إلى إعداد لمرة واحدة قبل أن يتمكن GAIA من الاتصال به. الخطوات في الإعدادات.',
+    'connectCard.setUp': 'إعداد {name}',
     'connectCard.cancelled': 'أُلغي تسجيل الدخول. اضغط «ربط» للمحاولة مرة أخرى.',
     'connectCard.failed': 'لم يكتمل تسجيل الدخول. اضغط «ربط» للمحاولة مرة أخرى.',
     'msg.continue': 'متابعة',
