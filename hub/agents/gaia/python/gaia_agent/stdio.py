@@ -987,7 +987,20 @@ def switch_model(
 
     *on_status* receives a plain-language line while the switch waits for
     GAIA's model server to come back after a restart.
+
+    A session started on ``hybrid`` (see :mod:`gaia.llm.hybrid`) stops routing
+    here: the user picked *target* by name.
     """
+    display = switch_concrete_model(agent, target, on_status)
+    if getattr(agent, "hybrid_router", None) is not None:
+        agent.hybrid_router = None
+    return display
+
+
+def switch_concrete_model(
+    agent: Any, target: str, on_status: Optional[Callable[[str], None]] = None
+) -> str:
+    """:func:`switch_model` to a model by name, leaving hybrid routing as it is."""
     from gaia.llm.lemonade_client import cloud_model_provider
     from gaia.llm.local_only import SETTINGS_HINT, cloud_blocked
 

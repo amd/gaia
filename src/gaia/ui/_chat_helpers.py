@@ -721,6 +721,9 @@ def _title_model_for(session_model: str) -> Optional[str]:
     None when the stand-in for a local guard model would be a cloud model: a
     local chat's content never leaves the PC just to name it.
     """
+    from gaia.llm.hybrid import start_model
+
+    session_model = start_model(session_model)
     if not _is_guard_model(session_model):
         return session_model
     from gaia.llm.lemonade_client import resolve_default_chat_model
@@ -3580,6 +3583,9 @@ _DEVICE_NAMES = (("npu", "NPU"), ("gpu", "GPU"), ("cpu", "CPU"))
 
 def _turn_location(model_id: str) -> InferenceLocation:
     """Where a turn with *model_id* was answered; needs no Lemonade."""
+    from gaia.llm.hybrid import start_model
+
+    model_id = start_model(model_id)
     provider_kwargs = _eval_provider_kwargs()
     if provider_kwargs.get("use_claude"):
         return resolve_inference_location(

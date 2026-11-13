@@ -130,6 +130,14 @@ def unsafe_gaia_home_reason(resolved: Path, user_home: Path) -> Optional[str]:
     return None
 
 
+#: Config keys naming a model for the ``hybrid`` router (see gaia.llm.hybrid).
+HYBRID_MODEL_KEYS = (
+    "hybrid_cheap_model",
+    "hybrid_strong_model",
+    "hybrid_classifier_model",
+)
+
+
 @dataclass
 class GaiaConfig:
     """Persistent GAIA configuration.
@@ -211,6 +219,15 @@ class GaiaConfig:
             form, and move to every tool at most once, so the first reply reads
             less and the prompt cache survives. Applies to new sessions.
             ``GAIA_DYNAMIC_TOOLS`` overrides it.
+        hybrid_cheap_model: Model the ``hybrid`` model id runs a turn on when
+            the classifier judges it routine. ``None`` uses
+            ``amd.DeepSeek-V4.1-Flash``. See :mod:`gaia.llm.hybrid`.
+        hybrid_strong_model: Model ``hybrid`` runs every other turn on.
+            ``None`` uses ``amd.Claude-Opus-5-5``.
+        hybrid_classifier_model: Model that labels each turn for ``hybrid``.
+            ``None`` uses the cheap model.
+        hybrid_classifier_timeout: Seconds ``hybrid`` waits for the label
+            (1-120) before running the turn on the strong model.
     """
 
     profile: str = "chat"
@@ -236,6 +253,10 @@ class GaiaConfig:
     read_aloud_speed: int = 100
     read_aloud_auto: bool = False
     dynamic_tools: bool = True
+    hybrid_cheap_model: Optional[str] = None
+    hybrid_strong_model: Optional[str] = None
+    hybrid_classifier_model: Optional[str] = None
+    hybrid_classifier_timeout: int = 15
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -286,6 +307,12 @@ class GaiaConfig:
             return check_read_aloud_voice(value)
         if key == "read_aloud_speed":
             return check_read_aloud_speed(cls._whole_number(key, value))
+        if key in HYBRID_MODEL_KEYS:
+            return cls._check_hybrid_model(key, value, "gaia config")
+        if key == "hybrid_classifier_timeout":
+            return cls._check_hybrid_timeout(
+                cls._whole_number(key, value), "gaia config"
+            )
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -411,6 +438,33 @@ class GaiaConfig:
         except ProjectContextError as e:
             raise GaiaConfigError(str(e)) from e
         return None if word == AUTO else word
+
+    @staticmethod
+    def _check_hybrid_model(key: str, value: Any, where: str) -> Optional[str]:
+        """A hybrid model id; empty means the default (stored as None)."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise GaiaConfigError(
+                f"{where}: '{key}' must be a model id, but it is {value!r}."
+            )
+        value = value.strip()
+        if value.lower() == "hybrid":
+            raise GaiaConfigError(
+                f"{where}: '{key}' can't be 'hybrid', which would route to itself. "
+                f'Set it to a concrete model id, or "" for the default.'
+            )
+        return value or None
+
+    @staticmethod
+    def _check_hybrid_timeout(value: int, where: str) -> int:
+        if not 1 <= value <= 120:
+            raise GaiaConfigError(
+                f"{where}: 'hybrid_classifier_timeout' must be 1-120 seconds, but "
+                f"it is {value}. Run `gaia config set hybrid_classifier_timeout 15` "
+                "for the default."
+            )
+        return value
 
     @staticmethod
     def _check_context_sizes(value: Any, config_file: Path) -> None:
@@ -559,6 +613,14 @@ class GaiaConfig:
         if "cloud_reasoning_effort" in kwargs:
             kwargs["cloud_reasoning_effort"] = cls._check_cloud_reasoning_effort(
                 kwargs["cloud_reasoning_effort"], f"GAIA config at {config_file}"
+            )
+        where = f"GAIA config at {config_file}"
+        for key in HYBRID_MODEL_KEYS:
+            if key in kwargs:
+                kwargs[key] = cls._check_hybrid_model(key, kwargs[key], where)
+        if "hybrid_classifier_timeout" in kwargs:
+            kwargs["hybrid_classifier_timeout"] = cls._check_hybrid_timeout(
+                kwargs["hybrid_classifier_timeout"], where
             )
         if "project_context" in kwargs:
             kwargs["project_context"] = cls._check_project_context(

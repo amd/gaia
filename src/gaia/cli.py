@@ -1239,7 +1239,8 @@ def build_parser():
         "--model",
         dest="print_model",
         default=None,
-        help="Model id for -p (default: config default_model, else the agent's)",
+        help="Model id for -p, or 'hybrid' to pick a cheap or strong model for "
+        "the turn (default: config default_model, else the agent's)",
     )
     parser.add_argument(
         "--output-format",
@@ -4062,7 +4063,11 @@ afterwards (or `swebench <run_dir>` does, later).
     gateway_use_parser = gateway_subparsers.add_parser(
         "use", help="Make a gateway model the default for gaia chat/llm/prompt"
     )
-    gateway_use_parser.add_argument("model", help="Model id to make active")
+    gateway_use_parser.add_argument(
+        "model",
+        help="Model id to make active, or 'hybrid' to pick a cheap or strong "
+        "model per turn",
+    )
     gateway_test_parser = gateway_subparsers.add_parser(
         "test", help="Send a prompt through the gateway end to end"
     )
@@ -7742,6 +7747,42 @@ def _print_gateway_models(models, state):
         print(f"\n⚠️  {describe_unavailable(state.active_model, active_failure)}")
 
 
+def _use_hybrid(manager) -> None:
+    """``gaia gateway use hybrid``: route each turn between two gateway models."""
+    from gaia.config import GaiaConfig
+    from gaia.llm.hybrid import HYBRID_MODEL_ID, HybridConfigError, HybridSettings
+
+    cfg = GaiaConfig.load()
+    try:
+        settings = HybridSettings.load(cfg)
+    except HybridConfigError as e:
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+    discovered = {m.id for m in manager.list_models()}
+    missing = [
+        m
+        for m in dict.fromkeys(
+            (settings.cheap_model, settings.strong_model, settings.classifier_model)
+        )
+        if discovered and m not in discovered
+    ]
+    if missing:
+        print(
+            f"❌ hybrid needs {', '.join(missing)}, which the gateway doesn't list.\n"
+            "   Run `gaia gateway models` to see what is available, then set "
+            "hybrid_cheap_model / hybrid_strong_model with `gaia config set`.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    cfg.set("default_model", HYBRID_MODEL_ID)
+    cfg.save()
+    print(
+        f"✅ hybrid is now the default model: each turn runs on "
+        f"{settings.cheap_model} or {settings.strong_model}, picked by "
+        f"{settings.classifier_model}."
+    )
+
+
 def _warn_if_default_model_unavailable(model_id: str) -> None:
     """One stderr line when the saved default last failed with a 404.
 
@@ -7907,6 +7948,7 @@ def handle_gateway_command(args):
         recall_token,
         remember_token,
     )
+    from gaia.llm.hybrid import is_hybrid_model
     from gaia.llm.lemonade_client import CloudModelUnavailableError
 
     action = getattr(args, "gateway_action", None)
@@ -8153,6 +8195,10 @@ def handle_gateway_command(args):
             updated = manager.disable(args.model)
             print(f"✅ Disabled {args.model}")
             print(f"   Active model is now: {updated.active_model or '(none)'}")
+            return
+
+        if action == "use" and is_hybrid_model(args.model):
+            _use_hybrid(manager)
             return
 
         if action == "use":

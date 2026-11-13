@@ -842,7 +842,8 @@ Keys are entered in a masked field and sent directly to local Lemonade's runtime
 auth API, never as agent queries. `/model` lists supported discovered cloud and
 downloaded local models, marking the configured default with `(default)`;
 `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
-when available. Cloud chat sends conversation history to the selected provider;
+when available. A session started on `hybrid` runs each turn on a cheap or
+strong model picked for that turn, until `/model` names one. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.
 

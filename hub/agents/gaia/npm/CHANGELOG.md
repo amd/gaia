@@ -18,6 +18,13 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   so its cost read "Not reported". It now names the tools it ran and its last
   findings, suggests asking for the work in smaller parts, and carries the
   turn's token counts.
+- **`hybrid` runs each turn on a cheap or a strong model.** A session on the
+  `hybrid` model id (`gaia gateway use hybrid` or `gaia -p --model hybrid`) asks a cheap classifier about each request and runs
+  the whole turn on `amd.DeepSeek-V4.1-Flash` when it is routine and low-stakes,
+  else on `amd.Claude-Opus-5-5`. A failed classification goes strong, a session
+  that went strong stays strong, and an unavailable model fails the turn instead
+  of running the other one. `gaia -p` JSON records the decision as `route`.
+
 - **A run stopped for an approval nobody can give reads as not done.** Its
   `final` now carries `failed: true` and the `usage` spent before the stop, so
   `gaia -p` reports `is_error: true` with real step and token counts instead of

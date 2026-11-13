@@ -500,10 +500,15 @@ def resolve_default_chat_model() -> str:
     ``~/.gaia/config.json``'s ``default_model`` — which ``gaia init`` sets from
     the hardware — else :data:`DEFAULT_MODEL_NAME`. Every agent resolves the
     same way, so switching agents never evicts the resident model.
+
+    A ``hybrid`` default resolves to its cheap model here: only the flagship
+    agent routes per turn, and it reads ``default_model`` itself.
     """
     from gaia.config import GaiaConfig
+    from gaia.llm.hybrid import start_model
 
-    return GaiaConfig.load().resolve_model(None, DEFAULT_MODEL_NAME)
+    config = GaiaConfig.load()
+    return start_model(config.resolve_model(None, DEFAULT_MODEL_NAME), config)
 
 
 def resolve_chat_model() -> str:
@@ -511,8 +516,10 @@ def resolve_chat_model() -> str:
     Agent UI or TUI, else :func:`resolve_default_chat_model`. May be a cloud model.
     """
     from gaia.config import GaiaConfig
+    from gaia.llm.hybrid import start_model
 
-    return GaiaConfig.load().last_model or resolve_default_chat_model()
+    config = GaiaConfig.load()
+    return start_model(config.last_model, config) or resolve_default_chat_model()
 
 
 #: Default chat models that also read images, so indexing a scan loads no second model.

@@ -159,6 +159,7 @@ def run(
         )
     try:
         text = read_prompt(prompt)
+        model, route = _route(text, model, base_url)
         turn = dict(
             model=model,
             verbose=verbose,
@@ -172,6 +173,8 @@ def run(
             if attempts > 1
             else _run_turn(text, **turn)
         )
+        if route is not None:
+            record["route"] = route.as_record()
     except KeyboardInterrupt:
         return _emit_failure(output_format, "interrupted", code=130)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report, never a traceback
@@ -233,6 +236,29 @@ def _run_with_attempts(text: str, attempts: int, **turn: Any) -> Dict[str, Any]:
     for key in _SUMMED:
         record[key] += sum(int(r.get(key) or 0) for r in records)
     return record
+
+
+def _route(text: str, model: Optional[str], base_url: Optional[str]):
+    """``(model to run, route)``: the hybrid router's pick, else *model* and None.
+
+    Decided once, before any attempt starts, so every attempt and the final
+    turn run on the same model.
+    """
+    from gaia.llm.hybrid import HybridRouter, is_hybrid_model
+
+    model = _resolve_model(model)
+    if not is_hybrid_model(model):
+        return model, None
+    router = HybridRouter()
+    detected = _start_server(router.settings.classifier_model, base_url)
+    route = router.decide(text, base_url=base_url or detected)
+    label = (
+        f"{route.kind}, difficulty {route.difficulty}, {route.stakes} stakes"
+        if route.classified
+        else route.reason
+    )
+    print(f"gaia -p: hybrid runs this turn on {route.model} ({label})", file=sys.stderr)
+    return route.model, route
 
 
 def _resolve_model(model: Optional[str]) -> Optional[str]:

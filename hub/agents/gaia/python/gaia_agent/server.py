@@ -2518,6 +2518,9 @@ class _StartupWarmUp:
             from gaia.llm.lemonade_client import resolve_default_chat_model
 
             model = resolve_default_chat_model()
+        from gaia.llm.hybrid import start_model
+
+        model = start_model(model)
         with self._lock:
             self._turn_models.append(model)
             self._stop_for_another_model()
