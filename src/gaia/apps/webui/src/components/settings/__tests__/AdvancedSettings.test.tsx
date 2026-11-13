@@ -102,6 +102,26 @@ describe('AdvancedSettings', () => {
         expect(screen.queryByText('Context Size')).not.toBeInTheDocument();
     });
 
+    it('offers no Load for an expected model Lemonade does not have', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({
+            default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
+            default_model_name: 'no-such-model-xyz-123', model_labels: null, model_downloaded: false,
+        }));
+        render(<AdvancedSettings />);
+        await screen.findByText('Qwen3-4B-GGUF');
+
+        expect(screen.queryByText('Wrong model loaded.')).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
+    });
+
+    it('marks Custom model ID as a place Settings can jump to', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({}));
+        const { container } = render(<AdvancedSettings />);
+        await screen.findByText('amd.o1-mini');
+
+        expect(container.querySelector('[data-settings-target="custom-model"]')).not.toBeNull();
+    });
+
     it('shows why Force Re-download could not start', async () => {
         modelActions.downloadError = "Cannot download 'user.x': add it from its Hugging Face link.";
         mockedApi.getSystemStatus.mockResolvedValue(status({

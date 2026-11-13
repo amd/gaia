@@ -158,7 +158,8 @@ export function AdvancedSettings() {
 
     // A cloud model runs off this PC: no device, download, load or context to manage.
     const cloudModel   = !!status?.default_model_is_cloud;
-    const wrongModel   = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false);
+    // A model Lemonade doesn't have (e.g. a mistyped custom ID) can't be loaded, so offer no Load.
+    const wrongModel   = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false && status.model_downloaded !== false);
     const smallContext = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
     const notDownloaded = !cloudModel && !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
     const needsLoad    = (wrongModel || smallContext) && modelName !== null;
@@ -314,7 +315,7 @@ export function AdvancedSettings() {
                 <LemonadeServerSection />
             </SettingsDisclosure>
 
-            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel ? isolate(savedCustomModel, 'ltr') : t('settings.advanced.customHint')}>
+            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel ? isolate(savedCustomModel, 'ltr') : t('settings.advanced.customHint')} targetId="custom-model">
                 <p className="model-override-desc">{t('settings.advanced.customDesc')}</p>
                 <div className="model-input-row">
                     <input
