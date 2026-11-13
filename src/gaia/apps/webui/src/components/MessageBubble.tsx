@@ -626,12 +626,14 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     }, []);
 
     const handleCopy = useCallback(() => {
+        // The cut-off notice is drawn below the answer, so it is not part of it.
+        const text = cutOff ? cutOff.body : message.content;
         if (navigator.clipboard?.writeText) {
-            navigator.clipboard.writeText(message.content).catch(() => {});
+            navigator.clipboard.writeText(text).catch(() => {});
         } else {
             // Fallback for non-HTTPS contexts (common for localhost)
             const textarea = document.createElement('textarea');
-            textarea.value = message.content;
+            textarea.value = text;
             textarea.style.position = 'fixed';
             textarea.style.opacity = '0';
             document.body.appendChild(textarea);
@@ -642,7 +644,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
         setCopied(true);
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
         copyTimerRef.current = setTimeout(() => setCopied(false), 2000);
-    }, [message.content]);
+    }, [message.content, cutOff]);
 
     const handleDelete = useCallback(() => {
         if (!confirmDelete) {

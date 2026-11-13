@@ -96,6 +96,14 @@ describe('the server\'s cut-off notice (#6588)', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
         expect(onTryAgain).toHaveBeenCalledTimes(1);
     });
+
+    it('is left out when the answer is copied (#8082)', () => {
+        const writeText = vi.fn().mockResolvedValue(undefined);
+        Object.assign(navigator, { clipboard: { writeText } });
+        render(<MessageBubble message={{ ...base, content: `Partial.\n\n${TOOLS}\n\n${INTERRUPTED}` }} />);
+        fireEvent.click(screen.getByRole('button', { name: 'Copy message' }));
+        expect(writeText).toHaveBeenCalledWith('Partial.');
+    });
 });
 
 describe('actions on a turn stopped before any text', () => {
