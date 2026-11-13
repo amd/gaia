@@ -3,7 +3,7 @@
 """Python code that names a credential file is refused before it runs.
 
 ``run_python`` and ``execute_python_file`` run arbitrary code, so the paths
-that code spells out are held to ``security.is_read_blocked``. The refusal
+that code spells out are held to ``PathValidator.is_read_blocked``. The refusal
 comes from ``Agent._policy_refusal``, before any prompt, so a blanket
 pre-approval (``auto_approve_gated_tools``) does not lift it.
 """

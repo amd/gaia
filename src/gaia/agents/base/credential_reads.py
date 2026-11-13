@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Refuse Python code that names a credential file before it runs.
 
-``security.is_read_blocked`` keeps ``.env``, private keys and the rest out of
+``PathValidator.is_read_blocked`` keeps ``.env``, private keys and the rest out of
 the read tools. ``run_python`` and ``execute_python_file`` run arbitrary code,
 so the paths that code spells out are held to the same rule. A path the code
 only computes when it runs is beyond this check.

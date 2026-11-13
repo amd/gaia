@@ -1864,7 +1864,7 @@ def _protected_folder(resolved_path: str) -> Optional[str]:
 
 
 def _credential_file_name(name: str) -> bool:
-    """Whether a file called *name* is one ``security.is_read_blocked`` refuses."""
+    """Whether a file called *name* is one ``PathValidator.is_read_blocked`` refuses."""
     from gaia import security
 
     return security.is_credential_file_name(name)
@@ -5501,7 +5501,7 @@ class ShellToolsMixin:
 
         A credential folder (``security.SECRET_DIRECTORIES``) is refused even
         inside the allowed paths, and so is reading a credential file
-        (``security.is_read_blocked``): a reader, copy source, upload or ``<``
+        (``PathValidator.is_read_blocked``): a reader, copy source, upload or ``<``
         given it or a link to it, or a wildcard over the folder it sits in.
         A recursive search of that folder runs when each line it prints comes
         back with its file name, which is how lines from the credential file

@@ -396,58 +396,11 @@ def _real_path(path: Any) -> str:
     return os.path.realpath(os.path.expanduser(os.fspath(path)))
 
 
-def is_read_blocked(path: Any) -> Tuple[bool, str]:
-    """Whether *path* holds credentials no tool may read into the conversation.
-
-    The same answer as :meth:`PathValidator.is_read_blocked`, for callers that
-    have no validator: the shell's argument check and the Python preflight.
-
-    Args:
-        path: File path to check. Symlinks and ``~`` are resolved first.
-
-    Returns:
-        Tuple of (is_blocked, reason). If blocked, reason explains why.
-    """
-    try:
-        real_path = Path(_real_path(path))
-        file_name = real_path.name.lower()
-        file_ext = real_path.suffix.lower()
-
-        if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
-            return (
-                True,
-                f"Read blocked: '{real_path.name}' holds credentials, keys or "
-                f"secrets. Open it yourself if you need its contents — the "
-                f"agent is not allowed to read it into the conversation.",
-            )
-
-        if file_ext in SENSITIVE_EXTENSIONS:
-            return (
-                True,
-                f"Read blocked: files with extension '{file_ext}' are "
-                f"certificates or private keys. The agent is not allowed to "
-                f"read them into the conversation.",
-            )
-
-        for secret_dir in SECRET_DIRECTORIES:
-            if _path_is_within(real_path, Path(secret_dir)):
-                return (
-                    True,
-                    f"Read blocked: '{real_path}' is inside '{secret_dir}', "
-                    f"which holds credentials. The agent is not allowed to "
-                    f"read from it.",
-                )
-
-        return (False, "")
-
-    except Exception as e:
-        logger.error("Could not check a path for credentials: %s", type(e).__name__)
-        # Fail-closed: refuse if we can't determine safety.
-        return (True, f"Read blocked: unable to validate path safety: {e}")
-
-
 def is_credential_file_name(name: str) -> bool:
-    """Whether a file called *name* is one :func:`is_read_blocked` refuses by name."""
+    """Whether a file called *name* is one the read tools refuse by name.
+
+    The same names and extensions as :meth:`PathValidator.is_read_blocked`.
+    """
     lowered = name.lower()
     return (
         lowered in {n.lower() for n in SENSITIVE_FILE_NAMES}
@@ -1500,7 +1453,42 @@ class PathValidator:
         Returns:
             Tuple of (is_blocked, reason). If blocked, reason explains why.
         """
-        return is_read_blocked(path)
+        try:
+            real_path = Path(_real_path(path))
+            file_name = real_path.name.lower()
+            file_ext = real_path.suffix.lower()
+
+            if file_name in {s.lower() for s in SENSITIVE_FILE_NAMES}:
+                return (
+                    True,
+                    f"Read blocked: '{real_path.name}' holds credentials, keys or "
+                    f"secrets. Open it yourself if you need its contents — the "
+                    f"agent is not allowed to read it into the conversation.",
+                )
+
+            if file_ext in SENSITIVE_EXTENSIONS:
+                return (
+                    True,
+                    f"Read blocked: files with extension '{file_ext}' are "
+                    f"certificates or private keys. The agent is not allowed to "
+                    f"read them into the conversation.",
+                )
+
+            for secret_dir in SECRET_DIRECTORIES:
+                if _path_is_within(real_path, Path(secret_dir)):
+                    return (
+                        True,
+                        f"Read blocked: '{real_path}' is inside '{secret_dir}', "
+                        f"which holds credentials. The agent is not allowed to "
+                        f"read from it.",
+                    )
+
+            return (False, "")
+
+        except Exception as e:
+            logger.error(f"Error checking read block for {path}: {e}")
+            # Fail-closed: refuse if we can't determine safety.
+            return (True, f"Read blocked: unable to validate path safety: {e}")
 
     def _missing_instead_of_prompt(self, path: str) -> str:
         """A "not found" refusal for an out-of-scope *path* that is not there.

@@ -3,7 +3,7 @@
 
 """A shell argument that reads a credential file is refused outright.
 
-``security.is_read_blocked`` keeps ``.env``, ``id_rsa``, ``*.pem`` and the
+``PathValidator.is_read_blocked`` keeps ``.env``, ``id_rsa``, ``*.pem`` and the
 rest out of the read tools; the shell must not be the way around it. No tier
 is attached, so neither an approval nor full access lifts the refusal.
 """
