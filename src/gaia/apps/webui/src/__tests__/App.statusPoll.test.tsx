@@ -142,7 +142,7 @@ describe('system status poll', () => {
         mocked.getSystemStatus.mockResolvedValue(BUSY as never);
         render(<App />);
         await advance(120_000);
-        expect(document.body.textContent).toMatch(/not answering/i);
+        expect(document.body.textContent).toMatch(/isn't answering/i);
         expect(document.body.textContent).not.toMatch(/isn't running/i);
     });
 

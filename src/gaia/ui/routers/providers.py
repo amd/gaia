@@ -29,7 +29,13 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-from gaia.llm.local_only import cloud_blocked, local_only_key_message
+from gaia.llm.local_only import (
+    blocked_reason,
+    cloud_blocked,
+    local_only_key_message,
+    recipes_confirm_local,
+    recipes_in_catalog,
+)
 from gaia.llm.surface_hints import (
     AGENT_UI_LOCAL_ONLY_HINT,
     APP_OTHER_SERVER_START_HINT,
@@ -477,6 +483,7 @@ def _suggested_local_models() -> set:
 def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str, Any]]:
     """Chat models for *provider*; *offer_optional* adds the optional ones that fit."""
     from gaia.llm.lemonade_client import (
+        NPU_MODEL_LADDER,
         _model_ids_match,
         catalog_context_window,
         find_model_requirement,
@@ -497,6 +504,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
             offered += _optional_models_that_fit()
     added = _added_models() if provider == LOCAL else []
     offered += [e["id"] for e in added]
+    npu_kept = [*NPU_MODEL_LADDER, *offered, *_last_local_model()]
     out: List[Dict[str, Any]] = []
     for m in body.get("data") or []:
         model_id = str(m.get("id") or "")
@@ -507,6 +515,11 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
             if is_cloud or not (
                 m.get("downloaded")
                 or any(_model_ids_match(model_id, o) for o in offered)
+            ):
+                continue
+            # Only NPU builds with evals on the NPU, or one the user already chose.
+            if runs_on_npu(model_id) and not any(
+                _model_ids_match(model_id, k) for k in npu_kept
             ):
                 continue
         elif not model_id.startswith(f"{provider}."):
@@ -557,6 +570,19 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _last_local_model() -> List[str]:
+    """The model the user last switched to, as config.json remembers it."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        last = (GaiaConfig.load().last_model or "").strip()
+    except GaiaConfigError as e:
+        # The active view reports the broken config; the list still shows the rest.
+        logger.warning("Listing models without the one last used: %s", e)
+        return []
+    return [last] if last else []
 
 
 def _added_models() -> List[Dict[str, Any]]:
@@ -1548,6 +1574,7 @@ def select_model(
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)
+    db.set_setting(PICKED_MODEL_SETTING, model_id)
     if provider_of(model_id) == LOCAL:
         from gaia.ui import warmup
 
@@ -1557,6 +1584,44 @@ def select_model(
     return _active_view(db)
 
 
+#: The model picked under Model, which a cleared Custom model ID goes back to.
+PICKED_MODEL_SETTING = "picked_model"
+
+
+def custom_model_override(db: ChatDatabase) -> Optional[str]:
+    """The Custom model ID in force; None while the picked model runs."""
+    custom = (db.get_setting("custom_model") or "").strip()
+    picked = (db.get_setting(PICKED_MODEL_SETTING) or "").strip()
+    return custom if custom and custom != picked else None
+
+
+def model_after_clearing_custom(db: ChatDatabase) -> Optional[str]:
+    """The model a cleared Custom model ID leaves running; None is the default.
+
+    The model picked under Model. With no pick on record, a cloud user keeps
+    their model unless the local default is on disk.
+    """
+    from gaia.config import GaiaConfigError
+
+    from ..database import resolved_default_model
+
+    picked = (db.get_setting(PICKED_MODEL_SETTING) or "").strip()
+    current = (db.get_setting("custom_model") or "").strip()
+    for model in (picked, current):
+        if model:
+            _learn_cloud_models(model)
+    if picked and not (cloud_blocked() and cloud_provider_name(picked)):
+        return picked
+    if not current or cloud_provider_name(current) is None or cloud_blocked():
+        return None
+    try:
+        default = {"remote": False, "model": resolved_default_model()}
+    except GaiaConfigError as e:
+        logger.info("Keeping %s: the default model can't be read: %s", current, e)
+        return current
+    return None if _local_downloaded(default) else current
+
+
 def clear_restore_notice() -> None:
     """A model the user picks now supersedes this run's restore notice."""
     global _restore_result
@@ -1564,16 +1629,34 @@ def clear_restore_notice() -> None:
         _restore_result = {"status": "none", "message": None}
 
 
-def refuse_blocked_cloud_model(model_id: str) -> None:
-    """Refuse *model_id* when it is a cloud model and Local only is on.
+def _known_local_without_catalog(model_id: str) -> bool:
+    """True when *model_id* is local by shape or by declaration.
 
-    Raises 409 for a cloud model, and 503 when only the model server's list
-    could say and it can't be read.
+    A bare id names no namespaced model, and an id GAIA declares is local
+    by declaration. Saving one must work without asking the model server.
+    """
+    from gaia.llm.lemonade_client import find_model_requirement, may_be_cloud_model
+
+    return (
+        not may_be_cloud_model(model_id) or find_model_requirement(model_id) is not None
+    )
+
+
+def refuse_blocked_cloud_model(model_id: str) -> None:
+    """Refuse *model_id* when Local only can't vouch that it runs here.
+
+    Raises 409 for a cloud model or a router collection, and 503 when only
+    the model server's list could say and it can't be read.
     """
     if not cloud_blocked():
         return
     try:
         cloud = _is_cloud_model(model_id)
+        recipes = (
+            None
+            if cloud or _known_local_without_catalog(model_id)
+            else _catalog_recipes(model_id)
+        )
     except ProviderError as e:
         raise HTTPException(
             status_code=503,
@@ -1586,8 +1669,19 @@ def refuse_blocked_cloud_model(model_id: str) -> None:
         raise HTTPException(
             status_code=409,
             detail=(
-                f"Can't switch to {model_label(model_id)}: Local only is on. "
-                f"{AGENT_UI_LOCAL_ONLY_HINT}"
+                f"Can't switch to {model_label(model_id)}: Local only is on, so it "
+                f"was blocked: it is a cloud model. {AGENT_UI_LOCAL_ONLY_HINT}"
+            ),
+        )
+    # A router collection can forward to a cloud member, so the catalog must
+    # confirm every recipe it lists runs on this PC: the same allowlist the
+    # per-turn guard applies, so the two checks can't disagree.
+    if recipes is not None and not recipes_confirm_local(recipes):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Can't switch to {model_id}: Local only is on, so it was blocked: "
+                f"{blocked_reason(recipes)}. {AGENT_UI_LOCAL_ONLY_HINT}"
             ),
         )
 
@@ -1783,6 +1877,17 @@ def _lemonade_catalog() -> List[Dict[str, Any]]:
     return list(body.get("data") or [])
 
 
+def _catalog_recipes(model_id: str) -> List[Optional[str]]:
+    """Recipes Lemonade's catalog lists for *model_id*.
+
+    The same allowlist the per-turn guard applies, so a model the guard
+    would refuse can never be saved as the Custom model ID.
+    """
+    catalog = _lemonade_catalog()
+    entries = {e["id"]: e for e in catalog if isinstance(e, dict) and e.get("id")}
+    return recipes_in_catalog(model_id, entries, lambda: {"data": catalog})
+
+
 @router.post("/api/providers/local/custom/check")
 def check_custom_model(body: CustomModelRequest) -> Dict[str, Any]:
     """Check a pasted link without saving or downloading anything."""
@@ -1847,6 +1952,8 @@ def remove_custom_model(
         raise HTTPException(status_code=500, detail=str(e)) from e
     if _model_ids_match(db.get_setting("custom_model"), result["removed"]):
         db.set_setting("custom_model", None)
+    if _model_ids_match(db.get_setting(PICKED_MODEL_SETTING), result["removed"]):
+        db.set_setting(PICKED_MODEL_SETTING, None)
     return result
 
 

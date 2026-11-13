@@ -72,6 +72,8 @@ function facts(plan: SetupPlan, hardware: PreflightReport | null) {
         sys,
         cpu: devices((k) => k === 'cpu')[0],
         gpus,
+        // Apple Silicon reports no separate GPU device; the chip is the GPU.
+        graphics: gpus.length ? gpus.map(deviceText).join('; ') : hardware?.gpu_name ?? null,
         npus,
         runsOn: gpus[0]?.name ?? hardware?.gpu_name ?? null,
         npu: npus[0] ?? null,
@@ -115,7 +117,7 @@ export function specText(plan: SetupPlan, hardware: PreflightReport | null): str
         ...f.runtimes.map(({ name, b }) => `${name}: ${b.backend}${b.version ? ` ${b.version}` : ''} (${STATE_WORDS[b.state ?? ''] ?? 'not installed'})`),
         `OS: ${f.sys?.os ?? hardware?.os ?? 'unknown'}`,
         `Processor: ${f.cpu?.name ?? f.sys?.processor ?? 'unknown'}${f.cpu?.cores ? ` (${f.cpu.cores} cores, ${f.cpu.threads ?? f.cpu.cores} threads)` : ''}`,
-        `Graphics: ${f.gpus.map(deviceText).join('; ') || hardware?.gpu_name || 'none found'}`,
+        `Graphics: ${f.graphics ?? 'none found'}`,
         `NPU: ${f.npus.map(deviceText).join('; ') || 'none found'}`,
         `Memory: ${f.totalMemory ?? 'unknown'}${plan.capacity_gb != null ? `, ${formatSize(plan.capacity_gb)} for models${plan.memory_source ? ` (${plan.memory_source})` : ''}` : ''}`,
         `Models folder: ${f.modelsPath ?? 'unknown'}${f.freeGb != null ? ` (${formatSize(f.freeGb)} free)` : ''}`,
@@ -304,7 +306,7 @@ export function DetectedSummary({ plan, hardware, onChangeMemory }: { plan: Setu
                             {f.cpu?.cores ? <span className="found-sub">{t('setup.found.cores', { cores: String(f.cpu.cores), threads: String(f.cpu.threads ?? f.cpu.cores) })}</span> : null}
                         </Row>
                         <Row label={t('setup.found.gpu')}>
-                            {f.gpus.length ? <Tech>{f.gpus.map(deviceText).join('; ')}</Tech> : <span className="found-muted">{t('setup.found.none')}</span>}
+                            {f.graphics ? <Tech>{f.graphics}</Tech> : <span className="found-muted">{t('setup.found.none')}</span>}
                         </Row>
                         <Row label={t('setup.found.npu')}>
                             {f.npus.length ? <Tech>{f.npus.map(deviceText).join('; ')}</Tech> : <span className="found-muted">{t('setup.found.none')}</span>}

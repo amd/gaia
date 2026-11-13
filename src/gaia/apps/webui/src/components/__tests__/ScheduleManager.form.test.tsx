@@ -96,7 +96,7 @@ describe('Reusing a schedule name', () => {
         fireEvent.change(screen.getByLabelText('When to run'), { target: { value: 'every day' } });
         fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Morning brief' } });
         fireEvent.change(screen.getByLabelText('Prompt'), { target: { value: 'Hello' } });
-        fireEvent.click(screen.getByRole('button', { name: 'Create Schedule' }));
+        fireEvent.click(screen.getByRole('button', { name: 'Create schedule' }));
 
         const name = screen.getByLabelText('Name');
         expect(await screen.findByText('A schedule with this name already exists. Choose a different name.')).toBeInTheDocument();
