@@ -28,4 +28,10 @@ describe('plainAnswerText', () => {
     it('leaves snake_case and ordered lists alone', () => {
         expect(plainAnswerText('1. set max_ctx_size\n2. restart')).toBe('1. set max_ctx_size\n2. restart');
     });
+
+    it('keeps inline code and arithmetic exactly', () => {
+        expect(plainAnswerText('Call `__init__` then `*args, **kwargs`.')).toBe('Call __init__ then *args, **kwargs.');
+        expect(plainAnswerText('Use `[a](b)` here')).toBe('Use [a](b) here');
+        expect(plainAnswerText('a 5*3 = 15\nand 4*2 = 8')).toBe('a 5*3 = 15\nand 4*2 = 8');
+    });
 });

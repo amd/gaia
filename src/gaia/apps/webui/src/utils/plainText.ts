@@ -6,7 +6,9 @@
 const FENCE = /(^|\n)[ \t]*```[^\n]*\n([\s\S]*?)(?:\n[ \t]*```[ \t]*(?=\n|$)|$)/g;
 
 function proseToPlain(prose: string): string {
-    return prose
+    const code: string[] = [];
+    const plain = prose
+        .replace(/`([^`\n]+)`/g, (_, text: string) => `\u0000${code.push(text) - 1}\u0000`)
         .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
         .replace(/\[([^\]]+)\]\(([^)]*)\)/g, (_, text: string, url: string) => (text === url || !url ? text : `${text} (${url})`))
         .replace(/^[ \t]*([-*_][ \t]*){3,}$/gm, '')
@@ -15,9 +17,9 @@ function proseToPlain(prose: string): string {
         .replace(/^([ \t]*)[-*+][ \t]+/gm, '$1• ')
         .replace(/^[ \t]*\|?[ \t:|-]+\|[ \t:|-]*\n?/gm, '')
         .replace(/^[ \t]*\|(.*?)\|?[ \t]*$/gm, (_, cells: string) => cells.split('|').map((c) => c.trim()).join('\t'))
-        .replace(/`([^`\n]*)`/g, '$1')
-        .replace(/(\*\*|\*|~~)(\S(?:[\s\S]*?\S)?)\1/g, '$2')
-        .replace(/(?<!\w)(__|_)(\S(?:[\s\S]*?\S)?)\1(?!\w)/g, '$2');
+        .replace(/(\*\*|\*|~~)(\S(?:[^\n]*?\S)?)\1/g, '$2')
+        .replace(/(?<!\w)(__|_)(\S(?:[^\n]*?\S)?)\1(?!\w)/g, '$2');
+    return plain.replace(/\u0000(\d+)\u0000/g, (_, i: string) => code[Number(i)]);
 }
 
 /** *markdown* with its formatting marks removed; code blocks and links keep their text. */
