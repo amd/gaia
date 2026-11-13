@@ -305,7 +305,8 @@ async def start_authorization(
         return await _handle_callback(request, flow_id)
 
     app.router.add_get("/callback", callback)
-    runner = web.AppRunner(app)
+    # aiohttp's access log would write the code and state in the query string.
+    runner = web.AppRunner(app, access_log=None)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
     await site.start()
@@ -350,11 +351,12 @@ async def start_authorization(
             )
         except Exception as e:
             # Best-effort — the authorization_url is also returned to
-            # the caller for a copy-paste fallback.
+            # the caller for a copy-paste fallback. Type only: an OSError
+            # carries the URL, and with it the state.
             logger.warning(
                 "flow: webbrowser.open failed (%s); fall back "
                 "to copy-paste of authorization_url",
-                e,
+                type(e).__name__,
             )
             return
         if not opened:
@@ -567,6 +569,11 @@ async def _handle_callback(request: web.Request, flow_id: str) -> web.Response:
     received_state = request.query.get("state")
     error = request.query.get("error")
     code = request.query.get("code")
+    logger.info(
+        "flow: callback flow_id=%s params=%s",
+        flow_id,
+        ",".join(sorted(request.query.keys())) or "none",
+    )
 
     # A8: explicit None guard. ``hmac.compare_digest(None, str)`` raises
     # ``TypeError`` and aiohttp would surface that as an unstructured 500.
@@ -730,7 +737,20 @@ def _resolve_granted_scopes(
 _MAX_PROVIDER_FIELD_LEN = 300
 
 
-def _structured_oauth_error(resp: Any) -> "tuple[str, str]":
+#: Real codes and verifiers are far longer; a short value would garble words.
+_MIN_SCRUB_LEN = 8
+
+
+def _scrub(text: str, secrets: Iterable[str]) -> str:
+    for secret in secrets:
+        if secret and len(secret) >= _MIN_SCRUB_LEN:
+            text = text.replace(secret, "[redacted]")
+    return text
+
+
+def _structured_oauth_error(
+    resp: Any, sent_secrets: Iterable[str] = ()
+) -> "tuple[str, str]":
     """The provider's RFC 6749 ``(error, error_description)``, bounded.
 
     Never falls back to the raw body (#3875): every request these responses
@@ -739,7 +759,8 @@ def _structured_oauth_error(resp: Any) -> "tuple[str, str]":
     bodies, so the body must not reach a log line or a user-visible error.
     Non-string fields are dropped rather than coerced, so a provider that
     nests an object under ``error`` yields no detail instead of a stringified
-    fragment of its body.
+    fragment of its body. ``sent_secrets`` (the code, verifier or device code
+    the request carried) are replaced if a provider echoes them in either field.
     """
     try:
         payload = resp.json()
@@ -749,9 +770,18 @@ def _structured_oauth_error(resp: Any) -> "tuple[str, str]":
         return "", ""
     error = payload.get("error")
     description = payload.get("error_description")
+    secrets = list(sent_secrets)
     return (
-        error[:_MAX_PROVIDER_FIELD_LEN] if isinstance(error, str) else "",
-        description[:_MAX_PROVIDER_FIELD_LEN] if isinstance(description, str) else "",
+        (
+            _scrub(error, secrets)[:_MAX_PROVIDER_FIELD_LEN]
+            if isinstance(error, str)
+            else ""
+        ),
+        (
+            _scrub(description, secrets)[:_MAX_PROVIDER_FIELD_LEN]
+            if isinstance(description, str)
+            else ""
+        ),
     )
 
 
@@ -769,7 +799,9 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         # Structured, bounded fields only (#2590) — the request this answers
         # carried the authorization code and PKCE verifier, so the raw body
         # never reaches the message (#3875).
-        error, description = _structured_oauth_error(response)
+        error, description = _structured_oauth_error(
+            response, (code, flow.code_verifier)
+        )
         raise OAuthProviderError(
             flow.provider_id,
             error=error,
@@ -977,7 +1009,7 @@ async def poll_device_flow(
             if resp.status_code == 200:
                 payload = resp.json()
                 break
-            err, err_description = _structured_oauth_error(resp)
+            err, err_description = _structured_oauth_error(resp, (device_code,))
             if err == "authorization_pending":
                 pass
             elif err == "slow_down":
