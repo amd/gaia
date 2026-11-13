@@ -1,12 +1,14 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Cloud, Cpu, Loader2, Trash2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useModelStore, displayModelName, distinctModelLabels, sameModelId } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useT, type Translate } from '../../i18n/useT';
+import { providerName, providerNotice } from '../../utils/providerText';
 import { AddCustomModel } from './AddCustomModel';
 import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { LocalModelsSections } from './LocalModelsSections';
@@ -14,6 +16,7 @@ import { ModelInUse } from './ModelInUse';
 import { ModelRow } from './ModelRow';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import { isDownloading } from '../modelMeta';
+import { modelServerHealth } from '../../services/statusPoll';
 import '../ModelPicker.css';
 import { CloudPrices } from './CloudPrices';
 import { SpendingLimit } from './SpendingLimit';
@@ -34,6 +37,7 @@ export function ModelSettings() {
     const selectModel = useModelStore((s) => s.select);
     const refreshActive = useModelStore((s) => s.refresh);
     const rememberNames = useModelStore((s) => s.rememberNames);
+    const serverHung = useChatStore((s) => !!s.systemStatus && modelServerHealth(s.systemStatus) === 'unresponsive');
 
     const [providers, setProviders] = useState<ProviderInfo[] | null>(null);
     const [loadError, setLoadError] = useState<string | null>(null);
@@ -307,7 +311,7 @@ export function ModelSettings() {
                 onSwitch={(model) => void use(model)}
             />
 
-            <div className="provider-tabs" role="radiogroup" aria-label={t('settings.model.whereRuns')}>
+            <RadioGroup className="provider-tabs" aria-label={t('settings.model.whereRuns')}>
                 {(providers ?? [{ id: 'local', name: 'Local', remote: false } as ProviderInfo]).map((p) => (
                     <button
                         key={p.id}
@@ -320,24 +324,30 @@ export function ModelSettings() {
                         title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? p.network?.detail ?? undefined : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
-                        <span>{p.name}</span>
+                        <span>{providerName(t, p)}</span>
                         {p.remote && p.models_discovered && <span className="provider-tab-dot" aria-label={t('settings.key.connectedDot')} />}
                     </button>
                 ))}
-            </div>
+            </RadioGroup>
+
+            {!providers && !loadError && (
+                <p className="settings-hint" role="status">
+                    <Loader2 size={13} className="spin" /> {serverHung ? t('settings.model.waitingServer') : t('settings.loading')}
+                </p>
+            )}
 
             {loadError && (
                 <ErrorNotice message={loadError} onRetry={() => { void loadProviders(); void loadModels(chosen); }} />
             )}
 
             {provider && (
-                <section className="settings-card" aria-label={provider.name}>
-                    {provider.remote && <p className="settings-note"><bdi>{provider.privacy_notice}</bdi></p>}
+                <section className="settings-card" aria-label={providerName(t, provider)}>
+                    {provider.remote && <p className="settings-note"><bdi>{providerNotice(t, provider)}</bdi></p>}
 
                     <details className="settings-more">
                         <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.model.howItWorks')}</summary>
                         <p className="settings-hint">{t('settings.model.lede')}</p>
-                        {local && <p className="settings-hint"><bdi>{provider.privacy_notice}</bdi></p>}
+                        {local && <p className="settings-hint"><bdi>{providerNotice(t, provider)}</bdi></p>}
                         {local && <p className="settings-hint">{t('settings.model.devices')}</p>}
                         {local && memory && <p className="settings-hint">{t('settings.model.memory', { memory })}</p>}
                     </details>

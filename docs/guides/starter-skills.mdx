@@ -130,7 +130,7 @@ In chat, ask the agent to use a skill by name. From code, load it with
 from gaia_agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(GaiaAgentConfig())
-agent.load_skill("research-report")     # body joins the system prompt
+agent.load_skill("research-report")     # body joins the prompt
 
 print(agent.process_query("What's the current state of NPU support in llama.cpp?"))
 ```
@@ -138,7 +138,7 @@ print(agent.process_query("What's the current state of NPU support in llama.cpp?
 `load_skill` resolves the name across the discovery roots, validates the
 manifest, registers any tools the skill provides under `<skill-name>/<tool>`,
 bridges its permissions to connector requirements, and injects the procedure
-into the system prompt. `unload_skill(name)` reverses all of it.
+into the session context at the start of the first user message. `unload_skill(name)` reverses all of it.
 
 On most agents a loaded body then renders in the prompt on every turn. The
 flagship `gaia` agent is the exception: it selects per turn which loaded
@@ -204,7 +204,9 @@ memory, and speak up only when there is news.
 ### price-watch
 
 `source-watch` specialized to products: extract the current price, compare to
-the lowest ever recorded in memory, alert only on a new low.
+the lowest ever recorded in memory, alert only on a new low. A price the user
+states (the lowest they have seen, or a target) is saved to memory before the
+page is fetched, so it is the baseline the check compares against.
 
 - **Demonstrates** — forking a template; memory holding a running extreme rather
   than a seen-list; the traps in extracting one number from a retail page.
@@ -252,7 +254,9 @@ duplicates, ranks by severity × reach, and posts the reply once you approve it.
 - **Demonstrates** — a scoped binary grant. It declares `shell:execute:gh`, which
   grants the GitHub CLI to this skill's session on this agent, restricted to the
   subcommands in GAIA's policy table (see the
-  [permission model](/plans/skill-format#permission-model)).
+  [permission model](/plans/skill-format#permission-model)). Read-only `gh`
+  commands run in any chat without this skill; the skill adds the triage workflow,
+  and anything it writes is confirmed per call.
 - **Configure** — nothing, if you let GAIA do it. Ask it to set up the GitHub CLI
   and it checks, installs, and signs in for you, showing you each command first —
   see [Setting up a CLI a skill needs](/guides/gaia#setting-up-a-cli-a-skill-needs).
