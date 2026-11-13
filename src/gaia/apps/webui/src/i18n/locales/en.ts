@@ -2495,6 +2495,7 @@ export const enMessages = {
     // The connection banner
     'banner.serverStopped': "The model server isn't running.",
     'banner.finishSetup': 'Set up models on this PC, or choose a cloud model in Settings.',
+    'banner.serverHung': "The model server isn't answering. It may be busy with another app or loading a model, so GAIA keeps checking.",
     'banner.unreachable': 'Can’t reach GAIA’s assistant.',
     'banner.unreachableHint': 'GAIA keeps trying to reconnect.',
     'banner.restarting': 'GAIA’s assistant stopped and is restarting…',

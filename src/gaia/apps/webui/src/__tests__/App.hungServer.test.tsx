@@ -58,6 +58,22 @@ describe('a set-up PC whose model server hangs', () => {
         render(<App />);
         await act(async () => { await vi.advanceTimersByTimeAsync(0); });
 
-        expect(document.body.textContent).toContain('The model server is not answering (Lemonade did not answer in time)');
+        expect(document.body.textContent).toContain("The model server isn't answering.");
+    });
+
+    it('keeps the same warning once the setup check gives up on the server', async () => {
+        mocked.getActiveModel.mockResolvedValue({
+            provider: 'fireworks', model: 'm', label: 'Cloud', remote: true, is_default: false,
+        } as never);
+        mocked.checkSetup.mockResolvedValue({
+            ready: false, stage: 'server', initialized: true, steps: [], reasons: ['Lemonade did not answer in time'],
+        } as never);
+        render(<App />);
+        await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+        const text = document.body.textContent ?? '';
+        expect(text).toContain("The model server isn't answering.");
+        expect(text).not.toContain("GAIA's model server isn't answering, so it can't reply yet.");
+        expect(text).not.toContain('Set up local models');
     });
 });
