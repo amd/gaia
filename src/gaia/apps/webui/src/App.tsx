@@ -168,6 +168,7 @@ function App() {
     // A task picked at the end of setup that needs the user to finish typing it.
     const [draftText, setDraftText] = useState('');
     const [newChatFocus, setNewChatFocus] = useState(0);
+    const [newChatSeed, setNewChatSeed] = useState(0);
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
@@ -634,14 +635,19 @@ function App() {
     useTrayBridge({ openChat: openChatFromTray, newChat: newChatFromTray, refreshStatus: () => void checkSystemStatus() });
 
     // The prompt waits in the box, so the user sees what goes to the model and sends it.
+    // Written to the saved draft, which the new-chat box reads over a suggested prefill.
     const useSkill = useCallback((name: string) => {
         const store = useChatStore.getState();
         const unsent = store.pendingPrompt?.sessionId === store.currentSessionId ? store.pendingPrompt?.text : null;
         newChat();
         const prompt = t.bare('settings.skills.tryPrompt', { name });
-        setDraftText(unsent ? `${unsent}
-
-${prompt}` : prompt);
+        const base = [readSavedDraft(NEW_CHAT_DRAFT_KEY), unsent].filter(Boolean).join('\n\n');
+        // A repeat Try with the prompt still in the box must not paste it twice.
+        const text = base.trimEnd().endsWith(prompt) ? base : [base, prompt].filter(Boolean).join('\n\n');
+        writeSavedDraft(NEW_CHAT_DRAFT_KEY, text);
+        setDraftText(text);
+        // Remount even when the box is already open with this same text.
+        setNewChatSeed((n) => n + 1);
     }, [newChat, t]);
 
     useEffect(() => {
@@ -813,7 +819,7 @@ ${prompt}` : prompt);
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat key={draftText} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} />
+        <NewChat key={`${newChatSeed}:${draftText}`} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} />
     );
 
     return (
