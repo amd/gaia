@@ -284,6 +284,11 @@ export function UploadErrorToast({ filename, error, status, kind, onDismiss, tim
         detail = permanentHint;
         issueUrl = null;
         Icon = AlertTriangle;
+    } else if (kind === 'too_large') {
+        title = t('docs.tooLarge', { name: filename });
+        detail = error;
+        issueUrl = null;
+        Icon = AlertTriangle;
     } else if (status === 404) {
         title = t('docs.notFound', { name: filename });
         detail = t('docs.notFoundDetail');

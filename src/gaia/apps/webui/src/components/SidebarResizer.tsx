@@ -3,6 +3,7 @@
 
 import { useCallback, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { log } from '../utils/logger';
+import { useT } from '../i18n/useT';
 
 export const SIDEBAR_MIN_WIDTH = 200;
 export const SIDEBAR_MAX_WIDTH = 420;
@@ -42,6 +43,7 @@ function isRtl(el: Element): boolean {
  * narrow to collapse, double-click to reset, arrow keys from the keyboard.
  */
 export function useSidebarWidth(onCollapse: () => void) {
+    const t = useT();
     const [width, setWidthState] = useState(readSidebarWidth);
     const [dragWidth, setDragWidth] = useState<number | null>(null);
 
@@ -96,12 +98,12 @@ export function useSidebarWidth(onCollapse: () => void) {
             className={`sb-resize${dragWidth != null ? ' is-dragging' : ''}`}
             role="separator"
             aria-orientation="vertical"
-            aria-label="Resize sidebar"
+            aria-label={t('sidebar.resize')}
             aria-valuemin={SIDEBAR_MIN_WIDTH}
             aria-valuemax={SIDEBAR_MAX_WIDTH}
             aria-valuenow={Math.round(dragWidth ?? width)}
             tabIndex={0}
-            title="Drag to resize, double-click to reset"
+            title={t('sidebar.resizeTitle')}
             onPointerDown={startDrag}
             onKeyDown={onKey}
             onDoubleClick={() => setWidth(SIDEBAR_DEFAULT_WIDTH)}

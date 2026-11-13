@@ -114,10 +114,15 @@ def _loop_state_directive(args: Dict[str, Any]) -> Dict[str, Any]:
         wake = 0
     if state == "scheduled":
         wake = max(30, min(86400, wake))
+    from gaia.agents.base.goal_store import GOAL_OUTCOMES
+
+    outcome = str(args.get("goal_outcome") or "")
     return {
         "directive": state,
         "reason": str(args.get("reason") or ""),
         "wake_in_seconds": wake,
+        # An unknown outcome is the tool's refusal, so the goal is unfinished.
+        "goal_outcome": outcome if outcome in GOAL_OUTCOMES else "",
     }
 
 
@@ -278,7 +283,17 @@ def _dispatch_one(
                 if offers_always and tool not in _FRESH_CONSENT_TOOLS
                 else ""
             )
-            handler.set_relay_confirmation(confirm_id, always_scope or None)
+            event_args = event.get("args")
+            path_access = (
+                event_args.get("path")
+                if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(event_args, dict)
+                else None
+            )
+            handler.set_relay_confirmation(
+                confirm_id,
+                always_scope or None,
+                path_access if isinstance(path_access, str) else None,
+            )
             # The UI's own approval prompt.
             request: Dict[str, Any] = {
                 "type": "permission_request",
@@ -445,6 +460,18 @@ def _dispatch_one(
             }
         )
 
+    elif etype == "context_usage":
+        # A live measurement from a sidecar on contract 2.28, streamed before
+        # the answer so the composer fills during a long turn. Its shape is the
+        # in-process one; the relay's own cuts are turns the sidecar never saw,
+        # so they are added here as they are on ``final``.
+        payload = {k: v for k, v in event.items() if k != "type"}
+        hidden = getattr(handler, "relay_hidden_turns", 0)
+        if hidden:
+            payload["turns_hidden"] = payload.get("turns_hidden", 0) + hidden
+        handler.relay_context = payload
+        handler._emit({"type": "context_usage", **payload})
+
     elif etype == "final":
         answer = str(event.get("answer", "") or "")
         cleaned = _strip_balanced_json_blobs(answer, _kind_re()).strip()
@@ -454,6 +481,9 @@ def _dispatch_one(
             out["failed"] = True
             if isinstance(event.get("failure"), str):
                 out["failure"] = event["failure"]
+            # A live pre-answer estimate is not this failed turn's usage, and
+            # ``final`` carries none: do not leave the meter showing the guess.
+            handler.relay_context = None
         # Same top-level fields an in-process answer carries, so the turn's
         # token counts and cost are recorded for a relayed turn too.
         usage = event.get("usage")
@@ -471,6 +501,10 @@ def _dispatch_one(
             handler.relay_context = context
             handler._emit({"type": "context_usage", **context})
         elif isinstance(event.get("context_error"), str):
+            # A live pre-answer estimate is only a hint. When the measurement
+            # failed, the error is the turn's result and the estimate must not
+            # outrank it when the meter is recorded.
+            handler.relay_context = None
             handler.relay_context_error = event["context_error"]
         if isinstance(event.get("model_messages"), list):
             # Saved with the reply so later turns replay its tool calls.
