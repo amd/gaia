@@ -319,6 +319,7 @@ export function ConnectorsSection() {
                     check={checks[c.id] ?? null}
                     onRunCheck={() => void runCheck(c.id)}
                     onClearCheck={() => clearCheck(c.id)}
+                    offeredAbove={justConnected?.id === c.id}
                 />
             ))}
         </div>
@@ -350,7 +351,7 @@ export function ConnectorsSection() {
                 <div className="connector-personalize connector-personalize--offer" role="status">
                     <p>
                         <strong>{t('settings.connectors.personalize.connected', { name: justConnected.display_name })}</strong>{' '}
-                        {t('settings.connectors.personalize.offer', { source: personalizeSourceRef(justConnected) })}
+                        {t('settings.connectors.personalize.offer', { source: personalizeSourceRef(justConnected), name: justConnected.display_name })}
                     </p>
                     <PersonalizeButton connector={justConnected} primary onStarted={() => setJustConnected(null)} />
                     <button type="button" className="btn-secondary" onClick={() => setJustConnected(null)}>
@@ -449,6 +450,7 @@ function ConnectorTile({
     check,
     onRunCheck,
     onClearCheck,
+    offeredAbove,
 }: {
     connector: ConnectorRow;
     expanded: boolean;
@@ -457,6 +459,8 @@ function ConnectorTile({
     check: McpCheck | null;
     onRunCheck: () => void;
     onClearCheck: () => void;
+    /** The just-connected banner already offers personalization for this connector. */
+    offeredAbove: boolean;
 }) {
     const t = useT();
     const { agents } = useChatStore();
@@ -515,9 +519,9 @@ function ConnectorTile({
                             onClearCheck={onClearCheck}
                         />
                     )}
-                    {connector.configured && connector.enabled !== false && (
+                    {connector.configured && connector.enabled !== false && !offeredAbove && (
                         <div className="connector-personalize">
-                            <p>{t('settings.connectors.personalize.tile', { source: personalizeSourceRef(connector) })}</p>
+                            <p>{t('settings.connectors.personalize.tile', { source: personalizeSourceRef(connector), name: connector.display_name })}</p>
                             <PersonalizeButton connector={connector} />
                         </div>
                     )}
@@ -655,7 +659,15 @@ function OAuthConfigureBody({
             (event) => {
                 if (event.connectorId !== connector.id) return;
                 if (event.reason === 'oauth_error') {
-                    setErr(String(event.payload.error ?? t('settings.connectors.deviceFailed')));
+                    // A browser sign-in says why it ended; its raw error stays in the log.
+                    const why = event.payload.reason;
+                    setErr(
+                        why === 'cancelled'
+                            ? t('connectCard.cancelled')
+                            : why
+                              ? t('connectCard.failed')
+                              : String(event.payload.error ?? t('settings.connectors.deviceFailed')),
+                    );
                     setDeviceInfo(null);
                 } else if (event.reason === 'oauth_completed') {
                     setDeviceInfo(null);
@@ -1010,7 +1022,7 @@ function OAuthClientEditor({
                     )}
                     <div className="configure-actions">
                         <button
-                            className={`btn-model-save${saved ? ' saved' : ''}`}
+                            className="btn-primary"
                             disabled={busy || !values['client_id']?.trim()}
                             onClick={() => void handleSave()}
                         >
@@ -1230,7 +1242,7 @@ function MCPServerConfigureBody({
             <div className="configure-actions">
                 {!(keyless && connector.configured) && (
                     <button
-                        className={`btn-model-save${saved ? ' saved' : ''}`}
+                        className="btn-primary"
                         disabled={busy || (!keyless && nothingTyped)}
                         onClick={() => void handleSave()}
                     >

@@ -18,6 +18,8 @@ class MailboxError(RuntimeError):
     ``connect`` names the connectors that signing in fixes, and ``reconnect``
     those of them that are connected already. ``scopes`` maps a connector to
     the access the failed call needs, when that is more than reading mail.
+    ``setup`` marks a call stopped by how accounts are set up right now,
+    before it reached the mailbox.
     """
 
     def __init__(
@@ -26,6 +28,7 @@ class MailboxError(RuntimeError):
         connect: Iterable[str] = (),
         reconnect: Iterable[str] = (),
         scopes: Optional[Mapping[str, Iterable[str]]] = None,
+        setup: bool = False,
     ):
         super().__init__(*args)
         self.connect: Tuple[str, ...] = tuple(connect)
@@ -33,6 +36,7 @@ class MailboxError(RuntimeError):
         self.scopes: Dict[str, Tuple[str, ...]] = {
             p: tuple(s) for p, s in (scopes or {}).items()
         }
+        self.setup = setup
 
 
 class MailboxAuthError(MailboxError):

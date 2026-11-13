@@ -117,14 +117,13 @@ def _fail(exc: Any, action: str, **extra: Any) -> str:
     logger.warning("email tool failed during %s: %s", action, exc)
     payload = {"error": str(exc), "action": action, "success": False}
     payload.update(extra)
-    if getattr(exc, "connect", ()):
-        with_connect_card(
-            payload,
-            exc,
-            agent_id=EMAIL_AGENT_ID,
-            surface=agent_surface(current().agent),
-            scopes=_SEND_SCOPES,
-        )
+    with_connect_card(
+        payload,
+        exc,
+        agent_id=EMAIL_AGENT_ID,
+        surface=agent_surface(current().agent),
+        scopes=_SEND_SCOPES,
+    )
     return json.dumps(payload, indent=2)
 
 

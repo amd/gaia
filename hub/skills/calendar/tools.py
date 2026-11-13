@@ -428,8 +428,6 @@ def _refusal(action: str, error: Any, **extra: Any) -> Dict[str, Any]:
         "error": str(error),
         **extra,
     }
-    if not getattr(error, "connect", ()):
-        return result
     return with_connect_card(
         result,
         error,
@@ -608,7 +606,10 @@ class _CalendarOps:
             # A terminal caller's remedy is already in each line of the error.
             targets, connected = _connect_targets() if app else ((), ())
             raise CalendarError(
-                _no_calendar_error(states), connect=targets, reconnect=connected
+                _no_calendar_error(states),
+                connect=targets,
+                reconnect=connected,
+                setup=True,
             )
 
         def _token() -> str:
@@ -624,7 +625,9 @@ class _CalendarOps:
                 logger.warning("calendar: no %s token: %s", provider, exc)
                 message, reconnect = token_fault(provider.capitalize(), exc)
                 fix = (provider,) if reconnect else ()
-                raise CalendarAuthError(message, connect=fix, reconnect=fix) from exc
+                raise CalendarAuthError(
+                    message, connect=fix, reconnect=fix, setup=reconnect
+                ) from exc
 
         from gaia.agents.tools._calendar import (
             GoogleCalendarBackend,
