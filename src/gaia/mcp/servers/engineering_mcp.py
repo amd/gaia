@@ -16,10 +16,12 @@ from gaia.engineering.service import EngineeringService
 def create_engineering_mcp(
     root: Path | None, backend: str, token: str, *, developer_mode: bool = False
 ):
-    from mcp.server import MCPServer
-
     service = EngineeringService(root, developer_mode=developer_mode)
     service.authenticate(backend, token)
+    # Imported after the refusal checks above, so a refused launch says why
+    # even where the optional `mcp` package is not installed.
+    from mcp.server import MCPServer
+
     server = MCPServer(name="gaia-engineering")
 
     def authorize():

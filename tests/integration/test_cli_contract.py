@@ -416,7 +416,8 @@ def test_a_timeout_fails_a_known_bug_cell_instead_of_xpassing():
     """pytest.fail is not an AssertionError, so raises= keeps it from counting as the bug."""
     marks = [
         mark
-        for param in _params(COMMANDS, "traceback")
+        for rule in ("traceback", "model server")
+        for param in _params(COMMANDS, rule)
         for mark in param.marks
         if mark.name == "xfail"
     ]
