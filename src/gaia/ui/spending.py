@@ -235,7 +235,9 @@ def chat_spend(
     """What this chat's cloud answers cost, and every chat's since *since*.
 
     *since* is the start of the viewer's local day as an ISO instant, so "today"
-    follows the user's clock. Costs are the ones each answer's details show.
+    follows the user's clock. This chat's costs are the ones each answer's
+    details show; today's are every turn billed since *since*, the record the
+    month total reads, so an answer edited away or retried still counts.
     ``paid`` says whether *model_id* is a priced cloud model, the only time the
     composer shows spending.
     """
@@ -250,7 +252,11 @@ def chat_spend(
     chat = sorted(
         _cloud_answers(db.answer_costs(session_id=session_id)), key=_answered_at
     )
-    today = [
+    # Billed turns, as the month total counts them: an answer edited away,
+    # retried or deleted was still billed.
+    billed = db.cloud_spend_since(start_utc)
+    priced = [r["usd"] for r in billed if r["usd"] is not None]
+    answered_today = [
         a
         for a in _cloud_answers(db.answer_costs(since_day=start_utc.date().isoformat()))
         if _answered_at(a) >= start_utc
@@ -272,8 +278,10 @@ def chat_spend(
             ],
         },
         "today": {
-            **_totals(today),
-            "chats": len({a["session_id"] for a in today}),
+            "usd": round(sum(priced), 6),
+            "answers": len(billed),
+            "unpriced_answers": len(billed) - len(priced),
+            "chats": len({a["session_id"] for a in answered_today}),
             "since": start_utc.isoformat(),
         },
         "price_source": PRICE_SOURCE,

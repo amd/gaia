@@ -19,6 +19,7 @@ import psutil
 from gaia.env import child_env
 from gaia.logger import get_logger
 from gaia.tool_cancellation import ToolCancelled, tool_cancelled
+from gaia.utils.file_lock import FileLockError, HeldFileLock, acquire_file_lock
 from gaia.utils.terminal import windows_hidden_popen_kwargs
 
 from ..redaction import LONGEST_FORM_PER_CHAR, redact, secrets_from_launch
@@ -58,6 +59,37 @@ _TOOL_CALL_MARGIN_S = 5
 # Lines read from the server and not yet consumed. A full queue stops the
 # reader, which back-pressures the server instead of growing without bound.
 _STDOUT_QUEUE_LINES = 10_000
+
+
+# How long an ``npx`` launch waits for another one installing the same package,
+# and how long a launch given up on mid-install may run on to finish it.
+_NPX_INSTALL_WAIT_S = 300.0
+
+_NPX_PROGRAMS = frozenset({"npx", "npx.cmd", "npx.exe", "npx.ps1"})
+
+
+def npx_package(argv: List[str]) -> Optional[str]:
+    """The package an ``npx`` launch runs, or None for any other program."""
+    # Either separator: a Windows path names npx.cmd wherever this runs.
+    program = argv[0].replace("\\", "/").rsplit("/", 1)[-1] if argv else ""
+    if program.lower() not in _NPX_PROGRAMS:
+        return None
+    args = argv[1:]
+    for i, arg in enumerate(args):
+        if arg.startswith("--package="):
+            return arg.split("=", 1)[1] or None
+        if arg in ("-p", "--package"):
+            return args[i + 1] if i + 1 < len(args) else None
+        if not arg.startswith("-"):
+            return arg
+    return None
+
+
+def _npx_lock_target(package: str) -> str:
+    from gaia.home import gaia_home
+
+    safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in package)
+    return str(gaia_home() / "mcp" / "npx" / safe)
 
 
 def tool_call_timeout() -> float:
@@ -195,6 +227,12 @@ class StdioTransport(MCPTransport):
         #: inspected after launch.
         self._ps_server: Optional["psutil.Process"] = None
         self._secret_values: Optional[List[str]] = None
+        #: Held from an ``npx`` launch until the server first answers or exits,
+        #: so two first starts never install one package into npx's cache at once.
+        self._install_lock: Optional[HeldFileLock] = None
+        self._npx_package: Optional[str] = None
+        #: The package of the last ``npx`` launch whose process died at startup.
+        self.died_installing: Optional[str] = None
 
     @property
     def label(self) -> str:
@@ -391,6 +429,10 @@ class StdioTransport(MCPTransport):
         # Built outside the try so a bad command surfaces as an actionable
         # ValueError instead of a bare "failed to start" False.
         argv = self._build_argv()
+        package = self._npx_package = npx_package(argv)
+        self.died_installing = None
+        if package is not None:
+            self._take_install_lock(package)
 
         try:
             if self.debug:
@@ -433,6 +475,7 @@ class StdioTransport(MCPTransport):
             if self._process.poll() is not None:
                 error = self._process_died_error()
                 self._process = None
+                self.died_installing = package
                 raise error
 
             return True
@@ -453,10 +496,74 @@ class StdioTransport(MCPTransport):
             self._abandon_launch()
             return False
 
+    def _take_install_lock(self, package: str) -> None:
+        """Wait for any other launch still installing *package* through npx.
+
+        Raises:
+            RuntimeError: That install has run past ``_NPX_INSTALL_WAIT_S``, or
+                the lock could not be taken.
+        """
+        target = _npx_lock_target(package)
+        try:
+            self._install_lock = acquire_file_lock(target, timeout=_NPX_INSTALL_WAIT_S)
+        except FileLockError as e:
+            raise RuntimeError(
+                f"MCP server '{self.label}' could not start: another start is still "
+                f"installing {package} through npx ({e}). Try again once it finishes."
+            ) from e
+
+    def _release_install_lock(self) -> None:
+        held, self._install_lock = self._install_lock, None
+        if held is not None:
+            held.release()
+
+    def _finish_install_then_stop(self, proc: subprocess.Popen) -> None:
+        """Let an ``npx`` launch given up on mid-install finish, then stop it.
+
+        Killing npx while it unpacks leaves the package in its cache without
+        the command it runs, and every later start fails on that copy. With its
+        input closed the server exits once it starts.
+        """
+        held, self._install_lock = self._install_lock, None
+        try:
+            proc.stdin.close()
+        except (OSError, ValueError) as e:
+            logger.debug("MCP server '%s' stdin already closed: %s", self.label, e)
+        children = dict(self._children)
+
+        def _wait() -> None:
+            try:
+                proc.wait(timeout=_NPX_INSTALL_WAIT_S)
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "MCP server '%s' was still starting %.0fs after it was given up "
+                    "on; stopping it.",
+                    self.label,
+                    _NPX_INSTALL_WAIT_S,
+                )
+                for child in children.values():
+                    try:
+                        if child.is_running():
+                            child.kill()
+                    except psutil.Error as e:
+                        logger.debug(
+                            "MCP server child %s already gone: %s", child.pid, e
+                        )
+                proc.kill()
+                proc.wait()
+            finally:
+                if held is not None:
+                    held.release()
+
+        threading.Thread(
+            target=_wait, name=f"mcp-npx-install:{proc.pid}", daemon=True
+        ).start()
+
     def _abandon_launch(self) -> None:
         """Stop a server whose launch failed after Popen, so none runs unread."""
         proc, self._process = self._process, None
         self._stop_children()
+        self._release_install_lock()
         if proc is None or proc.poll() is not None:
             return
         try:
@@ -472,6 +579,13 @@ class StdioTransport(MCPTransport):
     def disconnect(self) -> None:
         """Terminate the MCP server subprocess."""
         if self._process is None:
+            self._release_install_lock()
+            return
+
+        if self._install_lock is not None and self._process.poll() is None:
+            # Never answered: npx may still be installing the package.
+            proc, self._process = self._process, None
+            self._finish_install_then_stop(proc)
             return
 
         try:
@@ -505,6 +619,7 @@ class StdioTransport(MCPTransport):
 
         finally:
             self._process = None
+            self._release_install_lock()
 
     @staticmethod
     def _own_process(pid: Any) -> Optional["psutil.Process"]:
@@ -701,6 +816,14 @@ class StdioTransport(MCPTransport):
             except (TimeoutError, ToolCancelled) as e:
                 self._cancel_on_server(proc, request_id, str(e))
                 raise
+            except RuntimeError:
+                if self._install_lock is not None and proc.poll() is not None:
+                    # Died before its first answer: npx may have left a broken install.
+                    self.died_installing = self._npx_package
+                    self._release_install_lock()
+                raise
+            # It answered, so npx has finished installing it.
+            self._release_install_lock()
 
             if self.debug:
                 logger.debug(
