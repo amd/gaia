@@ -1,9 +1,10 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A host the web client blocks stays blocked for every tool in the same turn.
+"""A metadata host the web client blocks stays blocked for every tool that turn.
 
-When ``fetch_page`` refuses a private, link-local or metadata address, the
-refusal is recorded as a NETWORK effect. A shell ``curl``/``wget``/
+When ``fetch_page`` refuses a cloud-metadata or link-local address, the
+refusal is recorded as a NETWORK effect. A private LAN address it refuses is
+not carried over: the shell may still reach a NAS or a dev box. A shell ``curl``/``wget``/
 ``Invoke-WebRequest`` or a Python ``urllib`` call to that address — in any
 spelling of it — is then refused, even under full access. No request is made
 here: the web client and the shell/Python tools are doubles.
@@ -22,6 +23,7 @@ from gaia.agents.base.denied_effects import (
     Effect,
     canonical_host,
     effects_of_call,
+    is_cloud_metadata_host,
 )
 from gaia.agents.base.tools import _TOOL_REGISTRY, tool
 from gaia.agents.tools.browser_tools import BrowserToolsMixin
@@ -287,3 +289,101 @@ def test_a_loopback_block_does_not_refuse_the_shell(web_agent):
     )
 
     assert result["status"] == "success"
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "169.254.169.254",
+        "2852039166",
+        "0xA9FEA9FE",
+        "0251.0376.0251.0376",
+        "[::ffff:169.254.169.254]",
+        "::ffff:a9fe:a9fe",
+        "64:ff9b::a9fe:a9fe",
+        "169.254.170.2",
+        "fe80::1",
+        "[FE80::a9fe:a9fe]",
+        "fe80::1%eth0",
+        "fd00:ec2::254",
+        "[fd00:ec2::254]",
+        "metadata.google.internal",
+        "METADATA.GOOGLE.INTERNAL.",
+        "metadata",
+        "100.100.100.200",
+    ],
+)
+def test_metadata_and_link_local_hosts_are_recognised(host):
+    assert is_cloud_metadata_host(host) is True
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "192.168.1.10",
+        "10.0.0.5",
+        "172.16.4.2",
+        "3232235786",
+        "[::ffff:192.168.1.10]",
+        "fd12:3456::1",
+        "127.0.0.1",
+        "::1",
+        "localhost",
+        "nas.local",
+        "intranet.corp",
+        "example.com",
+        "",
+    ],
+)
+def test_lan_and_public_hosts_are_not_metadata(host):
+    assert is_cloud_metadata_host(host) is False
+
+
+@pytest.mark.parametrize(
+    "host, address",
+    [
+        ("nas.local", "192.168.1.10"),
+        ("192.168.1.10", "192.168.1.10"),
+        ("devbox", "10.0.0.5"),
+        ("intranet.corp", "172.16.4.2"),
+        ("localhost", "127.0.0.1"),
+    ],
+)
+def test_a_lan_block_does_not_refuse_the_shell(web_agent, host, address):
+    agent = web_agent(host=host, address=address)
+
+    blocked = agent._execute_tool("fetch_page", {"url": f"http://{host}/"})
+    result = agent._execute_tool(
+        "run_shell_command", {"command": f"curl http://{host}/status"}
+    )
+
+    assert "Blocked" in str(blocked)
+    assert result["status"] == "success", result
+    assert agent.ran == [f"curl http://{host}/status"]
+
+
+@pytest.mark.parametrize(
+    "host, address",
+    [
+        ("metadata.google.internal", "169.254.169.254"),
+        ("public.example", "169.254.169.254"),
+        ("fd00:ec2::254", "fd00:ec2::254"),
+        ("link.example", "fe80::1"),
+    ],
+)
+def test_a_metadata_block_refuses_the_shell(web_agent, host, address):
+    agent = web_agent(host=host, address=address)
+
+    agent._execute_tool("fetch_page", {"url": "http://public.example/"})
+    target = f"[{address}]" if ":" in address else address
+    result = agent._execute_tool(
+        "run_shell_command", {"command": f"curl http://{target}/latest/"}
+    )
+
+    assert result["executed"] is False, result
+    assert agent.ran == []
+
+
+def test_fetch_page_still_refuses_a_lan_address():
+    with pytest.raises(BlockedHostError):
+        _assert_ip_allowed("192.168.1.10", "nas.local")

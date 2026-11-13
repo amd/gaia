@@ -484,6 +484,43 @@ def canonical_host(host: str) -> str:
     return str(mapped or address)
 
 
+#: Names cloud providers serve instance metadata and credentials under.
+_METADATA_NAMES = frozenset(
+    {
+        "metadata",
+        "metadata.google.internal",
+        "metadata.goog",
+        "metadata.azure.com",
+        "metadata.azure.internal",
+        "instance-data",
+        "instance-data.ec2.internal",
+    }
+)
+#: Metadata addresses outside the link-local ranges: AWS over IPv6, Alibaba.
+_METADATA_ADDRESSES = frozenset(
+    {ipaddress.ip_address("fd00:ec2::254"), ipaddress.ip_address("100.100.100.200")}
+)
+_NAT64 = ipaddress.ip_network("64:ff9b::/96")
+
+
+def is_cloud_metadata_host(host: str) -> bool:
+    """Whether *host*, in any spelling, is a cloud-metadata or link-local target.
+
+    169.254.0.0/16 and fe80::/10 are link-local and hold every major cloud's
+    metadata service; a private LAN address (a NAS, a dev box) is not one.
+    """
+    host = canonical_host(host or "")
+    if host in _METADATA_NAMES:
+        return True
+    try:
+        address = ipaddress.ip_address(host.split("%", 1)[0])
+    except ValueError:
+        return False
+    if address.version == 6 and address in _NAT64:
+        address = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+    return address.is_link_local or address in _METADATA_ADDRESSES
+
+
 def _hosts(text: str) -> Set[Effect]:
     return {
         Effect(NETWORK, canonical_host(m.group(1)))

@@ -694,24 +694,22 @@ def text_window(
 
 
 def _refuse_host_this_turn(host: Any, tool_name: str, tool_args: dict, error) -> None:
-    """Refuse a host the web client blocked to every other tool, this turn.
+    """Refuse a cloud-metadata host the web client blocked to every tool, this turn.
 
     The block is policy, not a person's no, so nothing may lift it: a shell
-    ``curl`` or a Python ``urlopen`` to the same address is refused too.
+    ``curl`` or a Python ``urlopen`` to the same address is refused too. Only
+    metadata and link-local targets carry over; loopback and private LAN
+    addresses stay reachable from the shell, where reaching them is ordinary
+    work (a dev server, a NAS).
     """
     ledger = getattr(host, "_denied_effects", None)
     if ledger is None:
         return
-    import ipaddress
+    from gaia.agents.base.denied_effects import NETWORK, is_cloud_metadata_host
 
-    from gaia.agents.base.denied_effects import NETWORK, canonical_host
-
-    try:
-        loopback = ipaddress.ip_address(canonical_host(error.address)).is_loopback
-    except ValueError:
-        loopback = False
-    # Loopback is the user's own dev server; the shell may still reach it.
-    if loopback:
+    if not (
+        is_cloud_metadata_host(error.host) or is_cloud_metadata_host(error.address)
+    ):
         return
 
     ledger.record(
