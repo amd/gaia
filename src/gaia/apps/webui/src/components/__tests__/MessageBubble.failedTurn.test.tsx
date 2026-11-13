@@ -31,7 +31,7 @@ const WORDED = 'There is no model called `no-such-model-xyz-123` to download: th
     + 'clear it under Settings > Advanced > Custom model ID.';
 
 afterEach(() => {
-    useChatStore.setState({ settingsSection: null, settingsProvider: null });
+    useChatStore.setState({ settingsSection: null, settingsProvider: null, settingsJump: null });
 });
 
 describe('a turn that failed on a model the server does not have', () => {
@@ -65,13 +65,19 @@ describe('a turn that failed on a model the server does not have', () => {
         expect(useChatStore.getState().settingsSection).toBe('advanced');
     });
 
+    it('lands on the setting the sentence names, with no way "back" to a Settings tab it never came from', () => {
+        renderFailed(WORDED);
+        fireEvent.click(screen.getByRole('button', { name: 'Open Settings › Advanced' }));
+        expect(useChatStore.getState().settingsJump).toEqual({ section: 'advanced', target: '[data-settings-target="custom-model"]' });
+    });
+
 });
 
 describe('describeFailedTurn', () => {
     it('keeps a plain failure as the answer', () => {
         const memory = 'Not enough free memory to load Gemma-4-E4B-it-GGUF with a 32,768-token window: needs about 7.8 GB '
             + 'and only 6.0 GB is free. Close apps that use a lot of memory, then try again.';
-        expect(describeFailedTurn(memory)).toEqual({ kind: 'unknown', raw: false, sections: [] });
+        expect(describeFailedTurn(memory)).toEqual({ kind: 'unknown', raw: false, sections: [], targets: {} });
         expect(describeFailedTurn(`Failed to start the query run: ${memory}`).raw).toBe(false);
     });
 

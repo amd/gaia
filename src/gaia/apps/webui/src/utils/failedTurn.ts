@@ -12,7 +12,14 @@ export interface FailedTurn {
     raw: boolean;
     /** Settings tabs the fix lives on, each offered as a button. */
     sections: SettingsSection[];
+    /** The setting on a tab the text names, so its button lands there rather than at the top. */
+    targets: Partial<Record<SettingsSection, string>>;
 }
+
+/** Settings the server's remedies name by their label, and where each one lives in the app. */
+const NAMED_SETTINGS: Array<{ re: RegExp; section: SettingsSection; target: string }> = [
+    { re: /Settings\s*(?:>|›|→)\s*Advanced\s*(?:>|›|→)\s*Custom model ID/i, section: 'advanced', target: '[data-settings-target="custom-model"]' },
+];
 
 const START_PREFIX = 'Failed to start the query run:';
 const RAW_RE = /^(?:[A-Za-z_.]*(?:Error|Exception):|Failed to (?:preload|load|auto-download)\b)|Traceback \(most recent/;
@@ -45,7 +52,11 @@ export function describeFailedTurn(content: string): FailedTurn {
         const section = match[1].toLowerCase() as SettingsSection;
         if (!sections.includes(section)) sections.push(section);
     }
-    return { kind, raw, sections };
+    const targets: FailedTurn['targets'] = {};
+    for (const named of NAMED_SETTINGS) {
+        if (sections.includes(named.section) && named.re.test(text)) targets[named.section] = named.target;
+    }
+    return { kind, raw, sections, targets };
 }
 
 /** The server's own words for Details, without the wrapper the app adds. */

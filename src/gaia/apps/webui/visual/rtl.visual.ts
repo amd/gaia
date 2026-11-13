@@ -614,6 +614,35 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         await reply.screenshot({ path: info.outputPath(`failed-turn-open-${locale}.png`) });
     });
+
+    test(`a failed turn's Settings button lands on the setting it names (${locale})`, async ({ page }) => {
+        const worded = "There is no model called `no-such-model-xyz-123` to download: the model server doesn't list it. "
+            + 'If you typed this model ID yourself, clear it under Settings > Advanced > Custom model ID.';
+        await open(page, `#${ANSWER_SESSION}`, locale, async (p) => {
+            await p.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) => route.fulfill({
+                json: {
+                    messages: [
+                        { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Say hello.', created_at: NOW.toISOString(), rag_sources: null },
+                        { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: worded, created_at: NOW.toISOString(), rag_sources: null, failed: true },
+                    ],
+                    total: 2,
+                },
+            }));
+            await p.route('**/api/settings', (route) => route.fulfill({ json: {
+                custom_model: 'no-such-model-xyz-123', model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                context_size: null, agent_mode: 'goal_driven', dynamic_tools: false, dynamic_tools_locked: false,
+            } }));
+        });
+        await page.locator('.msg-error .msg-try-again').filter({ hasText: /Advanced|متقدم/ }).click();
+        const custom = page.locator('details[data-settings-target="custom-model"]');
+        // Opened and focused, not the top of the tab (#7861).
+        await expect(custom).toHaveAttribute('open', '');
+        await expect(custom.locator('summary')).toBeFocused();
+        await expect(custom.locator('input')).toBeInViewport();
+        await expect(page.locator('.settings-back')).toHaveCount(0);
+        await shot(page, `failed-turn-to-custom-model-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 /** A new chat whose empty history is still loading when its first message goes out. */

@@ -560,6 +560,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const place = useInferencePlace();
     const showServerLog = useLogsStore((s) => s.show);
     const openSettings = useChatStore((s) => s.openSettings);
+    const jumpToSetting = useChatStore((s) => s.jumpToSetting);
     const failedTurn = useMemo(
         () => (isError && !isStreaming ? describeFailedTurn(message.content) : null),
         [isError, isStreaming, message.content],
@@ -840,7 +841,16 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         </button>
                     )}
                     {failedTurn?.sections.map((section) => (
-                        <button key={section} type="button" className="msg-try-again" onClick={() => openSettings(section)}>
+                        <button
+                            key={section}
+                            type="button"
+                            className="msg-try-again"
+                            onClick={() => {
+                                const target = failedTurn?.targets[section];
+                                if (target) jumpToSetting({ section, target });
+                                else openSettings(section);
+                            }}
+                        >
                             <Settings size={12} aria-hidden="true" />
                             {t.compose((say) => say('failedTurn.openSettings', { tab: say(`settings.section.${section}`) }))}
                         </button>

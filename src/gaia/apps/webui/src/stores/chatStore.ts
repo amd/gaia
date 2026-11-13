@@ -30,7 +30,8 @@ export interface SettingsJump {
     section: SettingsSection;
     /** CSS selector for the setting inside that section. */
     target: string;
-    from: SettingsSection;
+    /** The tab that sent the user here, offered as the way back; none from outside Settings. */
+    from?: SettingsSection;
 }
 
 /**

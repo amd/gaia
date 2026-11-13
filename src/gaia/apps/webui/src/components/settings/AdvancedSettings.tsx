@@ -161,7 +161,9 @@ export function AdvancedSettings() {
     const wrongModel   = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.expected_model_loaded === false);
     const smallContext = !cloudModel && !!(status?.lemonade_running && status.model_loaded && status.context_size_sufficient === false);
     const notDownloaded = !cloudModel && !!(status?.lemonade_running && !status.model_loaded && status.model_downloaded === false);
-    const needsLoad    = (wrongModel || smallContext) && modelName !== null;
+    // A saved custom ID the model server doesn't list can't be loaded; the custom model section says so.
+    const unlistedModel = saveNote?.kind === 'unlisted' && saveNote.id === modelName;
+    const needsLoad    = (wrongModel || smallContext) && modelName !== null && settingsLoaded && !unlistedModel;
 
     const failedMcp = mcpServers.some((s) => !s.connected);
 
@@ -314,7 +316,7 @@ export function AdvancedSettings() {
                 <LemonadeServerSection />
             </SettingsDisclosure>
 
-            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel ? isolate(savedCustomModel, 'ltr') : t('settings.advanced.customHint')}>
+            <SettingsDisclosure title={t('settings.advanced.customTitle')} hint={savedCustomModel ? isolate(savedCustomModel, 'ltr') : t('settings.advanced.customHint')} targetId="custom-model">
                 <p className="model-override-desc">{t('settings.advanced.customDesc')}</p>
                 <div className="model-input-row">
                     <input

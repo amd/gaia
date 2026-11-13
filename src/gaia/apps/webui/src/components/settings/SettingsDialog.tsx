@@ -76,6 +76,7 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
     }, [jump, section]);
 
     if (!section) return null;
+    const backTo = jump && jump.section === section ? jump.from : undefined;
 
     const pane = (() => {
         switch (section) {
@@ -118,17 +119,17 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                         <X size={18} />
                     </button>
                     <div ref={scroller} className="settings-scroll">
-                        {jump && jump.section === section && (
+                        {backTo && (
                             <button
                                 type="button"
                                 className="settings-back"
                                 onClick={() => {
-                                    open(jump.from);
-                                    panel.current?.querySelector<HTMLElement>(`[data-section="${jump.from}"]`)?.focus();
+                                    open(backTo);
+                                    panel.current?.querySelector<HTMLElement>(`[data-section="${backTo}"]`)?.focus();
                                 }}
                             >
                                 <ChevronLeft size={14} aria-hidden="true" />
-                                {t.compose((say) => say('settings.backTo', { section: say(`settings.section.${jump.from}`) }))}
+                                {t.compose((say) => say('settings.backTo', { section: say(`settings.section.${backTo}`) }))}
                             </button>
                         )}
                         {/* Keyed so a crashed section clears when another is picked. */}
