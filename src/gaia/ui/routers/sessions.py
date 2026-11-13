@@ -475,6 +475,7 @@ async def delete_session(
         session_permissions.forget_session(session_id)
         followups.forget(session_id)
         answer_retry.forget(session_id)
+        session_environment.forget_session(session_id)
     try:
         await asyncio.to_thread(file_snapshots.delete_session, session_id)
     except OSError as e:

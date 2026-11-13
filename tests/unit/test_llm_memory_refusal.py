@@ -150,6 +150,7 @@ def test_an_unreachable_server_gets_the_start_hint(monkeypatch, capsys):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         closed = sock.getsockname()[1]
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
     monkeypatch.setattr(LemonadeManager, "is_lemonade_installed", lambda: True)
     _answering_fails(monkeypatch, ConnectionError("connection refused"), server_up=None)
     monkeypatch.setattr(
