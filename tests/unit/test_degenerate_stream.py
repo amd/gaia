@@ -103,6 +103,25 @@ def test_a_run_that_ends_the_stream_is_flushed():
     assert _run(DegenerateOutputGuard(), chunks) == chunks
 
 
+def test_chunks_without_text_pass_through_untouched():
+    role_only = {"choices": [{"index": 0, "delta": {"role": "assistant"}}]}
+    tool_call = {
+        "choices": [
+            {
+                "index": 0,
+                "delta": {
+                    "content": None,
+                    "tool_calls": [{"index": 0, "function": {"arguments": "{"}}],
+                },
+                "finish_reason": None,
+            }
+        ]
+    }
+    not_text = _chunk(content=MagicMock(), reasoning=0)
+    chunks = [role_only, _chunk(), tool_call, tool_call, not_text, _chunk("Hi")]
+    assert _run(DegenerateOutputGuard(repeat_limit=2), chunks) == chunks
+
+
 # --------------------------------------------------------------------------
 # The Lemonade client
 # --------------------------------------------------------------------------

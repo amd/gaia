@@ -38,7 +38,7 @@ def _texts(chunk: Dict[str, Any]) -> Iterator[Tuple[str, str]]:
         delta = choice.get("delta") or {}
         for field in _TEXT_FIELDS:
             text = delta.get(field)
-            if text:
+            if isinstance(text, str) and text:
                 yield field, text
 
 
