@@ -1,0 +1,34 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+/** A markdown answer as the plain text a person sees, for the clipboard. */
+
+const FENCE = /(^|\n)[ \t]*```[^\n]*\n([\s\S]*?)(?:\n[ \t]*```[ \t]*(?=\n|$)|$)/g;
+
+function proseToPlain(prose: string): string {
+    return prose
+        .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+        .replace(/\[([^\]]+)\]\(([^)]*)\)/g, (_, text: string, url: string) => (text === url || !url ? text : `${text} (${url})`))
+        .replace(/^[ \t]*([-*_][ \t]*){3,}$/gm, '')
+        .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
+        .replace(/^([ \t]*)>[ \t]?/gm, '$1')
+        .replace(/^([ \t]*)[-*+][ \t]+/gm, '$1• ')
+        .replace(/^[ \t]*\|?[ \t:|-]+\|[ \t:|-]*\n?/gm, '')
+        .replace(/^[ \t]*\|(.*?)\|?[ \t]*$/gm, (_, cells: string) => cells.split('|').map((c) => c.trim()).join('\t'))
+        .replace(/`([^`\n]*)`/g, '$1')
+        .replace(/(\*\*|\*|~~)(\S(?:[\s\S]*?\S)?)\1/g, '$2')
+        .replace(/(?<!\w)(__|_)(\S(?:[\s\S]*?\S)?)\1(?!\w)/g, '$2');
+}
+
+/** *markdown* with its formatting marks removed; code blocks and links keep their text. */
+export function plainAnswerText(markdown: string): string {
+    let out = '';
+    let last = 0;
+    for (const m of markdown.matchAll(FENCE)) {
+        const at = m.index ?? 0;
+        out += proseToPlain(markdown.slice(last, at)) + m[1] + m[2];
+        last = at + m[0].length;
+    }
+    out += proseToPlain(markdown.slice(last));
+    return out.replace(/\n{3,}/g, '\n\n').trim();
+}
