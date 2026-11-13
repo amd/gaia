@@ -207,11 +207,6 @@ const MCP_OUTPUT_PREVIEW_LINES = 5;
 /** Below this many call rows the list is short enough to scan without a filter. */
 const FILTER_MIN_TOOL_ROWS = 6;
 
-/**
- * Shorten the detail of "Reading file: <long path>" to the part that differs
- * between similar rows (a path's tail, a URL's host and page) instead of
- * letting the row cut off at a shared prefix.
- */
 const FETCH_ERROR = /^Error fetching page:\s*(\d{3})?/;
 
 /** What a failed page fetch shows on its row; the library's own error stays in the opened step. */
@@ -224,6 +219,11 @@ export function failureText(step: AgentStep, t: Translate): string {
     return t('activity.fetchFailed');
 }
 
+/**
+ * Shorten the detail of "Reading file: <long path>" to the part that differs
+ * between similar rows (a path's tail, a URL's host and page) instead of
+ * letting the row cut off at a shared prefix.
+ */
 export function compactNarration(text: string): string {
     const split = /^([^:\n]{1,40}): (.+)$/.exec(text);
     if (!split) return text;
