@@ -13,7 +13,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.rag_tools import RAGToolsMixin, _split_oversized_page
 from gaia.rag.keyword_search import KeywordIndex
 from gaia.rag.sdk import EMBED_MAX_CHARS, RAGSDK, RAGConfig
-from gaia.rag.text_units import join_pieces
+from gaia.rag.text_units import join_pieces, last_tokens
 
 ZH_SENTENCES = [
     f"第{n}季度北京办公室的销售额为{n * 37}万元，比去年同期增长了百分之{n % 9 + 1}。"
@@ -65,6 +65,21 @@ def test_japanese_keyword_search_matches_kanji_and_kana_words():
 )
 def test_sentences_end_at_non_latin_punctuation(text, count):
     assert len(_sdk()._split_into_sentences(text)) == count
+
+
+def test_korean_keyword_search_matches_a_word_with_its_particle():
+    texts = [
+        "부산 공장의 직원 수는 이천 명입니다.",
+        "서울 사무소의 연간 예산은 삼백만 원입니다.",
+    ]
+
+    assert _top("서울 사무소 예산", texts)[:1] == [1]
+
+
+def test_chinese_overlap_starts_at_a_sentence_even_with_spaces_inside():
+    text = "广州仓库的面积为五千平方米。上海工厂 Q3 report 的员工人数为两千人。"
+
+    assert last_tokens(text, 20) == "上海工厂 Q3 report 的员工人数为两千人。"
 
 
 def test_joining_keeps_spaces_in_korean_and_drops_them_only_in_chinese():

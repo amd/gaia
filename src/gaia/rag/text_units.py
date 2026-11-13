@@ -79,10 +79,10 @@ def last_tokens(text: str, n_tokens: int) -> str:
     if len(text) <= target_chars:
         return text
     trimmed = text[-target_chars:]
-    first_space = trimmed.find(" ")
-    if first_space > 0:
-        return trimmed[first_space + 1 :]
     sentence_end = _WIDE_SENTENCE_END.search(trimmed)
     if sentence_end and sentence_end.end() < len(trimmed):
         return trimmed[sentence_end.end() :]
+    first_space = trimmed.find(" ")
+    if first_space > 0:
+        return trimmed[first_space + 1 :]
     return trimmed
