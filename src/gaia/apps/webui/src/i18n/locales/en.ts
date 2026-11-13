@@ -1040,7 +1040,7 @@ export const enMessages = {
     'rail.noSites': 'None from GAIA\'s web tools',
     'rail.cost': 'Cost',
     'rail.costLocal': 'No cloud charges',
-    'rail.costAbout': 'About ${usd} at list price',
+    'rail.costAbout': 'About {usd} at list price',
     'rail.costUnknownModel': 'Not known for this model',
     'rail.costUnknown': 'Not known',
     'rail.costUnreported': 'Not reported for this answer',

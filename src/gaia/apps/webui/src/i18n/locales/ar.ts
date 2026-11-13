@@ -1040,7 +1040,7 @@ const messages: Messages = {
     'rail.noSites': 'لا شيء من أدوات الويب في GAIA',
     'rail.cost': 'التكلفة',
     'rail.costLocal': 'لا رسوم سحابية',
-    'rail.costAbout': 'نحو ${usd} بسعر القائمة',
+    'rail.costAbout': 'نحو {usd} بسعر القائمة',
     'rail.costUnknownModel': 'غير معروفة لهذا النموذج',
     'rail.costUnknown': 'غير معروفة',
     'rail.costUnreported': 'لم يُبلَّغ عنها لهذه الإجابة',
