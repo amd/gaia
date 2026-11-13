@@ -1474,7 +1474,7 @@ export const enMessages = {
     'setup.plan.customize': 'Customize',
     'setup.plan.cloud': 'Use a cloud model',
     'setup.plan.cloudLabel': 'Cloud model',
-    'setup.plan.cloudWhy.noDownload': "Nothing to download: the model runs on the provider's computers.",
+    'setup.plan.cloudWhy.stillLocal': "The chat model runs on the provider's computers. GAIA still sets up graphics support and a small model on this PC to search your files and remember things.",
     'setup.plan.cloudWhy.key': 'Needs an API key from the provider, who charges for what you use.',
     'setup.plan.cloudWhy.sent': 'Each message and the chat history are sent to the provider.',
     'setup.plan.whatDownloads': 'See everything that will be downloaded',

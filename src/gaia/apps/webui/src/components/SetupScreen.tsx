@@ -1160,7 +1160,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         ? <p className="setup-hint">{t('settings.privacy.localOnlyBlocked')}</p>
                                         : (
                                             <ul className="setup-reasons">
-                                                <li>{t('setup.plan.cloudWhy.noDownload')}</li>
+                                                <li>{t('setup.plan.cloudWhy.stillLocal')}</li>
                                                 <li>{t('setup.plan.cloudWhy.key')}</li>
                                                 <li>{t('setup.plan.cloudWhy.sent')}</li>
                                             </ul>

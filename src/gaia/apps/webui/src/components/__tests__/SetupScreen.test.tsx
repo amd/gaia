@@ -344,7 +344,8 @@ describe('SetupScreen: the recommendation', () => {
         expect(cloud).not.toBeChecked();
         expect(screen.getByRole('region', { name: 'Recommended setup' })).toHaveTextContent('Recommended for this PC');
         const cloudCard = screen.getByRole('region', { name: 'Cloud model' });
-        expect(cloudCard).toHaveTextContent('Nothing to download');
+        expect(cloudCard).toHaveTextContent('GAIA still sets up graphics support and a small model on this PC');
+        expect(cloudCard).not.toHaveTextContent('Nothing to download');
         expect(cloudCard).toHaveTextContent('Each message and the chat history are sent to the provider.');
         expect(cloudCard).not.toHaveTextContent('Recommended');
         // Customize is its own button in the bottom bar, not a link beside the cloud choice.
