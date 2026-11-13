@@ -8,6 +8,7 @@ Provides shell command execution capabilities for file operations and system que
 
 import base64
 import binascii
+import fnmatch
 import ipaddress
 import logging
 import os
@@ -2116,6 +2117,1211 @@ def _protected_folder(resolved_path: str) -> Optional[str]:
         if security._path_is_within(Path(resolved_path), Path(folder)):
             return folder
     return None
+
+
+def _credential_file_name(name: str) -> bool:
+    """Whether a file called *name* is one ``PathValidator.is_read_blocked`` refuses."""
+    from gaia import security
+
+    return security.is_credential_file_name(name)
+
+
+def _credential_file(candidate_path: str, cwd: str) -> Optional[str]:
+    """The credential file *candidate_path* reads from *cwd*, or None."""
+    from gaia import security
+
+    return security.credential_file_read(candidate_path, cwd)
+
+
+#: Programs that print a file's contents, so a wildcard operand reads every match.
+_CONTENT_READERS = frozenset(
+    {
+        "cat",
+        "type",
+        "more",
+        "less",
+        "head",
+        "tail",
+        "nl",
+        "tac",
+        "strings",
+        "xxd",
+        "od",
+        "base64",
+        "grep",
+        "egrep",
+        "fgrep",
+        "rg",
+        "findstr",
+        "get-content",
+        "gc",
+        "select-string",
+        "sls",
+    }
+)
+
+#: grep's long options, and whether each takes a value. GNU grep also takes
+#: any unique prefix of one: ``--no-f`` is ``--no-filename``.
+_GREP_LONG = {
+    "after-context": True,
+    "before-context": True,
+    "context": True,
+    "binary-files": True,
+    "devices": True,
+    "directories": True,
+    "exclude": True,
+    "exclude-from": True,
+    "exclude-dir": True,
+    "file": True,
+    "include": True,
+    "label": True,
+    "max-count": True,
+    "regexp": True,
+    "group-separator": True,
+    "basic-regexp": False,
+    "binary": False,
+    "byte-offset": False,
+    "color": False,
+    "colour": False,
+    "count": False,
+    "dereference-recursive": False,
+    "extended-regexp": False,
+    "files-with-matches": False,
+    "files-without-match": False,
+    "fixed-strings": False,
+    "help": False,
+    "ignore-case": False,
+    "no-ignore-case": False,
+    "initial-tab": False,
+    "invert-match": False,
+    "line-buffered": False,
+    "line-number": False,
+    "line-regexp": False,
+    "no-filename": False,
+    "no-group-separator": False,
+    "no-messages": False,
+    "null": False,
+    "null-data": False,
+    "only-matching": False,
+    "perl-regexp": False,
+    "quiet": False,
+    "recursive": False,
+    "silent": False,
+    "text": False,
+    "version": False,
+    "with-filename": False,
+    "word-regexp": False,
+}
+
+#: ripgrep's long options. It takes no abbreviations.
+_RG_LONG = {
+    **{
+        name: True
+        for name in (
+            "regexp",
+            "file",
+            "glob",
+            "iglob",
+            "type",
+            "type-not",
+            "type-add",
+            "type-clear",
+            "after-context",
+            "before-context",
+            "context",
+            "max-count",
+            "max-columns",
+            "max-depth",
+            "max-filesize",
+            "threads",
+            "replace",
+            "encoding",
+            "pre",
+            "pre-glob",
+            "sort",
+            "sortr",
+            "colors",
+            "color",
+            "context-separator",
+            "field-match-separator",
+            "field-context-separator",
+            "path-separator",
+            "ignore-file",
+            "engine",
+            "dfa-size-limit",
+            "regex-size-limit",
+        )
+    },
+    **{
+        name: False
+        for name in (
+            "hidden",
+            "no-hidden",
+            "no-ignore",
+            "no-ignore-vcs",
+            "no-ignore-dot",
+            "no-ignore-global",
+            "no-ignore-parent",
+            "no-ignore-exclude",
+            "no-ignore-files",
+            "no-require-git",
+            "ignore-case",
+            "smart-case",
+            "case-sensitive",
+            "fixed-strings",
+            "word-regexp",
+            "line-regexp",
+            "invert-match",
+            "count",
+            "count-matches",
+            "files",
+            "files-with-matches",
+            "files-without-match",
+            "line-number",
+            "no-line-number",
+            "column",
+            "no-column",
+            "with-filename",
+            "no-filename",
+            "heading",
+            "no-heading",
+            "pretty",
+            "json",
+            "only-matching",
+            "multiline",
+            "multiline-dotall",
+            "follow",
+            "no-follow",
+            "text",
+            "binary",
+            "no-binary",
+            "search-zip",
+            "pcre2",
+            "auto-hybrid-regex",
+            "crlf",
+            "null",
+            "null-data",
+            "quiet",
+            "trim",
+            "no-messages",
+            "no-config",
+            "one-file-system",
+            "unrestricted",
+            "vimgrep",
+            "byte-offset",
+            "stats",
+            "passthru",
+            "no-unicode",
+            "max-columns-preview",
+            "line-buffered",
+            "block-buffered",
+            "sort-files",
+        )
+    },
+}
+
+#: ``git grep``'s long options; git takes a unique prefix of one too.
+_GIT_GREP_LONG = {
+    **{
+        name: True
+        for name in (
+            "after-context",
+            "before-context",
+            "context",
+            "max-depth",
+            "max-count",
+            "threads",
+        )
+    },
+    **{
+        name: False
+        for name in (
+            "cached",
+            "untracked",
+            "no-index",
+            "exclude-standard",
+            "no-exclude-standard",
+            "recurse-submodules",
+            "text",
+            "textconv",
+            "no-textconv",
+            "ignore-case",
+            "invert-match",
+            "word-regexp",
+            "full-name",
+            "extended-regexp",
+            "basic-regexp",
+            "perl-regexp",
+            "fixed-strings",
+            "line-number",
+            "column",
+            "files-with-matches",
+            "name-only",
+            "files-without-match",
+            "null",
+            "only-matching",
+            "count",
+            "color",
+            "no-color",
+            "break",
+            "heading",
+            "show-function",
+            "function-context",
+            "and",
+            "or",
+            "not",
+            "all-match",
+            "quiet",
+            "recursive",
+            "no-recursive",
+        )
+    },
+}
+
+#: How each search tool reads its flags.
+_SEARCH_FLAVORS = {
+    "grep": {
+        "long": _GREP_LONG,
+        "prefixes": True,
+        "value_short": "efmABCdD",
+        "known_short": "abcdefhilmnoqrsuvwxyzABCDEFGHILPRTUVZ0123456789",
+        "recursive_short": "rR",
+        "recursive_long": ("recursive", "dereference-recursive"),
+        "hidden_short": "hz",
+        "hidden_long": ("no-filename", "null-data"),
+        "always_recursive": False,
+    },
+    "rg": {
+        "long": _RG_LONG,
+        "prefixes": False,
+        "value_short": "efgtTABCmMjrEd",
+        "known_short": "0123456789aABcCdeEfFgHhiIjlLmMnNopqrsStTuUvVwxz.",
+        "recursive_short": "",
+        "recursive_long": (),
+        "hidden_short": "Ip",
+        "hidden_long": ("no-filename", "heading", "pretty", "json", "null-data"),
+        "always_recursive": True,
+    },
+    "git": {
+        "long": _GIT_GREP_LONG,
+        "prefixes": True,
+        "value_short": "efABCm",
+        "known_short": "aiIvwcElLnoqHhzefABCFGPWpOm0123456789",
+        "recursive_short": "",
+        "recursive_long": (),
+        "hidden_short": "h",
+        "hidden_long": ("heading",),
+        "always_recursive": True,
+    },
+}
+
+_LONG_ALIASES = {"colour": "color"}
+
+
+def _long_option(name: str, table: dict, prefixes: bool) -> Optional[str]:
+    """The long option *name* spells in *table*, allowing a unique prefix; else None."""
+    if name in table:
+        return _LONG_ALIASES.get(name, name)
+    if not prefixes or not name:
+        return None
+    matches = {_LONG_ALIASES.get(o, o) for o in table if o.startswith(name)}
+    return matches.pop() if len(matches) == 1 else None
+
+
+_COMMAND_BREAKS = frozenset({"|", "||", "&&", ";", "&"})
+
+_WILDCARD = re.compile(r"[*?\[]")
+
+_GREP_PROGRAMS = frozenset({"grep", "egrep", "fgrep"})
+
+
+def _parse_grep(args: list, flavor: str = "grep") -> dict:
+    """How a grep-style command reads *args*: its pattern, files and switches.
+
+    ``files`` holds the operands searched; the pattern operand is not one, so
+    ``grep .env .gitignore`` searches ``.gitignore`` only. ``pattern_files``
+    are the ``-f`` files the patterns come from. ``unknown`` is set when an
+    option is one this check does not know, so what it does to the output
+    is unknown too.
+    """
+    spec = _SEARCH_FLAVORS[flavor]
+    table = spec["long"]
+    parsed: dict = {
+        "recursive": spec["always_recursive"],
+        "names_hidden": False,
+        "unknown": False,
+        "includes": [],
+        "excludes": [],
+        "pattern_files": [],
+        "files": [],
+    }
+    pattern_given = False
+    positional: list = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg == "--":
+            positional.extend(args[index:])
+            break
+        if arg.startswith("--"):
+            written, eq, value = arg[2:].partition("=")
+            name = _long_option(written, table, spec["prefixes"])
+            if name is None:
+                parsed["unknown"] = True
+                continue
+            if table.get(name) and not eq:
+                value = args[index] if index < len(args) else ""
+                index += 1
+            if name in spec["recursive_long"] or (
+                name == "directories" and value == "recurse"
+            ):
+                parsed["recursive"] = True
+            if name in spec["hidden_long"]:
+                parsed["names_hidden"] = True
+            if name in ("regexp", "file"):
+                pattern_given = True
+                if name == "file":
+                    parsed["pattern_files"].append(value)
+            elif name in ("glob", "iglob") and value.startswith("!"):
+                parsed["excludes"].append(value[1:])
+            elif name in ("include", "glob", "iglob"):
+                parsed["includes"].append(value)
+            elif name == "exclude":
+                parsed["excludes"].append(value)
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            for offset, flag in enumerate(arg[1:], start=1):
+                if flag not in spec["known_short"]:
+                    parsed["unknown"] = True
+                if flag in spec["recursive_short"]:
+                    parsed["recursive"] = True
+                if flag in spec["hidden_short"]:
+                    parsed["names_hidden"] = True
+                if flag in spec["value_short"]:
+                    pattern_given = pattern_given or flag in "ef"
+                    value = arg[offset + 1 :]
+                    if not value:
+                        value = args[index] if index < len(args) else ""
+                        index += 1
+                    if flag == "f":
+                        parsed["pattern_files"].append(value)
+                    elif flag == "d" and flavor == "grep" and value == "recurse":
+                        parsed["recursive"] = True
+                    elif flag == "g" and flavor == "rg":
+                        if value.startswith("!"):
+                            parsed["excludes"].append(value[1:])
+                        else:
+                            parsed["includes"].append(value)
+                    break
+            continue
+        positional.append(arg)
+    parsed["files"] = positional if pattern_given else positional[1:]
+    return parsed
+
+
+def _grep_roots(args: list, flavor: str = "grep") -> Tuple[list, bool]:
+    """``(roots, names_shown)`` for a recursive search; no roots when not recursive.
+
+    Each root is ``(root, includes, excludes)``. *names_shown* is whether every
+    output line is known to start with the name of the file it came from.
+    """
+    parsed = _parse_grep(args, flavor)
+    if not parsed["recursive"]:
+        return [], True
+    roots = [
+        (root, parsed["includes"], parsed["excludes"])
+        for root in parsed["files"] or ["."]
+    ]
+    return roots, not (parsed["names_hidden"] or parsed["unknown"])
+
+
+#: git's own options that take a value, before its subcommand.
+_GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+
+
+def _git_grep_roots(args: list) -> Tuple[list, bool]:
+    """:func:`_grep_roots` for ``git [options] grep ...``; no roots for another subcommand."""
+    base = ""
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg in _GIT_VALUE_OPTIONS:
+            if arg == "-C" and index < len(args):
+                base = os.path.join(base, args[index])
+            index += 1
+            continue
+        if arg.startswith("-"):
+            continue
+        if arg != "grep":
+            return [], True
+        roots, names_shown = _grep_roots(args[index:], "git")
+        if base:
+            roots = [(os.path.join(base, r), inc, exc) for r, inc, exc in roots]
+        return roots, names_shown
+    return [], True
+
+
+def _findstr_parse(args: list) -> Tuple[bool, list, list]:
+    """``(recursive, files, lists)`` for ``findstr``; the search string is not a file.
+
+    *lists* are the ``/g:`` and ``/f:`` files it reads strings or names from.
+    """
+    recursive = pattern_given = False
+    folders: list = []
+    lists: list = []
+    positional: list = []
+    for arg in args:
+        if arg[:1] in ("/", "-") and len(arg) > 1:
+            head, colon, value = arg[1:].partition(":")
+            if colon:
+                if head.lower() in ("c", "g"):
+                    pattern_given = True
+                if head.lower() in ("g", "f"):
+                    lists.append(value)
+                elif head.lower() == "d":
+                    folders.extend(f for f in value.split(";") if f)
+            elif head.isalpha() and "s" in head.lower():
+                recursive = True
+            continue
+        positional.append(arg)
+    specs = positional if pattern_given else positional[1:]
+    if folders:
+        specs = [os.path.join(folder, spec) for folder in folders for spec in specs]
+    return recursive, specs, lists
+
+
+def _findstr_roots(args: list) -> list:
+    """``(spec, [], [])`` for each file spec of ``findstr /s``; [] without ``/s``."""
+    recursive, specs, _ = _findstr_parse(args)
+    if not recursive:
+        return []
+    return [(spec, [], []) for spec in specs]
+
+
+_SELECT_STRING = ("select-string", "sls")
+_CHILD_ITEM = ("get-childitem", "gci", "ls", "dir", "childitem")
+_PS_PATH_PARAMS = ("-path", "-literalpath", "-lp", "-pspath")
+
+
+def _select_string_roots(words: list) -> list:
+    """Roots of a PowerShell ``Select-String`` that recurses, or []."""
+    lowered = [w.lower() for w in words]
+    if not any(w in _SELECT_STRING for w in lowered):
+        return []
+    if not any(len(w) > 1 and "-recurse".startswith(w) for w in lowered):
+        return []
+    roots: list = []
+    includes: list = []
+    for index, word in enumerate(lowered[:-1]):
+        value = words[index + 1]
+        if word in _PS_PATH_PARAMS:
+            roots.append(value)
+        elif word in ("-include", "-filter"):
+            includes.extend(v for v in value.split(",") if v)
+        elif word in _CHILD_ITEM:
+            if not value.startswith("-"):
+                roots.append(value)
+    return [(root, includes, []) for root in roots or ["."]]
+
+
+def _split_commands(words: list) -> list:
+    """``(command, piped)`` for each command in *words*; *piped* when ``|`` follows."""
+    commands: list = [[]]
+    piped: list = []
+    for word in words:
+        if word in _COMMAND_BREAKS:
+            piped.append(word == "|")
+            commands.append([])
+        else:
+            commands[-1].append(word)
+    piped.append(False)
+    return list(zip(commands, piped))
+
+
+#: Filters that pass each line through whole, so its file-name prefix survives.
+_LINE_KEEPERS = frozenset(
+    {"head", "tail", "sort", "wc", "less", "more", "findstr"} | _GREP_PROGRAMS
+)
+
+
+def _redirects_stdout(command: list) -> bool:
+    """Whether *command* sends its output to a file instead of back to the tool."""
+    return any(re.match(r"1?>", word) is not None for word in command)
+
+
+#: head's and tail's long options; both take a unique prefix of one.
+_HEAD_TAIL_LONG = {
+    "bytes": True,
+    "lines": True,
+    "follow": False,
+    "retry": False,
+    "pid": True,
+    "sleep-interval": True,
+    "max-unchanged-stats": True,
+    "quiet": False,
+    "silent": False,
+    "verbose": False,
+    "zero-terminated": False,
+    "help": False,
+    "version": False,
+}
+
+
+def _keeps_lines(command: list) -> bool:
+    """Whether *command*, fed lines on stdin, prints each one whole or not at all.
+
+    An option this check does not know could change that, so it says no.
+    """
+    if not command:
+        return False
+    program = _interpreter_name(command[0])
+    if program not in _LINE_KEEPERS or _redirects_stdout(command):
+        return False
+    args = command[1:]
+    if program in _GREP_PROGRAMS:
+        if _parse_grep(args)["unknown"]:
+            return False
+        for arg in args:
+            if arg == "--":
+                break
+            if arg.startswith("--"):
+                written = arg[2:].partition("=")[0]
+                if _long_option(written, _GREP_LONG, True) == "only-matching":
+                    return False
+            elif arg.startswith("-") and "o" in re.split(r"[efmABCdD]", arg[1:])[0]:
+                return False
+        return True
+    if program in ("head", "tail"):
+        for arg in args:
+            if arg.startswith("--"):
+                written = arg[2:].partition("=")[0]
+                name = _long_option(written, _HEAD_TAIL_LONG, True)
+                if name is None or (program == "tail" and name == "bytes"):
+                    return False
+            elif program == "tail" and re.match(r"-[a-z]*c", arg):
+                return False
+    return True
+
+
+def _bulk_read_roots(words: list, shown: bool = False) -> list:
+    """``(spec, includes, excludes, named)`` for every folder or wildcard *words* reads.
+
+    A recursive search reads every file under its root; a reader given a
+    wildcard reads every match. Each spec is a folder or a folder/glob.
+
+    *named* marks a recursive search whose every output line comes back with
+    its file name in front: lines from a credential file are masked on the
+    way back (``credential_shapes.mask_credential_file_lines``), so only a
+    link that hides one behind an ordinary name refuses it. *shown* says
+    whether what *words* prints comes back with each line whole.
+    """
+    commands = _split_commands(words)
+    # Whether each command's output comes back: nothing after it in its
+    # pipeline but line keepers, and nothing sent to a file.
+    reaches = [False] * len(commands)
+    downstream_ok = shown
+    for index in range(len(commands) - 1, -1, -1):
+        command, piped = commands[index]
+        if not piped:
+            downstream_ok = shown
+        reaches[index] = downstream_ok and not _redirects_stdout(command)
+        downstream_ok = reaches[index] and _keeps_lines(command)
+    roots: list = []
+    masked: set = set()
+    for index, (command, _) in enumerate(commands):
+        if not command:
+            continue
+        program = _interpreter_name(command[0])
+        if program in _GREP_PROGRAMS:
+            found, names_shown = _grep_roots(command[1:])
+        elif program == "rg":
+            found, names_shown = _grep_roots(command[1:], "rg")
+        elif program == "git":
+            found, names_shown = _git_grep_roots(command[1:])
+        elif program == "findstr":
+            found, names_shown = _findstr_roots(command[1:]), True
+        else:
+            continue
+        shown_whole = bool(found) and reaches[index] and names_shown
+        if shown_whole:
+            masked.add(index)
+        roots.extend((*root, shown_whole) for root in found)
+    search = _select_string_roots(words)
+    last = max((i for i, (c, _) in enumerate(commands) if c), default=-1)
+    tail = [w.lower() for w in commands[last][0]] if last >= 0 else []
+    if (
+        search
+        and reaches[last]
+        and any(w in _SELECT_STRING for w in tail)
+        and "-raw" not in tail
+    ):
+        # The whole pipeline feeding the search: 'gci -r | sls x'.
+        index = last
+        while index >= 0 and (index == last or commands[index][1]):
+            masked.add(index)
+            index -= 1
+        roots.extend((*root, True) for root in search)
+    else:
+        roots.extend((*root, False) for root in search)
+    if any(_interpreter_name(w) in _CONTENT_READERS for w in words):
+        roots.extend(
+            (word, [], [], False)
+            for index, (command, _) in enumerate(commands)
+            if index not in masked
+            for word in command
+            if not word.startswith("-") and _WILDCARD.search(word)
+        )
+    return roots
+
+
+#: Programs and cmdlets that print, search, copy or encode a file they are
+#: given. Only these make a credential-file operand a read: ``rm .env``,
+#: ``git add .env``, ``mv``, ``chmod`` and an editor do not put it in the output.
+_CREDENTIAL_READERS = _CONTENT_READERS | frozenset(
+    {
+        "awk",
+        "gawk",
+        "sed",
+        "sort",
+        "uniq",
+        "cut",
+        "diff",
+        "jq",
+        "yq",
+        "iconv",
+        "cp",
+        "copy",
+        "xcopy",
+        "robocopy",
+        "scp",
+        "rsync",
+        "copy-item",
+        "cpi",
+        "certutil",
+        "openssl",
+    }
+)
+
+#: Flags whose value is a file kept out of the run, never read for output.
+_EXCLUDING_FLAGS = frozenset({"--exclude", "--exclude-dir", "-exclude", "/x"})
+
+#: Uploaders that read a file named ``@file`` (curl -F x=@f, -d @f) or after -T.
+_UPLOADERS = frozenset({"curl", "wget", "http", "https", "xh", "httpie"})
+
+#: Calls a non-Python inline script reads a file with.
+_CODE_READ_CALLS = re.compile(
+    r"readFileSync|readFile|createReadStream|\bopen\b|File\.read|IO\.read|slurp"
+)
+
+_COPIERS = frozenset(
+    {"cp", "copy", "xcopy", "robocopy", "scp", "rsync", "copy-item", "cpi"}
+)
+
+#: Each copier's flags that take a value, which is never a file it copies.
+_COPIER_VALUE_FLAGS = {
+    "cp": frozenset({"-S", "--suffix"}),
+    "scp": frozenset({"-i", "-F", "-P", "-o", "-c", "-l", "-S", "-J", "-D", "-X"}),
+    "rsync": frozenset(
+        {
+            "-e",
+            "--rsh",
+            "-f",
+            "--filter",
+            "--exclude",
+            "--include",
+            "--exclude-from",
+            "--include-from",
+            "--files-from",
+            "-T",
+            "--temp-dir",
+            "--log-file",
+            "--partial-dir",
+            "--backup-dir",
+            "--suffix",
+            "--chmod",
+            "--chown",
+            "-B",
+            "--block-size",
+            "--password-file",
+            "--link-dest",
+            "--compare-dest",
+            "--copy-dest",
+            "--timeout",
+            "--port",
+            "--bwlimit",
+            "--max-size",
+            "--min-size",
+        }
+    ),
+}
+
+#: Copy-Item's parameters that take a value other than a source path.
+_COPY_ITEM_VALUES = (
+    "-filter",
+    "-include",
+    "-exclude",
+    "-credential",
+    "-tosession",
+    "-fromsession",
+)
+
+#: ``openssl`` options whose value is a file it writes.
+_OPENSSL_OUTPUTS = frozenset({"-out", "-keyout"})
+
+#: sed text that writes somewhere other than the file it edits.
+_SED_TO_TERMINAL = re.compile(r"/dev/(?:stdout|stderr|fd/|tty)|/proc/self/fd")
+
+
+def _copier_sources(program: str, args: list) -> list:
+    """The files a copy reads: every operand but its destination."""
+    if program in ("copy-item", "cpi"):
+        return _copy_item_sources(args)
+    value_flags = _COPIER_VALUE_FLAGS.get(program, frozenset())
+    positional: list = []
+    dest_named = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg == "--":
+            positional.extend(args[index:])
+            break
+        if program == "robocopy" and arg.lower() in ("/xf", "/xd"):
+            # Every word up to the next switch is a name it skips.
+            while index < len(args) and not args[index].startswith("/"):
+                index += 1
+            continue
+        if program == "cp" and arg.startswith(("-t", "--target-directory")):
+            dest_named = True
+            if arg in ("-t", "--target-directory"):
+                index += 1
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            if arg in value_flags:
+                index += 1
+            continue
+        if program in ("copy", "xcopy", "robocopy") and _is_slash_switch(arg):
+            continue
+        positional.append(arg)
+    if program == "robocopy":
+        if not positional:
+            return []
+        source = positional[0]
+        return [source] + [os.path.join(source, name) for name in positional[2:]]
+    if program == "copy":
+        # 'copy a+b dest' joins its sources with '+'.
+        positional = [p for word in positional for p in word.split("+") if p]
+    if dest_named or len(positional) < 2:
+        return positional
+    return positional[:-1]
+
+
+def _copy_item_sources(args: list) -> list:
+    """The files ``Copy-Item`` reads: its path, never its destination."""
+    sources: list = []
+    positional: list = []
+    dest_named = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        lowered = arg.lower()
+        index += 1
+        if lowered.startswith("-") and len(lowered) > 1:
+            value = args[index] if index < len(args) else ""
+            if len(lowered) > 2 and "-destination".startswith(lowered):
+                dest_named = True
+                index += 1
+            elif lowered in _PS_PATH_PARAMS:
+                sources.extend(v for v in value.split(",") if v)
+                index += 1
+            elif any(
+                len(lowered) > 2 and p.startswith(lowered) for p in _COPY_ITEM_VALUES
+            ):
+                index += 1
+            continue
+        positional.append(arg)
+    if sources:
+        # With the path named, a positional operand is the destination.
+        return sources
+    if dest_named or len(positional) < 2:
+        return positional
+    return positional[:-1]
+
+
+def _sed_in_place(args: list) -> bool:
+    """Whether ``sed`` edits its files in place and prints none of them."""
+    in_place = any(
+        re.match(r"-[nErsuz]*i", arg) is not None or arg.startswith("--in-place")
+        for arg in args
+    )
+    if not in_place:
+        return False
+    # A script read from a file, or one that writes to the terminal, may print.
+    if any(arg in ("-f", "--file") or arg.startswith("--file=") for arg in args):
+        return False
+    return not any(_SED_TO_TERMINAL.search(arg) for arg in args)
+
+
+def _sed_files(args: list) -> list:
+    """The files ``sed`` reads; its script operand is not one."""
+    script_given = False
+    positional: list = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg in ("-e", "--expression", "-l", "--line-length"):
+            script_given = script_given or arg in ("-e", "--expression")
+            index += 1
+            continue
+        if arg in ("-f", "--file"):
+            # A script file is read: its text can surface in an error.
+            script_given = True
+            if index < len(args):
+                positional.append(args[index])
+                index += 1
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            if arg.startswith("--file="):
+                positional.append(arg.split("=", 1)[1])
+            script_given = script_given or arg.startswith(("--expression=", "--file="))
+            continue
+        positional.append(arg)
+    return positional if script_given else positional[1:]
+
+
+def _select_string_files(args: list) -> list:
+    """The files ``Select-String`` reads; its ``-Pattern`` is not one."""
+    files: list = []
+    positional: list = []
+    pattern_named = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        lowered = arg.lower()
+        index += 1
+        if lowered.startswith("-") and len(lowered) > 1:
+            value = args[index] if index < len(args) else ""
+            if len(lowered) > 3 and "-pattern".startswith(lowered):
+                pattern_named = True
+                index += 1
+            elif lowered in _PS_PATH_PARAMS:
+                files.extend(v for v in value.split(",") if v)
+                index += 1
+            elif lowered in ("-encoding", "-context", "-include", "-exclude"):
+                index += 1
+            continue
+        positional.append(arg)
+    return files + (positional if pattern_named else positional[1:])
+
+
+def _reader_operands(command: list) -> list:
+    """The operands *command*'s reader program reads as files.
+
+    A copy's destination, an ``openssl -out`` file, a search pattern and the
+    files of an in-place ``sed`` edit are not reads: none of them puts the
+    file's contents into the output.
+    """
+    start = next(
+        (
+            index
+            for index, word in enumerate(command)
+            if _interpreter_name(word) in _CREDENTIAL_READERS
+        ),
+        None,
+    )
+    if start is None:
+        return []
+    program = _interpreter_name(command[start])
+    args = command[start + 1 :]
+    if program in _COPIERS:
+        return _copier_sources(program, args)
+    if program in _GREP_PROGRAMS or program == "rg":
+        parsed = _parse_grep(args, "rg" if program == "rg" else "grep")
+        return parsed["pattern_files"] + parsed["files"]
+    if program == "findstr":
+        _, files, lists = _findstr_parse(args)
+        return lists + files
+    if program in _SELECT_STRING:
+        return _select_string_files(args)
+    if program == "sed":
+        return [] if _sed_in_place(args) else _sed_files(args)
+    operands: list = []
+    previous = ""
+    for word in args:
+        skip = previous.lower() in _EXCLUDING_FLAGS or (
+            program == "openssl" and previous in _OPENSSL_OUTPUTS
+        )
+        previous = word
+        if skip or word.lower().startswith(tuple(f + "=" for f in _EXCLUDING_FLAGS)):
+            continue
+        operands.extend(_flag_path_values(word))
+    return operands
+
+
+def _read_targets(command: list) -> list:
+    """The words of one command that it reads as files."""
+    uploader = any(_interpreter_name(word) in _UPLOADERS for word in command)
+    targets = []
+    for index, word in enumerate(command):
+        previous = command[index - 1].lower() if index else ""
+        if previous == "<":
+            targets.append(word)
+        elif word.startswith("<") and not word.startswith("<<") and len(word) > 1:
+            targets.append(word[1:])
+        if uploader:
+            if word.startswith("@"):
+                targets.append(word[1:])
+            elif "=@" in word:
+                targets.append(word.split("=@", 1)[1])
+            elif previous in ("-t", "--upload-file"):
+                targets.append(word)
+    targets.extend(_reader_operands(command))
+    return targets
+
+
+def _script_commands(body: str, quotes: str) -> list:
+    """``(text, joiner, redirected)`` for each command of a cmd/PowerShell *body*.
+
+    *joiner* is ``|`` when the next command reads this one's output, ``;``
+    for any other separator, and ``""`` after the last. *redirected* is
+    whether the command sends its output to a file with ``>``.
+    """
+    commands: list = []
+    current: list = []
+    redirected = False
+    quote: Optional[str] = None
+    index = 0
+    while index < len(body):
+        char = body[index]
+        nxt = body[index + 1 : index + 2]
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in quotes:
+            quote = char
+        elif char in "|;&":
+            doubled = nxt == char and char != ";"
+            joiner = "|" if char == "|" and not doubled else ";"
+            commands.append(("".join(current), joiner, redirected))
+            current, redirected = [], False
+            index += 2 if doubled else 1
+            continue
+        elif char == ">" and not "".join(current).rstrip().endswith("2"):
+            redirected = True
+        current.append(char)
+        index += 1
+    commands.append(("".join(current), "", redirected))
+    return commands
+
+
+def _check_words(body: str, dialect: str) -> list:
+    """An inline script's words for the credential check.
+
+    A cmd script keeps its ``/name`` switches: ``findstr /c:x`` and ``/s``
+    decide which operand is a file and whether a search recurses. A cmd or
+    PowerShell script keeps its ``|``, ``;`` and ``>``, which decide whether
+    a search's lines come back with their file names on them.
+    """
+    if dialect == _PS_ENCODED:
+        try:
+            body = base64.b64decode(body, validate=True).decode("utf-16-le")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return _script_words(body, dialect)
+        dialect = "powershell"
+    if dialect == _CMD_ATTACHED:
+        body, dialect = body[2:], "cmd"
+    if dialect not in ("cmd", "powershell"):
+        return _script_words(body, dialect)
+    words: list = []
+    for text, joiner, redirected in _script_commands(body, _SCRIPT_QUOTES[dialect]):
+        if dialect == "cmd":
+            words.extend(_split_script(text, "cmd"))
+        else:
+            words.extend(_script_words(text, dialect))
+        if redirected:
+            words.append(">")
+        if joiner:
+            words.append(joiner)
+    return words
+
+
+def credential_read_in_words(words: list, cwd: str) -> Optional[Tuple[str, str]]:
+    """``(word, file)`` when a command in *words* reads a credential file.
+
+    Args:
+        words: One command's words, or several joined by ``|``/``&&``/``;``.
+        cwd: The folder relative paths resolve against.
+    """
+    commands: list = [[]]
+    for word in words:
+        if word in _COMMAND_BREAKS:
+            commands.append([])
+        else:
+            commands[-1].append(word)
+    for command in commands:
+        for target in _read_targets(command):
+            spellings = [target]
+            # cmd.exe drops an unquoted '^' that shlex keeps.
+            if _pipe_dialect() == "cmd" and "^" in target:
+                spellings.append(re.sub(r"\^(.?)", r"\1", target))
+            for spelling in spellings:
+                found = _credential_file(spelling, cwd)
+                if found is not None:
+                    return target, found
+    return None
+
+
+def _credential_read(argv: list, cwd: str) -> Optional[Tuple[str, str]]:
+    """``(what, file)`` when *argv*, or a script it runs, reads a credential file."""
+    from gaia.agents.base.credential_reads import (
+        credential_in_python,
+        script_credential,
+    )
+
+    found = credential_read_in_words(list(argv), cwd)
+    if found is not None:
+        return found
+    program = _interpreter_name(argv[0])
+    positions = _inline_script_positions(argv)
+    if program == "python" and not positions:
+        script = next((a for a in argv[1:] if not a.startswith("-")), None)
+        if script and script.lower().endswith((".py", ".pyw")):
+            hit = script_credential(script, [cwd])
+            if hit is not None:
+                return script, hit
+    script_words: list = []
+    for index, dialect in positions.items():
+        dialect = dialect.rstrip(_MAYBE)
+        if dialect in (_SWITCH, _ENV_SPLIT, _ENV_SPLIT_ATTACHED):
+            continue
+        body = argv[index]
+        if dialect != "code":
+            script_words.extend(_check_words(body, dialect))
+            continue
+        interpreter = next(
+            (
+                _interpreter_name(w)
+                for w in argv[:index]
+                if _interpreter_name(w) in _CODE_SCRIPT_FLAGS
+            ),
+            "",
+        )
+        if interpreter in ("python", "py"):
+            hit = credential_in_python(body, [cwd])
+            if hit is not None:
+                return body, hit
+        elif _CODE_READ_CALLS.search(body):
+            for word in _script_words(body, dialect):
+                hit = _credential_file(word, cwd)
+                if hit is not None:
+                    return word, hit
+    if script_words:
+        return credential_read_in_words(script_words, cwd)
+    return None
+
+
+def _command_word_lists(argv: list) -> list:
+    """*argv*, then the words of any inline script it runs, as one list each."""
+    lists = [list(argv)]
+    script: list = []
+    for index, dialect in _inline_script_positions(argv).items():
+        dialect = dialect.rstrip(_MAYBE)
+        if dialect in (_SWITCH, _ENV_SPLIT, _ENV_SPLIT_ATTACHED):
+            continue
+        script.extend(_check_words(argv[index], dialect))
+    if script:
+        lists.append(script)
+    return lists
+
+
+def _bulk_read_credential(
+    argv: list, cwd: str, downstream: Optional[list] = None
+) -> Optional[str]:
+    """A credential file directly inside a folder *argv* reads as a whole, or None.
+
+    Only the folder's own entries are listed, never a whole tree, so a
+    credential file in a subfolder is not found here. *downstream* are the
+    commands *argv*'s output is piped through, which decide whether a
+    recursive search's lines come back with their file names on them.
+    """
+    shown = all(_keeps_lines(command) for command in downstream or ())
+    for words in _command_word_lists(argv):
+        for spec, includes, excludes, named in _bulk_read_roots(words, shown):
+            spec = os.path.expandvars(os.path.expanduser(spec))
+            try:
+                base = Path(cwd).joinpath(spec)
+                if base.is_dir():
+                    folder, pattern = base, None
+                elif _WILDCARD.search(base.name) and base.parent.is_dir():
+                    folder, pattern = base.parent, base.name.lower()
+                else:
+                    continue
+                entries = list(os.scandir(folder))
+            except (OSError, ValueError) as exc:
+                logger.debug("Cannot list %r for the credential check: %s", spec, exc)
+                continue
+            for entry in entries:
+                if _bulk_entry_is_credential(entry, pattern, includes, excludes, named):
+                    return entry.path
+    return None
+
+
+def _bulk_entry_is_credential(
+    entry: os.DirEntry,
+    pattern: Optional[str],
+    includes: list,
+    excludes: list,
+    named: bool = False,
+) -> bool:
+    """Whether a folder-wide read of *entry*'s folder reads it as a credential.
+
+    With *named*, a credential file under its own name is masked in the
+    output instead, so only a link to one under another name counts.
+    """
+    name = entry.name.lower()
+    if pattern and not fnmatch.fnmatchcase(name, pattern):
+        return False
+    if includes and not any(fnmatch.fnmatchcase(name, g.lower()) for g in includes):
+        return False
+    if any(fnmatch.fnmatchcase(name, g.lower()) for g in excludes):
+        return False
+    try:
+        if not entry.is_file():
+            return False
+        real = os.path.realpath(entry.path)
+    except OSError as exc:
+        logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
+        return False
+    if named:
+        return not _credential_file_name(name) and _credential_file_name(
+            os.path.basename(real)
+        )
+    return _credential_file_name(name) or _credential_file_name(os.path.basename(real))
+
+
+def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]:
+    """The hard refusal for a shell argument that reads a credential file.
+
+    No tier: neither an approval nor full access lifts it.
+    """
+    return {
+        **NOT_EXECUTED,
+        "status": "error",
+        "error": (
+            f"Access denied: {label} '{arg}' reads '{credential}', which holds "
+            "credentials, keys or secrets. Shell commands may not read it, even "
+            "with full access or after approval."
+        ),
+        "has_errors": True,
+        "hint": (
+            "Ask the user to open the file themselves. A recursive search of a "
+            "folder that holds one runs when each line keeps its file name (no "
+            "-h, cut or sed after it); or name the files to search."
+        ),
+    }
 
 
 def _operator_check_text(command: str) -> str:
@@ -4564,7 +5770,13 @@ class ShellToolsMixin:
         scanned.
 
         A credential folder (``security.SECRET_DIRECTORIES``) is refused even
-        inside the allowed paths.
+        inside the allowed paths, and so is reading a credential file
+        (``PathValidator.is_read_blocked``): a reader, copy source, upload or ``<``
+        given it or a link to it, or a wildcard over the folder it sits in.
+        A recursive search of that folder runs when each line it prints comes
+        back with its file name, which is how lines from the credential file
+        are masked. ``rm``, ``mv``, ``git add``, a copy's destination, an
+        ``openssl -out`` file, a search pattern and ``sed -i`` still run.
 
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
@@ -4596,6 +5808,18 @@ class ShellToolsMixin:
                 )
                 if refusal:
                     return refusal
+        for position, seg in enumerate(segments):
+            if not any(seg is kept for kept in scanned):
+                continue
+            argv = policy_argv(seg)
+            read = _credential_read(argv, cwd)
+            if read is not None:
+                return _credential_refusal("Argument", read[0], read[1])
+            credential = _bulk_read_credential(
+                argv, cwd, [policy_argv(s) for s in segments[position + 1 :]]
+            )
+            if credential is not None:
+                return _credential_refusal("Command", " ".join(argv), credential)
         return None
 
     def _path_candidate_refusal(
