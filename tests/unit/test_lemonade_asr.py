@@ -1086,6 +1086,10 @@ class TestErrors:
         monkeypatch.setattr(
             "gaia.llm.lemonade_launcher.gaia_runs_lemonade", lambda *_a: False
         )
+        # GAIA's own server: a URL the user chose gets a different remedy.
+        monkeypatch.setattr(
+            "gaia.llm.lemonade_client.configured_lemonade_url", lambda: None
+        )
 
         def refuse(_session, _request, **_kwargs):
             raise requests.ConnectionError("connection refused")

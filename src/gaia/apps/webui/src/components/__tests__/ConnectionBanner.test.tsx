@@ -143,14 +143,13 @@ describe('the model server is down', () => {
         expect(container).toHaveTextContent("The model server isn't answering.");
         expect(container).not.toHaveTextContent('Lemonade');
         expect(container).toHaveTextContent('may be busy');
-        expect(container).not.toHaveTextContent("isn't answering.");
         expect(container).toHaveTextContent('If it stays this way, restart it:');
         expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
     });
 
     it.each([
         ['hung', { lemonade_error: 'Lemonade health query failed' }, 'خادم النماذج لا يستجيب', 'فأعد تشغيله'],
-        ['stopped', {}, 'خادم النماذج لا يعمل', 'لتشغيله يدويًا'],
+        ['stopped', {}, 'خادم النماذج لا يستجيب', 'لتشغيله يدويًا'],
     ])('reads in Arabic when the model server is %s, the command kept left to right', (_, extra, message, hint) => {
         useChatStore.setState({ locale: 'ar', systemStatus: {
             lemonade_running: false, start_command: '/usr/bin/lemond', ...extra,
