@@ -492,7 +492,6 @@ _ROOT_SEPARATORS = ["\\"] if sys.platform == "win32" else ["/"]
         "{ $_.FullName.Substring($root.Length).Replace('\\','/') }",
         "Get-ChildItem -File | ForEach-Object { $_.Name.Replace( '/', '\\\\' ) }",
         "(Get-Location).Path.TrimEnd('\\').Split('/')",
-        "[string]::Join('/', @('a', 'b'))",
         "Get-ChildItem -File | ForEach-Object { $_.FullName -replace '\\\\', '/' }",
         "'a,b' -split '/'",
     ],
@@ -517,6 +516,11 @@ def test_a_separator_given_to_a_string_method_is_not_a_path(script, layout):
         "Get-ChildItem ([IO.Path]::Join('{sep}', 'x'))",
         "Get-Content ('{sep}')",
         "Get-ChildItem '{sep}' | ForEach-Object {{ $_.Name.Replace('a','b') }}",
+        # A separator a string method returns is still a path.
+        "Get-ChildItem ('x'.Replace('x','{sep}'))",
+        "Get-ChildItem ('x' -replace 'x','{sep}')",
+        "Get-ChildItem (@('','') -join '{sep}')",
+        "Get-ChildItem ([string]::Join('{sep}', @('','')))",
     ],
 )
 def test_a_root_path_is_still_refused_beside_string_methods(template, sep, layout):

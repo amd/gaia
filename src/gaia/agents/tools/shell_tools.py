@@ -1714,31 +1714,41 @@ def _split_script(body: str, dialect: str) -> list:
 
 #: A quoted string of path separators only: '\', "/", '\\'.
 _PS_SEPARATOR_STRING = r"""(?:'[\\/]+'|"[\\/]+")"""
-#: String methods whose arguments are text, never a path: ``.Replace('\','/')``.
-_PS_STRING_METHOD_CALL = re.compile(
-    r"(?:\.(?:Replace|Split|Trim|TrimStart|TrimEnd|IndexOf|LastIndexOf|IndexOfAny"
-    r"|LastIndexOfAny|StartsWith|EndsWith|Contains)|\[string\]::Join)\s*\([^()]*\)",
+#: String methods and operators whose arguments are only searched for, never
+#: part of what they return: ``.Split('\')``, ``-split '/'``.
+_PS_SEARCH_ARGUMENTS = re.compile(
+    r"\.(?:Split|Trim|TrimStart|TrimEnd|IndexOf|LastIndexOf|IndexOfAny"
+    r"|LastIndexOfAny|StartsWith|EndsWith|Contains)\s*\([^()]*\)"
+    rf"|-[ci]?split\s+{_PS_SEPARATOR_STRING}",
     re.IGNORECASE,
 )
-#: String operators and their separator operands: ``-replace '\\','/'``.
-_PS_STRING_OPERATOR = re.compile(
-    r"-[ci]?(?:replace|split|join)\s+"
-    rf"{_PS_SEPARATOR_STRING}(?:\s*,\s*{_PS_SEPARATOR_STRING})?",
+#: A replace whose search text is a separator: ``.Replace('\','/')``,
+#: ``-replace '\\','/'``. The replacement is output, so it counts as text only
+#: when it swaps one separator for another.
+_PS_SEPARATOR_REPLACE = re.compile(
+    rf"(\.Replace\s*\(\s*|-[ci]?replace\s+){_PS_SEPARATOR_STRING}"
+    rf"(\s*,\s*)({_PS_SEPARATOR_STRING})?",
     re.IGNORECASE,
 )
 
 
 def _without_separator_strings(body: str) -> str:
-    """*body* with the separator strings handed to string methods emptied.
+    """*body* with the separator strings that are only text emptied.
 
-    ``'\\'`` there is text to split or replace on; read as a path it was the
-    drive root, and the guard refused the whole script.
+    ``'\\'`` handed to a string method was read as a path, the drive root, and
+    the guard refused the whole script. A separator a method can return
+    (``'x'.Replace('x','\\')``, ``-join '\\'``) stays a path.
     """
 
     def empty(match: re.Match) -> str:
         return re.sub(_PS_SEPARATOR_STRING, "''", match.group(0))
 
-    return _PS_STRING_OPERATOR.sub(empty, _PS_STRING_METHOD_CALL.sub(empty, body))
+    def empty_swap(match: re.Match) -> str:
+        replacement = "''" if match.group(3) else ""
+        return f"{match.group(1)}''{match.group(2)}{replacement}"
+
+    body = _PS_SEPARATOR_REPLACE.sub(empty_swap, body)
+    return _PS_SEARCH_ARGUMENTS.sub(empty, body)
 
 
 def _script_words(body: str, dialect: str) -> list:
