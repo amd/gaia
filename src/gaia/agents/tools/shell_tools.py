@@ -1712,6 +1712,35 @@ def _split_script(body: str, dialect: str) -> list:
     return words
 
 
+#: A quoted string of path separators only: '\', "/", '\\'.
+_PS_SEPARATOR_STRING = r"""(?:'[\\/]+'|"[\\/]+")"""
+#: String methods whose arguments are text, never a path: ``.Replace('\','/')``.
+_PS_STRING_METHOD_CALL = re.compile(
+    r"(?:\.(?:Replace|Split|Trim|TrimStart|TrimEnd|IndexOf|LastIndexOf|IndexOfAny"
+    r"|LastIndexOfAny|StartsWith|EndsWith|Contains)|\[string\]::Join)\s*\([^()]*\)",
+    re.IGNORECASE,
+)
+#: String operators and their separator operands: ``-replace '\\','/'``.
+_PS_STRING_OPERATOR = re.compile(
+    r"-[ci]?(?:replace|split|join)\s+"
+    rf"{_PS_SEPARATOR_STRING}(?:\s*,\s*{_PS_SEPARATOR_STRING})?",
+    re.IGNORECASE,
+)
+
+
+def _without_separator_strings(body: str) -> str:
+    """*body* with the separator strings handed to string methods emptied.
+
+    ``'\\'`` there is text to split or replace on; read as a path it was the
+    drive root, and the guard refused the whole script.
+    """
+
+    def empty(match: re.Match) -> str:
+        return re.sub(_PS_SEPARATOR_STRING, "''", match.group(0))
+
+    return _PS_STRING_OPERATOR.sub(empty, _PS_STRING_METHOD_CALL.sub(empty, body))
+
+
 def _script_words(body: str, dialect: str) -> list:
     """The words an inline script operand names, for the path check."""
     if dialect == _PS_ENCODED:
@@ -1729,6 +1758,8 @@ def _script_words(body: str, dialect: str) -> list:
         except ValueError:
             # sh refuses an unbalanced quote too; still check every word in it.
             return _split_script(body, "code")
+    if dialect == "powershell":
+        body = _without_separator_strings(body)
     words = _split_script(body, dialect)
     if dialect == "powershell":
         # '-Path:C:\x' binds its value with a colon.
