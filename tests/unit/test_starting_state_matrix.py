@@ -115,7 +115,7 @@ def scheduled_run(_tmp_path) -> list:
                 sink="stdout",
             )
         )
-    except LemonadeClientError:
+    except (LemonadeClientError, runner.ScheduleModelError):
         # A refused load still reached the server; the cell judges its log.
         pass
     return []
@@ -151,8 +151,8 @@ RULES = {
     ("cloud_custom_model_id", "scheduled_run"): NO_LOCAL_MODEL,
     ("empty_cache", "start_up_warm_up"): NO_DOWNLOAD,
     ("empty_cache", "memory_run_inference"): NO_DOWNLOAD,
-    # A run the user asked for may fetch the model it needs.
-    ("empty_cache", "scheduled_run"): None,
+    # A scheduled run refuses a model that isn't on disk rather than fetch it.
+    ("empty_cache", "scheduled_run"): NO_DOWNLOAD,
     ("local_model_on_disk", "start_up_warm_up"): USES_LOCAL,
     ("local_model_on_disk", "memory_run_inference"): USES_LOCAL,
     ("local_model_on_disk", "scheduled_run"): USES_LOCAL,
@@ -160,10 +160,7 @@ RULES = {
 
 #: Cells that fail today, each naming its issue. Strict: fixing one without
 #: deleting its line fails the run.
-KNOWN_BUGS = {
-    ("cloud_picked_in_app", "scheduled_run"): "amd/gaia#7329, no fix yet",
-    ("cloud_custom_model_id", "scheduled_run"): "amd/gaia#7329, no fix yet",
-}
+KNOWN_BUGS = {}
 
 
 def _cells():
