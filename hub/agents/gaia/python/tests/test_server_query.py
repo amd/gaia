@@ -1342,6 +1342,30 @@ def test_a_one_shot_still_refuses_a_gated_tool(built):
     assert "needs your explicit approval" in final[-1].get("answer", "")
 
 
+def test_a_refused_gated_tool_ends_failed_with_what_the_turn_spent(built):
+    """`gaia -p` read the stop as a free, zero-step success (#8034)."""
+    client, _ = built
+
+    class _Spent(_ScriptedAgent):
+        def process_query(self, query, max_steps=None):
+            self.console.confirm_tool_execution("allow_path_access", {"path": "x"})
+            return {
+                "status": "cancelled",
+                "result": "",
+                "steps_taken": 1,
+                "input_tokens": 5120,
+                "output_tokens": 48,
+            }
+
+    with mock.patch.object(server_mod, "build_query_agent", _Spent):
+        response = client.post("/v1/gaia/query", json=_body(can_answer_questions=False))
+
+    [final] = [e for e in _events(response) if e.get("type") == "final"]
+    assert final["failed"] is True
+    assert final["usage"] == {"steps": 1, "input_tokens": 5120, "tokens": 48}
+    assert "needs your explicit approval" in final["answer"]
+
+
 def test_a_caller_that_cannot_answer_is_never_asked(built):
     """A question on a run nobody can answer would wait out its whole timeout."""
     client, agents = built
