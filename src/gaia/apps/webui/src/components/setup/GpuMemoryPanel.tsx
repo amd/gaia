@@ -1,12 +1,13 @@
 // Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { AlertTriangle, Check, Copy, Info, Loader2, RotateCcw } from 'lucide-react';
 import * as api from '../../services/api';
 import { useT } from '../../i18n/useT';
 import type { Say } from '../../i18n/registry';
 import type { GpuMemoryPreset, GpuMemoryStatus } from '../../types';
+import { RadioGroup } from '../RadioGroup';
 import { ConfirmSheet } from './ConfirmSheet';
 import { SetupFooter } from './SetupFooter';
 import { formatSize } from './format';
@@ -112,30 +113,13 @@ interface PresetPickerProps {
 /** A radiogroup of safe sizes, after keeping the current one; arrow keys move between them. */
 function PresetPicker({ presets, value, onChange, recommended, max, keepGb, disabled }: PresetPickerProps) {
     const t = useT();
-    const refs = useRef<Array<HTMLButtonElement | null>>([]);
-    const choices: Array<number | null> = [...(keepGb != null ? [null] : []), ...presets.map((p) => p.setting_gb)];
-    const at = Math.max(0, choices.indexOf(value));
-    const onKey = (e: KeyboardEvent) => {
-        const delta = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-        if (!delta) return;
-        e.preventDefault();
-        const rtl = getComputedStyle(e.currentTarget).direction === 'rtl';
-        const horizontal = e.key === 'ArrowRight' || e.key === 'ArrowLeft';
-        const step = horizontal && rtl ? -delta : delta;
-        const next = (at + step + choices.length) % choices.length;
-        onChange(choices[next]);
-        refs.current[next]?.focus();
-    };
-    const offset = keepGb != null ? 1 : 0;
     return (
-        <div className="gpu-presets" role="radiogroup" aria-label={t('gpu.presets.label')} onKeyDown={onKey}>
+        <RadioGroup className="gpu-presets" aria-label={t('gpu.presets.label')}>
             {keepGb != null && (
                 <button
-                    ref={(el) => { refs.current[0] = el; }}
                     type="button"
                     role="radio"
                     aria-checked={value === null}
-                    tabIndex={at === 0 ? 0 : -1}
                     className={`gpu-preset${value === null ? ' is-active' : ''}`}
                     disabled={disabled}
                     onClick={() => onChange(null)}
@@ -143,14 +127,12 @@ function PresetPicker({ presets, value, onChange, recommended, max, keepGb, disa
                     <bdi>{t('gpu.presets.keep', { gb: formatSize(keepGb) })}</bdi>
                 </button>
             )}
-            {presets.map((p, i) => (
+            {presets.map((p) => (
                 <button
                     key={p.setting_gb}
-                    ref={(el) => { refs.current[i + offset] = el; }}
                     type="button"
                     role="radio"
                     aria-checked={p.setting_gb === value}
-                    tabIndex={i + offset === at ? 0 : -1}
                     className={`gpu-preset${p.setting_gb === value ? ' is-active' : ''}`}
                     disabled={disabled}
                     onClick={() => onChange(p.setting_gb)}
@@ -160,7 +142,7 @@ function PresetPicker({ presets, value, onChange, recommended, max, keepGb, disa
                     {p.setting_gb === max && <>{' '}<span className="gpu-tag is-max">{t('gpu.presets.max')}</span></>}
                 </button>
             ))}
-        </div>
+        </RadioGroup>
     );
 }
 

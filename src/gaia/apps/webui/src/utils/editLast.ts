@@ -27,3 +27,11 @@ export function lastSentMessage(messages: readonly Message[]): Message | undefin
     }
     return undefined;
 }
+
+/** Messages from the next question on: Resend or Edit at `at` deletes them along with its own answer. */
+export function laterTurns(messages: readonly Message[], at: number): number {
+    for (let i = at + 1; i < messages.length; i++) {
+        if (messages[i].role === 'user') return messages.length - i;
+    }
+    return 0;
+}

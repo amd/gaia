@@ -190,8 +190,9 @@ def test_reindexing_a_copied_file_does_not_repeat_the_copy_notice(tmp_path, home
     assert [d["id"] for d in again.documents] == [d["id"] for d in first.documents]
 
 
-def test_no_copy_notice_when_the_library_already_holds_the_content(tmp_path, home, db):
-    inside = home / "plant_manual.md"
+def test_a_content_match_elsewhere_is_named_instead_of_copied(tmp_path, home, db):
+    inside = home / "Documents" / "b2" / "plant_manual.md"
+    inside.parent.mkdir(parents=True)
     inside.write_text("Backup generator code: BG-7731", encoding="utf-8")
     outside = _outside(tmp_path)
     session = db.create_session()
@@ -199,9 +200,26 @@ def test_no_copy_notice_when_the_library_already_holds_the_content(tmp_path, hom
 
     added = add_indexed_documents(db, session["id"], [(str(outside), 3)])
 
-    assert added.notices == []
     [library_doc] = db.list_documents()
     assert Path(library_doc["filepath"]) == inside.resolve()
+    [notice] = added.notices
+    assert "same content" in notice and str(inside.resolve()) in notice
+    assert "copy" not in notice
+
+
+def test_two_library_files_with_the_same_content_are_named(home, db):
+    first = home / "b2" / "harbor.md"
+    first.parent.mkdir()
+    first.write_text("Passphrase: tidewater", encoding="utf-8")
+    second = home / "harbor.md"
+    second.write_text("Passphrase: tidewater", encoding="utf-8")
+    session = db.create_session()
+    add_indexed_documents(db, session["id"], [(str(first), 3)])
+
+    added = add_indexed_documents(db, session["id"], [(str(second), 3)])
+
+    [notice] = added.notices
+    assert str(first.resolve()) in notice and "same content" in notice
 
 
 def test_the_library_copy_of_an_indexed_file_is_not_indexed_again(tmp_path, home, db):
