@@ -476,6 +476,7 @@ def _suggested_local_models() -> set:
 def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str, Any]]:
     """Chat models for *provider*; *offer_optional* adds the optional ones that fit."""
     from gaia.llm.lemonade_client import (
+        NPU_MODEL_LADDER,
         _model_ids_match,
         catalog_context_window,
         find_model_requirement,
@@ -496,6 +497,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
             offered += _optional_models_that_fit()
     added = _added_models() if provider == LOCAL else []
     offered += [e["id"] for e in added]
+    npu_kept = [*NPU_MODEL_LADDER, *offered, *_last_local_model()]
     out: List[Dict[str, Any]] = []
     for m in body.get("data") or []:
         model_id = str(m.get("id") or "")
@@ -506,6 +508,11 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
             if is_cloud or not (
                 m.get("downloaded")
                 or any(_model_ids_match(model_id, o) for o in offered)
+            ):
+                continue
+            # Only NPU builds with evals on the NPU, or one the user already chose.
+            if runs_on_npu(model_id) and not any(
+                _model_ids_match(model_id, k) for k in npu_kept
             ):
                 continue
         elif not model_id.startswith(f"{provider}."):
@@ -556,6 +563,19 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _last_local_model() -> List[str]:
+    """The model the user last switched to, as config.json remembers it."""
+    from gaia.config import GaiaConfig, GaiaConfigError
+
+    try:
+        last = (GaiaConfig.load().last_model or "").strip()
+    except GaiaConfigError as e:
+        # The active view reports the broken config; the list still shows the rest.
+        logger.warning("Listing models without the one last used: %s", e)
+        return []
+    return [last] if last else []
 
 
 def _added_models() -> List[Dict[str, Any]]:

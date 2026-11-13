@@ -283,7 +283,17 @@ def _dispatch_one(
                 if offers_always and tool not in _FRESH_CONSENT_TOOLS
                 else ""
             )
-            handler.set_relay_confirmation(confirm_id, always_scope or None)
+            event_args = event.get("args")
+            path_access = (
+                event_args.get("path")
+                if tool == PATH_ACCESS_PROMPT_TOOL and isinstance(event_args, dict)
+                else None
+            )
+            handler.set_relay_confirmation(
+                confirm_id,
+                always_scope or None,
+                path_access if isinstance(path_access, str) else None,
+            )
             # The UI's own approval prompt.
             request: Dict[str, Any] = {
                 "type": "permission_request",
