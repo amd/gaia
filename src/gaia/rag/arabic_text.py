@@ -7,8 +7,9 @@ import re
 import unicodedata
 
 # Arabic Presentation Forms-A and -B: per-position glyph codes many PDF writers
-# (Word, Chrome) emit instead of base letters.
-_PRESENTATION_FORMS = re.compile("[ﭐ-﷿ﹰ-﻾]+")
+# (Word, Chrome) emit instead of base letters. Chrome also reports some kanji
+# as the CJK radical that looks the same (日 as U+2F47).
+_PRESENTATION_FORMS = re.compile("[\u2e80-\u2fdf\ufb50-\ufdff\ufe70-\ufefe]+")
 
 _ARABIC_YEH = "ي"
 _SHARED_GLYPH_LETTERS = str.maketrans({"ی": _ARABIC_YEH, "ھ": "ه"})
@@ -191,7 +192,8 @@ def _reading_order(line: list) -> str:
 
 
 def normalize_arabic_pdf_text(text: str) -> str:
-    """Map Arabic presentation-form glyphs to base letters (U+FEFB -> "لا").
+    """Map Arabic presentation-form glyphs to base letters (U+FEFB -> "لا"),
+    and CJK radicals to the kanji they stand in for (U+2F47 -> "日").
 
     Only those code points are touched; NFKC on the whole string would also
     rewrite unrelated characters such as "²" or "ﬁ". Fonts share one glyph for

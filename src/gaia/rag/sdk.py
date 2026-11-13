@@ -58,6 +58,7 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
+from gaia.rag.normalize import search_form
 from gaia.rag.text_units import (
     SENTENCE_BREAK,
     estimate_tokens,
@@ -1497,8 +1498,9 @@ class RAGSDK:
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        # No-break spaces in extracted tables can exceed one token per character.
-        safe_texts = [text.replace("\u00a0", " ") for text in texts]
+        # Documents and queries are embedded in one search form; NFKC also turns
+        # no-break spaces, which can exceed one token per character, into spaces.
+        safe_texts = [search_form(text) for text in texts]
 
         all_embeddings = []
 
@@ -1715,6 +1717,7 @@ class RAGSDK:
         Falls back to ``_encode_texts`` on a miss. Stored/doc-chunk vectors
         are persisted elsewhere; this targets repeated *query* embeds only.
         """
+        query = search_form(query)
         if len(query) > EMBED_MAX_CHARS:
             self.log.warning(
                 f"Search query is {len(query)} chars; only the first "
@@ -3525,13 +3528,13 @@ These positions indicate where to split the text."""
     def _vectors_path(self, chunks: List[str]) -> str:
         """Where the embeddings of *chunks* under the current embedder are kept.
 
-        The name binds the vectors to the embedding model and the exact chunk
-        text, so different text never reads them and the same text, indexed
+        The name binds the vectors to the embedding model and the chunk text as
+        embedded, so different text never reads them and the same text, indexed
         again from a new temp copy, adds no second file.
         """
         digest = hashlib.sha256(self.config.embedding_model.encode("utf-8"))
         for chunk in chunks:
-            digest.update(b"\x1e" + chunk.encode("utf-8"))
+            digest.update(b"\x1e" + search_form(chunk).encode("utf-8"))
         return os.path.join(
             self.config.cache_dir, f"vectors_{digest.hexdigest()[:24]}.npy"
         )

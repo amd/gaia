@@ -17,6 +17,7 @@ import logging
 import os
 import sys
 import tempfile
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import List
@@ -152,7 +153,7 @@ def _sanitize_stem(stem: str, max_length: int = 80) -> str:
             if c in _ILLEGAL_FILENAME_CHARS or c in _SHELL_QUOTING_CHARS or ord(c) < 32
             else c
         )
-        for c in stem
+        for c in unicodedata.normalize("NFC", stem)
     )
     cleaned = cleaned.strip(" .")
     cleaned = cleaned[:max_length]
@@ -385,7 +386,8 @@ async def upload_document_blob(
     # Strip any path components the client might have sent (defense in depth;
     # we never use this value as a filesystem path, but it's stored in the
     # db for display and returned to the frontend).
-    display_name = Path(file.filename).name
+    # Composed, so a macOS (decomposed) name matches the one the model writes.
+    display_name = unicodedata.normalize("NFC", Path(file.filename).name)
     ext = Path(display_name).suffix.lower()
 
     # 2. Validate extension against the strict document set
