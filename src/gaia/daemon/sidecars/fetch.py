@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: MIT
 """Verified binary fetch (port of fetch.ts) — the security boundary.
 
-Two verified sources, checked in order; there is NO 'use it anyway' path:
+Three verified sources, checked in order; there is NO 'use it anyway' path:
 
 1. **Agent Hub install** — a binary the Hub installer already verified against
    the hub manifest's server-computed SHA-256 and recorded in its ``.installed``
    sentinel (#2086). Re-checked against that sentinel here before every spawn.
-2. **Lock fetch** — resolve the host platform -> look up the artifact in
+2. **Installer-placed flagship** — the ``gaia-agent`` install.sh/install.ps1
+   verified and recorded beside itself in ``gaia-agent.install.json``.
+   Re-checked against that record before every spawn, like source 1.
+3. **Lock fetch** — resolve the host platform -> look up the artifact in
    binaries.lock.json -> download -> **verify its SHA-256 against the lock and
    raise loudly on any mismatch** -> write atomically into the cache -> chmod +x
-   on POSIX. Source 2 is a repo-checkout/npm-package convenience: the lock is
+   on POSIX. Source 3 is a repo-checkout/npm-package convenience: the lock is
    NOT wheel package data, so on a pip install the Hub install (source 1, which
    verifies against the hub manifest) is the only path — an absent lock reports
    "not installed" with the `gaia hub install <id>` remedy, never a
@@ -27,8 +30,12 @@ unchanged.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import re
+import shutil
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -44,16 +51,23 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+_SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
+
 
 def sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
 def file_sha256(path: Path) -> Optional[str]:
+    # Streamed: `gaia init --check` hashes a ~160 MB agent on every call.
+    digest = hashlib.sha256()
     try:
-        return sha256_hex(Path(path).read_bytes())
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                digest.update(chunk)
     except OSError:
         return None
+    return digest.hexdigest()
 
 
 def verify_sha256(data: bytes, expected: str, source_label: str) -> str:
@@ -132,9 +146,10 @@ def _load_lock_or_install_hint(
             # An explicitly-supplied lock that cannot be read is a caller
             # contract violation, not a missing install — surface it as-is.
             raise
+        # The lock path means nothing to a user of an installed GAIA.
+        logger.debug("sidecar fetch: no binary lock: %s", e)
         raise BinaryNotFoundError(
-            f"no verified '{agent_dir_name}' agent binary is installed and no "
-            f"local binaries.lock.json is available ({e}) "
+            f"no verified '{agent_dir_name}' agent binary is installed. "
             f"{_install_remedy(agent_dir_name)}"
         ) from e
 
@@ -186,6 +201,113 @@ def _hub_installed_binary(cache: Path, platform_key: str) -> Optional[FetchResul
     )
 
 
+INSTALL_RECORD_NAME = "gaia-agent.install.json"
+
+
+def flagship_executable_name() -> str:
+    return "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
+
+
+def installer_placed_flagship() -> Optional[Path]:
+    """The flagship an installer put outside the hub, else ``None``.
+
+    install.sh / install.ps1 put it in GAIA's bin dir; the terminal packages
+    ship it beside the frozen gaia (Windows setup) or on PATH (.deb, .rpm,
+    .pkg). A pip install's PATH is not trusted for it. Says nothing about
+    whether the copy is verified -- see :func:`installer_verified_binary`.
+    """
+    from gaia.frozen import is_frozen
+    from gaia.home import gaia_home
+
+    name = flagship_executable_name()
+    candidates = [gaia_home() / "bin" / name]
+    if is_frozen():
+        candidates.append(Path(sys.executable).parent / name)
+        on_path = shutil.which("gaia-agent")
+        if on_path:
+            candidates.append(Path(on_path))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        if sys.platform != "win32" and not os.access(path, os.X_OK):
+            continue
+        return path
+    return None
+
+
+def _read_install_record(record: Path) -> "tuple[str, str]":
+    """``(version, sha256)`` from an installer's record; raises when unusable."""
+    reinstall = (
+        "Re-run the GAIA installer, or install the agent with "
+        f"`{install_command(FLAGSHIP_AGENT_ID)}`."
+    )
+    try:
+        data = json.loads(record.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as e:
+        raise IntegrityError(
+            f"cannot read the GAIA agent's install record at {record}: {e}. "
+            f"{reinstall}"
+        ) from e
+    version = data.get("version") if isinstance(data, dict) else None
+    sha = data.get("sha256") if isinstance(data, dict) else None
+    if (
+        not isinstance(version, str)
+        or not version
+        or not isinstance(sha, str)
+        or not _SHA256_RE.match(sha)
+    ):
+        raise IntegrityError(
+            f"the GAIA agent's install record at {record} names no version and "
+            f"SHA-256. {reinstall}"
+        )
+    return version, sha.lower()
+
+
+def installer_verified_binary(
+    agent_dir_name: str, platform_key: Optional[str] = None
+) -> Optional[FetchResult]:
+    """The installer-placed flagship, verified against its install record.
+
+    The installers check the download against the published SHA-256, then
+    record that digest and the version beside the binary
+    (``gaia-agent.install.json``). Returns ``None`` when there is no copy or
+    no record; raises :class:`IntegrityError` when the copy no longer matches
+    its record. The daemon starts this copy and `gaia init --check` counts
+    it, so the two agree on it.
+    """
+    if agent_dir_name != FLAGSHIP_AGENT_ID:
+        return None
+    path = installer_placed_flagship()
+    if path is None:
+        return None
+    record = path.parent / INSTALL_RECORD_NAME
+    if not record.is_file():
+        return None
+    version, expected = _read_install_record(record)
+    actual = file_sha256(path)
+    if actual is None or actual != expected:
+        raise IntegrityError(
+            f"the GAIA agent at {path} does not match the SHA-256 its installer "
+            f"recorded:\n  expected {expected}\n  actual   {actual}\n"
+            "It was replaced or corrupted after install. Re-run the GAIA "
+            "installer, or install the agent with "
+            f"`{install_command(FLAGSHIP_AGENT_ID)}`."
+        )
+    logger.info(
+        "sidecar fetch: using installer-placed verified binary %s (v%s)",
+        path,
+        version,
+    )
+    return FetchResult(
+        path,
+        platform_key or plat.current_platform_key(),
+        actual,
+        url="",
+        cached=True,
+        version=version,
+    )
+
+
 def hub_installed_binary(agent_dir_name: str) -> Optional[Path]:
     """The verified Hub-installed binary for *agent_dir_name*, or ``None``.
 
@@ -224,6 +346,9 @@ def fetch_binary(
 
     if not force:
         installed = _hub_installed_binary(cache, key)
+        if installed is not None:
+            return installed
+        installed = installer_verified_binary(agent_dir_name, key)
         if installed is not None:
             return installed
 

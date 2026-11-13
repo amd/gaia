@@ -1516,12 +1516,27 @@ class TestCheckSetupStatus(unittest.TestCase):
         name = "gaia-agent.exe" if sys.platform == "win32" else "gaia-agent"
         return gaia_home() / "bin" / name
 
-    def _install_terminal_agent(self, mode=0o755):
-        """What install.sh / install.ps1 leave: the agent in GAIA's bin dir, no sentinel."""
+    def _install_terminal_agent(self, mode=0o755, record=True):
+        """What install.sh / install.ps1 leave: the agent in GAIA's bin dir and
+        its install record beside it, no sentinel."""
+        import hashlib
+        import json
+
         path = self._terminal_agent_path()
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"\x7fELF")
         path.chmod(mode)
+        if record:
+            (path.parent / "gaia-agent.install.json").write_text(
+                json.dumps(
+                    {
+                        "id": "gaia",
+                        "version": "0.3.9",
+                        "sha256": hashlib.sha256(b"\x7fELF").hexdigest(),
+                    }
+                ),
+                encoding="utf-8",
+            )
         return path
 
     def test_terminal_installer_agent_is_ready(self):
@@ -1535,6 +1550,32 @@ class TestCheckSetupStatus(unittest.TestCase):
         self.assertFalse(status.agent_missing)
         self.assertEqual(status.reasons, [])
         self.assertEqual(status.warnings, [])
+
+    def test_terminal_installer_agent_without_a_record_is_not_ready(self):
+        """#7187: the daemon cannot verify a copy with no install record, so the
+        check must not count it either."""
+        self._remove_flagship()
+        self._install_terminal_agent(record=False)
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+
+    def test_a_tampered_terminal_installer_agent_is_not_ready(self):
+        self._remove_flagship()
+        self._install_terminal_agent().write_bytes(b"\x7fELF-replaced")
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
+        self.assertTrue(status.agent_missing)
+
+    def test_a_corrupt_terminal_install_record_is_not_ready(self):
+        self._remove_flagship()
+        path = self._install_terminal_agent()
+        (path.parent / "gaia-agent.install.json").write_text("{not json")
+        status, _ = self._check_with_models()
+
+        self.assertEqual(status.reasons, [self.AGENT_MISSING])
 
     def test_terminal_installer_agent_never_asks_the_hub(self):
         self._remove_flagship()
@@ -1564,7 +1605,7 @@ class TestCheckSetupStatus(unittest.TestCase):
     def _frozen_at(self, directory):
         """Run the check as the frozen gaia in *directory*."""
         name = "gaia.exe" if sys.platform == "win32" else "gaia"
-        frozen = patch("gaia.installer.init_command.is_frozen", return_value=True)
+        frozen = patch("gaia.frozen.is_frozen", return_value=True)
         exe = patch.object(sys, "executable", str(directory / name))
         frozen.start()
         exe.start()

@@ -875,7 +875,8 @@ Two rules are important enough to restate here:
 
 Automated PR-review *policy* — severity tiers, the nit cap, skip rules, length caps —
 lives in [`REVIEW.md`](REVIEW.md), which is the single source of truth for review
-scoring. Don't fork it into another file.
+scoring. Don't fork it into another file. Vetting a PR or issue that integrates an outside
+company's product lives there too, under "Third-party integrations".
 
 ## Claude Agents
 
