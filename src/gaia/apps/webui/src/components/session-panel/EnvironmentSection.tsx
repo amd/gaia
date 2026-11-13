@@ -7,6 +7,7 @@
  * backend enforces it in the agent's path checks and tool policy.
  */
 
+import { RadioGroup } from '../RadioGroup';
 import { useCallback, useEffect, useState } from 'react';
 import { Cloud, File, Folder, FolderPlus, Monitor, ShieldAlert, ShieldCheck, Smartphone, X } from 'lucide-react';
 import * as api from '../../services/api';
@@ -15,6 +16,7 @@ import { requestErrorText } from '../../utils/requestErrors';
 import { log } from '../../utils/logger';
 import { useInferencePlace, useModelStore, selectChipModel, displayModelName, UNKNOWN_PLACE_TITLE } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
+import { useNotificationStore, selectSessionPermissionPrompt } from '../../stores/notificationStore';
 import { useFolderPicker } from '../../hooks/useFolderPicker';
 import { useSessionEnvironment } from '../../hooks/useSessionEnvironment';
 import { useTurnEnd } from '../../hooks/useTurnEnd';
@@ -314,7 +316,8 @@ function PhoneAccess() {
                     {t('env.qr')}
                 </button>
             )}
-            {(error || status?.error) && <span className="sp-error">{error ?? status?.error}</span>}
+            {/* A failed start is explained in the Mobile access dialog; it isn't this switch's error. */}
+            {(error || (active && status?.error)) && <span className="sp-error">{error ?? status?.error}</span>}
         </Row>
     );
 }
@@ -325,6 +328,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     const [mode, setMode] = useState<PermissionMode | null>(null);
     const [confirming, setConfirming] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const promptWaiting = useNotificationStore((s) => selectSessionPermissionPrompt(sessionId)(s) !== null);
 
     useEffect(() => {
         let live = true;
@@ -353,7 +357,7 @@ function Permission({ sessionId }: { sessionId: string }) {
     const note = MODES.find((m) => m.mode === mode)?.note;
     return (
         <Row label={t('env.permission')}>
-            <div className="sp-segmented" role="radiogroup" aria-label={t('env.permission')}>
+            <RadioGroup className="sp-segmented" aria-label={t('env.permission')}>
                 {MODES.map((m) => (
                     <button
                         key={m.mode}
@@ -370,8 +374,9 @@ function Permission({ sessionId }: { sessionId: string }) {
                         {m.mode === 'ask' ? t('env.ask') : t(m.label)}
                     </button>
                 ))}
-            </div>
+            </RadioGroup>
             {note && <span className="sp-meta">{t(note)}</span>}
+            {mode === 'full_access' && promptWaiting && <span className="sp-meta" role="status">{t('perm.fullPendingNote')}</span>}
             {confirming && (
                 <span className="sp-confirm" role="alert">
                     {t('env.fullAccessWarn')}

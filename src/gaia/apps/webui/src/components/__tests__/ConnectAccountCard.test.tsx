@@ -115,13 +115,31 @@ describe('ConnectAccountCard', () => {
         expect(shown()).not.toMatch(/gaia connectors|terminal/i);
     });
 
-    it('starts sign-in with every scope and gives the asking agent access', async () => {
+    it('names the asking agent and sends no scopes, so the backend asks only for what it declares', async () => {
         render(<ConnectAccountCard data={card(['google'])} />);
         fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
         await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledTimes(1));
-        expect(mocked.authorizeConnector).toHaveBeenCalledWith('google', ['openid', 'mail.read'], ['installed:gaia']);
+        expect(mocked.authorizeConnector).toHaveBeenCalledWith('google', [], ['installed:gaia']);
+        // The connector's whole scope list is never read to build the request.
+        expect(mocked.getConnector).not.toHaveBeenCalled();
         expect(window.open).toHaveBeenCalledWith('https://accounts.example/auth', '_blank', 'noopener');
         expect(await screen.findByText(/A browser tab opened for sign-in/)).toBeTruthy();
+    });
+
+    it('reconnects with the same request: the agent, and no scopes', async () => {
+        mocked.listConnectors.mockResolvedValue({ connectors: [connector('microsoft', true)] });
+        render(<ConnectAccountCard data={{ ...card(['microsoft']), reconnect: ['microsoft'] }} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Reconnect Microsoft' }));
+        await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledWith('microsoft', [], ['installed:gaia']));
+    });
+
+    it('opens Connectors in Settings instead of signing in when the agent does not declare the account', async () => {
+        render(<ConnectAccountCard data={card(['microsoft_work'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Microsoft 365' }));
+        await waitFor(() => expect(useChatStore.getState().settingsSection).toBe('connectors'));
+        expect(mocked.authorizeConnector).not.toHaveBeenCalled();
+        expect(window.open).not.toHaveBeenCalled();
+        act(() => useChatStore.setState({ settingsSection: null }));
     });
 
     it('says so when sign-in cannot start, and keeps the button', async () => {
