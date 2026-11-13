@@ -3,7 +3,7 @@
 
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ModelChip } from '../ModelChip';
 import { useModelStore } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
@@ -736,5 +736,48 @@ describe('ModelChip keyboard', () => {
         await user.keyboard('{ArrowLeft}');
         expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
         expect(gemma).not.toHaveAttribute('aria-describedby');
+    });
+});
+
+describe('ModelChip in Arabic', () => {
+    // The backend's own wording, which the UI translates by provider.
+    const LOCAL_SERVER: ProviderInfo = { ...LOCAL, privacy_notice: 'Runs on this PC. Nothing leaves your machine.' };
+    const FIREWORKS_SERVER: ProviderInfo = { ...FIREWORKS, privacy_notice: 'Chat history is sent to Fireworks AI. Usage may incur charges.' };
+
+    beforeEach(() => {
+        useChatStore.setState({ locale: 'ar' });
+        mockedApi.listProviders.mockResolvedValue({ providers: [LOCAL_SERVER, FIREWORKS_SERVER], active: LOCAL_ACTIVE, lemonade_error: null });
+    });
+    afterEach(() => useChatStore.setState({ locale: 'en' }));
+
+    it('names the local group in Arabic and keeps the cloud brand name', async () => {
+        render(<ModelChip />);
+        fireEvent.click(screen.getByRole('button', { name: /Gemma/ }));
+        const dialog = await screen.findByRole('dialog', { name: /Choose a model/ });
+        const headings = await waitFor(() => {
+            const found = Array.from(dialog.querySelectorAll('.popover-heading')).map((h) => h.textContent);
+            expect(found).toHaveLength(2);
+            return found;
+        });
+        expect(headings).toEqual(expect.arrayContaining(['محلي', 'Fireworks AI']));
+        expect(headings).not.toContain('Local');
+    });
+
+    it('warns in Arabic before a cloud model is used', async () => {
+        render(<ModelChip />);
+        fireEvent.click(screen.getByRole('button', { name: /Gemma/ }));
+        const dialog = await screen.findByRole('dialog', { name: /Choose a model/ });
+        fireEvent.click(await rowFor(dialog, /kimi-k2/));
+        const alert = await within(dialog).findByRole('alert');
+        expect(alert).toHaveTextContent('يُرسَل سجل المحادثة إلى Fireworks AI');
+        expect(within(alert).getByRole('button', { name: /استخدام.*kimi-k2/ })).toBeInTheDocument();
+    });
+
+    it('says a cloud chat leaves this PC in Arabic on hover', () => {
+        useModelStore.setState({ active: CLOUD_ACTIVE });
+        useChatStore.setState({ sessions: [{ ...SESSION, inference_remote: true, inference_provider_name: 'Fireworks AI' }] });
+        render(<ModelChip />);
+        const chip = screen.getByRole('button', { name: /kimi-k2/ });
+        expect(chip.getAttribute('title')).toContain('ويغادر سجل المحادثة هذا الجهاز');
     });
 });
