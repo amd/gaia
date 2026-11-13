@@ -240,10 +240,10 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
             onClick={() => selectSchedule(isSelected ? null : schedule.name)}
         >
             <div className="schedule-card-header">
-                <span className="schedule-card-name" dir="auto">{schedule.name}</span>
+                <span className="schedule-card-name" dir="auto" title={schedule.name}>{schedule.name}</span>
                 <span className={`schedule-card-status ${schedule.status}`}>{t(STATUS_LABEL[schedule.status])}</span>
             </div>
-            <div className="schedule-card-prompt" dir="auto">{schedule.prompt}</div>
+            <div className="schedule-card-prompt" dir="auto" title={schedule.prompt}>{schedule.prompt}</div>
             <div className="schedule-card-meta">
                 <span title={stripIsolates(described ?? schedule.description)}><Clock size={11} /> {described ?? <bdi>{schedule.description}</bdi>}</span>
                 <span>{t('schedules.card.runs', { n: schedule.run_count })}</span>
@@ -464,7 +464,7 @@ export function ScheduleManager() {
                                                 )}
                                                 {parsed.valid && parsed.next_run_at && (
                                                     <div className="schedule-parsed-next">
-                                                        {t.compose((say, code) => say('schedules.nextRun', { when: new Date(parsed.next_run_at!).toLocaleString(dateLocale(translator(code))) }))}
+                                                        {t.compose((say, code) => say('schedules.nextRun', { when: formatNextRun(parsed.next_run_at, undefined, say, dateLocale(translator(code))) }))}
                                                     </div>
                                                 )}
                                                 {parsed.valid && (

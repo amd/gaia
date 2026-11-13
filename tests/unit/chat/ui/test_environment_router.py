@@ -524,3 +524,54 @@ def test_a_failed_rollback_keeps_the_original_500_and_logs_both(
     assert "Check server logs" in failed.json()["detail"]
     assert "database is locked" in caplog.text
     assert "disk full" in caplog.text
+
+
+class _DecisionProxy:
+    agent_id = "gaia"
+
+    def tool_decision(self, run_id, decision, confirm_id):
+        return {"run_id": run_id, "decision": decision, "delivered": True}
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_a_path_allowed_at_a_relayed_prompt_is_listed(
+    client, gaia_session_id, relayed_gaia, tmp_path, approved
+):
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.email_sidecar import relay
+    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    target = tmp_path / "words.txt"
+    target.write_text("A\na\n")
+    handler = SSEOutputHandler()
+    handler.active_relay_proxy = _DecisionProxy()
+    handler.active_relay_run_id = "r1"
+    prompt = {
+        "type": "needs_confirmation",
+        "action": "allow_path_access",
+        "confirm_id": "c-path",
+        "args": {"path": str(target), "kind": "file"},
+    }
+    relay._dispatch_one(handler, prompt, GAIA_PROFILE, True)
+    helpers._active_sse_handlers[gaia_session_id] = handler
+    try:
+        answered = client.post(
+            "/api/chat/confirm-tool",
+            json={
+                "session_id": gaia_session_id,
+                "approved": approved,
+                "confirm_id": "c-path",
+            },
+        )
+    finally:
+        helpers._active_sse_handlers.pop(gaia_session_id, None)
+    assert answered.status_code == 200, answered.text
+
+    body = client.get(f"/api/sessions/{gaia_session_id}/environment").json()
+    listed = {f["path"]: f for f in body["folders"]}
+    if approved:
+        assert listed[str(target)]["source"] == "approved"
+        assert listed[str(target)]["kind"] == "file"
+    else:
+        assert str(target) not in listed
