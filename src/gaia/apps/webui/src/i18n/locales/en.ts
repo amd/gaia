@@ -905,6 +905,8 @@ export const enMessages = {
     'docs.folder.noSubfolders': "Subfolders aren't included.",
     'docs.notFound': '"{name}" doesn\'t exist',
     'docs.notFoundDetail': 'Check the path for typos, then add it again.',
+    'docs.tooLarge': '"{name}" is too large',
+    'docs.tooLargeDetail': 'The library takes files up to {max} MB. Split it into smaller files, then add those.',
     'docs.failedAria': 'Failed: {error}',
     'docs.indexingFailed': 'Indexing failed',
     'docs.retry': 'Retry',
