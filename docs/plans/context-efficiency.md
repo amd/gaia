@@ -4,7 +4,7 @@
 **Related:** [mcp-context-efficiency.md](mcp-context-efficiency.md) (partly superseded, see
 below), [subagent-context-isolation.md](subagent-context-isolation.md),
 [skill-bound-task-execution.md](skill-bound-task-execution.md),
-the Claude Code plugin plan (not yet published)
+[claude-code-plugin.mdx](claude-code-plugin.mdx)
 
 Long GAIA runs fail when the conversation outgrows the model's context window, and today
 some of those failures lose a turn silently or show a raw backend error. The main cause is
