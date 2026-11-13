@@ -58,6 +58,12 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
+from gaia.rag.text_units import (
+    SENTENCE_BREAK,
+    estimate_tokens,
+    join_pieces,
+    last_tokens,
+)
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
     UNSUPPORTED_DOCUMENTS,
@@ -3342,7 +3348,7 @@ These positions indicate where to split the text."""
                 continue
 
             # Estimate tokens (rough: 1 token ≈ 4 characters)
-            para_tokens = len(para) // 4
+            para_tokens = estimate_tokens(para)
 
             # Check if this is VLM content - if so, keep it atomic
             is_vlm_content = idx in vlm_paragraphs
@@ -3353,18 +3359,18 @@ These positions indicate where to split the text."""
                 sentences = self._split_into_sentences(para)
 
                 for sentence in sentences:
-                    sentence_tokens = len(sentence) // 4
+                    sentence_tokens = estimate_tokens(sentence)
 
                     # If adding this sentence exceeds chunk size, save current chunk
                     if (
                         current_size + sentence_tokens > chunk_size_tokens
                         and current_chunk
                     ):
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
 
                         # Keep overlap (last few sentences)
-                        overlap_text = " ".join(current_chunk)
-                        overlap_actual = len(overlap_text) // 4
+                        overlap_text = join_pieces(current_chunk)
+                        overlap_actual = estimate_tokens(overlap_text)
                         if overlap_actual > overlap_tokens:
                             # Trim to overlap size
                             current_chunk = self._get_last_n_tokens(
@@ -3383,7 +3389,7 @@ These positions indicate where to split the text."""
                 if is_vlm_content:
                     if current_chunk:
                         # Save current chunk before adding VLM content
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
                         current_chunk = []
                         current_size = 0
 
@@ -3395,14 +3401,14 @@ These positions indicate where to split the text."""
 
                 elif current_size + para_tokens > chunk_size_tokens and current_chunk:
                     # Save current chunk
-                    chunks.append(" ".join(current_chunk))
+                    chunks.append(join_pieces(current_chunk))
 
                     # Keep overlap
-                    overlap_text = " ".join(current_chunk)
+                    overlap_text = join_pieces(current_chunk)
                     current_chunk = self._get_last_n_tokens(
                         overlap_text, overlap_tokens
                     ).split()
-                    current_size = len(" ".join(current_chunk)) // 4
+                    current_size = estimate_tokens(join_pieces(current_chunk))
 
                     current_chunk.append(para)
                     current_size += para_tokens
@@ -3412,7 +3418,7 @@ These positions indicate where to split the text."""
 
         # Add final chunk
         if current_chunk:
-            chunks.append(" ".join(current_chunk))
+            chunks.append(join_pieces(current_chunk))
 
         # STEP 4: Restore VLM blocks from placeholders
         if vlm_blocks:
@@ -3466,8 +3472,6 @@ These positions indicate where to split the text."""
 
         Better than word splitting, doesn't require NLTK dependency.
         """
-        # Split on sentence endings followed by space and capital letter
-
         # Handle common abbreviations that shouldn't split
         text = text.replace("Dr.", "Dr<DOT>")
         text = text.replace("Mr.", "Mr<DOT>")
@@ -3482,7 +3486,7 @@ These positions indicate where to split the text."""
         text = text.replace("etc.", "etc<DOT>")
 
         # Split on sentence boundaries
-        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+        sentences = SENTENCE_BREAK.split(text)
 
         # Restore abbreviations
         sentences = [s.replace("<DOT>", ".") for s in sentences]
@@ -3491,17 +3495,7 @@ These positions indicate where to split the text."""
 
     def _get_last_n_tokens(self, text: str, n_tokens: int) -> str:
         """Get approximately the last n tokens from text."""
-        # Rough estimate: 1 token ≈ 4 characters
-        target_chars = n_tokens * 4
-        if len(text) <= target_chars:
-            return text
-
-        # Try to break on word boundary
-        trimmed = text[-target_chars:]
-        first_space = trimmed.find(" ")
-        if first_space > 0:
-            return trimmed[first_space + 1 :]
-        return trimmed
+        return last_tokens(text, n_tokens)
 
     def _create_faiss_index(self, embeddings: "np.ndarray"):
         """Build a FAISS L2 index from precomputed embeddings."""
