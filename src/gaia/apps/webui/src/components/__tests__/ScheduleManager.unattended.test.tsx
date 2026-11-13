@@ -67,4 +67,15 @@ describe('schedules run unattended', () => {
         render(<ScheduleManager />);
         expect(screen.getAllByText(new RegExp('GAIA stopped this unattended run'))).toHaveLength(1);
     });
+
+    it('keeps the failure on the card while the history reloads', () => {
+        useScheduleStore.setState({
+            selectedSchedule: 'Daily note',
+            resultsLoading: true,
+            results: [{ id: 'r1', task_id: 's1', executed_at: '2026-11-12T15:00:00Z', result: null, error: failure }],
+        });
+        render(<ScheduleManager />);
+        expect(screen.getAllByText(new RegExp('GAIA stopped this unattended run'))).toHaveLength(1);
+        expect(screen.getByText(/Loading/)).toBeInTheDocument();
+    });
 });
