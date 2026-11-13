@@ -3972,6 +3972,21 @@ for (const locale of ['ar', 'en']) {
         if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
         await shot(page, `notification-panel-${locale}`);
     });
+
+    test(`the notification panel hides what is under it in the dark theme (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, undefined, 'dark');
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // A see-through panel shows the side panel's text inside the list.
+        const background = await panel.evaluate((el) => getComputedStyle(el).backgroundColor);
+        expect(background).toMatch(/^rgb\(/);
+        await shot(page, `notification-panel-dark-${locale}`);
+    });
 }
 
 for (const locale of ['ar', 'en']) {

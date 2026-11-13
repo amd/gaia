@@ -3171,7 +3171,7 @@ Do NOT wrap conversational replies in JSON.
             silent_mode: If True, suppresses all console output for JSON-only usage (default: False)
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
-            max_plan_iterations: Plan-execute-replan cycles before a final answer is forced (default: 3, 0 = unlimited); binds only once half the step budget is spent
+            max_plan_iterations: Plan-execute-replan cycles before a final answer is forced (default: 3, 0 = unlimited); binds only once 20 steps are left (half a budget of 40 or fewer)
             max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError).
                           The first time the limit is hit the model gets one correction and the call is not run;
                           a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
@@ -11441,16 +11441,18 @@ Do NOT wrap conversational replies in JSON.
     def _plan_cap_reached(self, steps_taken: int, steps_limit: int) -> bool:
         """Whether finishing this plan must force the final answer.
 
-        The plan count alone stopped a 300-line audit after three short plans
-        with most of its steps unspent, so the cap binds only once at least
-        half the step budget is gone. Below that, the step budget, repetition
-        detection and timeouts still bound the turn.
+        Binds once the first step-budget notice applies (20 steps left, or half
+        a budget too small for that), so a finished plan is not followed by one
+        the budget cannot hold. Before then the step budget, repetition
+        detection and timeouts bound the turn.
         """
         if self.max_plan_iterations <= 0:
             return False
         if self.plan_iterations < self.max_plan_iterations:
             return False
-        return steps_limit - steps_taken <= steps_limit // 2
+        steps_left, fraction_left, _ = _BUDGET_NOTICES[0]
+        trigger = _budget_notice_trigger(steps_left, fraction_left, steps_limit)
+        return steps_limit - steps_taken <= trigger
 
     def _announce_step_budget(
         self,
@@ -12127,7 +12129,8 @@ Do NOT wrap conversational replies in JSON.
                                 budget_stop_pending = True
                                 # Force final answer after max iterations
                                 completion_message = (
-                                    f"Maximum plan iterations ({self.max_plan_iterations}) reached for task: {user_input}\n"
+                                    f"No room for another plan: {steps_limit - steps_taken} "
+                                    f"of {steps_limit} steps left after {self.plan_iterations} plans.\n"
                                     f"Task: {user_input}\n"
                                     f"Plan information:\n{plan_context_str}\n\n"
                                     f"IMPORTANT: Stop planning and researching. {_DELIVER_NOW}\n"
