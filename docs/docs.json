@@ -443,6 +443,7 @@
               "plans/mcp-docs",
               "plans/codebase-knowledge-index",
               "plans/desktop-installer",
+              "plans/binaries-only",
               "plans/tool-loader",
               "plans/nightly-benchmarks",
               "plans/eval-hillclimbing",

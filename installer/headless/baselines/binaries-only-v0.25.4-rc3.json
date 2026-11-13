@@ -1,0 +1,1945 @@
+{
+  "about": "Binaries-only speed baseline, clean-runner half: every passing phase time from the installer journeys (.github/workflows/test_installers_headless.yml) against one release. Copied from the runs' install-timings artifacts; never hand-edit a number. Method: docs/plans/binaries-only.mdx, section 'Speed baseline'.",
+  "release": "v0.25.4-rc3",
+  "collected": "2026-11-02",
+  "source_runs": [
+    41547074552,
+    41549317482,
+    41550559185,
+    41555790026,
+    41564304019,
+    41565579912,
+    41567660194
+  ],
+  "reproduce": "python installer/headless/propose_thresholds.py --runs 7 --release v0.25.4-rc3",
+  "phase_meanings": {
+    "download": "Downloading the installer from the GitHub release; network-bound",
+    "install": "Silent install of the downloaded installer until it exits",
+    "upgrade": "Upgrade from the previous stable release",
+    "launch": "Desktop app: process start plus the journey's fixed 10 s liveness wait. Terminal: gaia-tui version",
+    "health": "Desktop app: first launch until GET /api/health answers, which includes building ~/.gaia/venv from PyPI (uv + amd-gaia[ui]) and the backend's cold start; gaia init skipped (GAIA_SKIP_GAIA_INIT), polled every 3 s. Terminal: one non-interactive turn through the installed gaia-agent against a fake model server, so agent cold start plus one turn",
+    "preflight": "Terminal: the same turn with no model server, which must refuse and name the fix within 120 s",
+    "quit": "Desktop app: stopping the app and its backend",
+    "uninstall": "Silent uninstall",
+    "leftovers": "Checking nothing is left behind after uninstall"
+  },
+  "rows": {
+    "fedora-tui-rpm": {
+      "title": "Terminal .rpm",
+      "os": "Fedora (container)",
+      "runner_images": [
+        "ubuntu26/20261026.180.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 2.5,
+          "samples": [
+            2.4,
+            2.7,
+            1.8,
+            3.6,
+            1.8,
+            2.5,
+            5.2
+          ]
+        },
+        "install": {
+          "median": 13.5,
+          "samples": [
+            13.5,
+            13.4,
+            12.4,
+            13.6,
+            13.5,
+            13.7,
+            13.2
+          ]
+        },
+        "launch": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.2,
+            0.1,
+            0.1,
+            0.1,
+            0.2,
+            0.2
+          ]
+        },
+        "health": {
+          "median": 5.1,
+          "samples": [
+            4.6,
+            5.3,
+            5.0,
+            5.0,
+            5.1,
+            5.5,
+            5.1
+          ]
+        },
+        "preflight": {
+          "median": 0.2,
+          "samples": [
+            0.2,
+            0.3,
+            0.2,
+            0.2,
+            0.2,
+            0.3,
+            0.3
+          ]
+        },
+        "uninstall": {
+          "median": 0.3,
+          "samples": [
+            0.2,
+            0.3,
+            0.3,
+            0.3,
+            0.3,
+            0.3,
+            0.3
+          ]
+        },
+        "leftovers": {
+          "median": 0.2,
+          "samples": [
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.3,
+            0.3
+          ]
+        }
+      }
+    },
+    "mac-arm64-agent-ui-dmg": {
+      "title": "Desktop app .dmg",
+      "os": "macOS arm64",
+      "runner_images": [
+        "macos26/20261026.0455.2"
+      ],
+      "phases": {
+        "download": {
+          "median": 2.2,
+          "samples": [
+            1.6,
+            1.7,
+            2.8,
+            2.0,
+            2.7,
+            2.9,
+            2.2
+          ]
+        },
+        "install": {
+          "median": 16.7,
+          "samples": [
+            15.8,
+            16.9,
+            16.4,
+            16.4,
+            16.7,
+            17.0,
+            16.7
+          ]
+        },
+        "launch": {
+          "median": 10.3,
+          "samples": [
+            10.1,
+            10.3,
+            10.3,
+            10.2,
+            10.4,
+            10.4,
+            10.2
+          ]
+        },
+        "health": {
+          "median": 18.0,
+          "samples": [
+            8.5,
+            21.7,
+            22.9,
+            7.9,
+            18.0,
+            15.8,
+            19.3
+          ]
+        },
+        "quit": {
+          "median": 2.5,
+          "samples": [
+            1.3,
+            2.5,
+            2.7,
+            2.4,
+            2.5,
+            2.4,
+            2.6
+          ]
+        },
+        "uninstall": {
+          "median": 0.2,
+          "samples": [
+            0.2,
+            0.1,
+            0.3,
+            0.1,
+            0.2,
+            0.1,
+            0.2
+          ]
+        },
+        "leftovers": {
+          "median": 0.2,
+          "samples": [
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.1,
+            0.2
+          ]
+        }
+      }
+    },
+    "mac-arm64-install-sh": {
+      "title": "install.sh in a sandbox home",
+      "os": "macOS arm64",
+      "runner_images": [
+        "macos26/20261026.0455.2"
+      ],
+      "phases": {
+        "install": {
+          "median": 12.4,
+          "samples": [
+            8.9,
+            11.8,
+            8.3,
+            15.4,
+            14.2,
+            13.0,
+            12.4
+          ]
+        },
+        "launch": {
+          "median": 5.6,
+          "samples": [
+            4.6,
+            5.3,
+            2.8,
+            5.6,
+            6.3,
+            6.9,
+            5.7
+          ]
+        },
+        "health": {
+          "median": 7.9,
+          "samples": [
+            5.6,
+            7.7,
+            4.6,
+            8.5,
+            10.4,
+            7.9,
+            9.2
+          ]
+        },
+        "preflight": {
+          "median": 0.3,
+          "samples": [
+            0.2,
+            0.3,
+            0.1,
+            0.3,
+            0.3,
+            0.3,
+            0.3
+          ]
+        },
+        "uninstall": {
+          "median": 3.9,
+          "samples": [
+            2.3,
+            3.3,
+            2.2,
+            4.3,
+            4.8,
+            4.5,
+            3.9
+          ]
+        },
+        "leftovers": {
+          "median": 0.2,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.2,
+            0.3,
+            0.2,
+            0.2
+          ]
+        }
+      }
+    },
+    "mac-arm64-tui-pkg": {
+      "title": "Terminal .pkg",
+      "os": "macOS arm64",
+      "runner_images": [
+        "macos26/20261026.0455.2"
+      ],
+      "phases": {
+        "download": {
+          "median": 2.1,
+          "samples": [
+            2.1,
+            1.7,
+            1.4,
+            3.2,
+            2.6,
+            2.0,
+            2.2
+          ]
+        },
+        "install": {
+          "median": 3.0,
+          "samples": [
+            4.3,
+            3.0,
+            2.8,
+            2.8,
+            3.1,
+            3.2,
+            2.8
+          ]
+        },
+        "launch": {
+          "median": 0.3,
+          "samples": [
+            0.3,
+            0.4,
+            0.1,
+            0.3,
+            0.2,
+            0.3,
+            0.3
+          ]
+        },
+        "health": {
+          "median": 7.7,
+          "samples": [
+            8.6,
+            7.6,
+            3.5,
+            6.4,
+            8.4,
+            9.3,
+            7.7
+          ]
+        },
+        "preflight": {
+          "median": 0.4,
+          "samples": [
+            0.4,
+            0.3,
+            0.1,
+            0.3,
+            0.7,
+            0.4,
+            0.4
+          ]
+        },
+        "uninstall": {
+          "median": 0.3,
+          "samples": [
+            0.3,
+            0.3,
+            0.1,
+            0.2,
+            0.4,
+            0.3,
+            0.3
+          ]
+        },
+        "leftovers": {
+          "median": 0.3,
+          "samples": [
+            0.2,
+            0.3,
+            0.1,
+            0.2,
+            0.3,
+            0.3,
+            0.3
+          ]
+        }
+      }
+    },
+    "mac-x64-install-sh": {
+      "title": "install.sh in a sandbox home",
+      "os": "macOS x64",
+      "runner_images": [
+        "macos15/20260824.0482.1"
+      ],
+      "phases": {
+        "install": {
+          "median": 34.7,
+          "samples": [
+            17.9,
+            27.7,
+            37.1,
+            34.7,
+            41.4,
+            39.1,
+            32.9
+          ]
+        },
+        "launch": {
+          "median": 15.4,
+          "samples": [
+            15.4,
+            9.5,
+            14.0,
+            12.0,
+            17.2,
+            16.2,
+            17.7
+          ]
+        },
+        "health": {
+          "median": 19.9,
+          "samples": [
+            19.9,
+            14.5,
+            21.0,
+            20.9,
+            14.6,
+            28.1,
+            18.6
+          ]
+        },
+        "preflight": {
+          "median": 0.5,
+          "samples": [
+            0.3,
+            0.4,
+            0.8,
+            0.6,
+            0.4,
+            0.5,
+            0.6
+          ]
+        },
+        "uninstall": {
+          "median": 9.3,
+          "samples": [
+            6.1,
+            7.0,
+            10.5,
+            9.7,
+            8.0,
+            9.3,
+            9.6
+          ]
+        },
+        "leftovers": {
+          "median": 0.4,
+          "samples": [
+            0.2,
+            0.5,
+            0.8,
+            0.5,
+            0.3,
+            0.3,
+            0.4
+          ]
+        }
+      }
+    },
+    "mac-x64-tui-pkg": {
+      "title": "Terminal .pkg",
+      "os": "macOS x64",
+      "runner_images": [
+        "macos15/20260824.0482.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 2.6,
+          "samples": [
+            4.1,
+            2.2,
+            1.8,
+            3.0,
+            2.6,
+            5.8,
+            2.2
+          ]
+        },
+        "install": {
+          "median": 5.5,
+          "samples": [
+            10.5,
+            5.7,
+            5.5,
+            5.0,
+            4.6,
+            11.9,
+            3.9
+          ]
+        },
+        "launch": {
+          "median": 0.4,
+          "samples": [
+            0.5,
+            0.3,
+            0.7,
+            0.4,
+            0.6,
+            0.4,
+            0.2
+          ]
+        },
+        "health": {
+          "median": 17.1,
+          "samples": [
+            21.6,
+            31.5,
+            20.7,
+            15.2,
+            17.1,
+            15.9,
+            8.7
+          ]
+        },
+        "preflight": {
+          "median": 0.4,
+          "samples": [
+            0.8,
+            0.4,
+            0.9,
+            0.4,
+            0.4,
+            0.4,
+            0.3
+          ]
+        },
+        "uninstall": {
+          "median": 0.4,
+          "samples": [
+            0.6,
+            0.4,
+            0.5,
+            0.3,
+            0.3,
+            0.4,
+            0.3
+          ]
+        },
+        "leftovers": {
+          "median": 0.3,
+          "samples": [
+            0.5,
+            0.5,
+            0.2,
+            0.2,
+            0.3,
+            0.4,
+            0.2
+          ]
+        }
+      }
+    },
+    "ubuntu22-agent-ui-deb": {
+      "title": "Desktop app .deb",
+      "os": "Ubuntu 22.04",
+      "runner_images": [
+        "ubuntu22/20261026.341.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 1.9,
+          "samples": [
+            1.8,
+            1.7,
+            1.7,
+            2.2,
+            3.1,
+            2.4,
+            1.9
+          ]
+        },
+        "install": {
+          "median": 12.9,
+          "samples": [
+            15.0,
+            12.9,
+            12.1,
+            12.1,
+            15.8,
+            12.9,
+            12.8
+          ]
+        },
+        "launch": {
+          "median": 10.1,
+          "samples": [
+            10.1,
+            10.0,
+            10.1,
+            10.1,
+            10.1,
+            10.1,
+            10.1
+          ]
+        },
+        "health": {
+          "median": 6.0,
+          "samples": [
+            5.1,
+            1.8,
+            6.0,
+            9.4,
+            6.0,
+            9.0,
+            12.2
+          ]
+        },
+        "quit": {
+          "median": 1.2,
+          "samples": [
+            1.1,
+            1.1,
+            1.1,
+            1.2,
+            1.2,
+            1.2,
+            1.2
+          ]
+        },
+        "uninstall": {
+          "median": 2.6,
+          "samples": [
+            2.2,
+            1.9,
+            2.5,
+            2.6,
+            2.7,
+            2.8,
+            2.7
+          ]
+        },
+        "leftovers": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        }
+      }
+    },
+    "ubuntu22-appimage": {
+      "title": "Desktop app .AppImage",
+      "os": "Ubuntu 22.04",
+      "runner_images": [
+        "ubuntu22/20261026.341.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 1.7,
+          "samples": [
+            1.0,
+            1.7,
+            2.4,
+            1.4,
+            1.8,
+            2.3,
+            1.5
+          ]
+        },
+        "install": {
+          "median": 0.2,
+          "samples": [
+            0.1,
+            0.2,
+            0.3,
+            0.2,
+            0.2,
+            0.2,
+            0.1
+          ]
+        },
+        "launch": {
+          "median": 10.1,
+          "samples": [
+            10.0,
+            10.1,
+            10.1,
+            10.1,
+            10.1,
+            10.1,
+            10.0
+          ]
+        },
+        "health": {
+          "median": 12.9,
+          "samples": [
+            4.8,
+            15.1,
+            12.9,
+            9.6,
+            15.8,
+            15.4,
+            5.0
+          ]
+        },
+        "quit": {
+          "median": 1.2,
+          "samples": [
+            1.1,
+            1.2,
+            1.2,
+            1.3,
+            1.2,
+            1.2,
+            2.1
+          ]
+        },
+        "uninstall": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        },
+        "leftovers": {
+          "median": 0.1,
+          "samples": [
+            0.0,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.0
+          ]
+        }
+      }
+    },
+    "ubuntu22-install-sh": {
+      "title": "install.sh in a sandbox home",
+      "os": "Ubuntu 22.04",
+      "runner_images": [
+        "ubuntu22/20261026.341.1"
+      ],
+      "phases": {
+        "install": {
+          "median": 11.7,
+          "samples": [
+            10.0,
+            10.4,
+            11.7,
+            12.7,
+            11.6,
+            12.1,
+            11.8
+          ]
+        },
+        "launch": {
+          "median": 6.1,
+          "samples": [
+            6.1,
+            5.6,
+            6.4,
+            6.9,
+            6.0,
+            5.9,
+            6.8
+          ]
+        },
+        "health": {
+          "median": 8.8,
+          "samples": [
+            8.8,
+            8.5,
+            9.1,
+            9.1,
+            8.5,
+            7.7,
+            8.9
+          ]
+        },
+        "preflight": {
+          "median": 0.2,
+          "samples": [
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.2
+          ]
+        },
+        "uninstall": {
+          "median": 4.0,
+          "samples": [
+            4.2,
+            3.3,
+            4.0,
+            4.0,
+            3.2,
+            3.0,
+            4.1
+          ]
+        },
+        "leftovers": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        }
+      }
+    },
+    "ubuntu22-tui-deb": {
+      "title": "Terminal .deb",
+      "os": "Ubuntu 22.04",
+      "runner_images": [
+        "ubuntu22/20261026.341.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 1.8,
+          "samples": [
+            1.5,
+            1.6,
+            0.9,
+            2.6,
+            1.8,
+            2.8,
+            2.7
+          ]
+        },
+        "install": {
+          "median": 9.0,
+          "samples": [
+            13.1,
+            7.4,
+            9.0,
+            20.2,
+            17.5,
+            7.8,
+            8.5
+          ]
+        },
+        "launch": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        },
+        "health": {
+          "median": 5.9,
+          "samples": [
+            6.3,
+            4.0,
+            3.9,
+            5.9,
+            6.1,
+            5.3,
+            5.9
+          ]
+        },
+        "preflight": {
+          "median": 0.1,
+          "samples": [
+            0.2,
+            0.1,
+            0.1,
+            0.1,
+            0.2,
+            0.1,
+            0.2
+          ]
+        },
+        "uninstall": {
+          "median": 2.6,
+          "samples": [
+            2.8,
+            1.8,
+            1.9,
+            2.6,
+            2.7,
+            2.6,
+            2.8
+          ]
+        },
+        "leftovers": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        }
+      }
+    },
+    "ubuntu24-agent-ui-deb": {
+      "title": "Desktop app .deb",
+      "os": "Ubuntu 24.04",
+      "runner_images": [
+        "ubuntu24/20261026.354.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 1.2,
+          "samples": [
+            1.3,
+            1.3,
+            1.0,
+            1.2,
+            2.2,
+            1.2,
+            1.0
+          ]
+        },
+        "install": {
+          "median": 8.7,
+          "samples": [
+            7.7,
+            9.9,
+            8.7,
+            9.5,
+            8.1,
+            9.8,
+            7.7
+          ]
+        },
+        "launch": {
+          "median": 10.1,
+          "samples": [
+            10.1,
+            10.1,
+            10.1,
+            10.1,
+            10.1,
+            10.1,
+            10.1
+          ]
+        },
+        "health": {
+          "median": 9.0,
+          "samples": [
+            9.0,
+            9.5,
+            1.9,
+            4.8,
+            9.2,
+            5.4,
+            12.1
+          ]
+        },
+        "quit": {
+          "median": 1.2,
+          "samples": [
+            1.2,
+            1.2,
+            1.2,
+            1.1,
+            1.2,
+            1.2,
+            1.2
+          ]
+        },
+        "uninstall": {
+          "median": 1.9,
+          "samples": [
+            2.0,
+            1.8,
+            1.5,
+            1.5,
+            2.7,
+            2.2,
+            1.9
+          ]
+        },
+        "leftovers": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        }
+      }
+    },
+    "ubuntu24-appimage": {
+      "title": "Desktop app .AppImage",
+      "os": "Ubuntu 24.04",
+      "runner_images": [
+        "ubuntu24/20261026.354.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 2.2,
+          "samples": [
+            3.7,
+            1.2,
+            1.5,
+            2.2,
+            2.2,
+            3.8,
+            3.7
+          ]
+        },
+        "install": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.3,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        },
+        "launch": {
+          "median": 10.1,
+          "samples": [
+            10.1,
+            10.1,
+            10.1,
+            10.1,
+            10.1,
+            10.1,
+            10.1
+          ]
+        },
+        "health": {
+          "median": 9.6,
+          "samples": [
+            5.3,
+            6.0,
+            12.7,
+            12.3,
+            12.6,
+            1.9,
+            9.6
+          ]
+        },
+        "quit": {
+          "median": 1.2,
+          "samples": [
+            1.1,
+            1.2,
+            1.2,
+            1.3,
+            1.2,
+            1.2,
+            1.2
+          ]
+        },
+        "uninstall": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        },
+        "leftovers": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        }
+      }
+    },
+    "ubuntu24-install-sh": {
+      "title": "install.sh in a sandbox home",
+      "os": "Ubuntu 24.04",
+      "runner_images": [
+        "ubuntu24/20261026.354.1"
+      ],
+      "phases": {
+        "install": {
+          "median": 10.0,
+          "samples": [
+            7.1,
+            9.8,
+            13.1,
+            8.6,
+            11.4,
+            11.8,
+            10.0
+          ]
+        },
+        "launch": {
+          "median": 5.3,
+          "samples": [
+            5.5,
+            5.3,
+            5.3,
+            6.6,
+            4.3,
+            4.3,
+            5.8
+          ]
+        },
+        "health": {
+          "median": 8.1,
+          "samples": [
+            6.4,
+            8.1,
+            8.1,
+            8.3,
+            6.8,
+            6.8,
+            8.4
+          ]
+        },
+        "preflight": {
+          "median": 0.2,
+          "samples": [
+            0.1,
+            0.2,
+            0.2,
+            0.2,
+            0.1,
+            0.1,
+            0.2
+          ]
+        },
+        "uninstall": {
+          "median": 3.0,
+          "samples": [
+            2.6,
+            3.0,
+            3.0,
+            3.0,
+            2.3,
+            3.5,
+            3.7
+          ]
+        },
+        "leftovers": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.2,
+            0.1,
+            0.1,
+            0.1
+          ]
+        }
+      }
+    },
+    "ubuntu24-tui-deb": {
+      "title": "Terminal .deb",
+      "os": "Ubuntu 24.04",
+      "runner_images": [
+        "ubuntu24/20261026.354.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 1.5,
+          "samples": [
+            1.2,
+            2.0,
+            1.3,
+            1.2,
+            1.5,
+            2.8,
+            4.2
+          ]
+        },
+        "install": {
+          "median": 7.0,
+          "samples": [
+            7.5,
+            6.0,
+            7.3,
+            6.8,
+            6.9,
+            7.6,
+            7.0
+          ]
+        },
+        "launch": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        },
+        "health": {
+          "median": 4.7,
+          "samples": [
+            4.7,
+            4.0,
+            4.7,
+            4.1,
+            5.7,
+            5.9,
+            5.6
+          ]
+        },
+        "preflight": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.2,
+            0.2,
+            0.2
+          ]
+        },
+        "uninstall": {
+          "median": 1.9,
+          "samples": [
+            1.8,
+            1.4,
+            2.0,
+            1.5,
+            1.9,
+            2.3,
+            1.9
+          ]
+        },
+        "leftovers": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        }
+      }
+    },
+    "ubuntu24-tui-deb-upgrade": {
+      "title": "Terminal .deb upgrade from the previous stable release",
+      "os": "Ubuntu 24.04",
+      "runner_images": [
+        "ubuntu24/20261026.354.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 1.9,
+          "samples": [
+            1.9,
+            1.5,
+            2.8,
+            1.9,
+            1.3,
+            3.0,
+            2.8
+          ]
+        },
+        "install": {
+          "median": 5.9,
+          "samples": [
+            6.2,
+            5.9,
+            7.2,
+            5.8,
+            5.4,
+            5.6,
+            11.8
+          ]
+        },
+        "upgrade": {
+          "median": 4.6,
+          "samples": [
+            4.6,
+            4.5,
+            5.4,
+            4.7,
+            4.4,
+            5.4,
+            4.4
+          ]
+        },
+        "launch": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        },
+        "health": {
+          "median": 5.8,
+          "samples": [
+            5.7,
+            5.9,
+            6.2,
+            5.8,
+            5.5,
+            5.6,
+            6.9
+          ]
+        },
+        "uninstall": {
+          "median": 2.0,
+          "samples": [
+            2.0,
+            2.4,
+            3.0,
+            2.3,
+            1.9,
+            2.0,
+            2.0
+          ]
+        },
+        "leftovers": {
+          "median": 0.1,
+          "samples": [
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1,
+            0.1
+          ]
+        }
+      }
+    },
+    "win-agent-ui-exe": {
+      "title": "Desktop app's own setup",
+      "os": "Windows x64",
+      "runner_images": [
+        "win25-vs2026/20261030.294.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 2.2,
+          "samples": [
+            1.6,
+            2.1,
+            2.0,
+            2.5,
+            2.2,
+            4.0,
+            3.1
+          ]
+        },
+        "install": {
+          "median": 21.0,
+          "samples": [
+            32.2,
+            22.6,
+            17.2,
+            21.0,
+            23.1,
+            20.1,
+            21.0
+          ]
+        },
+        "launch": {
+          "median": 10.6,
+          "samples": [
+            10.5,
+            10.6,
+            10.5,
+            10.5,
+            10.7,
+            11.7,
+            10.8
+          ]
+        },
+        "health": {
+          "median": 48.6,
+          "samples": [
+            72.8,
+            48.6,
+            41.5,
+            45.2,
+            59.6,
+            47.9,
+            48.7
+          ]
+        },
+        "quit": {
+          "median": 5.8,
+          "samples": [
+            6.2,
+            5.8,
+            7.4,
+            5.7,
+            5.7,
+            5.7,
+            5.8
+          ]
+        },
+        "uninstall": {
+          "median": 2.3,
+          "samples": [
+            2.2,
+            2.4,
+            1.8,
+            2.1,
+            2.4,
+            2.3,
+            2.4
+          ]
+        },
+        "leftovers": {
+          "median": 1.5,
+          "samples": [
+            1.3,
+            1.6,
+            1.3,
+            1.4,
+            1.5,
+            1.5,
+            1.6
+          ]
+        }
+      }
+    },
+    "win-install-ps1": {
+      "title": "install.ps1 in a sandbox profile",
+      "os": "Windows x64",
+      "runner_images": [
+        "win25-vs2026/20261030.294.1"
+      ],
+      "phases": {
+        "install": {
+          "median": 37.6,
+          "samples": [
+            39.2,
+            32.2,
+            46.5,
+            43.8,
+            33.2,
+            37.6,
+            32.4
+          ]
+        },
+        "launch": {
+          "median": 8.5,
+          "samples": [
+            8.5,
+            8.2,
+            8.8,
+            10.9,
+            8.2,
+            9.2,
+            8.1
+          ]
+        },
+        "health": {
+          "median": 16.0,
+          "samples": [
+            16.2,
+            15.7,
+            17.0,
+            15.9,
+            16.0,
+            16.6,
+            13.8
+          ]
+        },
+        "preflight": {
+          "median": 0.9,
+          "samples": [
+            0.9,
+            0.8,
+            0.8,
+            1.1,
+            0.9,
+            0.9,
+            0.6
+          ]
+        },
+        "uninstall": {
+          "median": 7.2,
+          "samples": [
+            7.3,
+            7.1,
+            7.2,
+            8.6,
+            7.2,
+            8.6,
+            6.2
+          ]
+        },
+        "leftovers": {
+          "median": 1.4,
+          "samples": [
+            1.5,
+            1.3,
+            1.4,
+            1.6,
+            1.4,
+            1.5,
+            1.1
+          ]
+        }
+      }
+    },
+    "win-setup-both": {
+      "title": "One setup, desktop app and terminal",
+      "os": "Windows x64",
+      "runner_images": [
+        "win25-vs2026/20261030.294.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 4.1,
+          "samples": [
+            2.9,
+            3.9,
+            5.4,
+            5.0,
+            6.6,
+            4.1,
+            3.8
+          ]
+        },
+        "install": {
+          "median": 66.3,
+          "samples": [
+            45.9,
+            66.3,
+            54.9,
+            96.1,
+            60.9,
+            69.9,
+            85.7
+          ]
+        },
+        "launch": {
+          "median": 10.7,
+          "samples": [
+            10.9,
+            10.6,
+            10.7,
+            10.7,
+            10.7,
+            10.7,
+            10.8
+          ]
+        },
+        "health": {
+          "median": 62.5,
+          "samples": [
+            37.7,
+            49.0,
+            53.8,
+            89.0,
+            64.2,
+            77.9,
+            62.5
+          ]
+        },
+        "preflight": {
+          "median": 45.6,
+          "samples": [
+            45.4,
+            45.6,
+            45.7,
+            45.7,
+            45.6,
+            45.7,
+            45.6
+          ]
+        },
+        "quit": {
+          "median": 5.5,
+          "samples": [
+            5.4,
+            6.0,
+            5.5,
+            5.5,
+            6.1,
+            5.4,
+            5.8
+          ]
+        },
+        "uninstall": {
+          "median": 2.8,
+          "samples": [
+            2.0,
+            2.4,
+            2.8,
+            3.8,
+            2.8,
+            3.5,
+            3.1
+          ]
+        },
+        "leftovers": {
+          "median": 1.4,
+          "samples": [
+            1.2,
+            1.3,
+            1.4,
+            1.5,
+            1.4,
+            1.5,
+            1.4
+          ]
+        }
+      }
+    },
+    "win-setup-tui": {
+      "title": "One setup, terminal only",
+      "os": "Windows x64",
+      "runner_images": [
+        "win25-vs2026/20261030.294.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 4.2,
+          "samples": [
+            4.2,
+            2.2,
+            4.8,
+            3.2,
+            5.3,
+            3.2,
+            5.6
+          ]
+        },
+        "install": {
+          "median": 36.4,
+          "samples": [
+            36.4,
+            28.2,
+            33.2,
+            37.7,
+            37.6,
+            38.5,
+            33.2
+          ]
+        },
+        "launch": {
+          "median": 0.6,
+          "samples": [
+            0.6,
+            0.4,
+            0.6,
+            0.6,
+            0.6,
+            0.6,
+            0.5
+          ]
+        },
+        "health": {
+          "median": 15.1,
+          "samples": [
+            27.3,
+            15.1,
+            14.8,
+            17.4,
+            22.0,
+            14.6,
+            13.8
+          ]
+        },
+        "preflight": {
+          "median": 45.6,
+          "samples": [
+            45.6,
+            45.4,
+            45.6,
+            45.6,
+            45.7,
+            45.6,
+            45.5
+          ]
+        },
+        "uninstall": {
+          "median": 0.9,
+          "samples": [
+            1.0,
+            0.6,
+            0.9,
+            0.9,
+            0.9,
+            0.9,
+            0.8
+          ]
+        },
+        "leftovers": {
+          "median": 1.5,
+          "samples": [
+            1.5,
+            1.2,
+            1.5,
+            1.5,
+            1.4,
+            1.5,
+            1.3
+          ]
+        }
+      }
+    },
+    "win-setup-ui": {
+      "title": "One setup, desktop app only",
+      "os": "Windows x64",
+      "runner_images": [
+        "win25-vs2026/20261030.294.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 3.5,
+          "samples": [
+            2.4,
+            2.8,
+            3.3,
+            4.3,
+            3.5,
+            3.8,
+            3.8
+          ]
+        },
+        "install": {
+          "median": 44.3,
+          "samples": [
+            65.0,
+            42.4,
+            44.3,
+            79.1,
+            47.3,
+            34.5,
+            40.8
+          ]
+        },
+        "launch": {
+          "median": 10.6,
+          "samples": [
+            10.6,
+            10.5,
+            10.8,
+            10.6,
+            10.7,
+            10.4,
+            10.6
+          ]
+        },
+        "health": {
+          "median": 65.5,
+          "samples": [
+            84.5,
+            41.2,
+            70.7,
+            91.8,
+            65.5,
+            34.2,
+            41.4
+          ]
+        },
+        "quit": {
+          "median": 5.6,
+          "samples": [
+            6.2,
+            5.3,
+            6.7,
+            5.6,
+            5.6,
+            5.3,
+            5.1
+          ]
+        },
+        "uninstall": {
+          "median": 2.4,
+          "samples": [
+            8.9,
+            1.9,
+            4.6,
+            4.5,
+            2.4,
+            1.6,
+            2.3
+          ]
+        },
+        "leftovers": {
+          "median": 1.3,
+          "samples": [
+            1.6,
+            1.3,
+            1.6,
+            1.3,
+            1.5,
+            1.0,
+            1.2
+          ]
+        }
+      }
+    },
+    "win-setup-upgrade": {
+      "title": "Upgrade from the previous stable release (installed and launched once) to the one setup",
+      "os": "Windows x64",
+      "runner_images": [
+        "win25-vs2026/20261030.294.1"
+      ],
+      "phases": {
+        "download": {
+          "median": 4.9,
+          "samples": [
+            4.9,
+            2.7,
+            4.4,
+            5.0,
+            5.4,
+            8.3,
+            4.8
+          ]
+        },
+        "install": {
+          "median": 78.5,
+          "samples": [
+            112.4,
+            116.9,
+            112.7,
+            75.6,
+            74.0,
+            70.9,
+            78.5
+          ]
+        },
+        "upgrade": {
+          "median": 27.2,
+          "samples": [
+            33.4,
+            30.8,
+            32.0,
+            26.7,
+            25.3,
+            22.1,
+            27.2
+          ]
+        },
+        "launch": {
+          "median": 10.6,
+          "samples": [
+            10.6,
+            10.7,
+            10.9,
+            10.6,
+            10.5,
+            10.4,
+            10.7
+          ]
+        },
+        "health": {
+          "median": 14.6,
+          "samples": [
+            24.5,
+            20.4,
+            64.4,
+            14.6,
+            9.4,
+            7.5,
+            12.0
+          ]
+        },
+        "quit": {
+          "median": 5.7,
+          "samples": [
+            5.6,
+            5.7,
+            6.0,
+            5.7,
+            5.5,
+            5.3,
+            5.7
+          ]
+        },
+        "uninstall": {
+          "median": 2.1,
+          "samples": [
+            2.1,
+            2.1,
+            2.6,
+            2.4,
+            1.6,
+            1.5,
+            3.2
+          ]
+        },
+        "leftovers": {
+          "median": 1.4,
+          "samples": [
+            1.4,
+            1.5,
+            1.6,
+            1.4,
+            1.2,
+            1.2,
+            1.6
+          ]
+        }
+      }
+    }
+  }
+}
