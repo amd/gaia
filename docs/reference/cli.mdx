@@ -3472,8 +3472,11 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 ## Automation
 
 Reminders, alerts, triggers and summaries GAIA runs on its own and reports
-later. Stored in `~/.gaia/automations/automations.json`; the Discord bridge runs
-them today and delivers them to your Discord DM. Ask GAIA in plain words ("remind
+later. Stored in `~/.gaia/automations/automations.json`. `gaia daemon` runs them on
+its clock and the Discord bridge delivers them to your Discord DM; with the bridge
+stopped, what ran waits in `~/.gaia/automations/outbox.json` (shown by `list`; removing
+or pausing its automation drops it, as does `remove "waiting:<id>"`), and
+with no daemon running the bridge runs them itself. Ask GAIA in plain words ("remind
 me at 5pm", "alert me if main breaks", "what are you watching?") and it uses
 these commands through the `automations` skill, asking before every change.
 
