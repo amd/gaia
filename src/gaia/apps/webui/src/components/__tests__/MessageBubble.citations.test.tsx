@@ -101,6 +101,59 @@ describe('citations in an answer', () => {
     });
 });
 
+describe('citations to dropped files and same-named files', () => {
+    const at = (id: string, filename: string, filepath: string): Document => ({ ...doc(id, filename), filepath });
+    const UPLOADS = 'C:\\Users\\me\\.gaia\\documents';
+
+    it('a full path to a dropped file, stored with an id in front, cites it', () => {
+        useChatStore.setState({ documents: [at('up', 'report.pdf', `${UPLOADS}\\a1b2c3d4e5f6_report.pdf`)] });
+        const found = links(`According to ${UPLOADS}\\a1b2c3d4e5f6_report.pdf (page 3):`);
+        expect(found.map(({ kind, id, page }) => [kind, id, page])).toEqual([['doc', 'up', 3], ['page', 'up', 3]]);
+        expect(found[0].text).toBe('report.pdf');
+    });
+
+    it('the stored name of a dropped file on its own cites it', () => {
+        useChatStore.setState({ documents: [at('up', 'notes.md', `${UPLOADS}\\0123456789ab_notes.md`)] });
+        expect(links('See `0123456789ab_notes.md`, page 1.').map(({ kind, id }) => [kind, id])).toEqual([
+            ['doc', 'up'], ['page', 'up'],
+        ]);
+    });
+
+    it('a Linux path to a dropped file cites it', () => {
+        useChatStore.setState({ documents: [at('up', 'report.pdf', '/home/me/.gaia/documents/a1b2c3d4e5f6_report.pdf')] });
+        const found = links('According to /home/me/.gaia/documents/a1b2c3d4e5f6_report.pdf, page 2:');
+        expect(found.map(({ kind, id, page }) => [kind, id, page])).toEqual([['doc', 'up', 2], ['page', 'up', 2]]);
+    });
+
+    const TWINS = [
+        at('a23', 'report.pdf', 'C:\\work\\2023\\report.pdf'),
+        at('a24', 'report.pdf', 'C:\\work\\2024\\report.pdf'),
+        at('annual', 'annual_report.pdf', 'C:\\work\\annual_report.pdf'),
+    ];
+
+    it('each of two same-named files opens itself, labelled with its folder', () => {
+        useChatStore.setState({ documents: TWINS });
+        const found = links('C:\\work\\2023\\report.pdf says 5; C:\\work\\2024\\report.pdf says 7.');
+        expect(found.map(({ id, text }) => [id, text])).toEqual([['a23', '2023/report.pdf'], ['a24', '2024/report.pdf']]);
+    });
+
+    it('a same-named file under a folder with a space opens itself', () => {
+        useChatStore.setState({ documents: [
+            at('js23', 'plan.pdf', 'C:\\Users\\John Smith\\2023\\plan.pdf'),
+            at('js24', 'plan.pdf', 'C:\\Users\\John Smith\\2024\\plan.pdf'),
+        ] });
+        const found = links('See C:\\Users\\John Smith\\2024\\plan.pdf, page 4.');
+        expect(found.map(({ kind, id }) => [kind, id])).toEqual([['doc', 'js24'], ['page', 'js24']]);
+        expect(found[0].text).toBe('2024/plan.pdf');
+    });
+
+    it('a bare name two files share links neither, rather than the wrong one', () => {
+        useChatStore.setState({ documents: TWINS });
+        expect(links('According to report.pdf, page 2.')).toEqual([]);
+        expect(links('According to annual_report.pdf, page 2.').map(({ id }) => id)).toEqual(['annual', 'annual']);
+    });
+});
+
 describe('page references', () => {
     const pages = (text: string) => findPages(text).map((p) => p.page);
     it.each([

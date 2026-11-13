@@ -30,6 +30,7 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 from gaia.rag.keyword_search import keyword_index
+from gaia.rag.normalize import search_form
 from gaia.rag.sdk import (
     EmbeddingUnavailableError,
     folder_index_skip_reason,
@@ -821,6 +822,15 @@ _SEARCH_AGAIN_NOTE = (
     "that answer is from the web."
 )
 
+# One file missed and others are attached: the fact may be in another one.
+_SEARCH_ALL_NOTE = (
+    "\n\nIf these chunks do not answer the question, do not say so yet: the "
+    "answer may be in another attached document, whatever its name or language. "
+    "Search them all with query_documents (the question's words, and the same "
+    "words in the documents' languages). If that misses too, say plainly that "
+    "the answer is not in the attached documents."
+)
+
 
 _NO_TURN = object()
 
@@ -842,7 +852,14 @@ def _asks_once_for_another_search(mixin: Any):
             if getattr(mixin, "_search_again_turn", _NO_TURN) == turn:
                 return result
             mixin._search_again_turn = turn
-            result["instruction"] = result.get("instruction", "") + _SEARCH_AGAIN_NOTE
+            rag = getattr(mixin, "rag", None)
+            others = len(getattr(rag, "indexed_files", None) or ()) > 1
+            note = (
+                _SEARCH_ALL_NOTE
+                if others and search.__name__ == "query_specific_file"
+                else _SEARCH_AGAIN_NOTE
+            )
+            result["instruction"] = result.get("instruction", "") + note
             return result
 
         return wrapper
@@ -2002,7 +2019,8 @@ class RAGToolsMixin:
                 # so exact matches retain their source file and PDF page.
                 matching_chunks = []
                 matching_details = []
-                pattern_lower = pattern.lower()
+                # Digits, vowel marks and compatibility forms written either way match.
+                pattern_lower = search_form(pattern).lower()
 
                 if debug_info:
                     debug_info["total_chunks_searched"] = len(searched)
@@ -2011,7 +2029,7 @@ class RAGToolsMixin:
                     )
 
                 for index, chunk, source_file in searched:
-                    if pattern_lower in chunk.lower():
+                    if pattern_lower in search_form(chunk).lower():
                         matching_chunks.append(chunk)
                         matching_details.append((index, chunk, source_file))
 
@@ -2020,7 +2038,9 @@ class RAGToolsMixin:
                             # Find the line containing the pattern
                             lines = chunk.split("\n")
                             matching_lines = [
-                                line for line in lines if pattern_lower in line.lower()
+                                line
+                                for line in lines
+                                if pattern_lower in search_form(line).lower()
                             ]
                             debug_info["chunks_with_matches"].append(
                                 {
@@ -2079,7 +2099,7 @@ class RAGToolsMixin:
                         matching_entries = [
                             entry
                             for entry in page_entries
-                            if pattern_lower in entry["content"].lower()
+                            if pattern_lower in search_form(entry["content"]).lower()
                         ]
                         if matching_entries:
                             matched_content = matching_entries[0]["content"]
