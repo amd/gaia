@@ -312,9 +312,14 @@ other. Pins stay separate. If the file can't be read, neither app overwrites it:
 setting fails with a message saying to fix or delete the file, and the desktop app pauses
 its update checks until it is fixed. Both check the
 [GitHub releases](https://github.com/amd/gaia/releases). The desktop app installs only releases that publish its update for your
-platform; macOS releases don't yet
-([#5682](https://github.com/amd/gaia/issues/5682)), so on a Mac the Updates section
-says so and you install the `.dmg` from the releases page.
+platform.
+
+**On a Mac the desktop app can't install updates itself yet** ([#7061](https://github.com/amd/gaia/issues/7061)):
+its builds aren't signed with an Apple Developer ID, and macOS rejects an unsigned
+update. A new release still shows on the corner chip and in **Settings → General →
+Updates**, with a **Download** link to its release page; install the `.dmg` from there
+over the app you have. **Install updates automatically** isn't shown, and **Install a
+specific version…** opens the chosen release's page instead of installing it.
 
 To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching.
 
@@ -386,7 +391,7 @@ gaia uninstall --purge --purge-hf-cache     # Also remove ~/.cache/huggingface/
 | Chat file attachments | `~/.gaia/chat/uploads/` |
 | Configuration | `~/.gaia/electron-config.json` |
 | Logs | `~/.gaia/gaia.log` (`$GAIA_HOME/gaia.log` when `GAIA_HOME` is set), or the path in `GAIA_LOG_FILE` (capped at 10 MB; older logs rotate to `gaia.log.1`–`gaia.log.3`), `~/.gaia/electron-install.log` |
-| Terminal UI and agent binaries (one-line installer). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links to `~/.gaia/core` on Linux and macOS; on Windows the frozen `gaia` itself), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
+| Terminal UI and agent binaries (one-line installer), plus the agent's install record (`gaia-agent.install.json`, its version and SHA-256, which GAIA checks before starting it). It also holds the `gaia`, `gaia-cli` and `gaia-mcp` commands (links to `~/.gaia/core` on Linux and macOS; on Windows the frozen `gaia` itself), and is the only GAIA directory the installer puts on your PATH | `~/.gaia/bin/` |
 | The frozen `gaia` the one-line installer runs (Linux and macOS) | `~/.gaia/core/` |
 | The copy of its `gaia` an AppImage runs, which outlives the AppImage's mount | `~/.gaia/app-core/` |
 | Agent run traces | `~/.gaia/traces/` |

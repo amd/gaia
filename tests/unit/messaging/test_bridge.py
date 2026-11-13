@@ -291,7 +291,8 @@ def test_missing_agent_binary_names_the_fix():
         ch.start()
     message = str(excinfo.value)
     assert "not on PATH" in message
-    assert "gaia init" in message, "an error must name what to do about it"
+    assert "setup" in message, "an error must name what to do about it"
+    assert "gaia init" not in message, "the fix is in the app, not a command"
 
 
 # ----------------------------------------------------------------------
@@ -371,3 +372,25 @@ def test_a_withdrawn_turn_cannot_be_amended():
     turn = Turn(text="later")
     ch.withdraw(turn)
     assert ch.amend(turn, "later, and more") is False
+
+
+def test_a_control_turn_is_sent_in_its_place_and_ends_at_once(channel):
+    """ "new chat" clears the conversation behind the running turn, not across it."""
+    from gaia.messaging.bridge import CONTROL_CLEAR_HISTORY, CONTROL_KEY
+
+    ch, proc, seen = channel
+    first = Turn(text="first")
+    clear = Turn(text="", control=CONTROL_CLEAR_HISTORY)
+    after = Turn(text="after")
+    for turn in (first, clear, after):
+        ch.submit(turn)
+    assert _wait_for(lambda: len(proc.stdin.lines) == 1)
+    proc.stdout.emit({"type": "final", "answer": "one"})
+    assert _wait_for(lambda: len(proc.stdin.lines) == 3)
+    assert [json.loads(line) for line in proc.stdin.lines] == [
+        {QUERY_KEY: "first"},
+        {CONTROL_KEY: CONTROL_CLEAR_HISTORY},
+        {QUERY_KEY: "after"},
+    ]
+    assert _wait_for(lambda: any(turn is clear for _event, turn in seen))
+    assert [event["type"] for event, turn in seen if turn is clear] == ["final"]

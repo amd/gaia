@@ -90,6 +90,61 @@ def test_text_file_detects_utf32_bom(rag, tmp_path, bom, encoding):
     assert rag._extract_text_from_text_file(str(document)) == expected
 
 
+@pytest.mark.parametrize(
+    ("text", "encoding"),
+    [
+        pytest.param(
+            "بلغت إيرادات الشركة في عام 2023 نحو 45 مليون ريال، "
+            "بزيادة قدرها 12 بالمئة.",
+            "cp1256",
+            id="arabic-windows-1256",
+        ),
+        pytest.param(
+            "東京本社の売上高は前年比12%増の45億円でした。",
+            "shift_jis",
+            id="japanese-shift-jis",
+        ),
+        pytest.param("北京办公室的年度预算为三百万元。", "gbk", id="chinese-gbk"),
+        pytest.param(
+            "Привет, мир. Бюджет 300 рублей.", "cp1251", id="russian-windows-1251"
+        ),
+    ],
+)
+def test_text_file_detects_legacy_non_latin_encoding(rag, tmp_path, text, encoding):
+    document = tmp_path / "legacy.txt"
+    document.write_bytes(text.encode(encoding))
+
+    assert rag._extract_text_from_text_file(str(document)) == text
+
+
+def test_csv_detects_windows_1256_arabic(rag, tmp_path):
+    document = tmp_path / "sales_cp1256.csv"
+    document.write_bytes(
+        "الشركة,الإيرادات\r\nشركة النور,1234\r\nشركة الأمل,5678\r\n".encode("cp1256")
+    )
+
+    extracted = rag._extract_text_from_csv(str(document))
+
+    assert "الشركة: شركة النور" in extracted
+    assert "الإيرادات: 5678" in extracted
+
+
+def test_symbol_heavy_cp1252_text_still_reads(rag, tmp_path):
+    document = tmp_path / "prices.txt"
+    expected = "Prix: 12€ — 15€ — 20€"
+    document.write_bytes(expected.encode("cp1252"))
+
+    assert rag._extract_text_from_text_file(str(document)) == expected
+
+
+def test_undetectable_bytes_fail_with_the_file_named(rag, tmp_path):
+    document = tmp_path / "scrambled.txt"
+    document.write_bytes(bytes(range(128, 256)) * 8)
+
+    with pytest.raises(ValueError, match="scrambled.txt"):
+        rag._extract_text_from_text_file(str(document))
+
+
 def test_truncated_utf16_raises_with_tried_encodings(rag, tmp_path):
     document = tmp_path / "broken.txt"
     document.write_bytes(codecs.BOM_UTF16_LE + b"a")

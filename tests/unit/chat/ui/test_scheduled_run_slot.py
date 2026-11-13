@@ -87,8 +87,10 @@ async def test_timed_out_scheduled_run_stops_and_keeps_the_model_until_it_has(
         assert len(calls) == 1, "a second run started on top of the stuck one"
 
         unstick.set()
-        with pytest.raises(asyncio.TimeoutError):
+        with pytest.raises(asyncio.TimeoutError) as timed_out:
             await asyncio.wait_for(first, 5)
+        assert "GAIA_SCHEDULE_TIMEOUT" not in str(timed_out.value)
+        assert "shorter or simpler task" in str(timed_out.value)
         assert await asyncio.wait_for(second, 5) == "late"
         assert not queue.locked()
     finally:
