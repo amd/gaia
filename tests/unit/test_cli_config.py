@@ -263,6 +263,22 @@ class TestConfigCLI:
         assert exc.value.code != 0
         assert "Unknown config key" in capsys.readouterr().err
 
+    def test_set_hybrid_policy_saves_a_known_value(self, monkeypatch, tmp_path, capsys):
+        _run_main(["config", "set", "hybrid_policy", "balanced"], monkeypatch, tmp_path)
+        data = json.loads((tmp_path / "config.json").read_text())
+        assert data["hybrid_policy"] == "balanced"
+
+    def test_set_unknown_hybrid_policy_exits_nonzero_and_saves_nothing(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        with pytest.raises(SystemExit) as exc:
+            _run_main(
+                ["config", "set", "hybrid_policy", "cheap"], monkeypatch, tmp_path
+            )
+        assert exc.value.code != 0
+        assert "quality, balanced" in capsys.readouterr().err
+        assert not (tmp_path / "config.json").exists()
+
     def test_get_unknown_key_exits_nonzero(self, monkeypatch, tmp_path, capsys):
         with pytest.raises(SystemExit) as exc:
             _run_main(["config", "get", "bogus"], monkeypatch, tmp_path)

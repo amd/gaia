@@ -14,8 +14,10 @@ from gaia.llm import hybrid
 from gaia.llm.hybrid import (
     CHEAP_KINDS,
     CLASSIFIER_SYSTEM_PROMPT,
+    DEFAULT_POLICY,
     KINDS,
     MAX_REQUEST_CHARS,
+    POLICIES,
     ClassifierError,
     HybridConfigError,
     HybridRouter,
@@ -54,7 +56,7 @@ class FakeClient:
         return self.reply(messages) if callable(self.reply) else self.reply
 
 
-def _router(reply, delay=0.0, timeout=5.0):
+def _router(reply, delay=0.0, timeout=5.0, policy=DEFAULT_POLICY):
     client = FakeClient(reply, delay)
     made = []
 
@@ -67,6 +69,7 @@ def _router(reply, delay=0.0, timeout=5.0):
         strong_model=STRONG,
         classifier_model=CLASSIFIER,
         classifier_timeout_s=timeout,
+        policy=policy,
     )
     return HybridRouter(settings, client_factory=factory), client, made
 
@@ -86,21 +89,107 @@ def _cloud_allowed(monkeypatch):
 # --- policy -----------------------------------------------------------------
 
 
-def _expected(kind, difficulty, stakes):
+def _expected(kind, difficulty, stakes, policy):
     """The policy as specified, written independently of the implementation."""
     if stakes == "low" and difficulty <= 3 and kind in CHEAP_KINDS:
         return True
     if kind == "change_code" and difficulty <= 2 and stakes == "low":
         return True
+    if policy == "balanced" and kind == "change_code" and difficulty <= 3:
+        return True
     return False
+
+
+@pytest.mark.parametrize(
+    "policy,kind,difficulty,stakes",
+    list(
+        itertools.product(
+            ("quality", "balanced"), sorted(KINDS), range(1, 6), ("low", "high")
+        )
+    ),
+)
+def test_policy_table(policy, kind, difficulty, stakes):
+    assert runs_cheap(kind, difficulty, stakes, policy) is _expected(
+        kind, difficulty, stakes, policy
+    )
+
+
+def test_policies_are_exactly_quality_and_balanced():
+    assert POLICIES == ("quality", "balanced") and DEFAULT_POLICY == "quality"
 
 
 @pytest.mark.parametrize(
     "kind,difficulty,stakes",
     list(itertools.product(sorted(KINDS), range(1, 6), ("low", "high"))),
 )
-def test_policy_table(kind, difficulty, stakes):
-    assert runs_cheap(kind, difficulty, stakes) is _expected(kind, difficulty, stakes)
+def test_default_policy_is_quality(kind, difficulty, stakes):
+    assert runs_cheap(kind, difficulty, stakes) is runs_cheap(
+        kind, difficulty, stakes, "quality"
+    )
+
+
+def test_balanced_only_adds_difficulty_3_and_high_stakes_code_changes():
+    labels = list(itertools.product(KINDS, range(1, 6), ("low", "high")))
+    added = {
+        label
+        for label in labels
+        if runs_cheap(*label, "balanced") and not runs_cheap(*label, "quality")
+    }
+    assert added == {
+        ("change_code", 1, "high"),
+        ("change_code", 2, "high"),
+        ("change_code", 3, "high"),
+        ("change_code", 3, "low"),
+    }
+    # Balanced never takes a turn away from the cheap model.
+    assert not any(
+        runs_cheap(*label, "quality") and not runs_cheap(*label, "balanced")
+        for label in labels
+    )
+
+
+@pytest.mark.parametrize("kind", ["find_defects", "plan_or_design", "other"])
+@pytest.mark.parametrize("policy", ["quality", "balanced"])
+def test_judgement_kinds_stay_strong_under_every_policy(kind, policy):
+    assert not any(
+        runs_cheap(kind, d, s, policy) for d in range(1, 6) for s in ("low", "high")
+    )
+
+
+@pytest.mark.parametrize("policy", ["quality", "balanced"])
+def test_difficulty_4_and_up_never_runs_cheap(policy):
+    assert not any(
+        runs_cheap(k, d, s, policy)
+        for k in KINDS
+        for d in (4, 5)
+        for s in ("low", "high")
+    )
+
+
+@pytest.mark.parametrize("policy", ["quality", "balanced"])
+@pytest.mark.parametrize("kind", sorted(CHEAP_KINDS))
+def test_high_stakes_prose_stays_strong_under_every_policy(kind, policy):
+    assert not any(runs_cheap(kind, d, "high", policy) for d in range(1, 6))
+
+
+@pytest.mark.parametrize("policy", ["Balanced", "cheap", "", None, "quality "])
+def test_unknown_policy_fails_loudly_in_runs_cheap(policy):
+    with pytest.raises(HybridConfigError, match="quality, balanced"):
+        runs_cheap("write_prose", 1, "low", policy)
+
+
+def test_balanced_router_sends_a_difficulty_3_code_change_cheap():
+    label = _label("change_code", 3, "high", "fix in two files")
+    assert _router(label, policy="quality")[0].decide("Fix it").model == STRONG
+    assert _router(label, policy="balanced")[0].decide("Fix it").model == CHEAP
+
+
+@pytest.mark.parametrize("policy", ["quality", "balanced"])
+def test_every_policy_still_fails_closed(policy):
+    router, _, _ = _router("not json", policy=policy)
+    route = router.decide("Fix the bug")
+    assert route.model == STRONG and not route.classified
+    assert route.policy == policy
 
 
 def test_policy_cheap_kinds_are_exactly_the_four():
@@ -117,7 +206,7 @@ def test_judgement_kinds_never_run_cheap(kind):
     assert not any(runs_cheap(kind, d, "low") for d in range(1, 6))
 
 
-def test_high_stakes_never_runs_cheap():
+def test_high_stakes_never_runs_cheap_under_quality():
     assert not any(runs_cheap(k, d, "high") for k in KINDS for d in range(1, 6))
 
 
@@ -440,8 +529,19 @@ def test_route_record_has_every_field():
         "classified": True,
         "seconds": record["seconds"],
         "sticky": False,
+        "policy": "quality",
     }
     assert isinstance(record["seconds"], float)
+
+
+@pytest.mark.parametrize("policy", ["quality", "balanced"])
+def test_every_route_records_its_policy(policy):
+    router, _, _ = _router(_label("find_defects", 4, "high"), policy=policy)
+    assert router.decide("   ").policy == policy
+    first = _turn(router, "Review this")
+    sticky = router.decide("next")
+    assert first.policy == sticky.policy == policy and sticky.sticky
+    assert first.as_record()["policy"] == policy
 
 
 def test_decision_is_logged_once(caplog):
@@ -450,6 +550,7 @@ def test_decision_is_logged_once(caplog):
         router.decide("Summarise")
     lines = [r for r in caplog.records if "hybrid: turn runs on" in r.getMessage()]
     assert len(lines) == 1 and CHEAP in lines[0].getMessage()
+    assert "policy=quality" in lines[0].getMessage()
 
 
 # --- settings ---------------------------------------------------------------
@@ -471,6 +572,12 @@ def test_settings_default_to_the_gateway_pair():
     assert settings.strong_model == "amd.Claude-Opus-5-5"
     assert settings.classifier_model == settings.cheap_model
     assert settings.classifier_timeout_s == 15
+    assert settings.policy == "quality"
+
+
+def test_settings_load_the_configured_policy():
+    config = GaiaConfig(hybrid_policy="balanced")
+    assert HybridSettings.load(config).policy == "balanced"
 
 
 def test_classifier_defaults_to_a_configured_cheap_model():
@@ -489,6 +596,10 @@ def test_classifier_defaults_to_a_configured_cheap_model():
         {"classifier_timeout_s": 121},
         {"classifier_timeout_s": True},
         {"classifier_timeout_s": "15"},
+        {"policy": "cheap"},
+        {"policy": "Balanced"},
+        {"policy": ""},
+        {"policy": None},
     ],
 )
 def test_bad_settings_fail_loudly(kwargs):
@@ -511,6 +622,17 @@ def test_config_keys_validate_on_set():
             config.set("hybrid_classifier_timeout", bad)
 
 
+def test_policy_config_key_validates_on_set():
+    config = GaiaConfig()
+    assert config.hybrid_policy == "quality"
+    config.set("hybrid_policy", " Balanced ")
+    assert config.hybrid_policy == "balanced"
+    for bad in ("cheap", "", "fast", "1"):
+        with pytest.raises(GaiaConfigError, match="quality, balanced"):
+            config.set("hybrid_policy", bad)
+    assert config.hybrid_policy == "balanced"
+
+
 @pytest.mark.parametrize(
     "doc",
     [
@@ -518,6 +640,11 @@ def test_config_keys_validate_on_set():
         {"hybrid_strong_model": "hybrid"},
         {"hybrid_classifier_timeout": 0},
         {"hybrid_classifier_timeout": "15"},
+        {"hybrid_policy": "cheap"},
+        {"hybrid_policy": ""},
+        {"hybrid_policy": None},
+        {"hybrid_policy": 1},
+        {"hybrid_policy": ["balanced"]},
     ],
 )
 def test_config_file_with_bad_hybrid_values_fails_to_load(tmp_path, doc):
@@ -525,6 +652,12 @@ def test_config_file_with_bad_hybrid_values_fails_to_load(tmp_path, doc):
     path.write_text(json.dumps(doc), encoding="utf-8")
     with pytest.raises(GaiaConfigError):
         GaiaConfig.load(path)
+
+
+def test_config_file_policy_loads(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"hybrid_policy": "balanced"}), encoding="utf-8")
+    assert GaiaConfig.load(path).hybrid_policy == "balanced"
 
 
 # --- gaia -p ------------------------------------------------------------------
@@ -553,6 +686,7 @@ class _CountingRouter:
             reason="needs investigation",
             classified=True,
             seconds=0.5,
+            policy=self.settings.policy,
         )
 
 
@@ -611,7 +745,9 @@ def test_p_hybrid_records_the_route_and_runs_on_its_model(print_mode_doubles, ca
         "classified",
         "seconds",
         "sticky",
+        "policy",
     }
+    assert record["route"]["policy"] == "quality"
     assert "hybrid runs this turn on amd.Claude-Strong" in err
 
 

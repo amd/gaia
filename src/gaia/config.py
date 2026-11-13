@@ -228,6 +228,9 @@ class GaiaConfig:
             ``None`` uses the cheap model.
         hybrid_classifier_timeout: Seconds ``hybrid`` waits for the label
             (1-120) before running the turn on the strong model.
+        hybrid_policy: How readily ``hybrid`` uses the cheap model:
+            ``quality`` (default) or ``balanced``, which also sends
+            medium-difficulty code changes to it.
     """
 
     profile: str = "chat"
@@ -257,6 +260,7 @@ class GaiaConfig:
     hybrid_strong_model: Optional[str] = None
     hybrid_classifier_model: Optional[str] = None
     hybrid_classifier_timeout: int = 15
+    hybrid_policy: str = "quality"
 
     #: Field values as last read from or written to the file (not a field).
     _loaded: ClassVar[Optional[dict]] = None
@@ -313,6 +317,8 @@ class GaiaConfig:
             return cls._check_hybrid_timeout(
                 cls._whole_number(key, value), "gaia config"
             )
+        if key == "hybrid_policy":
+            return cls._check_hybrid_policy(value, "gaia config")
         if cls._is_int_field(key):
             return cls._whole_number(key, value)
         if not cls._is_bool_field(key) or isinstance(value, bool):
@@ -465,6 +471,19 @@ class GaiaConfig:
                 "for the default."
             )
         return value
+
+    @staticmethod
+    def _check_hybrid_policy(value: Any, where: str) -> str:
+        from gaia.llm.hybrid import DEFAULT_POLICY, POLICIES
+
+        word = value.strip().lower() if isinstance(value, str) else value
+        if word not in POLICIES:
+            raise GaiaConfigError(
+                f"{where}: 'hybrid_policy' must be one of {', '.join(POLICIES)}, "
+                f"but it is {value!r}. Run `gaia config set hybrid_policy "
+                f"{DEFAULT_POLICY}` for the default."
+            )
+        return word
 
     @staticmethod
     def _check_context_sizes(value: Any, config_file: Path) -> None:
@@ -621,6 +640,10 @@ class GaiaConfig:
         if "hybrid_classifier_timeout" in kwargs:
             kwargs["hybrid_classifier_timeout"] = cls._check_hybrid_timeout(
                 kwargs["hybrid_classifier_timeout"], where
+            )
+        if "hybrid_policy" in kwargs:
+            kwargs["hybrid_policy"] = cls._check_hybrid_policy(
+                kwargs["hybrid_policy"], where
             )
         if "project_context" in kwargs:
             kwargs["project_context"] = cls._check_project_context(

@@ -284,6 +284,12 @@ difficulty 3 or below, or a code change at difficulty 2 or below. Everything
 else — reviews and audits, planning and design, anything high-stakes — runs on
 the strong model.
 
+That is the default `quality` policy. `gaia config set hybrid_policy balanced`
+also sends medium-difficulty code changes (difficulty 3 or below, whatever the
+stakes) to the cheap model: cheaper, with a measurable quality cost on harder
+fixes. Reviews, planning, anything at difficulty 4 or above, and high-stakes
+writing stay on the strong model under either policy.
+
 - **One decision per turn.** Every step of the turn, and every `--attempts`
   attempt, runs on the model chosen at the start, so the tool format and the
   prompt cache stay consistent.
@@ -303,8 +309,8 @@ the strong model.
 Requests longer than 9,000 characters are judged on their beginning, and the
 classifier is told the full length. `gaia -p --output-format json` adds a
 `route` object naming the model, the label, the classifier's reason, whether it
-classified (`classified`), how long it took (`seconds`), and whether the turn was
-`sticky`. Each decision is also logged at INFO.
+classified (`classified`), how long it took (`seconds`), whether the turn was
+`sticky`, and the `policy` in effect. Each decision is also logged at INFO.
 
 Pick the models with `gaia config`:
 
@@ -314,8 +320,9 @@ Pick the models with `gaia config`:
 | `hybrid_strong_model` | `amd.Claude-Opus-5-5` | Runs every other turn |
 | `hybrid_classifier_model` | the cheap model | Labels each turn |
 | `hybrid_classifier_timeout` | `15` | Seconds to wait for the label (1-120) before going strong |
+| `hybrid_policy` | `quality` | `quality`, or `balanced` to also send medium-difficulty code changes to the cheap model |
 
-Set a key to `""` to go back to its default. Routing applies to the flagship
+Set a model key to `""` to go back to its default. Routing applies to the flagship
 agent's turns in new sessions; picking a model by name (`/model <id>`) ends it for
 that session. A one-off call outside a turn, such as a chat title or `gaia llm`,
 uses the cheap model. With [Local only](/reference/cli#local-only) on, a hybrid
