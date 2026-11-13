@@ -50,6 +50,7 @@ from gaia.agents.base.call_risk import (
     RISK_NOTE_ARG,
     SHELL_TOOLS,
 )
+from gaia.agents.base.chunk_index import OUTPUT_TOOLS
 from gaia.agents.base.completion import (
     _BINARY_SUFFIXES,
     WRITE_TOOLS,
@@ -191,6 +192,7 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import redact_credentials_in
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
@@ -8465,6 +8467,9 @@ Do NOT wrap conversational replies in JSON.
             with skill_scope as skill_call:
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
+            if tool_name in OUTPUT_TOOLS:
+                # Command output goes into the prompt; tokens printed in it must not.
+                result = redact_credentials_in(result)
             logger.debug(f"Tool execution result: {result}")
             _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
