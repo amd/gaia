@@ -721,6 +721,31 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withArabicTable(page: Page): Promise<void> {
+    const table = '| الاسم | المبلغ |\n| --- | --- |\n| إيجار | 1200 |\n| طعام | 450 |';
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'اعرض مصاريفي', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: table, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+test('an Arabic answer table reads right to left', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withArabicTable);
+    const table = page.locator('.md-table');
+    await expect(table).toHaveCount(1);
+    expect(await table.evaluate((t) => getComputedStyle(t).direction)).toBe('rtl');
+    const wrap = (await page.locator('.md-table-wrap').boundingBox())!;
+    const header = (await page.locator('.md-table th').first().boundingBox())!;
+    expect(header.x + header.width).toBeGreaterThan(wrap.x + wrap.width - 2);
+});
+
 async function withStoppedAnswer(page: Page): Promise<void> {
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
         route.fulfill({
