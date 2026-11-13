@@ -216,6 +216,18 @@ def test_a_correction_to_a_skill_asks_for_the_lesson_tool(message):
         "add a skill level column to this table",
         "save my skills list as a csv",
         "install the skill tree mod for this game",
+        "add the following skills to my CV: Python, SQL",
+        "add the skills you listed to my resume",
+        "add a new skills column",
+        "save these skills to my profile",
+        "add this skill to my LinkedIn profile: negotiation",
+        "add a new skill column to the sheet",
+        # Fixing code or a document that mentions skills is not a correction.
+        "fix the skill issue in my code",
+        "can you fix that skill bug",
+        "update the skill section of my resume",
+        "my team skill should improve",
+        "update your skill requirements list",
         # Installing something that is not a skill.
         "install numpy",
         "Install the GitHub CLI for me.",
@@ -263,6 +275,34 @@ def test_skill_tools_absent_from_the_registry_are_not_requested():
     assert requested_tools(
         "Install tampered-notes from the hub.", {"install_skill"}
     ) == ["install_skill"]
+
+
+def test_unfenced_name_and_description_frontmatter_asks_for_capture():
+    """Intended: an unfenced block with both keys is a pasted skill, any prose."""
+    message = "---\nname: x\ndescription: y\n---\nWhat does this do?"
+    assert requested_tools(message, SKILL_REGISTRY) == CAPTURE
+
+
+def test_save_phrasing_after_a_long_paste_still_counts():
+    """The instruction may follow the paste; the middle is skipped, not the end."""
+    message = "filler line\n" * 2000 + "save this skill"
+    assert requested_tools(message, SKILL_REGISTRY) == CAPTURE
+
+
+def test_a_skill_named_after_a_career_site_still_installs():
+    message = "install the linkedin-post skill from the hub"
+    assert requested_tools(message, SKILL_REGISTRY) == INSTALL
+
+
+@pytest.mark.parametrize("prefix", ["", "install ", "fix "])
+@pytest.mark.parametrize("unit", ["skill hub ", "the skill ", "this skill should "])
+def test_a_megabyte_of_skill_words_is_classified_quickly(prefix, unit):
+    import time
+
+    message = prefix + unit * 100000
+    start = time.perf_counter()
+    requested_tools(message, SKILL_REGISTRY)
+    assert time.perf_counter() - start < 1.0
 
 
 def test_a_huge_paste_is_classified_quickly():

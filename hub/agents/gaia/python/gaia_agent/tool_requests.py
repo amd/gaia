@@ -73,18 +73,35 @@ _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _FRONTMATTER_KEY = re.compile(r"^(name|description):\s*\S")
 _SKILL_WORD = re.compile(r"\bskills?\b", re.IGNORECASE)
 
+# Phrasing is read from the message's ends: a paste sits between them.
+_PHRASING_SPAN = 4096
+
 # "skill level", "skills section": the word as part of another noun.
 _NOT_A_SKILL = (
     r"(?![\s-]*(?:levels?|sets?|trees?|points?|gaps?|sections?|lists?|matrix"
-    r"|ratings?|scores?|checks?|issues?|bars?|badges?)\b)"
+    r"|ratings?|scores?|checks?|issues?|bars?|badges?|bugs?|errors?|columns?"
+    r"|fields?|categor(?:y|ies)|tags?|requirements?)\b)"
 )
 _DETERMINERS = r"(?:(?:this|that|the|these|those|a|an|my|your|new|following)\s+)+"
 
+# Resume and profile talk: "add this skill to my CV" is not about the library.
+_CAREER_TARGET = re.compile(
+    r"\b(?:to|in|on|into|onto|for)\s+(?:my|the|your|our|a|his|her|their)\s+"
+    r"(?:[\w-]+\s+)?(?:r[eé]sum[eé]s?|cvs?|profiles?|linkedin|portfolios?)\b",
+    re.IGNORECASE,
+)
+
 # "save this skill", "add the skill at ~/x", "install the rss-digest skill". A
-# determiner is required, so "add skills to my resume" is not a request.
+# determiner is required, so "add skills to my resume" is not a request, and
+# only installs take the plural: "add the skills you listed" is about a list.
 _SKILL_VERB_OBJECT = re.compile(
-    r"\b(?P<verb>save|store|keep|add|capture|import|grab|register|install|download)"
-    r"\s+" + _DETERMINERS + r"(?:[\w.-]+\s+){0,2}?skills?\b" + _NOT_A_SKILL,
+    r"\b(?:(?P<save>save|store|keep|add|capture|import|grab|register)\s+"
+    + _DETERMINERS
+    + r"(?:[\w.-]+\s+){0,2}?skill\b"
+    + r"|(?P<install>install|download)\s+"
+    + _DETERMINERS
+    + r"(?:[\w.-]+\s+){0,2}?skills?\b)"
+    + _NOT_A_SKILL,
     re.IGNORECASE,
 )
 # "save this as a skill", "turn these notes into a skill".
@@ -101,10 +118,16 @@ _INSTALL_FROM_HUB = re.compile(
 )
 
 # A correction to a skill's own instructions: "this skill should end with X".
-_SKILL_REF_PATTERN = r"\b(?:this|that|the|my|your)\s+(?:[\w.-]+\s+)?skill(?:'s)?\b"
+_SKILL_REF_PATTERN = (
+    r"\b(?:this|that|the|my|your)\s+(?:[\w.-]+\s+)?skill(?:'s)?\b" + _NOT_A_SKILL
+)
 _SKILL_REF = re.compile(_SKILL_REF_PATTERN, re.IGNORECASE)
+# As a subject, only a skill's own slug names it: "my team skill should" doesn't.
+_SKILL_SUBJECT = (
+    r"\b(?:this|that|the)\s+(?:[\w.]+-[\w.-]+\s+)?skill(?:'s)?\b" + _NOT_A_SKILL
+)
 _SKILL_LESSON = re.compile(
-    _SKILL_REF_PATTERN + r"\s+(?:[\w-]+\s+){0,2}?should\b"
+    _SKILL_SUBJECT + r"\s+(?:[\w-]+\s+){0,2}?should\b"
     r"|\b(?:change|update|fix|correct|edit|rewrite)\s+" + _SKILL_REF_PATTERN,
     re.IGNORECASE,
 )
@@ -168,19 +191,24 @@ def _skill_tools(user_input: str) -> List[str]:
     # A fenced block is often an example of something else; the prose decides.
     if any(not fenced for fenced in blocks) or (blocks and _SKILL_WORD.search(prose)):
         wanted.append(CAPTURE_TOOL)
+    if len(user_input) > 2 * _PHRASING_SPAN:
+        text = user_input[:_PHRASING_SPAN] + "\n" + user_input[-_PHRASING_SPAN:]
+    else:
+        text = user_input
+    career = bool(_CAREER_TARGET.search(text))
     install = False
-    for match in _SKILL_VERB_OBJECT.finditer(user_input):
-        if match.group("verb").lower() in ("install", "download"):
+    for match in _SKILL_VERB_OBJECT.finditer(text):
+        if match.group("install"):
             install = True
-        elif CAPTURE_TOOL not in wanted:
+        elif not career and CAPTURE_TOOL not in wanted:
             wanted.append(CAPTURE_TOOL)
-    if _AS_A_SKILL.search(user_input) and CAPTURE_TOOL not in wanted:
+    if not career and _AS_A_SKILL.search(text) and CAPTURE_TOOL not in wanted:
         wanted.append(CAPTURE_TOOL)
-    if install or _INSTALL_FROM_HUB.search(user_input):
+    if install or _INSTALL_FROM_HUB.search(text):
         # "Install" covers the hub and a URL or path, which capture handles.
         wanted.extend(t for t in (INSTALL_TOOL, CAPTURE_TOOL) if t not in wanted)
-    if _SKILL_LESSON.search(user_input) or (
-        _STANDING_CUE.search(user_input) and _SKILL_REF.search(user_input)
+    if _SKILL_LESSON.search(text) or (
+        _STANDING_CUE.search(text) and _SKILL_REF.search(text)
     ):
         wanted.append(LESSON_TOOL)
     return wanted
