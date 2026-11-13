@@ -99,7 +99,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     except ImportError:  # amd-gaia older than the WMI guard; the pin allows it
         print(
             "WARNING: this amd-gaia cannot keep the agent off WMI, so on a busy "
-            "Windows PC the agent may crash. Fix: pip install --upgrade amd-gaia",
+            "Windows PC the agent may crash. Fix: update the amd-gaia package.",
             file=sys.stderr,
             flush=True,
         )
