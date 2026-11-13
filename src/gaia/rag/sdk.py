@@ -3988,6 +3988,16 @@ These positions indicate where to split the text."""
         )
         return chunks_ok and files_ok, evicted_files
 
+    def is_full(self) -> bool:
+        """True when indexing one more document would push out one already held."""
+        with self._state_lock:
+            files = len(self.indexed_files)
+            chunks = len(self.chunks)
+        return (
+            0 < self.config.max_indexed_files <= files
+            or 0 < self.config.max_total_chunks <= chunks
+        )
+
     def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.
 

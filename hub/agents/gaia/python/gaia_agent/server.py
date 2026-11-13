@@ -66,6 +66,7 @@ from starlette.responses import StreamingResponse
 from gaia.agents.base import file_snapshots
 from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
+from gaia.agents.tools.rag_tools import _forget_evicted
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.llm.surface_hints import surface_wording
@@ -852,16 +853,29 @@ def _attach_refusal(agent: Any, path: str) -> str:
     return reason if blocked else ""
 
 
+def _grant_unloaded(agent: Any, documents: List[str]) -> None:
+    """Grant attached documents the full index can't hold, so one loads on request."""
+    for doc in documents:
+        if not _attach_refusal(agent, doc):
+            agent.path_validator.add_allowed_path(doc)
+
+
 def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
     """Index the documents the caller attached to this conversation (>= 2.16).
 
     Grants each as that exact file, never its folder: the scope an in-process
     Agent UI agent gets. Files already indexed are skipped, so a retained
-    session pays only for documents attached since its last turn.
+    session pays only for documents attached since its last turn. Loading
+    stops once the index is full; the rest stay attached and load on request.
     """
+    agent.attached_documents = list(documents)
     indexed = agent.indexed_files
     pending = [d for d in documents if d not in indexed]
     if not pending:
+        return
+    if agent.rag is not None and agent.rag.is_full():
+        # Already said when the index filled; the model is told every turn.
+        _grant_unloaded(agent, pending)
         return
     handler.print_tool_usage(_ATTACH_TOOL)
     handler.pretty_print_json(
@@ -871,6 +885,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     lines: List[str] = []
     cancel = getattr(agent, "_cancel_event", None)
     stopped = False
+    not_loaded = 0
     for position, doc in enumerate(pending):
         # Stop ends the loading here; what is left stays pending for the next turn.
         if cancel is not None and cancel.is_set():
@@ -881,6 +896,16 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
                 + " not loaded. They load with your next message."
             )
             stopped = True
+            break
+        if rag is not None and rag.is_full():
+            left = len(pending) - position
+            lines.append(
+                f"{left} more not loaded: a conversation searches at most "
+                f"{rag.config.max_indexed_files} documents at once. Ask about one "
+                "of them by name to search it."
+            )
+            _grant_unloaded(agent, pending[position:])
+            not_loaded = left
             break
         name = Path(doc).name
         reason = (
@@ -899,6 +924,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             lines.append(f"{name}: not indexed: {exc}")
             continue
         if result.get("success") and not result.get("error"):
+            _forget_evicted(indexed, result.get("evicted", []))
             indexed.add(doc)
             lines.append(f"{name}: {result.get('num_chunks', 0)} chunks")
         else:
@@ -907,7 +933,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     succeeded = sum(1 for d in pending if d in indexed)
     if succeeded:
         agent.rebuild_system_prompt()
-    all_indexed = succeeded == len(pending)
+    all_indexed = succeeded == len(pending) - not_loaded
     status = "stopped" if stopped else "indexed" if all_indexed else "not all indexed"
     handler._emit(
         {

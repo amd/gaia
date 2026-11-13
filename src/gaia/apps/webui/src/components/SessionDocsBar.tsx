@@ -10,6 +10,9 @@ import { middleTruncate } from '../utils/format';
 import { useT } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 
+/** Documents one chat searches at once: ``RAGConfig.max_indexed_files`` in ``gaia/rag/sdk.py``. */
+export const SEARCHED_AT_ONCE = 100;
+
 /** The documents indexed for this chat, shown under the header; renders nothing when there are none. */
 export function SessionDocsBar({ sessionId, onDetachFailed }: {
     sessionId: string;
@@ -106,6 +109,14 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
                 <button className="doc-pill-collapse" onClick={(e) => { e.stopPropagation(); setDocsExpanded(false); }}>
                     {t('docsBar.less')}
                 </button>
+            )}
+            {readableCount > SEARCHED_AT_ONCE && (
+                <p className="doc-context-past-cap" role="status">
+                    <AlertCircle size={12} className="doc-context-icon doc-context-icon-warn" aria-hidden="true" />
+                    <span className="doc-context-past-cap-text">
+                        {t('docsBar.pastCap', { limit: SEARCHED_AT_ONCE, n: readableCount })}
+                    </span>
+                </p>
             )}
         </div>
     );

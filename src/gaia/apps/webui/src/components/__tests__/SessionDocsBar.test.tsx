@@ -40,6 +40,23 @@ describe('the documents bar above the chat', () => {
         expect(screen.getByRole('button', { name: /عرض أقل/ })).toBeInTheDocument();
     });
 
+    it.each([
+        ['en', 'Only 100 of the 150 documents in this chat are searched at once. Ask about a file by name to search it.'],
+        ['ar', 'يُبحث في 100 فقط من مستندات هذه المحادثة البالغ عددها 150 في المرة الواحدة'],
+    ])('says when a chat has more documents than it searches at once (%s)', (locale, text) => {
+        const many = Array.from({ length: 150 }, (_, i) => doc(i + 10));
+        useChatStore.setState({ locale, sessions: [{ ...session, document_ids: many.map((d) => d.id) } as never], documents: many });
+        render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
+        expect(screen.getByRole('status').textContent).toContain(text);
+    });
+
+    it('says nothing about a limit at 100 documents', () => {
+        const hundred = Array.from({ length: 100 }, (_, i) => doc(i + 10));
+        useChatStore.setState({ sessions: [{ ...session, document_ids: hundred.map((d) => d.id) } as never], documents: hundred });
+        render(<SessionDocsBar sessionId="s1" onDetachFailed={() => {}} />);
+        expect(screen.queryByRole('status')).toBeNull();
+    });
+
     it('names its manage button and remove buttons in Arabic', () => {
         setup('ar');
         expect(screen.getByRole('button', { name: /إزالة.*notes-5\.txt.*من هذه المحادثة/ })).toBeInTheDocument();

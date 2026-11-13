@@ -1673,7 +1673,10 @@ def _index_rag_with_progress(
     Emits tool_start, per-doc status, and tool_result events.
     When *rebuild_per_doc* is True, calls agent.rebuild_system_prompt() after
     each successfully indexed document (used for cache-hit incremental updates).
+    Stops at the index's cap; the rest stay attached and load on request.
     """
+    from gaia.agents.tools.rag_tools import _forget_evicted
+
     n = len(fpath_list)
     sse_handler._emit(
         {
@@ -1687,10 +1690,15 @@ def _index_rag_with_progress(
     total_chunks = 0
     cancelled = getattr(sse_handler, "cancelled", None)
     left = 0
+    not_loaded = 0
     for i, fpath in enumerate(fpath_list, 1):
         # Stop ends the loading here; what is left is picked up on the next turn.
         if cancelled is not None and cancelled.is_set():
             left = n - i + 1
+            break
+        # Full: loading more would push out what was just loaded.
+        if agent.rag.is_full():
+            not_loaded = n - i + 1
             break
         doc_name = Path(fpath).name
         sse_handler._emit(
@@ -1715,6 +1723,7 @@ def _index_rag_with_progress(
                     }
                 )
             else:
+                _forget_evicted(agent.indexed_files, result.get("evicted", []))
                 agent.indexed_files.add(fpath)
                 total_chunks += n_chunks
                 size_mb = result.get("file_size_mb", 0) or 0
@@ -1746,8 +1755,14 @@ def _index_rag_with_progress(
     headline = (
         f"Stopped: {left} of {n} {label} not loaded. They load with your next message."
         if left
-        else f"Indexed {n} {label} in {idx_elapsed}s"
+        else f"Indexed {n - not_loaded} {label} in {idx_elapsed}s"
     )
+    if not_loaded:
+        headline += (
+            f". {not_loaded} more not loaded: a chat searches at most "
+            f"{agent.rag.config.max_indexed_files} documents at once. Ask about "
+            "one of them by name to search it."
+        )
     summary_lines = [
         headline,
         f"Total: {total_chunks} chunks in index",
@@ -4094,14 +4109,23 @@ async def _get_chat_response(
             if hasattr(agent, "config"):
                 agent.config.working_directory = working_directory
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
+                from gaia.agents.tools.rag_tools import _forget_evicted
+
                 from .agent_documents import not_yet_indexed
 
+                agent.attached_documents = list(rag_file_paths)
                 new_paths = not_yet_indexed(rag_file_paths, agent.indexed_files)
                 for fpath in new_paths:
+                    # Named to the model as not searched; it loads one on request.
+                    if agent.rag.is_full():
+                        break
                     doc_name = Path(fpath).name
                     try:
                         result_idx = agent.rag.index_document(fpath)
                         if result_idx.get("success"):
+                            _forget_evicted(
+                                agent.indexed_files, result_idx.get("evicted", [])
+                            )
                             agent.indexed_files.add(fpath)
                             agent.rebuild_system_prompt()
                         else:
@@ -4571,6 +4595,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     from .agent_documents import not_yet_indexed
 
                     new_rag_paths = not_yet_indexed(rag_file_paths, agent.indexed_files)
+                    if hasattr(agent, "rag") and agent.rag:
+                        agent.attached_documents = list(rag_file_paths)
+                        if agent.rag.is_full():
+                            # Named to the model as not searched; it loads one on request.
+                            new_rag_paths = []
                     if new_rag_paths and hasattr(agent, "rag") and agent.rag:
                         _index_rag_with_progress(
                             agent,
@@ -4715,6 +4744,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                         # Index session-attached RAG docs (single pass, with SSE progress).
                         if rag_file_paths and hasattr(agent, "rag") and agent.rag:
+                            agent.attached_documents = list(rag_file_paths)
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
 
                         _store_agent(

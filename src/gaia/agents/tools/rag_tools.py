@@ -294,6 +294,43 @@ def _forget_evicted(indexed_files: set, evicted: List[str]) -> None:
             indexed_files.discard(path)
 
 
+def attached_not_loaded(host: Any, rag: Any) -> List[str]:
+    """Documents attached to the chat that the index does not hold: past its cap.
+
+    *host*'s ``attached_documents`` lists every document attached to the chat;
+    the index holds at most ``max_indexed_files`` of them at once.
+    """
+    attached = getattr(host, "attached_documents", None) or []
+    if not attached or rag is None:
+        return []
+    held = {os.path.realpath(p) for p in rag.indexed_files}
+    held.update(os.path.realpath(p) for p in documents_still_indexing(rag))
+    return [p for p in attached if os.path.realpath(p) not in held]
+
+
+def not_loaded_note(count: int, rag: Any) -> str:
+    """What the model must know about attached documents it cannot search at once."""
+    return (
+        f"{count} more document{'s are' if count != 1 else ' is'} attached to this "
+        "chat but not searched by query_documents: a chat searches at most "
+        f"{rag.config.max_indexed_files} documents at once. They ARE attached; "
+        "never say one is not attached or does not exist. To search one, call "
+        "query_specific_file with its file name, which loads it. If the answer "
+        "is not found, tell the user only part of the attached documents was "
+        "searched and ask which file to look in."
+    )
+
+
+def _note_not_searched(host: Any, rag: Any, result: Dict[str, Any]) -> None:
+    """Tell the model about attached documents this search could not reach."""
+    missing = attached_not_loaded(host, rag)
+    if missing:
+        result["attached_not_searched"] = len(missing)
+        result["instruction"] = (
+            not_loaded_note(len(missing), rag) + " " + result["instruction"]
+        )
+
+
 def _indexing_in_progress(job: _IndexJob) -> Dict[str, Any]:
     """Tool result for a document that is still indexing in the background."""
     name = Path(job.path).name
@@ -1209,6 +1246,7 @@ class RAGToolsMixin:
                         result["instruction"] = (
                             _left_out_note(left_out) + result["instruction"]
                         )
+                    _note_not_searched(self, rag, result)
                     if debug_info:
                         result["debug_info"] = debug_info
                     return result
@@ -1372,6 +1410,7 @@ class RAGToolsMixin:
                     result["instruction"] = (
                         _left_out_note(left_out) + result["instruction"]
                     )
+                _note_not_searched(self, rag, result)
 
                 # Add debug info to result if debug mode is enabled
                 if debug_info:
@@ -1448,10 +1487,23 @@ class RAGToolsMixin:
                         if Path(str(f)).name == basename
                     )
                     if len(matching_files) == 0:
+                        attached = _match_indexed_files(
+                            attached_not_loaded(self, rag), file_path
+                        )
+                        if len(attached) > 1:
+                            return _ambiguous_file_error(file_path, attached)
                         # Auto-index the file if it exists on disk instead of failing.
                         # This avoids the slow fail → plan → index → re-query cycle.
-                        disk_path = str(
-                            _resolve_target(file_path, None, _workspace_default(self))
+                        # An attached one past the cap loads here, pushing out
+                        # the least recently searched document.
+                        disk_path = (
+                            attached[0]
+                            if attached
+                            else str(
+                                _resolve_target(
+                                    file_path, None, _workspace_default(self)
+                                )
+                            )
                         )
                         denied = read_access_error(self, disk_path)
                         if denied:

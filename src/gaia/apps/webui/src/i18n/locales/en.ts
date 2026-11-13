@@ -998,6 +998,7 @@ export const enMessages = {
     'docsBar.remove': 'Remove {name} from this chat',
     'docsBar.more': '+{n} more',
     'docsBar.less': 'show less',
+    'docsBar.pastCap': 'Only {limit} of the {n} documents in this chat are searched at once. Ask about a file by name to search it.',
     'docsBar.failedTitle': '{name} couldn\'t be read. Open the document library to see why and retry.',
     'docs.removed': 'Removed {name} from your library. The file on your PC is untouched.',
     'docs.undo': 'Undo',
