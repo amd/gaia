@@ -162,6 +162,29 @@
     gap: 8px;
 }
 .msg-edit-btn { height: 28px; }
+.msg-edit-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    list-style: none;
+}
+.msg-edit-attachment {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 260px;
+    padding-block: 3px;
+    padding-inline: 8px;
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    font-size: 13px;
+}
+.msg-edit-attachment svg { flex-shrink: 0; }
+.msg-edit-attachment-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .msg-drop-confirm {
     display: flex;
     flex-direction: column;
@@ -486,6 +509,11 @@
 }
 .md-table tr:hover td {
     background: var(--tint-subtle);
+}
+
+/* A short code word keeps its chip whole; the table widens or scrolls instead. */
+.md-table .inline-code {
+    overflow-wrap: normal;
 }
 
 /* Right-align numeric columns */

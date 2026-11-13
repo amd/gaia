@@ -5,7 +5,7 @@ import React, { createContext, useCallback, useContext, useId, useLayoutEffect, 
 import type { Components } from 'react-markdown';
 import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, FolderOpen, Square, FileText, ScrollText } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { SAFE_DISALLOWED_ELEMENTS, safeUrlTransform } from '../utils/markdown';
+import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
@@ -496,9 +496,12 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
     onCancel: () => void;
 }) {
     const t = useT();
-    const [text, setText] = useState(draft ?? original);
+    // Attachments stay out of the text box and go back on when the edit is sent.
+    const { text: originalText, links } = useMemo(() => splitAttachmentLinks(original), [original]);
+    const [text, setText] = useState(() => (draft != null ? splitAttachmentLinks(draft).text : originalText));
     const ref = useRef<HTMLTextAreaElement>(null);
-    const changed = text.trim() !== '' && text !== original;
+    const changed = text.trim() !== '' && text !== originalText;
+    const send = () => onSend(joinAttachmentLinks(text, links));
 
     useLayoutEffect(() => {
         const el = ref.current;
@@ -520,7 +523,7 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
             onCancel();
         } else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
-            if (changed) onSend(text);
+            if (changed) send();
         }
     };
 
@@ -537,9 +540,19 @@ function MessageEditor({ original, draft, onDraft, onSend, onCancel }: {
                 dir="auto"
                 {...CLAIMS_ESCAPE}
             />
+            {links.length > 0 && (
+                <ul className="msg-edit-attachments" aria-label={t('composer.attached')}>
+                    {links.map((l, i) => (
+                        <li key={i} className="msg-edit-attachment">
+                            <FileText size={14} aria-hidden="true" />
+                            <span className="msg-edit-attachment-name" title={l.name} dir="auto">{l.name}</span>
+                        </li>
+                    ))}
+                </ul>
+            )}
             <div className="msg-edit-actions">
                 <button type="button" className="btn-secondary msg-edit-btn" onClick={onCancel}>{t('msg.editCancel')}</button>
-                <button type="button" className="btn-primary msg-edit-btn" onClick={() => onSend(text)} disabled={!changed}>
+                <button type="button" className="btn-primary msg-edit-btn" onClick={send} disabled={!changed}>
                     {t('msg.editSend')}
                 </button>
             </div>
@@ -573,6 +586,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
             : cleanToolCallContent(cutOff ? cutOff.body : message.content, Boolean(isStreaming))),
         [message.content, message.role, isStreaming, cutOff],
     );
+    const hasAnswerText = Boolean(cleanedContent.trim()) && !(stopState && cleanedContent.trim() === SERVER_CANCELLED_TEXT);
     const summaryFiles = message.turnSummary?.files;
     const writtenFiles = useMemo(() => summaryFiles?.map((f) => f.path) ?? [], [summaryFiles]);
     const readAloudId = `${message.session_id}:${message.id}`;
@@ -698,17 +712,19 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                                 </button>
                             )}
                             {extraActions}
-                            {message.role === 'assistant' && !isError && cleanedContent.trim() && (
+                            {message.role === 'assistant' && !isError && hasAnswerText && (
                                 <ReadAloudButton messageId={readAloudId} content={cleanedContent} />
                             )}
-                            <button
-                                className={`msg-copy ${copied ? 'copied' : ''}`}
-                                onClick={handleCopy}
-                                title={copied ? t('msg.copied') : t('msg.copy')}
-                                aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
-                            >
-                                {copied ? <Check size={12} /> : <Copy size={12} />}
-                            </button>
+                            {hasAnswerText && (
+                                <button
+                                    className={`msg-copy ${copied ? 'copied' : ''}`}
+                                    onClick={handleCopy}
+                                    title={copied ? t('msg.copied') : t('msg.copy')}
+                                    aria-label={copied ? t('msg.copiedAria') : t('msg.copy')}
+                                >
+                                    {copied ? <Check size={12} /> : <Copy size={12} />}
+                                </button>
+                            )}
                             {/* Delete button */}
                             {onDelete && (
                                 <button
@@ -1252,8 +1268,8 @@ const MARKDOWN_COMPONENTS: Components = {
     ol({ children, start }) {
         return <ol className="md-ol" start={start} dir="auto">{children}</ol>;
     },
-    li({ children }) {
-        return <li className="md-li" dir="auto"><Linkified>{children}</Linkified></li>;
+    li({ children, className }) {
+        return <li className={className ? `md-li ${className}` : 'md-li'} dir="auto"><Linkified>{children}</Linkified></li>;
     },
     // Blockquote
     blockquote({ children }) {
