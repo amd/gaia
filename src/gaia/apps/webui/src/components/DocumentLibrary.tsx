@@ -41,6 +41,10 @@ function describeFolderResult(t: Translate, folderName: string, result: IndexFol
         if (skipped > 0) {
             parts.push(say(pluralKey('docs.folder.skipped', skipped), { n: skipped }));
         }
+        const images = result.skipped_images ?? 0;
+        if (images > 0) {
+            parts.push(say(pluralKey('docs.folder.images', images), { n: images }));
+        }
         if (result.failed > 0) {
             parts.push(say(pluralKey('docs.folder.failed', result.failed), { n: result.failed }));
             if (result.errors[0]) parts.push(result.errors[0].split('\n')[0]);

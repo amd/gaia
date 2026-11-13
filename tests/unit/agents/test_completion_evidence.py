@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -1535,6 +1536,28 @@ def test_a_bare_output_a_script_wrote_beside_the_named_input_is_found(tmp_path):
     _script_run(ledger, tmp_path / "build.py", lambda: xlsx.write_bytes(b"PK"))
 
     assert not [g for g in gaps(ledger, "Both files are in kx.") if "recon_tables" in g]
+
+
+def test_a_write_the_file_clock_dates_a_tick_early_is_still_the_runs(tmp_path):
+    """Linux and Windows stamp files with a coarse clock that trails time.time_ns."""
+    kx = tmp_path / "kx"
+    kx.mkdir()
+    (kx / "reconciliation.md").write_text("# Recon\n")
+    ledger = CompletionEvidence(
+        f"Read {kx / 'reconciliation.md'} and make recon_tables.xlsx from it.",
+        str(tmp_path),
+    )
+    xlsx = kx / "recon_tables.xlsx"
+
+    tick_early = time.time_ns() - 10_000_000
+
+    def write_a_tick_early():
+        xlsx.write_bytes(b"PK")
+        os.utime(xlsx, ns=(tick_early, tick_early))
+
+    _script_run(ledger, tmp_path / "build.py", write_a_tick_early)
+
+    assert not [g for g in gaps(ledger, "Done.") if "recon_tables" in g]
 
 
 def test_a_bare_output_no_run_wrote_is_still_missing(tmp_path):
