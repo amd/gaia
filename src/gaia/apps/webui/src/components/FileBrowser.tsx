@@ -15,6 +15,7 @@ import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
+import { isMacPlatform } from '../utils/platform';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from './UnsupportedFeature';
@@ -215,6 +216,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
     const [quickLinks, setQuickLinks] = useState<QuickLink[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [deniedName, setDeniedName] = useState<string | null>(null);
     const [showHidden, setShowHidden] = useState(false);
 
     // Search state
@@ -243,6 +245,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
     const loadDirectory = useCallback(async (path?: string) => {
         setLoading(true);
         setError(null);
+        setDeniedName(null);
         setSearchResults(null);
         setSearchQuery('');
         setSearchedLocations([]);
@@ -254,8 +257,15 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
             if (data.quick_links.length > 0) setQuickLinks(data.quick_links);
             log.ui.info(`Browsing: ${data.current_path} (${data.entries.length} items)`);
         } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Failed to load directory';
-            setError(msg);
+            if (path && (err as { reason?: unknown }).reason === 'os_denied') {
+                const name = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;
+                setCurrentPath(path);
+                setParentPath(null);
+                setEntries([]);
+                setDeniedName(name);
+            } else {
+                setError(err instanceof Error ? err.message : 'Failed to load directory');
+            }
             log.ui.error('Browse failed', err);
         } finally {
             setLoading(false);
@@ -617,14 +627,18 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                     )}
 
                     {/* Error */}
-                    {error && <div className="fb-error">{error}</div>}
+                    {(error || deniedName) && (
+                        <div className="fb-error">
+                            {deniedName ? t(isMacPlatform() ? 'fileBrowser.deniedMac' : 'fileBrowser.denied', { name: deniedName }) : error}
+                        </div>
+                    )}
 
                     {/* File list + Preview split */}
                     <div className="fb-content">
                         <div className="fb-file-list">
                             {loading && <div className="fb-loading">{t('fileBrowser.loading')}</div>}
 
-                            {!loading && displayItems.length === 0 && (
+                            {!loading && !error && !deniedName && displayItems.length === 0 && (
                                 <div className="fb-empty">
                                     {searchResults
                                         ? t('fileBrowser.noFiles')

@@ -632,6 +632,43 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** The server's crash notice is English; it ends a partial answer and repeats as the last error step. */
+const CRASH_NOTICE = 'GAIA stopped unexpectedly while answering. Anything it had already written is kept above. Send your message again.';
+
+async function withCrashedAnswer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Write me an essay about rivers.', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: `Rivers shape the land they cross. They carve valleys and carry silt to the sea.\n\n${CRASH_NOTICE}`,
+                        inference_stats: { seconds: 7, place: 'via Fireworks AI' },
+                        agent_steps: [
+                            { id: 1, type: 'thinking', label: 'Thinking', detail: 'Let me write.', active: false, timestamp: 1 },
+                            { id: 2, type: 'error', label: 'Error', detail: CRASH_NOTICE, active: false, success: false, timestamp: 2 },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a crash notice under a partial answer reads left to right (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCrashedAnswer);
+        const note = page.locator('.msg-assistant .msg-cut-off', { hasText: 'GAIA stopped unexpectedly' });
+        await expect(note).toHaveCount(1);
+        expect(await note.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+        await expect(page.locator('.msg-assistant .msg-stats-summary')).toContainText(locale === 'en' ? 'Failed after' : 'فشلت بعد');
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.msg-assistant').screenshot({ path: info.outputPath(`crashed-answer-${locale}.png`) });
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     test(`the latest answer's actions sit under its text, at the start edge (${locale})`, async ({ page }, info) => {
         await open(page, `#${ANSWER_SESSION}`, locale);
@@ -720,6 +757,31 @@ for (const locale of ['ar', 'en']) {
         await page.screenshot({ path: info.outputPath(`checked-answer-${locale}.png`) });
     });
 }
+
+async function withArabicTable(page: Page): Promise<void> {
+    const table = '| الاسم | المبلغ |\n| --- | --- |\n| إيجار | 1200 |\n| طعام | 450 |';
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'اعرض مصاريفي', created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: table, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+test('an Arabic answer table reads right to left', async ({ page }) => {
+    await open(page, `#${ANSWER_SESSION}`, 'ar', withArabicTable);
+    const table = page.locator('.md-table');
+    await expect(table).toHaveCount(1);
+    expect(await table.evaluate((t) => getComputedStyle(t).direction)).toBe('rtl');
+    const wrap = (await page.locator('.md-table-wrap').boundingBox())!;
+    const header = (await page.locator('.md-table th').first().boundingBox())!;
+    expect(header.x + header.width).toBeGreaterThan(wrap.x + wrap.width - 2);
+});
 
 async function withStoppedAnswer(page: Page): Promise<void> {
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
@@ -2468,12 +2530,16 @@ const SCHEDULE_ROWS = [
         description: 'Every 2 hours, 8:00 AM - 6:00 PM, weekdays',
         description_parts: { ...NO_PARTS, kind: 'window', count: 2, unit: 'hour', start_hour: 8, end_hour: 18, days: [0, 1, 2, 3, 4] },
     },
+    {
+        ...SCHEDULE_ROW, id: 's4', name: 'Long instructions', last_error: null, error_count: 0, session_id: null,
+        prompt: 'لخّص رسائل البريد الإلكتروني غير المقروءة وأحداث التقويم لهذا اليوم، ثم رتّبها حسب الأهمية، وأضف إلى كل عنصر سطراً يوضّح الإجراء المطلوب منّي، وإن وجدت اجتماعات متعارضة فاذكرها أولاً مع اقتراح لحلّ التعارض، وأنهِ الملخص بقائمة قصيرة بما يمكن تأجيله إلى الأسبوع القادم دون أي ضرر على العمل. ثم أرسل الملخص إليّ في الصباح وذكّرني بأي موعد نهائي يقترب خلال الأيام الثلاثة القادمة، واقترح وقتاً هادئاً للتركيز في كل يوم، وراجع المهام المتأخرة من الأسبوع الماضي، واكتب لكل واحدة منها خطوة صغيرة تالية يمكنني إنجازها في أقل من ربع ساعة، ثم اختم بجملة واحدة تلخّص أهم ما يجب إنجازه اليوم.',
+    },
 ];
 
 /** Titles, labels and placeholders in the schedules dialog that carry no Arabic. */
 const untranslatedAttributes = (page: Page): Promise<string[]> =>
     page.locator('.schedule-modal').evaluate((root) =>
-        [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title], [aria-label], [placeholder]')].flatMap((el) =>
+        [root.closest('[role="dialog"]')!, ...root.querySelectorAll('[title]:not([dir="auto"]), [aria-label], [placeholder]')].flatMap((el) =>
             ['aria-label', 'placeholder', 'title']
                 .map((a) => el.getAttribute(a) ?? '')
                 .filter((v) => /[A-Za-z]{3}/.test(v) && !/[؀-ۿ]/.test(v))));
@@ -2505,6 +2571,22 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.schedule-card').first().click();
             await expect(page.locator('.schedule-result-item')).toHaveCount(2);
             await check(page, 'list');
+        });
+
+        test('a long prompt stops at three lines inside its card', async ({ page }) => {
+            await openSchedules(page);
+            const card = page.locator('.schedule-card', { hasText: 'Long instructions' });
+            const prompt = card.locator('.schedule-card-prompt');
+            await expect(prompt).toBeVisible();
+            const m = await prompt.evaluate((el) => ({
+                scroll: el.scrollHeight, client: el.clientHeight,
+                line: parseFloat(getComputedStyle(el).lineHeight) || parseFloat(getComputedStyle(el).fontSize) * 1.5,
+                inside: el.getBoundingClientRect().bottom <= el.closest('.schedule-card')!.getBoundingClientRect().bottom + 1,
+            }));
+            expect(m.scroll).toBeGreaterThan(m.client);
+            expect(m.client).toBeLessThanOrEqual(m.line * 3 + 2);
+            expect(m.inside).toBe(true);
+            await shot(page, `schedules-${locale}-long-prompt`);
         });
 
         test('new schedule, nothing typed yet', async ({ page }) => {
@@ -2896,6 +2978,32 @@ for (const locale of ['ar', 'en']) {
         await shot(page, `banner-${locale}-not-installed`);
         expect(await audit(page)).toEqual([]);
     });
+}
+
+const MODEL_SERVER_STATES = [
+    { name: 'hung', status: { lemonade_error: 'Lemonade did not answer in time' }, hint: { ar: 'فأعد تشغيله', en: 'restart it:' } },
+    { name: 'stopped', status: { lemonade_error: null }, hint: { ar: 'لتشغيله يدويًا', en: 'To start it by hand' } },
+] as const;
+
+for (const locale of ['ar', 'en'] as const) {
+    for (const { name, status, hint } of MODEL_SERVER_STATES) {
+        test(`a ${name} model server's banner reads in the interface language, its command left to right (${locale})`, async ({ page }) => {
+            await open(page, '', locale, async (p) => {
+                await p.route('**/api/system/status', (route) => route.fulfill({
+                    json: { ...SYSTEM_STATUS, lemonade_running: false, model_loaded: null, start_command: 'C:\\Program Files\\Lemonade\\lemond.exe', ...status },
+                }));
+            });
+            const banner = page.locator('.connection-banner');
+            await expect(banner).toContainText(hint[locale]);
+            await expect(banner).not.toContainText('did not answer in time');
+            const code = banner.locator('code');
+            await expect(code).toHaveText('C:\\Program Files\\Lemonade\\lemond.exe');
+            expect(await code.evaluate((el) => getComputedStyle(el).direction)).toBe('ltr');
+            await shot(page, `model-server-${name}-${locale}`);
+            expect(await audit(page)).toEqual([]);
+            if (locale === 'ar') expect(await untranslated(page, '.connection-banner', 'code')).toEqual([]);
+        });
+    }
 }
 
 for (const locale of ['ar', 'en']) {
@@ -3435,6 +3543,29 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.perm-card', 'bdi, pre')).toEqual([]);
         await shot(page, `permission-python-${locale}`);
+    });
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a file-write prompt words its heading and always button in the UI language (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, [{
+            type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-always',
+            args: { file_path: '/private/tmp/plans/weekly-grocery-plan.md', content: '# Weekly grocery plan\n' },
+            always_scope: 'write_file on files in /private/tmp/plans', always_label: 'writing files in /private/tmp/plans',
+        }]);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('save my grocery plan');
+        await page.keyboard.press('Enter');
+        const card = page.locator('.perm-card');
+        await expect(card).toBeVisible();
+        if (locale === 'ar') {
+            await expect(card.locator('.perm-card-title')).toContainText('كتابة ملف');
+            await expect(card.locator('.perm-btn').nth(1)).toContainText('السماح دائمًا بـ');
+            expect(await untranslated(page, '.perm-card', 'bdi, pre, code')).toEqual([]);
+        } else {
+            await expect(card.locator('.perm-card-title')).toHaveText('Allow writing file?');
+        }
+        await shot(page, `permission-always-${locale}`);
     });
 }
 
