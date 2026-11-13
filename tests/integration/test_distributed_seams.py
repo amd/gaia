@@ -271,7 +271,7 @@ def test_relay_synthetic_error_detail_is_actionable():
 
     detail = stream_ended_unexpectedly_detail("email")
     assert "email" in detail
-    assert "ensure" in detail  # the remedy
+    assert "Send your message again" in detail  # the remedy
     assert "logs" in detail  # where to look
 
 

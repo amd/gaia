@@ -94,6 +94,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     A flag belonging to the other transport is an argparse error from the one
     that was selected — never a quiet switch to the other.
     """
+    from gaia_agent.platform_guard import avoid_wmi
+
+    avoid_wmi()
     try:
         from gaia.tls import use_os_trust_store
     except ImportError:  # amd-gaia older than the trust-store switch; the pin allows it
