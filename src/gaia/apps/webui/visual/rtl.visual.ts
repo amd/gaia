@@ -2468,6 +2468,10 @@ const SCHEDULE_ROWS = [
         description: 'Every 2 hours, 8:00 AM - 6:00 PM, weekdays',
         description_parts: { ...NO_PARTS, kind: 'window', count: 2, unit: 'hour', start_hour: 8, end_hour: 18, days: [0, 1, 2, 3, 4] },
     },
+    {
+        ...SCHEDULE_ROW, id: 's4', name: 'Long instructions', last_error: null, error_count: 0, session_id: null,
+        prompt: 'لخّص رسائل البريد الإلكتروني غير المقروءة وأحداث التقويم لهذا اليوم، ثم رتّبها حسب الأهمية، وأضف إلى كل عنصر سطراً يوضّح الإجراء المطلوب منّي، وإن وجدت اجتماعات متعارضة فاذكرها أولاً مع اقتراح لحلّ التعارض، وأنهِ الملخص بقائمة قصيرة بما يمكن تأجيله إلى الأسبوع القادم دون أي ضرر على العمل.',
+    },
 ];
 
 /** Titles, labels and placeholders in the schedules dialog that carry no Arabic. */
@@ -2505,6 +2509,22 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.schedule-card').first().click();
             await expect(page.locator('.schedule-result-item')).toHaveCount(2);
             await check(page, 'list');
+        });
+
+        test('a long prompt stops at three lines inside its card', async ({ page }) => {
+            await openSchedules(page);
+            const card = page.locator('.schedule-card', { hasText: 'Long instructions' });
+            const prompt = card.locator('.schedule-card-prompt');
+            await expect(prompt).toBeVisible();
+            const m = await prompt.evaluate((el) => ({
+                scroll: el.scrollHeight, client: el.clientHeight,
+                line: parseFloat(getComputedStyle(el).lineHeight) || parseFloat(getComputedStyle(el).fontSize) * 1.5,
+                inside: el.getBoundingClientRect().bottom <= el.closest('.schedule-card')!.getBoundingClientRect().bottom + 1,
+            }));
+            expect(m.scroll).toBeGreaterThan(m.client);
+            expect(m.client).toBeLessThanOrEqual(m.line * 3 + 2);
+            expect(m.inside).toBe(true);
+            await shot(page, `schedules-${locale}-long-prompt`);
         });
 
         test('new schedule, nothing typed yet', async ({ page }) => {
