@@ -1,6 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { RadioGroup } from './RadioGroup';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, Cloud, Eye, EyeOff, Info, Loader2 } from 'lucide-react';
 import * as api from '../services/api';
@@ -1247,7 +1248,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                     {stage === 'key' && (
                         <form id="setup-key-form" onSubmit={(e) => { e.preventDefault(); void connect(); }} className="setup-form">
                             <h1 id="setup-title" className="setup-title" tabIndex={-1}>{t('setup.key.title')}</h1>
-                            <div className="setup-choices" role="radiogroup" aria-label={t('setup.key.provider')}>
+                            <RadioGroup className="setup-choices" aria-label={t('setup.key.provider')}>
                                 {CHOICES.filter((c) => c.id !== 'local' && (c.id !== 'amd' || gatewayShown)).map((c) => (
                                     <button
                                         key={c.id}
@@ -1266,7 +1267,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         </span>
                                     </button>
                                 ))}
-                            </div>
+                            </RadioGroup>
                             {gateway?.reachable === false && gatewayShown && (
                                 <button type="button" className="link-btn setup-start" onClick={recheckGateway}>{t('setup.key.checkAgain')}</button>
                             )}

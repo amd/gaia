@@ -3,6 +3,8 @@ package client
 import (
 	"context"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -441,6 +443,79 @@ func TestTheFlagshipAt220IsToldTheTUIIsAsking(t *testing.T) {
 	sendOnce(t, f, "gaia")
 	if got := f.queries[0].Surface; got != "tui" {
 		t.Errorf("surface = %q, want \"tui\": %s", got, f.lastRawBody())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// working_directory (contract 2.24): without it the daemon-spawned sidecar
+// resolves relative paths and the project map against the daemon's folder.
+// ---------------------------------------------------------------------------
+
+func TestTheFlagshipAt224IsToldTheStartFolder(t *testing.T) {
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, version := range []string{"2.24", "2.27", "3.0"} {
+		t.Run(version, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.contractVersion = version
+			sendOnce(t, f, "gaia")
+			got := f.queries[0].WorkingDirectory
+			if got != want || !filepath.IsAbs(got) {
+				t.Errorf("working_directory = %q, want the absolute start folder %q: %s",
+					got, want, f.lastRawBody())
+			}
+		})
+	}
+}
+
+// The start folder only says where relative paths resolve. Sending it as
+// allowed_paths too would replace the session's file scope (#3591).
+func TestTheStartFolderIsNeverSentAsTheFileScope(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.27"
+	sendOnce(t, f, "gaia")
+	if raw := f.lastRawBody(); strings.Contains(raw, "allowed_paths") {
+		t.Errorf("the start folder narrowed the session's file scope: %s", raw)
+	}
+}
+
+func TestEveryTurnCarriesTheStartFolder(t *testing.T) {
+	want, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFakeRelay(t)
+	f.contractVersion = "2.24"
+	sendOnce(t, f, "gaia")
+	sendOnce(t, f, "gaia")
+	if len(f.queries) != 2 {
+		t.Fatalf("got %d queries, want 2", len(f.queries))
+	}
+	for i, q := range f.queries {
+		if q.WorkingDirectory != want {
+			t.Errorf("turn %d working_directory = %q, want %q", i, q.WorkingDirectory, want)
+		}
+	}
+}
+
+func TestOlderPeersAndOtherAgentsGetNoWorkingDirectory(t *testing.T) {
+	for _, tc := range []struct{ agent, version string }{
+		{"gaia", "2.23"},
+		{"gaia", "2.2"},
+		{"gaia", ""},
+		{"gaia", "garbage"},
+		{"email", "2.24"},
+	} {
+		t.Run(tc.agent+"@"+tc.version, func(t *testing.T) {
+			f := newFakeRelay(t)
+			f.contractVersion = tc.version
+			sendOnce(t, f, tc.agent)
+			if raw := f.lastRawBody(); strings.Contains(raw, "working_directory") {
+				t.Errorf("the start folder was sent to a peer that rejects it: %s", raw)
+			}
+		})
 	}
 }
 
