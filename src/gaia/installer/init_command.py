@@ -311,6 +311,9 @@ class SetupStatus:
     warnings: list = field(default_factory=list)
     #: The hub has no GAIA agent build for this PC, so chat can't run here.
     no_agent_build: bool = False
+    #: The server answers but its model list could not be read, so nothing is
+    #: known about which models are on disk.
+    model_list_unread: bool = False
 
     def to_json(self) -> dict:
         return {
@@ -321,6 +324,7 @@ class SetupStatus:
             "agent_missing": self.agent_missing,
             "warnings": list(self.warnings),
             "no_agent_build": self.no_agent_build,
+            "model_list_unread": self.model_list_unread,
         }
 
 
@@ -792,6 +796,17 @@ def check_setup_status(
         too_old = configured_server_too_old(health, base_url)
         if too_old:
             return SetupStatus(ready=False, reasons=[too_old], stage="server")
+
+    # Each model check below reads this list and calls an unreadable one "not downloaded".
+    try:
+        client.list_models(show_all=True)
+    except LemonadeClientError as e:
+        return SetupStatus(
+            ready=False,
+            reasons=[f"Could not read the model list from {base_url}: {e}"],
+            stage="server",
+            model_list_unread=True,
+        )
 
     if profile_config["models"]:
         model_ids = list(profile_config["models"])

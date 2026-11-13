@@ -1363,6 +1363,31 @@ class TestCheckSetupStatus(unittest.TestCase):
             "http://localhost:51234/api/v1",
         )
 
+    def test_unreadable_model_list_is_a_server_problem_not_missing_models(self):
+        """#8058: a model list in the wrong shape made a finished install read
+        as first-run setup, with every downloaded model "not downloaded"."""
+        from gaia.installer.init_command import check_setup_status
+        from gaia.llm.lemonade_client import LemonadeClient
+
+        with (
+            self._embedded(self._running()),
+            patch.object(LemonadeClient, "health_check", return_value={}),
+            patch.object(
+                LemonadeClient,
+                "_send_request",
+                return_value={"object": "list", "data": "x"},
+            ) as send,
+        ):
+            status = check_setup_status(profile="chat")
+
+        self.assertFalse(status.ready)
+        self.assertEqual(status.stage, "server")
+        self.assertTrue(status.model_list_unread)
+        self.assertFalse(any("not downloaded" in r for r in status.reasons))
+        self.assertIn("expected shape", status.reasons[0])
+        self.assertEqual(status.to_json()["model_list_unread"], True)
+        self.assertTrue(send.call_args.args[1].endswith("/models?show_all=true"))
+
     AGENT_MISSING = "The GAIA agent is not installed -- run: gaia init"
 
     def _check_with_models(self, profile="gaia", have=True, **kwargs):

@@ -1777,6 +1777,7 @@ export const enMessages = {
     'setup.unknown.retry': 'Check again',
     'setup.serverDown.notice': "GAIA's model server isn't answering, so it can't reply yet. Your chats are still here.",
     'setup.serverDown.setup': 'Open setup',
+    'setup.modelListUnread.notice': "GAIA's model server is answering, but its list of models came back in a shape GAIA can't read. Your chats and models are still here.",
     'setup.check.title': 'Check this PC',
     'setup.where.title': 'Choose where GAIA runs',
     'setup.where.local': 'On this PC',
