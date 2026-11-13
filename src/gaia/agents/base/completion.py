@@ -248,10 +248,17 @@ def _inside(path: str, folder: str) -> bool:
     return any(path.startswith(folder.rstrip("/\\") + sep) for sep in "/\\")
 
 
-def _changed_at(stamp: tuple) -> int:
-    # A copy keeps its source's mtime; ctime (creation on Windows, metadata
-    # change on POSIX) is set by a copy made in the run.
-    return max(stamp[3], stamp[4])
+def _changed_in(stamp: tuple, start: int, end: int) -> bool:
+    """Last changed within a run window whose *start* allows for mtime's coarse clock.
+
+    A copy keeps its source's mtime; ctime (creation on Windows, metadata
+    change on POSIX) is set by a copy made in the run. Only mtime gets the
+    clock slack, so a file created just before the run does not count.
+    """
+    mtime, ctime = stamp[3], stamp[4]
+    if max(mtime, ctime) > end:
+        return False
+    return mtime >= start or ctime >= start + _FILE_CLOCK_SLACK_NS
 
 
 def _absolute(path: str) -> bool:
@@ -942,7 +949,7 @@ class CompletionEvidence:
         during = [
             (ok, run)
             for start, end, ok, run in self.exec_windows
-            if start <= _changed_at(stamp) <= end
+            if _changed_in(stamp, start, end)
         ]
         if not during or not all(ok for ok, _ in during):
             return None
@@ -973,7 +980,7 @@ class CompletionEvidence:
                 continue
             stamp = self._stamp(key)
             if isinstance(stamp, tuple) and any(
-                ok and start <= _changed_at(stamp) <= end
+                ok and _changed_in(stamp, start, end)
                 for start, end, ok, _ in self.exec_windows
             ):
                 keys.append(key)
