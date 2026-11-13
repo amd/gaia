@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cstdint>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -36,6 +37,8 @@
 #   include <csignal>
 #   include <cstdlib>
 #   include <fcntl.h>
+#   include <sys/file.h>
+#   include <sys/stat.h>
 #   include <sys/types.h>
 #   include <sys/wait.h>
 #   include <unistd.h>
@@ -1343,6 +1346,67 @@ void ShellSession::reset() {
     impl_->cwd = impl_->startCwd;
     impl_->overrides.clear();
     impl_->unset.clear();
+}
+
+} // namespace gaia
+
+namespace gaia {
+
+MachineLock::MachineLock(const std::string& name) {
+    for (char c : name) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '-' && c != '_') {
+            throw std::invalid_argument("MachineLock name must use letters, digits, - and _: " + name);
+        }
+    }
+#ifdef _WIN32
+    const std::string full = "Local\\gaia-" + name;
+    HANDLE h = CreateMutexA(nullptr, FALSE, full.c_str());
+    if (!h) {
+        throw std::runtime_error("Could not create the machine lock " + full + " (error " +
+                                 std::to_string(GetLastError()) + ")");
+    }
+    handle_ = h;
+#else
+    const std::string path = (std::filesystem::temp_directory_path() / ("gaia-" + name + ".lock")).string();
+    const int fd = ::open(path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC, 0666);
+    if (fd < 0) {
+        throw std::runtime_error("Could not open the machine lock file " + path + ": " + std::strerror(errno));
+    }
+    // Whoever creates it opens it to every user, or a second user's agent could not lock it.
+    ::fchmod(fd, 0666);
+    handle_ = reinterpret_cast<void*>(static_cast<intptr_t>(fd) + 1);
+#endif
+}
+
+bool MachineLock::acquire(int timeoutMs) {
+    if (held_) return true;
+#ifdef _WIN32
+    const DWORD r = WaitForSingleObject(static_cast<HANDLE>(handle_), static_cast<DWORD>(std::max(0, timeoutMs)));
+    held_ = r == WAIT_OBJECT_0 || r == WAIT_ABANDONED;  // abandoned: the last holder died
+#else
+    const int fd = static_cast<int>(reinterpret_cast<intptr_t>(handle_) - 1);
+    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(std::max(0, timeoutMs));
+    for (;;) {
+        // flock, not fcntl: it also keeps out another agent in this same process.
+        if (::flock(fd, LOCK_EX | LOCK_NB) == 0) {
+            held_ = true;
+            break;
+        }
+        if (std::chrono::steady_clock::now() >= until) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+#endif
+    return held_;
+}
+
+MachineLock::~MachineLock() {
+#ifdef _WIN32
+    if (held_) ReleaseMutex(static_cast<HANDLE>(handle_));
+    if (handle_) CloseHandle(static_cast<HANDLE>(handle_));
+#else
+    // Closing the descriptor drops the lock.
+    if (handle_) ::close(static_cast<int>(reinterpret_cast<intptr_t>(handle_) - 1));
+#endif
 }
 
 } // namespace gaia

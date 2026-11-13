@@ -8,6 +8,7 @@
 #include "gaia/security.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <thread>
@@ -15,6 +16,8 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
+#include <optional>
+#include <regex>
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -484,19 +487,18 @@ std::string Agent::composeSystemPromptFor(const AgentConfig& cfg) const {
         oss << custom << "\n\n";
     }
 
-    // Tool descriptions. Kept even under native tool calling — Python does the
-    // same, and the prose list is what lets the model reason about which tool
-    // fits before emitting the call.
-    std::string toolsDesc = tools_.formatForPrompt();
-    if (!toolsDesc.empty()) {
-        oss << "==== AVAILABLE TOOLS ====\n" << toolsDesc << "\n";
-    }
-
     // Response format — omitted only when the request will actually carry a
     // `tools` array, which is what makes tool-calling models emit tool_calls
     // instead of prose JSON. With no enabled tool there is no `tools` field, so
     // dropping the template too would leave the model with no protocol at all.
     const bool willSendTools = cfg.useNativeToolCalls() && !tools_.enabledTools().empty();
+
+    // The prose list helps a full model weigh tools before calling one (Python
+    // keeps it too); a compact model re-reads it every step for little gain.
+    std::string toolsDesc = willSendTools && cfg.compactFeatures() ? std::string() : tools_.formatForPrompt();
+    if (!toolsDesc.empty()) {
+        oss << "==== AVAILABLE TOOLS ====\n" << toolsDesc << "\n";
+    }
     if (!willSendTools) {
         oss << (cfg.responseMode == ResponseMode::Conversational
                     ? CONVERSATIONAL_FORMAT_TEMPLATE
@@ -617,8 +619,32 @@ UsageStats extractUsage(const json& responseJson) {
 }
 } // namespace
 
+namespace {
+bool runsOnNpu(const std::string& modelId, const std::string& recipe) {
+    if (recipe == "flm") return true;
+    constexpr const char kSuffix[] = "-flm";
+    if (modelId.size() < sizeof kSuffix - 1) return false;
+    std::string tail = modelId.substr(modelId.size() - (sizeof kSuffix - 1));
+    for (auto& c : tail) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return tail == kSuffix;
+}
+} // namespace
+
 Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std::string& sysPrompt,
                                 const AgentConfig& cfg, bool allowTools) {
+    // Two agents on the NPU at once each run several times slower than in turn. Taken
+    // before the load, so one agent can't swap the NPU's model under another's reply.
+    std::optional<MachineLock> npuLock;
+    if (runsOnNpu(cfg.modelId, lemonade_.recipeOf(cfg.modelId))) {
+        npuLock.emplace("npu");
+        if (!npuLock->acquire(0)) {
+            console_->printWarning("Another agent is using the NPU; waiting for its model call to finish.");
+            while (!npuLock->acquire(200)) {
+                if (cancelRequested()) throw std::runtime_error("Cancelled while waiting for the NPU");
+            }
+        }
+    }
+
     // Re-check before every request: another client can reload the model at a smaller ctx mid-turn.
     if (!cfg.modelId.empty()) {
         try {
@@ -633,7 +659,7 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
     // time via LemonadeClient::loadModel() / ensureModelLoaded(), not per-request.
     json requestBody;
     requestBody["model"] = cfg.modelId;
-    requestBody["max_tokens"] = cfg.maxTokens;
+    requestBody["max_tokens"] = cfg.replyTokenLimit();
     requestBody["temperature"] = cfg.temperature;
 
     json msgArray = json::array();
@@ -739,10 +765,10 @@ Agent::LlmResult Agent::callLlm(const std::vector<Message>& messages, const std:
         const StreamSummary summary = summarizeStream(rawResponse);
         if (summary.finishReason == "length") {
             throw std::runtime_error(
-                "The model reached its reply limit of " + std::to_string(cfg.maxTokens) +
+                "The model reached its reply limit of " + std::to_string(cfg.replyTokenLimit()) +
                 " tokens before giving an answer" +
                 (summary.reasoned ? " (its reasoning used the whole limit)" : "") +
-                ". Raise maxTokens (--max-tokens) or ask for a shorter answer.");
+                ". Raise the limit (--max-tokens; at most half the context window, --ctx-size) or ask for a shorter answer.");
         }
         throw UnreadableLlmReply(summary.reasoned ? "The model sent reasoning but no answer"
                                                   : "Streaming response contained no tokens");
@@ -834,6 +860,18 @@ bool isContextOverflow(const std::exception& e) {
     return false;
 }
 
+// A reply made of a model's unused special tokens (`<unused49><unused49>...`) is noise from a
+// server whose copy of the model went bad, never an answer.
+bool isPlaceholderRun(const std::string& text) {
+    static const std::regex token(R"(<unused\d+>)");
+    if (text.size() < 64) return false;
+    size_t covered = 0;
+    for (auto it = std::sregex_iterator(text.begin(), text.end(), token); it != std::sregex_iterator(); ++it) {
+        covered += static_cast<size_t>(it->length(0));
+    }
+    return covered * 10 >= text.size() * 9;
+}
+
 // Shorten the model's own long replies, oldest first, keeping the newest message whole.
 size_t trimLongReplies(std::vector<Message>& messages) {
     constexpr size_t kKeepHead = 600, kKeepTail = 300, kLong = 1500;
@@ -888,6 +926,13 @@ Agent::LlmResult Agent::callLlmResilient(std::vector<Message>& messages,
         try {
             LlmResult r = callLlm(messages, sysPrompt, cfg, allowTools);
             r.content = stripReasoning(r.content);
+            if (isPlaceholderRun(r.content)) {
+                // Not retried: the same server returns the same noise until the model is reloaded.
+                throw std::runtime_error(
+                    "The model " + cfg.modelId + " returned only placeholder tokens (" + r.content.substr(0, 24) +
+                    "... repeated), so the server's copy of the model is in a bad state. Unload and reload the "
+                    "model in Lemonade, then try again.");
+            }
             return r;
         } catch (const std::exception& e) {
             if (cancelRequested()) throw;
@@ -1041,6 +1086,18 @@ namespace {
 std::optional<std::string> toolFailure(const json& r);  // defined with the loop helpers
 }  // namespace
 
+namespace {
+// A tool call's arguments for the step log: enough to see what was asked, not a whole file body.
+std::string clippedArgs(const json& args) {
+    constexpr size_t kMax = 300;
+    std::string text = args.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (text.size() <= kMax) return text;
+    size_t cut = kMax;
+    while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
+    return text.substr(0, cut) + "...";
+}
+} // namespace
+
 json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
     const auto started = std::chrono::steady_clock::now();
     const auto startedOnDisk = std::filesystem::file_time_type::clock::now();
@@ -1055,13 +1112,18 @@ json Agent::executeTool(const std::string& toolName, const json& toolArgs) {
     const double wall =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     const std::string resolved = tools_.resolveName(toolName);
+    std::string output = result.is_string() ? result.get<std::string>()
+                                            : result.dump(-1, ' ', false, json::error_handler_t::replace);
+    if (output.size() > 20000) output.resize(utf8Boundary(output, 20000));
     turnToolCalls_.push_back({resolved.empty() ? toolName : resolved, toolArgs,
-                              !toolFailure(result).has_value(), turnStep_, wall, startedOnDisk});
+                              !toolFailure(result).has_value(), turnStep_, wall, startedOnDisk,
+                              std::move(output)});
     if (stepLogger_) {
         const ToolCallRecord& call = turnToolCalls_.back();
         stepLogger_({{"kind", "tool"},
                      {"step", call.step},
                      {"name", call.name},
+                     {"args", clippedArgs(call.args)},
                      {"wall_s", std::round(wall * 1000) / 1000},
                      {"ok", call.succeeded}});
     }
@@ -1724,6 +1786,11 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     onTurnStart();
 
     console_->printProcessingStart(userInput, stepsLimit, cfg.modelId);
+    if (cfg.maxTokens > cfg.contextSize / 2) {
+        console_->printWarning("Reply limit " + std::to_string(cfg.maxTokens) + " is more than half the " +
+                               std::to_string(cfg.contextSize) + "-token context window; replies are capped at " +
+                               std::to_string(cfg.contextSize / 2) + ". Raise --ctx-size to allow more.");
+    }
 
     int stepsTaken = 0;
     std::string finalAnswer;
@@ -1755,6 +1822,12 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
     bool loopWarned = false;
     bool emptyNudged = false;
     bool emptyAtLimit = false;  // an empty reply that had used the whole reply limit
+    // After a compact model's runaway reply, the next ask is short so another costs a minute,
+    // not four. A reasoning model needs its full limit to think, so it keeps it.
+    AgentConfig shortCfg = cfg;
+    shortCfg.maxTokens = std::min(cfg.maxTokens, 1024);
+    bool shortNext = false;
+    int lastLimit = cfg.replyTokenLimit();
     std::string llmError;       // the model call failure that ended the loop
     constexpr size_t kMaxToolCallsPerReply = 24;
     int malformedStreak = 0;
@@ -1766,6 +1839,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         answerReviewed = true;
         std::optional<std::string> note = reviewFinalAnswer(answer);
         if (!note) return std::nullopt;
+        if (stepLogger_) stepLogger_({{"kind", "review"}, {"step", stepsTaken}, {"note", *note}});
         console_->printWarning("Answer sent back: " + *note);
         Message m;
         m.role = MessageRole::USER;
@@ -1834,7 +1908,10 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         LlmResult llmResult;
         const auto llmStarted = std::chrono::steady_clock::now();
         try {
-            llmResult = callLlmResilient(messages, turnSystemPrompt, cfg);
+            const AgentConfig& stepCfg = shortNext ? shortCfg : cfg;
+            lastLimit = stepCfg.replyTokenLimit();
+            shortNext = false;
+            llmResult = callLlmResilient(messages, turnSystemPrompt, stepCfg);
         } catch (const std::exception& e) {
             if (!cfg.streaming) console_->stopProgress();
             if (cancelRequested()) {
@@ -1886,19 +1963,20 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             }
             if (llmResult.toolCalls.size() < sent) {
                 console_->printWarning("The model's reply was cut off at the length limit of " +
-                                       std::to_string(cfg.maxTokens) + " tokens mid tool call.");
+                                       std::to_string(cfg.replyTokenLimit()) + " tokens mid tool call.");
                 batchNote = "[Your reply was cut off at the length limit of " +
-                            std::to_string(cfg.maxTokens) + " tokens, so " +
+                            std::to_string(cfg.replyTokenLimit()) + " tokens, so " +
                             std::to_string(sent - llmResult.toolCalls.size()) +
                             " unfinished tool call(s) at the end did not run. Send fewer calls "
-                            "per reply and keep arguments short; write long content in parts.]";
+                            "per reply and keep arguments short; write long content in parts, and refer to "
+                            "a file by its path instead of pasting its contents.]";
             }
             if (llmResult.toolCalls.empty()) {
                 if (++malformedStreak > 2) {
                     finalAnswer = "Unable to complete task: the model's reply was cut off at "
-                                  "the length limit of " + std::to_string(cfg.maxTokens) +
+                                  "the length limit of " + std::to_string(cfg.replyTokenLimit()) +
                                   " tokens in the middle of a tool call three times in a row. "
-                                  "Raise the limit (--max-tokens) or ask for a smaller step.";
+                                  "Raise the limit (--max-tokens; at most half the context window, --ctx-size) or ask for a smaller step.";
                     failed = true;
                     break;
                 }
@@ -2029,7 +2107,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                 toolMsg.role = MessageRole::TOOL;
                 toolMsg.name = tc.name;
                 toolMsg.toolCallId = tc.id;
-                toolMsg.content = recordToolOutput(toolResult, cfg.maxToolResultChars);
+                toolMsg.content = recordToolOutput(toolResult, cfg.toolResultCharLimit());
                 messages.push_back(toolMsg);
 
                 lastToolFailed = false;
@@ -2072,13 +2150,14 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
         if (response.find_first_not_of(" \t\r\n") == std::string::npos) {
             const bool atLimit = llmResult.finishReason == "length";
             emptyAtLimit = emptyAtLimit || atLimit;
+            shortNext = atLimit && cfg.compactFeatures();
             if (emptyNudged) {
                 stopReason = "empty";
                 break;
             }
             emptyNudged = true;
             console_->printWarning(atLimit ? "The model used its whole reply limit of " +
-                                                 std::to_string(cfg.maxTokens) +
+                                                 std::to_string(lastLimit) +
                                                  " tokens without answering; asking again."
                                            : "The model's reply was empty; asking again.");
             Message retry;
@@ -2089,7 +2168,8 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                                             : "[Your last reply was empty, possibly cut off while "
                                               "reasoning.] ") +
                             "Continue: call a tool or give your final answer, keeping any "
-                            "reasoning short.";
+                            "reasoning short. If you were copying a file's contents, stop and refer "
+                            "to the file by its path.";
             messages.push_back(retry);
             continue;
         }
@@ -2196,7 +2276,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             Message toolMsg;
             toolMsg.role = MessageRole::TOOL;
             toolMsg.name = toolName;
-            toolMsg.content = recordToolOutput(toolResult, cfg.maxToolResultChars);
+            toolMsg.content = recordToolOutput(toolResult, cfg.toolResultCharLimit());
             messages.push_back(toolMsg);
 
             lastToolFailed = false;
@@ -2242,7 +2322,7 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
             try {
                 const auto closingStarted = std::chrono::steady_clock::now();
                 LlmResult closingResult =
-                    callLlmResilient(messages, composeSystemPromptFor(cfg), cfg, false);
+                    callLlmResilient(messages, composeSystemPromptFor(cfg), shortNext ? shortCfg : cfg, false);
                 totalUsage += closingResult.usage;
                 logLlmCall(stepsTaken, closingStarted, closingResult.usage);
                 std::string text = closingResult.content;
@@ -2274,9 +2354,10 @@ json Agent::processQueryInternal(const std::vector<Message>& userMessages, int m
                           : stopReason == "empty"
                               ? (emptyAtLimit
                                      ? "Task stopped: the model used its whole reply limit of " +
-                                           std::to_string(cfg.maxTokens) +
+                                           std::to_string(lastLimit) +
                                            " tokens without giving an answer. Raise the limit "
-                                           "(--max-tokens) or pick a model that reasons less."
+                                           "(--max-tokens; at most half the context window, "
+                                           "--ctx-size) or pick a model that reasons less."
                                      : std::string("Task stopped: the model returned empty replies."))
                               : "Reached maximum steps limit (" + std::to_string(stepsLimit) + " steps).";
             console_->printWarning(finalAnswer);

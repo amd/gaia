@@ -350,7 +350,9 @@ TEST(NativeToolCallsTest, ToolCallingModelDropsTheResponseFormatTemplate) {
     bench::MockLlmServer mock;
     mock.pushResponse(kPlainAnswer);
 
-    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.featureTier = "full";  // a compact model also drops the prose tool list
+    ToolAgent agent(cfg);
     agent.initForTest();
     agent.processQuery("hello", 1);
 
@@ -1594,4 +1596,35 @@ TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {
     EXPECT_EQ(r.value("status", ""), "error") << r.dump();
     EXPECT_NE(r.value("result", "").find(kToolCallingModel), std::string::npos) << r.dump();
     EXPECT_EQ(mock.requestCount(), 0);  // no chat request against a model that isn't loaded
+}
+
+TEST(NativeToolCallsTest, ACompactToolCallingModelDropsTheProseToolList) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.featureTier = "compact";
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    const json body = json::parse(mock.receivedBodies().back());
+    EXPECT_EQ(systemPromptOf(body).find("==== AVAILABLE TOOLS ===="), std::string::npos);
+    EXPECT_EQ(body["tools"].size(), 4u) << "the schemas still carry every tool";
+}
+
+TEST(NativeToolCallsTest, ACompactModelOnThePromptJsonPathKeepsTheToolList) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.featureTier = "compact";
+    cfg.nativeToolCalls = NativeToolCalls::Never;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    EXPECT_NE(systemPromptOf(json::parse(mock.receivedBodies().back())).find("==== AVAILABLE TOOLS ===="),
+              std::string::npos)
+        << "without tool schemas the list is the only description of the tools";
 }

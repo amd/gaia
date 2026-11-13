@@ -478,6 +478,22 @@ struct AgentConfig {
     /// for a tool-free closing answer when it runs out.
     bool stepBudgetNotices = true;
 
+    /// "auto" (by model: isCompactModel), "full" or "compact". A compact model
+    /// is offered fewer tools and no prose copy of the tool list.
+    std::string featureTier = "auto";
+
+    /// Resolve featureTier against ``modelId``.
+    GAIA_API bool compactFeatures() const;
+
+    /// The reply limit sent with a request: maxTokens, but never more than half
+    /// the context window, so a long reasoning block cannot fill the window, and
+    /// at most 4096 for a compact model, whose longer replies are runaway repetition.
+    GAIA_API int replyTokenLimit() const;
+
+    /// Tool output longer than this is clipped: maxToolResultChars, scaled down
+    /// for a small context window so a few reads cannot fill it.
+    GAIA_API int toolResultCharLimit() const;
+
     /// Resolve the Auto policy against ``modelId``.
     GAIA_API bool useNativeToolCalls() const;
 

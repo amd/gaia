@@ -22,6 +22,7 @@
 #include <gaia/workspace.h>
 
 #include <atomic>
+#include <filesystem>
 
 namespace gaia {
 
@@ -75,6 +76,53 @@ public:
     /// Whether the user's own words this turn forbid acting ("use no tools", "plan only").
     static bool asksForNoAction(const std::string& request);
 
+    /// A tool call of the turn, as the answer checks below see it.
+    struct CallSeen {
+        std::string name;
+        json args;
+        std::string output;  // what the tool returned, clipped
+    };
+
+    /// A file or page the turn read holds text addressed to an AI assistant, and
+    /// the answer doesn't tell the user about it.
+    static std::optional<std::string> injectionNote(const std::string& answer, const std::vector<CallSeen>& calls);
+
+    /// Why a write to path must not go ahead unasked: a lock file beside it, or a
+    /// header saying another program owns it. "" when nothing guards it.
+    static std::string guardedFileReason(const std::filesystem::path& path);
+
+    /// Names under roots (two levels, dependency and hidden folders skipped) holding shell syntax.
+    static std::vector<std::string> hostileNames(const std::vector<std::string>& roots);
+
+    /// Why command must not run: it uses one of names outside any quotes, where the shell would
+    /// run part of the name. "" when it is safe.
+    static std::string unquotedHostileName(const std::string& command, const std::vector<std::string>& names);
+
+    /// Why command must not run: it pastes five or more rows of a CSV in roots into a script
+    /// instead of reading the file. "" when it doesn't.
+    static std::string pastedDataRefusal(const std::string& command, const std::vector<std::string>& roots);
+
+    /// Why command must not run: the last three shell commands began the same way and printed
+    /// the same output. "" otherwise.
+    static std::string repeatedCommandRefusal(const std::string& command, const std::vector<CallSeen>& calls);
+
+    /// text with every path-like token (one holding a slash) blanked out.
+    static std::string withoutPaths(const std::string& text);
+
+    /// The answer says something is absent while files under roots that could
+    /// hold it were never opened: names them.
+    static std::optional<std::string> unopenedFilesNote(const std::string& answer,
+                                                        const std::vector<std::filesystem::path>& roots,
+                                                        const std::vector<CallSeen>& calls);
+
+    /// The answer offers to read or work something out instead of doing it.
+    static std::optional<std::string> handBackNote(const std::string& answer,
+                                                   const std::vector<CallSeen>& calls);
+
+    /// The answer gives totals or rates from a data file no program computed.
+    static std::optional<std::string> uncomputedFiguresNote(const std::string& answer,
+                                                            const std::vector<CallSeen>& calls);
+
 private:
     /// OS, working directory and date, appended to the system prompt.
     std::string systemContext() const;
@@ -86,6 +134,7 @@ private:
     Options options_;
     mutable std::mutex turnListingMu_;
     std::optional<std::string> turnListing_;  // unset until the first turn starts
+    std::vector<std::string> turnHostileNames_;  // file names holding shell syntax, as the turn began
     std::unique_ptr<SkillLibrary> skills_;
     std::unique_ptr<LemonadeClient> embedClient_;
     std::unique_ptr<DocumentIndex> docs_;

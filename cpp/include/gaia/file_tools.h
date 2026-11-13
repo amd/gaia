@@ -16,6 +16,14 @@
 
 namespace gaia {
 
+/// What a file's first bytes are: UTF-8 (or ASCII) text, UTF-16 text, text in a legacy
+/// single- or double-byte encoding, or binary data.
+enum class TextKind { Utf8, Utf16, LegacyEncoding, Binary };
+GAIA_API TextKind textKind(const std::string& head);
+
+/// textKind(head) == TextKind::Binary.
+GAIA_API bool looksBinary(const std::string& head);
+
 /// Tracks the content hash of every file an agent has read, so a later write
 /// can tell "the model is editing what it saw" from "the file moved under it".
 ///

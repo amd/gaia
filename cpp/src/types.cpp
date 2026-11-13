@@ -5,6 +5,7 @@
 
 #include "gaia/model_registry.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstring>
 #include <fstream>
@@ -240,7 +241,29 @@ bool AgentConfig::useNativeToolCalls() const {
     return false;
 }
 
+bool AgentConfig::compactFeatures() const {
+    if (featureTier == "compact") return true;
+    if (featureTier == "full") return false;
+    return isCompactModel(modelId);
+}
+
+int AgentConfig::replyTokenLimit() const {
+    // A compact model's real replies stay under ~2K tokens; a longer one is a runaway
+    // repetition that would otherwise run for many minutes.
+    constexpr int kCompactReplyTokens = 4096;
+    const int limit = std::min(maxTokens, contextSize / 2);
+    return std::max(1, compactFeatures() ? std::min(limit, kCompactReplyTokens) : limit);
+}
+
+int AgentConfig::toolResultCharLimit() const {
+    // About 3 characters a token: one output may take a sixth of the window.
+    return std::max(1000, std::min(maxToolResultChars, contextSize / 2));
+}
+
 void AgentConfig::validate() const {
+    if (featureTier != "auto" && featureTier != "full" && featureTier != "compact")
+        throw std::invalid_argument("featureTier must be \"auto\", \"full\" or \"compact\", got \"" +
+                                    featureTier + "\"");
     if (baseUrl.empty())
         throw std::invalid_argument("baseUrl must not be empty");
     if (modelId.empty())
@@ -341,6 +364,7 @@ AgentConfig AgentConfig::fromJson(const json& j) {
     c.llmRetries            = j.value("llmRetries",            c.llmRetries);
     c.maxToolResultChars    = j.value("maxToolResultChars",    c.maxToolResultChars);
     c.stepBudgetNotices     = j.value("stepBudgetNotices",     c.stepBudgetNotices);
+    c.featureTier           = j.value("featureTier",           c.featureTier);
     if (j.contains("apiKey")) {
         throw std::invalid_argument(
             "config must not carry an API key: name its environment variable in "
@@ -396,7 +420,8 @@ json AgentConfig::toJson() const {
         {"apiKeyEnv",             apiKeyEnv},
         {"llmRetries",            llmRetries},
         {"maxToolResultChars",    maxToolResultChars},
-        {"stepBudgetNotices",     stepBudgetNotices}
+        {"stepBudgetNotices",     stepBudgetNotices},
+        {"featureTier",           featureTier}
     };
 }
 

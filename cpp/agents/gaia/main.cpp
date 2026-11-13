@@ -98,6 +98,7 @@ struct Cli {
     std::string provider;
     std::string apiKeyEnv;
     std::string nativeTools;
+    std::string featureTier;
     std::string cwd;
     std::string mcpConfig;
     std::string embeddingModel;
@@ -150,6 +151,8 @@ void printUsage() {
         "  --api-key-env VAR         Variable holding the endpoint key (default\n"
         "                            GAIA_API_KEY, then LEMONADE_API_KEY)\n"
         "  --native-tools MODE       auto | always | never (OpenAI tool calls)\n"
+        "  --feature-tier TIER       auto | full | compact: compact offers fewer tools\n"
+        "                            for a shorter prompt (env GAIA_FEATURE_TIER)\n"
         "  --ctx-size N              Context window to load the model with\n"
         "  --max-tokens N            Max tokens per reply\n"
         "  --temperature T           Sampling temperature\n"
@@ -244,6 +247,7 @@ Cli parseArgs(int argc, char** argv) {
         else if (a == "--provider") cli.provider = need(i, a);
         else if (a == "--api-key-env") cli.apiKeyEnv = need(i, a);
         else if (a == "--native-tools") cli.nativeTools = need(i, a);
+        else if (a == "--feature-tier") cli.featureTier = need(i, a);
         else if (a == "--ctx-size") cli.ctxSize = toInt(a, need(i, a));
         else if (a == "--max-tokens") cli.maxTokens = toInt(a, need(i, a));
         else if (a == "--temperature") {
@@ -360,6 +364,8 @@ Settings buildSettings(const Cli& cli) {
 
     const std::string envModel = gaia::getEnvVar("GAIA_MODEL_ID");
     if (!envModel.empty()) merged["modelId"] = envModel;
+    const std::string envTier = gaia::getEnvVar("GAIA_FEATURE_TIER");
+    if (!envTier.empty()) merged["featureTier"] = envTier;
     const std::string envUrl = gaia::getEnvVar("GAIA_BASE_URL");
     if (!envUrl.empty()) merged["baseUrl"] = envUrl;
     for (const auto& [var, field] : {std::pair<const char*, const char*>{"GAIA_AGENT_MAX_STEPS", "maxSteps"},
@@ -375,6 +381,7 @@ Settings buildSettings(const Cli& cli) {
     if (!cli.model.empty()) merged["modelId"] = cli.model;
     if (!cli.apiKeyEnv.empty()) merged["apiKeyEnv"] = cli.apiKeyEnv;
     if (!cli.nativeTools.empty()) merged["nativeToolCalls"] = cli.nativeTools;
+    if (!cli.featureTier.empty()) merged["featureTier"] = cli.featureTier;
     if (cli.ctxSize > 0) merged["contextSize"] = cli.ctxSize;
     if (cli.maxTokens > 0) merged["maxTokens"] = cli.maxTokens;
     if (cli.maxSteps > 0) merged["maxSteps"] = cli.maxSteps;

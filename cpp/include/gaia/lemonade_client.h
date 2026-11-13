@@ -244,6 +244,10 @@ public:
     void setModel(const std::string& m) { model_ = m; }
 
     int contextSize() const { return contextSize_; }
+    /// modelId's recipe as the server last reported it ("flm", "llamacpp"), or "" if not yet seen.
+    std::string recipeOf(const std::string& modelId) const {
+        return modelId == recipeModel_ ? loadedRecipe_ : std::string();
+    }
     void setContextSize(int ctx) { contextSize_ = ctx; }
 
     bool debug() const { return debug_; }
@@ -278,6 +282,8 @@ private:
     std::string baseUrl_;
     std::string model_;
     int contextSize_ = 0;
+    std::string loadedRecipe_;
+    std::string recipeModel_;
     bool debug_ = false;
     bool hasApiKey_ = false;
     std::function<bool()> abortCheck_;

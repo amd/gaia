@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -539,6 +540,7 @@ json FileIOTools::doFileRead(const json& args) {
 
         Sha256 sha;
         std::string content;
+        std::string head;  // the first bytes, to tell text from binary
         std::vector<char> buffer(kChunkBytes);
         int lineNumber = 1;        // line the next byte belongs to
         int emittedLines = 0;      // in-range lines started so far
@@ -554,6 +556,7 @@ json FileIOTools::doFileRead(const json& args) {
 
             sha.update(buffer.data(), static_cast<size_t>(got));
             totalBytes += static_cast<std::uint64_t>(got);
+            if (head.size() < 8192) head.append(buffer.data(), std::min<size_t>(static_cast<size_t>(got), 8192 - head.size()));
 
             for (std::streamsize i = 0; i < got; ++i) {
                 const char c = buffer[static_cast<size_t>(i)];
@@ -601,17 +604,90 @@ json FileIOTools::doFileRead(const json& args) {
         const std::string hash = sha.hex();
         FileStateTracker::instance().recordHash(path, hash, totalBytes);
 
-        return json{
+        // Binary bytes shown as text are noise a small model can loop on.
+        const TextKind kind = textKind(head);
+        if (kind == TextKind::Utf16) {
+            return json{{"error", path + " is UTF-16 text, which file_read doesn't decode. Read it with a program "
+                                      "that does, for example Python's open(path, encoding='utf-16')."},
+                        {"path", path}};
+        }
+        if (kind == TextKind::LegacyEncoding) {
+            return json{{"error", path + " is text in a legacy encoding, not UTF-8 (for example Windows-1252, "
+                                      "CP1251 or Shift-JIS). Read it with a program that names the encoding, for "
+                                      "example Python's open(path, encoding='cp1252')."},
+                        {"path", path}};
+        }
+        if (kind == TextKind::Binary) {
+            return json{{"error", path + " is not a text file (" + std::to_string(totalBytes) +
+                                      " bytes of binary data). Don't guess what it says: inspect it with a program "
+                                      "suited to its format (a PDF, Office or image library, or `file`), or tell the "
+                                      "user it can't be read as text."},
+                        {"path", path}};
+        }
+        if (totalBytes == 0) {
+            return json{{"content", ""},
+                        {"lines", 0},
+                        {"path", path},
+                        {"truncated", false},
+                        {"content_hash", shortHash(hash)},
+                        {"note", "The file is empty (0 bytes). Its data is missing, not zero: look for a log or "
+                                 "error beside it that says why, and report the figure as unknown."}};
+        }
+
+        json out{
             {"content", content},
             {"lines", totalLines},
             {"path", path},
             {"truncated", truncated},
             {"content_hash", shortHash(hash)},
         };
+        // Small models copy rows into a script and get them wrong; point at the file instead.
+        std::string ext = fs::u8path(path).extension().u8string();
+        for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if ((ext == ".csv" || ext == ".tsv") && totalLines > 20) {
+            out["note"] = "To total, count or compare this data, read the file by its path in a script "
+                          "(pandas.read_csv or the csv module). Don't paste its rows into a command.";
+        }
+        return out;
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_read failed: ") + e.what()}};
     }
 }
+
+TextKind textKind(const std::string& head) {
+    if (head.empty()) return TextKind::Utf8;
+    const auto byte = [&head](size_t i) { return static_cast<unsigned char>(head[i]); };
+    if (head.size() >= 2 && ((byte(0) == 0xFF && byte(1) == 0xFE) || (byte(0) == 0xFE && byte(1) == 0xFF))) {
+        return TextKind::Utf16;
+    }
+    // UTF-16 without a mark: every other byte is NUL.
+    size_t evenNul = 0, oddNul = 0;
+    for (size_t i = 0; i < head.size(); ++i) (i % 2 ? oddNul : evenNul) += head[i] == '\0';
+    const size_t half = head.size() / 2;
+    if (half >= 8 && (evenNul * 10 > half * 8 || oddNul * 10 > half * 8)) return TextKind::Utf16;
+    if (evenNul + oddNul > 0) return TextKind::Binary;
+    size_t invalid = 0, control = 0;
+    for (size_t i = 0; i < head.size();) {
+        const unsigned char c = byte(i);
+        const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        if (len > 1 && i + len > head.size()) break;  // a character cut at the end of the sample
+        bool ok = len > 0;
+        for (size_t k = 1; ok && k < len; ++k) ok = (byte(i + k) & 0xC0) == 0x80;
+        if (!ok) {
+            ++invalid;
+            ++i;
+            continue;
+        }
+        if (len == 1 && c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f') ++control;
+        i += len;
+    }
+    if (control * 20 > head.size()) return TextKind::Binary;
+    if (invalid * 10 > head.size()) return control * 100 > head.size() ? TextKind::Binary : TextKind::LegacyEncoding;
+    // A sprinkling of legacy bytes (an accented name in Windows-1252) still reads mostly fine.
+    return TextKind::Utf8;
+}
+
+bool looksBinary(const std::string& head) { return textKind(head) == TextKind::Binary; }
 
 // ---------------------------------------------------------------------------
 // fileWrite

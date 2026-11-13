@@ -338,6 +338,8 @@ protected:
         double wallSeconds = 0.0;
         /// When the call began, on the clock file timestamps use.
         std::filesystem::file_time_type started{};
+        /// The start of what the tool returned (for answer review), at most 20000 characters.
+        std::string output;
     };
 
     /// Every tool call of the query in progress, in order (for answer review).
