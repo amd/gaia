@@ -46,6 +46,8 @@ SIDE_EFFECT_PATHS = {
 }
 _EXEC_TOOLS = frozenset({"run_python", "execute_python_file", "run_shell_command"})
 _UNOBSERVABLE = object()
+# File systems date writes by a coarse clock that trails time.time_ns().
+_FILE_CLOCK_SLACK_NS = 20_000_000
 _BINARY_SUFFIXES = frozenset(
     {
         ".png",
@@ -616,7 +618,7 @@ class CompletionEvidence:
         """Metadata only, for concrete executor targets within the read boundary."""
         if tool not in _EXEC_TOOLS:
             return {}
-        self._exec_started = time.time_ns()
+        self._exec_started = time.time_ns() - _FILE_CLOCK_SLACK_NS
         paths = set(self.files) | {self.key(p) for p in self.requested}
         code = args.get("code")
         if isinstance(code, str):
