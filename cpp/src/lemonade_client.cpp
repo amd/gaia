@@ -440,7 +440,9 @@ void LemonadeClient::ensureModelLoaded(const std::string& modelName, int ctxSize
 
     if (const json* entry = h.running ? loadedModel(h.raw, effectiveModel) : nullptr) {
         // A cloud model has no local window to size, so its ctx_size never matches.
-        const bool cloud = entry->value("recipe", "") == "cloud";
+        loadedRecipe_ = entry->value("recipe", "");
+        recipeModel_ = effectiveModel;
+        const bool cloud = loadedRecipe_ == "cloud";
         const int loadedCtx = loadedContextSize(*entry);
         if (cloud || effectiveCtx == 0 || loadedCtx == effectiveCtx) {
             if (debug_) {

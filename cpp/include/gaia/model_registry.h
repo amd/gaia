@@ -49,4 +49,14 @@ GAIA_API bool isToolCallingModel(const std::string& modelId);
 /// model from the server's own catalog instead of assuming "no".
 GAIA_API std::optional<bool> knownToolCalling(const std::string& modelId);
 
+/// True for a small model that gets the compact feature set: fewer tools and no
+/// prose copy of the tool list, so every step re-reads a shorter prompt. Mirrors
+/// ``feature_tier="compact"`` in Python's ``MODELS``, plus the small local models
+/// gaiacpp has been measured on. Unlisted models get the full set.
+GAIA_API bool isCompactModel(const std::string& modelId);
+
+/// Tools a compact model is not offered: each has a shell or file-tool
+/// equivalent, and their schemas cost every step.
+GAIA_API const std::vector<std::string>& compactWithheldTools();
+
 } // namespace gaia

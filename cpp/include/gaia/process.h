@@ -18,6 +18,26 @@
 
 namespace gaia {
 
+/// A lock shared by every process on this machine that names it, held until
+/// destroyed. Released by the OS if the holder dies, so a crash never wedges it.
+class GAIA_API MachineLock {
+public:
+    /// name: letters, digits, '-' and '_' only.
+    explicit MachineLock(const std::string& name);
+    ~MachineLock();
+
+    MachineLock(const MachineLock&) = delete;
+    MachineLock& operator=(const MachineLock&) = delete;
+
+    /// Wait up to timeoutMs (0 = just try). True once held.
+    bool acquire(int timeoutMs);
+    bool held() const { return held_; }
+
+private:
+    void* handle_ = nullptr;  // the mutex (Windows) or lock file descriptor (POSIX)
+    bool held_ = false;
+};
+
 /// Result of a process execution.
 struct GAIA_API ProcessResult {
     std::string stdout_output;  ///< Captured stdout

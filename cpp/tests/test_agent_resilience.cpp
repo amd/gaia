@@ -1065,10 +1065,47 @@ TEST(AgentResilience, StepLoggerSeesEachModelAndToolCallAsItHappens) {
     ResilienceAgent agent(cfgFor(mock));
     agent.initForTest();
     std::vector<std::string> kinds;
-    agent.setStepLogger([&kinds](const json& step) { kinds.push_back(step.value("kind", "")); });
+    json toolLine;
+    agent.setStepLogger([&](const json& step) {
+        kinds.push_back(step.value("kind", ""));
+        if (step.value("kind", "") == "tool") toolLine = step;
+    });
     json r = agent.processQuery("go");
     EXPECT_EQ(r["status"], "error");
     EXPECT_EQ(kinds, (std::vector<std::string>{"llm", "tool", "llm_error"}));
+    EXPECT_EQ(toolLine["args"], R"({"a":1,"b":2})") << "the log shows what the tool was asked";
+}
+
+TEST(AgentResilience, StepLoggerClipsLongArgumentsAndRecordsASendBack) {
+    struct ReviewingAgent : ResilienceAgent {
+        using ResilienceAgent::ResilienceAgent;
+        bool sentBack = false;
+        std::optional<std::string> reviewFinalAnswer(const std::string&) override {
+            if (sentBack) return std::nullopt;
+            sentBack = true;
+            return "Check the total.";
+        }
+    };
+    bench::MockLlmServer mock;
+    const std::string big(5000, 'x');
+    mock.pushResponse(call("c1", "add", json{{"a", 1}, {"note", big}}.dump()));
+    mock.pushResponse(answer("first"));
+    mock.pushResponse(answer("second"));
+    ReviewingAgent agent(cfgFor(mock));
+    agent.initForTest();
+    std::vector<json> lines;
+    agent.setStepLogger([&lines](const json& step) { lines.push_back(step); });
+    json r = agent.processQuery("go");
+    EXPECT_EQ(r["result"], "second");
+    bool sawReview = false;
+    for (const auto& l : lines) {
+        if (l["kind"] == "tool") EXPECT_LT(l["args"].get<std::string>().size(), 400u);
+        if (l["kind"] == "review") {
+            sawReview = true;
+            EXPECT_EQ(l["note"], "Check the total.");
+        }
+    }
+    EXPECT_TRUE(sawReview);
 }
 
 TEST(AgentResilience, ACallWithNoArgumentsIsToldSoAndWhatItNeeds) {
@@ -1086,4 +1123,19 @@ TEST(AgentResilience, ACallWithNoArgumentsIsToldSoAndWhatItNeeds) {
     EXPECT_NE(toolReply.find("arrived with no arguments"), std::string::npos) << toolReply;
     EXPECT_NE(toolReply.find("'a'"), std::string::npos) << toolReply;
     EXPECT_TRUE(agent.executed.empty());
+}
+
+TEST(AgentResilience, AReplyOfPlaceholderTokensStopsTheTurnWithoutRetrying) {
+    bench::MockLlmServer mock;
+    std::string noise;
+    for (int i = 0; i < 40; ++i) noise += "<unused49>";
+    mock.pushResponses(answer(noise), 4);
+    AgentConfig c = cfgFor(mock);
+    c.llmRetries = 3;
+    ResilienceAgent agent(c);
+    agent.initForTest();
+    json r = agent.processQuery("hello");
+    EXPECT_EQ(r["status"], "error") << r.dump();
+    EXPECT_NE(r["result"].get<std::string>().find("placeholder tokens"), std::string::npos) << r.dump();
+    EXPECT_EQ(mock.requestCount(), 1) << "the same server would return the same noise";
 }
