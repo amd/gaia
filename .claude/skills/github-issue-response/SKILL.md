@@ -39,6 +39,11 @@ Security vulnerabilities · architecture and design decisions · roadmap or time
 breaking changes and deprecations · external integration or partnership requests · AMD hardware
 specifics · anything you can't resolve from the docs.
 
+**A vendor asking to integrate their product:** label it `third-party integration`, vet it
+against `../../../REVIEW.md` → "Third-party integrations" (the default is an opt-in connector
+that solves a real user problem), and reply warmly. Marketing-only additions are declined,
+pointing to the connector route when the product has real value.
+
 **Don't** escalate: questions the docs already answer, simple usage questions, duplicates (just
 link the original), or feature requests that need community discussion first.
 

@@ -2225,7 +2225,7 @@ class TestThePromptShowsTheRealEvent:
         (wire,) = CanonicalTranslator("r1", agent_id="gaia").translate(request)
         assert wire["args"]["notify_attendees"] == [lookalike]  # the model's own call
         ui = SSEOutputHandler()
-        ui.set_relay_confirmation = lambda _cid, _scope=None: None
+        ui.set_relay_confirmation = lambda _cid, _scope=None, _path=None: None
         relay._dispatch_one(ui, wire, GAIA_PROFILE, answers_confirmations=True)
         card = next(e for e in _events(ui) if e["type"] == "permission_request")
         assert card["args"]["notify_attendees"] == ["ceo@xn--pple-43d.com"]
