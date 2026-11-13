@@ -2869,6 +2869,7 @@ const messages: Messages = {
     'schedules.card.next': 'التشغيل التالي: {when}',
     'schedules.card.lastFailed': 'فشل آخر تشغيل: {error}',
     'schedules.finished': 'انتهت المهمة المجدولة «{name}»',
+    'schedules.failed': 'فشلت المهمة المجدولة «{name}»',
     'schedules.card.openChat': 'فتح المحادثة',
     'schedules.card.openChatTitle': 'فتح محادثة هذه المهمة',
     'schedules.card.runNow': 'تشغيل الآن',

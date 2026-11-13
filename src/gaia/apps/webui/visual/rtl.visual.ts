@@ -3666,6 +3666,38 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+for (const locale of ['ar', 'en']) {
+    test(`a scheduled task's failed and finished notices are in the UI language (${locale})`, async ({ page }) => {
+        const before = { ...SCHEDULE_ROW, run_count: 8, error_count: 0, last_error: null };
+        let loads = 0;
+        await open(page, '', locale, async (p) => {
+            await withSchedules(p);
+            await p.route('**/api/schedules', (route) => {
+                loads += 1;
+                const rows = loads === 1
+                    ? [before, { ...SCHEDULE_ROW, id: 's3', name: 'Inbox sweep', run_count: 4, error_count: 0, last_error: null }]
+                    : [{ ...before, run_count: 9, error_count: 1, last_error: 'The model server stopped.' }, { ...SCHEDULE_ROW, id: 's3', name: 'Inbox sweep', run_count: 5, error_count: 0, last_error: null }];
+                return route.fulfill({ json: { schedules: rows, total: rows.length } });
+            });
+        });
+        await page.locator('.sb').getByRole('button', { name: locale === 'ar' ? /المهام المجدولة/ : /Scheduled tasks/ }).click();
+        await expect(page.locator('.schedule-modal')).toBeVisible();
+        await page.keyboard.press('Escape');
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const titles = page.locator('.notification-center .notification-title');
+        await expect(titles).toHaveCount(2);
+        if (locale === 'ar') {
+            await expect(titles.filter({ hasText: 'فشلت المهمة المجدولة' })).toHaveCount(1);
+            await expect(titles.filter({ hasText: 'انتهت المهمة المجدولة' })).toHaveCount(1);
+            expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-message, .i18n-gloss, bdi')).toEqual([]);
+        } else {
+            await expect(titles.filter({ hasText: 'Scheduled task "Morning brief" failed' })).toHaveCount(1);
+        }
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `schedule-notices-${locale}`);
+    });
+}
+
 /** A first message whose chat model isn't downloaded, on a disk too small for it. */
 async function withMissingModel(page: Page): Promise<void> {
     await page.route('**/api/setup/needs/chat', (route) =>
