@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 
 from gaia.engineering.handoff import ENGINEERING_TOKEN_ENV_VAR
@@ -15,10 +16,12 @@ from gaia.engineering.service import EngineeringService
 def create_engineering_mcp(
     root: Path | None, backend: str, token: str, *, developer_mode: bool = False
 ):
-    from mcp.server import MCPServer
-
     service = EngineeringService(root, developer_mode=developer_mode)
     service.authenticate(backend, token)
+    # Imported after the refusal checks above, so a refused launch says why
+    # even where the optional `mcp` package is not installed.
+    from mcp.server import MCPServer
+
     server = MCPServer(name="gaia-engineering")
 
     def authorize():
@@ -104,12 +107,17 @@ def main(argv: list[str] | None = None) -> None:
     from gaia.mcp.servers.tui_mcp import route_logging_to_stderr
 
     route_logging_to_stderr()
-    server = create_engineering_mcp(
-        args.root,
-        args.backend,
-        os.environ.get(ENGINEERING_TOKEN_ENV_VAR, ""),
-        developer_mode=args.developer_mode,
-    )
+    try:
+        server = create_engineering_mcp(
+            args.root,
+            args.backend,
+            os.environ.get(ENGINEERING_TOKEN_ENV_VAR, ""),
+            developer_mode=args.developer_mode,
+        )
+    except PermissionError as exc:
+        # A refusal, not a crash: the reason on stderr is what an MCP client
+        # shows the user, and a traceback around it reads as a bug.
+        sys.exit(f"gaia mcp engineering: {exc}")
     server.run(transport="stdio")
 
 

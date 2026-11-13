@@ -2519,6 +2519,8 @@ const messages: Messages = {
 
     // The connection banner
     'banner.serverStopped': 'خادم النماذج لا يعمل.',
+    'banner.restartHint': 'إذا استمرّ على هذه الحال، فأعد تشغيله:',
+    'banner.startHint': 'لتشغيله يدويًا، نفّذ',
     'banner.finishSetup': 'أعدّ النماذج على هذا الجهاز، أو اختر نموذجًا سحابيًا من الإعدادات.',
     'banner.serverHung': 'خادم النماذج لا يستجيب. قد يكون مشغولًا بتطبيق آخر أو بتحميل نموذج، لذا يواصل GAIA التحقق.',
     'banner.unreachable': 'تعذّر الوصول إلى مساعد GAIA.',
