@@ -22,7 +22,7 @@ import type { Message, TurnSummary } from '../types';
 import { pluralKey, type Say } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import './SideRail.css';
-import { fileText } from './CalendarApproval';
+import { visibleName } from './CalendarApproval';
 
 /** What the rail shows: the latest answer's summary, a turn in progress, or nothing. */
 export type RailState = { kind: 'turn'; turn: Message } | { kind: 'busy' } | null;
@@ -63,7 +63,8 @@ function costText(summary: TurnSummary, t: Translate = tEn, stopped = false): st
     if (cost.kind === 'unreported') return t(stopped ? 'rail.costUnreportedStopped' : 'rail.costUnreported');
     if (cost.kind === 'estimate' && typeof cost.usd === 'number') {
         const usd = cost.usd < 0.01 ? cost.usd.toFixed(4) : cost.usd.toFixed(2);
-        return t('rail.costAbout', { usd });
+        // The "$" rides inside the value so the bidi isolate keeps it left of the digits in Arabic.
+        return t('rail.costAbout', { usd: `$${usd}` });
     }
     return t(summary.model ? 'rail.costUnknownModel' : 'rail.costUnknown');
 }
@@ -163,7 +164,7 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
                         <li key={d.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={fileText(d.name)} dir="auto">{fileText(d.name)}</span>
+                                <span className="side-rail-name" title={visibleName(d.name)} dir="ltr">{visibleName(d.name)}</span>
                                 <span className="side-rail-meta">
                                     {t.compose((say) => documentMeta(say, d.pages, count))}
                                 </span>
@@ -245,7 +246,7 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
                             <li key={f.path} className="side-rail-item side-rail-item-gone">
                                 <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                                 <div className="side-rail-item-text">
-                                    <span className="side-rail-name" title={fileText(f.path)}>{fileText(f.name)}</span>
+                                    <span className="side-rail-name" title={visibleName(f.path)}>{visibleName(f.name)}</span>
                                     <span className="side-rail-meta">{t('sp.gone')}</span>
                                 </div>
                             </li>
@@ -257,15 +258,15 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
                         <li key={f.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={fileText(f.path)}>{fileText(f.name)}</span>
+                                <span className="side-rail-name" title={visibleName(f.path)}>{visibleName(f.name)}</span>
                                 {changed && <span className="side-rail-meta">{t('rail.changedSince')}</span>}
                                 <span className="side-rail-actions">
                                     {f.openable && (
-                                        <button type="button" className="side-rail-action" onClick={() => run(api.openFileInApp(f.path), fileText(f.name))}>
+                                        <button type="button" className="side-rail-action" onClick={() => run(api.openFileInApp(f.path), visibleName(f.name))}>
                                             {t('sp.open')}
                                         </button>
                                     )}
-                                    <button type="button" className="side-rail-action" onClick={() => run(api.openFileOrFolder(f.path, true), fileText(f.name))}>
+                                    <button type="button" className="side-rail-action" onClick={() => run(api.openFileOrFolder(f.path, true), visibleName(f.name))}>
                                         <FolderOpen size={11} aria-hidden="true" />
                                         {t('sp.showInFolder')}
                                     </button>

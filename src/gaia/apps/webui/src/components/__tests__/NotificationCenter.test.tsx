@@ -11,7 +11,7 @@
  * for real so a selector that stops being cached crashes the suite, not a user.
  */
 
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NotificationCenter } from '../NotificationCenter';
 import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
@@ -19,6 +19,7 @@ import type { GaiaNotification } from '../../types/agent';
 import { stripIsolates } from '../../i18n/registry';
 import { translator } from '../../i18n/useT';
 import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
+import notificationCss from '../NotificationCenter.css?raw';
 
 const notif = (id: string, message: string): GaiaNotification => ({
     id,
@@ -103,12 +104,12 @@ describe('NotificationCenter permission prompts follow the interface language', 
     it('words a tool prompt in Arabic, the tool kept left to right', () => {
         setUiLocale('ar');
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         const title = container.querySelector('.notification-title')!;
         expect(title.textContent).toContain('هل تسمح بـ');
-        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^running python$/);
+        expect(title.querySelector('bdi[dir="ltr"]')).toHaveTextContent(/^editing file$/);
         expect(container.querySelector('.notification-message')).toHaveTextContent('يحتاج GAIA إلى موافقتك قبل');
     });
 
@@ -130,11 +131,47 @@ describe('NotificationCenter permission prompts follow the interface language', 
 
     it('reads the same as before in English', () => {
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'run_python', toolLabel: 'running python', toolArgs: { code: 'print(1)' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
-        expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow running python?');
-        expect(stripIsolates(container.querySelector('.notification-message')!.textContent!)).toBe('GAIA needs your OK before running python.');
+        expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow editing file?');
+        expect(stripIsolates(container.querySelector('.notification-message')!.textContent!)).toBe('GAIA needs your OK before editing file.');
+    });
+});
+
+describe('a permission entry', () => {
+    it('says what it was in words, with no raw tool id', () => {
+        useNotificationStore.setState({
+            notifications: [{ ...notif('perm-9', 'GAIA needs your OK before running Python.'), type: 'permission_request', tool: 'run_python', toolLabel: 'running Python', toolArgs: { code: 'print(1)' } }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-item')).not.toHaveTextContent('run_python');
+    });
+
+    it('wraps its filter tabs instead of running them off the edge', () => {
+        expect(notificationCss).toMatch(/\.notification-filter-bar \{[^}]*flex-wrap: wrap/);
+    });
+});
+
+describe('clicking a notification that names a chat', () => {
+    it('opens that chat and marks the notification read', () => {
+        const onOpenChat = vi.fn();
+        useNotificationStore.setState({
+            notifications: [{ ...notif('done-1', 'Three headlines today.'), title: 'Scheduled task "news" finished', sessionId: 'chat-1' }],
+        });
+        render(<NotificationCenter onClose={vi.fn()} onOpenChat={onOpenChat} />);
+        fireEvent.click(screen.getByText('Scheduled task "news" finished'));
+        expect(onOpenChat).toHaveBeenCalledExactlyOnceWith('chat-1');
+        expect(useNotificationStore.getState().notifications[0].read).toBe(true);
+    });
+
+    it('only marks it read when there is no chat to open', () => {
+        const onOpenChat = vi.fn();
+        useNotificationStore.setState({ notifications: [notif('plain-1', 'Document indexed')] });
+        render(<NotificationCenter onClose={vi.fn()} onOpenChat={onOpenChat} />);
+        fireEvent.click(screen.getByText('Document indexed'));
+        expect(onOpenChat).not.toHaveBeenCalled();
+        expect(useNotificationStore.getState().notifications[0].read).toBe(true);
     });
 });
 

@@ -967,7 +967,7 @@ describe('Chat App Integration', () => {
     it('should have keyboard accessibility on session items', () => {
       // Session rows are native buttons, so Tab/Enter/Space work without handlers.
       expect(sidebarContent).toMatch(
-        /<button\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
+        /<button\s+ref=\{mainRef\}\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
       );
       expect(sidebarContent).not.toContain('role="button"');
     });
@@ -1129,7 +1129,10 @@ describe('Chat App Integration', () => {
     it('should prompt differently on an empty chat, a reply, and during a running reply', () => {
       expectTranslated(chatContent, "messages.length === 0 ? t('composer.placeholder') : t('composer.reply')}", 'composer.placeholder', 'Ask GAIA anything');
       expect(EN_MESSAGES['composer.reply']).toBe('Reply to GAIA');
-      expect(chatContent).toContain('placeholder={isStreaming');
+      // A waiting question outranks the queue: the box answers it.
+      expect(chatContent).toContain('placeholder={answeringId');
+      expect(chatContent).toContain("? t('composer.answerQuestion')");
+      expect(chatContent).toContain(': isStreaming');
       expectTranslated(chatContent, "? t('composer.queueNext')", 'composer.queueNext', 'Queue your next message');
     });
 
@@ -1147,7 +1150,7 @@ describe('Chat App Integration', () => {
     it('should have drag-and-drop with visual overlay', () => {
       expect(chatContent).toContain('isDragOver');
       expect(chatContent).toContain('drag-overlay');
-      expect(chatContent).toContain('Drop files to index');
+      expectTranslated(chatContent, "{t('chat.dropOverlay')}", 'chat.dropOverlay', 'Drop files to index them for this chat');
     });
 
     it('should auto-upload dropped files', () => {
@@ -1178,8 +1181,8 @@ describe('Chat App Integration', () => {
       expectTranslated(composerContent, "aria-label={t('composer.stop')}", 'composer.stop', 'Stop');
       expectTranslated(composerContent, "aria-label={t('composer.attach')}", 'composer.attach', 'Attach files');
       expect(chatContent).toContain('aria-label="Chat title"');
-      expect(chatContent).toContain('aria-label="Export chat"');
-      expect(chatContent).toContain('aria-label="Browse files on this PC"');
+      expectTranslated(chatContent, "aria-label={t('chat.exportLabel')}", 'chat.exportLabel', 'Export chat');
+      expectTranslated(chatContent, "aria-label={t('chat.browseFiles')}", 'chat.browseFiles', 'Browse files on this PC');
     });
   });
 
@@ -1432,7 +1435,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have aria-label on file path input', () => {
-      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to index');
+      expectTranslated(docContent, "aria-label={t('docs.pathAria')}", 'docs.pathAria', 'File path to add');
     });
 
     it('should have aria-label on close button', () => {

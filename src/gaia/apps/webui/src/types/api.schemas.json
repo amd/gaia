@@ -312,6 +312,17 @@
         ],
         "title": "Decision"
       },
+      "declined": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Declined"
+      },
       "detail": {
         "anyOf": [
           {
@@ -514,6 +525,17 @@
         ],
         "title": "Success"
       },
+      "timedOut": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Timedout"
+      },
       "timestamp": {
         "default": 0,
         "title": "Timestamp",
@@ -637,6 +659,17 @@
         },
         "title": "Entries",
         "type": "array"
+      },
+      "folder_refusal": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Folder Refusal"
       },
       "parent_path": {
         "anyOf": [
@@ -1178,6 +1211,52 @@
       "history"
     ],
     "title": "DeviceUsage",
+    "type": "object"
+  },
+  "DiscordConnectRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "token": {
+        "title": "Token",
+        "type": "string"
+      }
+    },
+    "required": [
+      "token"
+    ],
+    "title": "DiscordConnectRequest",
+    "type": "object"
+  },
+  "DiscordStartRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "take_over": {
+        "default": false,
+        "title": "Take Over",
+        "type": "boolean"
+      }
+    },
+    "title": "DiscordStartRequest",
     "type": "object"
   },
   "DiscoveryCommit": {
@@ -3200,6 +3279,11 @@
   "ModelStatus": {
     "description": "Status of a custom model on the Lemonade server.",
     "properties": {
+      "checked": {
+        "default": false,
+        "title": "Checked",
+        "type": "boolean"
+      },
       "downloaded": {
         "default": false,
         "title": "Downloaded",
@@ -4689,6 +4773,61 @@
       }
     },
     "title": "SetupRunRequest",
+    "type": "object"
+  },
+  "SkillLinkAddRequest": {
+    "properties": {
+      "allow_code": {
+        "default": false,
+        "title": "Allow Code",
+        "type": "boolean"
+      },
+      "force": {
+        "default": false,
+        "title": "Force",
+        "type": "boolean"
+      },
+      "names": {
+        "anyOf": [
+          {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Names"
+      },
+      "pin": {
+        "title": "Pin",
+        "type": "string"
+      },
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "pin"
+    ],
+    "title": "SkillLinkAddRequest",
+    "type": "object"
+  },
+  "SkillLinkRequest": {
+    "properties": {
+      "url": {
+        "title": "Url",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "title": "SkillLinkRequest",
     "type": "object"
   },
   "SkipModelRequest": {

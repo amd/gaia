@@ -47,6 +47,8 @@ SRC = REPO_ROOT / "src"
 ENTRY = HERE / "entry.py"
 NAME = "gaia"
 AGENT_PACKAGING = REPO_ROOT / "hub" / "agents" / "gaia" / "python" / "packaging"
+#: Runtime hook: caps OpenBLAS's pool before the entry script can load numpy.
+BLAS_THREADS_HOOK = SRC / "gaia" / "blas_threads.py"
 
 sys.path.insert(0, str(SRC))
 from gaia.utils import tiktoken_bundle  # noqa: E402
@@ -245,6 +247,7 @@ def build(clean: bool = True) -> Path:
         args += ["--add-data", f"{source}{os.pathsep}{dest}"]
     for mod in EXCLUDES:
         args += ["--exclude-module", mod]
+    args += ["--runtime-hook", str(BLAS_THREADS_HOOK)]
     if sys.platform.startswith("linux"):
         args += ["--runtime-hook", str(AGENT_PACKAGING / "rthook_linux_ca.py")]
 

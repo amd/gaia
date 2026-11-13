@@ -271,3 +271,39 @@ def test_performance_carries_only_the_stats_entries(built, measured):
     assert [e["content"]["type"] for e in final["performance"]["conversation"]] == [
         "stats"
     ]
+
+
+def test_a_relayed_chat_is_measured_in_whole_turns_with_its_tool_results(
+    built, measured, monkeypatch
+):
+    """The meter counts what the next turn carries, one entry per real turn.
+
+    In v0.26.0-rc18 a text-tool model's recorded results were split into
+    "turns" of their own, and the newest turn counted only its question and
+    answer, so a 20 KB file read pushed history over budget with no warning.
+    """
+    from gaia.agents.base import history as history_mod
+
+    monkeypatch.setattr(history_mod, "history_budget", lambda agent, query: 10**6)
+    client, state = built
+    earlier = [
+        [
+            {"role": "user", "content": "Sum 1..9 with Python."},
+            {"role": "assistant", "content": '{"tool": "run_python"}'},
+            {"role": "user", "content": "[Recorded tool result: run_python] 45"},
+            {"role": "assistant", "content": "45"},
+        ]
+    ]
+    newest = [
+        {"role": "user", "content": "Capital of France?"},
+        {"role": "assistant", "content": '{"tool": "read_file"}'},
+        {"role": "user", "content": "[Recorded tool result: read_file] " + "x" * 20000},
+        {"role": "assistant", "content": "Paris."},
+    ]
+    state["result"] = {"answer": "Paris.", "model_messages": newest}
+
+    final = _final(client, context=[], turns=earlier)
+
+    assert final["type"] == "final"
+    [call] = measured
+    assert call["turns"] == earlier + [newest]

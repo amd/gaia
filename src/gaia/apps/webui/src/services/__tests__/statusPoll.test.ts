@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../api', async (orig) => ({ ...(await orig<typeof import('../api')>()), getSystemStatus: vi.fn() }));
 
 import * as api from '../api';
-import { createStatusPoller } from '../statusPoll';
+import { STATUS_POLL_MS, createStatusPoller } from '../statusPoll';
 
 const mocked = vi.mocked(api);
 
@@ -94,5 +94,57 @@ describe('createStatusPoller', () => {
         await expect(poller.check()).resolves.toBeUndefined();
         await expect(poller.check()).resolves.toBeUndefined();
         expect(onOutcome).toHaveBeenCalledTimes(2);
+    });
+
+    // The desktop app checks once when a restarted backend answers, often while it still boots.
+    // A hidden window runs no poll, so that "starting" would otherwise hold the composer for good.
+    it('re-reads a "starting" status until the boot ends, even with the poll stopped', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const starting = { init_state: 'initializing', init_tasks: [{ name: 'Loading AI model', status: 'running' }] };
+        const ready = { init_state: 'ready', init_tasks: [] };
+        mocked.getSystemStatus
+            .mockResolvedValueOnce(starting as never)
+            .mockResolvedValueOnce(starting as never)
+            .mockResolvedValue(ready as never);
+        const outcomes: unknown[] = [];
+        await createStatusPoller((o) => outcomes.push(o)).check();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(mocked.getSystemStatus).toHaveBeenCalledTimes(3);
+        expect(outcomes[2]).toMatchObject({ kind: 'ok', status: ready });
+    });
+
+    it('adds no second loop while the poll itself runs', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const starting = { init_state: 'initializing', init_tasks: [{ name: 'Loading AI model', status: 'running' }] };
+        mocked.getSystemStatus.mockResolvedValue(starting as never);
+        const stop = createStatusPoller(vi.fn()).start();
+        await vi.advanceTimersByTimeAsync(STATUS_POLL_MS * 3 - 1);
+        expect(mocked.getSystemStatus).toHaveBeenCalledTimes(3);
+        stop();
+    });
+
+    it('keeps re-reading a boot the window hid in the middle of', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const starting = { init_state: 'initializing', init_tasks: [{ name: 'Loading AI model', status: 'running' }] };
+        mocked.getSystemStatus.mockResolvedValueOnce(starting as never).mockResolvedValue({ init_state: 'ready' } as never);
+        const stop = createStatusPoller(vi.fn()).start();
+        await vi.advanceTimersByTimeAsync(0);
+        stop();
+        await vi.advanceTimersByTimeAsync(STATUS_POLL_MS);
+        expect(mocked.getSystemStatus).toHaveBeenCalledTimes(2);
+        await vi.advanceTimersByTimeAsync(STATUS_POLL_MS * 4);
+        expect(mocked.getSystemStatus).toHaveBeenCalledTimes(2);
+    });
+
+    it('backs off while a hidden window follows a boot that keeps failing', async () => {
+        vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+        const starting = { init_state: 'initializing', init_tasks: [{ name: 'Loading AI model', status: 'running' }] };
+        mocked.getSystemStatus
+            .mockResolvedValueOnce(starting as never)
+            .mockRejectedValue(new api.ApiError('HTTP 500', 500, 'boom', null));
+        await createStatusPoller(vi.fn()).check();
+        await vi.advanceTimersByTimeAsync(60_000);
+        // 5 s, then 10 s and 20 s: three re-reads in a minute, not twelve.
+        expect(mocked.getSystemStatus).toHaveBeenCalledTimes(4);
     });
 });

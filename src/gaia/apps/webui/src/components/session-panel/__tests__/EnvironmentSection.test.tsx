@@ -70,6 +70,21 @@ describe('Runs on', () => {
 });
 
 describe('Can read and write', () => {
+    it('shows a document the turn indexed once the reply ends, without a reload', async () => {
+        const { rerender } = render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByRole('list');
+        expect(screen.queryByText('outside.md')).toBeNull();
+
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [...ENV.folders, { path: 'C:\\Users\\me\\.gaia\\documents\\outside.md', kind: 'file', source: 'document', removable: false }],
+        } as never);
+        rerender(<EnvironmentSection sessionId={SID} busy />);
+        rerender(<EnvironmentSection sessionId={SID} busy={false} />);
+
+        expect(await screen.findByText('outside.md')).toBeInTheDocument();
+    });
+
     it('lists folders first, with where each came from', async () => {
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         const list = await screen.findByRole('list');
@@ -78,6 +93,18 @@ describe('Can read and write', () => {
         expect(rows[0]).toHaveTextContent('Added by you');
         expect(rows[1]).toHaveTextContent("GAIA's documents folder");
         expect(rows[2]).toHaveTextContent('Document in this chat');
+    });
+
+    it("lists a library copy under the document's own name (#7224)", async () => {
+        const copy = 'C:\\Users\\me\\.gaia\\documents\\6bebd6da81b2_outside.md';
+        mocked.getEnvironment.mockResolvedValue({
+            ...ENV,
+            folders: [{ path: copy, name: 'outside.md', kind: 'file', source: 'document', removable: false }],
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        const row = (await screen.findAllByRole('listitem'))[0];
+        expect(within(row).getByText('outside.md')).toHaveAttribute('title', copy);
+        expect(within(row).queryByText('6bebd6da81b2_outside.md')).not.toBeInTheDocument();
     });
 
     it('removes a folder through the backend and shows what it answered', async () => {
@@ -162,9 +189,9 @@ describe('Can read and write', () => {
         mocked.getEnvironment.mockResolvedValue({ ...ENV, enforced: false });
         useChatStore.setState({ sessions: [{ ...useChatStore.getState().sessions[0], agent_type: 'gaia' }] });
         render(<EnvironmentSection sessionId={SID} busy={false} />);
-        expect(await screen.findByText(/runs as its own process/)).toBeInTheDocument();
         // Not a boundary: say so rather than listing folders as if they were the limit.
-        expect(screen.getByText('Files GAIA can reach')).toBeInTheDocument();
+        expect(await screen.findByText('Files GAIA can reach')).toBeInTheDocument();
+        expect(screen.queryByText(/its own process/)).not.toBeInTheDocument();
         expect(screen.getByText(/never the whole user folder at once/)).toBeInTheDocument();
         expect(screen.queryByText('Can read and write')).not.toBeInTheDocument();
         expect(screen.queryByRole('button', { name: /Add folder/ })).not.toBeInTheDocument();
@@ -186,7 +213,7 @@ describe('Can read and write', () => {
         render(<EnvironmentSection sessionId={SID} busy={false} />);
         expect(await screen.findByText('On')).toBeInTheDocument();
         expect(screen.queryByRole('switch', { name: 'Internet for this chat' })).not.toBeInTheDocument();
-        expect(screen.getAllByText(/can't be changed from/)).toHaveLength(1);
+        expect(screen.queryByText(/can't be changed from/)).not.toBeInTheDocument();
     });
 
     it("doesn't claim another agent's scope", async () => {
@@ -284,6 +311,17 @@ describe('Phone access', () => {
         expect(await screen.findByText(/iPhone connected/)).toBeInTheDocument();
         expect(toggle).toHaveAttribute('aria-checked', 'true');
         window.removeEventListener('gaia:mobile-access-request', onRequest);
+    });
+
+    it('shows no error for phone access the user never got running', async () => {
+        mocked.getTunnelStatus.mockResolvedValue({
+            active: false, url: null, token: null, startedAt: null, publicIp: null,
+            error: 'ngrok is not installed. Install it from https://ngrok.com/download or run: choco install ngrok',
+        });
+        render(<EnvironmentSection sessionId={SID} busy={false} />);
+        await screen.findByRole('switch', { name: 'Phone access' });
+        await waitFor(() => expect(mocked.getTunnelStatus).toHaveBeenCalled());
+        expect(screen.queryByText(/ngrok/)).toBeNull();
     });
 });
 

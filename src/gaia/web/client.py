@@ -18,8 +18,9 @@ import re
 import socket
 import threading
 import time
+from collections import deque
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Callable, Deque, Dict, Optional, Tuple
 from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 
 import requests
@@ -617,16 +618,27 @@ class _SearchGate:
     """Process-wide pacing for search requests, shared by every ``WebClient``.
 
     Agents fire searches in parallel; each caller reserves the next free slot,
-    so requests leave at least ``min_interval`` apart. A block signal pushes
-    every caller back until ``blocked_until``.
+    so requests leave at least ``min_interval`` apart. With ``burst`` set, no
+    more than ``burst`` requests leave in any ``window`` seconds, which keeps a
+    long research turn under the burst that makes DuckDuckGo refuse. A block
+    signal pushes every caller back until ``blocked_until``.
     """
 
-    def __init__(self, min_interval: float, sleep=time.sleep) -> None:
+    def __init__(
+        self,
+        min_interval: float,
+        sleep=time.sleep,
+        burst: int = 0,
+        window: float = 0.0,
+    ) -> None:
         self.min_interval = min_interval
+        self.burst = burst
+        self.window = window
         self._sleep = sleep
         self._lock = threading.Lock()
         self._next_slot = 0.0
         self._blocked_until = 0.0
+        self._recent: Deque[float] = deque()
 
     def blocked_for(self) -> float:
         """Seconds until searching is allowed again after a block, or 0."""
@@ -641,6 +653,12 @@ class _SearchGate:
         with self._lock:
             now = time.monotonic()
             slot = max(now, self._next_slot, self._blocked_until)
+            if self.burst > 0:
+                if len(self._recent) >= self.burst:
+                    slot = max(slot, self._recent[-self.burst] + self.window)
+                self._recent.append(slot)
+                while self._recent[0] <= slot - self.window:
+                    self._recent.popleft()
             self._next_slot = slot + self.min_interval
         remaining = slot - now
         if should_stop is None:
@@ -663,7 +681,9 @@ class _SearchGate:
             self._blocked_until = max(self._blocked_until, time.monotonic() + seconds)
 
 
-_SEARCH_GATE = _SearchGate(min_interval=1.5)
+#: Measured from one PC: 14 quick searches in ~35 s answered, the 15th was
+#: refused. Ten a minute stays under that with room for the html->lite retry.
+_SEARCH_GATE = _SearchGate(min_interval=1.5, burst=10, window=60.0)
 
 
 def _retry_after_seconds(response: requests.Response) -> Optional[float]:

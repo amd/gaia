@@ -4,6 +4,7 @@
 Unit tests for the Goals & Tasks REST API router.
 
 Endpoints covered:
+  GET    /api/goals/health
   GET    /api/goals/stats
   GET    /api/goals/pending-approval
   GET    /api/goals
@@ -79,6 +80,18 @@ def _add_task(client, goal_id, desc="Do something"):
 # ===========================================================================
 # Stats
 # ===========================================================================
+
+
+class TestGoalStoreHealth:
+    def test_reports_the_loop_error(self, client, monkeypatch):
+        monkeypatch.setattr(agent_loop, "goal_store_error", "goals.db is broken")
+        resp = client.get("/api/goals/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"error": "goals.db is broken"}
+
+    def test_null_when_the_store_reads(self, client, monkeypatch):
+        monkeypatch.setattr(agent_loop, "goal_store_error", None)
+        assert client.get("/api/goals/health").json() == {"error": None}
 
 
 class TestStats:

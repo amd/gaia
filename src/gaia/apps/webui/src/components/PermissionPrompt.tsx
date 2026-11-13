@@ -11,6 +11,7 @@ import {
     PATH_ACCESS_TOOL,
     PROJECT_TRUST_TOOL,
     permissionPromptText,
+    alwaysScopeText,
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -20,6 +21,7 @@ import { cmdReading, decodedPowerShell } from './shownText';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
+import { ChangePreview, fileChange } from './PermissionChangePreview';
 import './PermissionPrompt.css';
 
 /** One-line description of a tool call, e.g. `run_shell_command · git status`. */
@@ -97,18 +99,28 @@ export function shownScript(tool: string | undefined, args: Record<string, unkno
     return { text: null, hiddenLines: 0, unreadable: reason };
 }
 
+/** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
+export function shortScope(scope: string): string {
+    return scope.replace(/(\s)((?:[A-Za-z]:)?[\\/][^]*)$/, (_, space: string, path: string) => {
+        const name = path.split(/[\\/]/).filter(Boolean).pop();
+        return name ? `${space}${name}` : `${space}${path}`;
+    });
+}
+
 /** Lines of code a prompt shows before "Show all". */
 export const CODE_PREVIEW_LINES = 12;
 
 /** Long text, collapsed past `previewLines` lines (the code a gated call runs, a tool's output). */
-export function CodeBlock({ code, previewLines = CODE_PREVIEW_LINES, testId = 'perm-code' }: {
+export function CodeBlock({ code, previewLines = CODE_PREVIEW_LINES, testId = 'perm-code', exact = false }: {
     code: string;
     previewLines?: number;
     testId?: string;
+    /** Keep every blank line; only the final line break is dropped. */
+    exact?: boolean;
 }) {
     const t = useT();
     const [expanded, setExpanded] = useState(false);
-    const lines = code.replace(/^\n+|\n+$/g, '').split('\n');
+    const lines = (exact ? code.replace(/\n$/, '') : code.replace(/^\n+|\n+$/g, '')).split('\n');
     const long = lines.length > previewLines;
     const shown = (long && !expanded ? lines.slice(0, previewLines) : lines).join('\n');
     return (
@@ -159,14 +171,19 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
     // A deadline, not a tick count: background tabs throttle timers, and the
     // backend denies at its own deadline regardless of how often we ticked.
-    const deadline = useRef(hasTimeout ? Date.now() + notification.timeoutSeconds! * 1000 : null);
-    const [remaining, setRemaining] = useState<number | null>(hasTimeout ? notification.timeoutSeconds! : null);
+    // A prompt replayed after a reload keeps the deadline it was asked with.
+    const deadline = useRef(hasTimeout ? notification.expiresAt ?? Date.now() + notification.timeoutSeconds! * 1000 : null);
+    const [remaining, setRemaining] = useState<number | null>(
+        deadline.current === null ? null : Math.max(0, Math.ceil((deadline.current - Date.now()) / 1000)),
+    );
     const cardRef = useRef<HTMLElement>(null);
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
     // It names a file or skill the model chose, so its hidden characters show as codes.
-    const scopeText = visibleText(notification.alwaysLabel ?? scope ?? '', false);
+    const markedScope = notification.alwaysScope && visibleText(notification.alwaysScope, false);
+    const scopeText = alwaysScopeText({ ...notification, alwaysScope: markedScope }, t)
+        ?? visibleText(notification.alwaysLabel ?? scope ?? '', false);
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
@@ -291,6 +308,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     {calendar && !hasArgs && notification.summary && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-summary">{notification.summary}</pre>}
                     {!detail && !code && !exactText && !calendar && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{visibleText(notification.summary, true)}</bdi></p>}
                     {freshConsent && <p className="perm-card-detail perm-card-question"><MarkedText text={question} /></p>}
+                    <ChangePreview args={args} />
                 </div>
                 {remaining !== null && !expired && (
                     <span className="perm-card-timer" title={t('prompt.timer')}>{formatCountdown(remaining)}</span>
@@ -305,7 +323,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                         aria-expanded={showArgs}
                     >
                         <ChevronRight size={13} className={showArgs ? 'is-open' : ''} aria-hidden="true" />
-                        {t('prompt.details')}
+                        {t(fileChange(args) ? 'prompt.technicalDetails' : 'prompt.details')}
                     </button>
                     {showArgs && <pre dir="ltr" className="perm-card-pre">{visibleText(JSON.stringify(detailArgs, null, 2), true)}</pre>}
                 </div>
@@ -329,8 +347,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                             className={`perm-btn${suggestAlways ? ' is-suggested' : ''}`}
                             onClick={() => answer('always')}
                             disabled={busy}
+                            title={scopeText}
                         >
-                            {t('prompt.alwaysAllow', { scope: scopeText })}
+                            {t('prompt.alwaysAllow', { scope: shortScope(scopeText) })}
                         </button>
                     )}
                     <button type="button" className="perm-btn" onClick={() => answer('deny')} disabled={busy}>

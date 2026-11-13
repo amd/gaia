@@ -176,6 +176,14 @@ def get_goal_stats():
     return _get_store().get_stats()
 
 
+@router.get("/api/goals/health")
+def get_goal_store_health():
+    """Why the background loop could not read the goal store, or null."""
+    from gaia.ui.agent_loop import agent_loop
+
+    return {"error": agent_loop.goal_store_error}
+
+
 @router.get("/api/goals/pending-approval")
 def get_pending_approval():
     """Goals waiting for user approval (agent-inferred, not yet reviewed).

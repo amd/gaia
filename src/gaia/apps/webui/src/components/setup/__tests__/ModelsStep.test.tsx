@@ -56,7 +56,8 @@ describe('Choose your models', () => {
         expect(chat(/Qwen3\.6-35B-A3B/)).toHaveAccessibleName(/Qwen3\.6-35B-A3B.*Recommended for this PC.*Download 23\.3 GB/);
         expect(screen.getByRole('checkbox', { name: /embeddinggemma/ }).closest('li')).toHaveTextContent('300 MB');
         expect(within(summary()).getByText('29.6 GB')).toBeInTheDocument();
-        expect(within(summary()).getByText('Free on C:')).toBeInTheDocument();
+        expect(within(summary()).getByText('C:')).toBeInTheDocument();
+        expect(within(summary()).getByText(/^Free on/)).toBeInTheDocument();
         expect(within(summary()).getByText('412.3 GB')).toBeInTheDocument();
     });
 
@@ -172,7 +173,7 @@ describe('Choose your models', () => {
         const onRetryPlan = vi.fn();
         const onUseRecommended = vi.fn();
         render(<Harness plan={null} planError="500" onRetryPlan={onRetryPlan} onUseRecommended={onUseRecommended} />);
-        expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t read the model list from the AI engine: 500');
+        expect(screen.getByRole('alert')).toHaveTextContent('Couldn’t read the model list from the model server: 500');
         fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
         expect(onRetryPlan).toHaveBeenCalledTimes(1);
         fireEvent.click(screen.getByRole('button', { name: 'Use the recommended set' }));
@@ -187,6 +188,13 @@ describe('Choose your models', () => {
         expect(row.querySelector('.mc-name bdi')!.textContent).toBe('Qwen3.6-35B-A3B');
         expect(stripIsolates(row.querySelector('.mc-status')!.textContent ?? '')).toContain('تنزيل 23.3 GB (Download 23.3 GB)');
         expect(screen.getAllByRole('button').filter((b) => stripIsolates(b.textContent ?? '').trim() === 'متابعة (Continue)')).toHaveLength(1);
+    });
+
+    it('names the disk folder once in Arabic, not again in the English gloss', () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        render(<Harness plan={COLD_BIG()} />);
+        const free = [...document.querySelectorAll('.mc-stat-label')].find((l) => l.textContent!.includes('المساحة الحرة على'))!;
+        expect(free.textContent!.match(/C:/g)).toHaveLength(1);
     });
 });
 

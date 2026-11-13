@@ -28,7 +28,7 @@ import { useSavedDraft } from '../hooks/useSavedDraft';
 import { NEW_CHAT_DRAFT_KEY } from '../utils/savedDraft';
 import { ref, type MessageKey } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
-import { fileText } from './CalendarApproval';
+import { visibleName } from './CalendarApproval';
 
 interface NewChatProps {
     /**
@@ -112,12 +112,12 @@ function LibraryDocuments() {
                     {attached.map((d) => (
                         <li key={d.id} className="new-chat-doc">
                             <FileText size={12} aria-hidden="true" />
-                            <span dir="auto">{fileText(d.filename)}</span>
+                            <span dir="ltr">{visibleName(d.filename)}</span>
                             <button
                                 type="button"
                                 className="new-chat-doc-remove"
                                 onClick={() => removeDraftDocument(d.id)}
-                                aria-label={t('newChat.docs.dontAttach', { name: fileText(d.filename) })}
+                                aria-label={t('newChat.docs.dontAttach', { name: visibleName(d.filename) })}
                             >
                                 <X size={12} aria-hidden="true" />
                             </button>
@@ -263,8 +263,8 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         if (focusRequest) inputRef.current?.focus();
     }, [focusRequest]);
 
-    // Typing drops the composer to the bottom, where the chat will continue.
-    const docked = text.length > 0 || sending;
+    // Sending, not typing, drops the composer to the bottom: the box never moves under the cursor.
+    const docked = sending;
     const innerTop = useRef<{ top: number; docked: boolean } | null>(null);
     useLayoutEffect(() => {
         const el = innerRef.current;
@@ -283,10 +283,14 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         );
     });
 
+    const lastExample = useRef('');
     const fillPrompt = useCallback((prompt: string) => {
-        setText(prompt);
+        const prev = lastExample.current;
+        const draft = (prev && text.endsWith(prev) ? text.slice(0, -prev.length) : text).trimEnd();
+        lastExample.current = prompt;
+        setText(draft ? `${draft}\n\n${prompt}` : prompt);
         inputRef.current?.focus();
-    }, []);
+    }, [text, setText]);
 
     const downloading = download?.state === 'starting' || download?.state === 'downloading';
     const activity = sending ? 'sending' : downloading ? 'download' : starting || warming !== null ? 'loading' : 'idle';

@@ -19,7 +19,6 @@ import {
   useNotificationStore,
   selectUnreadCount,
   selectVisibleNotifications,
-  PATH_ACCESS_TOOL,
   permissionPromptText,
 } from '../stores/notificationStore';
 import type { GaiaNotification, NotificationType } from '../types/agent';
@@ -30,6 +29,8 @@ import { visibleText } from './CalendarApproval';
 
 interface NotificationCenterProps {
   onClose: () => void;
+  /** Opens the chat a notification came from, e.g. a scheduled run's chat. */
+  onOpenChat?: (sessionId: string) => void;
 }
 
 // ── Notification type → icon + color mapping ─────────────────────────────
@@ -93,7 +94,7 @@ function formatNotifTime(timestamp: number, t: Translate): string {
 
 // ── Component ────────────────────────────────────────────────────────────
 
-export function NotificationCenter({ onClose }: NotificationCenterProps) {
+export function NotificationCenter({ onClose, onOpenChat }: NotificationCenterProps) {
   const t = useT();
   // useShallow is required — the selector filters into a fresh array, and an
   // uncached snapshot makes useSyncExternalStore re-render without end.
@@ -107,12 +108,13 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
   const typeFilter = useNotificationStore((s) => s.typeFilter);
   const setTypeFilter = useNotificationStore((s) => s.setTypeFilter);
 
-  // Handle clicking a notification item (mark as read)
+  // Clicking a notification marks it read and, when it names a chat, opens it.
   const handleClick = useCallback(
-    (id: string) => {
-      markRead(id);
+    (notif: GaiaNotification) => {
+      markRead(notif.id);
+      if (notif.sessionId && notif.type !== 'permission_request') onOpenChat?.(notif.sessionId);
     },
-    [markRead]
+    [markRead, onOpenChat]
   );
 
   // Handle approve for permission_request
@@ -195,11 +197,11 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                 className={`notification-item ${!n.read ? 'unread' : ''} ${meta.colorClass}`}
                 id={n.type === 'policy_alert' && n.receiptId ? `policy-receipt-${encodeURIComponent(n.receiptId)}` : undefined}
                 key={n.id}
-                onClick={() => handleClick(n.id)}
+                onClick={() => handleClick(n)}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') handleClick(n.id);
+                  if (e.key === 'Enter' || e.key === ' ') handleClick(n);
                 }}
               >
                 {/* Unread dot */}
@@ -228,13 +230,6 @@ export function NotificationCenter({ onClose }: NotificationCenterProps) {
                       )}
                       <span className="notification-message">{noticeText(n.message)}</span>
                     </>
-                  )}
-
-                  {/* Tool info for permission requests */}
-                  {n.type === 'permission_request' && n.tool && n.tool !== PATH_ACCESS_TOOL && (
-                    <span className="notification-tool">
-                      {t('activity.policy.tool')}: <code dir="ltr">{n.tool}</code>
-                    </span>
                   )}
 
                   {n.type === 'policy_alert' && (

@@ -294,7 +294,7 @@ class TestCommandFamilies:
     @pytest.mark.parametrize(
         "tool,label",
         [
-            ("run_python", "Python snippets (run_python)"),
+            ("run_python", "Python snippets"),
             ("execute_python_file", "running Python files"),
         ],
     )

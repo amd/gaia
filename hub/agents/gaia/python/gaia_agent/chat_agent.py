@@ -52,6 +52,7 @@ from gaia_agent.tool_bundles import PROFILE_TOOL_CONFIGS
 from gaia_agent.tool_requests import requested_tools
 
 from gaia.agents.base.agent import Agent, _withheld_skill_tools, default_max_steps
+from gaia.agents.base.call_risk import NEEDS_PERSON_ARG, READ, call_risk
 from gaia.agents.base.checks import attach_check, check_from_python_run, snippet_target
 from gaia.agents.base.code_path_screen import (
     python_code_preflight,
@@ -149,6 +150,35 @@ _UNSET = object()
 
 #: Longest request_user_input waits for an answer, in seconds.
 USER_INPUT_MAX_WAIT_S = 600
+
+#: request_user_input's answer where nobody can reply mid-run (a Discord DM, a
+#: one-shot run): no choice was made, so the question goes in the reply.
+NO_QUESTION_CHANNEL = (
+    "__NO_RESPONSE__ The user cannot answer a question mid-run here, so nothing "
+    "was chosen; do not act on a default. End your turn by asking the question "
+    "in your reply, with what they need to decide (such as the list); their "
+    "next message is the answer."
+)
+
+
+def _no_answer_result(timeout_seconds: int, default: Optional[str]) -> str:
+    """What request_user_input returns when nobody answered: never an answer."""
+    text = (
+        f"__NO_RESPONSE__ The user did not answer within {timeout_seconds} "
+        "seconds, so you have no answer from them. "
+    )
+    if default:
+        text += (
+            f'Your default was "{default}". You may go on with it only for steps '
+            "that change nothing, and your reply must say you assumed it because "
+            "they did not answer. "
+        )
+    return text + (
+        "Do not create, change, move or delete anything on that assumption: any "
+        "such step now needs the user's approval, even with Full access on. If "
+        "the work needs their choice, stop and end your reply with the question."
+    )
+
 
 #: ``search_tools``: searches a turn before it must get on with the job, longest
 #: query embedded, tools and skills returned, and tools returned with full docs.
@@ -552,6 +582,25 @@ _CROSS_LANGUAGE_NOTE = (
 )
 
 
+def _where_mcp_servers_are_set_up(names: List[str], config_path: Path) -> str:
+    """Where the user fixes each of *names*: Settings for a connector, else the file."""
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    connectors = [REGISTRY.get(n).display_name for n in names if n in REGISTRY]
+    hand_added = [n for n in names if n not in REGISTRY]
+    where = []
+    if connectors:
+        where.append(f"Check {', '.join(connectors)} in Settings > Connectors.")
+    if hand_added:
+        verb = "is" if len(hand_added) == 1 else "are"
+        where.append(
+            f"{', '.join(hand_added)} {verb} set up in {config_path}: check the "
+            "command and settings there."
+        )
+    return " ".join(where)
+
+
 class ChatAgent(
     MemoryMixin,
     Agent,
@@ -604,6 +653,9 @@ class ChatAgent(
     _mcp_unavailable_error: Optional[str] = None
     _mcp_dropped_notice: Optional[str] = None
     _mcp_dropped_notice_shown: Optional[str] = None
+
+    # This turn's last request_user_input question, while it went unanswered.
+    _unanswered_question: Optional[str] = None
 
     def __init__(self, config: Optional[ChatAgentConfig] = None):
         """
@@ -1793,7 +1845,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             self.config, "enable_filesystem", False
         ):
             filesystem_section = """
-**FILE SYSTEM TOOLS:** browse_directory (list folder), tree (visual hierarchy), file_info (metadata), find_files (search by name/content/size/date/type), read_file (text/CSV/JSON/PDF), bookmark (save locations).
+**FILE SYSTEM TOOLS:** no approval; use over shell. browse_directory (list folder, sort_by=size), tree (hierarchy), file_info (metadata), find_files (by name/content/size/date/type), read_file (text/CSV/JSON/PDF), bookmark.
 
 **FILE SEARCH AND AUTO-INDEX WORKFLOW:**
 - Use 1-2 distinctive keywords, not full phrases. WRONG: find_files("Acme Corp API reference"). RIGHT: find_files("api").
@@ -2275,15 +2327,18 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return
         try:
             self._mcp_manager.load_from_config()
-            self._print_mcp_load_summary()
             # Servers activated for this agent (#1005); every connected one
             # for an agent with no registry identity.
             active = self._active_mcp_servers(self._mcp_manager)
-            tool_counts = {
-                srv: len(client.list_tools())
+            # Refuse bad servers before the count, so their tools don't count.
+            admitted = {
+                srv: converted
                 for srv in active
-                if (client := self._mcp_manager.get_client(srv)) is not None
+                if (converted := self._admit_mcp_server(srv)) is not None
             }
+            # After admission, so a refused server shows as failed.
+            self._print_mcp_load_summary()
+            tool_counts = {srv: len(converted) for srv, converted in admitted.items()}
             total = sum(tool_counts.values())
             limit = self.config.mcp_tool_limit
             if total > limit:
@@ -2299,13 +2354,21 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 )
                 return
             before = len(_TOOL_REGISTRY)
-            for srv in active:
-                client = self._mcp_manager.get_client(srv)
-                if client:
-                    self._register_mcp_tools(client)
+            for srv, converted in admitted.items():
+                self._register_mcp_tools(self._mcp_manager.get_client(srv), converted)
             added = len(_TOOL_REGISTRY) - before
             if added > 0:
                 logger.info("Loaded %d MCP tool(s)", added)
+            failed = self._mcp_manager.failed_servers_for_agent(
+                self._namespaced_agent_id()
+            )
+            if failed:
+                reasons = "; ".join(f"{srv} ({err})" for srv, err in failed.items())
+                self._set_mcp_dropped_notice(
+                    f"MCP servers that could not start: {reasons}. "
+                    f"{_where_mcp_servers_are_set_up(list(failed), _mcp_config_path)}"
+                )
+                return
             self._set_mcp_dropped_notice(None)
         except Exception as e:  # pylint: disable=broad-except
             # A broken MCP setup must not stop the agent; the user is told.
@@ -2344,7 +2407,24 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
     def process_query(self, user_input, *args, **kwargs):
         """Run a turn, first telling the user about any dropped MCP servers."""
         self.report_mcp_dropped()
+        self._unanswered_question = None
         return super().process_query(user_input, *args, **kwargs)
+
+    def confirmation_args_for_call(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Also mark a gated call after an unanswered question for a person.
+
+        Pre-approval (Full access) must not turn the model's guess at an
+        answer into a change nobody agreed to. Only a call known to be a read
+        is exempt; the marker matters only on a call that already asks.
+        """
+        shown = super().confirmation_args_for_call(tool_name, tool_args)
+        if self._unanswered_question is None or not isinstance(shown, dict):
+            return shown
+        if call_risk(tool_name, tool_args) == READ:
+            return shown
+        return {**shown, NEEDS_PERSON_ARG: True}
 
     def _register_tools(self) -> None:
         """Register chat agent tools from mixins based on prompt_profile."""
@@ -3559,39 +3639,44 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             Args:
                 message: The question to present to the user.
                 choices: Optional list of choices (renders as buttons in the UI).
-                default_if_no_response: Value to use if no response received before
-                    timeout. If not set and continue_if_no_response=True, returns
-                    "__NO_RESPONSE__". Always check the return value.
+                default_if_no_response: The choice you would pick if nobody
+                    answers. It is never returned as the user's answer: on a
+                    timeout you get "__NO_RESPONSE__" with this default named.
                 timeout_seconds: How long to wait (10 to 600, default 300).
                 continue_if_no_response: If True, continue after timeout.
                     If False, the loop pauses until user re-engages.
 
             Returns:
-                User's response, chosen option, or "__NO_RESPONSE__" on timeout.
-                ALWAYS check for "__NO_RESPONSE__" before proceeding.
+                The user's response or chosen option, or text starting with
+                "__NO_RESPONSE__" when they did not answer. Silence is not an
+                answer: then change nothing on an assumption, and say in your
+                reply that you are waiting on them or what you assumed.
             """
             timeout_seconds = min(int(timeout_seconds), USER_INPUT_MAX_WAIT_S)
             console = _agent.console
+            if not getattr(console, "answers_questions", True):
+                # The default would read as the user's choice ("cancel").
+                _agent._unanswered_question = message
+                return NO_QUESTION_CHANNEL
             if hasattr(console, "request_user_input_blocking"):
-                return console.request_user_input_blocking(
+                reply = console.request_user_input_blocking(
                     message=message,
                     choices=choices,
-                    default_if_no_response=default_if_no_response,
+                    default_if_no_response=None,
                     timeout_seconds=timeout_seconds,
                     continue_if_no_response=continue_if_no_response,
                 )
-            # Fallback for non-SSE consoles (interactive sessions)
-            try:
-                return (
-                    input(f"\n[Agent asking]: {message}\n> ").strip()
-                    or "__NO_RESPONSE__"
-                )
-            except (EOFError, OSError):
-                return (
-                    default_if_no_response
-                    if default_if_no_response is not None
-                    else "__NO_RESPONSE__"
-                )
+            else:
+                # Non-SSE consoles (interactive sessions)
+                try:
+                    reply = input(f"\n[Agent asking]: {message}\n> ").strip()
+                except (EOFError, OSError):
+                    reply = ""
+            if reply and reply != "__NO_RESPONSE__":
+                _agent._unanswered_question = None
+                return reply
+            _agent._unanswered_question = message
+            return _no_answer_result(timeout_seconds, default_if_no_response)
 
     # NOTE: The actual tool definitions are in the mixin classes:
     # - RAGToolsMixin (rag_tools.py): RAG and document indexing tools

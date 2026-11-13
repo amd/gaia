@@ -2102,7 +2102,13 @@ class EmbeddedLemonade:
         ]
         log.info("Starting embedded Lemonade: %s", " ".join(argv))
         if sys.platform.startswith("linux"):
+            from gaia.llm.lemonade_tls import ca_store_problem
             from gaia.llm.npu_linux import raise_memlock_soft_limit
+
+            # Local models still run without it, so warn rather than refuse.
+            ca_problem = ca_store_problem()
+            if ca_problem:
+                log.warning(ca_problem)
 
             # FastFlowLM pins the model in locked memory, and inherits lemond's limit.
             raise_memlock_soft_limit()

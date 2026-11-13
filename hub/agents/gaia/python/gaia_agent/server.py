@@ -67,6 +67,7 @@ from gaia.agents.base import file_snapshots
 from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
+from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.llm.surface_hints import surface_wording
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
@@ -766,9 +767,13 @@ def _measure_turn_context(
     pushed: List[Dict[str, Any]],
     query: str,
     result: Optional[Dict[str, Any]],
+    received_turns: Optional[List[List[Dict[str, Any]]]] = None,
 ) -> Optional[Dict[str, Any]]:
     """What the next model call holds: the pushed history plus this turn.
 
+    With *received_turns* (a caller that sends ``turns``), the measurement is
+    over those whole turns plus this turn as recorded, tool results included:
+    the same turns, in the same budget, the next ``/query`` is fitted from.
     None for a turn with no answer (stopped, or the model failed), which adds
     nothing the caller's next push would carry.
     """
@@ -777,11 +782,15 @@ def _measure_turn_context(
     answer = _run_answer(result)
     if answer is None:
         return None
-    messages = list(pushed) + [
+    exchange = [
         {"role": "user", "content": query},
         {"role": "assistant", "content": answer},
     ]
-    turns = pushed_turns(messages)
+    if received_turns is not None:
+        recorded = result.get("model_messages") if isinstance(result, dict) else None
+        turns = list(received_turns) + _as_model_turns(agent, [recorded or exchange])
+    else:
+        turns = pushed_turns(list(pushed) + exchange)
     model_id = getattr(agent, "model_id", None)
     box: Dict[str, Any] = {}
 
@@ -860,7 +869,19 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     )
     rag = agent.rag
     lines: List[str] = []
-    for doc in pending:
+    cancel = getattr(agent, "_cancel_event", None)
+    stopped = False
+    for position, doc in enumerate(pending):
+        # Stop ends the loading here; what is left stays pending for the next turn.
+        if cancel is not None and cancel.is_set():
+            left = len(pending) - position
+            lines.append(
+                "Stopped: "
+                + ("1 document was" if left == 1 else f"{left} documents were")
+                + " not loaded. They load with your next message."
+            )
+            stopped = True
+            break
         name = Path(doc).name
         reason = (
             "document search is not available in this session"
@@ -887,6 +908,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     if succeeded:
         agent.rebuild_system_prompt()
     all_indexed = succeeded == len(pending)
+    status = "stopped" if stopped else "indexed" if all_indexed else "not all indexed"
     handler._emit(
         {
             "type": "tool_result",
@@ -895,7 +917,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             "success": all_indexed,
             # The status/message shape is what a relaying host summarizes from.
             "result_data": {
-                "status": "indexed" if all_indexed else "not all indexed",
+                "status": status,
                 "message": "; ".join(lines),
                 "success": all_indexed,
             },
@@ -1073,10 +1095,13 @@ async def init() -> Dict[str, Any]:
         # `gaia download` takes no positional model — argparse exits 2 on it.
         from gaia.llm.lemonade_launcher import describe_client_hint
 
-        pull = describe_client_hint("pull", probe["model_id"]).instruction
+        pull = describe_client_hint("pull", probe["model_id"])
+        # With no client found, the instruction already says it is not downloaded.
         hint = (
             f"The model {probe['model_id']} is not downloaded. "
-            f"{pull.rstrip('.')}, then re-check."
+            f"{pull.instruction.rstrip('.')}, then re-check."
+            if pull.command
+            else pull.instruction
         )
 
     ready = bool(probe["reachable"] and probe["present"] and compatible is not False)
@@ -1321,21 +1346,26 @@ def _release_abandoned_turn(checked_out: Optional[Tuple[Any, bool]]) -> None:
 _TURN_RECORD_WAIT_SECONDS = 15.0
 
 
+def _as_model_turns(
+    agent: Any, turns: List[List[Dict[str, Any]]]
+) -> List[List[Dict[str, Any]]]:
+    """*turns* as *agent*'s model reads them: tool calls as text without native tools."""
+    from gaia.agents.base.history import text_tool_history
+
+    uses_native = getattr(agent, "_uses_native_tool_calls", None)
+    if callable(uses_native) and not uses_native():
+        return text_tool_history(turns)
+    return turns
+
+
 def _history_from_turns(
     agent: Any, turns: List[List[Dict[str, Any]]], query: str, handler: Any
 ) -> List[Dict[str, Any]]:
     """The newest whole *turns* that fit *agent*'s window, as its model reads them."""
-    from gaia.agents.base.history import (
-        history_budget,
-        select_history,
-        text_tool_history,
-    )
+    from gaia.agents.base.history import history_budget, select_history
 
-    uses_native = getattr(agent, "_uses_native_tool_calls", None)
-    if callable(uses_native) and not uses_native():
-        turns = text_tool_history(turns)
     return select_history(
-        turns,
+        _as_model_turns(agent, turns),
         history_budget(agent, query),
         lambda cut: handler._emit({"type": "status", "message": cut.notice}),
     )
@@ -1394,7 +1424,7 @@ _QUERY_SSE_RESPONSES = {
         "description": (
             "Server-Sent Events stream (text/event-stream). Each `data:` line is "
             "one canonical event discriminated on `type`: status {message, "
-            "phase?, queue?, retracts_answer?} | token {delta} | "
+            "level?, phase?, queue?, retracts_answer?} | token {delta} | "
             "reasoning {delta, retracts_answer?} | "
             "tool_call {tool, args} | tool_result {tool, data, render?} | "
             "needs_confirmation {run_id, action, summary, confirm_id?, "
@@ -1674,6 +1704,11 @@ async def query(request: QueryRequest):
                 lambda cut: handler.print_warning(cut.notice),
             )
         pushed = list(getattr(agent, "conversation_history", None) or [])
+        received_turns = (
+            _as_model_turns(agent, request.turns)
+            if request.turns is not None and hasattr(agent, "conversation_history")
+            else None
+        )
         try:
             if request.max_steps is not None:
                 run.result = agent.process_query(
@@ -1683,7 +1718,7 @@ async def query(request: QueryRequest):
                 run.result = agent.process_query(request.query)
             try:
                 run.context = _measure_turn_context(
-                    agent, pushed, request.query, run.result
+                    agent, pushed, request.query, run.result, received_turns
                 )
             except Exception as exc:  # the answer stands; the meter says why it's blank
                 logger.exception("Context measurement failed for run_id=%s", run.run_id)
@@ -2226,6 +2261,8 @@ def build_app() -> FastAPI:
         turn on another model stops it (:class:`_StartupWarmUp`).
         """
         _log_caller_auth_state(auth_config)
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
         global _startup_warm_up
         _startup_warm_up = _StartupWarmUp()
         task = asyncio.create_task(asyncio.to_thread(_warmup_blocking))
