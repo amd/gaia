@@ -4193,6 +4193,17 @@ Do NOT wrap conversational replies in JSON.
             )
             if not granted:
                 refused.append((turn, target))
+            timed_out = getattr(self.console, "confirmation_timed_out", None)
+            note = getattr(self._read_validator(), "note_access_answer", None)
+            if callable(note):
+                note(
+                    target,
+                    declined=not granted
+                    and not (
+                        callable(timed_out)
+                        and timed_out(PATH_ACCESS_PROMPT_TOOL) is True
+                    ),
+                )
             return granted
         finally:
             if clock is not None:

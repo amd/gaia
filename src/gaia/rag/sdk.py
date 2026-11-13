@@ -4145,6 +4145,16 @@ These positions indicate where to split the text."""
             stats["error"] = f"File not found: {file_path}"
             return stats
 
+        # A folder's size reads as 0 on Windows, which would say "empty".
+        if os.path.isdir(file_path):
+            self.log.error(f"Not a file: {file_path}")
+            stats["error"] = (
+                f"'{file_path}' is a folder, not a file. Index a folder's "
+                "documents with index_directory."
+            )
+            stats["is_folder"] = True
+            return stats
+
         # Check if file is empty (early validation to save time)
         file_size = os.path.getsize(file_path)
         file_size_mb = file_size / (1024 * 1024)
