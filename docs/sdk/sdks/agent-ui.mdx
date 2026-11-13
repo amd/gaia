@@ -1356,7 +1356,9 @@ Deleting a chat deletes its copies.
     `indexing_status: "failed"`, the reason in `last_error`, and `error_kind`
     set to `corrupted`, `encrypted`, `empty` (no text), `empty_file` (nothing
     to index) or `unsupported_workbook` (a legacy `.xls` or password-protected
-    workbook) when retrying can't help until the file is fixed.
+    workbook) when retrying can't help until the file is fixed, or to
+    `model_server_down` / `model_server_busy` when the file is fine and the
+    model server didn't answer, so Retry works once it does.
 
     **Errors:** 400 with `detail.status: "is_folder"` when the path is a folder
     (index it with `index-folder`); 400 for a file type GAIA doesn't index; 404

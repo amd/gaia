@@ -809,6 +809,7 @@ class DocumentResponse(BaseModel):
     # Set with last_error when retrying can't help until the file is fixed:
     # "corrupted", "encrypted", "empty" (no extractable text), "empty_file"
     # (nothing to index) or "unsupported_workbook" (.xls or password-protected).
+    # "model_server_down" / "model_server_busy": the file is fine; retry later.
     error_kind: Optional[str] = None
 
 

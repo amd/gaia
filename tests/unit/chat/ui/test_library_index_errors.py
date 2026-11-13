@@ -342,3 +342,31 @@ class TestIndexDocumentKinds:
                 await _index_document(Path("x.pdf"))
 
         assert not isinstance(exc_info.value, UnreadableDocumentError)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "unreachable, busy, kind",
+        [(True, False, "model_server_down"), (False, True, "model_server_busy")],
+    )
+    async def test_a_model_server_failure_is_not_blamed_on_the_file(
+        self, unreachable, busy, kind
+    ):
+        from gaia.ui._chat_helpers import _index_document
+
+        rag = MagicMock()
+        rag.index_document.return_value = {
+            "success": False,
+            "error": "Lemonade Server is not reachable: HTTPConnectionPool(...)",
+            "error_type": "embedding_unavailable",
+            "lemonade_unreachable": unreachable,
+            "embedder_busy": busy,
+        }
+        with (
+            patch("gaia.rag.sdk.RAGSDK", return_value=rag),
+            patch("gaia.rag.sdk.RAGConfig"),
+        ):
+            with pytest.raises(RuntimeError) as exc_info:
+                await _index_document(Path("third.md"))
+
+        assert getattr(exc_info.value, "kind", None) == kind
+        assert not isinstance(exc_info.value, UnreadableDocumentError)

@@ -5973,6 +5973,14 @@ class UnreadableDocumentError(RuntimeError):
         self.kind = kind
 
 
+class ModelServerIndexError(RuntimeError):
+    """Indexing failed because the model server was down or busy, not the file."""
+
+    def __init__(self, message: str, kind: str):
+        super().__init__(message)
+        self.kind = kind
+
+
 # Live progress of running indexes, keyed by the ``progress_key`` the caller
 # passed (the document id). Written by the indexing thread, read by the status
 # endpoint; each value is replaced whole, never mutated in place.
@@ -6136,6 +6144,11 @@ async def _index_document(
             )
             if kind in PERMANENT_INDEX_FAILURES:
                 raise UnreadableDocumentError(message, kind)
+            if result.get("error_type") == "embedding_unavailable":
+                if result.get("lemonade_unreachable"):
+                    raise ModelServerIndexError(message, "model_server_down")
+                if result.get("embedder_busy"):
+                    raise ModelServerIndexError(message, "model_server_busy")
             raise RuntimeError(message)
 
         if not result.get("success"):

@@ -1202,6 +1202,25 @@ for (const locale of ['en', 'ar']) {
         await shot(page, `documents-${locale}-unreadable`);
         expect(await audit(page)).toEqual([]);
     });
+
+    // A down model server was blamed on the file, with the raw connection error.
+    test(`a document that failed because the model server was down (${locale})`, async ({ page }) => {
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: {
+                documents: [
+                    { id: 'd1', filename: 'third.md', filepath: 'C:/third.md', file_size: 1024, chunk_count: 0, indexing_status: 'failed', error_kind: 'model_server_down', last_error: "RAG indexing failed for third.md: Lemonade Server is not reachable: HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded", indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 },
+                ],
+                total: 1, total_size_bytes: 1024, total_chunks: 0,
+            } }));
+        });
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        const row = page.locator('.doc-failure');
+        await expect(row).toBeVisible();
+        await expect(row).not.toContainText('HTTPConnectionPool');
+        if (locale === 'ar') expect(await untranslated(page, '.doc-failure', 'bdi')).toEqual([]);
+        await shot(page, `documents-${locale}-server-down`);
+        expect(await audit(page)).toEqual([]);
+    });
 }
 
 for (const locale of ['ar', 'en']) {
