@@ -250,7 +250,7 @@ def test_an_existing_goal_list_gains_the_retry_columns(gaia_home):
     "sent, kept", [("done", "done"), ("failed", "failed"), ("finished", ""), (None, "")]
 )
 def test_the_relay_carries_the_goal_outcome(sent, kept):
-    from gaia.ui.email_sidecar.relay import _loop_state_directive
+    from gaia.ui.sidecar.relay import _loop_state_directive
 
     args = {"state": "idle", "reason": "r"}
     if sent is not None:
