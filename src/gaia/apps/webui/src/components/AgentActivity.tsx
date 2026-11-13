@@ -539,7 +539,6 @@ interface AgentActivityProps {
     answer?: string;
 }
 
-/** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
 const needsVision = (step: AgentStep) => step.type === 'tool' && step.needsModel === 'vision' && !step.active;
 
 /** The download an image step needs, offered where the user is looking. */
@@ -555,6 +554,7 @@ function VisionOffer() {
     );
 }
 
+/** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
 export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, toolStatus = null, answer }: AgentActivityProps) {
     const t = useT();
     const [openGroups, setOpenGroups] = useState<Map<number, boolean>>(new Map());
