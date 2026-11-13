@@ -7,6 +7,7 @@ GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
 import codecs
+import contextlib
 import errno
 import hashlib
 import hmac
@@ -489,6 +490,51 @@ class _ImagesReadableNow(Exception):
 
 class _EmbedderWarmingUp(Exception):
     """The embedder answered with no vectors: it is still loading."""
+
+
+class _EmbedderSwapLock:
+    """Embedding requests share the embedder; reloading it waits for them all.
+
+    Every ``RAGSDK`` in this process (one per upload, one per chat) unloads and
+    reloads the embedder on its first embed. Without this, that swap dropped
+    the requests other instances had in flight. A waiting reload also holds
+    back new requests, so it is not starved by a busy chat.
+    """
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._requests = 0
+        self._swapping = False
+        self._swaps_waiting = 0
+
+    @contextlib.contextmanager
+    def request(self):
+        with self._cond:
+            self._cond.wait_for(lambda: not self._swapping and not self._swaps_waiting)
+            self._requests += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._requests -= 1
+                self._cond.notify_all()
+
+    @contextlib.contextmanager
+    def swap(self):
+        with self._cond:
+            self._swaps_waiting += 1
+            self._cond.wait_for(lambda: not self._swapping and not self._requests)
+            self._swaps_waiting -= 1
+            self._swapping = True
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._swapping = False
+                self._cond.notify_all()
+
+
+_EMBEDDER_SWAP = _EmbedderSwapLock()
 
 
 class EmbeddingUnavailableError(RuntimeError):
@@ -1458,7 +1504,10 @@ class RAGSDK:
         # priority so a warm-up never makes an interactive turn wait.
         from gaia.daemon.broker_client import model_lease
 
-        with model_lease(self.config.embedding_model, priority="background"):
+        with (
+            model_lease(self.config.embedding_model, priority="background"),
+            _EMBEDDER_SWAP.swap(),
+        ):
             # Scoped unload of the embedder ONLY — a global /unload would evict
             # the co-resident chat model and trigger a ~100s cold reload (#1544).
             # ignore_if_not_loaded: on a cold start the embedder slot is empty
@@ -1573,7 +1622,8 @@ class RAGSDK:
         reloaded = False
         while True:
             try:
-                response = self._request_embeddings(batch_texts, wait_callback)
+                with _EMBEDDER_SWAP.request():
+                    response = self._request_embeddings(batch_texts, wait_callback)
             except Exception as e:  # noqa: BLE001 — classified, then re-raised
                 stop = _stop_behind(e)
                 if stop is not None:
