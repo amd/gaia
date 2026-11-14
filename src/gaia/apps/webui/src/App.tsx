@@ -8,6 +8,7 @@ import { ChatView } from './components/ChatView';
 import { NewChat } from './components/NewChat';
 import { ModelNeededDialog } from './components/ModelNeededDialog';
 import { LogsDialog } from './components/LogsDialog';
+import { ShortcutsDialog } from './components/ShortcutsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
@@ -689,6 +690,7 @@ function App() {
     }, []);
 
     // ── Keyboard shortcuts ─────────────────────────────────────────────
+    const [showShortcuts, setShowShortcuts] = useState(false);
     useEffect(() => {
         const onKey = (e: KeyboardEvent) => {
             const mod = e.ctrlKey || e.metaKey;
@@ -697,6 +699,7 @@ function App() {
             else if (!e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); window.dispatchEvent(new CustomEvent('gaia:focus-search')); }
             else if (!e.shiftKey && e.key.toLowerCase() === 'b') { e.preventDefault(); useChatStore.getState().toggleSidebarCollapsed(); }
             else if (!e.shiftKey && e.key === ',') { e.preventDefault(); openSettings(); }
+            else if (e.key === '/') { e.preventDefault(); setShowShortcuts((v) => !v); }
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
@@ -913,6 +916,7 @@ function App() {
             {settingsSection && <SettingsDialog onUseSkill={useSkill} />}
             <ModelNeededDialog />
             <LogsDialog />
+            {showShortcuts && <ShortcutsDialog onClose={() => setShowShortcuts(false)} />}
             <UpdateIndicator />
             {createError && (
                 <div className="toast toast-dismissible" role="alert">

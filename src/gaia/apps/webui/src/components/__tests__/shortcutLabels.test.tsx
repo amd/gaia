@@ -31,13 +31,13 @@ describe('shortcut labels', () => {
     it('show ⌘ on macOS', () => {
         onPlatform('MacIntel');
         render(<GeneralSettings />);
-        expect(shortcutList()).toEqual(['Enter', '⇧Enter', 'Esc', '⇧⌘O', '⌘K', '⌘B', '⌘,']);
+        expect(shortcutList()).toEqual(['⇧⌘O', '⌘K', '⌘B', '⌘,', '⌘/', 'Enter', '⇧Enter', '↑', 'Esc']);
     });
 
     it('show Ctrl on Windows and Linux', () => {
         onPlatform('Win32');
         render(<GeneralSettings />);
-        expect(shortcutList()).toEqual(['Enter', 'Shift+Enter', 'Esc', 'Ctrl+Shift+O', 'Ctrl+K', 'Ctrl+B', 'Ctrl+,']);
+        expect(shortcutList()).toEqual(['Ctrl+Shift+O', 'Ctrl+K', 'Ctrl+B', 'Ctrl+,', 'Ctrl+/', 'Enter', 'Shift+Enter', '↑', 'Esc']);
     });
 
     it('match the platform in sidebar tooltips', () => {
