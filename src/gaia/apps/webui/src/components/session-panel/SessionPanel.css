@@ -120,6 +120,16 @@
 
 .sp-section + .sp-section { border-top: 1px solid var(--border-light); }
 
+/* How the chat ran, below what it made and may touch. */
+.sp-group-title {
+    margin: var(--sp-space-4) 0 0;
+    padding: var(--sp-space-3) var(--sp-space-1) 0;
+    border-top: 1px solid var(--border-light);
+    font-size: var(--sp-fs-sm);
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
 .sp-section-heading { margin: 0; }
 
 .sp-section-head {
