@@ -207,9 +207,10 @@ class QueryRequest(_Strict):
             "(contract >= 2.16). Each is granted as that exact file, never its "
             "folder, and indexed before the turn runs, up to 100 documents or "
             "10,000 passages; the rest load when the agent is asked about one. "
-            "Send the full set every turn: files already indexed in a retained "
-            "session are skipped, so one attached mid-conversation is picked up "
-            "on the next turn."
+            "Send the full set every turn, an empty list when none are attached: "
+            "files already indexed in a retained session are skipped, so one "
+            "attached mid-conversation is picked up on the next turn, and one "
+            "sent before but left out now is removed from the session's index."
         ),
     )
 
@@ -901,6 +902,28 @@ def _grant_unloaded(agent: Any, documents: List[str]) -> None:
             agent.path_validator.add_allowed_path(doc)
 
 
+def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
+    """Take the documents attached last turn but not this one out of the index."""
+    attached = getattr(agent, "_attached_documents", set())
+    dropped = attached - set(documents)
+    agent._attached_documents = set(documents)
+    if not dropped:
+        return
+    rag = agent.rag
+    for doc in sorted(dropped):
+        if doc not in agent.indexed_files:
+            continue
+        held = rag is not None and str(Path(doc).absolute()) in rag.indexed_files
+        if held and not rag.remove_document(doc):
+            raise RuntimeError(
+                f"{Path(doc).name} was taken off this conversation but could not "
+                "be removed from its document index. Start a new conversation; "
+                "the GAIA log has the details."
+            )
+        agent.indexed_files.discard(doc)
+    agent.rebuild_system_prompt()
+
+
 def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
     """Index the documents the caller attached to this conversation (>= 2.16).
 
@@ -908,7 +931,10 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     Agent UI agent gets. Files already indexed are skipped, so a retained
     session pays only for documents attached since its last turn. Loading
     stops once the index is full; the rest stay attached and load on request.
+    A document attached on an earlier turn and left out of *documents* is
+    dropped.
     """
+    _drop_detached_documents(agent, documents)
     agent.attached_documents = list(documents)
     indexed = agent.indexed_files
     pending = [d for d in documents if d not in indexed]
@@ -1813,7 +1839,7 @@ async def query(request: QueryRequest):
         raise _start_failure(exc, _wording_surface(request)) from exc
 
     def _process() -> None:
-        if request.documents:
+        if request.documents is not None:
             _index_attached_documents(agent, request.documents, handler)
         if request.turns is not None and hasattr(agent, "conversation_history"):
             # Sizing them can ask the model server for its window: never on the loop.

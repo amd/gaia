@@ -1954,6 +1954,20 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`Delete all chats asks in a dialog (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        await scrollPane(page, 'bottom');
+        await page.locator('.settings-pane .btn-danger').click();
+        const ask = page.getByRole('alertdialog');
+        await expect(ask).toBeVisible();
+        // The safe choice starts focused, so Enter never deletes (#7405).
+        await expect(ask.locator('.btn-secondary')).toBeFocused();
+        await shot(page, `privacy-delete-all-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`a skills search that matches nothing says so (${locale})`, async ({ page }) => {
         await open(page, '', locale, withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2046,7 +2060,7 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
-    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced', 'about']) {
         test(`settings ${section} pane (${locale})`, async ({ page }) => {
             await open(page, '', locale, withSettingsPanes);
             await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2604,7 +2618,7 @@ test('no spending chip on a model on this PC', async ({ page }) => {
     await expect(page.locator('.spend-meter')).toHaveCount(0);
 });
 
-for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced', 'about']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {
         await open(page, '', 'ar', withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -3789,6 +3803,49 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+/** A finished turn, reopened: a document step and an image step that found no vision model. */
+async function withSavedVisionOffer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'What colour is the attached image?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'I can\'t see the image yet: GAIA needs its vision model to read images.',
+                        agent_steps: [
+                            { id: 1, type: 'tool', label: 'Using tool', tool: 'index_document', detail: 'notes.txt', result: 'Indexed 1 chunk', active: false, success: true },
+                            {
+                                id: 2, type: 'tool', label: 'Using tool', tool: 'answer_question_about_image', active: false, success: false, needsModel: 'vision',
+                                result: "error: Vision extraction failed for page 1, image 1: Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded",
+                            },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a reopened chat still offers the vision model, with its steps folded (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSavedVisionOffer);
+        const reply = page.locator('.msg-assistant').last();
+        await expect(reply.locator('.flow-steps.folded')).toBeVisible();
+        await expect(reply.locator('.flow-tool-offer')).toHaveCount(1);
+        await expect(reply.locator('.flow-tool-offer').getByRole('button')).toBeVisible();
+        await expect(reply).not.toContainText('Gemma-4-E4B-it-GGUF');
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`vision-offer-folded-${locale}.png`) });
+        await reply.locator('.flow-steps-summary').click();
+        await expect(reply.locator('.flow-tool-offer')).toHaveCount(1);
+        await expect(reply.locator('.flow-tool-failure')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`vision-offer-open-${locale}.png`) });
+    });
+}
+
 const CHANGE_PROMPTS = {
     write: {
         type: 'permission_request', tool: 'write_file', tool_label: 'writing file', confirm_id: 'c-write',
@@ -3971,9 +4028,58 @@ for (const locale of ['ar', 'en']) {
         if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
         await shot(page, `notification-panel-${locale}`);
     });
+
+    test(`the notification panel hides what is under it in the dark theme (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, undefined, 'dark');
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // A see-through panel shows the side panel's text inside the list.
+        const background = await panel.evaluate((el) => getComputedStyle(el).backgroundColor);
+        expect(background).toMatch(/^rgb\(/);
+        await shot(page, `notification-panel-dark-${locale}`);
+    });
 }
 
 for (const locale of ['ar', 'en']) {
+    test(`the notification panel opens at the bell, with tabs that fit (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const bell = page.locator('.sb-bottom-actions .sb-icon-btn').first();
+        // Empty: one line, no filter tabs.
+        await bell.click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-empty')).toBeVisible();
+        await expect(panel.getByRole('tab')).toHaveCount(0);
+        await shot(page, `notification-panel-empty-${locale}`);
+        await bell.click();
+
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await bell.click();
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // Anchored to the bell (#7416): it opens beside it, not across the window.
+        const b = (await bell.boundingBox())!;
+        const p = (await panel.boundingBox())!;
+        const vw = page.viewportSize()!.width;
+        const nearBell = locale === 'ar' ? vw - (p.x + p.width) < 40 : p.x < 40;
+        expect(nearBell, 'the panel opens on the bell side of the window').toBe(true);
+        expect(p.y + p.height).toBeLessThanOrEqual(b.y);
+        // Every tab is whole: none cut off at the panel's edge.
+        const bar = (await panel.locator('.notification-filter-bar').boundingBox())!;
+        for (const tab of await panel.getByRole('tab').all()) {
+            const box = (await tab.boundingBox())!;
+            expect(box.x >= bar.x - 1 && box.x + box.width <= bar.x + bar.width + 1).toBe(true);
+        }
+        await shot(page, `notification-panel-anchored-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`a scheduled task's failed and finished notices are in the UI language (${locale})`, async ({ page }) => {
         const before = { ...SCHEDULE_ROW, run_count: 8, error_count: 0, last_error: null };
         let loads = 0;
@@ -4433,6 +4539,23 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'goals-empty');
         });
 
+        // Create once did nothing and said nothing, and the banner said to restart.
+        test('goals, a damaged goal list', async ({ page }) => {
+            const damaged = "GAIA's goal list is damaged (file is not a database), so goals can't be shown or saved. Start a new goal list on this page; the damaged file is kept.";
+            await openMemory(page, locale, {});
+            await page.route('**/api/goals/health', (route) => route.fulfill({ json: { error: damaged, damaged: true } }));
+            await page.route((url) => /\/api\/goals(\/stats)?$/.test(url.pathname), (route) =>
+                route.fulfill({ status: 503, json: { detail: damaged } }));
+            await memoryTab(page, /Goals/);
+            await expect(page.getByRole('button', { name: locale === 'ar' ? /بدء قائمة أهداف جديدة/ : 'Start a new goal list' })).toBeVisible();
+            await expect(page.locator('.mem-goals-tab .mem-empty')).toHaveCount(0);
+            await page.locator('.mem-goals-toolbar .btn-primary').click();
+            await page.locator('.mem-goals-add-form input').fill('Tidy my notes');
+            await page.locator('.mem-goals-add-form .mem-goals-form-row .btn-primary').click();
+            await expect(page.locator('.mem-goals-add-form [role="alert"]')).toContainText('file is not a database');
+            await checkMemory(page, locale, 'goals-damaged');
+        });
+
         test('profile setup, before and after a discovery run', async ({ page }) => {
             await openMemory(page, locale);
             await memoryTab(page, /Profile setup/);
@@ -4634,6 +4757,9 @@ for (const locale of ['ar', 'en']) {
             await expect(page.getByLabel(locale === 'ar' ? /رسالة|Message/ : 'Message').first()).toBeEnabled();
             await shot(page, `pick-load-${locale}-${name}`);
             expect(await audit(page)).toEqual([]);
+            // A long memory-switch label gives way; the model's name is not the chip that is cut.
+            const modelName = page.locator('.composer-row-right .composer-chip-label', { hasText: PICKED });
+            expect(await modelName.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
         });
     }
 }
