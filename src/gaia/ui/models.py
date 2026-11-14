@@ -664,6 +664,8 @@ class AgentStepResponse(BaseModel):
     # card from history.
     render: Optional[str] = None
     data: Optional[Any] = None
+    # A model the call needed and didn't find; a reopened chat still offers it.
+    needsModel: Optional[str] = None
 
 
 class InferenceStatsResponse(BaseModel):

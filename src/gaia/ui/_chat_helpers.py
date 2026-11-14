@@ -93,7 +93,12 @@ from .session_environment import load as load_environment
 from .session_environment import with_folder_note, withheld_refusal
 from .sse_handler import _clean_answer_json, clean_reply_text
 from .turn_summary import upload_display_names
-from .utils import UPLOAD_LINK_RE, attached_upload_paths, managed_documents_dir
+from .utils import (
+    UPLOAD_LINK_RE,
+    attached_upload_paths,
+    managed_documents_dir,
+    resolve_upload_links,
+)
 from .warmup import wait_for_warm_up
 
 logger = logging.getLogger(__name__)
@@ -773,6 +778,24 @@ def _scripts(text: str) -> set:
     return found
 
 
+def _foreign_accents(title: str, source: str) -> set:
+    """Accented Latin letters in *title* that *source* never uses.
+
+    Scripts can't tell German or Spanish from English; a "ß" or "ñ" the user
+    never typed can, without a language detector. The cost: a title in the
+    user's own language with a letter their message lacks falls back too.
+    """
+    seen = unicodedata.normalize("NFC", source).lower()
+    return {
+        ch
+        for ch in unicodedata.normalize("NFC", title).lower()
+        if ch.isalpha()
+        and ord(ch) > 127
+        and unicodedata.name(ch, "").startswith("LATIN")
+        and ch not in seen
+    }
+
+
 def _title_from_question(user_msg: str) -> Optional[str]:
     """The first question itself, cut at a word boundary, as a title.
 
@@ -976,11 +999,12 @@ async def _generate_session_title(
     # Exact match: a real title can start with "None" ("None values in pandas").
     if title.lower() == "none":
         raise _NoTopicYet
-    foreign = _scripts(title) - _scripts(f"{user_msg} {latest_msg}")
+    source = f"{user_msg} {latest_msg}"
+    foreign = (_scripts(title) - _scripts(source)) or _foreign_accents(title, source)
     if foreign:
         logger.info(
-            "Auto-title: %s titled the chat in %s, which the user did not write "
-            "in; titling from the first question",
+            "Auto-title: %s's title uses %s, which the user did not write; "
+            "titling from the first question",
             model_id,
             "/".join(sorted(foreign)).lower(),
         )
@@ -1583,10 +1607,17 @@ def _canonical_agent_type(agent_type: str) -> str:
     return registry.canonical_id(agent_type)
 
 
-def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
+def _get_cached_agent(
+    session_id: str,
+    model_id: str,
+    agent_type: str = "chat",
+    document_ids: list | None = None,
+):
     """Return the cached agent for *session_id* if model and agent_type match, else None.
 
-    Evicts the entry when the model or agent type has changed. Legacy
+    Evicts the entry when the model or agent type has changed, or when a
+    document it was given is no longer in *document_ids* (detached, or deleted
+    from the library): its index still holds that document. Legacy
     agent-type aliases (e.g. ``chat-lite`` → ``gaia-lite``) are normalised
     before comparison so stored sessions that pre-date a rename continue to
     hit the cache instead of reconstructing the agent on every turn.
@@ -1610,6 +1641,16 @@ def _get_cached_agent(session_id: str, model_id: str, agent_type: str = "chat"):
                 "Agent cache miss (agent_type change) for session %s", session_id[:8]
             )
             return None
+        if document_ids is not None:
+            if set(entry["document_ids"]) - set(document_ids):
+                old_entry = _agent_cache.pop(session_id)
+                _disconnect_cached_agent(old_entry)
+                logger.debug(
+                    "Agent cache miss (document removed) for session %s",
+                    session_id[:8],
+                )
+                return None
+            entry["document_ids"] = list(document_ids)
         _agent_cache[session_id] = _agent_cache.pop(session_id)
         return entry["agent"]
 
@@ -2069,6 +2110,21 @@ def _relayed_documents(rag_file_paths: list, attached: list) -> list:
         if p not in rag_file_paths and Path(p).suffix.lower() not in not_indexed
     ]
     return list(rag_file_paths) + extra
+
+
+def _chat_upload_paths(db: ChatDatabase, session_id: str, attached: list) -> list:
+    """Every upload the chat's messages have linked so far, *attached* included.
+
+    A relayed flagship drops a document a turn leaves out, so a file dropped
+    into an earlier message must keep going with every later turn.
+    """
+    found = set(attached)
+    for message in db.get_messages(session_id, limit=-1):
+        if message["role"] == "user" and message.get("content"):
+            found.update(
+                attached_upload_paths(resolve_upload_links(message["content"]))
+            )
+    return sorted(found)
 
 
 def _extend_cached_scope(agent, allowed: list) -> None:
@@ -2783,8 +2839,9 @@ def _dispatch_sidecar_query(
         return
 
     relayed_documents = None
-    if documents and profile.min_documents_api_version is not None:
-        if not documents_supported(profile, handle.api_version):
+    takes_documents = documents_supported(profile, handle.api_version)
+    if documents is not None and profile.min_documents_api_version is not None:
+        if documents and not takes_documents:
             logger.warning(
                 "%s agent at contract %s can't read documents (needs %s)",
                 agent_type,
@@ -2795,7 +2852,9 @@ def _dispatch_sidecar_query(
                 {"type": "agent_error", "content": profile.documents_upgrade_message}
             )
             return
-        relayed_documents = [str(Path(p).resolve()) for p in documents]
+        if takes_documents:
+            # Even an empty list: it is how a detached document leaves.
+            relayed_documents = [str(Path(p).resolve()) for p in documents]
 
     if withheld:
         logger.warning(
@@ -3094,6 +3153,13 @@ def _denial(event: dict) -> Optional[str]:
         return None
     timed_out = event.get("timed_out") is True or data.get("timed_out") is True
     return "timedOut" if timed_out else "declined"
+
+
+def _needed_model(event: dict) -> Optional[str]:
+    """The model a ``tool_result`` says its call lacked; a relayed one nests it in ``data``."""
+    data = event.get("data") if isinstance(event.get("data"), dict) else {}
+    needed = event.get("needs_model", data.get("needs_model"))
+    return needed if isinstance(needed, str) and needed else None
 
 
 def _insert_skill_step(steps: list, step: dict) -> None:
@@ -4107,7 +4173,7 @@ async def _get_chat_response(
         # ── Agent cache ──────────────────────────────────────────────────────
         # Reuse what a running warm-up is caching rather than read it twice.
         wait_for_warm_up(model=model_id)
-        cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+        cached_agent = _get_cached_agent(session_id, model_id, agent_type, document_ids)
         working_directory = _session_working_directory(
             load_environment(db, session_id)["folders"]
         )
@@ -4575,7 +4641,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                 wait_for_warm_up(handler=sse_handler, model=model_id)
                 if sse_handler.cancelled.is_set():
                     return
-                cached_agent = _get_cached_agent(session_id, model_id, agent_type)
+                cached_agent = _get_cached_agent(
+                    session_id, model_id, agent_type, document_ids
+                )
                 working_directory = _session_working_directory(
                     load_environment(db, session_id)["folders"]
                 )
@@ -4646,7 +4714,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         model_id,
                         agent_type,
                         session_id=session_id,
-                        documents=_relayed_documents(rag_file_paths, attached),
+                        documents=_relayed_documents(
+                            rag_file_paths,
+                            _chat_upload_paths(db, session_id, attached),
+                        ),
                         allowed_paths=allowed,
                         folders=relayed_env["folders"],
                         withheld=relayed_env["withheld"],
@@ -5113,6 +5184,9 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         denial = _denial(event)
                         if denial:
                             tool_step[denial] = True
+                        # Kept so a reopened chat still offers the download.
+                        if _needed_model(event):
+                            tool_step["needsModel"] = _needed_model(event)
                         # Persist MCP tool latency
                         if event.get("latency_ms") is not None:
                             tool_step["latencyMs"] = event["latency_ms"]
