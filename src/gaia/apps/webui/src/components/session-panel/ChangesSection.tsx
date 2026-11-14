@@ -25,6 +25,7 @@ import { PanelSection } from './PanelSection';
 import type { ChatFileChange, GitRepo, SessionChanges, SessionGit } from '../../types/sessionPanel';
 import { ref, type MessageKey, type Param } from '../../i18n/registry';
 import { tEn, useT, type Translate } from '../../i18n/useT';
+import { visibleName } from '../CalendarApproval';
 
 function plural(n: number, one: string, many = `${one}s`): string {
     return `${n} ${n === 1 ? one : many}`;
@@ -168,7 +169,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                     return (
                         <li key={f.path} className="sp-change">
                             <div className="sp-item-text">
-                                <span className="sp-item-name" dir="ltr" title={f.path}>{baseName(f.path)}</span>
+                                <span className="sp-item-name" dir="ltr" title={visibleName(f.path)}>{visibleName(baseName(f.path))}</span>
                                 <span className="sp-meta">
                                     {t(CHANGE_LABEL[f.change])}
                                     {f.additions != null && <> · <span className="sp-add">+{f.additions}</span> <span className="sp-del">−{f.deletions}</span></>}
@@ -183,7 +184,7 @@ function ChangesBody({ sessionId, busy, changes, onChanged, onUndone, onJumpToMe
                                     type="button"
                                     className="btn-icon-sm"
                                     onClick={() => onJumpToMessage(latest)}
-                                    aria-label={t('chg.goToLast', { name: baseName(f.path) })}
+                                    aria-label={t('chg.goToLast', { name: visibleName(baseName(f.path)) })}
                                     title={t('sp.goToTurn')}
                                 >
                                     <CornerDownRight size={12} />
@@ -309,8 +310,8 @@ function GitActions({ sessionId, busy, onCommitted }: { sessionId: string; busy:
         <div className="sp-git">
             {git.repos.map((repo) => (
                 <div key={repo.root} className="sp-git-repo">
-                    <span className="sp-meta" title={repo.root}>
-                        <GitBranch size={12} aria-hidden="true" /> {baseName(repo.root)} · {repo.branch}
+                    <span className="sp-meta" title={visibleName(repo.root)}>
+                        <GitBranch size={12} aria-hidden="true" /> {visibleName(baseName(repo.root))} · {visibleName(repo.branch)}
                         {repo.uncommitted.length === 0 && repo.files.length > 0 && ' · committed'}
                     </span>
                     <span className="sp-actions-row">
@@ -402,8 +403,8 @@ function GitDialog({ sessionId, kind, repo, onClose, onDone }: {
                 <div className="modal-body sp-git-body">
                     <p className="sp-meta">
                         {kind === 'commit'
-                            ? `In ${repo.root} on ${repo.branch}. Only the files below are committed; anything else you changed stays as it is.`
-                            : `Pushes ${repo.branch} to ${repo.remote} (never forced), then opens a pull request with GitHub's gh tool.`}
+                            ? `In ${visibleName(repo.root)} on ${visibleName(repo.branch)}. Only the files below are committed; anything else you changed stays as it is.`
+                            : `Pushes ${visibleName(repo.branch)} to ${repo.remote} (never forced), then opens a pull request with GitHub's gh tool.`}
                     </p>
                     <label className="sp-field">
                         <span>{kind === 'commit' ? 'Summary' : 'Title'}</span>

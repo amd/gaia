@@ -169,3 +169,11 @@ describe('page references', () => {
         expect(pages(' is the report that covers everything since last year, page 4')).toEqual([]);
     });
 });
+
+describe('citations with hidden characters', () => {
+    it('shows a right-to-left override in a cited document name as a code', () => {
+        useChatStore.setState({ documents: [doc('rlo', 'plan\u202Efdp.md')] });
+        const found = links('See `plan\u202Efdp.md`, page 2.');
+        expect(found[0]).toEqual(expect.objectContaining({ kind: 'doc', id: 'rlo', text: 'plan[U+202E]fdp.md' }));
+    });
+});

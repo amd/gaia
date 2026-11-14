@@ -6,6 +6,7 @@ import { AlertCircle, CheckCircle2, FileText, X } from 'lucide-react';
 import { useChatStore } from '../stores/chatStore';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
+import { visibleName } from './CalendarApproval';
 import { middleTruncate } from '../utils/format';
 import { useT } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
@@ -43,7 +44,7 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
             log.doc.info(`Detached document from session: ${doc?.filename || docId}`);
         } catch (err) {
             log.doc.error(`Failed to detach document: ${doc?.filename || docId}`, err);
-            onDetachFailed(doc?.filename || docId, err);
+            onDetachFailed(doc?.filename ? visibleName(doc.filename) : docId, err);
         }
     }, [documents, sessionId, updateSessionInList, onDetachFailed]);
 
@@ -80,16 +81,16 @@ export function SessionDocsBar({ sessionId, onDetachFailed }: {
                     <span
                         key={d.id}
                         className={`doc-pill${failed ? ' doc-pill-failed' : ''}`}
-                        title={failed ? t('docsBar.failedTitle', { name: d.filename }) : d.filepath || d.filename}
+                        title={failed ? t('docsBar.failedTitle', { name: visibleName(d.filename) }) : visibleName(d.filepath || d.filename)}
                     >
                         {failed
                             ? <AlertCircle size={9} className="doc-pill-icon" aria-hidden="true" />
                             : <FileText size={9} className="doc-pill-icon" aria-hidden="true" />}
-                        <span className="doc-pill-name" dir="ltr">{middleTruncate(d.filename, 24)}</span>
+                        <span className="doc-pill-name" dir="ltr">{middleTruncate(visibleName(d.filename), 24)}</span>
                         <button
                             className="doc-pill-remove"
                             onClick={(e) => handleRemoveDocument(e, d.id)}
-                            aria-label={t('docsBar.remove', { name: d.filename })}
+                            aria-label={t('docsBar.remove', { name: visibleName(d.filename) })}
                         >
                             <X size={10} />
                         </button>

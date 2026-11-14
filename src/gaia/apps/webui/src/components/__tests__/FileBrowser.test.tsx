@@ -434,6 +434,28 @@ describe('FileBrowser dates follow the interface language', () => {
     });
 });
 
+it('marks a right-to-left override in entry names, paths, buttons, quick links, the path bar and the preview', async () => {
+    const rlo = String.fromCodePoint(0x202e);
+    const name = `report${rlo}txt.md`;
+    mockedApi.browseFiles.mockResolvedValue({
+        current_path: `/home/u${rlo}x`,
+        parent_path: '/home',
+        entries: [{ name, path: `/home/u/${name}`, type: 'file', size: 10, extension: '.md', modified: '' }],
+        quick_links: [{ name: `Docs${rlo}x`, path: `/home/docs${rlo}x`, icon: 'folder' }],
+    });
+    mockedApi.previewFile.mockResolvedValue({ ...FILE_PREVIEW, name, path: `/home/u/${name}`, preview_lines: [`a ${rlo}b`] });
+    render(<FileBrowser onStartChat={vi.fn()} />);
+    const shown = await screen.findByText('report[U+202E]txt.md');
+    expect(shown).toHaveAttribute('title', '/home/u/report[U+202E]txt.md');
+    expect(screen.getByRole('checkbox', { name: 'Select report[U+202E]txt.md' })).toBeInTheDocument();
+    expect(screen.getByText('Docs[U+202E]x').closest('button')).toHaveAttribute('title', '/home/docs[U+202E]x');
+    expect(screen.getByRole('button', { name: 'u[U+202E]x' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview report[U+202E]txt.md' }));
+    expect(await screen.findByText('a [U+202E]b')).toBeInTheDocument();
+    expect(document.querySelector('.fb-preview-name')!.textContent).toBe('report[U+202E]txt.md');
+    expect(document.body.innerHTML).not.toContain(rlo);
+});
+
 describe('unreadable folder', () => {
     const osDenied = () => Object.assign(new Error('Permission denied for this directory'), { httpStatus: 403, reason: 'os_denied' });
 

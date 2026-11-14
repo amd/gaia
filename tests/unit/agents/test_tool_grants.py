@@ -16,6 +16,26 @@ from gaia.agents.base.tool_grants import grant_scope
 PYTEST = "pytest (runs the test code it finds)"
 
 
+@pytest.mark.parametrize(
+    "tool, args, raw",
+    [
+        ("write_file", {"file_path": "invoice\u202etxt.exe", "content": "x"}, "\u202e"),
+        ("edit_file", {"file_path": "C:/w/inv\u200boice.txt"}, "\u200b"),
+        ("install_skill", {"name": "pd\u202ef-tools"}, "\u202e"),
+    ],
+    ids=["bidi override", "zero width", "skill name"],
+)
+def test_the_words_an_always_button_shows_mark_hidden_characters(tool, args, raw):
+    scope = grant_scope(tool, args)
+
+    assert scope is not None
+    code = f"[U+{ord(raw):04X}]"
+    assert raw not in scope.label and code in scope.label
+    assert raw not in scope.subject and code in scope.subject
+    # The grant itself still names the real file.
+    assert any(raw in key for key in scope.keys)
+
+
 class TestShellGrantsAreScopedToTheCommand:
     @pytest.mark.parametrize(
         "command,expected",

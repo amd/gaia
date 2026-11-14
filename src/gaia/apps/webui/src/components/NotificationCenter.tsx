@@ -26,6 +26,7 @@ import type { GaiaNotification, NotificationType } from '../types/agent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
 import './NotificationCenter.css';
+import { visibleText } from './CalendarApproval';
 
 interface NotificationCenterProps {
   onClose: () => void;
@@ -64,6 +65,14 @@ const NOTIFICATION_META: Record<
     colorClass: 'notif-type-error',
   },
 };
+
+/** Bidi isolates the translator wraps around each half and param; they cannot reverse a name. */
+const TRANSLATION_ISOLATE = /([⁦-⁩])/;
+
+/** A notification line marked like the approval card, its translation isolates kept. */
+function noticeText(text: string): string {
+  return text.split(TRANSLATION_ISOLATE).map((part, i) => (i % 2 ? part : visibleText(part, true))).join('');
+}
 
 // ── Time formatting ──────────────────────────────────────────────────────
 
@@ -188,7 +197,7 @@ export function NotificationCenter({ onClose, onOpenChat }: NotificationCenterPr
           notifications.map((n) => {
             const meta = NOTIFICATION_META[n.type];
             // A prompt reads as its card does, not as its stored English text.
-            const prompt = n.type === 'permission_request' && n.tool ? permissionPromptText(n, t, markLtr) : null;
+            const prompt = n.type === 'permission_request' && n.tool ? permissionPromptText(n, t, (s) => markLtr(visibleText(s, true))) : null;
             return (
               <div
                 className={`notification-item ${!n.read ? 'unread' : ''} ${meta.colorClass}`}
@@ -223,9 +232,9 @@ export function NotificationCenter({ onClose, onOpenChat }: NotificationCenterPr
                   ) : (
                     <>
                       {n.title && (
-                        <span className="notification-title">{n.title}</span>
+                        <span className="notification-title">{noticeText(n.title)}</span>
                       )}
-                      <span className="notification-message">{n.message}</span>
+                      <span className="notification-message">{noticeText(n.message)}</span>
                     </>
                   )}
 

@@ -245,3 +245,20 @@ describe('ThisAnswer', () => {
         expect(screen.queryByText('Websites')).not.toBeInTheDocument();
     });
 });
+
+describe('ThisAnswer marks hidden characters in names', () => {
+    it('shows a right-to-left override in a file or document name as a code', async () => {
+        render(<Host messages={turn(summary({
+            files: [{ path: 'C:/out/invoice\u202Etxt.md', name: 'invoice\u202Etxt.md', openable: true, mtime: 100 }],
+            documents: [{ name: 'plan\u202Efdp.md', path: 'C:/u/plan\u202Efdp.md', pages: [], passages: 1 }],
+        }))} />);
+        await act(async () => { await Promise.resolve(); });
+        const names = [...rail().querySelectorAll('.side-rail-name')];
+        expect(names.map((n) => n.textContent)).toEqual(['plan[U+202E]fdp.md', 'invoice[U+202E]txt.md']);
+        expect(names.map((n) => n.getAttribute('title'))).toEqual(['plan[U+202E]fdp.md', 'C:/out/invoice[U+202E]txt.md']);
+        expect(rail().textContent).not.toContain('\u202E');
+
+        fireEvent.click(screen.getByRole('button', { name: 'Open' }));
+        expect(mockedApi.openFileInApp).toHaveBeenCalledWith('C:/out/invoice\u202Etxt.md');
+    });
+});

@@ -354,7 +354,7 @@ class TestIsWriteBlockedException:
     def test_exception_includes_error_detail(self, validator):
         """The reason string should include the error message."""
         with patch("os.path.realpath", side_effect=ValueError("Bad path chars")):
-            is_blocked, reason = validator.is_write_blocked("/invalid\x00path")
+            is_blocked, reason = validator.is_write_blocked("/invalid/path")
 
         assert is_blocked is True
         assert "Bad path chars" in reason

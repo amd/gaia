@@ -981,10 +981,10 @@ describe('Chat App Integration', () => {
     });
 
     it('should have ARIA labels on session actions', () => {
-      expectTranslated(sidebarContent, "? t.plural('row.confirmDeleteUnsentAria', unsent, { title: session.title })", 'row.confirmDeleteUnsentAria.one', 'Confirm delete {title} and its {n} unsent message');
+      expectTranslated(sidebarContent, "? t.plural('row.confirmDeleteUnsentAria', unsent, { title: shownTitle })", 'row.confirmDeleteUnsentAria.one', 'Confirm delete {title} and its {n} unsent message');
       expect(EN_MESSAGES['row.confirmDeleteUnsentAria.other']).toBe('Confirm delete {title} and its {n} unsent messages');
-      expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: session.title }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
-      expectTranslated(sidebarContent, ": t('row.deleteAria', { title: session.title })}", 'row.deleteAria', 'Delete {title}');
+      expectTranslated(sidebarContent, ": t('row.confirmDeleteAria', { title: shownTitle }))", 'row.confirmDeleteAria', 'Confirm delete {title}');
+      expectTranslated(sidebarContent, ": t('row.deleteAria', { title: shownTitle })}", 'row.deleteAria', 'Delete {title}');
       expectTranslated(sidebarContent, '<nav className="sb-list" id="sb-chat-list" aria-label={t(\'sidebar.recent\')}>', 'sidebar.recent', 'Recent chats');
     });
 
@@ -1445,7 +1445,7 @@ describe('Chat App Integration', () => {
     });
 
     it('should have aria-label on document delete buttons', () => {
-      expectTranslated(docContent, "aria-label={t('docs.removeAria', { name: doc.filename })}", 'docs.removeAria', 'Remove {name}');
+      expectTranslated(docContent, "aria-label={t('docs.removeAria', { name: visibleName(doc.filename) })}", 'docs.removeAria', 'Remove {name}');
     });
   });
 

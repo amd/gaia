@@ -198,3 +198,22 @@ describe('Outputs dates follow the interface language', () => {
         expect(list).not.toMatch(ENGLISH_MONTH);
     });
 });
+
+describe('OutputsSection marks hidden characters in names', () => {
+    it('shows a right-to-left override in an output name as a code, and opens the real path', async () => {
+        mocked.getOutputs.mockResolvedValue({
+            session_id: SID,
+            items: [item({ name: 'invoice\u202Etxt.md', path: 'C:\\work\\invoice\u202Etxt.md' })],
+        });
+        render(<OutputsSection sessionId={SID} busy={false} onJumpToMessage={() => true} />);
+        await waitFor(() => expect(rows()).toHaveLength(1));
+        const name = rows()[0].querySelector('.sp-item-name')!;
+        expect(name.textContent).toBe('invoice[U+202E]txt.md');
+        expect(name.getAttribute('title')).toBe('C:\\work\\invoice[U+202E]txt.md');
+        expect(rows()[0].textContent).not.toContain('\u202E');
+        expect(screen.getByRole('button', { name: /invoice\[U\+202E\]txt\.md/ })).toBeInTheDocument();
+
+        fireEvent.click(within(rows()[0]).getByRole('button', { name: 'Open' }));
+        expect(mocked.openFileInApp).toHaveBeenCalledWith('C:\\work\\invoice\u202Etxt.md');
+    });
+});

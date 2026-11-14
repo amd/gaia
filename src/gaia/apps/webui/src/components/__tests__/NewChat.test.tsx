@@ -601,6 +601,19 @@ describe('NewChat after first-run setup failed', () => {
     });
 });
 
+it('marks a right-to-left override in a held document name and its button', async () => {
+    const rlo = String.fromCodePoint(0x202e);
+    useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus, draftDocumentIds: ['d9'] });
+    vi.mocked(api.listDocuments).mockResolvedValue({
+        documents: [libraryDoc('d9', `report${rlo}txt.md`)], total: 1, total_size_bytes: 100, total_chunks: 2,
+    });
+    render(<NewChat onSend={vi.fn()} />);
+    const list = await screen.findByRole('list', { name: 'Documents for this chat' });
+    expect(list).toHaveTextContent('report[U+202E]txt.md');
+    expect(screen.getByRole('button', { name: "Don't attach report[U+202E]txt.md" })).toBeInTheDocument();
+    expect(list.innerHTML).not.toContain(rlo);
+});
+
 describe('the greeting gloss', () => {
     it('is set smaller than the greeting, so the English never out-sizes the Arabic', () => {
         const rule = newChatCss.match(/\.new-chat-greeting \.i18n-gloss\.i18n-gloss \{([^}]*)\}/);

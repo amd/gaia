@@ -8,6 +8,25 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Code that names a credential folder or reads a credential file is refused before it runs.**
+  `run_python`, `execute_python_file` (the script and its arguments) and a shell
+  line that hands code to an interpreter could open `.env` or files inside
+  `~/.ssh` after one approval, though the file tools refuse them outright. Such
+  code is now refused before the prompt, whatever "always" was granted, and the
+  prompt for a code tool says GAIA checks the code's text, not what it does when
+  it runs. A credential file is refused only when the
+  code reads it; code that writes or only names one runs. `execute_python_file`
+  pointed at a credential file itself, or at a
+  path no approval can grant, is refused the same way: no `needs_confirmation`
+  is sent for it and the file is never read into one.
+
+- **An "always allow" label can no longer read reversed.** `always_scope` and
+  `always_label` name a file or skill the model chose, and a name holding a
+  right-to-left override or a zero-width character was sent raw, so a button
+  built from it showed `invoice<U+202E>txt.exe` as a name ending in `exe.txt`.
+  Both now carry such a character as `[U+XXXX]`. The grant still covers the
+  real file.
+
 - **The agent knows an MCP server it set up didn't start.** The notice the
   user sees about MCP servers that couldn't start, couldn't load or went over
   the tool limit now also reaches the model each turn, so asked about one it
@@ -164,6 +183,18 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   in its consent.
 
 ### Changed
+
+- **The prompt to run a Python file shows the file.** `execute_python_file`
+  asked with only a path, so a script the agent had just written to its
+  scratch folder was approved unread. `needs_confirmation` now carries
+  `prompt_context.script`: `{ text, hidden_lines }` with up to 400 lines (48,000
+  characters) of the file as it was when the prompt was built, or
+  `{ unreadable }` (`missing`, `not_text`, `too_large`, `unreadable`) when there
+  is nothing to show. `summary` shows the first lines under the path and, when
+  it leaves lines out, the file's full path to read them at. If the
+  file differs from what the prompt showed when the run starts, the run is refused and the agent
+  asks again with the new content. `args` still holds exactly the model's
+  arguments.
 
 - **Generated images and audio arrive as a `media` card.** A successful
   `generate_image`, `generate_music`, `generate_sound_effect` or `text_to_speech`

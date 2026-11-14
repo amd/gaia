@@ -35,6 +35,7 @@ import {
     type CitationIndex, type CitedDoc, type FoundPage,
 } from '../utils/citations';
 import './MessageBubble.css';
+import { visibleName, markStrayDirection } from './CalendarApproval';
 
 interface MessageBubbleProps {
     message: Message;
@@ -601,7 +602,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     // Memoized because the assistant path runs a brace-depth parser.
     const cleanedContent = useMemo(
         () => {
-            if (message.role === 'user') return message.content;
+            if (message.role === 'user') return markStrayDirection(message.content);
             const body = cutOff
                 ? cutOff.body
                 : endedBy ? message.content.trimEnd().slice(0, -endedBy.length) : message.content;
@@ -1039,13 +1040,13 @@ function FilePathLink({ path, label }: { path: string; label?: string }) {
             className="file-path-link"
             dir="ltr"
             onClick={handleClick}
-            title={`Open in file explorer: ${path}`}
+            title={`Open in file explorer: ${visibleName(path)}`}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleClick(e as unknown as React.MouseEvent); } }}
         >
             <FolderOpen size={12} className="file-path-icon" />
-            {label ?? path}
+            {visibleName(label ?? path)}
         </span>
     );
 }
@@ -1094,12 +1095,12 @@ function CitationLink({ doc, page, t }: { doc: CitedDoc; page?: number; t: Trans
             target="_blank"
             rel="noopener noreferrer"
             dir="ltr"
-            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: doc.label })}
+            title={page ? t('citation.openPage', { page }) : t('citation.open', { name: visibleName(doc.label) })}
             data-doc-id={doc.id}
             data-page={page}
         >
             <FileText size={12} className="citation-icon" aria-hidden="true" />
-            {doc.label}
+            {visibleName(doc.label)}
         </a>
     );
 }

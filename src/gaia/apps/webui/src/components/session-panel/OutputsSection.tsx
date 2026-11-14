@@ -17,6 +17,7 @@ import { PanelSection } from './PanelSection';
 import type { OutputItem, OutputKind } from '../../types/sessionPanel';
 import { ref, type MessageKey, type Param, type Params } from '../../i18n/registry';
 import { dateLocale, tEn, useT, type Translate } from '../../i18n/useT';
+import { visibleName } from '../CalendarApproval';
 
 /** Rows shown before "Show more". */
 export const OUTPUTS_SHOWN = 5;
@@ -127,7 +128,7 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
                         <li key={item.id} className={`sp-output${item.state !== 'present' ? ' is-inactive' : ''}`}>
                             <Icon size={13} className="sp-item-icon" aria-hidden="true" />
                             <div className="sp-item-text">
-                                <span className="sp-item-name" dir="ltr" title={item.path ?? item.name}>{item.name}</span>
+                                <span className="sp-item-name" dir="ltr" title={visibleName(item.path ?? item.name)}>{visibleName(item.name)}</span>
                                 <span className="sp-meta">
                                     {meta}
                                 </span>
@@ -141,18 +142,18 @@ function OutputsList({ sessionId, busy, onJumpToMessage }: OutputsSectionProps) 
                                                     setActionError(t('out.notLoaded'));
                                                 }
                                             }}
-                                            aria-label={t('out.goToAria', { name: item.name })}
+                                            aria-label={t('out.goToAria', { name: visibleName(item.name) })}
                                         >
                                             <CornerDownRight size={11} aria-hidden="true" /> {t('sp.goToTurn')}
                                         </button>
                                     )}
                                     {item.openable && item.path && (
-                                        <button type="button" className="sp-action" onClick={() => act(api.openFileInApp(item.path as string), item.name)}>
+                                        <button type="button" className="sp-action" onClick={() => act(api.openFileInApp(item.path as string), visibleName(item.name))}>
                                             {t('sp.open')}
                                         </button>
                                     )}
                                     {item.revealable && item.path && (
-                                        <button type="button" className="sp-action" onClick={() => act(api.openFileOrFolder(item.path as string, true), item.name)}>
+                                        <button type="button" className="sp-action" onClick={() => act(api.openFileOrFolder(item.path as string, true), visibleName(item.name))}>
                                             <FolderOpen size={11} aria-hidden="true" /> {t('sp.showInFolder')}
                                         </button>
                                     )}

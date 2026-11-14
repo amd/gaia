@@ -8,6 +8,7 @@ import { ChevronDown, ChevronUp } from 'lucide-react';
 import { pluralKey } from '../i18n/registry';
 import { useT, type Translate } from '../i18n/useT';
 import './LongContent.css';
+import { markStrayDirection } from './CalendarApproval';
 
 /** A user message is collapsed past this many lines… */
 export const USER_COLLAPSE_LINES = 15;
@@ -160,7 +161,7 @@ export function StepResult({ text, renderShort }: { text: string; renderShort: (
                 id={bodyId}
                 className={`detail-result-content${collapsible && !expanded ? ' is-collapsed' : ''}`}
             >
-                {envelope || collapsible ? shown : renderShort(shown)}
+                {envelope || collapsible ? markStrayDirection(shown) : renderShort(shown)}
             </div>
             {collapsible && (
                 <ExpandToggle

@@ -16,7 +16,8 @@ import {
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
 import { isEscapeClaimed } from '../hooks/useEscapeToClose';
-import { CalendarApproval, CALENDAR_WRITE_TOOLS } from './CalendarApproval';
+import { CalendarApproval, CALENDAR_WRITE_TOOLS, unseen, visibleText } from './CalendarApproval';
+import { cmdReading, decodedPowerShell } from './shownText';
 import { pluralKey } from '../i18n/registry';
 import { useT } from '../i18n/useT';
 import { MarkedText, markLtr } from './MarkedText';
@@ -34,6 +35,9 @@ function summarize(n: GaiaNotification): string {
 
 /** Tools whose relayed summary is a command and its risk note (`COMMAND_SUMMARY_TOOLS` in sse_translation.py). */
 const COMMAND_SUMMARY_TOOLS = new Set(['run_shell_command', 'wait_for_condition']);
+
+/** Tools that run code GAIA hands over whole (`CODE_SUMMARY_TOOLS` in sse_translation.py). */
+const CODE_TOOLS = new Set(['run_python', 'execute_python_file']);
 
 /** Tools whose relayed summary is the exact text being approved (`EXACT_TEXT_ARG` in call_risk.py). The flagship runs them from its send-email skill, so they also arrive namespaced. */
 const EXACT_MAIL_TOOLS = ['send_now', 'send_draft', 'reply_to_message', 'forward_message', 'discard_draft', 'update_draft'];
@@ -61,6 +65,38 @@ export function splitCommandSummary(summary: string): { command: string; folder:
         extras: body.slice(at + 1).join(' ').trim(),
         note,
     };
+}
+
+/** The tool whose prompt carries the file it runs (`SCRIPT_TOOL` in script_preview.py). */
+const SCRIPT_TOOL = 'execute_python_file';
+
+/** Why a script is not on its card (`unreadable` in script_preview.py), as message keys. */
+const SCRIPT_UNREADABLE = {
+    missing: 'prompt.scriptUnreadable.missing',
+    not_text: 'prompt.scriptUnreadable.not_text',
+    too_large: 'prompt.scriptUnreadable.too_large',
+    unreadable: 'prompt.scriptUnreadable.unreadable',
+} as const;
+
+/**
+ * The script a file-running call runs, as GAIA read it when it built the prompt
+ * (`SCRIPT_ARG` in call_risk.py): its text and the lines past the cap, or why there is none.
+ */
+export function shownScript(tool: string | undefined, args: Record<string, unknown>): {
+    text: string | null;
+    hiddenLines: number;
+    unreadable: keyof typeof SCRIPT_UNREADABLE | null;
+} | null {
+    const script = args._script;
+    if (tool !== SCRIPT_TOOL || typeof script !== 'object' || script === null) return null;
+    const { text, hidden_lines: hidden, unreadable } = script as Record<string, unknown>;
+    if (typeof text === 'string') {
+        return { text, hiddenLines: typeof hidden === 'number' && hidden > 0 ? hidden : 0, unreadable: null };
+    }
+    const reason = typeof unreadable === 'string' && unreadable in SCRIPT_UNREADABLE
+        ? unreadable as keyof typeof SCRIPT_UNREADABLE
+        : 'unreadable';
+    return { text: null, hiddenLines: 0, unreadable: reason };
 }
 
 /** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
@@ -144,7 +180,10 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
-    const scopeText = alwaysScopeText(notification, t) ?? notification.alwaysLabel ?? scope ?? '';
+    // It names a file or skill the model chose, so its hidden characters show as codes.
+    const markedScope = notification.alwaysScope && visibleText(notification.alwaysScope, false);
+    const scopeText = alwaysScopeText({ ...notification, alwaysScope: markedScope }, t)
+        ?? visibleText(notification.alwaysLabel ?? scope ?? '', false);
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
@@ -155,7 +194,13 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const riskNote = typeof args._risk_note === 'string' ? args._risk_note : '';
     const folder = riskNote && typeof args.working_directory === 'string' ? args.working_directory : '';
     // Code is approved as written, so all of it is one click away, never only a summary.
-    const code = typeof args.code === 'string' && args.code.trim() ? args.code : '';
+    // A file is approved on its content too: the path alone does not say what runs.
+    const script = shownScript(notification.tool, args);
+    const code = typeof args.code === 'string' && args.code.trim() ? args.code : script?.text?.trim() ? script.text : '';
+    // GAIA screens a script's text but can't see what it does when it runs.
+    const codeNote = (code || CODE_TOOLS.has(notification.tool ?? '')) && !riskNote ? t('prompt.codeRisk') : '';
+    // The script is on the card already; the raw arguments don't repeat it.
+    const detailArgs = script ? Object.fromEntries(Object.entries(args).filter(([key]) => key !== '_script')) : args;
     // An email is approved as it will be sent, so all of it shows, uncollapsed.
     // Over the sidecar relay it arrives as the summary.
     const exactText = typeof args._exact_text === 'string'
@@ -165,7 +210,14 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
         ? splitCommandSummary(notification.summary ?? '')
         : null;
     const isPath = notification.tool === PATH_ACCESS_TOOL;
-    const { heading, question } = permissionPromptText(notification, t, markLtr);
+    // Characters that don't show are shown as [U+XXXX]: the card is approved as it reads.
+    const { heading, question } = permissionPromptText(notification, t, (s) => markLtr(visibleText(s, true)));
+    const shownDetail = visibleText(detail, true);
+    const command = typeof args.command === 'string' ? args.command : relayed?.command ?? '';
+    // What the command runs when its own text hides it: base64 PowerShell, cmd's ^ escapes.
+    const decoded = command ? decodedPowerShell(command) : '';
+    const reading = command.includes('^') ? cmdReading(command) : '';
+    const hidden = [detail, code, command, decoded, args.path, folder, relayed?.folder, relayed?.extras].some(unseen);
 
     const calendar = CALENDAR_WRITE_TOOLS.has(notification.tool ?? '');
 
@@ -223,19 +275,38 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                     <h2 id={`perm-${notification.id}`} className="perm-card-title">
                         <MarkedText text={heading} />
                     </h2>
-                    {detail && riskNote && <pre dir="ltr" className="perm-card-pre perm-card-exact">{detail}</pre>}
-                    {detail && !riskNote && <p className="perm-card-detail"><code dir="ltr">{detail}</code></p>}
-                    {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{folder}</code></p>}
+                    {detail && riskNote && <pre dir="ltr" className="perm-card-pre perm-card-exact">{shownDetail}</pre>}
+                    {detail && !riskNote && <p className="perm-card-detail"><code dir="ltr">{shownDetail}</code></p>}
+                    {folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{visibleText(folder, false)}</code></p>}
                     {riskNote && <p className="perm-card-risk" role="note"><bdi>{riskNote}</bdi></p>}
-                    {code && <CodeBlock code={code} />}
+                    {code && <CodeBlock code={visibleText(code, true)} />}
+                    {script?.text != null && !script.text.trim() && (
+                        <p className="perm-card-detail" data-testid="perm-script-empty">{t('prompt.scriptEmpty')}</p>
+                    )}
+                    {!!script?.hiddenLines && (
+                        <p className="perm-card-risk" role="note" data-testid="perm-script-more">
+                            <bdi>{t.plural('prompt.scriptMoreLines', script.hiddenLines, { n: script.hiddenLines })}</bdi>
+                        </p>
+                    )}
+                    {script?.unreadable && (
+                        <p className="perm-card-risk" role="note" data-testid="perm-script-unreadable">
+                            <bdi>{t(SCRIPT_UNREADABLE[script.unreadable])}</bdi>
+                        </p>
+                    )}
+                    {codeNote && <p className="perm-card-risk" role="note" data-testid="perm-code-risk"><bdi>{codeNote}</bdi></p>}
                     {exactText && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-text">{exactText}</pre>}
-                    {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{relayed.command}</pre>}
-                    {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{relayed.folder}</code></p>}
-                    {relayed?.extras && <p className="perm-card-detail"><bdi>{relayed.extras}</bdi></p>}
+                    {relayed && <pre dir="ltr" className="perm-card-pre perm-card-exact">{visibleText(relayed.command, true)}</pre>}
+                    {decoded && <p className="perm-card-detail">{t('prompt.decodedCommand')}</p>}
+                    {decoded && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-decoded">{visibleText(decoded, true)}</pre>}
+                    {reading && reading !== command && <p className="perm-card-detail">{t('prompt.cmdReading')}</p>}
+                    {reading && reading !== command && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-cmd-reading">{visibleText(reading, true)}</pre>}
+                    {hidden && <p className="perm-card-risk" role="note" data-testid="perm-hidden-note"><bdi>{t('prompt.hiddenChars')}</bdi></p>}
+                    {relayed?.folder && <p className="perm-card-detail">{t.bare('prompt.in')} <code dir="ltr">{visibleText(relayed.folder, false)}</code></p>}
+                    {relayed?.extras && <p className="perm-card-detail"><bdi>{visibleText(relayed.extras, false)}</bdi></p>}
                     {relayed?.note && <p className="perm-card-risk" role="note"><bdi>{relayed.note}</bdi></p>}
                     {calendar && hasArgs && <CalendarApproval tool={notification.tool!} args={args} />}
                     {calendar && !hasArgs && notification.summary && <pre dir="ltr" className="perm-card-pre perm-card-exact" data-testid="perm-exact-summary">{notification.summary}</pre>}
-                    {!detail && !code && !exactText && !calendar && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{notification.summary}</bdi></p>}
+                    {!detail && !code && !exactText && !calendar && notification.summary && !relayed && <p className="perm-card-detail"><bdi>{visibleText(notification.summary, true)}</bdi></p>}
                     {freshConsent && <p className="perm-card-detail perm-card-question"><MarkedText text={question} /></p>}
                     <ChangePreview args={args} />
                 </div>
@@ -254,7 +325,7 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                         <ChevronRight size={13} className={showArgs ? 'is-open' : ''} aria-hidden="true" />
                         {t(fileChange(args) ? 'prompt.technicalDetails' : 'prompt.details')}
                     </button>
-                    {showArgs && <pre dir="ltr" className="perm-card-pre">{JSON.stringify(args, null, 2)}</pre>}
+                    {showArgs && <pre dir="ltr" className="perm-card-pre">{visibleText(JSON.stringify(detailArgs, null, 2), true)}</pre>}
                 </div>
             )}
             {suggestAlways && !expired && (

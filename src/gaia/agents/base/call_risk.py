@@ -45,6 +45,10 @@ NEEDS_PERSON_ARG = "_needs_person"
 #: such as a whole email. Every front-end shows it in full, never shortened.
 EXACT_TEXT_ARG = "_exact_text"
 
+#: Display-only prompt argument carrying the content of the script a call runs,
+#: read when the prompt is built: ``{"text", "hidden_lines"}`` or ``{"unreadable"}``.
+SCRIPT_ARG = "_script"
+
 SHELL_TOOLS = frozenset({"run_shell_command", "wait_for_condition"})
 
 _FILE_WRITE_TOOLS = frozenset(
@@ -341,18 +345,28 @@ _PLAIN_NOTES = {
 }
 
 
+#: The line a code prompt shows (``run_python``, ``execute_python_file``). The
+#: Agent UI shows the same words as ``prompt.codeRisk``.
+CODE_RISK_NOTE = (
+    "Can run any code with your permissions. GAIA checks the code's text, not "
+    "what it does when it runs."
+)
+
+
 def plain_risk_note(risk: Optional[str]) -> str:
     """One plain sentence for *risk* on a command prompt, or "" when none is due."""
     return _PLAIN_NOTES.get(risk or "", "")
 
 
 __all__ = [
+    "CODE_RISK_NOTE",
     "DESTRUCTIVE",
     "EXECUTE",
     "EXACT_TEXT_ARG",
     "NEEDS_PERSON_ARG",
     "READ",
     "RISK_NOTE_ARG",
+    "SCRIPT_ARG",
     "SHELL_TOOLS",
     "WRITE",
     "call_risk",

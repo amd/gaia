@@ -17,6 +17,7 @@ import { NotificationCenter } from '../NotificationCenter';
 import { useNotificationStore, PATH_ACCESS_TOOL } from '../../stores/notificationStore';
 import type { GaiaNotification } from '../../types/agent';
 import { stripIsolates } from '../../i18n/registry';
+import { translator } from '../../i18n/useT';
 import { ARABIC_MONTH, ENGLISH_MONTH, resetUiLocale, setUiLocale } from '../../test/dates';
 import notificationCss from '../NotificationCenter.css?raw';
 
@@ -193,5 +194,45 @@ describe('clicking a notification that names a chat', () => {
         fireEvent.click(screen.getByText('Document indexed'));
         expect(onOpenChat).not.toHaveBeenCalled();
         expect(useNotificationStore.getState().notifications[0].read).toBe(true);
+    });
+});
+
+describe('NotificationCenter marks hidden characters', () => {
+    it('shows a right-to-left override in a permission request path as a code', () => {
+        useNotificationStore.setState({
+            notifications: [{
+                ...notif('perm-rlo', 'GAIA needs your OK.'),
+                type: 'permission_request',
+                title: 'Allow?',
+                priority: 'high',
+                tool: PATH_ACCESS_TOOL,
+                toolArgs: { path: 'C:\\w\\report\u202Etxt.md', kind: 'file' },
+            }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container).toHaveTextContent('report[U+202E]txt.md');
+        expect(container.textContent).not.toContain('\u202E');
+    });
+
+    it('shows a right-to-left override in a plain notification as a code', () => {
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-rlo', 'Saved invoice\u202Etxt.md'), title: 'Wrote invoice\u202Etxt.md' }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-title')!.textContent).toBe('Wrote invoice[U+202E]txt.md');
+        expect(container.querySelector('.notification-message')!.textContent).toBe('Saved invoice[U+202E]txt.md');
+    });
+
+    it('keeps the isolates an Arabic translation wraps its halves and params in', () => {
+        setUiLocale('ar');
+        const title = translator('ar')('chatError.resendFailed');
+        expect(title).toMatch(/[⁦-⁩]/);
+        useNotificationStore.setState({
+            notifications: [{ ...notif('n-ar', `⁨invoice‮txt.md⁩`), title }],
+        });
+        const { container } = render(<NotificationCenter onClose={vi.fn()} />);
+        expect(container.querySelector('.notification-title')!.textContent).toBe(title);
+        expect(container.querySelector('.notification-message')!.textContent).toBe('⁨invoice[U+202E]txt.md⁩');
+        resetUiLocale();
     });
 });

@@ -22,6 +22,7 @@ import type { Message, TurnSummary } from '../types';
 import { pluralKey, type Say } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import './SideRail.css';
+import { visibleName } from './CalendarApproval';
 
 /** What the rail shows: the latest answer's summary, a turn in progress, or nothing. */
 export type RailState = { kind: 'turn'; turn: Message } | { kind: 'busy' } | null;
@@ -163,7 +164,7 @@ function SourcesSection({ summary }: { summary: TurnSummary }) {
                         <li key={d.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={d.name} dir="ltr">{d.name}</span>
+                                <span className="side-rail-name" title={visibleName(d.name)} dir="ltr">{visibleName(d.name)}</span>
                                 <span className="side-rail-meta">
                                     {t.compose((say) => documentMeta(say, d.pages, count))}
                                 </span>
@@ -245,7 +246,7 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
                             <li key={f.path} className="side-rail-item side-rail-item-gone">
                                 <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                                 <div className="side-rail-item-text">
-                                    <span className="side-rail-name" title={f.path}>{f.name}</span>
+                                    <span className="side-rail-name" title={visibleName(f.path)}>{visibleName(f.name)}</span>
                                     <span className="side-rail-meta">{t('sp.gone')}</span>
                                 </div>
                             </li>
@@ -257,15 +258,15 @@ function FilesSection({ summary }: { summary: TurnSummary }) {
                         <li key={f.path} className="side-rail-item">
                             <FileText size={13} className="side-rail-item-icon" aria-hidden="true" />
                             <div className="side-rail-item-text">
-                                <span className="side-rail-name" title={f.path}>{f.name}</span>
+                                <span className="side-rail-name" title={visibleName(f.path)}>{visibleName(f.name)}</span>
                                 {changed && <span className="side-rail-meta">{t('rail.changedSince')}</span>}
                                 <span className="side-rail-actions">
                                     {f.openable && (
-                                        <button type="button" className="side-rail-action" onClick={() => run(api.openFileInApp(f.path), f.name)}>
+                                        <button type="button" className="side-rail-action" onClick={() => run(api.openFileInApp(f.path), visibleName(f.name))}>
                                             {t('sp.open')}
                                         </button>
                                     )}
-                                    <button type="button" className="side-rail-action" onClick={() => run(api.openFileOrFolder(f.path, true), f.name)}>
+                                    <button type="button" className="side-rail-action" onClick={() => run(api.openFileOrFolder(f.path, true), visibleName(f.name))}>
                                         <FolderOpen size={11} aria-hidden="true" />
                                         {t('sp.showInFolder')}
                                     </button>
