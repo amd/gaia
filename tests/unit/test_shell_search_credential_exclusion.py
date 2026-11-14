@@ -101,6 +101,12 @@ def home(tmp_path, monkeypatch):
     return home
 
 
+@pytest.fixture(autouse=True)
+def posix_grep(monkeypatch):
+    """grep that reads its arguments as given; the Windows tests switch it off."""
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: False)
+
+
 def _refusal(command, home, cwd=None):
     host = _Host(home)
     steps, error = _parse_line(command, bypass_gates=True)
@@ -610,3 +616,83 @@ def test_the_exclude_file_is_removed_when_the_run_fails(home, monkeypatch):
     _run(home, "grep -rl guess secrets")
 
     assert seen and not os.path.exists(seen[-1])
+
+
+# ------------------------------- grep that wildcard-expands its own arguments
+
+
+@pytest.fixture
+def windows_grep(monkeypatch):
+    """Git for Windows' grep: every argument it gets is wildcard-expanded."""
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: True)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rl guess .",
+        'grep -rl guess . "?-"',
+        "grep -rn TODO .",
+        "egrep -rl guess secrets",
+        "fgrep -rc guess .",
+        "grep.exe -rl guess .",
+        "busybox grep -rl guess .",
+    ],
+)
+def test_a_recursive_grep_that_expands_its_arguments_is_refused(
+    home, windows_grep, command
+):
+    assert _argv(command) is None, command
+
+    refusal = _refusal(command, home)
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+    assert "rg or git grep" in refusal["hint"]
+
+
+@pytest.mark.parametrize(
+    "command", ["grep -rl guess .", 'grep -rl guess . "?-"', "grep -rn TODO ."]
+)
+def test_a_recursive_grep_that_expands_its_arguments_runs_in_a_clean_tree(
+    home, windows_grep, command
+):
+    (home / "proj" / "secrets" / ".env").unlink()
+
+    assert _refusal(command, home) is None, command
+
+
+@pytest.mark.parametrize(
+    "command, flavor",
+    [("rg -l guess", "rg"), ("rg -n TODO", "rg"), ("git grep -l guess", "git")],
+)
+def test_rg_and_git_grep_still_run_excluded_where_grep_expands(
+    home, windows_grep, popen_calls, command, flavor
+):
+    result = _run(home, command)
+
+    assert len(popen_calls) == 1, result
+    args, kwargs = popen_calls[0]
+    assert not kwargs.get("shell")
+    assert args[-len(_credential_exclusions(flavor)) :] == (
+        _credential_exclusions(flavor)
+    )
+
+
+def test_a_refused_grep_where_grep_expands_never_starts(
+    home, windows_grep, popen_calls
+):
+    result = _run(home, 'grep -rl guess . "?-"', full_access=True)
+
+    assert popen_calls == []
+    assert result["executed"] is False
+    assert "guess-me" not in str(result)
+
+
+def test_posix_grep_still_runs_with_the_exclude_file(home, popen_calls):
+    result = _run(home, 'grep -rl guess . "?-"')
+
+    assert len(popen_calls) == 1, result
+    args, kwargs = popen_calls[0]
+    assert args[1:5] == ["-rl", "guess", ".", "?-"]
+    _assert_grep_exclusions(args[5:], kwargs, home)

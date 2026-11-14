@@ -2871,9 +2871,21 @@ def _rewritable_search(segment: list) -> str:
         return ""
     if flavor in ("grep", "rg") and "--" in segment:
         return ""
-    if flavor == "grep" and "POSIXLY_CORRECT" in os.environ:
+    if flavor == "grep" and (
+        "POSIXLY_CORRECT" in os.environ or _greps_expand_arguments()
+    ):
         return ""
     return flavor
+
+
+def _greps_expand_arguments() -> bool:
+    """Whether grep wildcard-expands its own arguments, quoted ones included.
+
+    Git for Windows' grep does, so a planted file name can turn any word
+    into ``--`` and the exclusions into operands. There a recursive grep is
+    refused over credential files; rg and git grep do not expand.
+    """
+    return os.name == "nt"
 
 
 #: What a POSIX shell acts on outside quotes.
@@ -3883,8 +3895,9 @@ def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]
         ),
         "has_errors": True,
         "hint": (
-            "Ask the user to open the file themselves. grep -r, rg and git grep "
-            "skip credential files on their own; or name the files to search."
+            "Ask the user to open the file themselves. rg and git grep (and "
+            "grep -r outside Windows) skip credential files on their own; or "
+            "name the files to search."
         ),
     }
 
@@ -3894,6 +3907,13 @@ def _search_refusal(command: str, path: str, kind: str) -> Dict[str, Any]:
 
     No tier: neither an approval nor full access lifts it.
     """
+    searchers, windows_note = "grep -r, rg or git grep", ""
+    if _greps_expand_arguments():
+        searchers = "rg or git grep"
+        windows_note = (
+            " grep on Windows expands wildcards in its own arguments, so a "
+            "recursive grep cannot skip them: use rg or git grep instead."
+        )
     if kind == _BULK_UNKNOWN:
         reason = (
             f"which folder '{path}' names is only known once a shell expands "
@@ -3920,10 +3940,10 @@ def _search_refusal(command: str, path: str, kind: str) -> Dict[str, Any]:
         ),
         "has_errors": True,
         "hint": (
-            "Search specific files by name, or run grep -r, rg or git grep on "
-            "its own: no pipe, chaining, redirection, '--', @file or script "
-            "around it, and any wildcard or ~ quoted. Run that way, it skips "
-            "credential files by itself."
+            f"Search specific files by name, or run {searchers} on its own: "
+            "no pipe, chaining, redirection, '--', @file or script around it, "
+            "and any wildcard or ~ quoted. Run that way, it skips credential "
+            f"files by itself.{windows_note}"
         ),
     }
 

@@ -43,6 +43,12 @@ class _Host(ShellToolsMixin):
         self.path_validator = _Validator(root)
 
 
+@pytest.fixture(autouse=True)
+def posix_grep(monkeypatch):
+    """grep that reads its arguments as given; the Windows tests switch it off."""
+    monkeypatch.setattr(shell_tools, "_greps_expand_arguments", lambda: False)
+
+
 def _refusal(command, cwd, root):
     host = _Host(root)
     steps, error = _parse_line(command, bypass_gates=True)

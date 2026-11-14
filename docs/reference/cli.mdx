@@ -2026,7 +2026,8 @@ them left out, so `grep -rn TODO .` still searches everything else. Any other
 recursive search (piped or chained, inside a script, `findstr /s`,
 `Select-String` over `Get-ChildItem -Recurse`, `ag`, `find -exec`) is refused
 when the folder it searches holds one, and so is a `git grep` of a credential
-file's blob (`HEAD:.env`). Tokens
+file's blob (`HEAD:.env`). On Windows, use `rg` or `git grep` for this: a
+recursive `grep` there is refused when the folder holds a credential file. Tokens
 in shell and Python output, such as the one in a `git remote -v` URL, are
 masked before the model reads it. And a cloud-metadata or link-local address
 (`169.254.169.254`, `fe80::/10`, `metadata.google.internal`) the web fetcher
