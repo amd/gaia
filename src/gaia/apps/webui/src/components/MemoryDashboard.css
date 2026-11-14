@@ -11,8 +11,8 @@
     overflow: hidden;
     font-variant-numeric: tabular-nums;
 }
-/* Every tab sits in the same centred column; About you keeps its narrower reading width. */
-.memory-dashboard-body > :not(.mem-about) {
+/* Every tab sits in the same centred column, so switching tabs never moves the edges. */
+.memory-dashboard-body > * {
     max-width: 1080px;
     margin-inline: auto;
 }
@@ -1823,10 +1823,6 @@ textarea.mem-input { resize: vertical; }
 }
 
 /* ── About you: what GAIA knows about the user ─────────────────────── */
-.mem-about {
-    max-width: 760px;
-    margin: 0 auto;
-}
 .mem-about-title {
     font-size: 20px;
     font-weight: 600;
