@@ -59,6 +59,7 @@ from gaia.agents.base.write_safety import (
     is_too_broad_folder,
     lands_where_code_runs,
 )
+from gaia.utils.paths import UnsafePathSegment, safe_path_segment
 
 #: Binaries whose name bounds nothing: they run whatever they are handed, so
 #: "allow `bash` this session" is "allow everything this session" wearing a
@@ -222,6 +223,24 @@ PATH_TOOLS = frozenset(
     }
 )
 
+#: Tools that change a text file in place. A folder grant on any of them is one
+#: grant, "changes to files in <folder>", so a write's "always" covers an edit there.
+_FILE_CHANGE_TOOLS = frozenset({"write_file", "write_markdown_file", "edit_file"})
+_FILE_CHANGE_FAMILY = "file_change"
+
+#: Programs that only rename or move a file. A plain call that keeps the file in
+#: one folder is a change there, and a folder grant covers it. Off Windows,
+#: ``rename`` is often Perl's, whose first argument is code it runs. On Windows
+#: only cmd.exe's built-ins: it runs an ``mv.bat`` in the folder ahead of PATH.
+_RENAME_PROGRAMS = (
+    frozenset({"ren", "rename", "move"}) if os.name == "nt" else frozenset({"mv"})
+)
+#: Of those, cmd.exe's, whose new name is a bare name in the source's own folder.
+_RENAME_IN_PLACE = frozenset({"ren", "rename"})
+#: Characters a shell acts on. cmd.exe does so inside single quotes too, where
+#: this module reads them as part of a name, so a line holding one is never plain.
+_RENAME_SHELL_CHARS = frozenset("'`^&|<>;,=()!%$~{}*?[]")
+
 _PATH_ARG_NAMES = ("file_path", "path", "filename", "file", "target_file")
 _COMMAND_ARG_NAMES = ("command", "cmd", "script", "command_line")
 _SKILL_ARG_NAMES = ("skill", "skill_name", "skill_id", "name")
@@ -280,6 +299,9 @@ class GrantScope:
     label: str
     #: The file or skill the grant names, for a front-end to phrase in its own words.
     subject: str = ""
+    #: What "always" covers as a sentence says it ("changing files in X"), when the
+    #: tool's own verb would say less than the grant covers.
+    phrase: str = ""
 
     @property
     def key(self) -> str:
@@ -298,6 +320,10 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
     # Scratch writes never ask, so no prompt shows what a later run there does.
     if args.get(SCRATCH_ARG):
         return None
+    if tool_name == "run_shell_command":
+        renamed = _rename_scope(args)
+        if renamed is not None:
+            return renamed
     if tool_name in _SHELL_TOOLS:
         return _shell_scope(tool_name, args)
     if tool_name in PATH_TOOLS:
@@ -698,6 +724,8 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
                 and not re.fullmatch(r"[A-Za-z]:", parent)
                 and _folder_grant_is_safe(resolved_target, parent)
             ):
+                if tool_name in _FILE_CHANGE_TOOLS:
+                    return _file_change_scope(parent, resolved)
                 return GrantScope(
                     keys=(f"{tool_name}:{parent}/*",),
                     label=f"{tool_name} on files in {parent}",
@@ -710,6 +738,96 @@ def _path_scope(tool_name: str, args: Dict[str, Any]) -> Optional[GrantScope]:
         label=f"{tool_name} on {exact_display}",
         subject=exact_display,
     )
+
+
+def _file_change_scope(parent: str, as_written: str) -> GrantScope:
+    """The one folder grant writes, edits and renames in *parent* share."""
+    shown = parent.replace("/", "\\") if "\\" in as_written else parent
+    return GrantScope(
+        keys=(f"{_FILE_CHANGE_FAMILY}:{parent}/*",),
+        label=f"changes to files in {shown}",
+        subject=f"files in {shown}",
+        phrase=f"changing files in {shown}",
+    )
+
+
+def _rename_operand(word: str, cwd: Any) -> Optional[str]:
+    """*word* as an absolute path, or None when the shell, not GAIA, decides it.
+
+    A network path, a device name, a name Windows rewrites or a path through
+    ``..`` is None too, and is checked before anything on disk is looked at.
+    """
+    if not word or word.startswith("-") or glob.has_magic(word):
+        return None
+    if any(ch in word for ch in "$%~`"):
+        return None
+    if os.path.isabs(word):
+        written = word
+    elif isinstance(cwd, str) and os.path.isabs(cwd):
+        written = os.path.join(cwd, word)
+    else:
+        return None
+    # `link/..` is the link target's parent on disk, not the folder it is spelled in.
+    if ".." in re.split(r"[\\/]", written):
+        return None
+    path = os.path.normpath(written)
+    if _is_network_path(word) or _is_network_path(path):
+        return None
+    try:
+        safe_path_segment(os.path.basename(path))
+    except UnsafePathSegment:
+        return None
+    return path
+
+
+def _rename_scope(args: Dict[str, Any]) -> Optional[GrantScope]:
+    """A plain rename that keeps a file in one safe folder, as that folder's change grant.
+
+    Only one program with exactly two path operands and nothing else on the
+    line: no flags, wildcards, variables, redirects or second command. Both
+    names must sit directly in the same folder, under the same safety rules a
+    folder write grant uses, and the new name must be free. Anything else
+    returns None and is asked about.
+    """
+    command = _first_str(args, _COMMAND_ARG_NAMES)
+    if any(ch in _RENAME_SHELL_CHARS or ord(ch) < 32 for ch in command):
+        return None
+    # Off Windows a backslash is an escape to the shell and part of a name here.
+    if os.name != "nt" and "\\" in command:
+        return None
+    facts = read_command(command)
+    if facts.opaque or facts.writes_file or len(facts.segments) != 1:
+        return None
+    argv = facts.segments[0]
+    # The bare word only: `./mv` or `mv.bat` is whatever file sits at that path.
+    program = argv[0].lower() if os.name == "nt" else argv[0]
+    if program not in _RENAME_PROGRAMS or len(argv) != 3:
+        return None
+    cwd = args.get("working_directory")
+    source = _rename_operand(argv[1], cwd)
+    if source is None:
+        return None
+    # A folder or a link is not one of the folder's files.
+    if not os.path.isfile(source) or os.path.islink(source):
+        return None
+    folder = os.path.dirname(source)
+    if program in _RENAME_IN_PLACE:
+        if "/" in argv[2] or "\\" in argv[2] or argv[2] in (".", ".."):
+            return None
+        dest = _rename_operand(os.path.join(folder, argv[2]), cwd)
+    else:
+        dest = _rename_operand(argv[2], cwd)
+    # A name already taken would be replaced, and a folder would take the file out.
+    if dest is None or os.path.lexists(dest):
+        return None
+    if os.path.normcase(os.path.dirname(dest)) != os.path.normcase(folder):
+        return None
+    if not all(_folder_grant_is_safe(path, folder) for path in (source, dest)):
+        return None
+    parent = posixpath.dirname(posixpath.normpath(source.replace("\\", "/")))
+    if parent in ("", ".", "/") or re.fullmatch(r"[A-Za-z]:", parent):
+        return None
+    return _file_change_scope(parent, source)
 
 
 def _folder_grant_is_safe(target: str, parent: str) -> bool:
