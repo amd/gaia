@@ -51,11 +51,42 @@ def started_in(monkeypatch, tmp_path):
 
 def test_the_prompt_names_the_start_folder_as_the_place_to_look(started_in):
     start, agent = started_in
-    prompt = agent._compose_system_prompt()
+    folders = f"Your folders this session: {start.resolve()}. For"
+    working = f"Working directory: {start.resolve()}"
+
+    # Per-session lines ride in the first user message, not the system prompt.
+    sent = agent._with_session_context(
+        [
+            {"role": "system", "content": agent.system_prompt},
+            {"role": "user", "content": "what is in note.txt?"},
+        ]
+    )
+    first_user = sent[1]["content"]
 
     # Exactly the start folder: the home folder is not also offered.
-    assert f"Your folders this session: {start.resolve()}. For" in prompt
-    assert f"Working directory: {start.resolve()}" in prompt
+    assert folders in first_user
+    assert working in first_user
+    assert first_user.endswith("what is in note.txt?")
+    assert folders not in sent[0]["content"]
+    assert working not in sent[0]["content"]
+
+
+def test_every_request_carries_the_start_folder_not_only_the_first(started_in):
+    start, agent = started_in
+    folders = f"Your folders this session: {start.resolve()}. For"
+    history = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "first answer"},
+        {"role": "user", "content": "second question"},
+    ]
+
+    for _ in range(2):
+        sent = agent._with_session_context(history)
+        assert folders in sent[0]["content"]
+        assert folders not in sent[2]["content"]
+
+    # The block is rebuilt per request, never written into stored history.
+    assert history[0]["content"] == "first question"
 
 
 def test_a_bare_name_is_read_from_the_start_folder_without_asking(started_in):
