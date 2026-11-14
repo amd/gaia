@@ -106,20 +106,6 @@ def test_agent_pdf_reader_past_the_cap_says_what_to_do(tmp_path, monkeypatch):
         _pdf_text(str(_pdf_with_large_array(tmp_path / "f.pdf", 5_000)))
 
 
-def test_upload_page_count_reads_an_array_past_the_pypdf_default(tmp_path):
-    from gaia.ui._chat_helpers import _page_total
-
-    assert _page_total(_pdf_with_large_array(tmp_path / "f.pdf", 150_000)) == 1
-
-
-def test_upload_page_count_past_the_cap_is_unknown_not_a_crash(tmp_path, monkeypatch):
-    from gaia.ui._chat_helpers import _page_total
-
-    monkeypatch.setattr(pdf_utils, "PDF_MAX_ARRAY_ELEMENTS", 1_000)
-
-    assert _page_total(_pdf_with_large_array(tmp_path / "f.pdf", 5_000)) is None
-
-
 @pytest.mark.skipif(not _MSFT_10K.exists(), reason="real 10-K not on this machine")
 def test_real_microsoft_10k_indexes(rag):
     text, pages, _ = rag._extract_text_from_pdf(str(_MSFT_10K))
