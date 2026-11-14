@@ -28,12 +28,9 @@ function renderRow() {
                 current={false}
                 remote
                 busy={null}
-                confirmingRemove={false}
                 onUse={noop}
                 onDownload={noop}
                 onAskRemove={noop}
-                onKeep={noop}
-                onRemove={noop}
             />
         </ul>,
     );
