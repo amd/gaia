@@ -52,6 +52,43 @@ first. That agent:
   and the fix needed, for the maintainer. The one exception is a mechanical keep-both
   conflict in tests, locale files, or a CHANGELOG.
 
+## Express lane for low-risk bug fixes
+
+When the maintainer asks to land a backlog of bug fixes fast, merge a PR without a full
+review once **all** of these hold:
+
+- it's a bug fix (`fix…` title), not a draft, and **mergeable**; conflicts mean merging
+  `main` in first;
+- the product-code change is small, **~300 lines or fewer**. Tests, docs, CHANGELOG and
+  eval scenarios don't count toward the size;
+- the review bot's **latest verdict approves** (`Approve` or `Approve with suggestions`);
+- no check is still running, and every **failing check is unrelated**:
+  - an infra lane: setup journeys, installers, hardware;
+  - a network or rate-limit failure;
+  - a known flake;
+  - a failing test in code the PR doesn't touch.
+
+  Read the log to decide; never judge by the job name alone.
+
+Hold anything that breaks a condition, and anything that touches security, permission
+gating, prompts or tool schemas. Those get a full verifier pass.
+
+Keep the backlog moving:
+
+- **Approve waiting CI runs** on every open PR's current head. Skip superseded runs, which
+  only burn quota. For a fork, read the head diff first: approve unless it touches
+  `.github/` or an installer.
+- **Mark bot drafts ready** when they pass the same bar. Close a bot draft whose fix
+  already landed on `main`, or that a maintainer PR covers.
+- **Fix `main` before the PRs.** When the same test fails on many unrelated PRs, it's broken
+  on `main`. Fix it once, with a self-merge allowed for a `main`-breakage fix, then merge
+  `main` into the held PRs so CI re-runs against the fix.
+- **On a maintainer fork, merge `main` in;** never rebase or force-push. Several PRs that
+  edit the same docs paragraph will keep conflicting; order their sentences once so each
+  later merge only adds.
+- **A PR held only for in-app evidence** (a screenshot or packaged-build replay) waits for
+  the maintainer or slips to the patch release. It never blocks the RC.
+
 ## Verification
 
 - **Never self-merge.** An agent that authored a PR's final commits must not merge it; a
