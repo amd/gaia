@@ -69,6 +69,27 @@ def test_a_file_removed_from_disk_says_where_it_was(home, client):
     assert "notes.md" in resp.json()["detail"]
 
 
+def test_a_file_the_account_can_no_longer_read_is_403_not_a_cut_reply(
+    home, client, monkeypatch
+):
+    from gaia.ui.routers import documents as documents_router
+
+    notes = home / "acl_me.txt"
+    notes.write_text("Brisk Hollow gate PIN is 5806")
+    doc_id = _add(client, notes)
+
+    def _denied(file, *args, **kwargs):
+        raise PermissionError(13, "Access is denied", str(file))
+
+    monkeypatch.setattr(documents_router, "open", _denied, raising=False)
+
+    resp = client.get(f"/api/documents/{doc_id}/file")
+
+    assert resp.status_code == 403
+    assert "acl_me.txt" in resp.json()["detail"]
+    assert "5806" not in resp.text
+
+
 def test_a_document_outside_the_document_roots_is_not_served(
     home, client, tmp_path, monkeypatch
 ):

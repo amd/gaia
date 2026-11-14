@@ -97,6 +97,29 @@ def test_denied_read_prompts_once_and_fails(layout):
     assert len(console.calls) == 1
 
 
+def test_a_declined_read_says_the_user_declined_not_that_the_file_is_bad(layout):
+    agent = _ReadAgent(layout["scope"], _RecordingConsole(False))
+
+    error = _read(agent, layout["file"])["error"]
+
+    assert "the user declined access" in error
+    assert "The file is fine" in error
+
+
+class _TimingOutConsole(_RecordingConsole):
+    def confirmation_timed_out(self, tool_name):
+        return tool_name == PATH_ACCESS_PROMPT_TOOL
+
+
+def test_an_unanswered_prompt_is_not_called_a_decline(layout):
+    agent = _ReadAgent(layout["scope"], _TimingOutConsole(False))
+
+    error = _read(agent, layout["file"])["error"]
+
+    assert "Access denied" in error
+    assert "declined" not in error
+
+
 def test_secret_file_never_reaches_the_console(layout):
     secret = layout["file"].parent / ".env"
     secret.write_text("TOKEN=x", encoding="utf-8")

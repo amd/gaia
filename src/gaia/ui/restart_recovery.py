@@ -49,7 +49,7 @@ INTERRUPTED_INDEXING_ERROR = (
 )
 
 #: How often a running turn's streamed text is written to the database.
-PARTIAL_SAVE_INTERVAL = 2.0
+PARTIAL_SAVE_INTERVAL = 0.5
 #: How often a running server looks for work another, ended server left behind.
 SWEEP_INTERVAL = 30.0
 
@@ -91,6 +91,7 @@ class TurnJournal:
         self._interval = PARTIAL_SAVE_INTERVAL if interval is None else interval
         self._text = ""
         self._saved = ""
+        self._had_text = False
         self._saved_at = clock()
         self._answered = False
         self.error: Optional[str] = None
@@ -121,7 +122,11 @@ class TurnJournal:
                 self._answered = True
             elif kind in ("error", "agent_error") and content.strip():
                 self.error = content
-        if self._clock() - self._saved_at >= self._interval:
+        # The answer's first words are saved at once: a thinking model's
+        # last save often holds none.
+        first_text = bool(self._text) and not self._had_text
+        self._had_text = self._had_text or bool(self._text)
+        if first_text or self._clock() - self._saved_at >= self._interval:
             try:
                 self.flush()
             except (sqlite3.Error, RuntimeError) as exc:
