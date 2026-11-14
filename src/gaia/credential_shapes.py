@@ -159,15 +159,92 @@ def redact_tool_output(value: Any) -> Any:
     return _map_strings(value, _mask_command_output)
 
 
+#: ``user:password@`` in a URL. A bare ``user@`` (``git@``, ``postgres@``) is
+#: a login name, not a secret.
+_FILE_USERINFO = re.compile(r"(?<=://)([^/\s@?#:]+)(?::([^/\s@?#]*))?(?=@)")
+
+#: A query value is a secret only at this length; ``?key=abc`` is a placeholder.
+_MIN_QUERY_SECRET = 8
+
+#: Placeholder passwords and values that documentation uses in place of a secret.
+_PLACEHOLDER_WORDS = frozenset(
+    {"password", "passwd", "pass", "pwd", "secret", "token", "changeme", "example"}
+)
+_TEMPLATE_CHARS = frozenset("{}$%<>")
+_PLACEHOLDER_SHAPE = re.compile(r"^(?:[A-Z_]+|x+|X+|\*+|\.+)$")
+
+#: A run of key-like characters a generated token has and a hyphenated name lacks.
+_RANDOM_RUN = re.compile(r"[A-Za-z0-9_]{16,}")
+
+
+def _placeholder(value: str) -> bool:
+    """True when *value* is a template or a stand-in, not a real secret."""
+    return (
+        not value
+        or any(char in _TEMPLATE_CHARS for char in value)
+        or value.lower() in _PLACEHOLDER_WORDS
+        or bool(_PLACEHOLDER_SHAPE.match(value))
+    )
+
+
+def _looks_generated(text: str) -> bool:
+    """True when *text* holds a long run of letters mixed with digits."""
+    return any(
+        any(c.isdigit() for c in run) and any(c.isalpha() for c in run)
+        for run in _RANDOM_RUN.findall(text)
+    )
+
+
+def _mask_file_userinfo(match: "re.Match[str]") -> str:
+    user, password = match.group(1), match.group(2)
+    if password is not None and not _placeholder(password):
+        return REDACTED
+    if password is None and len(user) >= 20 and _looks_generated(user):
+        return REDACTED  # a token used as the user name
+    return match.group(0)
+
+
+def _mask_file_query(match: "re.Match[str]") -> str:
+    value = match.group(0)[len(match.group(1)) :]
+    if len(value) < _MIN_QUERY_SECRET or _placeholder(value):
+        return match.group(0)
+    return match.group(1) + REDACTED
+
+
+def _mask_file_token(match: "re.Match[str]") -> str:
+    token = match.group(0)
+    # Only the bare "sk-" prefix collides with ordinary hyphenated names.
+    if token[:3].lower() == "sk-" and not _looks_generated(token):
+        return token
+    return REDACTED
+
+
+def redact_file_text(text: str) -> str:
+    """*text* read out of a file, with its real credentials masked.
+
+    Stricter than :func:`redact_credentials`, because a file is full of
+    things shaped like a secret that aren't: ``git@`` and ``postgres@`` URLs,
+    ``?key={api_key}`` templates, ``sk-learn-...`` names. Masking those would
+    hide the file's own text and block edits to it.
+    """
+    if not text:
+        return text
+    text = _FILE_USERINFO.sub(_mask_file_userinfo, text)
+    text = _URL_SECRET_QUERY.sub(_mask_file_query, text)
+    for pattern in _TOKENS:
+        text = pattern.sub(_mask_file_token, text)
+    return text
+
+
 def redact_file_content(value: Any) -> Any:
-    """*value* with tokens masked everywhere in it; lines are never hidden.
+    """*value* with :func:`redact_file_text` applied everywhere; lines are never hidden.
 
     For text read out of a file: a line naming ``.env:`` there is the file's
     own content, not a search's file-name prefix.
     """
-    return _map_strings(value, redact_credentials)
+    return _map_strings(value, redact_file_text)
 
 
 def holds_credentials(text: str) -> bool:
-    """True when :func:`redact_credentials` would change *text*."""
-    return bool(text) and redact_credentials(text) != text
+    """True when :func:`redact_file_text` would change *text*."""
+    return bool(text) and redact_file_text(text) != text

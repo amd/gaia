@@ -216,7 +216,13 @@ class FileReadRecord:
 
 
 #: Arguments whose text a write or edit puts into the file.
-_WRITTEN_ARGS = ("new_content", "content", "new_implementation")
+_WRITTEN_ARGS = (
+    "new_content",
+    "content",
+    "new_implementation",
+    "instructions",
+    "description",
+)
 
 
 def masked_secret_refusal(

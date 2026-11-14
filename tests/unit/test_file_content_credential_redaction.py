@@ -24,6 +24,7 @@ from gaia.credential_shapes import (
     REDACTED,
     holds_credentials,
     redact_file_content,
+    redact_file_text,
 )
 from gaia.security import PathValidator
 
@@ -377,3 +378,82 @@ def test_mcp_file_preview_is_masked():
 
     assert GHP not in str(result)
     assert result["preview_lines"][0] == "[remote]"
+
+
+NOT_SECRETS = [
+    '"repository": "git+ssh://git@github.com/amd/gaia.git"',
+    "postgresql://postgres@localhost:5432/app",
+    'requests.get(f"https://api.x.com/v1?key={api_key}")',
+    "# sk-learn-compatible-estimator-wrapper",
+    "https://user:${GIT_TOKEN}@github.com/amd/gaia.git",
+    "https://user:password@example.com/x",
+    "curl https://api.example.com/v1?token=YOUR_TOKEN_HERE",
+    "url = https://example.com/x?api_key=%(key)s",
+    "see https://example.com/items?key=abc",
+]
+
+SK_PROJ = "sk-proj-" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z"
+SK_ANT = "sk-ant-api03-" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z"
+HEX_TOKEN = "0123456789abcdef" * 2 + "01234567"
+REAL_SECRETS = [
+    (f"url = https://user:{GHP}@github.com/amd/gaia.git", GHP),
+    ("postgresql://app:hunter2@db.internal:5432/app", "hunter2"),
+    (f"https://x-access-token:{GLPAT}@gitlab.com/a/b.git", GLPAT),
+    (f"https://{HEX_TOKEN}@github.com/amd/gaia.git", HEX_TOKEN),
+    ("GET https://api.example.com/v1?access_token=Zq81mXv0Lp7c", "Zq81mXv0Lp7c"),
+    (f"OPENAI_API_KEY={SK_PROJ}", SK_PROJ),
+    (f"ANTHROPIC_API_KEY={SK_ANT}", SK_ANT),
+    ("OLD_KEY=sk-" + "Ab3dEf6hIj9kLm2nOp5qRs8t", "Ab3dEf6hIj9kLm2nOp5qRs8t"),
+]
+
+
+@pytest.mark.parametrize("line", NOT_SECRETS)
+def test_secret_shaped_file_text_is_not_masked(line):
+    assert redact_file_text(line) == line
+    assert not holds_credentials(line)
+
+
+@pytest.mark.parametrize("line, secret", REAL_SECRETS)
+def test_real_secrets_in_file_text_are_still_masked(line, secret):
+    out = redact_file_text(line)
+
+    assert secret not in out and REDACTED in out
+    assert holds_credentials(line)
+
+
+@pytest.mark.parametrize("line", NOT_SECRETS[:4])
+def test_a_file_with_secret_shaped_text_stays_editable(agent, tmp_path, line):
+    path = tmp_path / "settings.txt"
+    original = f"{line}\nname = demo\n"
+    path.write_text(original, encoding="utf-8")
+    shown = _read(agent, path)["content"]
+    assert line in shown
+
+    edited = agent._execute_tool(
+        "edit_file",
+        {
+            "file_path": str(path),
+            "old_content": f"{line}\nname = demo",
+            "new_content": f"{line}\nname = renamed",
+        },
+    )
+    assert edited["status"] == "success", edited
+    _read(agent, path)
+    rewritten = agent._execute_tool(
+        "write_file",
+        {"file_path": str(path), "content": f"{line}\nname = rewritten\n"},
+    )
+
+    assert rewritten["status"] == "success", rewritten
+    assert path.read_text(encoding="utf-8") == f"{line}\nname = rewritten\n"
+
+
+def test_gaia_md_instructions_cannot_write_the_marker_over_a_secret(tmp_path):
+    path = tmp_path / "GAIA.md"
+    path.write_text(f"# Demo\nremote: {REMOTE}\n", encoding="utf-8")
+
+    refusal = masked_secret_refusal(
+        path, {"instructions": f"Push to https://{REDACTED}@github.com/amd/gaia"}
+    )
+
+    assert refusal is not None and refusal["error_type"] == "redacted_secret"
