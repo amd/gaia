@@ -474,6 +474,35 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
+    id: `lib-${i}`, filename: `meeting-notes-${i}.txt`, filepath: `C:/library/meeting-notes-${i}.txt`, file_size: 512,
+    chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0,
+}));
+
+for (const locale of ['en', 'ar']) {
+    // 600 attached documents drew 600 chips and pushed the message box off the screen.
+    test(`a new chat with a whole large library attached keeps the message box on screen (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route('**/api/documents', (route) => route.fulfill({
+            json: { documents: BIG_LIBRARY, total: 600, total_size_bytes: 307_200, total_chunks: 600 },
+        })));
+        const box = page.locator('.new-chat textarea').first();
+        const onScreen = async (why: string) => {
+            const r = (await box.boundingBox())!;
+            const vh = page.viewportSize()!.height;
+            expect(r.y >= 0 && r.y + r.height <= vh, `${why}: the message box is at y=${r.y}`).toBe(true);
+        };
+        await page.locator('.new-chat-docs .link-btn').first().click();
+        await expect(page.locator('.new-chat-doc')).toHaveCount(5);
+        await onScreen('five chips and +595 more');
+        await shot(page, `new-chat-600-docs-${locale}`);
+        await page.locator('.new-chat-doc-toggle').click();
+        await expect(page.locator('.new-chat-doc')).toHaveCount(600);
+        await onScreen('the whole list opened');
+        await shot(page, `new-chat-600-docs-open-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 for (const locale of ['en', 'ar']) {
     test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
         await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({
@@ -1486,6 +1515,11 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('.fb-entry-date')).toHaveText(month);
         await shot(page, `dates-${locale}-files`);
         // No audit yet: the file browser's names and sizes still break the RTL rules, tracked separately.
+
+        // Closing a browser opened from the library used to drop you back in the chat.
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toBeVisible();
+        await expect(page.locator('.fb-entry-date')).toHaveCount(0);
     });
 
     // At 200% zoom the action buttons sat below the window and the wheel couldn't reach them.
@@ -1791,7 +1825,14 @@ for (const locale of ['ar', 'en']) {
         // Wheel over the pane, the way a person scrolls, so the rule doesn't name the scroller.
         await page.mouse.move(dialogBox.x + dialogBox.width / 2, dialogBox.y + dialogBox.height / 2);
         await page.mouse.wheel(0, 10_000);
-        await expect.poll(async () => (await title.boundingBox())?.y ?? 0).toBeLessThan(titleBefore.y - 100);
+        await expect.poll(() => dialog.locator('.settings-scroll').evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
+        // The tab title stays in view as a header (#7402).
+        const titleAfter = await title.boundingBox();
+        expect(titleAfter && titleAfter.y >= dialogBox.y && titleAfter.y < titleBefore.y + 1).toBe(true);
+        const titleShown = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-pane-title'),
+            [titleAfter!.x + titleAfter!.width / 2, titleAfter!.y + titleAfter!.height / 2]);
+        expect(titleShown, 'scrolled rows are drawn over the tab title').toBe(true);
+        await shot(page, `settings-sticky-title-${locale}`);
 
         const after = await close.boundingBox();
         if (!after) throw new Error('close button left the layout after scrolling');
@@ -1801,6 +1842,11 @@ for (const locale of ['ar', 'en']) {
         const onTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-close'),
             [after.x + after.width / 2, after.y + after.height / 2]);
         expect(onTop, 'the close button is covered by scrolled content').toBe(true);
+
+        // Another tab opens at its own top, not at this one's scroll offset.
+        await dialog.locator('[data-section="general"]').click();
+        await expect(title).toHaveText(/General|عام/);
+        expect(await dialog.locator('.settings-scroll').evaluate((el) => el.scrollTop)).toBe(0);
     });
 }
 
@@ -2106,6 +2152,13 @@ for (const locale of ['ar', 'en']) {
             [link.x + link.width / 2, link.y + link.height / 2])).toBe(true);
         await shot(page, `setup-row-jump-${locale}`);
         expect(await audit(page)).toEqual([]);
+        // The pinned tab title must not paint over the button.
+        await dialog.locator('.settings-scroll').evaluate((el) => { el.scrollTop = 0; });
+        const backBox = await back.boundingBox();
+        const backOnTop = await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-back'),
+            [backBox!.x + backBox!.width / 2, backBox!.y + backBox!.height / 2]);
+        expect(backOnTop, 'the tab title covers the Back button').toBe(true);
+        await shot(page, `setup-row-jump-${locale}-top`);
         await back.click();
         await expect(dialog.locator('[data-section="setup"]')).toHaveAttribute('aria-current', 'page');
         await expect(back).toHaveCount(0);
