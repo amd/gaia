@@ -689,6 +689,28 @@ def budget_notices_enabled() -> bool:
     )
 
 
+def plan_recap_enabled() -> bool:
+    """Whether a finished in-text plan is answered with the task and plan again.
+
+    On by default. ``GAIA_AGENT_PLAN_RECAP=0`` sends a one-line completion
+    note instead: the plan is already in the history as the model's own
+    message, and its results as the tool messages after it. Read at call
+    time, like the other ``GAIA_AGENT_*`` knobs.
+    """
+    raw = os.environ.get("GAIA_AGENT_PLAN_RECAP")
+    if raw is None or raw == "":
+        return True
+    normalized = raw.strip().lower()
+    if normalized in ("1", "true", "yes", "on"):
+        return True
+    if normalized in ("0", "false", "no", "off"):
+        return False
+    raise ValueError(
+        f"GAIA_AGENT_PLAN_RECAP must be a boolean (1/0, true/false, on/off), "
+        f"got {raw!r}. Unset it to keep the recap on."
+    )
+
+
 def verify_edits_enabled() -> bool:
     """Whether a turn reads its own edits back before it answers.
 
@@ -12347,6 +12369,14 @@ Do NOT wrap conversational replies in JSON.
                                     f"- Clearly state if anything remains incomplete or if errors occurred\n"
                                     f"- If the task is fully complete, state that clearly\n\n"
                                     f'Answer with {{"thought": "...", "goal": "...", "answer": "..."}}'
+                                )
+                            elif not plan_recap_enabled():
+                                completion_message = (
+                                    f"All {self.total_plan_steps} plan steps ran; "
+                                    f"{steps_limit - steps_taken} of {steps_limit} "
+                                    "steps left. If the task is done, answer with "
+                                    '{"thought": "...", "goal": "...", "answer": "..."}; '
+                                    "if not, give a new plan."
                                 )
                             else:
                                 completion_message = (

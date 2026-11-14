@@ -16,6 +16,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   documents fill), and never calls one of those "not attached": asking about
   one by name loads it.
 
+- **`GAIA_AGENT_PLAN_RECAP=0` shortens what a finished plan sends back.** For a
+  model that writes tool calls as JSON text, a finished plan was followed by the
+  whole request and plan again, which every later call re-sent. With the switch
+  off it is one line saying how many plan steps ran and how many steps are
+  left. On by default, so nothing changes unless you set it.
 - **Writing the report after the tests no longer counts as an untested
   change.** A task that ran its tests and then wrote its summary file, or a
   changelog entry, was told its passing tests "ran before the last change" and
