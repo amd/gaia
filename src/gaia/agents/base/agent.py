@@ -1454,6 +1454,24 @@ _CUT_OFF_NEXT_STEP = (
 # Unfinished-answer guard: a "final answer" that is really a plan,
 # a narrated next step, or a tool call typed out as text.
 _MAX_UNFINISHED_ANSWER_REPROMPTS = 2
+
+# A reply holding only a "thought" is asked once for a call or an answer; a
+# second one in a row ends the turn as unfinished.
+_THOUGHT_ONLY_PROMPT = (
+    'Your last reply had only a "thought": no tool call, plan or answer. '
+    "Make the next tool call, or give the final answer as "
+    '{"thought": "...", "answer": "..."}.'
+)
+_THOUGHT_ONLY_STOP = (
+    "This request is unfinished: the model replied twice in a row with only "
+    "its reasoning, without calling a tool or giving an answer."
+)
+_THOUGHT_ONLY_GAP = (
+    "The model replied with only its reasoning twice in a row, so no answer "
+    "was given."
+)
+# A reply that is nothing but one fenced JSON object.
+_FENCED_JSON_ONLY = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 _UNFINISHED_PARAGRAPH_MAX_CHARS = 500
 _FENCED_BLOCK_PATTERN = re.compile(r"```.*?(?:```|\Z)", re.DOTALL)
 _TOOL_CALL_MARKUP_PATTERN = re.compile(
@@ -1681,6 +1699,19 @@ def _announces_action(sentence: str, short: bool = True) -> bool:
     if _IMMEDIACY_PATTERN.search(sentence):
         return True
     return short and not match.group("lead")
+
+
+def _thought_only(reply: Any) -> bool:
+    """A parsed reply with a ``thought`` and nothing to act on.
+
+    No answer, tool call or plan steps (an empty or null ``plan`` runs
+    nothing). Text inside the thought is never read as an answer.
+    """
+    if not isinstance(reply, dict) or "thought" not in reply:
+        return False
+    if any(key in reply for key in ("answer", "tool", "tool_calls", "needs_plan")):
+        return False
+    return reply.get("plan") in (None, [])
 
 
 def _is_json(text: str) -> bool:
@@ -7217,6 +7248,14 @@ Do NOT wrap conversational replies in JSON.
         # like "Let me search for that.\n{"tool": "query_documents", ...}".
         # Detect and extract embedded tool calls before treating as plain text.
         if not response.startswith("{"):
+            fenced = _FENCED_JSON_ONLY.fullmatch(response)
+            if fenced:
+                try:
+                    inner = json.loads(fenced.group(1), strict=False)
+                except json.JSONDecodeError:
+                    inner = None
+                if _thought_only(inner):
+                    return {**inner, "thought_only": True}
             # Check for embedded tool call JSON: look for {"tool" or {"thought"
             # patterns that indicate a structured response is buried in the text
             embedded_json = self._extract_embedded_tool_call(response)
@@ -7235,6 +7274,8 @@ Do NOT wrap conversational replies in JSON.
             # Ensure tool_args exists if tool is present
             if "tool" in result and "tool_args" not in result:
                 result["tool_args"] = {}
+            if _thought_only(result):
+                result["thought_only"] = True
             logger.debug("[PARSE] Valid JSON response")
             return result
         except json.JSONDecodeError:
@@ -7248,6 +7289,8 @@ Do NOT wrap conversational replies in JSON.
             if isinstance(result, dict):
                 if "tool" in result and "tool_args" not in result:
                     result["tool_args"] = {}
+                if _thought_only(result):
+                    result["thought_only"] = True
                 logger.debug("[PARSE] Valid JSON with raw control characters")
                 return result
         except json.JSONDecodeError as exc:
@@ -7257,6 +7300,8 @@ Do NOT wrap conversational replies in JSON.
         extracted_json = self._extract_json_from_response(response)
         if extracted_json:
             logger.debug("[PARSE] Extracted JSON successfully")
+            if _thought_only(extracted_json):
+                extracted_json["thought_only"] = True
             return extracted_json
 
         # STEP 4: JSON was expected (starts with '{') but all parsing failed
@@ -7297,6 +7342,9 @@ Do NOT wrap conversational replies in JSON.
 
             logger.debug(f"Extracted tool call using regex: {result}")
             return result
+
+        if thought_field and not answer_field and not plan_match:
+            return {"thought": thought, "goal": goal, "thought_only": True}
 
         # Fall back to answer extraction (only reached if no tool was found)
         if answer_field:
@@ -11942,6 +11990,8 @@ Do NOT wrap conversational replies in JSON.
             []
         )  # Full unbounded log of all tool calls this turn (for workflow guards)
         unfinished_answer_reprompts = 0
+        thought_only_replies = 0
+        thought_only_stop = False
         stopped_on_announced_step = False
         look_first_reprompted = False
         save_reprompted = False
@@ -13127,6 +13177,8 @@ Do NOT wrap conversational replies in JSON.
                 steps_taken += 1
                 continue
             logger.debug(f"Parsed response: {parsed}")
+            thought_only = bool(parsed.pop("thought_only", False))
+            thought_only_replies = thought_only_replies + 1 if thought_only else 0
             conversation.append(
                 {"role": "assistant", "content": parsed}
                 | ({"reasoning": reasoning} if reasoning else {})
@@ -13334,6 +13386,32 @@ Do NOT wrap conversational replies in JSON.
 
                 if goal and goal != "No explicit goal provided":
                     self.console.print_goal(goal)
+
+            if thought_only:
+                self._record_step_stats(
+                    response_stats, steps_taken, step_timer, conversation
+                )
+                if thought_only_replies == 1:
+                    # On the last step the step-cap closing call answers instead.
+                    if steps_taken < steps_limit:
+                        logger.warning(
+                            "[WORKFLOW] Reply held only a thought at step %d; "
+                            "asking for a tool call or an answer",
+                            steps_taken,
+                        )
+                        messages.append(
+                            {"role": "user", "content": _THOUGHT_ONLY_PROMPT}
+                        )
+                    continue
+                logger.warning(
+                    "[WORKFLOW] Reply held only a thought again at step %d; "
+                    "ending the turn as unfinished",
+                    steps_taken,
+                )
+                thought_only_stop = True
+                final_answer = _THOUGHT_ONLY_STOP
+                loop_break_answer_unprinted = True
+                break
 
             # Process plan if available
             if "plan" in parsed:
@@ -14911,6 +14989,8 @@ Do NOT wrap conversational replies in JSON.
             final_answer, completion_gaps = self._gate_unsealed_answer(
                 final_answer, model_failed=self._turn_model_retries["failed"]
             )
+            if thought_only_stop:
+                completion_gaps = [*completion_gaps, _THOUGHT_ONLY_GAP]
             if self._turn_model_retries["failed"]:
                 self._announce_turn_failed()
             final_answer = self._with_verification_scope(final_answer)

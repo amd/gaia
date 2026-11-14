@@ -16,6 +16,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   documents fill), and never calls one of those "not attached": asking about
   one by name loads it.
 
+- **A reply that is only the model's reasoning no longer ends the turn as
+  done.** A model writing JSON tool calls sometimes replied with just a
+  `thought`: a fenced one was taken as the final answer, and after a bare one
+  the agent asked again with nothing new, up to the step limit. The agent now asks once for a tool call or an
+  answer, and a second such reply in a row ends the turn as incomplete.
 - **`GAIA_AGENT_PLAN_RECAP=0` shortens what a finished plan sends back.** For a
   model that writes tool calls as JSON text, a finished plan was followed by the
   whole request and plan again, which every later call re-sent. With the switch

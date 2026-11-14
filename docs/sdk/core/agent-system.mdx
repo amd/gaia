@@ -1084,6 +1084,12 @@ claim remains unsupported, or no correction step remains, the framework replaces
 it with an explicit incomplete result. Unsupported claims never become successful
 results merely because the correction budget ran out.
 
+A reply in the JSON text format that holds only a `thought` (no tool call, no
+plan steps, no answer, even inside a code fence) is never taken as the answer.
+The loop asks once for a tool call or the final answer; a second such reply in
+a row ends the turn with status `incomplete` and an answer saying the request
+is unfinished.
+
 Only an edit a test could depend on makes an earlier run stale. Writing a doc
 or data file (`.md`, `.mdx`, `.rst`, `.txt`, `.csv`, a bare `CHANGELOG` or
 `README`, …) leaves the run standing, and so does writing a non-code file the
