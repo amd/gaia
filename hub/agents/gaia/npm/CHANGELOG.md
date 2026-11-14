@@ -16,6 +16,12 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   documents fill), and never calls one of those "not attached": asking about
   one by name loads it.
 
+- **Large files and outputs are read in fewer, larger pieces.** Reading a file
+  too large for one result returned small archived parts the agent fetched one
+  per call. It now returns the file's first lines and a line-numbered outline
+  of its definitions or headings, so the agent reads the part it needs by line
+  range. `read_tool_output` takes `to_entry` to return a run of parts in one
+  call, up to the same size limit as any tool result.
 - **A command killed at its timeout keeps what it printed, and the agent scopes
   the retry.** A Python lint or test run that timed out came back with no
   output at all, and the hint suggested running it again with a longer

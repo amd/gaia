@@ -457,7 +457,8 @@ archived whole and reaches the model as a chunk index:
 - `shown` — the parts kept verbatim, as `{offset, text}` segments.
 - `index` — one `{n, label, offset, length}` per part left out, numbered from 1
   in document order. `read_tool_output(artifact, entry=n)` returns exactly that
-  part; the result's `fetch` field says so.
+  part, and `entry=n, to_entry=m` a run of parts in one call; the result's
+  `fetch` field says so.
 - `artifact`, `continuation`, `total_chars`, `truncated`, `original_chars`,
   `omitted_chars` — as before. `archived_field` names the field the archive
   holds (`content`, `stdout`, `matches`); every other field is kept, including
@@ -1340,9 +1341,14 @@ SPDX-License-Identifier: MIT
 
 When a result exceeds the model budget, it carries an `artifact` handle, a
 numbered `index` of the parts left out, and `continuation: read_tool_output`.
-Call `read_tool_output(artifact, entry=n)` to get entry `n` verbatim. The index
-names every omitted part, so paging through a whole output is almost never
-needed. A part longer than 8,000 characters comes back in pages: the page sets
+Call `read_tool_output(artifact, entry=n)` to get entry `n` verbatim, or
+`read_tool_output(artifact, entry=n, to_entry=m)` to get entries `n`..`m` as one
+span in a single call. A run returns as many whole entries as fit the model's
+tool-result target and sets `to_entry` to the last one returned and
+`next_entry` to where to continue; a first entry larger than that target pages
+like a single entry, with no `next_entry` until it is read to its end. The
+index names every omitted part, so paging through a whole output is almost
+never needed. A part longer than 8,000 characters comes back in pages: the page sets
 `remaining`, and `read_tool_output(artifact, offset=next_offset,
 limit=remaining)` continues it. Without an entry, `offset` and `limit` (default
 2,000) read any span. An entry number outside the index is an error that names

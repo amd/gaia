@@ -108,13 +108,24 @@ class ArtifactStore:
         offset: int = 0,
         limit: Optional[int] = None,
         entry: Optional[int] = None,
+        to_entry: Optional[int] = None,
+        max_chars: int = PAGE_CHARS,
     ) -> dict:
         """A page of archived text: index entry ``entry``, or ``offset``/``limit``.
 
         ``limit`` defaults to the entry's length, or 2000 without an entry. A
         page holds at most ``PAGE_CHARS``; ``remaining`` and ``next_offset``
-        say where the rest of the requested span continues.
+        say where the rest of the requested span continues. With ``to_entry``,
+        entries ``entry``..``to_entry`` come back as one span of up to
+        ``max_chars``; ``next_entry`` names the first one that did not fit.
         """
+        if to_entry is not None:
+            if entry is None or offset or limit is not None:
+                raise ValueError(
+                    "to_entry reads a run of entries: pass it with entry, "
+                    "without offset or limit."
+                )
+            return self._read_entries(handle, entry, to_entry, max_chars)
         with self._lock:
             whole = handle in self._whole
         if entry is None and not offset and limit is None and whole:
@@ -127,6 +138,11 @@ class ArtifactStore:
             limit = length if limit is None else limit
         elif limit is None:
             limit = 2000
+        return self._page(handle, offset, limit, entry, PAGE_CHARS)
+
+    def _page(
+        self, handle: str, offset, limit, entry: Optional[int], page_chars: int
+    ) -> dict:
         if (
             not isinstance(offset, int)
             or isinstance(offset, bool)
@@ -153,7 +169,7 @@ class ArtifactStore:
                 )
             if offset > len(text):
                 raise ValueError(f"offset exceeds output length {len(text)}")
-            end = min(len(text), offset + min(limit, PAGE_CHARS))
+            end = min(len(text), offset + min(limit, page_chars))
             page = {
                 "artifact": handle,
                 "content": text[offset:end],
@@ -167,6 +183,38 @@ class ArtifactStore:
             if entry is not None:
                 page["entry"] = entry
             return page
+
+    def _read_entries(self, handle: str, first, last, max_chars: int) -> dict:
+        """Entries *first*..*last* as one verbatim span, whole entries only.
+
+        The span runs from *first*'s start to the end of the last entry that
+        fits in *max_chars*, so it can include text between entries that the
+        condensed result already showed. A first entry longer than
+        *max_chars* comes back as a page that continues at ``next_offset``,
+        with no ``next_entry`` until it is read to its end.
+        """
+        if not isinstance(last, int) or isinstance(last, bool):
+            raise ValueError(f"to_entry must be an index entry number, got {last!r}.")
+        if not isinstance(max_chars, int) or max_chars < 1:
+            raise ValueError(f"max_chars must be a positive count, got {max_chars!r}.")
+        start, first_length = self._entry_span(handle, first)
+        if last < first:
+            raise ValueError(f"to_entry {last} is before entry {first}.")
+        self._entry_span(handle, last)
+        with self._lock:
+            spans = self._indexes[handle]
+        end, reached = start + first_length, first
+        for n in range(first + 1, last + 1):
+            offset, length = spans[n - 1]
+            if offset < start or offset + length - start > max_chars:
+                break
+            end, reached = max(end, offset + length), n
+        page = self._page(handle, start, end - start, first, max_chars)
+        page["to_entry"] = reached
+        # A part still paging continues at next_offset first.
+        if reached < last and "remaining" not in page:
+            page["next_entry"] = reached + 1
+        return page
 
     def _entry_span(self, handle: str, entry) -> Tuple[int, int]:
         if not isinstance(entry, int) or isinstance(entry, bool):

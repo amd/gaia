@@ -4128,17 +4128,30 @@ Do NOT wrap conversational replies in JSON.
             offset: int = 0,
             limit: Optional[int] = None,
             entry: Optional[int] = None,
+            to_entry: Optional[int] = None,
         ) -> dict:
-            """Read one part of a condensed tool result, verbatim, without rerunning the tool.
+            """Read parts of a condensed tool result, verbatim, without rerunning the tool.
 
-            Pass the result's artifact and the n of the index entry you need.
-            The index already names every omitted part, so paging through a
-            whole output is almost never needed. For exhaustive item lists from
-            long files, use extract_document_items instead.
+            Pass the result's artifact and the n of the index entry you need,
+            or entry and to_entry to read a run of entries in one call. The
+            index already names every omitted part, so paging through a whole
+            output is almost never needed. For exhaustive item lists from long
+            files, use extract_document_items instead.
             """
             # Per-argument detail lives in the schema below, not here: this
             # docstring is the tool description and is re-sent every call.
-            return store_for(self).read(artifact, offset, limit, entry)
+            store = store_for(self)
+            if to_entry is None:
+                return store.read(artifact, offset, limit, entry)
+            # A run of entries fills one result, never more than the condenser allows.
+            return store.read(
+                artifact,
+                offset,
+                limit,
+                entry,
+                to_entry,
+                max_chars=self._truncation_budget()[1],
+            )
 
         self._output_reader_entry = {
             "name": "read_tool_output",
@@ -4153,6 +4166,15 @@ Do NOT wrap conversational replies in JSON.
                     "type": "integer",
                     "required": False,
                     "description": "The n of an index entry; returns exactly that part.",
+                },
+                "to_entry": {
+                    "type": "integer",
+                    "required": False,
+                    "description": (
+                        "With entry: the last entry to return. Reads entries "
+                        "entry..to_entry in one call, as many as fit; "
+                        "next_entry names where to continue."
+                    ),
                 },
                 "offset": {
                     "type": "integer",
