@@ -62,10 +62,11 @@ the same message, save first, then run the check below.
    low (or below the floor); report it in the format below. Otherwise give the
    current price, the standing low, and the delta in one line. Report before
    any memory write.
-5. **Update the low — only if it is lower.**
+5. **Update the low — only if it is lower, or if no price is recorded yet.**
    `remember(fact="price:<product-slug>: <amount> <currency> on <YYYY-MM-DD> — <url>", category="fact")`.
-   Never record a price that is not a new low, or a guessed one: a wrong low
-   poisons every future comparison.
+   With no history, the first price you read becomes the baseline. Otherwise
+   never record a price that is not a new low, and never a guessed one: a
+   wrong low poisons every future comparison.
 
 A refused or failed `remember` never replaces the report. Give the report
 anyway and say in one line that the price was not saved. Do not stop to ask

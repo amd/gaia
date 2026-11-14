@@ -207,8 +207,9 @@ memory, and speak up only when there is news.
 the lowest ever recorded in memory, alert only on a new low. "Watch this at
 $949" saves the user's own number as the baseline and confirms, with no fetch.
 A check fetches the page, reports against that baseline first, and only then
-stores the price — and only if it is a new low. A memory save that fails or is
-refused never replaces the report.
+stores the price — only if it is a new low, or if no price is recorded yet, so
+a first check with no history still builds a baseline. A memory save that
+fails or is refused never replaces the report.
 
 - **Demonstrates** — forking a template; memory holding a running extreme rather
   than a seen-list; the traps in extracting one number from a retail page.

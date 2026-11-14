@@ -758,6 +758,23 @@ def test_price_watch_saves_on_a_check_only_for_a_new_low():
     assert "Record every observation" not in check
 
 
+def test_price_watch_first_check_with_no_history_builds_a_baseline():
+    """A watch with no stated price must still record something to compare to."""
+    _, check = _price_watch_paths()
+    update = check[check.index("**Update the low") :]
+    title = update.splitlines()[0]
+
+    assert "or if no price is recorded yet" in title
+    assert "no history" in update and "baseline" in update
+
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = guide[guide.index("### price-watch") :]
+    section = section[: section.index("\n### ")]
+    assert "no price is recorded yet" in " ".join(section.split())
+
+
 def test_price_watch_a_refused_save_never_replaces_the_report():
     body = parse_skill_file(STARTER_ROOT / "price-watch").body
 
