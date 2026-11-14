@@ -957,16 +957,14 @@ class ClaudeProvider(LLMClient):
             return message, False
         if _view_digest(view) != turn.view_digest:
             logger.debug(
-                "Not replaying thinking for turn %s: its text or tool calls "
-                "were edited since Claude produced it",
-                list(key),
+                "Not replaying thinking for a turn: its text or tool calls "
+                "were edited since Claude produced it"
             )
             return message, False
         if prefix_digest != turn.prefix_digest:
             logger.debug(
-                "Not replaying thinking for turn %s: the system prompt, tools "
-                "or earlier messages changed since Claude produced it",
-                list(key),
+                "Not replaying thinking for a turn: the system prompt, tools "
+                "or earlier messages changed since Claude produced it"
             )
             return message, False
         if turn.blocks is None:
