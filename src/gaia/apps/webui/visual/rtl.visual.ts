@@ -972,6 +972,78 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+async function withFormula(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'How much does a columnar scan save?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'The scan amplification is\n\n$$R = \\frac{C_{\\text{row}}}{C_{\\text{col}}} \\approx \\frac{W}{w}$$\n\nWith 50 columns and 4 read, $R \\approx 12.5$, and the bill drops from $5 to $0.40.',
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a formula in an answer is drawn, left to right (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withFormula);
+        const answer = page.locator('.msg-assistant').last();
+        await expect(answer.locator('.md-math math')).toHaveCount(2);
+        await expect(answer).toContainText('from $5 to $0.40');
+        await expect(answer.locator('.md-math').first()).toHaveAttribute('dir', 'ltr');
+        expect(await audit(page)).toEqual([]);
+        await answer.screenshot({ path: info.outputPath(`formula-${locale}.png`) });
+    });
+}
+
+const LONG_SUM = `$$${Array.from({ length: 30 }, (_, i) => `a_{${i + 1}}`).join(' + ')} = S$$`;
+const LONG_FORMULA_TEXT = `The quadratic formula is $$x = \\frac{-b \\pm \\sqrt{b^2 - 4ac}}{2a}$$ inline, and a very long one ${LONG_SUM} in the same paragraph.\n\n$$A = P\\left(1 + \\frac{r}{n}\\right)^{nt}$$`;
+
+async function withLongFormula(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: LONG_FORMULA_TEXT, created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: LONG_FORMULA_TEXT, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const theme of ['light', 'dark'] as const) {
+    test(`a formula wider than its line scrolls in its own box, and one that fits has no scrollbar (${theme})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, 'en', withLongFormula, theme);
+        const list = page.locator('.messages-scroll');
+        await expect(page.locator('.md-math-wide')).toHaveCount(2);
+        expect(await list.evaluate((el) => el.scrollWidth - el.clientWidth), 'the chat scrolls sideways').toBeLessThanOrEqual(1);
+        for (const bubble of ['.msg-user', '.msg-assistant']) {
+            const spill = await page.locator(bubble).last().evaluate((el) => {
+                const edge = el.getBoundingClientRect().right;
+                const math = el.querySelector('.md-math-wide')!.getBoundingClientRect();
+                return math.right - edge;
+            });
+            expect(spill, `${bubble}: the formula's box runs past its message`).toBeLessThanOrEqual(1);
+        }
+        // The short formulas stay as they were: in the line, and with nothing to scroll.
+        const fits = await page.locator('.msg-assistant').last().evaluate((el) =>
+            [...el.querySelectorAll('.md-math:not(.md-math-wide)')].map((m) => ({
+                display: m.classList.contains('md-math-display'),
+                scrollsDown: m.scrollHeight > m.clientHeight && getComputedStyle(m).overflowY !== 'hidden',
+            })));
+        expect(fits).toEqual([{ display: false, scrollsDown: false }, { display: true, scrollsDown: false }]);
+        expect(await audit(page)).toEqual([]);
+        await page.locator('.messages-column').screenshot({ path: info.outputPath(`formula-long-${theme}.png`) });
+    });
+}
+
 /** A question and an answer that each name a Windows path with spaces. */
 const SPACED_PATH = 'C:\\Users\\test\\Documents\\Q3 report.txt';
 const SPACED_ANSWER_PATH = 'C:\\Program Files (x86)\\GAIA\\Q3 summary.md';

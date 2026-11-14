@@ -7,8 +7,12 @@ import { Copy, Check, AlertTriangle, Trash2, RefreshCw, RotateCw, Play, Pencil, 
 import ReactMarkdown from 'react-markdown';
 import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitAttachmentLinks } from '../utils/markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import temml from 'temml';
+import 'temml/dist/Temml-Local.css';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
+import { normalizeMathDelimiters } from '../utils/mathDelimiters';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
@@ -1202,11 +1206,46 @@ function Linkified({ children }: { children?: React.ReactNode }) {
     return <>{out}</>;
 }
 
+/**
+ * A formula, drawn as MathML. A formula that does not parse shows its source
+ * in the error colour, with the reason on hover, rather than vanishing.
+ */
+function MathFormula({ tex, display }: { tex: string; display: boolean }) {
+    const html = useMemo(
+        () => temml.renderToString(tex, { displayMode: display, throwOnError: false, errorColor: 'var(--danger)' }),
+        [tex, display],
+    );
+    const ref = useRef<HTMLElement | null>(null);
+    const [wide, setWide] = useState(false);
+    // A formula can't wrap: one wider than its line gets a line of its own that scrolls.
+    useLayoutEffect(() => {
+        const el = ref.current;
+        if (display || !el) return;
+        const measure = () => {
+            const math = el.firstElementChild;
+            // An inline ancestor (bold, a link) has no width of its own.
+            let block = el.parentElement;
+            while (block && block.clientWidth === 0) block = block.parentElement;
+            if (math && block) setWide(math.getBoundingClientRect().width > block.clientWidth);
+        };
+        measure();
+        const column = el.closest('.md-content');
+        if (!column || typeof ResizeObserver === 'undefined') return;
+        const observer = new ResizeObserver(measure);
+        observer.observe(column);
+        return () => observer.disconnect();
+    }, [html, display]);
+    const Tag = display ? 'div' : 'span';
+    const className = display ? 'md-math md-math-display' : wide ? 'md-math md-math-wide' : 'md-math';
+    return <Tag ref={ref as React.Ref<never>} className={className} dir="ltr" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 // `node` is the markdown AST; spread onto <code> it renders as node="[object Object]".
-function InlineCode({ className: _className, children, node: _node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
+function InlineCode({ className, children, node: _node, ...props }: React.ComponentProps<'code'> & { node?: unknown }) {
     const index = useContext(CitationContext);
     const writtenFiles = useContext(WrittenFilesContext);
     const t = useT();
+    if (className?.includes('math-inline')) return <MathFormula tex={String(children)} display={false} />;
     // A filename here outside a block Linkified handles (e.g. inside **bold**).
     const doc = inlineCodeDoc(index, children);
     if (doc) return <CitationLink doc={doc} t={t} />;
@@ -1245,6 +1284,7 @@ const MARKDOWN_COMPONENTS: Components = {
             const className = codeProps?.className || '';
             const match = /language-([\w-]+)/.exec(className);
             const codeString = String(codeProps?.children || '').replace(/\n$/, '');
+            if (className.includes('math-display')) return <MathFormula tex={codeString} display />;
             const lang = match?.[1] || '';
             return (
                 <CodeBlock
@@ -1323,9 +1363,13 @@ const MARKDOWN_COMPONENTS: Components = {
 
 const NO_WRITTEN_FILES: readonly string[] = [];
 
+// Single dollars are money ("$5 and $10"); normalizeMathDelimiters turns real maths into `$$`.
+const REMARK_MATH: [typeof remarkMath, { singleDollarTextMath: boolean }] = [remarkMath, { singleDollarTextMath: false }];
+
 export function RenderedContent({ content, showCursor, isStreaming = false, writtenFiles = NO_WRITTEN_FILES }: { content: string; showCursor?: boolean; isStreaming?: boolean; writtenFiles?: readonly string[] }) {
     const documents = useChatStore((s) => s.documents);
     const citations = useMemo(() => buildCitationIndex(documents), [documents]);
+    const markdown = useMemo(() => normalizeMathDelimiters(content), [content]);
     if (!content && !showCursor) return null;
     if (!content && showCursor) return <span className="cursor" />;
 
@@ -1335,12 +1379,12 @@ export function RenderedContent({ content, showCursor, isStreaming = false, writ
         <WrittenFilesContext.Provider value={writtenFiles}>
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
+                remarkPlugins={[remarkGfm, REMARK_MATH, remarkWindowsPaths, remarkSoftBreaks]}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
                 components={MARKDOWN_COMPONENTS}
             >
-                {content}
+                {markdown}
             </ReactMarkdown>
             {showCursor && <span className="cursor" />}
         </div>
