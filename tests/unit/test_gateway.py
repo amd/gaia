@@ -27,6 +27,7 @@ from gaia.llm.gateway import (
     GatewayState,
 )
 from gaia.llm.lemonade_client import LemonadeClientError
+from gaia.llm.surface_hints import TUI_GATEWAY_INSTALL_HINT, surface_wording
 from gaia.version import LEMONADE_MIN_VERSION, LEMONADE_VERSION
 
 
@@ -341,11 +342,16 @@ class TestErrors:
             "gaia.llm.gateway.requests.request",
             return_value=_response(status_code=404, body=body),
         ):
-            with pytest.raises(GatewayError, match="`gaia gateway install`") as excinfo:
+            with pytest.raises(GatewayError) as excinfo:
                 manager.clear_token()
         message = str(excinfo.value)
+        assert TUI_GATEWAY_INSTALL_HINT in message
         assert "older than" not in message
         assert "daemon restart" not in message
+        # The Agent UI relays this text, so the command appears only after the
+        # CLI surface swap, never in the raw message.
+        assert "gaia gateway install" not in message
+        assert "`gaia gateway install`" in surface_wording(message, "cli")
 
     def test_404_for_a_missing_cloud_endpoint_keeps_the_version_requirement(
         self, manager
