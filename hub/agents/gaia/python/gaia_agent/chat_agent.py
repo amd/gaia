@@ -453,6 +453,8 @@ def _python_script_run_context(
     env["PYTHONIOENCODING"] = "utf-8"
     # Files it writes with a bare open() are UTF-8, like the file tools write.
     env["PYTHONUTF8"] = "1"
+    # A timed-out run still returns what it printed before the kill.
+    env.setdefault("PYTHONUNBUFFERED", "1")
     if project_dir is None:
         return script.parent, env
     project = Path(project_dir).resolve()
@@ -2892,6 +2894,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 env = child_env(relaunch_self=True)
                 env["PYTHONIOENCODING"] = "utf-8"
                 env["PYTHONUTF8"] = "1"
+                env.setdefault("PYTHONUNBUFFERED", "1")
                 if project:
                     _with_project_paths(env, project)
 
