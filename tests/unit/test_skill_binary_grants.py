@@ -1072,6 +1072,7 @@ class _ExecutingAgent(_Gated):
     _resolve_tool_name = _Base._resolve_tool_name
     _execution_tool_registry = _Base._execution_tool_registry
     _fold_tool_usage = _Base._fold_tool_usage
+    _prompted_call_key = _Base.__dict__["_prompted_call_key"]
     current_plan = None
     current_step = 0
     debug = False

@@ -27,6 +27,7 @@ fetches, and :class:`~gaia.skills.lock.SkillLock` for provenance.
 from __future__ import annotations
 
 import posixpath
+import re
 import shlex
 import shutil
 import subprocess
@@ -102,10 +103,51 @@ def published_on_hub_message(name: str) -> str:
 def failed_verification_message(name: str) -> str:
     """The refusal for a skill whose hub install failed verification."""
     return (
-        f"{name} failed signature verification on the GAIA hub, so it must not "
-        "be obtained any other way — do not fetch, capture, download, or "
-        f"rewrite it. Tell the user; they can report it at {REPORT_URL}."
+        f"{name} failed verification on the GAIA hub: its signature or "
+        "checksum does not match what was published, so it may have been "
+        "tampered with. It must not be obtained any other way, and GAIA will "
+        "not install it by another route — do not fetch it, capture it, "
+        "download it, or rewrite it from memory. Tell the user it was refused "
+        f"for failing verification; they can report it at {REPORT_URL}."
     )
+
+
+def _decoded(text: str) -> str:
+    """*text* lower-cased, percent-decoded however deeply, ``_``/spaces read as ``-``."""
+    current = text.strip()
+    for _ in range(5):
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+    return re.sub(r"[\s_]+", "-", current.replace("\\", "/").lower())
+
+
+def refuse_failed_verification_source(
+    source: str, failed_verification: Iterable[str]
+) -> None:
+    """Refuse a URL or path that names a skill whose hub install failed verification.
+
+    Runs before any fetch, so a guessed URL for the refused skill never touches
+    the network. A name matches as a whole token (``tampered-notes`` matches
+    ``.../tampered-notes/SKILL.md`` and ``tampered-notes-1.0.0.zip``, never
+    ``my-tampered-notes-copy``).
+
+    Raises:
+        SkillCaptureError: *source* names a refused skill.
+    """
+    text = _decoded(source)
+    names = {n.strip().lower() for n in failed_verification if n and n.strip()}
+    for name in sorted(names):
+        pattern = rf"(?<![a-z0-9-]){re.escape(name)}(?![a-z0-9]|-[a-z])"
+        if re.search(pattern, text):
+            log.warning(
+                "Refusing capture of %r: it names %s, whose hub install failed "
+                "verification this session",
+                source.strip(),
+                name,
+            )
+            raise SkillCaptureError(failed_verification_message(name))
 
 
 def _url_parts(url: str) -> Optional[Tuple[str, Optional[int], str]]:
@@ -331,7 +373,12 @@ def _classify_source(source: str) -> str:
     return "text"
 
 
-def _fetch_url(url: str, workdir: Path, web_client: Optional[Any]) -> tuple:
+def _fetch_url(
+    url: str,
+    workdir: Path,
+    web_client: Optional[Any],
+    failed_verification: Iterable[str] = (),
+) -> tuple:
     """Fetch ``url`` via the SSRF-guarded WebClient.
 
     Returns ``("dir", skill_dir)`` for a zip bundle, ``("text", markdown)`` for
@@ -357,7 +404,8 @@ def _fetch_url(url: str, workdir: Path, web_client: Optional[Any]) -> tuple:
 
     final_url = getattr(response, "url", None)
     if isinstance(final_url, str) and final_url != url:
-        # A redirect can land on the hub.
+        # A redirect can land on the hub, or on a skill that failed verification.
+        refuse_failed_verification_source(final_url, failed_verification)
         refuse_hub_url(final_url)
 
     content = response.content
@@ -470,7 +518,8 @@ def capture_skill(
             :class:`~gaia.web.client.WebClient`.
         force: Replace an already-captured copy of the same name.
         failed_verification: Skill names whose hub install failed signature
-            verification this session; capturing one is refused.
+            verification this session; capturing one is refused, as is a URL
+            or path that names one (checked before anything is fetched).
 
     Returns:
         A :class:`CaptureResult`; ``review_findings`` is non-empty when the
@@ -497,6 +546,8 @@ def capture_skill(
 
     kind = _classify_source(source)
     failed_verification = tuple(failed_verification)
+    if kind in ("url", "path"):
+        refuse_failed_verification_source(source, failed_verification)
     if kind == "url":
         refuse_hub_url(source)
 
@@ -506,7 +557,9 @@ def capture_skill(
 
         if kind == "url":
             origin = source.strip()
-            fetched_kind, fetched = _fetch_url(origin, workdir, web_client)
+            fetched_kind, fetched = _fetch_url(
+                origin, workdir, web_client, failed_verification
+            )
             if fetched_kind == "dir":
                 source_dir = fetched
             else:
@@ -1040,6 +1093,7 @@ __all__ = [
     "code_is_deferred",
     "deferred_remedy",
     "failed_verification_message",
+    "refuse_failed_verification_source",
     "import_bundle",
     "promote_skill",
     "published_on_hub_message",
