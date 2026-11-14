@@ -30,8 +30,8 @@ turns:
     objective: "Start watching the observatory notices page (v1) for anything new"
     user_message: "watch this page for new notices: http://127.0.0.1:8765/observatory_v1.html"
     ground_truth:
-      expected_behavior: "Fetches v1, records the 3 current notices as the baseline (memory writes in agent_tools[])"
-    success_criteria: "Agent fetches the page and records the baseline (3 notices: mirror maintenance Aug 12, stargazing night Aug 22, parking repaving Aug 25). No notice may be reported as 'new' on the first check."
+      expected_behavior: "Fetches v1 and reports the 3 current notices as the baseline; no memory write needed unless the user asked to keep track"
+    success_criteria: "Agent fetches the page and reports the notices as the baseline (3 notices: mirror maintenance Aug 12, stargazing night Aug 22, parking repaving Aug 25). No notice may be reported as 'new' on the first check."
 
   - turn: 3
     objective: "Later check against the updated page (v2)"
@@ -39,11 +39,11 @@ turns:
     ground_truth:
       expected_answer: "One new item: Aurora watch alert issued for Friday night, Aug 28"
     success_criteria: |
-      CRITICAL: Agent fetches v2, diffs against its remembered baseline, and
-      reports EXACTLY the aurora alert as new. Re-reporting the three old
-      notices as new, missing the aurora item, or inventing changes is a
-      FAIL.
+      CRITICAL: Agent fetches v2, diffs against the notices it reported
+      earlier in this conversation, and reports EXACTLY the aurora alert as
+      new. Re-reporting the three old notices as new, missing the aurora
+      item, or inventing changes is a FAIL.
 
 expected_outcome: |
-  The baseline is remembered and the second check surfaces only the one
-  genuinely new notice.
+  The baseline is the notices reported earlier in the conversation, and the
+  second check surfaces only the one genuinely new notice.
