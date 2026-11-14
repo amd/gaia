@@ -13,8 +13,9 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
-from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.agents.base.verification import CHECKED_ABSENT_KEY, NOT_EXECUTED
 from gaia.agents.tools.search_scope import path_validator_of
+from gaia.security import MISSING_REFUSAL_PREFIX
 
 
 def read_access_error(
@@ -40,7 +41,15 @@ def read_access_error(
     allowed, reason = validator.validate_read(str(path), prompt_user=prompt_user)
     if allowed:
         return None
-    return {**NOT_EXECUTED, "status": "error", "error": reason}
+    return read_refusal(reason)
+
+
+def read_refusal(reason: str) -> Dict[str, Any]:
+    """The tool error for a refused read, marked when the path was found missing."""
+    refusal = {**NOT_EXECUTED, "status": "error", "error": reason}
+    if reason.startswith(MISSING_REFUSAL_PREFIX):
+        refusal[CHECKED_ABSENT_KEY] = True
+    return refusal
 
 
 def missing_file_error(path: Any) -> Dict[str, Any]:
@@ -60,6 +69,7 @@ def missing_file_error(path: Any) -> Dict[str, Any]:
         where = ""
     return {
         **NOT_EXECUTED,
+        CHECKED_ABSENT_KEY: True,
         "status": "error",
         "error": (
             f"File not found: {path}.{where} If the user may have the location "
