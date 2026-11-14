@@ -2639,15 +2639,32 @@ def _probe_misses_only_the_model(init_body: dict | None) -> bool:
 
 
 def _missing_local_model_text(init_body: dict) -> str:
-    """What the chat says when the local model a turn needs is not downloaded.
+    """What the chat says when the model a turn needs is not available.
 
-    The sidecar's own hint names a CLI; the app's way is Settings.
+    A local model is not downloaded; a cloud model has lost its key. The
+    sidecar's own hint names a CLI; the app's way is Settings.
     """
     from gaia.llm.local_only import cloud_blocked
 
     from .local_models import friendly_name
+    from .routers.providers import cloud_provider_name, display_name
 
-    name = friendly_name(init_body["model"]["id"])
+    model_id = init_body["model"]["id"]
+    provider = cloud_provider_name(model_id)
+    if provider:
+        # A cloud model is never downloaded; Lemonade lost its key.
+        name = display_name(model_id)
+        if cloud_blocked():
+            return (
+                f"Local only is on, so {name} can't answer. Pick a local model "
+                "under Settings > Model, or turn off Local only under Settings > "
+                "Privacy."
+            )
+        return (
+            f"{name} isn't connected, so GAIA can't answer. Reconnect {provider} "
+            "under Settings > Model, or pick another model."
+        )
+    name = friendly_name(model_id)
     if cloud_blocked():
         return (
             f"Local only is on and {name} isn't downloaded yet, so GAIA can't "
