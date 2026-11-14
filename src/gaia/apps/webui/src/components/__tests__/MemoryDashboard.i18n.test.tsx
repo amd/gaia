@@ -194,7 +194,7 @@ describe('Memory dashboard in Arabic', () => {
         memoryEnabled = false;
         render(<MemoryDashboard />);
         tab(/متقدم/);
-        fireEvent.click(await screen.findByRole('button', { name: /الذاكرة متوقفة/ }));
+        fireEvent.click(await screen.findByRole('button', { name: /التذكر عبر المحادثات متوقف/ }));
         const dialog = await screen.findByRole('dialog');
         expect(within(dialog).getByText(readsAs('تفعيل ذاكرة الوكيل؟ (Enable Agent Memory?)'))).toBeInTheDocument();
         expect(leftoverEnglish(dialog)).toEqual([]);

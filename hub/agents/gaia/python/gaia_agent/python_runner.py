@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import builtins
 import importlib.util
+import io
 import os
 import runpy
 import stat
@@ -158,6 +159,34 @@ def _prepend_import_paths(first: str) -> None:
         while entry in sys.path:
             sys.path.remove(entry)
         sys.path.insert(0, entry)
+
+
+def _apply_utf8_mode() -> None:
+    """Text files default to UTF-8 when ``PYTHONUTF8=1`` asks for it.
+
+    A frozen interpreter ignores ``PYTHONUTF8``, so a script's bare
+    ``open(path, "w")`` wrote the locale codec (cp1252 on Windows). Covers
+    ``open``/``io.open`` and what ``pathlib`` resolves through
+    ``io.text_encoding``; ``locale.getpreferredencoding()``, ``subprocess``
+    text mode and a bare ``io.TextIOWrapper`` stay on the locale codec.
+    """
+    if sys.flags.utf8_mode or os.environ.get("PYTHONUTF8") != "1":
+        return
+    real_open = io.open
+    real_text_encoding = io.text_encoding
+
+    def open_utf8(file, mode="r", buffering=-1, encoding=None, *args, **kwargs):
+        if encoding is None and "b" not in mode:
+            encoding = "utf-8"
+        return real_open(file, mode, buffering, encoding, *args, **kwargs)
+
+    def text_encoding(encoding, stacklevel=2):
+        if encoding is None:
+            return "utf-8"
+        return real_text_encoding(encoding, stacklevel + 1)
+
+    builtins.open = io.open = open_utf8
+    io.text_encoding = text_encoding
 
 
 def _set_output_encoding(encoding: Optional[str]) -> None:
@@ -327,6 +356,7 @@ def run_python_file(argv: Optional[Sequence[str]] = None) -> int:
     if is_frozen():
         # A frozen interpreter ignores PYTHONIOENCODING, and the tools read UTF-8.
         _set_output_encoding("utf-8")
+        _apply_utf8_mode()
     return _run_file(argv[0], argv[1:])
 
 
@@ -335,6 +365,7 @@ def run_interpreter(kind: str, target: str, args: Sequence[str]) -> int:
     guard_folders_from_env()
     if is_frozen():
         _set_output_encoding(os.environ.get("PYTHONIOENCODING"))
+        _apply_utf8_mode()
     if kind == "module":
         return _run_module(target, args)
     if kind == "code":

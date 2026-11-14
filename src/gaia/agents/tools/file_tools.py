@@ -64,6 +64,7 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.filesystem.name_match import fold_name, strip_accents
 from gaia.logger import get_logger
 from gaia.security import BackupError
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
 from gaia.utils.user_folders import documents_dir
 
 logger = get_logger(__name__)
@@ -2639,6 +2640,19 @@ class FileSearchToolsMixin:
                         }
 
                 supported_extensions = {".csv", ".tsv", ".xlsx", ".xls"}
+                if fp.suffix.lower() in IMAGE_EXTENSIONS:
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"{fp.name} is an image, not a spreadsheet. If it is "
+                            "attached or indexed, search its text with "
+                            "query_documents. To look at it, call "
+                            "answer_question_about_image with image_path set to "
+                            f"{fp} and question set to what the user asked."
+                        ),
+                        "has_errors": True,
+                        "operation": "analyze_data_file",
+                    }
                 if fp.suffix.lower() not in supported_extensions:
                     return {
                         "status": "error",
