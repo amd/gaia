@@ -93,6 +93,132 @@ _FINISH_REASON_MAP = {
 }
 
 
+#: Tool results that must reach the model exactly as the tool returned them.
+_VERBATIM_TOOL_RESULTS = frozenset({"read_tool_output"})
+
+#: Control characters other than tab, newline and carriage return.
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+#: A list of scalars this short stays on one line, as JSON.
+_INLINE_LIST_CHARS = 120
+
+#: Nesting below this depth stays one line of JSON, so recursion is bounded.
+_MAX_RENDER_DEPTH = 32
+
+
+#: First characters of a string that might read as a JSON number, literal,
+#: array, object or quoted string when written plain.
+_JSON_LOOKALIKE_START = frozenset('-0123456789tfnNI[{"')
+
+
+def _reads_as_json(value: str) -> bool:
+    if value[:1] not in _JSON_LOOKALIKE_START:
+        return False
+    try:
+        json.loads(value)
+    except (ValueError, RecursionError):
+        return False
+    return True
+
+
+def _scalar_text(value: Any) -> str:
+    """A scalar as the model reads it: plain when unambiguous, else JSON."""
+    if isinstance(value, str) and (
+        value
+        and value == value.strip()
+        and "\n" not in value
+        and not _CONTROL_CHARS.search(value)
+        and not _reads_as_json(value)
+    ):
+        return value
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _key_text(key: str) -> str:
+    """A key as a label: plain unless it could pass for a value or a new field."""
+    text = _scalar_text(key)
+    if text == key and (":" in key or key.startswith(("-", "<", ">"))):
+        return json.dumps(key, ensure_ascii=False)
+    return text
+
+
+def _is_block_text(value: Any) -> bool:
+    """Multi-line text that can go out raw: nothing in it closes the block."""
+    return (
+        isinstance(value, str)
+        and "\n" in value
+        and not _CONTROL_CHARS.search(value)
+        and ">>>" not in value.splitlines()
+    )
+
+
+def _render_value(label: str, value: Any, depth: int, lines: List[str]) -> None:
+    indent = "  " * depth
+    if depth >= _MAX_RENDER_DEPTH:
+        lines.append(f"{indent}{label} {json.dumps(value, ensure_ascii=False)}")
+    elif _is_block_text(value):
+        # Raw between markers: no escaping, no indent added to the text itself.
+        lines.append(f"{indent}{label} <<<\n{value}\n>>>")
+    elif isinstance(value, dict) and value:
+        lines.append(f"{indent}{label}")
+        for key, item in value.items():
+            _render_value(f"{_key_text(key)}:", item, depth + 1, lines)
+    elif isinstance(value, list) and value:
+        inline = json.dumps(value, ensure_ascii=False)
+        if len(inline) <= _INLINE_LIST_CHARS and not any(
+            isinstance(item, (dict, list)) or _is_block_text(item) for item in value
+        ):
+            lines.append(f"{indent}{label} {inline}")
+            return
+        lines.append(f"{indent}{label}")
+        for item in value:
+            _render_value("-", item, depth + 1, lines)
+    elif isinstance(value, (dict, list)):
+        lines.append(f"{indent}{label} {json.dumps(value)}")  # empty
+    else:
+        lines.append(f"{indent}{label} {_scalar_text(value)}")
+
+
+def _readable_tool_text(text: str) -> str:
+    """A JSON-object tool result as indented ``key: value`` lines.
+
+    JSON escaping spends tokens on every newline, quote and backslash of file
+    contents and command output, on every call that re-reads the history.
+    Multi-line strings go out raw between ``<<<`` and ``>>>``. Anything that is
+    not a JSON object is returned unchanged. Deterministic, so the cached
+    prefix stays byte-identical across calls.
+    """
+    if not text.startswith("{"):
+        return text
+    try:
+        parsed = json.loads(text)
+    except (ValueError, RecursionError):
+        return text  # not an object this renders; it goes out as the tool wrote it
+    if not isinstance(parsed, dict) or not parsed:
+        return text
+    lines: List[str] = []
+    for key, value in parsed.items():
+        _render_value(f"{_key_text(key)}:", value, 0, lines)
+    return "\n".join(lines)
+
+
+def _readable_tool_content(content: Any) -> Any:
+    if isinstance(content, str):
+        return _readable_tool_text(content)
+    if isinstance(content, list):
+        return [
+            (
+                {**block, "text": _readable_tool_text(block["text"])}
+                if isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                else block
+            )
+            for block in content
+        ]
+    return content
+
+
 def _check_empty_reply(stop_reason: str, api_blocks: List[dict]) -> None:
     """Explain a reply that has neither answer text nor a tool call.
 
@@ -647,10 +773,13 @@ class ClaudeProvider(LLMClient):
         tool_call_id = message.get("tool_call_id")
         if not tool_call_id:
             raise ValueError("Claude tool results require a tool_call_id.")
+        content = message.get("content") or "[tool returned no output]"
+        if message.get("name") not in _VERBATIM_TOOL_RESULTS:
+            content = _readable_tool_content(content)
         block = {
             "type": "tool_result",
             "tool_use_id": tool_call_id,
-            "content": message.get("content") or "[tool returned no output]",
+            "content": content,
         }
         if (
             cleaned

@@ -160,6 +160,10 @@ What that means in practice:
   thinking when a later step has none, so the cached history stays valid. Thinking is
   still dropped from older steps when GAIA edits a step, after a restart, and for
   steps more than 1,024 turns back.
+- **Tool results go to Claude as plain text.** A JSON tool result is sent as
+  `key: value` lines, with file contents and command output unescaped between `<<<`
+  and `>>>`, which costs fewer tokens on every step that re-reads it. Other models get
+  the JSON unchanged.
 - **Same token as every other gateway model.** GAIA sends it in the
   `Ocp-Apim-Subscription-Key` header itself, reading `LEMONADE_AMD_API_KEY`, then
   `GAIA_GATEWAY_TOKEN` in GAIA's environment, then the OS credential store that
