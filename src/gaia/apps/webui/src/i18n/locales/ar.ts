@@ -3123,6 +3123,8 @@ const messages: Messages = {
     'mem.about.add': 'إضافة',
     'mem.about.forgotten': 'نُسي: «{content}»، ولن يتعلّمه GAIA مجددًا من المحادثات القديمة.',
     'mem.about.forgottenSensitive': 'نُسيت ذكرى حساسة، ولن يتعلّمها GAIA مجددًا من المحادثات القديمة.',
+    'mem.about.forgottenMany': 'نُسي: «{content}» مع الإدخالات الأخرى التي تقول الشيء نفسه (العدد الإجمالي: {count})، ولن يتعلّمه GAIA مجددًا من المحادثات القديمة.',
+    'mem.about.forgottenSensitiveMany': 'نُسيت ذكرى حساسة كانت محفوظة في عدة إدخالات (العدد: {count})، ولن يتعلّمها GAIA مجددًا من المحادثات القديمة.',
     'mem.about.undo': 'تراجع',
     'mem.about.loadFailed': 'تعذّر تحميل ذكرياتك: {error}',
     'mem.about.retry': 'حاول مجددًا',
