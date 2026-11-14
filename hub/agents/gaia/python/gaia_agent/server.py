@@ -205,8 +205,10 @@ class QueryRequest(_Strict):
             "Absolute paths of the files the user attached to this conversation "
             "(contract >= 2.16). Each is granted as that exact file, never its "
             "folder, and indexed before the turn runs. Send the full set every "
-            "turn: files already indexed in a retained session are skipped, so "
-            "one attached mid-conversation is picked up on the next turn."
+            "turn, an empty list when none are attached: files already indexed "
+            "in a retained session are skipped, so one attached mid-conversation "
+            "is picked up on the next turn, and one sent before but left out "
+            "now is removed from the session's index."
         ),
     )
 
@@ -858,9 +860,14 @@ def _report_live_context(run: "_QueryRun") -> None:
 
 
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
-    """Terminal refusal for a confirmation-gated tool (the stateless D1 stub)."""
+    """Terminal refusal for a confirmation-gated tool (the stateless D1 stub).
+
+    ``failed``: the request was not done, so a scripted caller must not read
+    it as a success.
+    """
     return {
         "type": "final",
+        "failed": True,
         "answer": (
             f"I stopped before running '{action}' because it needs your explicit "
             "approval, and this streaming surface cannot collect that yet. "
@@ -886,13 +893,37 @@ def _attach_refusal(agent: Any, path: str) -> str:
     return reason if blocked else ""
 
 
+def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
+    """Take the documents attached last turn but not this one out of the index."""
+    attached = getattr(agent, "_attached_documents", set())
+    dropped = attached - set(documents)
+    agent._attached_documents = set(documents)
+    if not dropped:
+        return
+    rag = agent.rag
+    for doc in sorted(dropped):
+        if doc not in agent.indexed_files:
+            continue
+        held = rag is not None and str(Path(doc).absolute()) in rag.indexed_files
+        if held and not rag.remove_document(doc):
+            raise RuntimeError(
+                f"{Path(doc).name} was taken off this conversation but could not "
+                "be removed from its document index. Start a new conversation; "
+                "the GAIA log has the details."
+            )
+        agent.indexed_files.discard(doc)
+    agent.rebuild_system_prompt()
+
+
 def _index_attached_documents(agent: Any, documents: List[str], handler: Any) -> None:
     """Index the documents the caller attached to this conversation (>= 2.16).
 
     Grants each as that exact file, never its folder: the scope an in-process
     Agent UI agent gets. Files already indexed are skipped, so a retained
-    session pays only for documents attached since its last turn.
+    session pays only for documents attached since its last turn. A document
+    attached on an earlier turn and left out of *documents* is dropped.
     """
+    _drop_detached_documents(agent, documents)
     indexed = agent.indexed_files
     pending = [d for d in documents if d not in indexed]
     if not pending:
@@ -1780,7 +1811,7 @@ async def query(request: QueryRequest):
         raise _start_failure(exc, _wording_surface(request)) from exc
 
     def _process() -> None:
-        if request.documents:
+        if request.documents is not None:
             _index_attached_documents(agent, request.documents, handler)
         if request.turns is not None and hasattr(agent, "conversation_history"):
             # Sizing them can ask the model server for its window: never on the loop.
@@ -2007,9 +2038,19 @@ async def query(request: QueryRequest):
                         # ever see.
                         for warning in await _finish_changes(run):
                             yield _emit(warning)
-                        yield _emit(_confirmation_refusal(canonical.get("action", "")))
                         handler.cancelled.set()
                         run.cancel_event.set()
+                        refusal = _confirmation_refusal(canonical.get("action", ""))
+                        # The steps and tokens spent before the stop are known
+                        # once the cancelled loop returns.
+                        await asyncio.to_thread(thread.join, _RUN_RESULT_WAIT_SECONDS)
+                        if not thread.is_alive():
+                            from gaia_agent.stdio import _usage_from_result
+
+                            usage = _usage_from_result(run.result)
+                            if usage:
+                                refusal["usage"] = usage
+                        yield _emit(refusal)
                         terminated = True
                         return
                     if ctype in TERMINAL_TYPES:
