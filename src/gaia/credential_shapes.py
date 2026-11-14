@@ -9,7 +9,7 @@ and tool output all mask, so a shape added here is masked everywhere.
 import functools
 import os
 import re
-from typing import Any, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 REDACTED = "[redacted]"
 
@@ -137,14 +137,37 @@ def _credential_prefix_end(
     return None
 
 
+def _map_strings(value: Any, mask: Callable[[str], str]) -> Any:
+    """*value* with *mask* applied to every string in it, however deeply nested."""
+    if isinstance(value, str):
+        return mask(value)
+    if isinstance(value, dict):
+        return {key: _map_strings(item, mask) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_map_strings(item, mask) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_map_strings(item, mask) for item in value)
+    return value
+
+
+def _mask_command_output(text: str) -> str:
+    return redact_credentials(mask_credential_file_lines(text))
+
+
 def redact_tool_output(value: Any) -> Any:
     """*value* with tokens masked and credential-file lines hidden, everywhere in it."""
-    if isinstance(value, str):
-        return redact_credentials(mask_credential_file_lines(value))
-    if isinstance(value, dict):
-        return {key: redact_tool_output(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [redact_tool_output(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(redact_tool_output(item) for item in value)
-    return value
+    return _map_strings(value, _mask_command_output)
+
+
+def redact_file_content(value: Any) -> Any:
+    """*value* with tokens masked everywhere in it; lines are never hidden.
+
+    For text read out of a file: a line naming ``.env:`` there is the file's
+    own content, not a search's file-name prefix.
+    """
+    return _map_strings(value, redact_credentials)
+
+
+def holds_credentials(text: str) -> bool:
+    """True when :func:`redact_credentials` would change *text*."""
+    return bool(text) and redact_credentials(text) != text

@@ -40,6 +40,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from gaia.agents.base.verification import NOT_EXECUTED
+from gaia.credential_shapes import REDACTED, holds_credentials
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -214,6 +215,49 @@ class FileReadRecord:
         return None
 
 
+#: Arguments whose text a write or edit puts into the file.
+_WRITTEN_ARGS = ("new_content", "content", "new_implementation")
+
+
+def masked_secret_refusal(
+    file_path: Any, tool_args: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """Why a write would put the redaction marker where a secret is, or ``None``.
+
+    Read tools show a secret as ``[redacted]``. Text copied from that view
+    must not reach the file: as an edit's search text it names text the file
+    doesn't hold, and as written text it replaces the secret with the marker.
+    """
+    old = tool_args.get("old_content")
+    old = old.replace("\r\n", "\n") if isinstance(old, str) else ""
+    written = [tool_args.get(arg) for arg in _WRITTEN_ARGS]
+    adds_marker = any(
+        isinstance(text, str) and text.count(REDACTED) > old.count(REDACTED)
+        for text in written
+    )
+    if REDACTED not in old and not adds_marker:
+        return None
+    path = os.fspath(file_path)
+    if stamp_of(path) is None:
+        return None  # nothing on disk for the marker to replace
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        current = f.read()
+    if REDACTED in old and old not in current:
+        what = "old_content"
+    elif adds_marker and holds_credentials(current):
+        what = "The new text"
+    else:
+        return None
+    return _read_required(
+        f"{what} contains {REDACTED}, which stands in for a secret hidden from "
+        f"what you read; it is not text in {path}. Nothing was written. Leave "
+        "the lines that hold the secret out of old_content and the new text, "
+        "or ask the user to change them.",
+        path,
+        "redacted_secret",
+    )
+
+
 _ATTACH_LOCK = threading.Lock()
 
 
@@ -271,6 +315,8 @@ def read_first_preflight(
             old, new = tool_args.get("old_content"), tool_args.get("new_content")
             if refusal is None and isinstance(old, str) and isinstance(new, str):
                 refusal = reads.repeat_refusal(target, old, new, turn_of(host))
+            if refusal is None:
+                refusal = masked_secret_refusal(target, tool_args)
             return refusal
         except (KeyError, TypeError, ValueError, OSError) as e:
             # Malformed arguments or an unstat-able path: the tool body reports it.
