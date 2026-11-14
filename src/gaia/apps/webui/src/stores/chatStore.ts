@@ -25,7 +25,8 @@ export type SettingsSection =
     | 'privacy'
     | 'notifications'
     | 'voice'
-    | 'advanced';
+    | 'advanced'
+    | 'about';
 
 export interface SettingsJump {
     section: SettingsSection;

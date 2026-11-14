@@ -1,7 +1,7 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { lazy, Suspense, useEffect, useRef } from 'react';
+import { lazy, Suspense, useEffect, useRef, type KeyboardEvent } from 'react';
 import { ChevronLeft, Loader2, X } from 'lucide-react';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
 import { useEscapeToClose } from '../../hooks/useEscapeToClose';
@@ -19,6 +19,7 @@ import '../SettingsModal.css';
 import './SettingsDialog.css';
 import { useT } from '../../i18n/useT';
 import { SetupSettings } from './SetupSettings';
+import { AboutSettings } from './AboutSettings';
 import { ErrorBoundary } from '../ErrorBoundary';
 
 // The heaviest panes, and ones most people never open, load on first open.
@@ -28,7 +29,7 @@ const AutomationsPane = lazy(() => import('./AutomationsSettings').then((m) => (
 const AdvancedPane = lazy(() => import('./AdvancedSettings').then((m) => ({ default: m.AdvancedSettings })));
 
 const SECTIONS: SettingsSection[] = [
-    'general', 'setup', 'model', 'permissions', 'skills', 'connectors', 'messaging', 'automations', 'memory', 'notifications', 'voice', 'privacy', 'advanced',
+    'general', 'setup', 'model', 'permissions', 'skills', 'connectors', 'messaging', 'automations', 'memory', 'notifications', 'voice', 'privacy', 'advanced', 'about',
 ];
 
 /** One settings window with a section list on the left. */
@@ -96,6 +97,19 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
 
     if (!section) return null;
 
+    const moveInNav = (e: KeyboardEvent<HTMLElement>) => {
+        const at = SECTIONS.indexOf(section);
+        const to = e.key === 'ArrowDown' ? (at + 1) % SECTIONS.length
+            : e.key === 'ArrowUp' ? (at - 1 + SECTIONS.length) % SECTIONS.length
+                : e.key === 'Home' ? 0
+                    : e.key === 'End' ? SECTIONS.length - 1
+                        : null;
+        if (to === null) return;
+        e.preventDefault();
+        open(SECTIONS[to]);
+        panel.current?.querySelector<HTMLElement>(`[data-section="${SECTIONS[to]}"]`)?.focus();
+    };
+
     const pane = (() => {
         switch (section) {
             case 'general': return <GeneralSettings />;
@@ -111,13 +125,14 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
             case 'voice': return <ReadAloudSettings />;
             case 'privacy': return <PrivacySettings />;
             case 'advanced': return <AdvancedPane />;
+            case 'about': return <AboutSettings />;
         }
     })();
 
     return (
         <div className="settings-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
             <div ref={panel} className="settings-dialog" role="dialog" aria-modal="true" aria-label={t('settings.title')}>
-                <nav className="settings-nav" aria-label={t('settings.sections')}>
+                <nav className="settings-nav" aria-label={t('settings.sections')} onKeyDown={moveInNav}>
                     <h1 className="settings-nav-title">{t('settings.title')}</h1>
                     {SECTIONS.map((id) => (
                         <button
@@ -126,6 +141,8 @@ export function SettingsDialog({ onUseSkill }: { onUseSkill: (name: string) => v
                             data-section={id}
                             className={`settings-nav-item${section === id ? ' is-active' : ''}`}
                             aria-current={section === id ? 'page' : undefined}
+                            // One Tab stop for the whole list; the arrow keys move within it.
+                            tabIndex={section === id ? 0 : -1}
                             // The focus ring follows the selection instead of staying on the tab focused at open.
                             onClick={(e) => { e.currentTarget.focus(); open(id); }}
                         >

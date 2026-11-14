@@ -376,6 +376,64 @@ def test_frozen_output_is_utf8_whatever_the_console_codec(project, child_env):
 
 
 # ---------------------------------------------------------------------------
+# Files a script writes are UTF-8, as the file tools write them
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("tool", ["run_python", "execute_python_file"])
+def test_a_script_runs_in_utf8_mode(tool, tools, project):
+    script = project / "job.py"
+    script.write_text("print(1)\n", encoding="utf-8")
+    args = {"code": "print(1)"} if tool == "run_python" else {"file_path": str(script)}
+
+    with _spawn() as spawn:
+        tools[tool](**args)
+
+    assert spawn.call_args.kwargs["env"]["PYTHONUTF8"] == "1"
+
+
+_WRITES_TEXT = (
+    "from pathlib import Path\n"
+    "with open('opened.md', 'w') as f:\n"
+    "    f.write('26.45 \\u00b0C')\n"
+    "Path('pathlib.md').write_text('26.45 \\u00b0C')\n"
+    "print(open('opened.md').read() == Path('pathlib.md').read_text())\n"
+)
+
+
+@pytest.mark.parametrize("frozen_build", [False, True])
+def test_a_file_a_script_writes_without_an_encoding_is_utf8(
+    frozen_build, project, child_env
+):
+    """``open(path, "w")`` wrote cp1252 on Windows: the degree sign became 0xB0.
+
+    ``-X utf8=0`` stands in for a frozen interpreter, which ignores PYTHONUTF8.
+    """
+    script = project / "report.py"
+    script.write_text(_WRITES_TEXT, encoding="utf-8")
+    child_env["PYTHONUTF8"] = "1"
+    # A non-UTF-8 locale codec on Linux too (Windows ignores it: cp1252 there).
+    child_env["LC_ALL"] = "C"
+    child = ("import sys\nsys.frozen = True\n" if frozen_build else "") + _CHILD
+    argv = [sys.executable, "-X", "utf8=0"] if frozen_build else [sys.executable]
+
+    result = subprocess.run(
+        [*argv, "-c", child, RUN_PYTHON_FILE_FLAG, str(script)],
+        cwd=str(project),
+        env=child_env,
+        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        timeout=120,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == b"True"
+    for name in ("opened.md", "pathlib.md"):
+        assert (project / name).read_bytes() == "26.45 \u00b0C".encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
 # A script that starts sys.executable itself reaches the binary too
 # ---------------------------------------------------------------------------
 
