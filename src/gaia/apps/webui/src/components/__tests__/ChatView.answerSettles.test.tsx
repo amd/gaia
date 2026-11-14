@@ -77,6 +77,30 @@ describe('a finished answer', () => {
         expect(document.querySelector('.msg-user')).toBe(question);
     });
 
+    it('is drawn once when the stream ends, never redrawn with an entrance', async () => {
+        render(<ChatView sessionId={SESSION.id} />);
+        await act(async () => {
+            fireEvent.change(screen.getByLabelText('Message'), { target: { value: QUESTION } });
+            fireEvent.click(screen.getByLabelText('Send'));
+        });
+        await act(async () => {
+            callbacks!.onDone({ type: 'done', message_id: 42, content: ANSWER } as StreamEvent);
+        });
+
+        // Every answer on screen is the settled one: no live bubble redrawn to play its entrance again.
+        const answer = document.querySelector('[data-message-id="42"] .msg-assistant');
+        expect(answer).not.toBeNull();
+        expect(document.querySelectorAll('.msg-assistant')).toHaveLength(1);
+        expect(answer?.parentElement?.classList.contains('msg-settled')).toBe(true);
+
+        await act(async () => { await new Promise((done) => setTimeout(done, 400)); });
+        expect(document.querySelector('[data-message-id="42"] .msg-assistant')).toBe(answer);
+        expect(document.querySelectorAll('.msg-assistant')).toHaveLength(1);
+        // The saved copy replaces the shown one in place, too.
+        await waitFor(() => expect(mockedApi.getMessages).toHaveBeenCalledTimes(2));
+        expect(document.querySelector('[data-message-id="42"] .msg-assistant')).toBe(answer);
+    });
+
     it('stays settled when an unconfirmed ending gets its saved id on refresh', async () => {
         render(<ChatView sessionId={SESSION.id} />);
         await act(async () => {

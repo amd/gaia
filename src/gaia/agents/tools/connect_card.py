@@ -14,6 +14,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, Optional, Tuple
 
 from gaia.agents.base.tool_outcome import tool_result_dict
+from gaia.agents.base.verification import NOT_EXECUTED
 
 #: The card's render key, and its payload's ``kind``.
 CONNECT_CARD_KIND = "connect_account"
@@ -152,7 +153,13 @@ def with_connect_remedy(
 def with_connect_card(
     payload: Dict[str, Any], error: Any, *, agent_id: str, surface: Optional[str]
 ) -> Dict[str, Any]:
-    """A failed result, plus the remedy when *error* names connectors to connect."""
+    """A failed result, plus the remedy when *error* names connectors to connect.
+
+    A call stopped by account setup is marked as never run, so memory does not
+    keep its remedy, which is worded for this front-end, for the next one.
+    """
+    if getattr(error, "setup", False):
+        payload.update(NOT_EXECUTED)
     return with_connect_remedy(
         payload,
         getattr(error, "connect", ()),

@@ -1,6 +1,9 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""A non-Claude model's system prompt in a repo with guidance matches a golden.
+"""A non-Claude model's prompt in a repo with guidance matches a golden.
+
+The prompt is the system prompt plus the session context sent at the start of
+the first user message.
 
 The golden was rendered by the base agent, before repositories' CLAUDE.md,
 AGENTS.md and ``.claude/skills`` could reach the prompt. A repo carrying all
@@ -100,7 +103,7 @@ def test_a_non_claude_prompt_matches_the_base_golden(guided_repo, flagship, tmp_
     agent.model_id = MODEL
     agent._use_claude = False
     agent.rebuild_system_prompt()
-    prompt = _normalized(agent.system_prompt, agent, tmp_path)
+    prompt = _normalized(agent._prompt_text(), agent, tmp_path)
 
     assert "Root: <TMP>/repo" in prompt, "the project map must name the pinned repo"
     assert "<ENVIRONMENT>" in prompt and "<SCRATCH>" in prompt
@@ -135,6 +138,6 @@ def test_the_golden_catches_guidance_leaking_in(guided_repo, flagship, tmp_path)
     agent.model_id = MODEL
     agent._use_claude = False
     agent.rebuild_system_prompt()
-    prompt = _normalized(agent.system_prompt, agent, tmp_path)
+    prompt = _normalized(agent._prompt_text(), agent, tmp_path)
     assert "Run `make check` first." in prompt and "release-steps" in prompt
     assert prompt != GOLDEN.read_text(encoding="utf-8")

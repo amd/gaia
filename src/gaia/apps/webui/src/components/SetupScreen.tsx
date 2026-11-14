@@ -908,8 +908,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const pending = selection ? pendingDownloads(catalog, selection) : [];
     const short = plan && selection ? shortfall(plan, selection) : null;
     const modelsOnPc = selection ? catalog.filter((e) => selection.ticked.has(e.id) && e.downloaded).length : 0;
+    // Settings > Setup counts every downloaded model, so step 1 must not say none are here.
+    const othersOnPc = catalog.some((e) => e.downloaded);
     const checkLede = !checksDone ? 'setup.check.lede'
-        : modelsOnPc === 0 ? 'setup.check.ledeDone'
+        : modelsOnPc === 0 ? (othersOnPc ? 'setup.check.ledeOthersOnPc' : 'setup.check.ledeDone')
             : pending.length === 0 ? 'setup.check.ledeAllOnPc' : 'setup.check.ledeSomeOnPc';
     const chatEntry = catalog.find((e) => e.id === selection?.defaultChat);
 
@@ -1069,7 +1071,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
                             {serverRun?.state === 'running' && (
                                 <>
-                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} />
+                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} bar={false} />
                                     <SetupFooter>
                                         <button type="button" className="btn-secondary" onClick={() => void cancel()}>{t('setup.progress.cancel')}</button>
                                     </SetupFooter>
@@ -1160,7 +1162,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                         ? <p className="setup-hint">{t('settings.privacy.localOnlyBlocked')}</p>
                                         : (
                                             <ul className="setup-reasons">
-                                                <li>{t('setup.plan.cloudWhy.noDownload')}</li>
+                                                <li>{t('setup.plan.cloudWhy.stillLocal')}</li>
                                                 <li>{t('setup.plan.cloudWhy.key')}</li>
                                                 <li>{t('setup.plan.cloudWhy.sent')}</li>
                                             </ul>
@@ -1168,7 +1170,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </section>
                             </div>
                             <SetupFooter>
-                                <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>
+                                {/* Both pick local models, which a cloud setup doesn't download. */}
+                                {where !== 'cloud' && <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>}
                                 {where === 'cloud' ? (
                                     <button type="button" className="btn-primary" onClick={useCloud} disabled={runGoing}>{t('setup.continue')}</button>
                                 ) : (
@@ -1193,10 +1196,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             )}
                             {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
                             {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
-                            <details className="setup-disclosure">
-                                <summary>{t('setup.plan.whatDownloads')}</summary>
-                                <DownloadContents plan={plan} models={pending} />
-                            </details>
+                            {where !== 'cloud' && (
+                                <details className="setup-disclosure">
+                                    <summary>{t('setup.plan.whatDownloads')}</summary>
+                                    <DownloadContents plan={plan} models={pending} />
+                                </details>
+                            )}
                         </>
                     )}
 
@@ -1210,6 +1215,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 mode="setup"
                                 headingId="setup-title"
                                 names={names}
+                                cloud={choice !== 'local'}
                                 onBack={backOne}
                                 onSkip={() => stepTo(gpuFrom)}
                                 onContinue={() => stepTo(gpuFrom)}

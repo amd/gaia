@@ -38,6 +38,7 @@ from starlette.convertors import PathConvertor, register_url_convertor
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from gaia.agents.install_hints import agent_wheel_failed_message
+from gaia.client_hangups import quiet_client_hangups
 from gaia.config import UnsafeGaiaHomeError
 from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.security import AllowedPathsEnvError, env_allowed_paths
@@ -471,9 +472,14 @@ class _ScheduledRuns:
                     "freeing the model while its thread winds down",
                     self._timeout,
                 )
+            limit = (
+                f"{self._timeout / 60:g} minutes"
+                if self._timeout >= 120
+                else f"{self._timeout:g} seconds"
+            )
             raise asyncio.TimeoutError(
-                f"Scheduled run did not finish within {self._timeout:g}s and was "
-                "stopped. Raise GAIA_SCHEDULE_TIMEOUT if the task needs longer."
+                f"This scheduled task took longer than {limit} and was stopped. "
+                "Try a shorter or simpler task, or run it again."
             )
         finally:
             turn_queue.release()
@@ -528,6 +534,8 @@ def create_app(db_path: str = None, webui_dist: str = None) -> FastAPI:
         from gaia.ui._chat_helpers import _eval_provider_kwargs
         from gaia.ui.dispatch import DispatchQueue
 
+        # A client quitting mid-connection is not an error here.
+        quiet_client_hangups(asyncio.get_running_loop())
         # A client resetting a queued connection must not close the listener.
         keep_listening_after_client_resets(asyncio.get_running_loop())
         _eval_provider_kwargs()

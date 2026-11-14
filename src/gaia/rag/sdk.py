@@ -7,6 +7,7 @@ GAIA RAG SDK - Simple PDF document retrieval and Q&A
 """
 
 import codecs
+import contextlib
 import errno
 import hashlib
 import hmac
@@ -58,6 +59,13 @@ from gaia.llm.lemonade_client import (
 from gaia.llm.vlm_client import VLMExtractionError
 from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
+from gaia.rag.normalize import search_form
+from gaia.rag.text_units import (
+    SENTENCE_BREAK,
+    estimate_tokens,
+    join_pieces,
+    last_tokens,
+)
 from gaia.security import PathValidator
 from gaia.utils.document_formats import (
     UNSUPPORTED_DOCUMENTS,
@@ -81,9 +89,9 @@ _TEXT_BOM_ENCODINGS = (
     (codecs.BOM_UTF16_LE, "utf-16"),
     (codecs.BOM_UTF16_BE, "utf-16"),
 )
-_TEXT_FALLBACK_ENCODINGS = ("utf-8", "cp1252", "latin-1")
 _TEXT_TRIED_ENCODINGS = ", ".join(
-    dict.fromkeys([e for _, e in _TEXT_BOM_ENCODINGS] + list(_TEXT_FALLBACK_ENCODINGS))
+    list(dict.fromkeys(e for _, e in _TEXT_BOM_ENCODINGS))
+    + ["utf-8", "cp1252", "detected legacy encodings (Windows-1256, Shift-JIS, GBK…)"]
 )
 
 
@@ -188,19 +196,36 @@ def folder_index_skip_reason(file_path) -> Optional[str]:
 
 
 def _decode_text_bytes(data: bytes) -> str:
-    """Decode text bytes without letting latin-1 hide Windows encodings."""
+    """Decode text bytes, detecting legacy encodings; raise when none fits."""
     for bom, encoding in _TEXT_BOM_ENCODINGS:
         if data.startswith(bom):
             return data.decode(encoding)
 
-    for encoding in _TEXT_FALLBACK_ENCODINGS:
-        try:
-            return data.decode(encoding)
-        except UnicodeDecodeError:
-            continue
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
 
-    # latin-1 never fails; only a corrupt BOM-tagged file raises (above).
-    raise UnicodeDecodeError("text", data, 0, len(data), "unsupported encoding")
+    from charset_normalizer import from_bytes
+
+    matches = from_bytes(data)
+    try:
+        cp1252_text = data.decode("cp1252")
+    except UnicodeDecodeError:
+        cp1252_text = None
+    # Short Western text scores as cp1250/cp775 too; keep cp1252 when it reads cleanly.
+    if cp1252_text is not None and any(str(m) == cp1252_text for m in matches):
+        return cp1252_text
+    best = matches.best()
+    if best is not None:
+        return str(best)
+    # Symbol-heavy Western text ("12€ — 15€") the detector can't place.
+    high = sum(byte >= 0x80 for byte in data)
+    if cp1252_text is not None and high <= sum(0x20 < byte < 0x80 for byte in data):
+        return cp1252_text
+    raise UnicodeDecodeError(
+        "text", data, 0, len(data), "no text encoding fits these bytes"
+    )
 
 
 # --- PDF extraction errors ---------------------------------------------------
@@ -338,6 +363,12 @@ class SpreadsheetReadError(ValueError):
         self.status = status
 
 
+class PresentationReadError(ValueError):
+    """A .pptx that is damaged or not a real presentation."""
+
+    status = "corrupted"
+
+
 # Legacy .xls and password-protected .xlsx are both OLE2 compound files.
 _OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
@@ -462,6 +493,51 @@ class _EmbedderWarmingUp(Exception):
     """The embedder answered with no vectors: it is still loading."""
 
 
+class _EmbedderSwapLock:
+    """Embedding requests share the embedder; reloading it waits for them all.
+
+    Every ``RAGSDK`` in this process (one per upload, one per chat) unloads and
+    reloads the embedder on its first embed. Without this, that swap dropped
+    the requests other instances had in flight. A waiting reload also holds
+    back new requests, so it is not starved by a busy chat.
+    """
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._requests = 0
+        self._swapping = False
+        self._swaps_waiting = 0
+
+    @contextlib.contextmanager
+    def request(self):
+        with self._cond:
+            self._cond.wait_for(lambda: not self._swapping and not self._swaps_waiting)
+            self._requests += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._requests -= 1
+                self._cond.notify_all()
+
+    @contextlib.contextmanager
+    def swap(self):
+        with self._cond:
+            self._swaps_waiting += 1
+            self._cond.wait_for(lambda: not self._swapping and not self._requests)
+            self._swaps_waiting -= 1
+            self._swapping = True
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._swapping = False
+                self._cond.notify_all()
+
+
+_EMBEDDER_SWAP = _EmbedderSwapLock()
+
+
 class EmbeddingUnavailableError(RuntimeError):
     """The embedding model could not run, so nothing was embedded or searched.
 
@@ -573,8 +649,26 @@ EMBED_WAIT_REPORT_S = 15
 EMBED_WARMUP_ATTEMPTS = 3
 EMBED_WARMUP_PAUSE_S = 2
 
+# Windows' sharing and lock violations: another program has the file open.
+_SHARING_WINERRORS = frozenset({32, 33})
 
-def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+
+def _open_state(file_path: str) -> Optional[str]:
+    """Why *file_path* can't be opened for reading now, or None when it can."""
+    try:
+        with open(file_path, "rb"):
+            return None
+    except FileNotFoundError:
+        return "missing"
+    except PermissionError as e:
+        if getattr(e, "winerror", None) in _SHARING_WINERRORS:
+            return "locked"
+        return "denied"
+    except OSError:
+        return "unreadable"
+
+
+def _split_at_whitespace(text: str, max_chars: int) -> List[str]:
     """Split *text* into pieces of at most *max_chars*, dropping nothing but whitespace.
 
     Breaks at the last newline, else the last space, in the back half of each
@@ -599,6 +693,23 @@ def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str
     if rest:
         pieces.append(rest)
     return pieces
+
+
+def split_for_embedding(text: str, max_chars: int = EMBED_MAX_CHARS) -> List[str]:
+    """Split *text* into pieces whose embedded form is at most *max_chars* long.
+
+    The embedder reads :func:`search_form`, which a ligature such as U+FDFA
+    lengthens, so a piece that grows past the limit is cut finer.
+    """
+    fitted = []
+    for piece in _split_at_whitespace(text, max_chars):
+        size = max_chars
+        parts = [piece]
+        while size > 1 and any(len(search_form(p)) > max_chars for p in parts):
+            size = max(1, size * 3 // 4)
+            parts = _split_at_whitespace(piece, size)
+        fitted.extend(parts)
+    return fitted
 
 
 def default_rag_cache_dir() -> str:
@@ -1411,7 +1522,10 @@ class RAGSDK:
         # priority so a warm-up never makes an interactive turn wait.
         from gaia.daemon.broker_client import model_lease
 
-        with model_lease(self.config.embedding_model, priority="background"):
+        with (
+            model_lease(self.config.embedding_model, priority="background"),
+            _EMBEDDER_SWAP.swap(),
+        ):
             # Scoped unload of the embedder ONLY — a global /unload would evict
             # the co-resident chat model and trigger a ~100s cold reload (#1544).
             # ignore_if_not_loaded: on a cold start the embedder slot is empty
@@ -1459,17 +1573,18 @@ class RAGSDK:
             numpy array of embeddings with shape (num_texts, embedding_dim)
         """
 
+        # Documents and queries are embedded in one search form; NFKC also turns
+        # no-break spaces, which can exceed one token per character, into spaces.
+        safe_texts = [search_form(text) for text in texts]
         # Chunks are cut to fit, so a longer text here is a caller bug that
         # the embedder would answer with a 500.
-        oversized = [len(t) for t in texts if len(t) > EMBED_MAX_CHARS]
+        oversized = [len(t) for t in safe_texts if len(t) > EMBED_MAX_CHARS]
         if oversized:
             raise ValueError(
                 f"{len(oversized)}/{len(texts)} texts exceed the embedder's "
                 f"{EMBED_MAX_CHARS}-char input limit (longest: {max(oversized)} "
                 "chars). Split them with gaia.rag.sdk.split_for_embedding first."
             )
-        # No-break spaces in extracted tables can exceed one token per character.
-        safe_texts = [text.replace("\u00a0", " ") for text in texts]
 
         all_embeddings = []
 
@@ -1526,7 +1641,8 @@ class RAGSDK:
         reloaded = False
         while True:
             try:
-                response = self._request_embeddings(batch_texts, wait_callback)
+                with _EMBEDDER_SWAP.request():
+                    response = self._request_embeddings(batch_texts, wait_callback)
             except Exception as e:  # noqa: BLE001 — classified, then re-raised
                 stop = _stop_behind(e)
                 if stop is not None:
@@ -1686,6 +1802,7 @@ class RAGSDK:
         Falls back to ``_encode_texts`` on a miss. Stored/doc-chunk vectors
         are persisted elsewhere; this targets repeated *query* embeds only.
         """
+        query = search_form(query)
         if len(query) > EMBED_MAX_CHARS:
             self.log.warning(
                 f"Search query is {len(query)} chars; only the first "
@@ -2106,7 +2223,7 @@ class RAGSDK:
             self._log_read_failure(
                 e, pptx_path, f"Corrupted PPTX (bad zip): {pptx_path}: {e}"
             )
-            raise ValueError(msg) from e
+            raise PresentationReadError(msg) from e
 
         try:
             # A stream, not the path: given a path, python-pptx's is_zipfile
@@ -2124,7 +2241,7 @@ class RAGSDK:
                 "  3. Save as PDF and index the PDF instead"
             )
             self._log_read_failure(e, pptx_path, f"Corrupted PPTX {pptx_path}: {e}")
-            raise ValueError(msg) from e
+            raise PresentationReadError(msg) from e
 
         try:
             extract_start = time_module.time()
@@ -3336,7 +3453,7 @@ These positions indicate where to split the text."""
                 continue
 
             # Estimate tokens (rough: 1 token ≈ 4 characters)
-            para_tokens = len(para) // 4
+            para_tokens = estimate_tokens(para)
 
             # Check if this is VLM content - if so, keep it atomic
             is_vlm_content = idx in vlm_paragraphs
@@ -3347,18 +3464,18 @@ These positions indicate where to split the text."""
                 sentences = self._split_into_sentences(para)
 
                 for sentence in sentences:
-                    sentence_tokens = len(sentence) // 4
+                    sentence_tokens = estimate_tokens(sentence)
 
                     # If adding this sentence exceeds chunk size, save current chunk
                     if (
                         current_size + sentence_tokens > chunk_size_tokens
                         and current_chunk
                     ):
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
 
                         # Keep overlap (last few sentences)
-                        overlap_text = " ".join(current_chunk)
-                        overlap_actual = len(overlap_text) // 4
+                        overlap_text = join_pieces(current_chunk)
+                        overlap_actual = estimate_tokens(overlap_text)
                         if overlap_actual > overlap_tokens:
                             # Trim to overlap size
                             current_chunk = self._get_last_n_tokens(
@@ -3377,7 +3494,7 @@ These positions indicate where to split the text."""
                 if is_vlm_content:
                     if current_chunk:
                         # Save current chunk before adding VLM content
-                        chunks.append(" ".join(current_chunk))
+                        chunks.append(join_pieces(current_chunk))
                         current_chunk = []
                         current_size = 0
 
@@ -3389,14 +3506,14 @@ These positions indicate where to split the text."""
 
                 elif current_size + para_tokens > chunk_size_tokens and current_chunk:
                     # Save current chunk
-                    chunks.append(" ".join(current_chunk))
+                    chunks.append(join_pieces(current_chunk))
 
                     # Keep overlap
-                    overlap_text = " ".join(current_chunk)
+                    overlap_text = join_pieces(current_chunk)
                     current_chunk = self._get_last_n_tokens(
                         overlap_text, overlap_tokens
                     ).split()
-                    current_size = len(" ".join(current_chunk)) // 4
+                    current_size = estimate_tokens(join_pieces(current_chunk))
 
                     current_chunk.append(para)
                     current_size += para_tokens
@@ -3406,7 +3523,7 @@ These positions indicate where to split the text."""
 
         # Add final chunk
         if current_chunk:
-            chunks.append(" ".join(current_chunk))
+            chunks.append(join_pieces(current_chunk))
 
         # STEP 4: Restore VLM blocks from placeholders
         if vlm_blocks:
@@ -3440,7 +3557,7 @@ These positions indicate where to split the text."""
         fitted = []
         split = pieces = 0
         for chunk in chunks:
-            if len(chunk) <= EMBED_MAX_CHARS:
+            if len(search_form(chunk)) <= EMBED_MAX_CHARS:
                 fitted.append(chunk)
                 continue
             parts = split_for_embedding(chunk)
@@ -3460,8 +3577,6 @@ These positions indicate where to split the text."""
 
         Better than word splitting, doesn't require NLTK dependency.
         """
-        # Split on sentence endings followed by space and capital letter
-
         # Handle common abbreviations that shouldn't split
         text = text.replace("Dr.", "Dr<DOT>")
         text = text.replace("Mr.", "Mr<DOT>")
@@ -3476,7 +3591,7 @@ These positions indicate where to split the text."""
         text = text.replace("etc.", "etc<DOT>")
 
         # Split on sentence boundaries
-        sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", text)
+        sentences = SENTENCE_BREAK.split(text)
 
         # Restore abbreviations
         sentences = [s.replace("<DOT>", ".") for s in sentences]
@@ -3485,17 +3600,7 @@ These positions indicate where to split the text."""
 
     def _get_last_n_tokens(self, text: str, n_tokens: int) -> str:
         """Get approximately the last n tokens from text."""
-        # Rough estimate: 1 token ≈ 4 characters
-        target_chars = n_tokens * 4
-        if len(text) <= target_chars:
-            return text
-
-        # Try to break on word boundary
-        trimmed = text[-target_chars:]
-        first_space = trimmed.find(" ")
-        if first_space > 0:
-            return trimmed[first_space + 1 :]
-        return trimmed
+        return last_tokens(text, n_tokens)
 
     def _create_faiss_index(self, embeddings: "np.ndarray"):
         """Build a FAISS L2 index from precomputed embeddings."""
@@ -3508,13 +3613,13 @@ These positions indicate where to split the text."""
     def _vectors_path(self, chunks: List[str]) -> str:
         """Where the embeddings of *chunks* under the current embedder are kept.
 
-        The name binds the vectors to the embedding model and the exact chunk
-        text, so different text never reads them and the same text, indexed
+        The name binds the vectors to the embedding model and the chunk text as
+        embedded, so different text never reads them and the same text, indexed
         again from a new temp copy, adds no second file.
         """
         digest = hashlib.sha256(self.config.embedding_model.encode("utf-8"))
         for chunk in chunks:
-            digest.update(b"\x1e" + chunk.encode("utf-8"))
+            digest.update(b"\x1e" + search_form(chunk).encode("utf-8"))
         return os.path.join(
             self.config.cache_dir, f"vectors_{digest.hexdigest()[:24]}.npy"
         )
@@ -3831,7 +3936,8 @@ These positions indicate where to split the text."""
         """How *file_path* compares to the bytes it was indexed from; cheap to call.
 
         Returns ``"current"``, ``"changed"``, ``"missing"``, ``"locked"`` (another
-        program holds it), ``"unreadable"`` or ``"not_indexed"``. Hashes only
+        program holds it), ``"denied"`` (the user may no longer read it),
+        ``"unreadable"`` or ``"not_indexed"``. Hashes only
         when the file's size, mtime, inode or (POSIX) ctime moved since it was
         indexed, or when it was written within 2s of that stat. On Windows, an
         edit that later restores both size and mtime is caught by
@@ -3856,7 +3962,8 @@ These positions indicate where to split the text."""
             and recorded[0] == stat_key
             and recorded[1] - stat_key[1] >= _RACY_STAT_NS
         ):
-            return "current"
+            # A permission change moves no stat field on Windows.
+            return _open_state(file_path) or "current"
         if indexed_key is None:
             return "changed"
         try:
@@ -4092,7 +4199,8 @@ These positions indicate where to split the text."""
                 "error_type": str (some failures: "file_locked",
                     "cache_busy" or "embedding_unavailable"),
                 "xlsx_status": str (an unreadable workbook: "corrupted",
-                    "unsupported_workbook" or "empty_file")
+                    "unsupported_workbook" or "empty_file"),
+                "pptx_status": str ("readable", or "corrupted" for a damaged file)
             }
 
         Raises:
@@ -4125,6 +4233,16 @@ These positions indicate where to split the text."""
                 print(f"❌ File not found: {file_path}")
                 print("   Please check the file path and try again")
             stats["error"] = f"File not found: {file_path}"
+            return stats
+
+        # A folder's size reads as 0 on Windows, which would say "empty".
+        if os.path.isdir(file_path):
+            self.log.error(f"Not a file: {file_path}")
+            stats["error"] = (
+                f"'{file_path}' is a folder, not a file. Index a folder's "
+                "documents with index_directory."
+            )
+            stats["is_folder"] = True
             return stats
 
         # Check if file is empty (early validation to save time)
@@ -4649,6 +4767,13 @@ These positions indicate where to split the text."""
             self.log.error(f"Excel extraction failed for {file_path}: {e.status}")
             stats["error"] = str(e)
             stats["xlsx_status"] = e.status
+            return stats
+        except PresentationReadError as e:
+            if self.config.show_stats:
+                print(f"❌ Failed to index {Path(file_path).name}: {e}")
+            self.log.error(f"PowerPoint extraction failed for {file_path}: {e.status}")
+            stats["error"] = str(e)
+            stats["pptx_status"] = e.status
             return stats
         except VisionModelFailedError as e:
             if self.config.show_stats:

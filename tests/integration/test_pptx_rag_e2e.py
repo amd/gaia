@@ -21,10 +21,13 @@ from urllib.request import urlopen
 import pytest
 
 
-def _lemonade_available(base_url="http://localhost:13305"):
-    """Check if Lemonade server is reachable."""
+def _lemonade_available():
+    """Check if the Lemonade server LEMONADE_BASE_URL selects is reachable."""
+    from gaia.llm.lemonade_client import _get_lemonade_config
+
+    base_url = _get_lemonade_config()[2].rstrip("/")
     try:
-        with urlopen(f"{base_url}/api/v1/models", timeout=3) as r:
+        with urlopen(f"{base_url}/models", timeout=3) as r:
             return r.status == 200, "ok"
     except (URLError, OSError) as e:
         return False, f"Lemonade not reachable: {e}"

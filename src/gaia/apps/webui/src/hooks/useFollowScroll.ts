@@ -95,5 +95,19 @@ export function useFollowScroll(
         };
     }, [markUserScroll, clearUserScroll]);
 
+    // A card opening in the composer shrinks the list without a scroll event, hiding its last rows.
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        let height = el.clientHeight;
+        const observer = new ResizeObserver(() => {
+            const shrank = el.clientHeight < height;
+            height = el.clientHeight;
+            if (shrank && followRef.current && !userScrolling()) el.scrollTop = el.scrollHeight;
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [scrollRef, followRef, userScrolling]);
+
     return { userScrolling, clearUserScroll, listProps: { onScroll, onWheel, onTouchMove: markUserScroll, onPointerDown } };
 }
