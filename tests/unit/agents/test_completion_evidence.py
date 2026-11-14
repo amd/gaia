@@ -1578,6 +1578,35 @@ def test_a_bare_output_no_run_wrote_is_still_missing(tmp_path):
     assert any("recon_tables.xlsx" in g for g in gaps(ledger, "Done."))
 
 
+_RUN_START_NS = 10**18
+_MS = 1_000_000
+_HOUR_AGO = _RUN_START_NS - 3600 * 1000 * _MS
+
+
+@pytest.mark.parametrize(
+    "mtime, ctime, counted",
+    [
+        # Created 10 ms before the run: inside the slack, which is mtime's alone.
+        (_HOUR_AGO, _RUN_START_NS - 10 * _MS, False),
+        (_RUN_START_NS - 10 * _MS, _HOUR_AGO, True),
+        (_HOUR_AGO, _RUN_START_NS + 10 * _MS, True),
+    ],
+)
+def test_only_mtime_gets_the_file_clock_slack(
+    tmp_path, monkeypatch, mtime, ctime, counted
+):
+    from gaia.agents.base.completion import _FILE_CLOCK_SLACK_NS
+
+    target = tmp_path / "report.csv"
+    target.write_text("x\n")
+    ledger = CompletionEvidence(f"Save the report to `{target}`", str(tmp_path))
+    monkeypatch.setattr(ledger, "_stamp", lambda p: (0, 0, 2, mtime, ctime))
+    start = _RUN_START_NS - _FILE_CLOCK_SLACK_NS
+    ledger.exec_windows.append((start, _RUN_START_NS + 1000 * _MS, True, 0))
+
+    assert (ledger.key(str(target)) in ledger.written_files()) is counted
+
+
 def test_a_bare_output_is_not_looked_for_in_a_folder_nobody_named(tmp_path):
     other = tmp_path / "other"
     other.mkdir()
