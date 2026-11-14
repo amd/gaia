@@ -390,6 +390,7 @@ export const enMessages = {
     'msg.stoppedError': 'Stopped. GAIA reported an error while stopping: {error}',
     'msg.about': 'About this answer',
     'msg.timestamp': 'Message timestamp',
+    'msg.route': 'Picked by hybrid. {reason}',
 
     // The line under an answer: how long it took and where it ran
     'answer.answeredIn': 'Answered in {time}',

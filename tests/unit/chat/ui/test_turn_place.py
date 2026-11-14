@@ -104,7 +104,23 @@ class _NoLemonade:
         raise httpx.ConnectError(f"connection refused: {url}")
 
 
-async def _done_stats(model_id):
+class _RoutedAgent(_AnswerAgent):
+    """A ``hybrid`` agent: built on the cheap model, the turn moves to the routed one."""
+
+    ROUTE = {
+        "model": CLOUD_MODEL,
+        "reason": "find_defects",
+        "degraded": True,
+        "notice": "hybrid: the classifier has failed 3 turns in a row",
+    }
+
+    def process_query(self, _message):
+        self.model_id = self.ROUTE["model"]
+        self.console.print_final_answer("Miso.", total_tokens=4, input_tokens=9)
+        return {"result": "Miso.", "route": dict(self.ROUTE)}
+
+
+async def _done_stats(model_id, agent_cls=_AnswerAgent, agent_model=None):
     db = ChatDatabase(":memory:")
     helpers._agent_cache.clear()
     try:
@@ -120,7 +136,7 @@ async def _done_stats(model_id):
             ),
         ):
             session = db.create_session(model=model_id, agent_type="chat")
-            agent = _AnswerAgent(model_id)
+            agent = agent_cls(agent_model or model_id)
             helpers._store_agent(session["id"], model_id, [], agent, "chat")
             request = ChatRequest(session_id=session["id"], message="hi", stream=True)
             events = []
@@ -152,3 +168,27 @@ async def test_cloud_turn_names_its_provider_with_lemonade_stopped():
 async def test_local_turn_with_lemonade_stopped_claims_no_place():
     done, _saved = await _done_stats("Gemma-4-E4B-it-GGUF")
     assert "place" not in done
+
+
+async def test_hybrid_turn_is_placed_and_billed_by_its_routed_model():
+    from gaia.config import GaiaConfig
+
+    GaiaConfig(
+        hybrid_cheap_model="Gemma-4-E4B-it-GGUF", hybrid_strong_model=CLOUD_MODEL
+    ).save()
+    with patch.object(helpers.spending, "record_turn") as record_turn:
+        done, saved = await _done_stats(
+            "hybrid", _RoutedAgent, agent_model="Gemma-4-E4B-it-GGUF"
+        )
+    assert done["place"] == "via Fireworks AI"
+    assert done["model"] == CLOUD_MODEL
+    assert done["route"] == _RoutedAgent.ROUTE
+    assert saved["route"]["model"] == CLOUD_MODEL
+    assert saved["route"]["notice"] == _RoutedAgent.ROUTE["notice"]
+    assert record_turn.call_args.args[1] == CLOUD_MODEL
+
+
+async def test_a_turn_with_no_route_records_none():
+    done, saved = await _done_stats(CLOUD_MODEL)
+    assert "route" not in done
+    assert saved.get("route") is None

@@ -108,6 +108,66 @@ class TestSessionInferenceLocation:
         assert session_inference_location(_session(), None, _Registry([])) is None
 
 
+class TestHybridSessionLocation:
+    """``hybrid`` is not a local model id: it routes to cloud models by default."""
+
+    def test_hybrid_session_is_remote(self):
+        loc = session_inference_location(
+            _session("hybrid"), None, registry=_Registry([])
+        )
+        assert loc.remote is True
+        assert loc.provider == "amd"
+        assert loc.model == "hybrid"
+
+    def test_hybrid_override_is_remote(self):
+        loc = session_inference_location(_session(), "hybrid", registry=_Registry([]))
+        assert loc.remote is True
+
+    def test_device_choice_does_not_turn_hybrid_local(self):
+        loc = session_inference_location(
+            _session("hybrid", device="npu"), None, registry=_Registry([])
+        )
+        assert loc.remote is True
+        assert loc.model == "hybrid"
+
+    def test_hybrid_with_one_cloud_model_is_remote(self):
+        from gaia.config import GaiaConfig
+
+        GaiaConfig(
+            hybrid_cheap_model="Gemma-4-E4B-it-GGUF",
+            hybrid_strong_model="fireworks.deepseek-v4p1-flash",
+        ).save()
+        loc = session_inference_location(
+            _session("hybrid"), None, registry=_Registry([])
+        )
+        assert loc.remote is True
+        assert loc.provider == "fireworks"
+
+    def test_hybrid_between_local_models_is_local(self):
+        from gaia.config import GaiaConfig
+
+        GaiaConfig(
+            hybrid_cheap_model="Gemma-4-E4B-it-GGUF",
+            hybrid_strong_model="Qwen3.6-35B-A3B-GGUF",
+            hybrid_classifier_model="Gemma-4-E4B-it-GGUF",
+        ).save()
+        loc = session_inference_location(
+            _session("hybrid"), None, registry=_Registry([])
+        )
+        assert loc.remote is False
+
+    def test_unusable_hybrid_settings_make_no_claim(self, monkeypatch):
+        from gaia.llm import hybrid
+
+        def broken(*_a, **_k):
+            raise hybrid.HybridConfigError("hybrid_cheap_model must name a model")
+
+        monkeypatch.setattr(hybrid.HybridSettings, "load", classmethod(broken))
+        assert (
+            session_inference_location(_session("hybrid"), None, _Registry([])) is None
+        )
+
+
 class TestSessionResponseFields:
     def test_cloud_override_reaches_session_responses(self, client):
         created = client.post("/api/sessions", json={"title": "t"}).json()

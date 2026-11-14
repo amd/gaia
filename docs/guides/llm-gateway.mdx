@@ -326,6 +326,9 @@ classified (`classified`), how long it took (`seconds`), whether the turn was
 (`classifier_format`), and on a failed classification the `fix`, plus
 `degraded` and its `notice` once failures repeat. Each decision is also logged
 at INFO.
+In the Agent UI, a hybrid chat is labelled as cloud, keeps `hybrid` when you
+switch device, and each answer's footer names the model the turn ran on, with
+the classifier's reason on hover; the degraded notice shows under the answer.
 
 Pick the models with `gaia config`:
 

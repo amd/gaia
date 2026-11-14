@@ -782,6 +782,12 @@
 .msg-stats-summary:hover {
     color: var(--text-secondary);
 }
+/* A hybrid turn's routing warning stays visible, unlike the hover-only stats */
+.msg-route-notice {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--accent-yellow);
+}
 /* Separator dots between stat items */
 .msg-stats > span + span::before {
     content: '·';

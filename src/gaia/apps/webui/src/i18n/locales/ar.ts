@@ -390,6 +390,7 @@ const messages: Messages = {
     'msg.stoppedError': 'تم الإيقاف. أبلغ GAIA عن خطأ أثناء الإيقاف: {error}',
     'msg.about': 'حول هذه الإجابة',
     'msg.timestamp': 'وقت الرسالة',
+    'msg.route': 'اختاره التوجيه الهجين. {reason}',
 
     // The line under an answer: how long it took and where it ran
     'answer.answeredIn': 'اكتملت الإجابة خلال {time}',
