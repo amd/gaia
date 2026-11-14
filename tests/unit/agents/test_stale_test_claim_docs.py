@@ -5,8 +5,8 @@
 A task that asks for the code fix and then a write-up of it ends with the
 write-up. Every passing run then came "before the last change", so the
 answer's honest pass count was sent back for a re-run that changed nothing.
-Only a write a test could depend on makes an earlier run stale now: code, test
-fixtures, build inputs, and files inside a Python package.
+Only a write that is clearly documentation, or the requested output, leaves
+the run standing; anything a test could read still makes it stale.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from gaia.agents.base.checks import CheckResult, attach_check
 from gaia.agents.base.tools import tool
 from gaia.agents.base.verification import (
     TEST_RUN_STALE,
+    feeds_tests,
     is_code_mutation,
     is_doc_path,
     strip_verification_scope,
@@ -73,8 +74,12 @@ def _write(path, tool_name="write_file", is_deliverable=None):
         "CHANGELOG.md",
         "CHANGELOG",
         "README",
-        "notes.txt",
-        "report.csv",
+        "README.txt",
+        "LICENSE.txt",
+        "hub/agents/chat/README.md",
+        "docs/notes.txt",
+        "docs/img/flow.png",
+        "docs/guides/agent.mdx",
         "C:\\work\\proj\\docs\\notes.rst",
     ],
 )
@@ -115,8 +120,9 @@ def test_a_md_inside_a_python_package_is_not_a_doc(tmp_path):
     package = tmp_path / "pkg"
     package.mkdir()
     (package / "__init__.py").write_text("", encoding="utf-8")
-    assert not is_doc_path(str(package / "system_prompt.md"))
-    assert is_doc_path(str(tmp_path / "system_prompt.md"))
+    root = str(tmp_path)
+    assert not is_doc_path(str(package / "system_prompt.md"), root)
+    assert is_doc_path(str(tmp_path / "system_prompt.md"), root)
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +339,17 @@ def test_package_data_below_the_package_folder_is_not_a_doc(tmp_path):
     package = tmp_path / "pkg"
     (package / "prompts").mkdir(parents=True)
     (package / "__init__.py").write_text("", encoding="utf-8")
-    assert not is_doc_path(str(package / "prompts" / "system.md"))
+    assert not is_doc_path(str(package / "prompts" / "system.md"), str(tmp_path))
+
+
+def test_package_data_any_depth_below_the_package_is_not_a_doc(tmp_path):
+    """Docs say "in or below a package folder": no depth cut-off."""
+    package = tmp_path / "pkg"
+    deep = package / "a" / "b" / "c" / "d"
+    deep.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    assert not is_doc_path(str(deep / "prompt.md"), str(tmp_path))
+    assert not is_doc_path("pkg/a/b/c/d/prompt.md", str(tmp_path))
 
 
 def test_a_relative_path_is_judged_against_the_project_root(tmp_path, monkeypatch):
@@ -353,3 +369,94 @@ def test_a_relative_path_is_judged_against_the_project_root(tmp_path, monkeypatc
         root=str(tmp_path),
     )
     assert record["mutated"] is True
+
+
+# ---------------------------------------------------------------------------
+# Test inputs outside the usual ``tests`` folder still count
+# ---------------------------------------------------------------------------
+
+TEST_INPUTS = [
+    "test_data/input.csv",
+    "test-data/x.json",
+    "testdata/x.txt",
+    "__tests__/snap.txt",
+    "src/__tests__/view.md",
+    "spec/fixtures.csv",
+    "specs/case.md",
+    "data/expected.txt",
+    "data/notes.md",
+    "datasets/train.csv",
+    "e2e/flow.md",
+    "mocks/reply.json",
+    "samples/in.txt",
+    "golden/out.md",
+    "integration_tests/README.md",
+    "tests/README.md",
+    "tests/docs/how.md",
+    "expected_output.md",
+    "golden.txt",
+    "fixture.json",
+    "notes.txt",
+    "report.csv",
+    "output.json",
+    "input.txt",
+]
+
+
+@pytest.mark.parametrize("path", TEST_INPUTS)
+def test_a_file_a_test_can_read_is_not_a_doc(path):
+    assert not is_doc_path(path)
+
+
+@pytest.mark.parametrize("path", TEST_INPUTS)
+def test_rewriting_a_test_input_after_the_run_makes_it_stale(path):
+    claim, why = unsupported_test_claim(CLAIM, [_run(), _write(path)])
+    assert (claim, why) == ("12 passed", TEST_RUN_STALE)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "test_data/input.csv",
+        "test-data/x.json",
+        "__tests__/snap.txt",
+        "spec/fixtures.csv",
+        "data/expected.txt",
+        "tests/README.md",
+    ],
+)
+def test_a_test_input_named_as_the_output_still_makes_it_stale(path):
+    """Asked to write ``data/expected.txt``: a test may compare against it."""
+    record = _write(path, is_deliverable={path}.__contains__)
+    assert record["mutated"] is True
+    assert unsupported_test_claim(CLAIM, [_run(), record])[1] == TEST_RUN_STALE
+
+
+@pytest.mark.parametrize("path", ["result.json", "out/report.csv", "summary.txt"])
+def test_a_data_file_named_as_the_output_leaves_the_run_standing(path):
+    record = _write(path, is_deliverable={path}.__contains__)
+    assert record["mutated"] is False
+    assert unsupported_test_claim(CLAIM, [_run(), record]) is None
+
+
+@pytest.mark.parametrize("path", ["summary.txt", "report.csv", "out.json"])
+def test_the_same_data_file_unrequested_still_makes_it_stale(path):
+    assert _write(path)["mutated"] is True
+
+
+def test_folders_above_the_project_root_are_not_read(tmp_path):
+    """A project under ``/testbed`` or ``AppData`` is not all test input."""
+    project = tmp_path / "test_project" / "data"
+    project.mkdir(parents=True)
+    root = str(project)
+    assert is_doc_path(str(project / "NOTES.md"), root)
+    assert not feeds_tests(str(project / "NOTES.md"), root)
+    assert not is_doc_path(str(project / "tests" / "NOTES.md"), root)
+    # Outside the root, every folder name is read.
+    assert not is_doc_path(str(tmp_path / "test_project" / "NOTES.md"), root)
+
+
+def test_a_doc_name_with_a_code_or_data_suffix_is_not_a_doc():
+    assert not is_doc_path("README.json")
+    assert not is_doc_path("CHANGELOG.csv")
+    assert not is_doc_path("README.py")

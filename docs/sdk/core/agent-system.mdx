@@ -1090,17 +1090,22 @@ The loop asks once for a tool call or the final answer; a second such reply in
 a row ends the turn with status `incomplete` and an answer saying the request
 is unfinished.
 
-Only an edit a test could depend on makes an earlier run stale. Writing a doc
-or data file (`.md`, `.mdx`, `.rst`, `.txt`, `.csv`, a bare `CHANGELOG` or
-`README`, …) leaves the run standing, and so does writing a non-code file the
-request asked for as its output (`OUTPUT.md`, `result.json`). These still count
-as changes, even when the request named them as its output: any source file
-(`.py`, `.ts`, …, even one named `README.py`), a file under a `tests`, `test`,
-`fixtures`, `testdata` or `__snapshots__` folder, a file in or below a Python
-package folder (a prompt `.md` the code loads), and build, install or test
+Only a write that is clearly documentation, or the request's own output, leaves
+an earlier test run standing; every other write makes it stale. Documentation
+means prose (`.md`, `.mdx`, `.rst`), a `README`, `CHANGELOG`, `LICENSE` or
+similar file (bare or `.txt`), or a text or image file under a `docs` folder.
+The request's output is any non-code file it asked for (`OUTPUT.md`,
+`result.json`, `report.csv`). Neither applies to a file a test may read, so
+these always count as changes, even when the request named them as its output:
+any source file (`.py`, `.ts`, …, even one named `README.py`); a file under a
+folder, or with a name, that looks like test input (`tests`, `test_data`,
+`__tests__`, `spec`, `fixtures`, `data`, `mocks`, `samples`, `e2e`, `golden`,
+`expected_output.md`, …); a file anywhere below a folder that holds an
+`__init__.py` (a prompt `.md` the code loads); and build, install or test
 configuration (`requirements*.txt`, `pyproject.toml`, `pytest.ini`,
-`package.json`, `CMakeLists.txt`, …). The verify-after-change nudge uses the
-same rule.
+`package.json`, `CMakeLists.txt`, …). A plain `.txt`, `.csv` or `.json` that the
+request didn't ask for counts too. Folder names are read below the project
+root. The verify-after-change nudge uses the same rule.
 
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix is `verified` and gets no note; one
