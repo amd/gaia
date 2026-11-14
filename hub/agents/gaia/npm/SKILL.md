@@ -14,7 +14,8 @@ runs as `gaia-tui`, so its behaviour cannot differ from that one. By default eve
 runs on the local machine against a local model server, and nothing you type or index
 leaves it. If you pick a cloud provider (Fireworks AI, the AMD LLM Gateway or Claude
 in the terminal UI, or `provider: "claude"` on `/query`), the conversation is sent to
-that provider.
+that provider. The web search and page-fetch tools reach the internet with any model:
+they send their queries and URLs to the sites they look up.
 
 Two ways in:
 
