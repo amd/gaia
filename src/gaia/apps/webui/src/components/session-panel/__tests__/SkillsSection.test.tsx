@@ -3,7 +3,7 @@
 
 /** Skills: what this chat is using, how each came in, and every way that can't be listed. */
 
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SkillsSection } from '../SkillsSection';
 import { useChatStore } from '../../../stores/chatStore';
@@ -50,11 +50,12 @@ describe('SkillsSection', () => {
         expect(await screen.findByText(tEn('skills.empty'))).toBeInTheDocument();
     });
 
-    it('says an agent running elsewhere does not report skills, not that there are none', async () => {
+    it('hides the section for an agent running elsewhere, which does not report skills', async () => {
         mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: [], skills: null });
         render(<SkillsSection sessionId={SID} busy={false} />);
 
-        expect(await screen.findByText(tEn('skills.notReported'))).toBeInTheDocument();
+        await waitFor(() => expect(screen.queryByText(tEn('sp.checking'))).not.toBeInTheDocument());
+        expect(screen.queryByText(tEn('skills.title'))).not.toBeInTheDocument();
         expect(screen.queryByText(tEn('skills.empty'))).not.toBeInTheDocument();
     });
 
@@ -63,6 +64,23 @@ describe('SkillsSection', () => {
         render(<SkillsSection sessionId={SID} busy={false} />);
 
         expect(await screen.findByRole('status')).toHaveTextContent(tEn('skills.notRunning'));
+    });
+
+    it('reads again while a reply runs, so a turn paused on a permission prompt is not called "not running"', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            mocked.getCapabilities
+                .mockRejectedValueOnce(httpError(409, 'not running'))
+                .mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: [], skills: SKILLS });
+            render(<SkillsSection sessionId={SID} busy />);
+            expect(await screen.findByRole('status')).toHaveTextContent(tEn('skills.notRunning'));
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+            expect(await screen.findByRole('list', { name: 'Skills this chat is using' })).toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('treats a response with no skills field as an error', async () => {

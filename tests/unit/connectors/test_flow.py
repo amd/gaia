@@ -387,6 +387,47 @@ class TestConsentDenied:
         with pytest.raises(ConsentDeniedError):
             await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
 
+    @respx.mock
+    async def test_a_cancel_nobody_waits_on_reaches_the_app(
+        self, google_provider, monkeypatch, caplog
+    ):
+        """The apps start a flow and never await it: the cancel must reach them
+        as an event, and the next Connect must not log an unread exception."""
+        import gc
+        import logging
+
+        emitted = []
+
+        async def _emit(name, payload):
+            emitted.append((name, payload))
+
+        monkeypatch.setattr("gaia.connectors.flow.emit", _emit)
+        _mock_token_endpoint()
+        info = await start_authorization("google", scopes=["openid"])
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        async with httpx.AsyncClient() as c:
+            resp = await c.get(
+                f"{params['redirect_uri'][0]}?error=access_denied"
+                f"&state={params['state'][0]}"
+            )
+        assert resp.status_code == 400
+        assert emitted == [
+            (
+                "connector.oauth.error",
+                {
+                    "connector_id": "google",
+                    "reason": "cancelled",
+                    "error": "Sign-in was cancelled.",
+                },
+            )
+        ]
+
+        with caplog.at_level(logging.ERROR, logger="asyncio"):
+            await start_authorization("google", scopes=["openid"])
+            gc.collect()
+            await asyncio.sleep(0)
+        assert "never retrieved" not in caplog.text
+
 
 class TestTimeout:
     async def test_flow_timeout(self, google_provider, monkeypatch):
@@ -396,6 +437,59 @@ class TestTimeout:
         info = await start_authorization("google", scopes=["openid"])
         with pytest.raises(FlowTimeoutError):
             await complete_authorization(info["flow_id"])
+
+    async def test_a_sign_in_nobody_waits_on_times_out_and_closes_its_port(
+        self, google_provider, monkeypatch
+    ):
+        """The apps never await the flow: a closed sign-in tab must still end
+        it, close the callback port and tell the app."""
+        from gaia.connectors.flow import _pending
+
+        monkeypatch.setattr("gaia.connectors.flow._FLOW_TIMEOUT_SECONDS", 0.2)
+        emitted = []
+
+        async def _emit(name, payload):
+            emitted.append((name, payload))
+
+        monkeypatch.setattr("gaia.connectors.flow.emit", _emit)
+        info = await start_authorization("google", scopes=["openid"])
+        redirect_uri = parse_qs(urlparse(info["authorization_url"]).query)[
+            "redirect_uri"
+        ][0]
+
+        await asyncio.sleep(0.5)
+
+        assert info["flow_id"] not in _pending
+        assert emitted == [
+            (
+                "connector.oauth.error",
+                {
+                    "connector_id": "google",
+                    "reason": "timeout",
+                    "error": "Sign-in did not finish in time.",
+                },
+            )
+        ]
+        async with httpx.AsyncClient() as c:
+            with pytest.raises(httpx.ConnectError):
+                await c.get(f"{redirect_uri}?code=late&state=x")
+
+    async def test_a_finished_sign_in_is_not_reported_as_timed_out(
+        self, google_provider, monkeypatch
+    ):
+        monkeypatch.setattr("gaia.connectors.flow._FLOW_TIMEOUT_SECONDS", 0.2)
+        emitted = []
+
+        async def _emit(name, payload):
+            emitted.append((name, payload))
+
+        monkeypatch.setattr("gaia.connectors.flow.emit", _emit)
+        info = await start_authorization("google", scopes=["openid"])
+        await cancel_flow(info["flow_id"])
+
+        await asyncio.sleep(0.4)
+
+        assert emitted == []
 
 
 class TestKeyringIsSourceOfTruth:

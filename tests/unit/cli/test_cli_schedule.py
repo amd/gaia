@@ -175,6 +175,29 @@ def test_add_accepts_notification_sink_on_windows(parser, mock_store, mocker):
     assert constructed.sink == "notification"
 
 
+def test_add_with_a_taken_name_exits_1_with_one_line_not_a_traceback(
+    parser, mocker, tmp_path, capsys
+):
+    """The store's ValueError already holds the right message; the CLI must print it."""
+    from gaia.schedule.store import TomlScheduleStore
+
+    store = TomlScheduleStore(tmp_path / "schedules.toml")
+    mocker.patch("gaia.schedule.store.TomlScheduleStore", return_value=store)
+    argv = ["add", "--name", "n", "--cron", "* * * * *", "--prompt"]
+    _handle_schedule(_parse(parser, [*argv, "first"]))
+    capsys.readouterr()
+
+    with pytest.raises(SystemExit) as excinfo:
+        _handle_schedule(_parse(parser, [*argv, "second"]))
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("❌ Cannot add schedule 'n': schedule 'n' already")
+    assert "Traceback" not in captured.err
+    assert store.get("n").prompt == "first"
+
+
 def test_add_requires_name_and_cron(parser):
     with pytest.raises(SystemExit) as excinfo:
         _parse(parser, ["add", "--prompt", "hi"])
@@ -377,6 +400,42 @@ def test_run_fires_schedule_and_marks_run_with_next_fire_time(
     )
 
 
+def _model_refused():
+    from gaia.schedule.runner import ScheduleModelError
+
+    return ScheduleModelError("Gemma-4-E4B-it-GGUF is not downloaded (5.6 GB).")
+
+
+def _server_failed():
+    from gaia.llm.lemonade_client import LemonadeClientError
+
+    return LemonadeClientError("Failed to load model Gemma-4-E4B-it-GGUF")
+
+
+@pytest.mark.parametrize("error", [_model_refused, _server_failed])
+@pytest.mark.parametrize("one_shot", [False, True])
+def test_a_run_that_cannot_reach_its_model_exits_1_with_one_line(
+    parser, mock_store, mocker, capsys, error, one_shot
+):
+    """A refused or unloadable model is a message, not a traceback (#7974)."""
+    schedule = Schedule(name="t", cron="0 7 1 1 *", prompt="hi")
+    if one_shot:
+        schedule = Schedule(name="t", at="2026-07-18T07:00:00+00:00", prompt="hi")
+        mock_store.claim_one_shot.return_value = schedule
+    mock_store.get.return_value = schedule
+    mocker.patch("gaia.schedule.runner.fire", side_effect=error())
+
+    with pytest.raises(SystemExit) as excinfo:
+        _handle_schedule(_parse(parser, ["run", "t"]))
+
+    assert excinfo.value.code == 1
+    err = capsys.readouterr().err
+    assert err.startswith("❌ Schedule 't' did not run: ")
+    assert "Gemma-4-E4B-it-GGUF" in err
+    assert "Traceback" not in err
+    mock_store.mark_run.assert_not_called()
+
+
 # ---- daemon ----
 
 
@@ -399,3 +458,30 @@ def test_no_subcommand_prints_usage_hint_to_stderr(parser, mock_store, capsys):
     err = capsys.readouterr().err
     assert "No schedule action specified" in err
     assert "add|list|show|remove|pause|resume|run|daemon" in err
+
+
+# ---- A name the store doesn't have ----
+
+
+@pytest.mark.parametrize("action", ["show", "remove", "pause", "resume", "run"])
+def test_an_unknown_schedule_name_exits_1_with_one_line_not_a_traceback(
+    parser, mocker, tmp_path, capsys, action
+):
+    """The store's KeyError already holds the right message; the CLI must print it."""
+    from gaia.schedule.store import TomlScheduleStore
+
+    # A real store, so the real KeyError reaches the handler.
+    mocker.patch(
+        "gaia.schedule.store.TomlScheduleStore",
+        return_value=TomlScheduleStore(tmp_path / "schedules.toml"),
+    )
+
+    with pytest.raises(SystemExit) as excinfo:
+        _handle_schedule(_parse(parser, [action, "nope"]))
+
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err.startswith("❌ no schedule named 'nope'")
+    assert "gaia schedule list" in captured.err
+    assert "Traceback" not in captured.err

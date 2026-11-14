@@ -11,6 +11,7 @@ import {
     PATH_ACCESS_TOOL,
     PROJECT_TRUST_TOOL,
     permissionPromptText,
+    alwaysScopeText,
     type PermissionDecision,
 } from '../stores/notificationStore';
 import type { GaiaNotification } from '../types/agent';
@@ -60,6 +61,14 @@ export function splitCommandSummary(summary: string): { command: string; folder:
         extras: body.slice(at + 1).join(' ').trim(),
         note,
     };
+}
+
+/** A grant's folder by its name alone, for a button; the full path stays in its tooltip. */
+export function shortScope(scope: string): string {
+    return scope.replace(/(\s)((?:[A-Za-z]:)?[\\/][^]*)$/, (_, space: string, path: string) => {
+        const name = path.split(/[\\/]/).filter(Boolean).pop();
+        return name ? `${space}${name}` : `${space}${path}`;
+    });
 }
 
 /** Lines of code a prompt shows before "Show all". */
@@ -126,13 +135,16 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
     const hasTimeout = notification.timeoutSeconds != null && notification.timeoutSeconds > 0;
     // A deadline, not a tick count: background tabs throttle timers, and the
     // backend denies at its own deadline regardless of how often we ticked.
-    const deadline = useRef(hasTimeout ? Date.now() + notification.timeoutSeconds! * 1000 : null);
-    const [remaining, setRemaining] = useState<number | null>(hasTimeout ? notification.timeoutSeconds! : null);
+    // A prompt replayed after a reload keeps the deadline it was asked with.
+    const deadline = useRef(hasTimeout ? notification.expiresAt ?? Date.now() + notification.timeoutSeconds! * 1000 : null);
+    const [remaining, setRemaining] = useState<number | null>(
+        deadline.current === null ? null : Math.max(0, Math.ceil((deadline.current - Date.now()) / 1000)),
+    );
     const cardRef = useRef<HTMLElement>(null);
     const freshConsent = requiresFreshConsent(notification.tool);
     const scope = freshConsent ? undefined : notification.alwaysScope;
     // Shell scopes are already the command itself, so only file and skill grants carry a label.
-    const scopeText = notification.alwaysLabel ?? scope ?? '';
+    const scopeText = alwaysScopeText(notification, t) ?? notification.alwaysLabel ?? scope ?? '';
     const repeats = useNotificationStore((s) => repeatedAllowCount(s.notifications, notification));
     const suggestAlways = !!scope && repeats > 0;
     const detail = summarize(notification);
@@ -264,8 +276,9 @@ function PromptCard({ notification }: { notification: GaiaNotification }) {
                             className={`perm-btn${suggestAlways ? ' is-suggested' : ''}`}
                             onClick={() => answer('always')}
                             disabled={busy}
+                            title={scopeText}
                         >
-                            {t('prompt.alwaysAllow', { scope: scopeText })}
+                            {t('prompt.alwaysAllow', { scope: shortScope(scopeText) })}
                         </button>
                     )}
                     <button type="button" className="perm-btn" onClick={() => answer('deny')} disabled={busy}>

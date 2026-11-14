@@ -857,15 +857,24 @@ func (l localRunner) verifyModelsRow(ctx context.Context) (Row, string, string, 
 		// Installed and not answering is a fault, not a step still to do.
 		row.State = StateFailed
 		row.Disposition = status.DispositionHalt
-		row.Line = "model server not answering"
 		row.Detail = strings.Join(st.Reasons, "\n")
+		row.Raw = row.Detail
+		if st.ModelListUnread {
+			row.Line = "model server's model list can't be read"
+			row.Remedy = Remedy{
+				Action: "The model server answers, but not with a list of models. Check that GAIA " +
+					"points at Lemonade Server, then press r to check again.",
+				Where: installDocs,
+			}
+			return row, "", "", st
+		}
+		row.Line = "model server not answering"
 		row.Fix = FixRunSetup
 		row.Remedy = Remedy{
 			Action:  "Press f and setup starts it again, then checks the models.",
 			Command: gaiainit.RunCommand(l.skipChatModel()),
 			Where:   installDocs,
 		}
-		row.Raw = row.Detail
 		return row, "", "", st
 	}
 

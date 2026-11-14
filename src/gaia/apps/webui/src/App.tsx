@@ -11,6 +11,7 @@ import { LogsDialog } from './components/LogsDialog';
 import { SetupScreen } from './components/SetupScreen';
 import { ensureModel } from './stores/modelNeededStore';
 import { SettingsDialog } from './components/settings/SettingsDialog';
+import { buildPersonalizePrompt, PERSONALIZE_EVENT, type PersonalizeRequest } from './utils/connectorPersonalize';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { ConnectionBanner } from './components/ConnectionBanner';
 import { UpdateIndicator } from './components/UpdateIndicator';
@@ -24,11 +25,12 @@ import { useScheduleStore } from './stores/scheduleStore';
 import { useGoalHealthStore } from './stores/goalHealthStore';
 import { useTrayBridge } from './hooks/useTrayBridge';
 import { useChatAlerts } from './hooks/useChatAlerts';
+import { useWindowTitle } from './hooks/useWindowTitle';
 import { useMediaQuery } from './hooks/useMediaQuery';
 import { startActiveRunsPoll } from './services/activeRuns';
 import { startQueueDispatcher } from './services/queueDispatch';
 import * as api from './services/api';
-import { createStatusPoller, type StatusOutcome } from './services/statusPoll';
+import { createStatusPoller, modelServerHealth, type StatusOutcome } from './services/statusPoll';
 import { log, logBanner } from './utils/logger';
 import { announceMobileAccess, useMobileAccessRequests } from './utils/mobileAccessEvents';
 import { getSessionHash } from './utils/format';
@@ -59,7 +61,7 @@ type SetupGate =
     | { state: 'ready' }
     | { state: 'needed'; check: SetupCheck }
     /** Set up before, but its model server isn't answering: the app, with a notice. */
-    | { state: 'serverDown' }
+    | { state: 'serverDown'; modelListUnread?: boolean }
     | { state: 'addingLocal' }
     /** `upgradeFailed`: the check answered, but updating GAIA's own model server failed. */
     | { state: 'unknown'; error: string; upgradeFailed?: boolean };
@@ -110,6 +112,7 @@ const shouldLogRetry = (attempt: number) => attempt === 1 || attempt % 10 === 0;
 
 function App() {
     const t = useT();
+    useWindowTitle();
     const currentSessionId = useChatStore((s) => s.currentSessionId);
     const setSessions = useChatStore((s) => s.setSessions);
     const setCurrentSession = useChatStore((s) => s.setCurrentSession);
@@ -165,6 +168,7 @@ function App() {
     // A task picked at the end of setup that needs the user to finish typing it.
     const [draftText, setDraftText] = useState('');
     const [newChatFocus, setNewChatFocus] = useState(0);
+    const [newChatSeed, setNewChatSeed] = useState(0);
     const [showMobileAccess, setShowMobileAccess] = useState(false);
     const [tunnelActive, setTunnelActive] = useState(false);
     const [tunnelError, setTunnelError] = useState<string | null>(null);
@@ -215,7 +219,9 @@ function App() {
                 setNoAgentBuild(!!check.no_agent_build);
                 // Seen ready before: an unreachable server is an outage, not a first run.
                 const serverDown = !check.ready && check.stage === 'server' && !!check.initialized;
-                setSetup(check.ready ? { state: 'ready' } : serverDown ? { state: 'serverDown' } : { state: 'needed', check });
+                setSetup(check.ready ? { state: 'ready' }
+                    : serverDown ? { state: 'serverDown', modelListUnread: !!check.model_list_unread }
+                    : { state: 'needed', check });
                 return;
             }
         } catch (err) {
@@ -231,6 +237,8 @@ function App() {
         }
     }, []);
 
+    // Listening but hung: the connection banner already says so; a second notice would replace it.
+    const serverHung = useChatStore((s) => !!s.systemStatus && modelServerHealth(s.systemStatus) === 'unresponsive');
     // The status poll sees the model server again: ask whether GAIA is ready now.
     const lemonadeRunning = useChatStore((s) => s.systemStatus?.lemonade_running === true);
     useEffect(() => {
@@ -613,16 +621,45 @@ function App() {
         }
         setCurrentSession(id);
     }, [setCurrentSession, setMessages]);
+    const openChatFromNotification = useCallback((id: string) => {
+        const store = useChatStore.getState();
+        store.setShowMemoryDashboard(false);
+        store.setShowSchedules(false);
+        setShowNotificationPanel(false);
+        openChatFromTray(id);
+    }, [openChatFromTray]);
     const newChatFromTray = useCallback(() => {
         useChatStore.getState().closeSettings();
         newChat();
     }, [newChat]);
     useTrayBridge({ openChat: openChatFromTray, newChat: newChatFromTray, refreshStatus: () => void checkSystemStatus() });
 
+    // The prompt waits in the box, so the user sees what goes to the model and sends it.
+    // Written to the saved draft, which the new-chat box reads over a suggested prefill.
     const useSkill = useCallback((name: string) => {
+        const store = useChatStore.getState();
+        const unsent = store.pendingPrompt?.sessionId === store.currentSessionId ? store.pendingPrompt?.text : null;
         newChat();
-        startChat(`Load the \`${name}\` skill, then tell me briefly what it lets you do.`)
-            .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+        const prompt = t.bare('settings.skills.tryPrompt', { name });
+        const base = [readSavedDraft(NEW_CHAT_DRAFT_KEY), unsent].filter(Boolean).join('\n\n');
+        // A repeat Try with the prompt still in the box must not paste it twice.
+        const text = base.trimEnd().endsWith(prompt) ? base : [base, prompt].filter(Boolean).join('\n\n');
+        writeSavedDraft(NEW_CHAT_DRAFT_KEY, text);
+        setDraftText(text);
+        // Remount even when the box is already open with this same text.
+        setNewChatSeed((n) => n + 1);
+    }, [newChat, t]);
+
+    useEffect(() => {
+        const onPersonalize = (e: Event) => {
+            const req = (e as CustomEvent<PersonalizeRequest>).detail;
+            useChatStore.getState().closeSettings();
+            newChat();
+            startChat(buildPersonalizePrompt(req))
+                .catch((err) => setCreateError(err instanceof Error ? err.message : String(err)));
+        };
+        window.addEventListener(PERSONALIZE_EVENT, onPersonalize);
+        return () => window.removeEventListener(PERSONALIZE_EVENT, onPersonalize);
     }, [newChat, startChat]);
 
     const finishSetup = useCallback((first?: StartCard) => {
@@ -782,7 +819,7 @@ function App() {
     ) : currentSessionId ? (
         <ChatView key={currentSessionId} sessionId={currentSessionId} />
     ) : (
-        <NewChat key={draftText} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} />
+        <NewChat key={`${newChatSeed}:${draftText}`} onSend={startChat} initialText={draftText} focusRequest={newChatFocus} />
     );
 
     return (
@@ -807,12 +844,14 @@ function App() {
             </ErrorBoundary>
 
             <div className="main-content">
-                {setup.state === 'ready' && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
-                {setup.state === 'serverDown' && (
+                {/* The setup check can wait a minute on a hung model server; the chat shows meanwhile, so the warning must too. */}
+                {(setup.state === 'ready' || setup.state === 'checking' || (setup.state === 'serverDown' && serverHung)) && <ConnectionBanner onRetry={checkSystemStatus} backendSlow={backendSlow} backendError={backendError} />}
+                {setup.state === 'serverDown' && !serverHung && (
                     <div className="app-notice is-warning" role="status">
-                        <span>{t('setup.serverDown.notice')}</span>
+                        <span>{t(setup.modelListUnread ? 'setup.modelListUnread.notice' : 'setup.serverDown.notice')}</span>
                         <button type="button" className="link-btn" onClick={() => void checkSetup(true)}>{t('setup.unknown.retry')}</button>
-                        <button type="button" className="link-btn" onClick={() => runSetupAgain(true)}>{t('setup.serverDown.setup')}</button>
+                        {/* Setup can't fix a list the server sends in the wrong shape. */}
+                        {!setup.modelListUnread && <button type="button" className="link-btn" onClick={() => runSetupAgain(true)}>{t('setup.serverDown.setup')}</button>}
                     </div>
                 )}
                 {setup.state === 'unknown' && (setup.upgradeFailed ? (
@@ -856,7 +895,7 @@ function App() {
             {showFileBrowser && <Suspense fallback={null}><FileBrowser onStartChat={startChat} /></Suspense>}
             {showNotificationPanel && (
                 <div className="notification-center-popover">
-                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} />
+                    <NotificationCenter onClose={() => setShowNotificationPanel(false)} onOpenChat={openChatFromNotification} />
                 </div>
             )}
             {showMobileAccess && (

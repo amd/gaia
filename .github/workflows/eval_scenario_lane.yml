@@ -279,11 +279,7 @@ jobs:
           node-version: '22'
 
       - name: Install Claude Code CLI (the eval's scenario driver)
-        run: |
-          npm install -g @anthropic-ai/claude-code
-          if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
-          claude --version
-          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+        uses: ./.github/actions/install-claude-cli
 
       # The account this job starts on: the primary, or the secondary if the
       # primary is out of quota. Both out fails here, naming both reset times.
@@ -325,9 +321,13 @@ jobs:
             exit 1
           }
           # Accepted, not merely present (#3341); the classifier names who can fix a rejection.
-          $global:LASTEXITCODE = 0
-          $probe = (claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | Out-String)
+          # Continue: under Stop, any CLI stderr line is a terminating NativeCommandError.
+          # Preset 1 so a claude that never launches cannot read as a pass.
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 1
+          $probe = (& claude -p --model $env:EVAL_MODEL "reply with: ok" 2>&1 | ForEach-Object { "$_" } | Out-String)
           $probeExit = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
           $probeFile = Join-Path $env:RUNNER_TEMP "claude_probe.txt"
           Set-Content -Path $probeFile -Value $probe -Encoding UTF8
           & $env:VENV_PY util/classify_claude_probe.py --exit-code $probeExit --text-file $probeFile

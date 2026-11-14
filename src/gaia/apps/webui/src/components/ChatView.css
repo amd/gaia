@@ -2,6 +2,15 @@
 /* SPDX-License-Identifier: MIT */
 /* Chat View - Refined conversation interface */
 
+.turn-announcer {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}
+
 .history-notice,
 .library-notices {
     margin: 8px auto;
@@ -173,7 +182,10 @@
 }
 .doc-context-pills-expanded {
     flex-wrap: wrap;
-    overflow: visible;
+    align-content: flex-start;
+    max-height: min(30vh, 160px);
+    overflow-x: hidden;
+    overflow-y: auto;
 }
 .doc-pill {
     display: inline-flex;
@@ -203,6 +215,13 @@
 .doc-pill-icon {
     flex-shrink: 0;
     color: var(--accent-green);
+}
+.doc-context-icon-failed,
+.doc-pill-failed .doc-pill-icon {
+    color: var(--danger);
+}
+.doc-pill-failed {
+    border-color: color-mix(in srgb, var(--danger) 40%, transparent);
 }
 /* Remove button - hidden by default, shown on pill hover */
 .doc-pill-remove {
@@ -350,9 +369,6 @@
 .streaming-bubble.stream-active {
     animation: streamBubbleIn var(--duration-slow) var(--ease);
 }
-.streaming-bubble.stream-ending {
-    pointer-events: none;
-}
 @keyframes streamBubbleIn {
     from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
@@ -384,6 +400,7 @@
 /* ── Input Area -- refined prompt input ──────────────────────────── */
 
 .input-area {
+    position: relative;
     padding: 0 0 16px;
     flex-shrink: 0;
     background: var(--bg-primary);
@@ -395,12 +412,19 @@
     .input-column { padding: 0 12px; }
 }
 
-/* Scroll to bottom FAB */
+/* Phone: the title takes its own row so five icons cannot squeeze it to a few letters. */
+@media (max-width: 480px) {
+    .task-header { flex-wrap: wrap; row-gap: 0; }
+    .task-header-left { flex: 1 1 100%; }
+    .task-header-right { margin-inline-start: auto; }
+}
+
+/* Scroll to bottom: 12px clear of the composer, at the column's end, where a line's
+   last word is least often. */
 .scroll-bottom-btn {
     position: absolute;
-    bottom: 100px;
-    left: 50%;
-    transform: translateX(-50%);
+    bottom: calc(100% + 12px);
+    inset-inline-end: max(12px, calc((100% - var(--content-w)) / 2 + 12px));
     width: 34px;
     height: 34px;
     border-radius: var(--radius-md);
@@ -419,15 +443,15 @@
 }
 
 @keyframes scrollBtnSlideIn {
-    from { opacity: 0; transform: translateX(-50%) translateY(12px); }
-    to { opacity: 1; transform: translateX(-50%) translateY(0); }
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
 }
 
 .scroll-bottom-btn:hover {
     background: var(--bg-hover);
     color: var(--text-primary);
     border-color: var(--accent);
-    transform: translateX(-50%) translateY(-3px);
+    transform: translateY(-3px);
     box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 15%, transparent);
 }
 

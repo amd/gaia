@@ -97,3 +97,16 @@ describe('the server\'s cut-off notice (#6588)', () => {
         expect(onTryAgain).toHaveBeenCalledTimes(1);
     });
 });
+
+describe('actions on a turn stopped before any text', () => {
+    it('offers no Read aloud or Copy on the empty answer', () => {
+        render(<MessageBubble message={{ ...base, content: 'Cancelled.' }} />);
+        expect(screen.queryByRole('button', { name: 'Copy message' })).not.toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: /read aloud/i })).not.toBeInTheDocument();
+    });
+
+    it('keeps Copy on a stopped turn that has partial text', () => {
+        render(<MessageBubble message={{ ...base, content: 'Paris is', stopState: 'stopped' }} />);
+        expect(screen.getByRole('button', { name: 'Copy message' })).toBeInTheDocument();
+    });
+});

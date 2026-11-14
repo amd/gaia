@@ -7,16 +7,25 @@ import re
 import unicodedata
 
 # Arabic Presentation Forms-A and -B: per-position glyph codes many PDF writers
-# (Word, Chrome) emit instead of base letters.
-_PRESENTATION_FORMS = re.compile("[ﭐ-﷿ﹰ-﻾]+")
+# (Word, Chrome) emit instead of base letters. Chrome also reports some kanji
+# as the CJK radical that looks the same (日 as U+2F47).
+_PRESENTATION_FORMS = re.compile("[\u2e80-\u2fdf\ufb50-\ufdff\ufe70-\ufefe]+")
 
 _ARABIC_YEH = "ي"
 _SHARED_GLYPH_LETTERS = str.maketrans({"ی": _ARABIC_YEH, "ھ": "ه"})
 
 # The Arabic block holds digits too; those read left to right.
-_ARABIC_LETTER = re.compile("[؀-ٟ٪-ۯۺ-ۿﭐ-﷿ﹰ-﻾]")
+_ARABIC_LETTER = re.compile("[؀-ٟ٪٭-ۯۺ-ۿﭐ-﷿ﹰ-﻾]")
 _LATIN_LETTER = re.compile("[A-Za-z]")
 _LTR_RUN = re.compile(r"[0-9A-Za-z٠-٩۰-۹]")
+
+# pypdf reverses these as right-to-left text, but numbers are drawn left to right.
+_ARABIC_INDIC_NUMBER = re.compile("[٠-٩۰-۹]+(?:[٫٬][٠-٩۰-۹]+)*")
+# A hyphen or plus between numbers after Arabic words does not join them, so
+# each number is its own run and the runs are laid out right to left.
+_RUN_SEPARATORS = frozenset("-+−–")
+_NUMBER_PIECE = re.compile(r"[0-9٠-٩۰-۹](?:[0-9٠-٩۰-۹.,٫٬]*[0-9٠-٩۰-۹])?")
+_LATIN_EDGE = re.compile("[A-Za-z]")
 
 _CLOSING_MARKS = ".,:;!?%)،؛؟٪"
 _SHOW_TEXT_OPERATORS = (b"Tj", b"TJ", b"'", b'"')
@@ -78,7 +87,10 @@ def _repair_visual_order_lines(text: str, pieces: list) -> str:
         if found is None:
             continue
         in_order = found.start() >= cursor
-        reading = _reading_order(line) if _is_visual_order(line) else found.group()
+        if _is_visual_order(line):
+            reading = _reading_order(line)
+        else:
+            reading = _numbers_put_back(found.group(), line)
         text = text[: found.start()] + reading + text[found.end() :]
         if in_order:
             cursor = found.start() + len(reading)
@@ -109,13 +121,43 @@ def _is_visual_order(line: list) -> bool:
     return moved_right
 
 
+def _numbers_in_order(text: str) -> str:
+    return _ARABIC_INDIC_NUMBER.sub(lambda m: m.group()[::-1], text)
+
+
+def _numbers_put_back(stored: str, line: list) -> str:
+    """``stored`` with each piece's Arabic-Indic numbers back in reading order.
+
+    Piece by piece, because pypdf reverses within one drawn string only.
+    """
+    rebuilt, at = "", 0
+    for _x, _y, raw in line:
+        piece = raw.strip()
+        found = stored.find(piece, at)
+        if not piece or found < 0:
+            continue
+        rebuilt += stored[at:found] + _numbers_in_order(piece)
+        at = found + len(piece)
+    return rebuilt + stored[at:]
+
+
 def _reading_order(line: list) -> str:
     """Join a visual-order line right to left, keeping numbers left to right."""
-    parts: list[str] = []
+    # Each part is a list of runs in page order; a hyphenated date has several.
+    parts: list[list[str]] = []
     for index, (_x, _y, raw) in enumerate(line):
-        piece = raw.strip()
+        piece = _numbers_in_order(raw.strip())
         previous = line[index - 1][2] if index else ""
         following = line[index + 1][2] if index + 1 < len(line) else ""
+        last = parts[-1][-1] if parts else ""
+        # Only when the run so far is a bare number; after a Latin word the
+        # hyphen joins one left-to-right run.
+        between_numbers = (
+            piece in _RUN_SEPARATORS
+            and _NUMBER_PIECE.fullmatch(last)
+            and _NUMBER_PIECE.fullmatch(previous.strip())
+            and _NUMBER_PIECE.fullmatch(following.strip())
+        )
         in_number = (
             not _LTR_RUN.search(piece)
             and not _ARABIC_LETTER.search(piece)
@@ -126,22 +168,35 @@ def _reading_order(line: list) -> str:
         continues_number = (
             parts
             and _LTR_RUN.search(piece)
-            and not _ARABIC_LETTER.search(piece + parts[-1])
-            and _LTR_RUN.search(parts[-1])
+            and not _ARABIC_LETTER.search(piece + last)
+            and (_LTR_RUN.search(last) or last in _RUN_SEPARATORS)
         )
-        if in_number or continues_number:
-            parts[-1] += piece
+        if between_numbers or (
+            continues_number
+            and last in _RUN_SEPARATORS
+            and len(parts[-1]) > 1
+            and _NUMBER_PIECE.fullmatch(piece)
+        ):
+            parts[-1].append(piece)
+        elif in_number:
+            parts[-1][-1] += piece
+        elif continues_number:
+            # Chrome draws each Latin word alone and drops the space between them.
+            spaced = _LATIN_EDGE.match(last[-1:]) and _LATIN_EDGE.match(piece[:1])
+            parts[-1][-1] += f" {piece}" if spaced else piece
         else:
-            parts.append(piece)
+            parts.append([piece])
 
     joined = ""
-    for part in reversed(parts):
+    for runs in reversed(parts):
+        part = "".join(reversed(runs))
         joined += part if not joined or part[0] in _CLOSING_MARKS else f" {part}"
     return joined
 
 
 def normalize_arabic_pdf_text(text: str) -> str:
-    """Map Arabic presentation-form glyphs to base letters (U+FEFB -> "لا").
+    """Map Arabic presentation-form glyphs to base letters (U+FEFB -> "لا"),
+    and CJK radicals to the kanji they stand in for (U+2F47 -> "日").
 
     Only those code points are touched; NFKC on the whole string would also
     rewrite unrelated characters such as "²" or "ﬁ". Fonts share one glyph for
