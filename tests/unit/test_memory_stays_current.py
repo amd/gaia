@@ -476,7 +476,7 @@ class TestLastConfirmedMeansConfirmed:
             assert "decayed_at" in cols
             assert (
                 db._conn.execute("SELECT version FROM schema_version").fetchone()[0]
-                == 8
+                == 9
             )
         finally:
             db.close()

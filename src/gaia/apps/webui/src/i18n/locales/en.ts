@@ -3122,6 +3122,8 @@ export const enMessages = {
     'mem.about.add': 'Add',
     'mem.about.forgotten': "Forgotten: “{content}” — GAIA won't learn it again from old chats.",
     'mem.about.forgottenSensitive': "Forgotten: a sensitive memory — GAIA won't learn it again from old chats.",
+    'mem.about.forgottenMany': "Forgotten: “{content}” and the other entries that said it, {count} in all — GAIA won't learn it again from old chats.",
+    'mem.about.forgottenSensitiveMany': "Forgotten: a sensitive memory, saved in {count} entries — GAIA won't learn it again from old chats.",
     'mem.about.undo': 'Undo',
     'mem.about.loadFailed': "Couldn't load your memories: {error}",
     'mem.about.retry': 'Try again',

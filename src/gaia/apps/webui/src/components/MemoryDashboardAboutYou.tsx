@@ -88,6 +88,13 @@ export function dueLabel(iso: string, now: Date = new Date(), t: Translate = tEn
     return { text: t(past ? 'mem.due.past' : 'mem.due.upcoming', { when }), past };
 }
 
+/** One Forget: the row clicked, how many rows went, and the others to restore on Undo. */
+interface ForgottenEntry {
+    item: AboutYouItem;
+    count: number;
+    copies: memoryApi.ForgottenCopy[];
+}
+
 interface Props {
     memoryEnabled: boolean;
     /** Bumped by the parent whenever another tab changes memory. */
@@ -104,7 +111,7 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     const [editingId, setEditingId] = useState<string | null>(null);
     const [draft, setDraft] = useState('');
     const [draftDue, setDraftDue] = useState('');
-    const [forgotten, setForgotten] = useState<AboutYouItem[]>([]);
+    const [forgotten, setForgotten] = useState<ForgottenEntry[]>([]);
     const [revealed, setRevealed] = useState<Set<string>>(new Set());
     const [newText, setNewText] = useState('');
     const [newCategory, setNewCategory] = useState('fact');
@@ -199,11 +206,15 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
     const forget = useCallback(async (item: AboutYouItem) => {
         setBusyId(item.id);
         try {
-            await memoryApi.deleteKnowledge(item.id);
+            const result = await memoryApi.deleteKnowledge(item.id);
+            // The server forgets every copy of the fact; drop them all, not just this row.
+            const gone = new Set<string>([item.id, ...(result.knowledge_ids ?? [])]);
+            const shown = (items ?? []).filter(i => gone.has(i.id));
             generation.current++;
-            setItems(prev => (prev ?? []).filter(i => i.id !== item.id));
-            setTotal(prev => Math.max(prev - 1, 0));
-            setForgotten(prev => [item, ...prev]);
+            setItems(prev => (prev ?? []).filter(i => !gone.has(i.id)));
+            setTotal(prev => Math.max(prev - gone.size, 0));
+            const sensitive = item.sensitive || result.sensitive === true || shown.some(i => i.sensitive);
+            setForgotten(prev => [{ item: { ...item, sensitive }, count: gone.size, copies: result.copies ?? [] }, ...prev]);
             onChanged();
         } catch (err) {
             log.system.error('Failed to forget memory', err);
@@ -211,21 +222,24 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
         } finally {
             setBusyId(null);
         }
-    }, [onChanged, showToast, t]);
+    }, [items, onChanged, showToast, t]);
 
-    const undoForget = useCallback(async (item: AboutYouItem) => {
+    const undoForget = useCallback(async ({ item, copies }: ForgottenEntry) => {
         setBusyId(item.id);
         try {
-            await memoryApi.createKnowledge({
-                content: item.content,
-                category: item.category,
-                domain: item.domain ?? undefined,
-                context: item.context,
-                entity: item.entity ?? undefined,
-                sensitive: item.sensitive,
-                due_at: item.due_at ?? undefined,
-            });
-            setForgotten(prev => prev.filter(f => f.id !== item.id));
+            // Every row the forget removed, not just the one clicked.
+            for (const row of [item, ...copies]) {
+                await memoryApi.createKnowledge({
+                    content: row.content,
+                    category: row.category,
+                    domain: row.domain ?? undefined,
+                    context: row.context ?? undefined,
+                    entity: row.entity ?? undefined,
+                    sensitive: false,
+                    due_at: row.due_at ?? undefined,
+                });
+            }
+            setForgotten(prev => prev.filter(f => f.item.id !== item.id));
             await load();
             onChanged();
         } catch (err) {
@@ -317,16 +331,24 @@ export function MemoryDashboardAboutYou({ memoryEnabled, reloadKey, onChanged, o
                 </button>
             </form>
 
-            {forgotten.map(item => (
+            {forgotten.map(entry => {
+                const { item, count } = entry;
+                // More than one row went: say how many.
+                const text = item.sensitive
+                    ? (count > 1 ? t('mem.about.forgottenSensitiveMany', { count }) : t('mem.about.forgottenSensitive'))
+                    : (count > 1 ? t('mem.about.forgottenMany', { content: oneLineQuote(item.content), count }) : t('mem.about.forgotten', { content: oneLineQuote(item.content) }));
+                return (
                 <div key={item.id} className="mem-about-forgotten" role="status">
-                    <span title={item.sensitive ? undefined : item.content}>
-                        {item.sensitive ? t('mem.about.forgottenSensitive') : t('mem.about.forgotten', { content: oneLineQuote(item.content) })}
-                    </span>
-                    <button className="mem-about-link" disabled={busyId === item.id} onClick={() => undoForget(item)}>
-                        <Undo2 size={12} /> {t('mem.about.undo')}
-                    </button>
+                    <span title={item.sensitive ? undefined : item.content}>{text}</span>
+                    {/* No undo for a sensitive one: it could only come back as a new, plain copy. */}
+                    {!item.sensitive && (
+                        <button className="mem-about-link" disabled={busyId === item.id} onClick={() => undoForget(entry)}>
+                            <Undo2 size={12} /> {t('mem.about.undo')}
+                        </button>
+                    )}
                 </div>
-            ))}
+                );
+            })}
 
             {loadError ? (
                 <div className="mem-about-empty">

@@ -58,10 +58,15 @@ def api_client(memory_store):
     Patches the module-level _store singleton in the memory router so all
     endpoints use our tmp_path-backed store instead of ~/.gaia/memory.db.
     """
+    from gaia.ui.database import ChatDatabase
+    from gaia.ui.dependencies import get_db
     from gaia.ui.routers import memory as memory_mod
 
     app = FastAPI()
     app.include_router(memory_mod.router)
+    # Saving a sensitive fact renames the chats named after it.
+    db = ChatDatabase(":memory:")
+    app.dependency_overrides[get_db] = lambda: db
 
     # Inject test store into the module-level singleton
     original_store = memory_mod._store

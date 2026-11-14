@@ -76,6 +76,9 @@ PLACEHOLDER_TITLES = {
     "chat",
 }
 
+#: What a chat is called when its title would name a fact marked sensitive.
+HIDDEN_TITLE = "New Chat"
+
 
 def non_finite_field(value: Any, path: str = "") -> Optional[str]:
     """The dotted path of the first Infinity or NaN inside *value*, else None."""
@@ -951,6 +954,32 @@ class ChatDatabase:
                 (title, self._now(), session_id, expected),
             )
             return cursor.rowcount > 0
+
+    def hide_private_titles(self, names_private: Callable[[str, str], bool]) -> int:
+        """Rename each chat whose auto title names a private fact; how many.
+
+        *names_private* gets ``(title, created_at)``. Such a chat goes back to
+        ``HIDDEN_TITLE``; a title the user typed is never touched, and
+        ``updated_at`` stays, so the chat keeps its place in the list.
+        """
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, title, created_at FROM sessions WHERE title_is_custom = 0"
+            ).fetchall()
+        named = [
+            (sid, title)
+            for sid, title, created in rows
+            if not is_placeholder_title(title) and names_private(title, created)
+        ]
+        hidden = 0
+        with self._transaction():
+            for sid, title in named:
+                hidden += self._conn.execute(
+                    "UPDATE sessions SET title = ? "
+                    "WHERE id = ? AND title = ? AND title_is_custom = 0",
+                    (HIDDEN_TITLE, sid, title),
+                ).rowcount
+        return hidden
 
     def delete_session(self, session_id: str) -> bool:
         """Delete a session and its messages."""
