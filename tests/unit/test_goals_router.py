@@ -85,13 +85,117 @@ def _add_task(client, goal_id, desc="Do something"):
 class TestGoalStoreHealth:
     def test_reports_the_loop_error(self, client, monkeypatch):
         monkeypatch.setattr(agent_loop, "goal_store_error", "goals.db is broken")
+        monkeypatch.setattr(agent_loop, "goal_store_damaged", True)
         resp = client.get("/api/goals/health")
         assert resp.status_code == 200
-        assert resp.json() == {"error": "goals.db is broken"}
+        assert resp.json() == {"error": "goals.db is broken", "damaged": True}
 
     def test_null_when_the_store_reads(self, client, monkeypatch):
         monkeypatch.setattr(agent_loop, "goal_store_error", None)
-        assert client.get("/api/goals/health").json() == {"error": None}
+        monkeypatch.setattr(agent_loop, "goal_store_damaged", False)
+        assert client.get("/api/goals/health").json() == {
+            "error": None,
+            "damaged": False,
+        }
+
+
+@pytest.fixture
+def damaged_home(tmp_path, monkeypatch):
+    """A GAIA home whose goals.db is not a database at all (#7739)."""
+    home = tmp_path / ".gaia"
+    home.mkdir()
+    (home / "goals.db").write_text("this is not a database", encoding="utf-8")
+    monkeypatch.setenv("GAIA_HOME", str(home))
+    monkeypatch.setattr(agent_loop, "goal_store_error", None)
+    monkeypatch.setattr(agent_loop, "goal_store_damaged", False)
+    app = FastAPI()
+    app.include_router(goals_router_mod.router)
+    goals_router_mod._store = None
+    with TestClient(app) as c:
+        yield home, c
+    goals_router_mod.close_store()
+
+
+class TestDamagedGoalStore:
+    def test_create_says_the_goal_list_is_damaged_and_what_to_do(self, damaged_home):
+        _, c = damaged_home
+        resp = c.post("/api/goals", json={"title": "t", "description": "d"})
+        assert resp.status_code == 503
+        detail = resp.json()["detail"]
+        assert "damaged" in detail and "Start a new goal list" in detail
+        assert "restart" not in detail.lower()
+
+    def test_health_reports_damage_before_the_loop_has_ticked(self, damaged_home):
+        _, c = damaged_home
+        health = c.get("/api/goals/health").json()
+        assert health["damaged"] is True
+        assert "damaged" in health["error"]
+
+    def test_listing_fails_instead_of_looking_empty(self, damaged_home):
+        _, c = damaged_home
+        assert c.get("/api/goals").status_code == 503
+        assert c.get("/api/goals/stats").status_code == 503
+
+    def test_a_new_goal_list_keeps_the_damaged_file_and_works(self, damaged_home):
+        home, c = damaged_home
+        agent_loop.goal_store_error = "damaged"
+        agent_loop.goal_store_damaged = True
+
+        resp = c.post("/api/goals/store/reset")
+
+        assert resp.status_code == 200, resp.text
+        kept = home / resp.json()["kept"]
+        assert kept.name.startswith("goals.db.damaged-")
+        assert kept.read_text(encoding="utf-8") == "this is not a database"
+        assert c.post(
+            "/api/goals", json={"title": "t", "description": "d"}
+        ).status_code == (201)
+        assert c.get("/api/goals/health").json() == {"error": None, "damaged": False}
+
+    def test_a_readable_goal_list_is_never_replaced(
+        self, client, tmp_path, monkeypatch
+    ):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+        GoalStore(db_path=tmp_path / "home" / "goals.db").close()
+        resp = client.post("/api/goals/store/reset")
+        assert resp.status_code == 409
+        assert (tmp_path / "home" / "goals.db").exists()
+
+    def test_a_goal_list_torn_past_its_header_can_be_replaced(
+        self, client, tmp_path, monkeypatch
+    ):
+        """Its schema reads, but a table page is garbage: still damaged."""
+        home = tmp_path / "home"
+        monkeypatch.setenv("GAIA_HOME", str(home))
+        store = GoalStore(db_path=home / "goals.db")
+        for i in range(40):
+            store.create_goal(title=f"goal {i}", description="x" * 400)
+        store.close()
+        path = home / "goals.db"
+        data = bytearray(path.read_bytes())
+        assert len(data) > 4 * 4096
+        data[2 * 4096 :] = b"\xff" * (len(data) - 2 * 4096)
+        path.write_bytes(bytes(data))
+
+        resp = client.post("/api/goals/store/reset")
+
+        assert resp.status_code == 200, resp.text
+        assert (home / resp.json()["kept"]).exists()
+
+    def test_no_goal_list_is_nothing_to_replace(self, client, tmp_path, monkeypatch):
+        monkeypatch.setenv("GAIA_HOME", str(tmp_path / "home"))
+        resp = client.post("/api/goals/store/reset")
+        assert resp.status_code == 409
+        assert not (tmp_path / "home" / "goals.db").exists()
+
+    def test_a_locked_goal_list_keeps_the_close_other_windows_remedy(self):
+        import sqlite3
+
+        failure = goals_router_mod._store_failure(
+            sqlite3.OperationalError("database is locked")
+        )
+        assert failure.status_code == 503
+        assert "Close other GAIA windows" in failure.detail
 
 
 class TestStats:

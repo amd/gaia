@@ -148,12 +148,33 @@ def _embedded_lemonade_url() -> str:
     alongside its API key. Nothing exports either, so a client that assumed the
     default port looked at an address with nothing on it and reported the models
     as missing — while the embedded server held every one of them.
+
+    A stopped embedded server resolves to the port it last ran on, where the
+    daemon starts it again, never to the default port: another Lemonade may be
+    listening there, and it is not the one this install was set up with.
     """
     state = _read_embedded_lemonade_state()
     port = state.get("port") if state else None
     if isinstance(port, int) and port > 0:
         return f"http://{DEFAULT_HOST}:{port}"
+    port = _stopped_gaia_lemonade_port()
+    if port is not None:
+        return f"http://{DEFAULT_HOST}:{port}"
     return DEFAULT_LEMONADE_URL
+
+
+def _stopped_gaia_lemonade_port() -> Optional[int]:
+    """The port GAIA's own installed server last ran on, or None.
+
+    None too when GAIA's server is not installed, or has never started.
+    """
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, is_gaias_to_start
+
+    embedded = EmbeddedLemonade()
+    if not is_gaias_to_start(embedded):
+        return None
+    port = embedded.last_port()
+    return port if isinstance(port, int) and not isinstance(port, bool) else None
 
 
 def _read_embedded_lemonade_state(
@@ -194,6 +215,12 @@ def _read_embedded_lemonade_state(
         if not pid_exists(pid):
             return None
     return state
+
+
+def gaia_lemonade_port() -> Optional[int]:
+    """The port of GAIA's own server: where it runs, or last ran while stopped."""
+    state = _read_embedded_lemonade_state()
+    return state["port"] if state else _stopped_gaia_lemonade_port()
 
 
 def running_embedded_lemonade_url() -> Optional[str]:
@@ -3871,6 +3898,10 @@ ToolCallingProbeStopped = CloudProbeStopped
 
 class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
+
+
+class ModelListShapeError(LemonadeClientError):
+    """The server answered ``/models``, but not with a list of model objects."""
 
 
 class LemonadeUnresponsiveError(LemonadeClientError):
@@ -8111,7 +8142,7 @@ class LemonadeClient:
             if bad is None:
                 return
             got = f"entry {bad[0]} of 'data' as a JSON {_json_type_name(bad[1])}"
-        raise LemonadeClientError(
+        raise ModelListShapeError(
             f"The model list{self._from_server()} isn't in the expected shape: "
             f"expected an object whose 'data' is a list of model objects, got "
             f"{got}. Check that LEMONADE_BASE_URL points at Lemonade Server and "

@@ -1663,6 +1663,12 @@
 .mem-goals-toolbar { display: flex; gap: 8px; }
 
 /* Add form */
+.mem-form-error {
+    margin: 8px 0 0;
+    color: var(--danger);
+    font-size: 13px;
+}
+
 .mem-goals-add-form {
     display: flex; flex-direction: column; gap: 8px;
     padding: 12px; background: var(--bg-hover);
@@ -1914,10 +1920,14 @@ textarea.mem-input { resize: vertical; }
     font-size: 12px;
     cursor: pointer;
 }
-.mem-about-btn:hover,
+.mem-about-btn:not(:disabled):hover,
 .mem-about-btn:focus-visible {
     color: var(--text-primary);
     background: var(--bg-hover);
+}
+.mem-about-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
 }
 .mem-about-btn-remove:hover,
 .mem-about-btn-remove:focus-visible {

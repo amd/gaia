@@ -66,6 +66,23 @@ describe('SkillsSection', () => {
         expect(await screen.findByRole('status')).toHaveTextContent(tEn('skills.notRunning'));
     });
 
+    it('reads again while a reply runs, so a turn paused on a permission prompt is not called "not running"', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            mocked.getCapabilities
+                .mockRejectedValueOnce(httpError(409, 'not running'))
+                .mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: [], skills: SKILLS });
+            render(<SkillsSection sessionId={SID} busy />);
+            expect(await screen.findByRole('status')).toHaveTextContent(tEn('skills.notRunning'));
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+            expect(await screen.findByRole('list', { name: 'Skills this chat is using' })).toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it('treats a response with no skills field as an error', async () => {
         mocked.getCapabilities.mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: [] });
         render(<SkillsSection sessionId={SID} busy={false} />);

@@ -71,6 +71,10 @@ import numpy as np
 from gaia.agents.base import turn_metrics
 from gaia.agents.base.console import SilentConsole
 from gaia.agents.base.history import MEMORY_CONTEXT_HEADER, frame_user_message
+from gaia.agents.base.memory_privacy import (  # noqa: F401  # pylint: disable=unused-import
+    memory_off_reason,
+    memory_writes_refused,
+)
 from gaia.agents.base.memory_store import (
     CONSOLIDATION_MIN_TURNS,
     EXTRACTABLE_CATEGORIES,
@@ -92,6 +96,7 @@ from gaia.agents.base.tool_outcome import (
 )
 from gaia.agents.base.verification import check_was_executed
 from gaia.chat.sdk import AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import TOKEN_SHAPES
 from gaia.llm.lemonade_client import (
     DEFAULT_EMBEDDING_MODEL,
     EMBED_MAX_CHARS,
@@ -954,17 +959,23 @@ WRITE_FAILURE_INDEX = "index"  # vector stored, not in this session's index
 WRITE_FAILURE_STORE = "store"  # row not saved at all
 
 
-def memory_off_reason(agent) -> str:
-    """Why *agent* is not storing memory, in words the user can act on."""
-    reason = getattr(agent, "_incognito_reason", None)
-    if reason == "private":
-        return "This is a private chat, so nothing is saved to memory."
-    if reason == "memory_off":
-        return (
-            "Memory is turned off in Settings, so nothing is saved. "
-            "It can be turned back on there."
-        )
-    return "Memory is off for this session, so nothing is saved."
+#: Where the user can still make a change a chat may not, by what was refused.
+_REFUSED_CHANGE_REMEDY = {
+    "updated": " Nothing was updated; the user can change it on the Memory page.",
+    "erased": " Nothing was erased; the user can erase it on the Memory page.",
+}
+
+
+def _writes_refused_result(agent, done: str) -> Optional[dict]:
+    """The tool result for a memory change refused now, or None."""
+    reason = memory_writes_refused(agent)
+    if reason is None:
+        return None
+    remedy = _REFUSED_CHANGE_REMEDY.get(done, "")
+    return {
+        "status": "skipped",
+        "message": f"{reason}{remedy} Don't tell the user it was {done}.",
+    }
 
 
 _REEMBED_HINT = (
@@ -1335,6 +1346,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
 
         self._memory_embedder_pending = False
+        # Startup writes a private or memory-off session holds for a memory-on turn.
+        self._memory_startup_writes_pending = False
+        self._system_context_pending = False
         if incognito:
             # Memory is off for this session: load the embedder on first use.
             self._incognito = True
@@ -1344,10 +1358,10 @@ class MemoryMixin(ProceduralMemoryMixin):
             return
 
         # Step 10: Initialize system context on first run (non-blocking)
-        try:
-            self.init_system_context()
-        except Exception as e:
-            logger.warning("[MemoryMixin] system context initialization failed: %s", e)
+        if memory_writes_refused(self):
+            self._system_context_pending = True
+        else:
+            self._init_system_context_at_startup()
 
         logger.info(
             "[MemoryMixin] v2 initialized, session_id=%s context=%s",
@@ -1482,6 +1496,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         # instance with Lemonade up will init memory normally), and tracked
         # via ``_memory_store is None`` checks at every memory operation.
         # A reachable Lemonade that lacks the embedder gets it pulled first.
+        refused = memory_writes_refused(self)
         try:
             try:
                 dim = self._probe_embedder()
@@ -1505,8 +1520,9 @@ class MemoryMixin(ProceduralMemoryMixin):
                 self._embedding_model,
                 self._embedding_dim,
             )
-            # Clears vectors from any other embedder so backfill re-embeds them.
-            self._memory_store.reconcile_embedder(self._embedding_model)
+            if not refused:
+                # Clears vectors from any other embedder so backfill re-embeds them.
+                self._memory_store.reconcile_embedder(self._embedding_model)
         except Exception as e:
             reason = _classify_embedding_failure(e)
             self._memory_unavailable_reason = reason
@@ -1543,9 +1559,23 @@ class MemoryMixin(ProceduralMemoryMixin):
             self._reminder_last_turn_at = None
             return False
 
-        # (Embedder-change migration is handled above via the store's
-        # reconcile_embedder.)
+        if refused:
+            logger.info(
+                "[MemoryMixin] %s Embedder reconcile, embedding backfill and "
+                "confidence decay wait for a turn with memory on.",
+                refused,
+            )
+            self._memory_startup_writes_pending = True
+            self._index_stored_vectors_read_only()
+        else:
+            self._apply_startup_writes()
 
+        # Steps 6-8 need self.chat, so they run on the first query; prune follows consolidation.
+        self._memory_post_init_pending = True
+        return True
+
+    def _apply_startup_writes(self) -> None:
+        """Backfill, index and decay (startup steps 3-5), after the embedder reconcile."""
         # Step 3: Backfill embeddings for items missing them
         backfilled = self._backfill_embeddings(limit=100)
         if backfilled > 0:
@@ -1562,17 +1592,66 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Step 5: apply_confidence_decay()
         self._memory_store.apply_confidence_decay()
 
-        # Steps 6-8 need self.chat, so they run on the first query; prune follows consolidation.
-        self._memory_post_init_pending = True
-        return True
+    def _index_stored_vectors_read_only(self) -> None:
+        """Build the in-memory indexes without changing the store.
+
+        Vectors stamped by another embedder live in a different space, and
+        clearing them is a write, so they stay out of the index until a
+        memory-on turn re-embeds them.
+        """
+        store = self._memory_store
+        stamped = store.get_embedder_id()
+        if stamped != self._embedding_model:
+            stored = store.iter_items_with_embeddings(include_sensitive=True)
+            if next(iter(stored), None) is not None:
+                logger.warning(
+                    "[MemoryMixin] stored memory vectors came from embedder %s, "
+                    "not %s. Memory writes are off in this session, so they are "
+                    "not re-embedded: recall by meaning is off here and keyword "
+                    "recall still works. A turn with memory on re-embeds them.",
+                    stamped or "an unrecorded, pre-2026-07 embedder",
+                    self._embedding_model,
+                )
+            with self._get_faiss_lock():
+                self._faiss_index = None
+                self._faiss_id_map = []
+            self._proc_faiss_index = None
+            self._proc_faiss_id_map = []
+            return
+        self._rebuild_faiss_index()
+        self._rebuild_proc_faiss_index()
+
+    def _init_system_context_at_startup(self) -> None:
+        """Store system context; a failure is logged, never fatal to start-up."""
+        try:
+            self.init_system_context()
+        except Exception as e:
+            logger.warning("[MemoryMixin] system context initialization failed: %s", e)
+
+    def _run_deferred_startup_writes(self) -> None:
+        """Run the startup writes a private or memory-off start held, once allowed."""
+        if getattr(self, "_memory_store", None) is None or memory_writes_refused(self):
+            return
+        if getattr(self, "_memory_startup_writes_pending", False):
+            self._memory_startup_writes_pending = False
+            logger.info("[MemoryMixin] memory on — running the held startup upkeep")
+            self._memory_store.reconcile_embedder(self._embedding_model)
+            self._apply_startup_writes()
+        if getattr(self, "_system_context_pending", False):
+            self._system_context_pending = False
+            self._init_system_context_at_startup()
 
     def _finish_deferred_memory_init(self) -> None:
-        """Load the embedder ``init_memory(incognito=True)`` deferred, once."""
-        if not getattr(self, "_memory_embedder_pending", False):
-            return
-        self._memory_embedder_pending = False
-        logger.info("[MemoryMixin] memory in use — loading the deferred embedder")
-        self._start_memory_embedder()
+        """Load the embedder ``init_memory(incognito=True)`` deferred, once.
+
+        Its store writes wait until memory writes are allowed.
+        """
+        if getattr(self, "_memory_embedder_pending", False):
+            self._memory_embedder_pending = False
+            logger.info("[MemoryMixin] memory in use — loading the deferred embedder")
+            if not self._start_memory_embedder():
+                return
+        self._run_deferred_startup_writes()
 
     @staticmethod
     def _system_context_refresh_reason(existing: List[Dict]) -> Optional[str]:
@@ -2472,7 +2551,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         results = [all_items[kid] for kid in final_ids]
 
         # Step 6: Bump confidence + use_count on recalled items.
-        if count_as_use:
+        if count_as_use and not memory_writes_refused(self):
             store.count_use(results)
 
         return results
@@ -4059,7 +4138,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             # In-session first, so a failed persist below still can't repeat
             # the item on the next turn.
             self._reminders_surfaced.add(item["id"])
-            if getattr(self, "_incognito", False):
+            if memory_writes_refused(self):
                 continue
             try:
                 self._memory_store.update(item["id"], reminded_at=now_iso)
@@ -4282,7 +4361,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             # Run deferred LLM startup tasks on first real query (after self.chat
             # exists). Not in a private or memory-off turn: upkeep sends existing
             # memories to this turn's model, so it waits for a memory-on turn.
-            if not getattr(self, "_incognito", False) and getattr(
+            if not memory_writes_refused(self) and getattr(
                 self, "_memory_post_init_pending", False
             ):
                 self._memory_post_init_pending = False
@@ -4379,9 +4458,9 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             # Log to tool_history before re-raising
             try:
-                if getattr(self, "_memory_store", None) is not None and not getattr(
-                    self, "_incognito", False
-                ):
+                if getattr(
+                    self, "_memory_store", None
+                ) is not None and not memory_writes_refused(self):
                     self._memory_store.log_tool_call(
                         session_id=self.memory_session_id,
                         tool_name=tool_name,
@@ -4417,9 +4496,9 @@ class MemoryMixin(ProceduralMemoryMixin):
         # Log to tool_history
         try:
             with turn_metrics.span("memory_tool_log", tool=tool_name):
-                if getattr(self, "_memory_store", None) is not None and not getattr(
-                    self, "_incognito", False
-                ):
+                if getattr(
+                    self, "_memory_store", None
+                ) is not None and not memory_writes_refused(self):
                     self._memory_store.log_tool_call(
                         session_id=self.memory_session_id,
                         tool_name=tool_name,
@@ -4514,14 +4593,7 @@ class MemoryMixin(ProceduralMemoryMixin):
     _CREDENTIAL_PATTERNS: ClassVar[tuple] = tuple(
         re.compile(p, re.IGNORECASE)
         for p in (
-            r"\bsk-ant-[a-zA-Z0-9_-]{10,}",  # Anthropic API key
-            r"\bsk-[a-zA-Z0-9_-]{20,}",  # OpenAI-style API key
-            r"\bgh[pousr]_[a-zA-Z0-9]{20,}",  # GitHub token (ghp_/gho_/ghu_/ghs_/ghr_)
-            r"\bgithub_pat_[a-zA-Z0-9_]{20,}",  # GitHub fine-grained PAT
-            r"\bAKIA[0-9A-Z]{16}\b",  # AWS access key id
-            r"\bAIza[0-9A-Za-z_-]{20,}",  # Google API key
-            r"\bxox[baprs]-[a-zA-Z0-9-]{10,}",  # Slack token
-            r"\bglpat-[a-zA-Z0-9_-]{20,}",  # GitLab PAT
+            *TOKEN_SHAPES,
             r"\bBearer\s+[a-zA-Z0-9._-]{20,}",  # raw Bearer token
             # keyword directly adjacent to a value: "password is X", "secret: X"
             r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
@@ -4778,7 +4850,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         store = getattr(self, "_memory_store", None)
         turn_erase_count = getattr(self, "_turn_erase_count", None)
         return (
-            getattr(self, "_incognito", False)
+            memory_writes_refused(self) is not None
             or store is None
             # This turn began before the user erased all of memory.
             or (turn_erase_count is not None and store.erased_since(turn_erase_count))
@@ -5355,7 +5427,7 @@ class MemoryMixin(ProceduralMemoryMixin):
         """
         if getattr(self, "_memory_store", None) is None:
             return
-        if getattr(self, "_incognito", False):
+        if memory_writes_refused(self):
             return
 
         # Use original (pre-augmentation) user text for storage.
@@ -5775,11 +5847,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """
             if (gone := _store_gone()) is not None:
                 return gone
-            if getattr(mixin, "_incognito", False):
-                return {
-                    "status": "skipped",
-                    "message": memory_off_reason(mixin),
-                }
+            if (refused := _writes_refused_result(mixin, "stored")) is not None:
+                return refused
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
@@ -6125,6 +6194,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Update an existing memory entry by ID. Only non-empty fields change. reminded_at is maintained for you — do not set it after mentioning an item."""
             if (gone := _store_gone()) is not None:
                 return gone
+            if (refused := _writes_refused_result(mixin, "updated")) is not None:
+                return refused
             kwargs = {}
             if content:
                 if not content.strip():
@@ -6235,6 +6306,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Remove one memory: its ID from recall, or the user's words for it (e.g. 'allergic to shellfish'). Words erase only the one memory they clearly match; otherwise nothing is erased and the matching IDs come back. To erase all memory, use forget_everything."""
             if (gone := _store_gone()) is not None:
                 return gone
+            if (refused := _writes_refused_result(mixin, "erased")) is not None:
+                return refused
             ctx = mixin._memory_context
             contexts = None if ctx == "global" else (ctx, "global")
             try:
@@ -6335,6 +6408,8 @@ class MemoryMixin(ProceduralMemoryMixin):
             """Erase all of memory in one call: every fact, preference and reminder, sensitive ones included, and stored past conversations. Use for 'forget everything about me' or 'delete all my data'; for one topic use forget. Cannot be undone."""
             if (gone := _store_gone()) is not None:
                 return gone
+            if (refused := _writes_refused_result(mixin, "erased")) is not None:
+                return refused
             try:
                 cleared = mixin._memory_store.clear_all()
             except MemoryScrubError as e:
@@ -6510,7 +6585,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         Generates new session ID and applies confidence decay.
         """
         if getattr(self, "_memory_store", None) is not None:
-            self._memory_store.apply_confidence_decay()
+            if (refused := memory_writes_refused(self)) is not None:
+                logger.info("[MemoryMixin] %s Confidence decay skipped.", refused)
+            else:
+                self._memory_store.apply_confidence_decay()
             self._memory_session_id = str(uuid4())
             # A new session reopens the reminder window; anything still due
             # (reminded_at < due_at) may be raised once on its first turn.
