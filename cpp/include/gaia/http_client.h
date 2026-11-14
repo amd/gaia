@@ -15,6 +15,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include "gaia/export.h"
 
@@ -28,6 +29,14 @@ using HttpHeaders = std::map<std::string, std::string>;
 
 /// Streaming body callback. Return false to stop reading — that is treated as
 /// normal completion, not an error (e.g. an SSE `[DONE]` sentinel).
+/// One part of a multipart/form-data body (a field, or a file when filename is set).
+struct HttpMultipartPart {
+    std::string name;
+    std::string content;
+    std::string filename;
+    std::string contentType;
+};
+
 using HttpChunkCallback = std::function<bool(const char* data, std::size_t len)>;
 
 // ---- Response ----
@@ -92,8 +101,20 @@ struct GAIA_API HttpClientConfig {
     /// https only: verify the server certificate.
     bool verifyTls = true;
 
+    /// GET only: follow 3xx redirects (across hosts too). Off by default so an
+    /// API client never sends its headers somewhere it did not name.
+    bool followRedirects = false;
+
+    /// Return 3xx responses (Location in headers) instead of throwing, so a
+    /// caller can vet each redirect target itself.
+    bool returnRedirects = false;
+
     /// https only: custom CA bundle path (empty → system trust store).
     std::string caCertPath;
+
+    /// A kept connection idle for longer than this is reopened rather than
+    /// reused, since a server may have dropped it without saying so.
+    int keepAliveIdleSec = 30;
 
     /// Log method and URL to stderr.
     bool debug = false;
@@ -112,7 +133,13 @@ struct GAIA_API HttpClientConfig {
 /// HTTPS requires an OpenSSL-enabled build (auto-detected by CMake); an https
 /// URL on an HTTP-only build throws HttpError rather than downgrading.
 ///
-/// Not thread-safe: use one instance per thread.
+/// The connection to each server is kept open and reused by later requests,
+/// so an https server costs one TLS set-up per client, not one per request.
+/// Reuse only happens within one HttpClient: keep the instance, don't
+/// rebuild it per call.
+///
+/// Requests may run on several threads at once (one that finds the kept
+/// connection busy opens its own); changing configuration may not.
 class GAIA_API HttpClient {
 public:
     /// @throws std::invalid_argument if a configured timeout is not positive
@@ -152,6 +179,11 @@ public:
     /// passed to `onChunk`.
     ///
     /// @throws HttpError on connection failure, timeout, or non-2xx status
+    /// POST multipart/form-data (file uploads such as /audio/transcriptions).
+    HttpResponse postMultipart(const std::string& path, const std::vector<HttpMultipartPart>& parts,
+                               const HttpHeaders& headers = {}, int timeoutSec = 0,
+                               int connectTimeoutSec = 0);
+
     HttpResponse postStreaming(const std::string& path, const std::string& body,
                                HttpChunkCallback onChunk,
                                const HttpHeaders& headers = {}, int timeoutSec = 0,
@@ -162,6 +194,7 @@ public:
 
     /// Add or replace a header sent on every request.
     void setDefaultHeader(const std::string& name, const std::string& value);
+    void removeDefaultHeader(const std::string& name);
 
     bool debug() const;
     void setDebug(bool enabled);

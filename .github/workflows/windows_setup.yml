@@ -35,7 +35,9 @@
 # published flagship, not one built from the candidate's commit.
 #
 # Reads the `tui-binaries` artifact the caller's tui_installers.yml run uploaded,
-# so the setup wraps the same gaia-tui bytes the raw downloads publish.
+# so the setup wraps the same gaia-tui bytes the raw downloads publish, and its
+# `gaiacpp-binaries`: the gaiacpp that run verified. `gaiacpp` names the same
+# source the caller gave tui_installers.yml; stub stands gaia-tui in for it.
 
 name: Windows setup
 
@@ -73,6 +75,11 @@ on:
         type: string
       artifact_prefix:
         description: 'Prefix for every artifact this uploads or reads, except the sidecar. Empty (the default) keeps today''s names.'
+        required: false
+        default: ''
+        type: string
+      gaiacpp:
+        description: "The gaiacpp source given to tui_installers.yml: artifact or release (its verified gaiacpp-binaries), or stub (PR gate)."
         required: false
         default: ''
         type: string
@@ -220,10 +227,18 @@ jobs:
           name: ${{ inputs.artifact_prefix }}winsetup-gaia-core-win32-x64
           path: core-download
 
-      # What build-setup.sh consumes: gaia-tui.exe, gaia-agent.exe, LICENSE.md, core/.
+      - uses: actions/download-artifact@v8
+        if: inputs.gaiacpp == 'artifact' || inputs.gaiacpp == 'release'
+        with:
+          name: ${{ inputs.artifact_prefix }}gaiacpp-binaries
+          path: gaiacpp
+
+      # What build-setup.sh consumes: gaia-tui.exe, gaia-agent.exe, gaiacpp.exe, LICENSE.md, core/.
       - name: Stage the terminal payload
         env:
           SIDECAR: ${{ inputs.sidecar }}
+          GAIACPP: ${{ inputs.gaiacpp }}
+          VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
           mkdir -p stage/win-x64/core
@@ -249,6 +264,21 @@ jobs:
               ;;
             *)
               echo "::error::sidecar must be pinned, artifact or stub (got '${SIDECAR}')."
+              exit 1
+              ;;
+          esac
+          case "${GAIACPP}" in
+            stub)
+              # Same reason as the sidecar stub; nothing built this way is published.
+              cp stage/win-x64/gaia-tui.exe stage/win-x64/gaiacpp.exe
+              ;;
+            artifact|release)
+              # Re-checked against the checksum list tui_installers.yml verified.
+              python installer/tui/fetch_gaiacpp.py stage --dir gaiacpp \
+                --platform win-x64 --version "${VERSION}" --dest stage/win-x64
+              ;;
+            *)
+              echo "::error::gaiacpp must be artifact, release or stub (got '${GAIACPP}'). Pass the caller's tui_installers.yml source; the setup ships gaiacpp.exe beside gaia-tui.exe."
               exit 1
               ;;
           esac
@@ -343,10 +373,11 @@ jobs:
         shell: pwsh
         env:
           VERSION: ${{ inputs.version }}
+          GAIACPP: ${{ inputs.gaiacpp }}
         run: |
           $ErrorActionPreference = 'Stop'
           $name = python installer/tui/artifacts.py names --version $env:VERSION --platform win-x64
-          ./installer/tui/nsis/smoke-test.ps1 -Setup "dist/$name" -Version $env:VERSION
+          ./installer/tui/nsis/smoke-test.ps1 -Setup "dist/$name" -Version $env:VERSION -StubGaiacpp:($env:GAIACPP -eq 'stub')
 
   # Runs only when the smoke test passed, so `ok` is empty -- not "true" --
   # after any failure. Same contract as tui_installers.yml's installers-ok.

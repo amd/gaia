@@ -273,7 +273,18 @@ add_library(gaia_core
     src/skill.cpp
     src/skill_yaml.cpp
     src/skill_sets.cpp
+    src/skill_library.cpp
+    src/skill_signing.cpp
     src/database.cpp
+    src/api_server.cpp
+    src/web_tools.cpp
+    src/workspace.cpp
+    src/document_index.cpp
+    src/memory_store.cpp
+    src/media_tools.cpp
+    src/keyring.cpp
+    src/mcp_stdio_server.cpp
+    src/secrets.cpp
 )
 
 # SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
@@ -295,6 +306,7 @@ if(GAIA_BUILD_TUI)
 endif()
 
 add_library(gaia::gaia_core ALIAS gaia_core)
+target_compile_definitions(gaia_core PRIVATE GAIA_CORE_VERSION="${PROJECT_VERSION}")
 
 include(GenerateExportHeader)
 generate_export_header(gaia_core
@@ -359,7 +371,7 @@ if(UNIX)
     target_link_libraries(gaia_core PRIVATE ${CMAKE_DL_LIBS})
 endif()
 if(WIN32)
-    target_link_libraries(gaia_core PRIVATE ws2_32)
+    target_link_libraries(gaia_core PRIVATE ws2_32 advapi32)
 endif()
 
 # FTXUI (TUI console — optional)
@@ -393,7 +405,6 @@ if(GAIA_BUILD_BASH_AGENT)
         agents/bash/main.cpp
         agents/bash/bash_agent.cpp
         agents/bash/bash_tools.cpp
-        agents/bash/api_server.cpp
         agents/bash/mcp_server.cpp
     )
     target_include_directories(gaia-bash PRIVATE
@@ -401,16 +412,52 @@ if(GAIA_BUILD_BASH_AGENT)
     )
     target_link_libraries(gaia-bash PRIVATE gaia::gaia_core)
 
-    # API server needs httplib (already a dependency of gaia_core but PRIVATE)
+endif()
+
+# ---------------------------------------------------------------------------
+# gaiacpp: the general-purpose GAIA agent (headless, serve, interactive)
+# ---------------------------------------------------------------------------
+option(GAIA_BUILD_GAIA_AGENT "Build the gaiacpp agent" ON)
+if(GAIA_BUILD_GAIA_AGENT)
+    add_executable(gaiacpp
+        agents/gaia/main.cpp
+        agents/gaia/gaia_agent.cpp
+        agents/gaia/sidecar.cpp
+        agents/gaia/stdio_server.cpp
+        agents/bash/bash_tools.cpp
+    )
+    # A GAIA release stamps its own version (0.25.4, 0.25.4-rc.1); the daemon
+    # and the release checks read it back from `gaiacpp --version`.
+    set(GAIACPP_VERSION "${PROJECT_VERSION}" CACHE STRING "Version gaiacpp reports")
+    target_compile_definitions(gaiacpp PRIVATE GAIACPP_VERSION="${GAIACPP_VERSION}")
+    target_link_libraries(gaiacpp PRIVATE gaia::gaia_core)
     if(httplib_FOUND)
-        target_link_libraries(gaia-bash PRIVATE httplib::httplib)
+        target_link_libraries(gaiacpp PRIVATE httplib::httplib)
     else()
-        target_include_directories(gaia-bash SYSTEM PRIVATE
+        target_include_directories(gaiacpp SYSTEM PRIVATE
             $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>)
     endif()
+    # httplib's classes must match gaia_core's build of them (ODR).
     if(OpenSSL_FOUND)
-        target_compile_definitions(gaia-bash PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
-        target_link_libraries(gaia-bash PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+        target_compile_definitions(gaiacpp PRIVATE CPPHTTPLIB_OPENSSL_SUPPORT)
+        target_link_libraries(gaiacpp PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+    if(WIN32)
+        target_link_libraries(gaiacpp PRIVATE psapi ws2_32)
+        # The manifest makes UTF-8 the process code page, so a path outside the
+        # PC's legacy code page survives every narrow string and file call.
+        if(MSVC)
+            target_sources(gaiacpp PRIVATE agents/gaia/gaiacpp.manifest)
+        else()
+            enable_language(RC)
+            target_sources(gaiacpp PRIVATE agents/gaia/gaiacpp.rc)
+        endif()
+    endif()
+    # Release archives must run on older distros than the build host (Lemonade
+    # ships to Ubuntu 24.04, Debian 13, Fedora): carry the C++ runtime inside.
+    option(GAIA_STATIC_CXX_RUNTIME "Link libstdc++/libgcc statically into gaiacpp" OFF)
+    if(GAIA_STATIC_CXX_RUNTIME AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        target_link_options(gaiacpp PRIVATE -static-libstdc++ -static-libgcc)
     endif()
 endif()
 
@@ -451,6 +498,19 @@ if(GAIA_BUILD_TESTS)
         tests/test_agent_vlm.cpp
         tests/test_mcp_client.cpp
         tests/test_mcp_registry.cpp
+        tests/test_mcp_stdio_server.cpp
+        tests/test_secrets.cpp
+        tests/test_mcp_http.cpp
+        tests/test_agent_resilience.cpp
+        tests/test_skill_library.cpp
+        tests/test_workspace.cpp
+        tests/test_document_index.cpp
+        tests/test_gaia_agent.cpp
+        tests/test_memory_store.cpp
+        tests/test_skill_signing.cpp
+        tests/test_media_tools.cpp
+        agents/gaia/gaia_agent.cpp
+        agents/bash/bash_tools.cpp
         tests/test_console.cpp
         tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
@@ -472,6 +532,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_skill.cpp
         tests/test_skill_sets.cpp
         tests/test_database.cpp
+        tests/test_api_server.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
@@ -503,6 +564,15 @@ if(GAIA_BUILD_TESTS)
         GAIA_CPP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
+
+    # Runs the built gaiacpp program end to end against the mock model server:
+    # the CLI, and the sidecar HTTP + SSE API the Agent UI and the TUI use.
+    if(GAIA_BUILD_GAIA_AGENT)
+        target_sources(tests_mock PRIVATE tests/test_gaiacpp_cli.cpp tests/test_gaiacpp_sidecar.cpp)
+        target_sources(tests_mock PRIVATE tests/test_gaiacpp_stdio.cpp agents/gaia/stdio_server.cpp)
+        target_compile_definitions(tests_mock PRIVATE GAIACPP_BIN="$<TARGET_FILE:gaiacpp>")
+        add_dependencies(tests_mock gaiacpp)
+    endif()
 
     # TUI tests (conditional -- requires FTXUI)
     if(GAIA_BUILD_TUI)

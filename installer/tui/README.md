@@ -1,11 +1,15 @@
 # GAIA Terminal UI installers
 
 Native double-click installers for the GAIA Terminal UI (`gaia-tui`). Each one
-puts two executables on disk and on `PATH`:
+puts these executables on disk and on `PATH`:
 
 - **`gaia-tui`** — the Terminal UI itself (built from [`tui/`](../../tui))
 - **`gaia-agent`** — the flagship agent the Terminal UI spawns as a child process
   (`TransportSubprocess` in `tui/internal/catalog/catalog.go`)
+- **`gaiacpp`** — the native flagship agent, on Windows x64, Linux x64 and Apple
+  silicon. The Terminal UI runs it in place of `gaia-agent` when it sits beside
+  `gaia-tui` (`FindNative` in `tui/internal/catalog/native.go`); an Intel Mac
+  package has none, so it runs `gaia-agent`
 
 Shipping only the first installs a front end with nothing behind it, which is
 why the sidecar is bundled rather than fetched on first run.
@@ -35,7 +39,7 @@ those platform keys rather than let a half-empty installer get built.
 ## Staging a payload
 
 All three builders take `--payload <dir>` holding `gaia-tui` and `gaia-agent`
-(with `.exe` suffixes on Windows), and `core/`: the frozen `gaia` and its
+(with `.exe` suffixes on Windows), `gaiacpp` where one is built, and `core/`: the frozen `gaia` and its
 `_internal` folder, unpacked from a `gaia-core-<platform>` build of
 [`build_core.yml`](../../.github/workflows/build_core.yml). The terminal UI runs
 setup and starts the daemon with that `gaia`, so the PC needs no Python. The Windows and macOS builders read

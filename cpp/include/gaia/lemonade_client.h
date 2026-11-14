@@ -154,6 +154,20 @@ public:
     /// Set server-side parameters.
     json setParams(const json& params);
 
+    /// Download a model with POST /pull. A built-in model is pulled by name
+    /// alone; `checkpoint` / `recipe` register a new one and are only valid for
+    /// a `user.` model (Lemonade rejects them for built-ins). Throws
+    /// std::invalid_argument on that misuse, HttpError on a server refusal.
+    json pullModel(const std::string& modelName, const std::string& checkpoint = "",
+                   const std::string& recipe = "", int timeoutSec = 3600);
+
+    /// Embed `inputs` with `model` via POST /embeddings (OpenAI shape), in
+    /// batches. One vector per input, in order. Throws on any failure or a
+    /// response that doesn't hold exactly one vector per input.
+    std::vector<std::vector<float>> embeddings(const std::string& model,
+                                               const std::vector<std::string>& inputs,
+                                               size_t batchSize = 32);
+
     /// Load (or reload) a model on the server.
     ///
     /// Mirrors Python LemonadeClient.load_model():
@@ -230,10 +244,21 @@ public:
     void setModel(const std::string& m) { model_ = m; }
 
     int contextSize() const { return contextSize_; }
+    /// modelId's recipe as the server last reported it ("flm", "llamacpp"), or "" if not yet seen.
+    std::string recipeOf(const std::string& modelId) const {
+        return modelId == recipeModel_ ? loadedRecipe_ : std::string();
+    }
     void setContextSize(int ctx) { contextSize_ = ctx; }
 
     bool debug() const { return debug_; }
     void setDebug(bool d) { debug_ = d; http_.setDebug(d); }
+
+    /// Sends `Authorization: Bearer <key>` on every request; empty removes it.
+    void setApiKey(const std::string& key);
+    bool hasApiKey() const { return hasApiKey_; }
+
+    /// Polled on every streamed chunk; returning true ends the stream early.
+    void setAbortCheck(std::function<bool()> check) { abortCheck_ = std::move(check); }
 
 private:
     /// Normalize URL: strip trailing slashes, preserve /v1 or /api/v1, append /api/v1 otherwise.
@@ -257,7 +282,11 @@ private:
     std::string baseUrl_;
     std::string model_;
     int contextSize_ = 0;
+    std::string loadedRecipe_;
+    std::string recipeModel_;
     bool debug_ = false;
+    bool hasApiKey_ = false;
+    std::function<bool()> abortCheck_;
     HttpClient http_;
 };
 

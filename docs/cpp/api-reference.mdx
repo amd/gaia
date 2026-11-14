@@ -20,10 +20,10 @@ The framework handles failures at every layer — LLM connection, JSON parsing, 
 
 ### LLM Connection Failures
 
-If the LLM server is unreachable or returns an error, the agent **retries once automatically**, then exits gracefully:
+A model call that fails transiently is retried, then the run ends with an error result. Transient means a connection error or HTTP 408, 409, 425, 429 or 5xx. `AgentConfig::llmRetries` sets the number of extra attempts (default 3), spaced 2, 4 and 8 seconds apart, up to 30. Any other error ends the run at once.
 
 ```
-Call LLM → fails → retry once → fails again → return error result
+Call LLM → fails → wait, retry (up to llmRetries) → still failing → return error result
 ```
 
 The return value on LLM failure:
@@ -31,11 +31,15 @@ The return value on LLM failure:
 {
   "result": "Unable to complete task due to LLM error: Connection refused",
   "steps_taken": 1,
-  "steps_limit": 20
+  "steps_limit": 20,
+  "status": "error",
+  "tool_errors": 0
 }
 ```
 
-Your application should check the `result` field — there is no exception to catch. HTTP timeouts: 30s connection, 120s read.
+A run also returns `llm_calls` and `tool_calls` (counts), `usage` when the server reports token counts (`prompt_tokens`, `completion_tokens`, `total_tokens`, `cached_tokens`, `peak_context_tokens`), and `telemetry`, which lists each model request and each tool call with its step and time.
+
+Your application should check the `status` field (`success`, `incomplete` when the turn stopped short but `result` holds a closing answer, `error` or `cancelled`) — there is no exception to catch. HTTP timeouts: 30s connection, 120s read.
 
 ## Tool Calling Protocols
 
@@ -73,12 +77,23 @@ cfg.nativeToolCalls = gaia::NativeToolCalls::Never;   // force prompt-JSON
 cfg.toolChoice = "auto";  // or "required"
 ```
 
-`Auto` consults `gaia::isToolCallingModel(modelId)`, a mirror of the `MODELS`
-table in `src/gaia/llm/lemonade_client.py`. **An unrecognised model id resolves to
-`false`** — the C++ framework targets any OpenAI-compatible server, where an
-unknown id says nothing about tool-calling support, so it keeps the fallback that
-works everywhere. Running a tool-calling model this build does not know? Set
-`NativeToolCalls::Always`.
+`Auto` settles the protocol once per turn, in two steps:
+
+1. The built-in table (`gaia::knownToolCalling(modelId)`), a mirror of the `MODELS`
+   table in `src/gaia/llm/lemonade_client.py`, decides for every model it lists.
+2. For a model it does not list, the agent reads the server's catalog
+   (`GET /models`) and uses native tool calls when the model carries the
+   `tool-calling` label. This covers cloud models served through Lemonade and
+   models added after this build.
+
+A model that is in neither, or a server with no catalog, keeps the prompt-JSON
+path: an unknown id on an arbitrary OpenAI-compatible server says nothing about
+tool-calling support, and that path works everywhere. Running such a model that
+does take tool calls? Set `NativeToolCalls::Always`.
+
+On the prompt-JSON path a reply may say what it is about to do and then end with
+the call (`I'll read the file. {"tool": ...}`); the call runs. An object in the
+middle of an answer, or one holding other keys, is left as text.
 
 ### Response modes
 
@@ -306,6 +321,16 @@ my_agent.exe
 
 All other `AgentConfig` fields are set at construction time. For dynamic configuration, read from a config file or registry in your `makeConfig()` function.
 
+Three fields cover keys, retries and large tool output:
+
+| Field | Default | What it does |
+|---|---|---|
+| `apiKeyEnv` | empty | Name of the environment variable that holds the endpoint's key, so a config file never carries the secret. A named variable that is unset stops the agent at startup |
+| `llmRetries` | `3` | Extra attempts for a model call that failed transiently. See [LLM Connection Failures](#llm-connection-failures) |
+| `maxToolResultChars` | `16000` | Tool output longer than this is clipped in the conversation. The model reads the full text with the `read_tool_output` tool |
+
+The key is resolved when the agent is constructed (`resolveApiKey()`): `apiKey`, else the variable `apiKeyEnv` names, else `GAIA_API_KEY`, else `LEMONADE_API_KEY` when `baseUrl` is a loopback address. `toJson()` never writes `apiKey`.
+
 ### HTTPS Support
 
 HTTPS is enabled automatically when CMake finds OpenSSL on the system
@@ -340,6 +365,11 @@ public:
                       int maxSteps = 0);
     json processQuery(const std::vector<Message>& messages, int maxSteps = 0);
 
+    // Stop the run in progress at its next step; it returns a partial result
+    // with "status": "cancelled". Safe from any thread. Cleared when the next
+    // processQuery() starts.
+    void requestCancel();
+
     // MCP server management
     // Discovered tools are registered with ToolPolicy::CONFIRM unless the
     // server proves them read-only — see /cpp/security.
@@ -372,9 +402,73 @@ protected:
     virtual void registerTools() {}           // override to register domain tools
     virtual std::string getSystemPrompt() const;  // override for agent-specific instructions
     virtual std::optional<std::string> selectSkillSet() const;  // override to pick a set at runtime
+
+    // Check a final answer before it is accepted. Return a note to send the
+    // answer back to the model once; nullopt accepts it. Called at most once
+    // per query.
+    virtual std::optional<std::string> reviewFinalAnswer(const std::string& answer);
+
+    // Every tool call of the query in progress, in order — what
+    // reviewFinalAnswer() checks the answer against.
+    struct ToolCallRecord {
+        std::string name;
+        json args;
+        bool succeeded = false;
+        int step = 0;
+        double wallSeconds = 0.0;
+        std::filesystem::file_time_type started;  // when the call began
+    };
+    const std::vector<ToolCallRecord>& turnToolCalls() const;
+
+    // The user's request for the query in progress, as text.
+    const std::string& turnRequest() const;
+
     void init();  // call at end of subclass constructor
 };
 ```
+
+### ApiServer
+
+Serves any `Agent` over an OpenAI-compatible HTTP API (`#include <gaia/api_server.h>`).
+
+```cpp
+struct ServerOptions {
+    std::string host = "127.0.0.1";  // run() refuses any other address without an apiKey
+    int port = 8200;                 // 0 picks a free port; read it back with port()
+    std::string apiKey;              // when set, every route but GET /health needs Bearer <apiKey>
+    std::vector<std::string> allowedOrigins;  // browser origins allowed; empty = none
+    bool exposeToolRoutes = false;   // register POST /v1/tools/:name (runs a tool with no LLM)
+    std::string modelName;           // id shown by /v1/models; empty = the agent's model
+    std::string agentVersion;        // reported by GET /health
+    bool rejectSystemMessages = false;  // 400 on role=system; by default they are dropped
+    size_t maxRequestBytes = 32u * 1024u * 1024u;
+};
+
+class ApiServer {
+public:
+    ApiServer(Agent& agent, ServerOptions options);
+    explicit ApiServer(Agent& agent, int port = 8200);  // default options on `port`
+
+    void setSessionStore(std::shared_ptr<SessionStore> store);
+
+    void run();   // bind and serve, blocking; throws std::runtime_error if it can't bind or the options are unsafe
+    void stop();  // stop serving and cancel the completion in flight
+    bool isRunning() const;
+    int port() const;
+    static const char* version();  // gaia_core version, reported by /health
+};
+```
+
+| Route | Purpose |
+|---|---|
+| `POST /v1/chat/completions` | Run the agent on the request's conversation, streamed or not |
+| `GET /v1/models` | The served model id |
+| `GET /v1/tools` | The agent's registered tools |
+| `POST /v1/tools/:name` | Run a tool directly. Only with `exposeToolRoutes` |
+| `GET /health` | Liveness and version. Never needs the key |
+| `GET /sessions`, `DELETE /sessions/:id` | List and delete sessions, when a store is set |
+
+Each completion replaces the agent's history with the request's earlier turns, so the server keeps nothing between requests. One completion runs at a time; a second gets 409 `agent_busy`. The server installs its own `OutputHandler` on the agent, so don't replace it while the server exists. The answer streams token by token only when `AgentConfig::streaming` is on; otherwise it arrives as one chunk after the tool activity.
 
 ### Skill sets (`gaia::SkillSets`)
 
@@ -493,6 +587,18 @@ public:
     json callTool(const std::string& toolName, const json& arguments);
 };
 ```
+
+### McpStdioServer
+
+Serves an agent's tools to an MCP client over a pair of streams (`#include <gaia/mcp_stdio_server.h>`). Calls go through the tool registry, so each tool's policy and the agent's confirm callback apply; with no callback set, a tool that needs approval is refused.
+
+```cpp
+MyAgent agent(config);
+gaia::McpStdioServer server(agent, "my-agent", "1.0.0");  // std::cin / std::cout
+server.run();  // until end of input
+```
+
+Print nothing else to the output stream while it runs.
 
 ### MCPRegistry
 
@@ -623,6 +729,13 @@ callback; returning `false` ends the stream normally — that is how
 absolute URL, in which case the configured base URL is ignored. HTTPS requires
 an OpenSSL-enabled build (see [HTTPS Support](#https-support)); an `https://`
 URL on an HTTP-only build raises rather than downgrading.
+
+Each client keeps its connection to a server open and reuses it, so an HTTPS
+server costs one TLS set-up per client rather than one per request. Keep the
+`HttpClient` for as long as you talk to the server instead of building one per
+call. A connection idle for longer than `HttpClientConfig::keepAliveIdleSec`
+(30 by default) is reopened, and a stream ended early by its callback closes
+its connection.
 
 ### VectorIndex
 

@@ -159,7 +159,11 @@ def test_an_explicit_gate_still_requires_the_frozen_core(workflow, job):
 def test_the_windows_setup_waits_on_the_binaries_not_the_packages(publish):
     binaries = publish["tui-binaries"]
     assert binaries["uses"] == "./.github/workflows/tui_installers.yml"
-    assert binaries["needs"] == ["validate"], "the binaries need no sidecar"
+    # No sidecar; gaiacpp is a binary verified here for the Windows setup.
+    assert binaries["needs"] == [
+        "validate",
+        "build-gaiacpp",
+    ], "the binaries need no sidecar"
     assert binaries["with"]["installers"] is False
     assert not binaries["with"].get("artifact_prefix")
 
@@ -172,6 +176,7 @@ def test_the_windows_setup_waits_on_the_binaries_not_the_packages(publish):
     assert "tui-installers" not in setup["needs"]
     assert "tui-binaries" in setup["needs"]
     assert "needs.tui-binaries.outputs.binaries_ok == 'true'" in setup["if"]
+    assert "needs.tui-binaries.outputs.gaiacpp_ok == 'true'" in setup["if"]
     assert "needs.tui-installers" not in setup["if"]
 
 
@@ -218,6 +223,8 @@ def test_the_final_release_job_steps(publish):
         "Checksum TUI binaries",
         "Download the gaia core builds",
         "Attach and checksum the gaia core",
+        "Download the gaiacpp bundle",
+        "Attach and checksum gaiacpp",
         "Download the combined Windows setup",
         "Check the combined Windows setup is this release's",
         "Download Desktop Installer (Windows NSIS)",

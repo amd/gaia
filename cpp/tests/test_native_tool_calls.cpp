@@ -29,8 +29,8 @@ namespace {
 
 // A model id known to support native tool calls (mirrors Python MODELS).
 constexpr const char* kToolCallingModel = "Gemma-4-E4B-it-GGUF";
-// A model id known NOT to support them (the FLM/NPU build).
-constexpr const char* kNonToolCallingModel = "gemma4-it-e2b-FLM";
+// A model id the table marks as not taking them (an embedder).
+constexpr const char* kNonToolCallingModel = "embed-gemma-300m-FLM";
 
 /// Agent with two tools, used to exercise the schema and execution paths.
 class ToolAgent : public Agent {
@@ -121,11 +121,11 @@ TEST(ModelGateTest, KnownToolCallingModelsReturnTrue) {
     EXPECT_TRUE(isToolCallingModel("Qwen3-8B-GGUF"));
     EXPECT_TRUE(isToolCallingModel("Qwen3.5-35B-A3B-GGUF"));
     EXPECT_TRUE(isToolCallingModel("Qwen3-VL-4B-Instruct-GGUF"));
+    EXPECT_TRUE(isToolCallingModel("Qwen3.6-35B-A3B-GGUF"));
+    EXPECT_TRUE(isToolCallingModel("gemma4-it-e2b-FLM"));
 }
 
 TEST(ModelGateTest, KnownNonToolCallingModelsReturnFalse) {
-    // The FastFlowLM/NPU build 500s on an OpenAI tools payload.
-    EXPECT_FALSE(isToolCallingModel("gemma4-it-e2b-FLM"));
     // Embedders never chat.
     EXPECT_FALSE(isToolCallingModel("user.embeddinggemma-300m-GGUF"));
     EXPECT_FALSE(isToolCallingModel("embed-gemma-300m-FLM"));
@@ -138,25 +138,126 @@ TEST(ModelGateTest, UnknownAndEmptyModelsReturnFalse) {
     EXPECT_FALSE(isToolCallingModel(""));
 }
 
-TEST(ModelGateTest, MirrorsThePythonModelTableExactly) {
-    // Pins the mirrored table so a Python-side change that is not mirrored here
-    // shows up as a test edit in review. Source of truth: MODELS in
-    // src/gaia/llm/lemonade_client.py.
-    const std::vector<std::pair<std::string, bool>> expected = {
-        {"Gemma-4-E4B-it-GGUF", true},
-        {"gemma4-it-e2b-FLM", false},
-        {"Qwen3.5-35B-A3B-GGUF", true},
-        {"Qwen3-0.6B-GGUF", true},
-        {"Qwen3-VL-4B-Instruct-GGUF", true},
-        {"Qwen3-8B-GGUF", true},
-        {"user.embeddinggemma-300m-GGUF", false},
-        {"embed-gemma-300m-FLM", false},
-    };
-    ASSERT_EQ(knownModels().size(), expected.size());
-    for (size_t i = 0; i < expected.size(); ++i) {
-        EXPECT_EQ(knownModels()[i].modelId, expected[i].first) << "at index " << i;
-        EXPECT_EQ(knownModels()[i].toolCalling, expected[i].second) << "at index " << i;
+TEST(ModelGateTest, UnlistedModelsAreUnknownNotRefused) {
+    EXPECT_EQ(knownToolCalling("Qwen3.6-35B-A3B-GGUF"), std::optional<bool>(true));
+    EXPECT_EQ(knownToolCalling("embed-gemma-300m-FLM"), std::optional<bool>(false));
+    EXPECT_EQ(knownToolCalling("fireworks.deepseek-v4p1-flash"), std::nullopt);
+}
+
+// ---------------------------------------------------------------------------
+// Auto policy for a model the table doesn't list: the server's catalog decides
+// ---------------------------------------------------------------------------
+
+TEST(ServerCatalogTest, ALabelledModelGetsNativeTools) {
+    bench::MockLlmServer mock;
+    mock.setModelsList(
+        R"({"data":[{"id":"other","labels":["chat"]},)"
+        R"({"id":"fireworks.deepseek-v4p1-flash","labels":["chat","cloud","tool-calling"]}]})");
+    mock.pushResponse(toolCallsResponse(
+        R"([{"id":"c1","type":"function","function":{"name":"echo","arguments":"{\"message\":\"hi\"}"}}])"));
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "fireworks.deepseek-v4p1-flash"));
+    agent.initForTest();
+    json result = agent.processQuery("say hi");
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"echo"}));
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    const json first = json::parse(bodies[0]);
+    ASSERT_TRUE(first.contains("tools"));
+    EXPECT_EQ(first["tool_choice"], "auto");
+    // No text protocol in the prompt when the request carries tools.
+    EXPECT_EQ(first["messages"][0]["content"].get<std::string>().find("RESPONSE FORMAT"), std::string::npos);
+    // The tool reply is a spec-shaped role=tool message with its call id.
+    const json second = json::parse(bodies[1]);
+    EXPECT_EQ(second["messages"].back()["role"], "tool");
+    EXPECT_EQ(second["messages"].back()["tool_call_id"], "c1");
+}
+
+TEST(ServerCatalogTest, AModelWithoutTheLabelKeepsTheTextProtocol) {
+    bench::MockLlmServer mock;
+    mock.setModelsList(R"({"data":[{"id":"plain-chat-model","labels":["chat"]}]})");
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "plain-chat-model"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    const json body = json::parse(mock.receivedBodies().back());
+    EXPECT_FALSE(body.contains("tools"));
+    EXPECT_NE(body["messages"][0]["content"].get<std::string>().find("RESPONSE FORMAT"), std::string::npos);
+}
+
+TEST(ServerCatalogTest, AServerThatDoesNotListTheModelKeepsTheTextProtocol) {
+    bench::MockLlmServer mock;  // its catalog lists only "mock-model", with no labels
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "some-third-party-model"));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("tools"));
+}
+
+TEST(ServerCatalogTest, ACatalogThatIsNotJsonKeepsTheTextProtocol) {
+    bench::MockLlmServer mock;
+    mock.setModelsList("<html>not a catalog</html>");
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), "some-third-party-model"));
+    agent.initForTest();
+    json result = agent.processQuery("hello", 1);
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("tools"));
+}
+
+TEST(ServerCatalogTest, TheTableWinsOverTheServersLabel) {
+    // A listed model is settled by the table, whatever a server labels it.
+    bench::MockLlmServer mock;
+    mock.setModelsList(R"({"data":[{"id":"embed-gemma-300m-FLM","labels":["chat","tool-calling"]}]})");
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), kNonToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    EXPECT_FALSE(json::parse(mock.receivedBodies().back()).contains("tools"));
+}
+
+// ---------------------------------------------------------------------------
+// The text protocol: a tool call written as text, and its result
+// ---------------------------------------------------------------------------
+
+TEST(TextProtocolTest, AToolCallAfterASentenceRunsAndItsResultGoesBackAsAUserMessage) {
+    bench::MockLlmServer mock;
+    const std::string said =
+        "I'll start by echoing.\n\n{\"tool\": \"echo\", \"tool_args\": {\"message\": \"hi\"}}";
+    const json reply = {
+        {"choices", json::array({{{"message", {{"role", "assistant"}, {"content", said}}}}})}};
+    mock.pushResponse(reply.dump());
+    mock.pushResponse(kPlainAnswer);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), kNonToolCallingModel));
+    agent.initForTest();
+    json result = agent.processQuery("say hi");
+
+    EXPECT_EQ(agent.executed, (std::vector<std::string>{"echo"}));
+    EXPECT_EQ(result["result"], "All done.");
+    const auto bodies = mock.receivedBodies();
+    ASSERT_EQ(bodies.size(), 2u);
+    // A strict server rejects role=tool without tool_call_id, so none is sent.
+    const json second = json::parse(bodies[1]);
+    for (const auto& m : second["messages"]) {
+        EXPECT_NE(m["role"], "tool") << m.dump();
+        EXPECT_FALSE(m.contains("tool_call_id")) << m.dump();
     }
+    const json& last = second["messages"].back();
+    EXPECT_EQ(last["role"], "user");
+    EXPECT_EQ(last["content"].get<std::string>().rfind("[Result from echo]: ", 0), 0u) << last.dump();
+    EXPECT_NE(last["content"].get<std::string>().find("echoed"), std::string::npos);
 }
 
 TEST(ModelGateTest, ConfigPolicyOverridesTheModel) {
@@ -226,7 +327,7 @@ TEST(NativeToolCallsTest, ToolCallingModelSendsToolsAndToolChoice) {
 
     ASSERT_TRUE(body.contains("tools"));
     ASSERT_TRUE(body["tools"].is_array());
-    EXPECT_EQ(body["tools"].size(), 3u);  // add, echo, ping
+    EXPECT_EQ(body["tools"].size(), 4u);  // add, echo, ping, read_tool_output
     EXPECT_EQ(body["tool_choice"], "auto");
 
     // Registry order is alphabetical (std::map): add, echo.
@@ -249,7 +350,9 @@ TEST(NativeToolCallsTest, ToolCallingModelDropsTheResponseFormatTemplate) {
     bench::MockLlmServer mock;
     mock.pushResponse(kPlainAnswer);
 
-    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.featureTier = "full";  // a compact model also drops the prose tool list
+    ToolAgent agent(cfg);
     agent.initForTest();
     agent.processQuery("hello", 1);
 
@@ -315,9 +418,10 @@ TEST(NativeToolCallsTest, DisabledToolsAreExcludedFromTheSchemas) {
 
     json body = json::parse(mock.receivedBodies().back());
     ASSERT_TRUE(body.contains("tools"));
-    ASSERT_EQ(body["tools"].size(), 2u);
+    ASSERT_EQ(body["tools"].size(), 3u);
     EXPECT_EQ(body["tools"][0]["function"]["name"], "add");
     EXPECT_EQ(body["tools"][1]["function"]["name"], "ping");
+    EXPECT_EQ(body["tools"][2]["function"]["name"], "read_tool_output");
 }
 
 // ---------------------------------------------------------------------------
@@ -491,8 +595,9 @@ TEST(NativeToolCallsTest, MalformedArgumentsJsonThrowsNamingTheTool) {
         const std::string msg = e.what();
         EXPECT_NE(msg.find("echo"), std::string::npos) << msg;
         EXPECT_NE(msg.find("call_9"), std::string::npos) << msg;
-        // Names the escape hatch so the error is actionable.
-        EXPECT_NE(msg.find("NativeToolCalls::Never"), std::string::npos) << msg;
+        // The model reads this, so it says what to send next.
+        EXPECT_NE(msg.find("one complete JSON object"), std::string::npos) << msg;
+        EXPECT_EQ(msg.find("AgentConfig"), std::string::npos) << msg;
     }
 }
 
@@ -507,8 +612,8 @@ TEST(NativeToolCallsTest, NonObjectArgumentsThrow) {
 TEST(NativeToolCallsTest, MalformedToolCallsSurfaceAsAnErrorNotAProseAnswer) {
     bench::MockLlmServer mock;
     // Both the first attempt and the one retry return the same malformed body.
-    mock.pushResponse(toolCallsResponse(R"([{"type":"function","function":{"name":"echo"}}])"));
-    mock.pushResponse(toolCallsResponse(R"([{"type":"function","function":{"name":"echo"}}])"));
+    mock.pushResponse(toolCallsResponse(R"([{"id":"call_1","type":"function","function":{"arguments":"{}"}}])"));
+    mock.pushResponse(toolCallsResponse(R"([{"id":"call_1","type":"function","function":{"arguments":"{}"}}])"));
 
     ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
     agent.initForTest();
@@ -948,25 +1053,48 @@ TEST(NativeToolCallsTest, CancelBetweenParallelCallsLeavesNoUnansweredToolCall) 
 
 TEST(NativeToolCallsTest, MalformedArgsInABatchRunNothingAndDoNotThrow) {
     // Call A is well-formed, call B is truncated. Decoding happens up front, so
-    // A's side effects never happen — and processQuery reports via "result"
-    // rather than throwing out of the public API.
+    // A's side effects never happen; both calls are answered with the problem
+    // and the model gets to resend.
     bench::MockLlmServer mock;
     const std::string body = toolCallsResponse(
         R"([{"id":"call_a","type":"function","function":{"name":"echo","arguments":"{\"message\":\"hi\"}"}},)"
         R"({"id":"call_b","type":"function","function":{"name":"add","arguments":"{\"a\":"}}])");
     mock.pushResponse(body);
-    mock.pushResponse(body);
+    mock.pushResponse(kPlainAnswer);
 
     ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
     agent.initForTest();
 
     json result;
-    ASSERT_NO_THROW(result = agent.processQuery("go", 2));
+    ASSERT_NO_THROW(result = agent.processQuery("go", 5));
     EXPECT_TRUE(agent.executed.empty())
         << "no tool may run when a sibling call in the batch is malformed";
-    EXPECT_NE(result["result"].get<std::string>().find("LLM error"), std::string::npos);
-    // The turn was still recorded — the history write must not be skipped.
+    EXPECT_EQ(result["result"], "All done.");
+    const json second = json::parse(mock.receivedBodies()[1]);
+    int toolReplies = 0;
+    for (const auto& m : second["messages"]) {
+        if (m["role"] == "tool") {
+            ++toolReplies;
+            EXPECT_NE(m["content"].get<std::string>().find("Not run"), std::string::npos);
+        }
+    }
+    EXPECT_EQ(toolReplies, 2) << "every advertised call needs a reply";
     EXPECT_FALSE(agent.history().empty());
+}
+
+TEST(NativeToolCallsTest, RepeatedMalformedArgsEndTheTurn) {
+    bench::MockLlmServer mock;
+    const std::string body = toolCallsResponse(
+        R"([{"id":"call_b","type":"function","function":{"name":"add","arguments":"{\"a\":"}}])");
+    mock.pushResponses(body, 3);
+
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    json result = agent.processQuery("go", 10);
+
+    EXPECT_EQ(result["status"], "error");
+    EXPECT_NE(result["result"].get<std::string>().find("malformed tool arguments"),
+              std::string::npos);
 }
 
 TEST(NativeToolCallsTest, NeverPolicyIgnoresVolunteeredToolCalls) {
@@ -1171,10 +1299,10 @@ std::string promptJsonEcho(const std::string& msg) {
            msg + R"(\"}}"}}]})";
 }
 
-const char* kLoopStopped = "Task stopped due to repeated tool call loop.";
-
 } // namespace
 
+// The Nth identical call is refused with a nudge instead of run; a model that
+// takes the hint carries on to its answer.
 TEST(LoopDetectionTest, NativeLoopStillCaughtAfterLongDistinctHistory) {
     bench::MockLlmServer mock;
     int id = 0;
@@ -1188,15 +1316,22 @@ TEST(LoopDetectionTest, NativeLoopStillCaughtAfterLongDistinctHistory) {
     agent.initForTest();
     json result = agent.processQuery("go", 50);
 
-    EXPECT_EQ(result["result"], kLoopStopped);
+    EXPECT_EQ(result["result"], "All done.");
     // 30 distinct + 3 identical run; the 4th identical one is refused.
     EXPECT_EQ(agent.executed.size(), 33u);
+    const auto bodies = mock.receivedBodies();
+    const json last = json::parse(bodies.back());
+    const auto& msgs = last["messages"];
+    EXPECT_NE(msgs[msgs.size() - 1]["content"].get<std::string>().find("identical call"),
+              std::string::npos)
+        << "the refused call must be answered with the nudge";
 }
 
 TEST(LoopDetectionTest, PromptJsonLoopStillCaughtAfterLongDistinctHistory) {
     bench::MockLlmServer mock;
     for (int i = 0; i < 30; ++i) mock.pushResponse(promptJsonEcho("m" + std::to_string(i)));
     for (int i = 0; i < 4; ++i) mock.pushResponse(promptJsonEcho("same"));
+    mock.pushResponse(R"({"choices":[{"message":{"content":"{\"answer\":\"done differently\"}"}}]})");
 
     AgentConfig cfg = makeCfg(mock.baseUrl(), kNonToolCallingModel);
     cfg.maxSteps = 50;
@@ -1204,16 +1339,16 @@ TEST(LoopDetectionTest, PromptJsonLoopStillCaughtAfterLongDistinctHistory) {
     agent.initForTest();
     json result = agent.processQuery("go", 50);
 
-    EXPECT_EQ(result["result"], kLoopStopped);
+    EXPECT_EQ(result["result"], "done differently");
     EXPECT_EQ(agent.executed.size(), 33u);
 }
 
-TEST(LoopDetectionTest, InterruptedRunIsNotALoop) {
-    // A A A B A A A: never four identical in a row, so every call runs.
+// A model that ignores the nudge is stopped, and one tool-free call asks it to wrap up.
+TEST(LoopDetectionTest, LoopAfterNudgeStopsWithClosingAnswer) {
     bench::MockLlmServer mock;
     int id = 0;
-    for (const char* m : {"a", "a", "a", "b", "a", "a", "a"}) mock.pushResponse(nativeEcho(m, ++id));
-    mock.pushResponse(kPlainAnswer);
+    for (int i = 0; i < 8; ++i) mock.pushResponse(nativeEcho("same", ++id));
+    mock.pushResponse(R"({"choices":[{"message":{"role":"assistant","content":"Partial: echoed same."}}]})");
 
     AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
     cfg.maxSteps = 20;
@@ -1221,43 +1356,12 @@ TEST(LoopDetectionTest, InterruptedRunIsNotALoop) {
     agent.initForTest();
     json result = agent.processQuery("go", 20);
 
-    EXPECT_EQ(result["result"], "All done.");
-    EXPECT_EQ(agent.executed.size(), 7u);
-}
-
-TEST(LoopDetectionTest, SameToolDifferentArgsIsNotALoop) {
-    bench::MockLlmServer mock;
-    int id = 0;
-    for (int i = 0; i < 8; ++i) mock.pushResponse(nativeEcho("v" + std::to_string(i % 2), ++id));
-    mock.pushResponse(kPlainAnswer);
-
-    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
-    cfg.maxSteps = 20;
-    ToolAgent agent(cfg);
-    agent.initForTest();
-    json result = agent.processQuery("go", 20);
-
-    EXPECT_EQ(result["result"], "All done.");
-    EXPECT_EQ(agent.executed.size(), 8u);
-}
-
-TEST(LoopDetectionTest, SmallestThresholdStopsOnSecondIdenticalCall) {
-    bench::MockLlmServer mock;
-    int id = 0;
-    mock.pushResponse(nativeEcho("x", ++id));
-    mock.pushResponse(nativeEcho("y", ++id));
-    mock.pushResponse(nativeEcho("y", ++id));
-    mock.pushResponse(kPlainAnswer);
-
-    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
-    cfg.maxSteps = 10;
-    cfg.maxConsecutiveRepeats = 2;
-    ToolAgent agent(cfg);
-    agent.initForTest();
-    json result = agent.processQuery("go", 10);
-
-    EXPECT_EQ(result["result"], kLoopStopped);
-    EXPECT_EQ(agent.executed.size(), 2u);
+    EXPECT_EQ(result["result"], "Partial: echoed same.");
+    EXPECT_EQ(result["status"], "success") << "a loop the model then answered from is a finished turn";
+    // 3 run, 4th nudged, window cleared: 3 more run, the next is the second loop.
+    EXPECT_EQ(agent.executed.size(), 6u);
+    const json closing = json::parse(mock.receivedBodies().back());
+    EXPECT_EQ(closing["tool_choice"], "none") << "the closing call must not let the model call tools";
 }
 
 TEST(LoopDetectionTest, LargeThresholdNeedsTheFullRun) {
@@ -1275,6 +1379,252 @@ TEST(LoopDetectionTest, LargeThresholdNeedsTheFullRun) {
     agent.initForTest();
     json result = agent.processQuery("go", 10);
 
-    EXPECT_EQ(result["result"], kLoopStopped);
+    EXPECT_EQ(result["result"], "All done.");
     EXPECT_EQ(agent.executed.size(), 5u);
+}
+
+// A, B, A, B never repeats one call twice in a row; the cycle is still a loop.
+TEST(LoopDetectionTest, AlternatingBetweenTwoCallsIsALoop) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    mock.pushResponse(nativeEcho("x", ++id));
+    for (int i = 0; i < 4; ++i) {
+        mock.pushResponse(nativeEcho("find", ++id));
+        mock.pushResponse(nativeEcho("read", ++id));
+    }
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 30;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 30);
+
+    EXPECT_EQ(result["result"], "All done.");
+    // x, then three full rounds and the fourth round's first call; its closing call is refused.
+    EXPECT_EQ(agent.executed.size(), 8u);
+    const json last = json::parse(mock.receivedBodies().back());
+    const std::string nudge = last["messages"].back()["content"].get<std::string>();
+    EXPECT_NE(nudge.find("repeating cycle of 2 calls"), std::string::npos) << nudge;
+    EXPECT_NE(nudge.find("try a different approach, or give your final answer"), std::string::npos) << nudge;
+}
+
+TEST(LoopDetectionTest, ACycleOfThreeCallsIsALoop) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (int i = 0; i < 4; ++i) {
+        for (const char* msg : {"a", "b", "c"}) mock.pushResponse(nativeEcho(msg, ++id));
+    }
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 30;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 30);
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_EQ(agent.executed.size(), 11u);
+    EXPECT_NE(mock.receivedBodies().back().find("repeating cycle of 3 calls"), std::string::npos);
+}
+
+TEST(LoopDetectionTest, PromptJsonCycleIsALoop) {
+    bench::MockLlmServer mock;
+    for (int i = 0; i < 4; ++i) {
+        mock.pushResponse(promptJsonEcho("find"));
+        mock.pushResponse(promptJsonEcho("read"));
+    }
+    mock.pushResponse(R"({"choices":[{"message":{"content":"{\"answer\":\"done differently\"}"}}]})");
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kNonToolCallingModel);
+    cfg.maxSteps = 30;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 30);
+
+    EXPECT_EQ(result["result"], "done differently");
+    EXPECT_EQ(agent.executed.size(), 7u);
+}
+
+// A cycle the model ignores the nudge for ends the turn like any other loop.
+TEST(LoopDetectionTest, ACycleAfterTheNudgeStopsWithClosingAnswer) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (int i = 0; i < 8; ++i) {
+        mock.pushResponse(nativeEcho("find", ++id));
+        mock.pushResponse(nativeEcho("read", ++id));
+    }
+    mock.pushResponse(R"({"choices":[{"message":{"role":"assistant","content":"Partial."}}]})");
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 40;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 40);
+
+    EXPECT_EQ(result["result"], "Partial.");
+    EXPECT_EQ(agent.executed.size(), 14u);
+    EXPECT_EQ(json::parse(mock.receivedBodies().back())["tool_choice"], "none");
+}
+
+// Steady work that revisits a call is not a loop: no cycle of up to three calls repeats.
+TEST(LoopDetectionTest, VariedCallsThatRevisitOneAreNotALoop) {
+    bench::MockLlmServer mock;
+    int id = 0;
+    for (int i = 0; i < 5; ++i) {
+        for (const char* msg : {"a", "b", "a", "c"}) mock.pushResponse(nativeEcho(msg, ++id));
+    }
+    for (int i = 0; i < 6; ++i) {
+        mock.pushResponse(nativeEcho("status", ++id));
+        mock.pushResponse(nativeEcho("step" + std::to_string(i), ++id));
+    }
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.maxSteps = 60;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    json result = agent.processQuery("go", 60);
+
+    EXPECT_EQ(result["result"], "All done.");
+    EXPECT_EQ(agent.executed.size(), 32u);
+    EXPECT_EQ(mock.receivedBodies().back().find("Not run"), std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// The model is checked before every request, and a failed load ends the turn
+// ---------------------------------------------------------------------------
+
+TEST(ModelLoadTest, LoadIsRecheckedBeforeEveryRequest) {
+    // A server that keeps reporting the model unloaded gets a load before each request.
+    bench::MockLlmServer mock(/*reportModelLoaded=*/false);
+    mock.pushResponses(kPlainAnswer, 2);
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("one");
+    agent.processQuery("two");
+    ASSERT_EQ(mock.requestCount(), 2);
+    EXPECT_EQ(mock.loadRequestCount(), 2);
+}
+
+namespace {
+// What a real Lemonade reports: speech, transcription and embedding models
+// loaded ahead of the chat model, which is never first in the list.
+std::string busyServerHealth(const std::string& chatModel, int ctx, const std::string& recipe = "llamacpp") {
+    const json health = {
+        {"status", "ok"},
+        {"model_loaded", chatModel},
+        {"all_models_loaded",
+         json::array({
+             {{"model_name", "kokoro-v1"}, {"type", "tts"}, {"recipe", "kokoro"}, {"recipe_options", {{"ctx_size", 4096}}}},
+             {{"model_name", "embeddinggemma-300m-GGUF"}, {"type", "embedding"}, {"recipe", "llamacpp"},
+              {"recipe_options", {{"ctx_size", 8192}}}},
+             {{"model_name", chatModel}, {"type", "llm"}, {"recipe", recipe}, {"recipe_options", {{"ctx_size", ctx}}}},
+         })}};
+    return health.dump();
+}
+}  // namespace
+
+TEST(ModelLoadTest, AChatModelLoadedBehindOtherModelsIsNotLoadedAgain) {
+    bench::MockLlmServer mock;
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    mock.setHealth(busyServerHealth(kToolCallingModel, cfg.contextSize));
+    mock.pushResponses(kPlainAnswer, 2);
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("one");
+    agent.processQuery("two");
+    ASSERT_EQ(mock.requestCount(), 2);
+    EXPECT_EQ(mock.loadRequestCount(), 0);
+}
+
+TEST(ModelLoadTest, AChatModelLoadedAtAnotherWindowIsReloaded) {
+    bench::MockLlmServer mock;
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    mock.setHealth(busyServerHealth(kToolCallingModel, cfg.contextSize / 2));
+    mock.pushResponse(kPlainAnswer);
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("one");
+    EXPECT_EQ(mock.loadRequestCount(), 1);
+}
+
+TEST(ModelLoadTest, ACloudModelIsNeverReloadedForItsWindow) {
+    bench::MockLlmServer mock;
+    const char* const model = "fireworks.deepseek-v4p1-flash";
+    mock.setHealth(busyServerHealth(model, 4096, "cloud"));
+    mock.pushResponses(kPlainAnswer, 2);
+    ToolAgent agent(makeCfg(mock.baseUrl(), model));
+    agent.initForTest();
+    agent.processQuery("one");
+    agent.processQuery("two");
+    ASSERT_EQ(mock.requestCount(), 2);
+    EXPECT_EQ(mock.loadRequestCount(), 0);
+}
+
+TEST(ModelLoadTest, AModelTheServerDoesNotHoldIsLoaded) {
+    bench::MockLlmServer mock;
+    mock.setHealth(busyServerHealth("Qwen3.6-35B-A3B-GGUF", 32768));
+    mock.pushResponse(kPlainAnswer);
+    ToolAgent agent(makeCfg(mock.baseUrl(), kToolCallingModel));
+    agent.initForTest();
+    agent.processQuery("one");
+    EXPECT_EQ(mock.loadRequestCount(), 1);
+}
+
+TEST(ModelLoadTest, HealthReportsThisClientsModelNotTheFirstOneListed) {
+    bench::MockLlmServer mock;
+    mock.setHealth(busyServerHealth(kToolCallingModel, 65536));
+    LemonadeClient client(LemonadeClientConfig{mock.baseUrl(), kToolCallingModel, 65536, false});
+    const LemonadeHealth h = client.healthCheck();
+    EXPECT_EQ(h.modelId, kToolCallingModel);
+    EXPECT_EQ(h.contextSize, 65536);
+
+    // A client asking for a model the server lacks sees the server's chat model.
+    LemonadeClient other(LemonadeClientConfig{mock.baseUrl(), "not-loaded", 65536, false});
+    EXPECT_EQ(other.healthCheck().modelId, kToolCallingModel);
+}
+
+TEST(ModelLoadTest, AFailedLoadIsAnErrorNotAWarning) {
+    bench::MockLlmServer mock(/*reportModelLoaded=*/false);
+    mock.setLoadStatus(500);
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.llmRetries = 0;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    const json r = agent.processQuery("hello");
+    EXPECT_EQ(r.value("status", ""), "error") << r.dump();
+    EXPECT_NE(r.value("result", "").find(kToolCallingModel), std::string::npos) << r.dump();
+    EXPECT_EQ(mock.requestCount(), 0);  // no chat request against a model that isn't loaded
+}
+
+TEST(NativeToolCallsTest, ACompactToolCallingModelDropsTheProseToolList) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.featureTier = "compact";
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    const json body = json::parse(mock.receivedBodies().back());
+    EXPECT_EQ(systemPromptOf(body).find("==== AVAILABLE TOOLS ===="), std::string::npos);
+    EXPECT_EQ(body["tools"].size(), 4u) << "the schemas still carry every tool";
+}
+
+TEST(NativeToolCallsTest, ACompactModelOnThePromptJsonPathKeepsTheToolList) {
+    bench::MockLlmServer mock;
+    mock.pushResponse(kPlainAnswer);
+
+    AgentConfig cfg = makeCfg(mock.baseUrl(), kToolCallingModel);
+    cfg.featureTier = "compact";
+    cfg.nativeToolCalls = NativeToolCalls::Never;
+    ToolAgent agent(cfg);
+    agent.initForTest();
+    agent.processQuery("hello", 1);
+
+    EXPECT_NE(systemPromptOf(json::parse(mock.receivedBodies().back())).find("==== AVAILABLE TOOLS ===="),
+              std::string::npos)
+        << "without tool schemas the list is the only description of the tools";
 }

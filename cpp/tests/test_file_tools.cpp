@@ -900,3 +900,46 @@ TEST_F(FileToolsHardeningTest, FileSearch_OversizedPatternIsRejected) {
     EXPECT_NE(result["error"].get<std::string>().find("limit is 512"),
               std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// Non-ASCII names: a model writes paths in UTF-8, whatever the code page
+// ---------------------------------------------------------------------------
+
+TEST_F(FileToolsTest, NonAsciiNamesAreReadAndWrittenAsUtf8) {
+    const std::string name = "r\xc3\xa9sum\xc3\xa9-\xe6\x97\xa5\xe6\x9c\xac.txt";
+    const fs::path onDisk = tempDir_ / fs::u8path("docs \xc3\xb1") / fs::u8path(name);
+    const std::string path = onDisk.u8string();
+    const std::string cafe = "caf\xc3\xa9";
+
+    json written = FileIOTools::fileWrite().callback({{"path", path}, {"content", cafe + " au lait\n"}});
+    ASSERT_FALSE(written.contains("error")) << written.dump();
+    ASSERT_TRUE(fs::exists(onDisk)) << "the file carries the name the model gave";
+    size_t entries = 0;
+    for (const auto& e : fs::directory_iterator(onDisk.parent_path())) {
+        ++entries;
+        EXPECT_EQ(e.path().filename().u8string(), name);
+    }
+    EXPECT_EQ(entries, 1u) << "and no second, mis-spelled copy";
+
+    json read = FileIOTools::fileRead().callback({{"path", path}});
+    ASSERT_FALSE(read.contains("error")) << read.dump();
+    EXPECT_NE(read["content"].get<std::string>().find(cafe), std::string::npos);
+    EXPECT_EQ(read["path"], path);
+
+    json edited = FileIOTools::fileEdit().callback({{"path", path}, {"old_string", cafe}, {"new_string", "tea"}});
+    ASSERT_FALSE(edited.contains("error")) << edited.dump();
+    std::ifstream in(onDisk, std::ios::binary);
+    std::ostringstream now;
+    now << in.rdbuf();
+    EXPECT_EQ(now.str(), "tea au lait\n");
+
+    for (const json& args : {json{{"pattern", "*.txt"}, {"path", tempDir_.u8string()}},
+                             json{{"pattern", "*.txt"}, {"path", tempDir_.u8string()}, {"content_pattern", "tea"}}}) {
+        json found = FileIOTools::fileSearch().callback(args);
+        ASSERT_FALSE(found.contains("error")) << found.dump();
+        ASSERT_EQ(found["matches"].size(), 1u) << found.dump();
+        const std::string match = found["matches"][0]["path"];
+        EXPECT_EQ(fs::u8path(match).filename().u8string(), name);
+        EXPECT_NO_THROW(found.dump()) << "the result is valid UTF-8 JSON";
+    }
+}

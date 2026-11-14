@@ -160,6 +160,16 @@ void LemonadeClient::setBaseUrl(const std::string& url) {
     http_.setBaseUrl(baseUrl_);
 }
 
+void LemonadeClient::setApiKey(const std::string& key) {
+    if (key.empty()) {
+        http_.removeDefaultHeader("Authorization");
+        hasApiKey_ = false;
+        return;
+    }
+    http_.setDefaultHeader("Authorization", "Bearer " + key);
+    hasApiKey_ = true;
+}
+
 // ---------------------------------------------------------------------------
 // Low-level HTTP helpers — thin forwards to gaia::HttpClient
 // ---------------------------------------------------------------------------
@@ -198,6 +208,26 @@ bool LemonadeClient::ready() {
     }
 }
 
+namespace {
+// The entry for `model` in a /health body's all_models_loaded, or null.
+const json* loadedModel(const json& health, const std::string& model) {
+    if (model.empty() || !health.is_object()) return nullptr;
+    const auto loaded = health.find("all_models_loaded");
+    if (loaded == health.end() || !loaded->is_array()) return nullptr;
+    for (const auto& entry : *loaded) {
+        if (entry.is_object() && entry.value("model_name", "") == model) return &entry;
+    }
+    return nullptr;
+}
+
+int loadedContextSize(const json& entry) {
+    const auto options = entry.find("recipe_options");
+    if (options == entry.end() || !options->is_object()) return 0;
+    const auto ctx = options->find("ctx_size");
+    return ctx != options->end() && ctx->is_number_integer() ? ctx->get<int>() : 0;
+}
+}  // namespace
+
 LemonadeHealth LemonadeClient::healthCheck() {
     LemonadeHealth h;
     try {
@@ -208,13 +238,18 @@ LemonadeHealth LemonadeClient::healthCheck() {
         // Extract loaded model id and context size from health response.
         // Lemonade health format:
         //   {"all_models_loaded": [{"model_name": "...", "recipe_options": {"ctx_size": N}}]}
-        if (h.raw.contains("all_models_loaded") && h.raw["all_models_loaded"].is_array() &&
+        // A server holds a speech, a transcription and an embedding model beside
+        // the chat model, in any order: report this client's model when it is
+        // loaded, else the server's current chat model.
+        const json* entry = loadedModel(h.raw, model_);
+        if (!entry) entry = loadedModel(h.raw, h.raw.value("model_loaded", ""));
+        if (!entry && h.raw.contains("all_models_loaded") && h.raw["all_models_loaded"].is_array() &&
             !h.raw["all_models_loaded"].empty()) {
-            const auto& first = h.raw["all_models_loaded"][0];
-            h.modelId = first.value("model_name", "");
-            if (first.contains("recipe_options") && first["recipe_options"].is_object()) {
-                h.contextSize = first["recipe_options"].value("ctx_size", 0);
-            }
+            entry = &h.raw["all_models_loaded"][0];
+        }
+        if (entry && entry->is_object()) {
+            h.modelId = entry->value("model_name", "");
+            h.contextSize = loadedContextSize(*entry);
         }
     } catch (...) {
         h.running = false;
@@ -307,6 +342,62 @@ json LemonadeClient::setParams(const json& params) {
     return json::parse(body);
 }
 
+json LemonadeClient::pullModel(const std::string& modelName, const std::string& checkpoint,
+                               const std::string& recipe, int timeoutSec) {
+    if (modelName.empty()) throw std::invalid_argument("pullModel: no model named");
+    const bool registers = !checkpoint.empty() || !recipe.empty();
+    if (registers && modelName.rfind("user.", 0) != 0) {
+        throw std::invalid_argument(
+            "A checkpoint or recipe registers a new model, so its name must start with 'user.' "
+            "(got '" + modelName + "'). To download a built-in model, pass its name alone.");
+    }
+    json body = {{"model_name", modelName}};
+    if (!checkpoint.empty()) body["checkpoint"] = checkpoint;
+    if (!recipe.empty()) body["recipe"] = recipe;
+    const std::string raw = httpPost("/pull", body.dump(), timeoutSec);
+    throwIfErrorBody(raw);
+    try {
+        return json::parse(raw);
+    } catch (const json::parse_error&) {
+        return json{{"status", "success"}, {"raw", raw}};
+    }
+}
+
+std::vector<std::vector<float>> LemonadeClient::embeddings(const std::string& model,
+                                                           const std::vector<std::string>& inputs,
+                                                           size_t batchSize) {
+    if (model.empty()) throw std::invalid_argument("embeddings: no embedding model named");
+    if (batchSize == 0) batchSize = 1;
+    std::vector<std::vector<float>> out;
+    out.reserve(inputs.size());
+    for (size_t start = 0; start < inputs.size(); start += batchSize) {
+        const size_t end = std::min(inputs.size(), start + batchSize);
+        json body = {{"model", model},
+                     {"input", std::vector<std::string>(inputs.begin() + start, inputs.begin() + end)}};
+        const std::string raw = httpPost("/embeddings", body.dump(-1, ' ', false,
+                                                                  json::error_handler_t::replace), 120);
+        throwIfErrorBody(raw);
+        const json resp = json::parse(raw);
+        if (!resp.contains("data") || !resp["data"].is_array() ||
+            resp["data"].size() != end - start) {
+            throw std::runtime_error("Embeddings from " + baseUrl_ + " with model " + model +
+                                     " returned " +
+                                     (resp.contains("data") ? std::to_string(resp["data"].size())
+                                                            : std::string("no")) +
+                                     " vectors for " + std::to_string(end - start) +
+                                     " inputs. Check that the model is an embedding model.");
+        }
+        std::vector<std::vector<float>> batch(end - start);
+        for (const auto& item : resp["data"]) {
+            const size_t idx = item.value("index", static_cast<size_t>(0));
+            if (idx >= batch.size()) throw std::runtime_error("Embeddings response index out of range");
+            batch[idx] = item.at("embedding").get<std::vector<float>>();
+        }
+        for (auto& v : batch) out.push_back(std::move(v));
+    }
+    return out;
+}
+
 json LemonadeClient::loadModel(const std::string& modelName, int ctxSize, int timeoutSec) {
     json payload = {{"model_name", modelName}};
     if (ctxSize > 0) {
@@ -347,12 +438,16 @@ void LemonadeClient::ensureModelLoaded(const std::string& modelName, int ctxSize
 
     LemonadeHealth h = healthCheck();
 
-    if (h.running && h.modelId == effectiveModel) {
-        // Model already loaded — check context size if requested
-        if (effectiveCtx == 0 || h.contextSize == effectiveCtx) {
+    if (const json* entry = h.running ? loadedModel(h.raw, effectiveModel) : nullptr) {
+        // A cloud model has no local window to size, so its ctx_size never matches.
+        loadedRecipe_ = entry->value("recipe", "");
+        recipeModel_ = effectiveModel;
+        const bool cloud = loadedRecipe_ == "cloud";
+        const int loadedCtx = loadedContextSize(*entry);
+        if (cloud || effectiveCtx == 0 || loadedCtx == effectiveCtx) {
             if (debug_) {
                 std::cerr << "[Lemonade] Model already loaded: " << effectiveModel
-                          << " ctx=" << h.contextSize << std::endl;
+                          << " ctx=" << loadedCtx << std::endl;
             }
             return;
         }
@@ -420,6 +515,8 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
 
     json body = requestBody;
     body["stream"] = true;
+    // Without this a streamed reply carries no token counts at all.
+    if (!body.contains("stream_options")) body["stream_options"] = {{"include_usage", true}};
 
     SseParser parser(onToken);
     std::string rawBytes;
@@ -427,13 +524,17 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
     httpPostStreaming(
         "/chat/completions",
         body.dump(),
-        [&parser, &rawBytes](const char* data, size_t len) -> bool {
+        [this, &parser, &rawBytes](const char* data, size_t len) -> bool {
+            if (abortCheck_ && abortCheck_()) return false;
             rawBytes.append(data, len);
             return parser.feed(data, len);
         },
         timeoutSec
     );
 
+    if (abortCheck_ && abortCheck_() && !parser.done()) {
+        throw std::runtime_error("Stream stopped: the request was cancelled.");
+    }
     parser.finish();
 
     if (parser.hasError()) {

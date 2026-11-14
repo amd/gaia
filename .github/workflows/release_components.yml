@@ -292,7 +292,9 @@ jobs:
   # apart.
   #
   # The macOS and Linux installers are built only on a dispatch: on a tag,
-  # publish.yml builds and attaches them.
+  # publish.yml builds and attaches them. A dispatch builds no gaiacpp, so its
+  # packages take the one published on the v<version> release, verified against
+  # that release's checksums; a version with no such release fails there.
   tui:
     name: TUI
     needs: version
@@ -302,6 +304,8 @@ jobs:
       version: ${{ needs.version.outputs.tui_version }}
       sidecar: pinned
       installers: ${{ github.event_name == 'workflow_dispatch' }}
+      gaiacpp: release
+      gaiacpp_tag: v${{ needs.version.outputs.tui_version }}
 
   # ── Fallback: the one Windows setup, by hand ────────────────────────────────
   # Dispatch only; on a tag publish.yml builds it. It embeds the desktop app
@@ -321,6 +325,7 @@ jobs:
     with:
       version: ${{ needs.version.outputs.tui_version }}
       sidecar: pinned
+      gaiacpp: release
       agent_ui_release: v${{ needs.version.outputs.tui_version }}
 
 

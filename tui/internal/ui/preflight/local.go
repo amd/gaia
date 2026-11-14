@@ -89,6 +89,9 @@ type LocalOptions struct {
 	// should chat run?", so the chat-model download is never chosen by default.
 	// Set by the interactive gate only: a headless run has nobody to ask.
 	AskWhereChatRuns bool
+	// Native marks the C++ agent (gaiacpp). It needs no Python setup and no
+	// embedding model, so the model row is answered by the model server alone.
+	Native bool
 }
 
 // NewLocalRunner builds the runner for an agent the TUI spawns itself.
@@ -134,6 +137,7 @@ func (l localRunner) Rows(cfg Config) []Row {
 	switch {
 	case l.unconnectedCloud() != "":
 		modelLabel = lemonade.Label(l.unconnectedCloud())
+	case l.opts.Native:
 	case l.skipChatModel() && l.pickedLocalModel() == "":
 		modelLabel = "Embeddings"
 	}
@@ -758,10 +762,51 @@ func (l localRunner) verifyModels(ctx context.Context, cfg Config) (Row, string,
 // verifyModelsStatus is verifyModels plus what setup reported about each model,
 // which sizes the local option of the "where should chat run?" step.
 func (l localRunner) verifyModelsStatus(ctx context.Context, _ Config) (Row, string, string, gaiainit.Status) {
+	if l.opts.Native {
+		row, chat, chatID := l.verifyNativeModel(ctx)
+		return row, chat, chatID, gaiainit.Status{}
+	}
 	if provider := l.unconnectedCloud(); provider != "" {
 		return connectProviderRow(provider), "", "", gaiainit.Status{}
 	}
 	return l.verifyModelsWith(ctx)
+}
+
+// nativeDefaultModel is the model gaiacpp runs when the launch names none.
+const nativeDefaultModel = "Gemma-4-E4B-it-GGUF"
+
+// verifyNativeModel answers the model row for gaiacpp from the model server
+// alone: the chat model it will be started on is one the server can run.
+// Nothing is loaded here; the agent loads its model on the first message.
+func (l localRunner) verifyNativeModel(ctx context.Context) (Row, string, string) {
+	row := Row{Key: KeyModel}
+	if provider := l.unconnectedCloud(); provider != "" {
+		row = connectProviderRow(provider)
+		row.Detail = "Paste your " + lemonade.Label(provider) + " key and pick a model."
+		return row, "", ""
+	}
+	if lemonade.IsCloudID(l.opts.Model) {
+		checked, ok := checkCloudModel(ctx, l.opts.Model, row)
+		if !ok {
+			return checked, "", ""
+		}
+		checked.State = StateOK
+		checked.Line = "chat uses " + l.opts.Model
+		return checked, l.opts.Model + " (in the cloud)", ""
+	}
+	model, picked := l.opts.Model, true
+	if model == "" {
+		model, picked = nativeDefaultModel, false
+	}
+	row = checkLocalModelDownloaded(ctx, model, row)
+	switch {
+	case row.State == StateOK:
+		return row, model + " (on this machine)", model
+	case row.State == StateFailed && !picked:
+		row.Detail = "It is the model GAIA starts on when none is chosen."
+		row.Remedy = Remedy{Action: "Press p and choose where chat runs: a model on this PC, or a cloud provider."}
+	}
+	return row, "", ""
 }
 
 func (l localRunner) verifyModelsWith(ctx context.Context) (Row, string, string, gaiainit.Status) {

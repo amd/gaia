@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -160,17 +161,17 @@ std::string shortHash(const std::string& full) {
 /// Canonical map key so "./a.txt", "a.txt" and "/abs/a.txt" share a record.
 std::string trackerKey(const std::string& path) {
     std::error_code ec;
-    fs::path p = fs::weakly_canonical(fs::path(path), ec);
+    fs::path p = fs::weakly_canonical(fs::u8path(path), ec);
     if (ec || p.empty()) {
-        p = fs::absolute(fs::path(path), ec);
-        if (ec) p = fs::path(path);
+        p = fs::absolute(fs::u8path(path), ec);
+        if (ec) p = fs::u8path(path);
     }
-    return p.generic_string();
+    return p.generic_u8string();
 }
 
 /// Read a whole file as raw bytes. Returns false when it cannot be opened.
 bool readWholeFile(const std::string& path, std::string& out) {
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(fs::u8path(path), std::ios::binary);
     if (!file.is_open()) return false;
     std::ostringstream buffer;
     buffer << file.rdbuf();
@@ -230,7 +231,7 @@ std::string FileStateTracker::hashContent(const std::string& contents) {
 }
 
 std::string FileStateTracker::hashFile(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
+    std::ifstream file(fs::u8path(path), std::ios::binary);
     if (!file.is_open()) return "";
 
     Sha256 sha;
@@ -279,7 +280,7 @@ std::string FileStateTracker::recordFromDisk(const std::string& path) {
     if (hash.empty()) return "";
 
     std::error_code ec;
-    const auto size = fs::file_size(fs::path(path), ec);
+    const auto size = fs::file_size(fs::u8path(path), ec);
 
     Impl& storage = impl();
     std::lock_guard<std::mutex> lock(storage.mutex);
@@ -346,7 +347,7 @@ FileStateTracker::Divergence FileStateTracker::checkFile(
     }
 
     std::error_code ec;
-    const auto sizeNow = fs::file_size(fs::path(path), ec);
+    const auto sizeNow = fs::file_size(fs::u8path(path), ec);
     result.sizeNow = ec ? 0 : static_cast<std::uint64_t>(sizeNow);
     result.hashNow = shortHash(hashNow);
 
@@ -529,7 +530,7 @@ json FileIOTools::doFileRead(const json& args) {
         // will search: a CRLF file must not read back as LF and then fail to
         // match. One pass, so the hash anchors exactly the bytes returned —
         // a second read could hash a version the model never saw.
-        std::ifstream file(path, std::ios::binary);
+        std::ifstream file(fs::u8path(path), std::ios::binary);
         if (!file.is_open()) {
             return json{{"error", "Cannot open file: " + path}};
         }
@@ -539,6 +540,7 @@ json FileIOTools::doFileRead(const json& args) {
 
         Sha256 sha;
         std::string content;
+        std::string head;  // the first bytes, to tell text from binary
         std::vector<char> buffer(kChunkBytes);
         int lineNumber = 1;        // line the next byte belongs to
         int emittedLines = 0;      // in-range lines started so far
@@ -554,6 +556,7 @@ json FileIOTools::doFileRead(const json& args) {
 
             sha.update(buffer.data(), static_cast<size_t>(got));
             totalBytes += static_cast<std::uint64_t>(got);
+            if (head.size() < 8192) head.append(buffer.data(), std::min<size_t>(static_cast<size_t>(got), 8192 - head.size()));
 
             for (std::streamsize i = 0; i < got; ++i) {
                 const char c = buffer[static_cast<size_t>(i)];
@@ -601,17 +604,90 @@ json FileIOTools::doFileRead(const json& args) {
         const std::string hash = sha.hex();
         FileStateTracker::instance().recordHash(path, hash, totalBytes);
 
-        return json{
+        // Binary bytes shown as text are noise a small model can loop on.
+        const TextKind kind = textKind(head);
+        if (kind == TextKind::Utf16) {
+            return json{{"error", path + " is UTF-16 text, which file_read doesn't decode. Read it with a program "
+                                      "that does, for example Python's open(path, encoding='utf-16')."},
+                        {"path", path}};
+        }
+        if (kind == TextKind::LegacyEncoding) {
+            return json{{"error", path + " is text in a legacy encoding, not UTF-8 (for example Windows-1252, "
+                                      "CP1251 or Shift-JIS). Read it with a program that names the encoding, for "
+                                      "example Python's open(path, encoding='cp1252')."},
+                        {"path", path}};
+        }
+        if (kind == TextKind::Binary) {
+            return json{{"error", path + " is not a text file (" + std::to_string(totalBytes) +
+                                      " bytes of binary data). Don't guess what it says: inspect it with a program "
+                                      "suited to its format (a PDF, Office or image library, or `file`), or tell the "
+                                      "user it can't be read as text."},
+                        {"path", path}};
+        }
+        if (totalBytes == 0) {
+            return json{{"content", ""},
+                        {"lines", 0},
+                        {"path", path},
+                        {"truncated", false},
+                        {"content_hash", shortHash(hash)},
+                        {"note", "The file is empty (0 bytes). Its data is missing, not zero: look for a log or "
+                                 "error beside it that says why, and report the figure as unknown."}};
+        }
+
+        json out{
             {"content", content},
             {"lines", totalLines},
             {"path", path},
             {"truncated", truncated},
             {"content_hash", shortHash(hash)},
         };
+        // Small models copy rows into a script and get them wrong; point at the file instead.
+        std::string ext = fs::u8path(path).extension().u8string();
+        for (auto& c : ext) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if ((ext == ".csv" || ext == ".tsv") && totalLines > 20) {
+            out["note"] = "To total, count or compare this data, read the file by its path in a script "
+                          "(pandas.read_csv or the csv module). Don't paste its rows into a command.";
+        }
+        return out;
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_read failed: ") + e.what()}};
     }
 }
+
+TextKind textKind(const std::string& head) {
+    if (head.empty()) return TextKind::Utf8;
+    const auto byte = [&head](size_t i) { return static_cast<unsigned char>(head[i]); };
+    if (head.size() >= 2 && ((byte(0) == 0xFF && byte(1) == 0xFE) || (byte(0) == 0xFE && byte(1) == 0xFF))) {
+        return TextKind::Utf16;
+    }
+    // UTF-16 without a mark: every other byte is NUL.
+    size_t evenNul = 0, oddNul = 0;
+    for (size_t i = 0; i < head.size(); ++i) (i % 2 ? oddNul : evenNul) += head[i] == '\0';
+    const size_t half = head.size() / 2;
+    if (half >= 8 && (evenNul * 10 > half * 8 || oddNul * 10 > half * 8)) return TextKind::Utf16;
+    if (evenNul + oddNul > 0) return TextKind::Binary;
+    size_t invalid = 0, control = 0;
+    for (size_t i = 0; i < head.size();) {
+        const unsigned char c = byte(i);
+        const size_t len = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+        if (len > 1 && i + len > head.size()) break;  // a character cut at the end of the sample
+        bool ok = len > 0;
+        for (size_t k = 1; ok && k < len; ++k) ok = (byte(i + k) & 0xC0) == 0x80;
+        if (!ok) {
+            ++invalid;
+            ++i;
+            continue;
+        }
+        if (len == 1 && c < 0x20 && c != '\t' && c != '\n' && c != '\r' && c != '\f') ++control;
+        i += len;
+    }
+    if (control * 20 > head.size()) return TextKind::Binary;
+    if (invalid * 10 > head.size()) return control * 100 > head.size() ? TextKind::Binary : TextKind::LegacyEncoding;
+    // A sprinkling of legacy bytes (an accented name in Windows-1252) still reads mostly fine.
+    return TextKind::Utf8;
+}
+
+bool looksBinary(const std::string& head) { return textKind(head) == TextKind::Binary; }
 
 // ---------------------------------------------------------------------------
 // fileWrite
@@ -650,7 +726,7 @@ json FileIOTools::doFileWrite(const json& args) {
         FileStateTracker& tracker = FileStateTracker::instance();
         bool recreated = false;
         std::error_code existsEc;
-        if (fs::exists(fs::path(path), existsEc) && !existsEc) {
+        if (fs::exists(fs::u8path(path), existsEc) && !existsEc) {
             const auto divergence = tracker.checkFile(path);
             if (divergence.diverged) {
                 return staleRejection(path, "file_write", divergence);
@@ -665,7 +741,7 @@ json FileIOTools::doFileWrite(const json& args) {
         }
 
         // Create parent directories if needed
-        fs::path filePath(path);
+        const fs::path filePath = fs::u8path(path);
         if (filePath.has_parent_path()) {
             std::error_code ec;
             fs::create_directories(filePath.parent_path(), ec);
@@ -674,7 +750,7 @@ json FileIOTools::doFileWrite(const json& args) {
             }
         }
 
-        std::ofstream file(path, std::ios::binary);
+        std::ofstream file(fs::u8path(path), std::ios::binary);
         if (!file.is_open()) {
             return json{{"error", "Cannot open file for writing: " + path}};
         }
@@ -817,7 +893,7 @@ json FileIOTools::doFileEdit(const json& args) {
         const int replacements = 1;
 
         // Write back
-        std::ofstream outFile(path, std::ios::binary);
+        std::ofstream outFile(fs::u8path(path), std::ios::binary);
         if (!outFile.is_open()) {
             return json{{"error", "Cannot open file for writing: " + path}};
         }
@@ -895,11 +971,12 @@ json FileIOTools::doFileSearch(const json& args) {
         int maxResults = args.value("max_results", 50);
         if (maxResults <= 0) maxResults = 50;
 
-        if (!fs::exists(searchPath)) {
+        const fs::path searchDir = fs::u8path(searchPath);
+        if (!fs::exists(searchDir)) {
             return json{{"error", "Search path does not exist: " + searchPath}};
         }
 
-        if (!fs::is_directory(searchPath)) {
+        if (!fs::is_directory(searchDir)) {
             return json{{"error", "Search path is not a directory: " + searchPath}};
         }
 
@@ -909,8 +986,8 @@ json FileIOTools::doFileSearch(const json& args) {
         GitignoreMatcher ignore = GitignoreMatcher::forDirectory(searchPath);
 
         std::error_code rootEc;
-        fs::path root = fs::weakly_canonical(fs::path(searchPath), rootEc);
-        if (rootEc) root = fs::path(searchPath);
+        fs::path root = fs::weakly_canonical(searchDir, rootEc);
+        if (rootEc) root = searchDir;
 
         // A pattern with a separator addresses a path; otherwise a file name.
         const bool pathPattern = pattern.find('/') != std::string::npos;
@@ -922,7 +999,7 @@ json FileIOTools::doFileSearch(const json& args) {
         int ignoredSkipped = 0;
 
         std::error_code ec;
-        for (auto it = fs::recursive_directory_iterator(searchPath, fs::directory_options::skip_permission_denied, ec);
+        for (auto it = fs::recursive_directory_iterator(searchDir, fs::directory_options::skip_permission_denied, ec);
              it != fs::recursive_directory_iterator(); it.increment(ec)) {
             if (ec) {
                 ec.clear();
@@ -930,7 +1007,7 @@ json FileIOTools::doFileSearch(const json& args) {
             }
 
             const fs::path& entryPath = it->path();
-            const std::string filename = entryPath.filename().string();
+            const std::string filename = entryPath.filename().u8string();
 
             if (it->is_directory(ec) && !ec) {
                 // .git is never interesting and is huge; it is pruned always
@@ -940,12 +1017,12 @@ json FileIOTools::doFileSearch(const json& args) {
                     it.disable_recursion_pending();
                     continue;
                 }
-                if (ignore.isIgnored(entryPath.string(), /*isDirectory=*/true)) {
+                if (ignore.isIgnored(entryPath.u8string(), /*isDirectory=*/true)) {
                     it.disable_recursion_pending();
                     ++ignoredSkipped;
                     continue;
                 }
-                ignore.addFile((entryPath / ".gitignore").string());
+                ignore.addFile((entryPath / ".gitignore").u8string());
                 continue;
             }
             ec.clear();
@@ -953,7 +1030,7 @@ json FileIOTools::doFileSearch(const json& args) {
             if (!it->is_regular_file(ec)) continue;
             if (ec) { ec.clear(); continue; }
 
-            if (ignore.isIgnored(entryPath.string(), /*isDirectory=*/false)) {
+            if (ignore.isIgnored(entryPath.u8string(), /*isDirectory=*/false)) {
                 ++ignoredSkipped;
                 continue;
             }
@@ -963,7 +1040,7 @@ json FileIOTools::doFileSearch(const json& args) {
                 std::error_code relEc;
                 fs::path rel = fs::relative(entryPath, root, relEc);
                 const std::string relStr =
-                    relEc ? entryPath.generic_string() : rel.generic_string();
+                    relEc ? entryPath.generic_u8string() : rel.generic_u8string();
                 nameMatches = globMatch(pattern, relStr, globOpts);
             } else {
                 nameMatches = globMatch(pattern, filename, globOpts);
@@ -983,7 +1060,7 @@ json FileIOTools::doFileSearch(const json& args) {
                         ++total;
                         if (static_cast<int>(matches.size()) < maxResults) {
                             json match;
-                            match["path"] = entryPath.generic_string();
+                            match["path"] = entryPath.generic_u8string();
                             match["line"] = lineNum;
                             // Trim context to reasonable length
                             std::string context = line;
@@ -1000,7 +1077,7 @@ json FileIOTools::doFileSearch(const json& args) {
                 ++total;
                 if (static_cast<int>(matches.size()) < maxResults) {
                     json match;
-                    match["path"] = entryPath.generic_string();
+                    match["path"] = entryPath.generic_u8string();
                     matches.push_back(std::move(match));
                 }
             }

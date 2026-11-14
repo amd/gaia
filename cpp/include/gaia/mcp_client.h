@@ -6,9 +6,10 @@
 //   - src/gaia/mcp/client/mcp_client.py (MCPClient, MCPTool)
 //   - src/gaia/mcp/client/transports/base.py (MCPTransport)
 //   - src/gaia/mcp/client/transports/stdio.py (StdioTransport)
+//   - src/gaia/mcp/client/transports/http.py  (HttpTransport)
 //
-// The MCP client manages a subprocess-based MCP server, sends JSON-RPC 2.0
-// requests via stdin, and reads responses from stdout.
+// The MCP client speaks JSON-RPC 2.0 over a pluggable transport: a subprocess
+// on stdin/stdout (StdioTransport) or MCP Streamable HTTP (HttpTransport).
 
 #pragma once
 
@@ -21,6 +22,7 @@
 #include <nlohmann/json.hpp>
 
 #include "types.h"
+#include "gaia/http_client.h"
 #include "gaia/export.h"
 
 namespace gaia {
@@ -84,6 +86,11 @@ public:
     virtual void disconnect() = 0;
     virtual json sendRequest(const std::string& method, const json& params = json::object()) = 0;
     virtual bool isConnected() const = 0;
+
+    /// Send a JSON-RPC notification (no id, no reply expected).
+    /// The default throws std::logic_error: a transport that cannot notify must
+    /// not let MCPClient::connect() believe the handshake completed.
+    virtual void sendNotification(const std::string& method, const json& params = json::object());
 };
 
 /// Stdio-based transport using subprocess.
@@ -118,6 +125,7 @@ public:
     bool connect() override;
     void disconnect() override;
     json sendRequest(const std::string& method, const json& params = json::object()) override;
+    void sendNotification(const std::string& method, const json& params = json::object()) override;
     bool isConnected() const override;
 
 private:
@@ -133,6 +141,67 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
+/// MCP Streamable HTTP transport (MCP spec 2025-03-26 and later).
+/// Mirrors Python HTTPTransport.
+///
+/// Every JSON-RPC message is a POST to one endpoint URL with
+/// `Accept: application/json, text/event-stream`. The server answers with a
+/// JSON body or an SSE stream; the event whose `id` matches the request is the
+/// reply, and server messages sent ahead of it are skipped. The
+/// `Mcp-Session-Id` returned by `initialize` and the negotiated
+/// `MCP-Protocol-Version` are sent on every later request.
+///
+/// Every failure throws (HttpError or std::runtime_error) naming the URL, the
+/// HTTP status when there is one, and what to check.
+class GAIA_API HttpTransport : public MCPTransport {
+public:
+    /// @param url      The server's MCP endpoint, http:// or https://.
+    /// @param headers  Sent on every request (e.g. Authorization). Values are
+    ///                 used verbatim; `${VAR}` expansion is fromConfig()'s job.
+    /// @throws std::invalid_argument if the URL is not http(s) or timeout <= 0.
+    HttpTransport(std::string url, HttpHeaders headers = {}, int timeout = 30,
+                  bool debug = false);
+    ~HttpTransport() override;
+
+    HttpTransport(const HttpTransport&) = delete;
+    HttpTransport& operator=(const HttpTransport&) = delete;
+
+    /// Marks the transport ready; HTTP has nothing to open until `initialize`.
+    bool connect() override;
+    void disconnect() override;
+    json sendRequest(const std::string& method, const json& params = json::object()) override;
+    /// POSTs the notification; the server must accept it with a 2xx (spec: 202).
+    void sendNotification(const std::string& method, const json& params = json::object()) override;
+    bool isConnected() const override;
+
+    const std::string& url() const { return url_; }
+    /// Session id the server assigned on `initialize` (empty if it assigned none).
+    const std::string& sessionId() const { return sessionId_; }
+    /// Protocol version the server answered `initialize` with (empty before).
+    const std::string& protocolVersion() const { return protocolVersion_; }
+
+private:
+    HttpHeaders requestHeaders() const;
+    [[noreturn]] void rethrowHttpError(const HttpError& e, const std::string& method);
+
+    std::string url_;
+    int timeout_;
+    bool debug_;
+    int requestId_ = 0;
+    bool connected_ = false;
+    std::string sessionId_;
+    std::string protocolVersion_;
+    std::unique_ptr<HttpClient> http_;
+};
+
+/// Expand `${VAR}` references in an MCP config value from the environment.
+/// A referenced variable that is unset is an error naming it, never an empty
+/// substitution (which would send `Authorization: Bearer ` and surface later
+/// as a confusing 401). A `$` not followed by `{` is kept literally.
+/// @param context  Where the value came from, for the error message.
+/// @throws std::invalid_argument on an unset variable or an unterminated `${`.
+GAIA_API std::string expandMcpEnvVars(const std::string& value, const std::string& context);
+
 /// MCP client for interacting with an MCP server.
 /// Mirrors Python MCPClient.
 class GAIA_API MCPClient {
@@ -145,8 +214,17 @@ public:
     static MCPClient fromCommand(const std::string& name, const std::string& command,
                                  int timeout = 30, bool debug = false);
 
-    /// Create client from config dict (Anthropic format).
-    /// Config must have "command" key, optionally "args" and "env".
+    /// Create client from config dict (Anthropic / Claude Code format).
+    ///
+    /// stdio: `{"command": "...", "args": [...], "env": {...}}`, optionally
+    ///        with `"type": "stdio"`.
+    /// HTTP:  `{"type": "http" | "streamable-http", "url": "...",
+    ///          "headers": {"Authorization": "Bearer ${LEMONADE_API_KEY}"}}`;
+    ///        `type` may be omitted when the entry has a `url` and no
+    ///        `command`. Header values expand `${VAR}` (see expandMcpEnvVars()).
+    /// @throws std::invalid_argument on an unknown `type`, a missing `command`
+    ///         or `url`, an entry carrying both without a `type`, non-string
+    ///         headers, or an unset `${VAR}`.
     static MCPClient fromConfig(const std::string& name, const json& config,
                                 int timeout = 30, bool debug = false);
 
@@ -173,6 +251,22 @@ public:
     /// @throws std::runtime_error if not connected.
     json callTool(const std::string& toolName, const json& arguments);
 
+    /// What the server declared in `initialize` (tools, resources, prompts…).
+    const json& capabilities() const { return capabilities_; }
+
+    /// resources/list — every entry ({uri, name, description, mimeType}),
+    /// following pagination. Throws on a JSON-RPC error or when not connected.
+    json listResources();
+
+    /// resources/read — the `contents` array for `uri`. Throws on error.
+    json readResource(const std::string& uri);
+
+    /// prompts/list — every prompt ({name, description, arguments}). Throws on error.
+    json listPrompts();
+
+    /// prompts/get — {description, messages} with `arguments` filled in. Throws on error.
+    json getPrompt(const std::string& name, const json& arguments = json::object());
+
     /// Get the server name.
     const std::string& name() const { return name_; }
 
@@ -184,6 +278,11 @@ private:
     std::unique_ptr<MCPTransport> transport_;
     bool debug_;
     json serverInfo_;
+    json capabilities_ = json::object();
+
+    /// Send a request and return its `result`; throws naming the server and
+    /// method when not connected or the server answers with an error.
+    json request(const std::string& method, const json& params);
     std::optional<std::vector<MCPToolSchema>> cachedTools_;
     std::string lastError_;
 };

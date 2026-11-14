@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <functional>
@@ -16,6 +17,8 @@
 #include <vector>
 
 #include <nlohmann/json.hpp>
+
+#include "gaia/export.h"
 
 namespace gaia {
 
@@ -40,7 +43,7 @@ using json = nlohmann::json;
 /// Returns "" (empty string) for full-sized (>= 12 byte) buffers with
 /// unrecognized magic. Callers must handle empty by throwing or requiring
 /// the caller to supply an explicit mimeType.
-std::string detectImageMimeType(const std::uint8_t* data, std::size_t size);
+GAIA_API std::string detectImageMimeType(const std::uint8_t* data, std::size_t size);
 
 /// A single piece of message content — either text or a base64 data-URI image.
 struct ContentPart {
@@ -50,10 +53,10 @@ struct ContentPart {
     std::string text;        // populated when kind == TEXT
     std::string imageUrl;    // populated when kind == IMAGE_URL ("data:...;base64,...")
 
-    json toJson() const;
+    GAIA_API json toJson() const;
 
-    static ContentPart makeText(std::string t);
-    static ContentPart makeImageUrl(std::string url);
+    GAIA_API static ContentPart makeText(std::string t);
+    GAIA_API static ContentPart makeImageUrl(std::string url);
 };
 
 /// Image bytes plus a MIME type, carrying everything needed to compose a
@@ -65,24 +68,24 @@ public:
     /// bytes unless explicitly provided.
     /// Throws std::invalid_argument if bytes are empty, or if an explicit
     /// MIME type is outside the whitelist (image/{png,jpeg,gif,webp,bmp}).
-    static Image fromBytes(std::vector<std::uint8_t> bytes,
-                           const std::string& mimeType = "");
+    GAIA_API static Image fromBytes(std::vector<std::uint8_t> bytes,
+                                    const std::string& mimeType = "");
 
     /// Load an image from a regular file on disk.
     /// Throws std::runtime_error if the path can't be opened.
     /// Throws std::invalid_argument for: non-regular files (directory/symlink/
     /// FIFO/device), zero-byte files, or files exceeding GAIA_MAX_IMAGE_BYTES.
-    static Image fromFile(const std::string& path);
+    GAIA_API static Image fromFile(const std::string& path);
 
     const std::vector<std::uint8_t>& bytes() const { return bytes_; }
     const std::string& mimeType() const { return mimeType_; }
     std::size_t size() const { return bytes_.size(); }
 
     /// Produce a ContentPart{IMAGE_URL} with a data:<mime>;base64,<...> URI.
-    ContentPart toContentPart() const;
+    GAIA_API ContentPart toContentPart() const;
 
     /// Produce the raw data URI string (same value as toContentPart().imageUrl).
-    std::string toDataUri() const;
+    GAIA_API std::string toDataUri() const;
 
 private:
     Image() = default;
@@ -152,14 +155,14 @@ struct ToolCall {
     /// An empty/whitespace-only string decodes to ``{}`` (what servers emit for
     /// a zero-argument function). Anything that is not a JSON object throws
     /// std::runtime_error naming the tool, the id, and the offending payload.
-    json parsedArgs() const;
+    GAIA_API json parsedArgs() const;
 
     /// Serialize to the OpenAI ``tool_calls`` element shape.
-    json toJson() const;
+    GAIA_API json toJson() const;
 
     /// Parse one ``tool_calls`` element. Throws std::runtime_error with an
     /// actionable message when ``id`` or ``function.name`` is missing or blank.
-    static ToolCall fromJson(const json& j);
+    GAIA_API static ToolCall fromJson(const json& j);
 };
 
 struct Message {
@@ -182,15 +185,15 @@ struct Message {
     /// Serialize to OpenAI-compatible chat message JSON.
     /// Defined out-of-line in types.cpp to avoid ODR hazards for consumers
     /// linked against a prebuilt gaia_core.
-    json toJson() const;
+    GAIA_API json toJson() const;
 
     /// Factory: build a user message with optional images. Text is placed
     /// first, followed by image parts in the order supplied. When `text`
     /// is empty and images are provided, the content array contains only
     /// image parts (no empty-text stub). When both are empty, the message
     /// has empty string content.
-    static Message fromUser(const std::string& text,
-                            const std::vector<Image>& images = {});
+    GAIA_API static Message fromUser(const std::string& text,
+                                     const std::vector<Image>& images = {});
 };
 
 // ---- Tool Types ----
@@ -285,6 +288,15 @@ struct ToolInfo {
     // MCP metadata (populated when tool comes from MCP server)
     std::optional<std::string> mcpServer;
     std::optional<std::string> mcpToolName;
+
+    /// What an "always allow" answer covers for one call. Unset = the whole
+    /// tool. A shell tool returns the program ("pytest"), so one approval never
+    /// becomes permission to run anything.
+    std::function<std::string(const json& args)> grantScope;
+
+    /// For a CONFIRM tool: false lets this one call run without asking (a
+    /// read-only shell command). Unset = every call asks.
+    std::function<bool(const json& args)> needsConfirm;
 };
 
 // ---- LLM Usage Statistics ----
@@ -293,17 +305,28 @@ struct UsageStats {
     int promptTokens = 0;
     int completionTokens = 0;
     int totalTokens = 0;
+    /// Prompt tokens the provider served from its own cache (part of promptTokens).
+    int cachedTokens = 0;
+    /// Largest single call, prompt plus completion: how full the window got.
+    int peakContextTokens = 0;
 
     void operator+=(const UsageStats& other) {
         promptTokens += other.promptTokens;
         completionTokens += other.completionTokens;
         totalTokens += other.totalTokens;
+        cachedTokens += other.cachedTokens;
+        peakContextTokens = (std::max)(peakContextTokens, other.peakContextTokens);  // parenthesised: windows.h defines max()
     }
 
     json toJson() const {
-        return {{"prompt_tokens", promptTokens},
-                {"completion_tokens", completionTokens},
-                {"total_tokens", totalTokens}};
+        json j = {{"prompt_tokens", promptTokens},
+                  {"completion_tokens", completionTokens},
+                  {"total_tokens", totalTokens}};
+        if (peakContextTokens > 0) {
+            j["cached_tokens"] = cachedTokens;
+            j["peak_context_tokens"] = peakContextTokens;
+        }
+        return j;
     }
 };
 
@@ -318,6 +341,13 @@ struct ParsedResponse {
     std::optional<std::string> toolName;      // Tool to call
     std::optional<json>        toolArgs;      // Arguments for tool
     std::optional<json>        plan;          // Multi-step plan (array)
+
+    // A call written as <function=name><parameter=key>: every value is text,
+    // to be typed against the tool's parameters.
+    bool toolArgsAreText = false;
+    // Tool-call tags that cannot be run as written (cut off, no name): neither
+    // a call nor an answer. Holds what is wrong, for the model.
+    std::optional<std::string> malformedToolCall;
 };
 
 // ---- Agent Configuration ----
@@ -375,13 +405,13 @@ inline std::string nativeToolCallsToString(NativeToolCalls m) {
 }
 
 /// Throws std::invalid_argument on an unrecognized value (no silent default).
-ResponseMode responseModeFromString(const std::string& s);
-NativeToolCalls nativeToolCallsFromString(const std::string& s);
+GAIA_API ResponseMode responseModeFromString(const std::string& s);
+GAIA_API NativeToolCalls nativeToolCallsFromString(const std::string& s);
 
 struct AgentConfig {
     std::string baseUrl = defaultBaseUrl();
     std::string modelId = "Qwen3-4B-GGUF";
-    int maxSteps = 20;
+    int maxSteps = 50;
     int maxPlanIterations = 3;
     int maxConsecutiveRepeats = 4;
     int maxHistoryMessages = 40; // Max messages kept between processQuery() calls (0 = unlimited)
@@ -424,22 +454,68 @@ struct AgentConfig {
     /// native tool calling entirely, set nativeToolCalls = NativeToolCalls::Never.
     std::string toolChoice = "auto";
 
+    /// Bearer key for the LLM endpoint (Lemonade with an API key, Fireworks,
+    /// any hosted OpenAI-compatible server). Held in memory only: toJson()
+    /// never writes it. Empty resolves apiKeyEnv, then GAIA_API_KEY, then
+    /// LEMONADE_API_KEY (loopback endpoints only) at Agent construction.
+    std::string apiKey;
+
+    /// Name of an environment variable holding the key. A config file names
+    /// the variable instead of carrying the secret; an unset variable that is
+    /// named here is a startup error, never an anonymous request.
+    std::string apiKeyEnv;
+
+    /// Extra attempts for a model call that failed transiently (connection
+    /// error, HTTP 408/409/425/429/5xx), with exponential backoff (2, 4, 8 s,
+    /// capped at 30). Other failures are not retried.
+    int llmRetries = 3;
+
+    /// Tool output longer than this is clipped in the conversation; the full
+    /// text stays readable through the read_tool_output tool.
+    int maxToolResultChars = 16000;
+
+    /// Tell the model how many steps remain as the budget runs low, and ask
+    /// for a tool-free closing answer when it runs out.
+    bool stepBudgetNotices = true;
+
+    /// "auto" (by model: isCompactModel), "full" or "compact". A compact model
+    /// is offered fewer tools and no prose copy of the tool list.
+    std::string featureTier = "auto";
+
+    /// Resolve featureTier against ``modelId``.
+    GAIA_API bool compactFeatures() const;
+
+    /// The reply limit sent with a request: maxTokens, but never more than half
+    /// the context window, so a long reasoning block cannot fill the window, and
+    /// at most 4096 for a compact model, whose longer replies are runaway repetition.
+    GAIA_API int replyTokenLimit() const;
+
+    /// Tool output longer than this is clipped: maxToolResultChars, scaled down
+    /// for a small context window so a few reads cannot fill it.
+    GAIA_API int toolResultCharLimit() const;
+
     /// Resolve the Auto policy against ``modelId``.
-    bool useNativeToolCalls() const;
+    GAIA_API bool useNativeToolCalls() const;
 
     /// Validate config fields; throws std::invalid_argument on violation.
-    void validate() const;
+    GAIA_API void validate() const;
 
     /// Construct from a JSON object. Missing fields retain defaults.
     /// Throws std::invalid_argument if any field is out of range.
-    static AgentConfig fromJson(const json& j);
+    GAIA_API static AgentConfig fromJson(const json& j);
 
     /// Load config from a JSON file. All fields are optional.
     /// Throws std::runtime_error on file/parse error, std::invalid_argument on invalid values.
-    static AgentConfig fromJsonFile(const std::string& path);
+    GAIA_API static AgentConfig fromJsonFile(const std::string& path);
 
-    /// Serialize all fields to JSON (round-trips through fromJson).
-    json toJson() const;
+    /// Serialize all fields to JSON (round-trips through fromJson). Never
+    /// includes apiKey.
+    GAIA_API json toJson() const;
 };
+
+/// The key an agent sends: apiKey, else the variable apiKeyEnv names (unset or
+/// empty throws), else GAIA_API_KEY, else LEMONADE_API_KEY when baseUrl is a
+/// loopback address, else "".
+GAIA_API std::string resolveApiKey(const AgentConfig& config);
 
 } // namespace gaia

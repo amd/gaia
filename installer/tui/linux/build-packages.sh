@@ -32,6 +32,10 @@ readonly ICON_DIR="usr/share/icons/hicolor/256x256/apps"
 readonly SUMMARY="AMD GAIA Terminal UI - local AI assistant"
 # Not `readonly`: bash 3.2 rejects `readonly name=(...)`.
 PAYLOAD_BINARIES=(gaia-tui gaia-agent)
+# gaiacpp, the native agent gaia-tui runs in place of gaia-agent, is packaged
+# when the payload holds it. tui_installers.yml stages it wherever one is built,
+# and its smoke test fails a package that should carry it and does not.
+readonly NATIVE_AGENT="gaiacpp"
 # The frozen `gaia` core (installer/core/freeze.py): an executable and its
 # _internal folder, installed together and linked onto PATH.
 readonly CORE_DIR="usr/lib/gaia"
@@ -50,6 +54,7 @@ Usage: build-packages.sh --version <x.y.z|x.y.z-rc.N> --payload <dir> --out <dir
               The candidate's packages carry 1.4.0~rc.2, which sorts before 1.4.0.
   --payload   Directory containing the executables gaia-tui and gaia-agent, and
               core/, the frozen gaia (its executable and _internal folder).
+              A gaiacpp there is packaged beside them.
   --out       Directory to write the .deb and .rpm into (created if absent).
   --without-core
               Build a package with no gaia core, as releases before it shipped
@@ -135,6 +140,13 @@ for binary in "${PAYLOAD_BINARIES[@]}"; do
         "Check the build step that copies the binaries into ${PAYLOAD_DIR}."
 done
 
+SHIPPED_BINARIES=("${PAYLOAD_BINARIES[@]}")
+if [ -f "${PAYLOAD_DIR}/${NATIVE_AGENT}" ]; then
+    SHIPPED_BINARIES+=("$NATIVE_AGENT")
+else
+    echo "build-packages.sh: the payload has no ${NATIVE_AGENT}, so the package ships gaia-agent alone" >&2
+fi
+
 [ "$WITHOUT_CORE" -eq 1 ] || { [ -f "${PAYLOAD_DIR}/core/gaia" ] && [ -d "${PAYLOAD_DIR}/core/_internal" ]; } || die \
     "payload is missing the frozen gaia core: ${PAYLOAD_DIR}/core/gaia and core/_internal." \
     "Unpack the gaia-core-linux-x64 build (.github/workflows/build_core.yml) into ${PAYLOAD_DIR}/core." \
@@ -186,7 +198,7 @@ chmod 0755 "$STAGE"
 install -d -m 0755 "${STAGE}/usr/bin" "${STAGE}/usr/share/applications" \
                    "${STAGE}/${ICON_DIR}" "${STAGE}/${DOC_DIR}"
 
-for binary in "${PAYLOAD_BINARIES[@]}"; do
+for binary in "${SHIPPED_BINARIES[@]}"; do
     install -m 0755 "${PAYLOAD_DIR}/${binary}" "${STAGE}/usr/bin/${binary}"
 done
 

@@ -4,6 +4,7 @@
 #include "gaia/json_utils.h"
 
 #include <algorithm>
+#include <cstring>
 #include <regex>
 
 namespace gaia {
@@ -207,6 +208,160 @@ json validateJsonResponse(const std::string& responseText) {
     return result;
 }
 
+namespace {
+// A tool call that ends the reply, and the prose before it. Only an object that
+// is the last thing in the reply and holds nothing but tool-call keys counts,
+// so an answer that merely quotes one as an example stays an answer.
+std::optional<std::pair<json, std::string>> trailingToolCall(const std::string& reply) {
+    static const char* const kSpace = " \t\r\n";
+    std::string body = reply;
+    auto rtrim = [&body] {
+        const auto last = body.find_last_not_of(kSpace);
+        body.erase(last == std::string::npos ? 0 : last + 1);
+    };
+    if (body.size() >= 3 && body.compare(body.size() - 3, 3, "```") == 0) {
+        body.erase(body.size() - 3);
+        rtrim();
+    }
+    if (body.empty() || body.back() != '}') return std::nullopt;
+
+    for (size_t at = body.find('{'); at != std::string::npos; at = body.find('{', at + 1)) {
+        const std::string candidate = extractFirstJsonObject(body.substr(at));
+        if (candidate.empty() || at + candidate.size() != body.size()) continue;
+        json call = json::parse(candidate, nullptr, false);
+        if (!call.is_object() || !call.contains("tool") || !call["tool"].is_string()) return std::nullopt;
+        if (call.contains("tool_args") && !call["tool_args"].is_object()) return std::nullopt;
+        for (const auto& [key, value] : call.items()) {
+            if (key != "tool" && key != "tool_args" && key != "thought" && key != "goal") return std::nullopt;
+        }
+        std::string prose = body.substr(0, at);
+        const auto fence = prose.rfind("```");
+        if (fence != std::string::npos && prose.find_first_not_of(kSpace, fence + 3) == std::string::npos) {
+            prose.erase(fence);
+        } else if (fence != std::string::npos && prose.compare(fence, 7, "```json") == 0 &&
+                   prose.find_first_not_of(kSpace, fence + 7) == std::string::npos) {
+            prose.erase(fence);
+        }
+        const auto last = prose.find_last_not_of(kSpace);
+        prose.erase(last == std::string::npos ? 0 : last + 1);
+        return std::make_pair(std::move(call), std::move(prose));
+    }
+    return std::nullopt;
+}
+
+struct TagToolCall {
+    std::string name;
+    json args = json::object();
+    std::string prose;
+    bool textArgs = false;
+    std::string problem;  // set when the call is there but cannot be run
+};
+
+bool startsWithAt(const std::string& text, size_t at, const char* what) {
+    return text.compare(at, std::strlen(what), what) == 0;
+}
+
+size_t skipSpace(const std::string& text, size_t at) {
+    const size_t next = text.find_first_not_of(" \t\r\n", at);
+    return next == std::string::npos ? text.size() : next;
+}
+
+bool insideCodeFence(const std::string& text, size_t at) {
+    size_t fences = 0;
+    for (size_t p = text.find("```"); p != std::string::npos && p < at; p = text.find("```", p + 3)) ++fences;
+    return fences % 2 == 1;
+}
+
+std::string trimmedCopy(const std::string& text) {
+    const size_t first = text.find_first_not_of(" \t\r\n");
+    if (first == std::string::npos) return "";
+    return text.substr(first, text.find_last_not_of(" \t\r\n") - first + 1);
+}
+
+// <function=name><parameter=key>value</parameter>...</function>, from its "<function=".
+void parseFunctionTags(const std::string& text, size_t at, TagToolCall& call) {
+    call.textArgs = true;
+    const size_t nameEnd = text.find('>', at);
+    if (nameEnd == std::string::npos) {
+        call.problem = "The tool call was cut off inside its <function=...> tag.";
+        return;
+    }
+    call.name = trimmedCopy(text.substr(at + 10, nameEnd - at - 10));
+    if (call.name.empty()) {
+        call.problem = "The <function=...> tag has no tool name.";
+        return;
+    }
+    for (size_t pos = skipSpace(text, nameEnd + 1);; pos = skipSpace(text, pos)) {
+        if (startsWithAt(text, pos, "</function>") || startsWithAt(text, pos, "</tool_call>")) return;
+        if (!startsWithAt(text, pos, "<parameter=")) {
+            call.problem = pos >= text.size()
+                               ? "The tool call '" + call.name + "' was cut off before </function>."
+                               : "The tool call '" + call.name + "' has text between its tags that is not a parameter.";
+            return;
+        }
+        const size_t keyEnd = text.find('>', pos);
+        const size_t close = keyEnd == std::string::npos ? keyEnd : text.find("</parameter>", keyEnd + 1);
+        if (close == std::string::npos) {
+            call.problem = "A parameter of the tool call '" + call.name + "' was cut off before </parameter>.";
+            return;
+        }
+        std::string value = text.substr(keyEnd + 1, close - keyEnd - 1);
+        if (!value.empty() && value.front() == '\n') value.erase(0, 1);
+        if (!value.empty() && value.back() == '\n') value.pop_back();
+        call.args[trimmedCopy(text.substr(pos + 11, keyEnd - pos - 11))] = std::move(value);
+        pos = close + 12;
+    }
+}
+
+// <tool_call>{"name": ..., "arguments": {...}}</tool_call>, from its "{".
+void parseJsonToolCall(const std::string& text, size_t at, TagToolCall& call) {
+    const std::string body = extractFirstJsonObject(text.substr(at));
+    const json payload = body.empty() ? json() : json::parse(body, nullptr, false);
+    if (!payload.is_object()) {
+        call.problem = "The <tool_call> block was cut off or is not valid JSON.";
+        return;
+    }
+    if (!payload.contains("name") || !payload["name"].is_string() || payload["name"].get<std::string>().empty()) {
+        call.problem = "The <tool_call> block has no tool name.";
+        return;
+    }
+    call.name = payload["name"].get<std::string>();
+    json args = payload.contains("arguments") ? payload["arguments"] : payload.value("parameters", json::object());
+    if (args.is_string()) args = json::parse(args.get<std::string>(), nullptr, false);
+    if (!args.is_object()) {
+        call.problem = "The arguments of the tool call '" + call.name + "' are not a JSON object.";
+        return;
+    }
+    call.args = std::move(args);
+}
+
+// A tool call a model wrote as tags instead of sending it as one. "<tool_call>"
+// followed by words is prose about the format, and so is anything in a code fence.
+std::optional<TagToolCall> tagToolCall(const std::string& reply) {
+    for (size_t at = reply.find('<'); at != std::string::npos; at = reply.find('<', at + 1)) {
+        size_t body = std::string::npos;
+        if (startsWithAt(reply, at, "<tool_call>")) {
+            const size_t next = skipSpace(reply, at + 11);
+            if (next < reply.size() && (reply[next] == '{' || startsWithAt(reply, next, "<function="))) body = next;
+        } else if (startsWithAt(reply, at, "<function=")) {
+            const size_t nameEnd = reply.find('>', at);
+            const size_t next = nameEnd == std::string::npos ? nameEnd : skipSpace(reply, nameEnd + 1);
+            if (next != std::string::npos &&
+                (startsWithAt(reply, next, "<parameter=") || startsWithAt(reply, next, "</function>"))) {
+                body = at;
+            }
+        }
+        if (body == std::string::npos || insideCodeFence(reply, at)) continue;
+        TagToolCall call;
+        call.prose = trimmedCopy(reply.substr(0, at));
+        if (reply[body] == '{') parseJsonToolCall(reply, body, call);
+        else parseFunctionTags(reply, body, call);
+        return call;
+    }
+    return std::nullopt;
+}
+}  // namespace
+
 ParsedResponse parseLlmResponse(const std::string& response) {
     ParsedResponse parsed;
 
@@ -228,6 +383,24 @@ ParsedResponse parseLlmResponse(const std::string& response) {
 
     // Fast path: plain text (doesn't start with '{')
     if (trimmed.empty() || trimmed[0] != '{') {
+        if (auto call = tagToolCall(trimmed)) {
+            parsed.thought = call->prose;
+            if (!call->problem.empty()) {
+                parsed.malformedToolCall = call->problem;
+                return parsed;
+            }
+            parsed.toolName = call->name;
+            parsed.toolArgs = call->args;
+            parsed.toolArgsAreText = call->textArgs;
+            return parsed;
+        }
+        // Models often say what they are about to do, then emit the call.
+        if (auto call = trailingToolCall(trimmed)) {
+            parsed.thought = call->second;
+            parsed.toolName = call->first.at("tool").get<std::string>();
+            parsed.toolArgs = call->first.value("tool_args", json::object());
+            return parsed;
+        }
         parsed.thought = "";
         parsed.goal = "";
         parsed.answer = trimmed;

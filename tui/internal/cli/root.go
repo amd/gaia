@@ -97,6 +97,18 @@ func binaryName(argv0 string) string {
 // point that honours it reads the same variable.
 var mockAgent string
 
+// agentProgram backs --agent-program: which agent program the flagship runs.
+var agentProgram string
+
+// agentChoice is the agent program asked for: the flag, else GAIA_TUI_AGENT,
+// else "" for the one the catalog picks.
+func agentChoice() string {
+	if agentProgram != "" {
+		return agentProgram
+	}
+	return os.Getenv(catalog.AgentEnv)
+}
+
 // tracePath is --trace's raw value: "" (off), traceAutoPath (bare --trace), or
 // the path the user gave. Resolved by openTrace.
 var tracePath string
@@ -228,7 +240,7 @@ var rootCmd = &cobra.Command{
 		if err := update.RemoveLeftover(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
-		if err := ui.RunFlagship(dev, mockAgent, ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume); err != nil {
+		if err := ui.RunFlagship(dev, mockAgent, agentChoice(), ctrl, fullAccess, fromSaved, useClaude, claudeModelArg(), trace, resume); err != nil {
 			return err
 		}
 		// An install the user asked for in /update runs now, after the TUI
@@ -333,6 +345,11 @@ func init() {
 	// substituted a stand-in.
 	rootCmd.PersistentFlags().StringVar(&mockAgent, "mock", "",
 		"path to a stand-in agent binary, for tests (overrides the agent being launched)")
+	rootCmd.PersistentFlags().StringVar(&agentProgram, "agent-program", "",
+		"which agent program GAIA runs on: "+catalog.NativeAgentBinary+" (the native agent), "+
+			catalog.PythonAgentBinary+" (the Python agent), or a path to either. Unset runs "+
+			catalog.NativeAgentBinary+" when it is installed and "+catalog.PythonAgentBinary+
+			" otherwise; a named one that is missing is an error. Overrides "+catalog.AgentEnv)
 	rootCmd.PersistentFlags().StringVar(&tracePath, "trace", "",
 		"record every agent event — tool calls WITH their arguments, results, errors "+
 			"and timings — to a JSONL file, one event per line, for later inspection. "+

@@ -5,8 +5,13 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <iterator>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <utility>
 
 #include <httplib.h>
@@ -167,6 +172,81 @@ struct HttpClient::Impl {
 
     explicit Impl(HttpClientConfig cfg) : config(std::move(cfg)) {}
 
+    /// A kept-open connection to one server (scheme, host and port).
+    struct Pooled {
+        std::unique_ptr<httplib::ClientImpl> cli;
+        bool busy = false;
+        std::chrono::steady_clock::time_point lastUsed{};
+    };
+
+    /// Hands out the server's kept connection for one request. While another
+    /// thread holds it, the request gets a connection of its own instead.
+    class Lease {
+    public:
+        Lease(Impl& impl, const Target& t) : impl_(impl) {
+            const std::string key = (t.useSSL ? "https://" : "http://") + t.host + ":" +
+                                    std::to_string(t.port);
+            std::lock_guard<std::mutex> lock(impl_.poolMutex);
+            auto it = impl_.pool.find(key);
+            if (it != impl_.pool.end() && it->second.busy) {
+                own_ = impl_.makeClient(t);
+                return;
+            }
+            if (it == impl_.pool.end()) {
+                if (impl_.pool.size() >= kMaxPooledServers) impl_.dropIdle();
+                it = impl_.pool.emplace(key, Pooled{impl_.makeClient(t), false}).first;
+            }
+            pooled_ = &it->second;
+            const auto idle = std::chrono::steady_clock::now() - pooled_->lastUsed;
+            if (idle > std::chrono::seconds(impl_.config.keepAliveIdleSec)) pooled_->cli->stop();
+            pooled_->busy = true;
+        }
+        ~Lease() {
+            if (pooled_ == nullptr) return;
+            std::lock_guard<std::mutex> lock(impl_.poolMutex);
+            pooled_->busy     = false;
+            pooled_->lastUsed = std::chrono::steady_clock::now();
+        }
+        Lease(const Lease&)            = delete;
+        Lease& operator=(const Lease&) = delete;
+
+        httplib::ClientImpl& client() { return pooled_ != nullptr ? *pooled_->cli : *own_; }
+
+    private:
+        Impl&                                impl_;
+        Pooled*                              pooled_ = nullptr;
+        std::unique_ptr<httplib::ClientImpl> own_;
+    };
+
+    // Caps open sockets when one client fetches from many different servers.
+    static constexpr std::size_t kMaxPooledServers = 8;
+
+    std::mutex                    poolMutex;
+    std::map<std::string, Pooled> pool; // node-based: a Lease's pointer stays valid
+
+    std::unique_ptr<httplib::ClientImpl> makeClient(const Target& t) const {
+        std::unique_ptr<httplib::ClientImpl> cli;
+        if (t.useSSL) {
+#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
+            cli = std::make_unique<httplib::SSLClient>(t.host, t.port);
+            cli->enable_server_certificate_verification(config.verifyTls);
+            if (!config.caCertPath.empty()) cli->set_ca_cert_path(config.caCertPath);
+#else
+            throwTlsUnavailable(t);
+#endif
+        } else {
+            cli = std::make_unique<httplib::ClientImpl>(t.host, t.port);
+        }
+        cli->set_keep_alive(true);
+        return cli;
+    }
+
+    void dropIdle() {
+        for (auto it = pool.begin(); it != pool.end();) {
+            it = it->second.busy ? std::next(it) : pool.erase(it);
+        }
+    }
+
     Target resolve(const std::string& path) const {
         const bool absolute = path.compare(0, 7, "http://") == 0 ||
                               path.compare(0, 8, "https://") == 0;
@@ -304,7 +384,8 @@ struct HttpClient::Impl {
         response.body    = result->body;
         response.headers = convertHeaders(result->headers);
 
-        if (!response.ok()) {
+        const bool redirect = response.status >= 300 && response.status < 400;
+        if (!response.ok() && !(redirect && config.returnRedirects)) {
             throw HttpError(std::string(method) + " " + t.url + " returned HTTP " +
                                 std::to_string(response.status) +
                                 (response.body.empty()
@@ -376,6 +457,12 @@ void HttpClient::setDefaultHeader(const std::string& name, const std::string& va
     headers.emplace(name, value);
 }
 
+void HttpClient::removeDefaultHeader(const std::string& name) {
+    auto& headers = impl_->config.defaultHeaders;
+    auto existing = findHeader(headers, name);
+    if (existing != headers.end()) headers.erase(existing);
+}
+
 bool HttpClient::debug() const { return impl_->config.debug; }
 
 void HttpClient::setDebug(bool enabled) { impl_->config.debug = enabled; }
@@ -392,24 +479,11 @@ HttpResponse HttpClient::get(const std::string& path, const HttpHeaders& headers
     const httplib::Headers hdrs = impl_->mergeHeaders(headers, t.url, nullptr);
     impl_->logRequest("GET", t);
 
-    httplib::Result result;
-    if (t.useSSL) {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        httplib::SSLClient cli(t.host, t.port);
-        cli.enable_server_certificate_verification(impl_->config.verifyTls);
-        if (!impl_->config.caCertPath.empty()) {
-            cli.set_ca_cert_path(impl_->config.caCertPath);
-        }
-        applyTimeouts(cli, connectSec, readSec);
-        result = cli.Get(t.path, hdrs);
-#else
-        impl_->throwTlsUnavailable(t);
-#endif
-    } else {
-        httplib::Client cli(t.host, t.port);
-        applyTimeouts(cli, connectSec, readSec);
-        result = cli.Get(t.path, hdrs);
-    }
+    Impl::Lease lease(*impl_, t);
+    httplib::ClientImpl& cli = lease.client();
+    applyTimeouts(cli, connectSec, readSec);
+    cli.set_follow_location(impl_->config.followRedirects);
+    httplib::Result result = cli.Get(t.path, hdrs);
     return impl_->finish("GET", t, result, connectSec, readSec);
 }
 
@@ -423,24 +497,32 @@ HttpResponse HttpClient::post(const std::string& path, const std::string& body,
     const httplib::Headers hdrs = impl_->mergeHeaders(headers, t.url, &contentType);
     impl_->logRequest("POST", t);
 
-    httplib::Result result;
-    if (t.useSSL) {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        httplib::SSLClient cli(t.host, t.port);
-        cli.enable_server_certificate_verification(impl_->config.verifyTls);
-        if (!impl_->config.caCertPath.empty()) {
-            cli.set_ca_cert_path(impl_->config.caCertPath);
-        }
-        applyTimeouts(cli, connectSec, readSec);
-        result = cli.Post(t.path, hdrs, body, contentType);
-#else
-        impl_->throwTlsUnavailable(t);
-#endif
-    } else {
-        httplib::Client cli(t.host, t.port);
-        applyTimeouts(cli, connectSec, readSec);
-        result = cli.Post(t.path, hdrs, body, contentType);
-    }
+    Impl::Lease lease(*impl_, t);
+    httplib::ClientImpl& cli = lease.client();
+    applyTimeouts(cli, connectSec, readSec);
+    cli.set_follow_location(false); // only GET follows redirects
+    httplib::Result result = cli.Post(t.path, hdrs, body, contentType);
+    return impl_->finish("POST", t, result, connectSec, readSec);
+}
+
+HttpResponse HttpClient::postMultipart(const std::string& path,
+                                       const std::vector<HttpMultipartPart>& parts,
+                                       const HttpHeaders& headers, int timeoutSec,
+                                       int connectTimeoutSec) {
+    const Impl::Target t = impl_->resolve(path);
+    const int readSec    = impl_->readTimeout(timeoutSec);
+    const int connectSec = impl_->connectTimeout(connectTimeoutSec);
+    std::string ignoredType;
+    const httplib::Headers hdrs = impl_->mergeHeaders(headers, t.url, &ignoredType);
+    impl_->logRequest("POST", t);
+    httplib::MultipartFormDataItems items;
+    for (const auto& p : parts) items.push_back({p.name, p.content, p.filename, p.contentType});
+
+    Impl::Lease lease(*impl_, t);
+    httplib::ClientImpl& cli = lease.client();
+    applyTimeouts(cli, connectSec, readSec);
+    cli.set_follow_location(false); // only GET follows redirects
+    httplib::Result result = cli.Post(t.path, hdrs, items);
     return impl_->finish("POST", t, result, connectSec, readSec);
 }
 
@@ -486,37 +568,21 @@ HttpResponse HttpClient::postStreaming(const std::string& path, const std::strin
         return keepGoing;
     };
 
-    auto buildAndSend = [&](auto& cli) {
-        applyTimeouts(cli, connectSec, readSec);
+    Impl::Lease lease(*impl_, t);
+    httplib::ClientImpl& cli = lease.client();
+    applyTimeouts(cli, connectSec, readSec);
+    cli.set_follow_location(false); // only GET follows redirects
 
-        httplib::Request req;
-        req.method  = "POST";
-        req.path    = t.path;
-        req.headers = hdrs;
-        req.set_header("Content-Type", contentType);
-        req.body             = body;
-        req.response_handler = responseHandler;
-        req.content_receiver = contentReceiver;
+    httplib::Request req;
+    req.method  = "POST";
+    req.path    = t.path;
+    req.headers = hdrs;
+    req.set_header("Content-Type", contentType);
+    req.body             = body;
+    req.response_handler = responseHandler;
+    req.content_receiver = contentReceiver;
 
-        return cli.send(req);
-    };
-
-    httplib::Result result;
-    if (t.useSSL) {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        httplib::SSLClient cli(t.host, t.port);
-        cli.enable_server_certificate_verification(impl_->config.verifyTls);
-        if (!impl_->config.caCertPath.empty()) {
-            cli.set_ca_cert_path(impl_->config.caCertPath);
-        }
-        result = buildAndSend(cli);
-#else
-        impl_->throwTlsUnavailable(t);
-#endif
-    } else {
-        httplib::Client cli(t.host, t.port);
-        result = buildAndSend(cli);
-    }
+    httplib::Result result = cli.send(req);
 
     // A callback-requested stop surfaces as Error::Canceled — that is normal
     // completion (e.g. an SSE [DONE] sentinel), not a transport failure.

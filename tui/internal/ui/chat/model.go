@@ -17,6 +17,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/control"
 	"github.com/amd/gaia/tui/internal/event"
@@ -3998,6 +3999,10 @@ func (m ChatModel) agentIdentity() string {
 	identity := "agent " + strings.ToLower(m.agentID)
 	if version != "" {
 		identity += " v" + version
+	}
+	if m.nativeAgent() {
+		// Two programs can answer as this agent; say which one is.
+		identity += " (" + catalog.NativeAgentBinary + ")"
 	}
 	return identity
 }

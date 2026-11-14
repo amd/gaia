@@ -14,6 +14,7 @@
 #pragma once
 
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -41,6 +42,9 @@ namespace gaia {
 ///   - processQuery() main loop
 ///   - JSON parsing with multi-strategy fallback
 ///   - Error recovery with loop detection
+/// Drop <think>…</think> reasoning (and a stray leading </think>) from a reply.
+GAIA_API std::string stripReasoning(const std::string& text);
+
 class GAIA_API Agent {
 public:
     explicit Agent(const AgentConfig& config = {});
@@ -129,6 +133,10 @@ public:
     /// tool is never lowered back to ALLOW.
     void setDefaultPolicy(ToolPolicy policy);
 
+    /// Where "always allow" answers are kept (default: ~/.gaia/security/).
+    void setAllowedToolsStore(std::shared_ptr<AllowedToolsStore> store);
+    std::shared_ptr<AllowedToolsStore> allowedToolsStore() const { return allowedToolsStore_; }
+
     /// Get the output handler.
     OutputHandler& console() { return *console_; }
 
@@ -165,8 +173,16 @@ public:
     /// The flag is automatically reset at the start of the next processQuery().
     void requestCancel() { cancelled_.store(true); }
 
+    /// Also stop when `check` returns true. Unlike requestCancel(), it isn't
+    /// reset when a run starts, so a Stop that lands just before one holds.
+    void setCancelCheck(std::function<bool()> check) { cancelCheck_ = std::move(check); }
+
+    /// Called after every model call and tool call of a turn, as it happens,
+    /// so a turn that is killed or hangs still leaves a record.
+    void setStepLogger(std::function<void(const json&)> logger) { stepLogger_ = std::move(logger); }
+
     /// Check whether a cancel has been requested.
-    bool isCancelled() const { return cancelled_.load(); }
+    bool isCancelled() const { return cancelRequested(); }
 
     /// Get a mutable reference to the tool registry (for subclass tool registration).
     ToolRegistry& toolRegistry() { return tools_; }
@@ -245,7 +261,7 @@ public:
     /// would dangle.
     std::vector<std::string> skillSetLoaded() const;
 
-    /// Install the loader that actually registers skills (P3.3 / #2800).
+    /// Install the loader that actually registers skills.
     /// Not owned; must outlive the agent. Passing nullptr detaches it.
     ///
     /// **Not thread-safe** — setup-time call, serialized with loadSkillSet()
@@ -262,7 +278,7 @@ public:
     /// Changes take effect on the next processQuery() call.
     void setConfig(const AgentConfig& newConfig);
 
-    /// Change the active model. Resets modelEnsured_ so the next processQuery() reloads it.
+    /// Change the active model. The next request loads it.
     void setModel(const std::string& modelId);
 
     /// Convenience setters — take effect on the next processQuery() call.
@@ -277,6 +293,7 @@ protected:
     /// This exists because virtual dispatch doesn't work from base constructors in C++.
     void init() {
         registerTools();
+        registerBuiltinTools();
         systemPromptDirty_ = true;
     }
 
@@ -301,12 +318,46 @@ protected:
     /// computed an undeclared name is a wiring bug, not a reason to guess.
     virtual std::optional<std::string> selectSkillSet() const { return std::nullopt; }
 
+    /// Review a final answer before it is accepted. Return a note to send it
+    /// back to the model once (e.g. "it says report.md was saved, but there is
+    /// no such file"); nullopt accepts it. Called at most once per query.
+    virtual std::optional<std::string> reviewFinalAnswer(const std::string& /*answer*/) {
+        return std::nullopt;
+    }
+
+    /// Called once as a query starts, before its first model call. Override to
+    /// capture what the system prompt should hold fixed for the whole query.
+    virtual void onTurnStart() {}
+
+    /// One tool call made during the current query.
+    struct ToolCallRecord {
+        std::string name;
+        json args;
+        bool succeeded = false;
+        int step = 0;
+        double wallSeconds = 0.0;
+        /// When the call began, on the clock file timestamps use.
+        std::filesystem::file_time_type started{};
+        /// The start of what the tool returned (for answer review), at most 20000 characters.
+        std::string output;
+    };
+
+    /// Every tool call of the query in progress, in order (for answer review).
+    const std::vector<ToolCallRecord>& turnToolCalls() const { return turnToolCalls_; }
+
+    /// The user's request for the query in progress, as text (for answer review).
+    const std::string& turnRequest() const { return turnRequest_; }
+
 private:
     /// Unified entry point for all processQuery overloads. Owns the full
     /// conversation turn: concurrency guard, empty-input validation,
     /// ensureModelLoaded, history prepend, LLM loop, and end-of-turn
     /// history write (text-only; image parts stripped).
     json processQueryInternal(const std::vector<Message>& userMessages, int maxSteps);
+
+    /// Whether to send native ``tools`` for cfg's model under the Auto policy:
+    /// the built-in table, else the ``tool-calling`` label in the server's catalog.
+    bool autoNativeToolCalls(const AgentConfig& cfg);
 
     // ---- LLM Communication ----
 
@@ -316,13 +367,34 @@ private:
         /// Native OpenAI tool calls, when the model answered with them.
         /// Always empty on the prompt-JSON path.
         std::vector<ToolCall> toolCalls;
+        /// The server's finish_reason ("stop", "length", "tool_calls"); empty when not reported.
+        std::string finishReason;
     };
 
     /// Send messages to the LLM and get a response with usage stats.
     /// Uses OpenAI-compatible chat completions API.
     /// @param cfg  Config snapshot from the current processQuery() call.
+    /// @param allowTools  false sends no tool schemas (the closing answer).
     LlmResult callLlm(const std::vector<Message>& messages, const std::string& systemPrompt,
-                      const AgentConfig& cfg);
+                      const AgentConfig& cfg, bool allowTools = true);
+
+    /// callLlm with cfg.llmRetries extra attempts on transient failures, and
+    /// one retry after eliding old tool output when the context overflows.
+    LlmResult callLlmResilient(std::vector<Message>& messages, const std::string& systemPrompt,
+                               const AgentConfig& cfg, bool allowTools = true);
+
+    // ---- Tool output store ----
+
+    /// Registers read_tool_output (every agent, as in Python), before any server thread can read the registry.
+    void registerBuiltinTools();
+
+    /// Serialize a tool result for the conversation, keeping the full text in
+    /// the output store when it has to be clipped.
+    std::string recordToolOutput(const json& toolResult, int maxChars);
+
+    /// Replace older tool outputs in `messages` with a pointer to the store,
+    /// keeping the newest `keepRecent`. Returns the characters freed.
+    size_t elideOldToolOutputs(std::vector<Message>& messages, size_t keepRecent);
 
     // ---- Execution Helpers ----
 
@@ -340,6 +412,10 @@ private:
 
     /// Call an MCP tool with automatic reconnect on connection failure.
     json callMcpTool(const std::string& serverName, const std::string& toolName, const json& args);
+
+    /// Generic tools for MCP resources / prompts, registered once a server offers them.
+    void registerMcpResourceTools();
+    void registerMcpPromptTools();
 
     /// Attempt to reconnect to a previously registered MCP server using its stored config.
     bool reconnectMcpServer(const std::string& name);
@@ -359,7 +435,6 @@ private:
     ToolRegistry tools_;
     std::unique_ptr<OutputHandler> console_;
     LemonadeClient lemonade_;
-    std::atomic<bool> modelEnsured_{false};
 
     // Concurrency guard — Agent is NOT re-entrant. A second processQuery
     // call on the same Agent (from any thread) throws std::runtime_error.
@@ -368,6 +443,9 @@ private:
     // Cancel flag — set by requestCancel(), checked between loop steps.
     // Reset at the start of each processQuery().
     std::atomic<bool> cancelled_{false};
+    std::function<bool()> cancelCheck_;
+    std::function<void(const json&)> stepLogger_;
+    bool cancelRequested() const { return cancelled_.load() || (cancelCheck_ && cancelCheck_()); }
 
     AgentState executionState_ = AgentState::PLANNING;
     json currentPlan_;
@@ -376,7 +454,16 @@ private:
     int planIterations_ = 0;
 
     std::vector<std::string> errorHistory_;
+    std::vector<ToolCallRecord> turnToolCalls_;
+    std::string turnRequest_;
+    std::map<std::string, bool> serverToolCalling_;  // base URL + model id -> label seen
+    int turnStep_ = 0;
     std::vector<Message> conversationHistory_;
+
+    // Full text of recent tool outputs, by id, for read_tool_output.
+    mutable std::mutex toolOutputsMutex_;
+    std::map<int, std::string> toolOutputs_;
+    int nextToolOutputId_ = 1;
 
     // Security: persistent allowed-tools store (shared with tools_)
     std::shared_ptr<AllowedToolsStore> allowedToolsStore_;

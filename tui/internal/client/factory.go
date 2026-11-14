@@ -1,6 +1,7 @@
 package client
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/amd/gaia/tui/internal/catalog"
@@ -84,6 +85,13 @@ const UseClaudeFlag = "--use-claude"
 // UseClaudeFlag, followed by the model id as its own argv entry.
 const ClaudeModelFlag = "--claude-model"
 
+// NativeClaudeUnavailable is what a user is told when Claude is asked of the
+// native agent, which has no Claude provider. One text for the launch flag and
+// for /model, so the two cannot disagree.
+const NativeClaudeUnavailable = "Claude models are not available with the native GAIA agent (gaiacpp). " +
+	"Choose a model your Lemonade server offers instead — one on this PC, or a cloud " +
+	"provider such as Fireworks AI or the AMD LLM Gateway — with /provider."
+
 // ForAgent builds the transport a catalog entry declares.
 //
 // This is the single transport switch: the chat UI, the hub, and the
@@ -149,6 +157,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		if opts.FullAccess {
 			args = append(append([]string{}, args...), FullAccessFlag)
 		}
+		if opts.UseClaude && agent.Native {
+			return nil, errors.New(NativeClaudeUnavailable)
+		}
 		if opts.UseClaude {
 			extra := []string{UseClaudeFlag}
 			if opts.ClaudeModel != "" {
@@ -161,6 +172,10 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 				return nil, fmt.Errorf("model override is unsupported for subprocess agent %q", agent.ID)
 			}
 			args = append(append([]string{}, args...), "--model", opts.Model)
+		}
+		// Before the session flags: gaiacpp doesn't take them and exits on an unknown argument.
+		if agent.Native {
+			return NewNativeSubprocessClient(bin, args, opts.Dev).WithTrace(opts.Trace).WithLogf(opts.Logf), nil
 		}
 		if opts.HistoryFile != "" {
 			args = append(append([]string{}, args...), HistoryFileFlag, opts.HistoryFile)

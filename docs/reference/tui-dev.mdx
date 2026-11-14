@@ -16,21 +16,77 @@ debugging time:
 
 ```
 gaia-tui            Go. The terminal app and the control API.
-  └─ gaia-agent     Python subprocess, spawned once per session. The agent loop
-                    and every tool.
+  └─ the agent      A subprocess, spawned once per session. The agent loop and
+                    every tool. Either gaiacpp (C++) or gaia-agent (Python).
        └─ Lemonade  HTTP server. Runs local models and routes cloud chat.
 ```
 
 The readiness gate straddles all three: the **GAIA agent** and **Lemonade** rows
-are checked by the Go side; the **Language model** row shells out to
-`gaia init --check`, which is Python and talks to Lemonade.
+are checked by the Go side. The **Language model** row depends on the agent
+program: for `gaia-agent` it shells out to `gaia init --check`, which is Python
+and talks to Lemonade; for `gaiacpp` the Go side asks Lemonade directly.
+
+### Which agent program runs
+
+The flagship has two programs behind it. `gaia-tui` runs the native one,
+`gaiacpp`, when it is installed, and the Python one, `gaia-agent`, otherwise,
+so an install that only has `gaia-agent` behaves as before. The header says
+which is answering: `agent gaia v<x> (gaiacpp)` for the native agent, plain
+`agent gaia v<x>` for the Python one.
+
+With nothing asked for, `gaiacpp` is looked for only where an install puts
+it, in this order, and the first match wins:
+
+1. `PATH`
+2. The folder `gaia-tui` itself is in
+3. `~/.gaia/agents/gaia/`, then its `bin/`
+
+A build in your checkout is **not** picked up by itself: starting `gaia-tui`
+from inside a repository never runs whatever sits in its `cpp/build`.
+
+To choose, set `GAIA_TUI_AGENT` or pass `--agent-program` (the flag wins). It
+applies to the flagship only, so `gaia-tui run email` ignores it. A named
+program that is not found is an error that lists where it looked; the other
+program is never run in its place. `--mock` replaces whichever was chosen.
+
+| Value | What runs |
+|---|---|
+| `gaiacpp` | The first `gaiacpp` in the three places above, then `cpp/build/Debug`, `cpp/build/Release` and `cpp/build` in the working directory and up to seven folders above it |
+| A path to `gaiacpp` | That file. It counts as `gaiacpp` when it is named `gaiacpp` or `gaiacpp-<platform>`, as the release assets are |
+| `gaia-agent` | The Python agent as installed: the first `gaia-agent` on `PATH`, in a finished install under `~/.gaia/agents/gaia/`, or in `cpp/build`. On an install whose record puts the flagship behind the daemon (`artifact_kind: binary`) it stays behind the daemon, and the first chat frame says so, because the `gaia-agent` file in that install is the daemon's HTTP sidecar |
+| A path to `gaia-agent` | That file, spawned by `gaia-tui` itself, even on a daemon install |
+
+On Windows `gaiacpp.exe` and `gaia-agent.exe` are accepted for the two names.
+`gaiacpp` is always a child process of `gaia-tui`, whatever the install record
+says.
+
+```bash
+GAIA_TUI_AGENT=gaia-agent gaia-tui                      # the Python agent
+gaia-tui --agent-program ../cpp/build/Release/gaiacpp   # a build of your own
+```
+
+What changes with `gaiacpp` (`catalog.Agent.Native`):
+
+| | `gaiacpp` | `gaia-agent` |
+|---|---|---|
+| Launched as | `gaiacpp --stdio`, plus `--dev`, `--full-access`, `--accept-edits`, `--model <id>` as needed | `gaia-agent`, plus the same and `--use-claude`, `--claude-model <id>` |
+| Claude | Not available. `--use-claude` is refused before any screen opens, and `/model <claude id>` is refused in the chat; neither reaches the agent, which would exit on the flag | Available |
+| Model server address | Passed in its environment: `LEMONADE_BASE_URL`, and `LEMONADE_API_KEY` when the server has a key. Inherited `LEMONADE_BASE_URL`, `LEMONADE_API_KEY`, `GAIA_BASE_URL` and `GAIA_API_KEY` are removed first, so the child only ever gets the address and key `gaia-tui` resolved | Reads GAIA's saved choice itself |
+| Language model row | Lemonade lists the launch model: a cloud model its provider serves, or a local one that is downloaded (`Gemma-4-E4B-it-GGUF` when none was chosen). Nothing is loaded and no embedding model is needed | `gaia init --check --load` |
+
+Setup still needs the Python `gaia` CLI on either agent: installing Lemonade
+from the gate (`f`), `/setup`, and adding a model from a link.
+
+`gaia-tui chat --subprocess "gaiacpp --stdio …"` also reads the canonical
+events; without `--stdio` it is refused, because `gaiacpp` would open its own
+prompt on the pipe.
 
 <Warning>
 **The agent subprocess is spawned once and outlives your edits.** Change Python
 source and the running TUI keeps executing the old code — a measurement taken
 without restarting is a measurement of the previous build. Restart the TUI
-after touching anything under `src/gaia/` or `hub/agents/`. This is the single
-easiest way to waste an hour.
+after touching anything under `src/gaia/` or `hub/agents/`, or after rebuilding
+`gaiacpp`. This is the single easiest way to waste an hour.
 </Warning>
 
 ## Building
@@ -276,7 +332,7 @@ colour support, and the TUI then emits no escape sequences at all. It reads as
 | What | Where |
 |---|---|
 | TUI control/state log | `$GAIA_TUI_HOME/gaia-tui.log` |
-| Agent debug log | `~/.gaia/logs/gaia-agent.log` |
+| Agent debug log | `~/.gaia/logs/gaia-agent.log` (`gaia-agent` only; `gaiacpp` writes its log lines to stderr, which the TUI shows if the process exits with an error) |
 | Lemonade (embedded) | `~/.gaia/lemonade/lemond.log` |
 | Event trace | `~/.gaia/traces/<ts>-<agent>.jsonl` via `--trace` |
 

@@ -64,7 +64,7 @@ func TestMetadataSitsOnItsOwnLine(t *testing.T) {
 	dump := sampleMemoryDump()
 	dump.Items = []client.MemoryItem{{
 		ID: "1", Category: "fact", Content: "the user prefers tabs",
-		Confidence: 0.42, UpdatedAt: "2026-08-14T15:36:00",
+		Confidence: memConf(0.42), UpdatedAt: "2026-08-14T15:36:00",
 	}}
 
 	for _, line := range strings.Split(ansi.Strip(renderMemoryView(dump, 88)), "\n") {
@@ -145,7 +145,7 @@ func TestShortPathsAreLeftAlone(t *testing.T) {
 func TestProseIsSetToAReadableMeasure(t *testing.T) {
 	dump := sampleMemoryDump()
 	dump.Items = []client.MemoryItem{{
-		ID: "1", Category: "note", Confidence: 0.5,
+		ID: "1", Category: "note", Confidence: memConf(0.5),
 		Content: strings.TrimSpace(strings.Repeat("alpha bravo charlie delta echo ", 20)),
 	}}
 

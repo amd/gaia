@@ -6,6 +6,7 @@ Builds a `.deb` and an `.rpm` for **x86-64 only**, each containing:
 | --- | --- |
 | `/usr/bin/gaia-tui` | 0755 |
 | `/usr/bin/gaia-agent` | 0755 |
+| `/usr/bin/gaiacpp` | 0755 |
 | `/usr/share/applications/gaia-tui.desktop` | 0644 |
 | `/usr/share/icons/hicolor/256x256/apps/gaia-tui.png` | 0644 |
 | `/usr/share/doc/gaia-tui/LICENSE.md` | 0644 |
@@ -35,7 +36,9 @@ dist/gaia-1.4.0.x86_64.rpm
 
 - `--payload` is a directory that already contains two executables named
   `gaia-tui` and `gaia-agent`, no extension, and `core/`, the frozen `gaia` with
-  its `_internal` folder. The script copies them; it does not build them. The
+  its `_internal` folder. The script copies them; it does not build them. A
+  `gaiacpp` there, the native agent `gaia-tui` runs in place of `gaia-agent`, is
+  packaged too; `tui_installers.yml` stages it from the release's own build. The
   core installs to `/usr/lib/gaia`, linked as `/usr/bin/gaia`, and a pre-remove
   script stops a daemon running it before the package is removed or upgraded.
   `--without-core` leaves the core out, as packages before it shipped one did;

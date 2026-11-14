@@ -194,13 +194,24 @@ The C++ CI workflow (`.github/workflows/build_cpp.yml`) runs five jobs on every 
 
 | Job | Runs on | What it validates |
 |-----|---------|-------------------|
-| **Build & Test** | Ubuntu + Windows (cloud) | CMake build + unit tests |
+| **Build & Test** | Ubuntu + Windows (cloud) | CMake build + unit tests + the `gaiacpp` chaos test |
 | **Install Test** | Ubuntu + Windows (cloud) | `cmake --install` + `find_package` round-trip |
 | **Shared Library** | Ubuntu + Windows (cloud) | `BUILD_SHARED_LIBS=ON` compiles cleanly |
 | **Integration Tests** | STX hardware (self-hosted) | Full stack: LLM + MCP + WiFi + Health |
 | **Benchmarks** | Ubuntu + Windows (cloud) | Performance benchmarks (`benchmark_cpp.yml`), runs after Build & Test succeeds |
 
 The integration test job runs on AMD STX hardware with a real Lemonade Server and Qwen3-4B model. It is treated as non-blocking in CI (infrastructure issues on self-hosted runners don't fail the PR).
+
+### Chaos test
+
+`cpp/tests/chaos/chaos_gaiacpp.py` runs the built `gaiacpp` binary against a local model server that misbehaves on purpose: HTTP errors, dropped connections, truncated and non-JSON bodies, malformed and oversized tool calls, unknown tools and slow replies, in a different seeded order each run. Whatever it is sent, the binary must exit in time with code 0 or 1, end its output with a JSON record, report success only with an answer, stay within its memory bound, and write nothing outside its working folder.
+
+```bash
+python cpp/tests/chaos/chaos_gaiacpp.py --binary cpp/build/gaiacpp --runs 200
+python cpp/tests/chaos/chaos_gaiacpp.py --binary cpp/build/gaiacpp --seed 137   # replay one failing run
+```
+
+CI runs 200 seeds on Ubuntu and Windows in Build & Test, and 100 on each release binary (`build_agents.yml`: Windows, Linux, macOS) before it is packaged. A failure prints the seed that reproduces it.
 
 ---
 

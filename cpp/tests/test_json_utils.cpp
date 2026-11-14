@@ -217,3 +217,122 @@ TEST(JsonUtilsTest, NullToolArgs) {
     EXPECT_TRUE(parsed.toolArgs.value().is_object());
     EXPECT_TRUE(parsed.toolArgs.value().empty());
 }
+
+// ---- a tool call at the end of a prose reply ----
+
+TEST(JsonUtilsTest, ToolCallAfterASentenceIsACall) {
+    auto p = parseLlmResponse(
+        "I'll start by looking at the file.\n\n"
+        "{\"tool\": \"bash_execute\", \"tool_args\": {\"command\": \"ls -la && echo '{}'\"}}");
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_EQ(*p.toolName, "bash_execute");
+    EXPECT_EQ((*p.toolArgs)["command"], "ls -la && echo '{}'");
+    EXPECT_EQ(p.thought, "I'll start by looking at the file.");
+    EXPECT_FALSE(p.answer.has_value());
+}
+
+TEST(JsonUtilsTest, ToolCallInACodeFenceAfterProseIsACall) {
+    auto p = parseLlmResponse("Checking.\n```json\n{\"tool\": \"echo\", \"tool_args\": {}}\n```");
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_EQ(*p.toolName, "echo");
+    EXPECT_EQ(p.thought, "Checking.");
+}
+
+TEST(JsonUtilsTest, ToolCallWithoutArgsAfterProseGetsEmptyArgs) {
+    auto p = parseLlmResponse("Listing skills. {\"tool\": \"list_skills\"}");
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_TRUE(p.toolArgs->is_object());
+    EXPECT_TRUE(p.toolArgs->empty());
+}
+
+TEST(JsonUtilsTest, AQuotedExampleInTheMiddleOfAnAnswerStaysAnAnswer) {
+    const std::string text =
+        "To call a tool you write {\"tool\": \"echo\", \"tool_args\": {}} on one line. That is all.";
+    auto p = parseLlmResponse(text);
+    EXPECT_FALSE(p.toolName.has_value());
+    EXPECT_EQ(p.answer.value_or(""), text);
+}
+
+TEST(JsonUtilsTest, TrailingJsonThatIsNotAToolCallStaysAnAnswer) {
+    for (const char* text : {
+             "The config is {\"retention_days\": 30}",
+             "Result: {\"tool\": 5}",
+             "Result: {\"tool\": \"echo\", \"tool_args\": \"oops\"}",
+             "Result: {\"tool\": \"echo\", \"rows\": 3}",
+             "Unbalanced {\"tool\": \"echo\"",
+         }) {
+        auto p = parseLlmResponse(text);
+        EXPECT_FALSE(p.toolName.has_value()) << text;
+        EXPECT_EQ(p.answer.value_or(""), text);
+    }
+}
+
+TEST(JsonUtilsTest, ACallWrittenAsFunctionTagsIsACallWithTextArguments) {
+    auto p = parseLlmResponse(
+        "Saving it now.\n<tool_call>\n<function=file_write>\n<parameter=path>\nnotes.txt\n</parameter>\n"
+        "<parameter=content>\nline one\nline two\n</parameter>\n</function>\n</tool_call>");
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_EQ(*p.toolName, "file_write");
+    EXPECT_EQ((*p.toolArgs)["path"], "notes.txt");
+    EXPECT_EQ((*p.toolArgs)["content"], "line one\nline two");
+    EXPECT_TRUE(p.toolArgsAreText);
+    EXPECT_EQ(p.thought, "Saving it now.");
+    EXPECT_FALSE(p.answer.has_value());
+    EXPECT_FALSE(p.malformedToolCall.has_value());
+}
+
+TEST(JsonUtilsTest, FunctionTagsWithoutTheWrapperOrItsCloseAreStillACall) {
+    for (const char* text : {
+             "<function=list_skills>\n</function>",
+             "<function=echo>\n<parameter=message>hi</parameter>\n</function>",
+             "<tool_call>\n<function=echo>\n<parameter=message>hi</parameter>\n</tool_call>",
+         }) {
+        auto p = parseLlmResponse(text);
+        ASSERT_TRUE(p.toolName.has_value()) << text;
+        EXPECT_FALSE(p.answer.has_value()) << text;
+    }
+}
+
+TEST(JsonUtilsTest, AJsonCallInToolCallTagsIsACall) {
+    auto p = parseLlmResponse(
+        "<tool_call>\n{\"name\": \"add\", \"arguments\": {\"a\": 2, \"b\": 3}}\n</tool_call>");
+    ASSERT_TRUE(p.toolName.has_value());
+    EXPECT_EQ(*p.toolName, "add");
+    EXPECT_EQ((*p.toolArgs)["b"], 3);
+    EXPECT_FALSE(p.toolArgsAreText);
+
+    auto encoded = parseLlmResponse("<tool_call>{\"name\": \"add\", \"arguments\": \"{\\\"a\\\": 2}\"}");
+    ASSERT_TRUE(encoded.toolName.has_value());
+    EXPECT_EQ((*encoded.toolArgs)["a"], 2);
+}
+
+TEST(JsonUtilsTest, ATagCallThatCannotBeRunIsNeitherACallNorAnAnswer) {
+    for (const char* text : {
+             "<tool_call>\n<function=file_write>\n<parameter=content>\n# Report\nThe first",
+             "<tool_call>\n<function=file_write>\n<parameter=path>\na.txt\n</parameter>\n",
+             "<tool_call>\n<function=file_wr",
+             "<tool_call>\n<function=>\n</function>",
+             "<tool_call>\n{\"name\": \"add\", \"arguments\": {\"a\": 2",
+             "<tool_call>{\"arguments\": {\"a\": 2}}</tool_call>",
+             "<tool_call>{\"name\": \"add\", \"arguments\": [1, 2]}</tool_call>",
+         }) {
+        auto p = parseLlmResponse(text);
+        EXPECT_TRUE(p.malformedToolCall.has_value()) << text;
+        EXPECT_FALSE(p.toolName.has_value()) << text;
+        EXPECT_FALSE(p.answer.has_value()) << text;
+    }
+}
+
+TEST(JsonUtilsTest, TagsNamedInProseOrShownInACodeFenceStayAnAnswer) {
+    for (const char* text : {
+             "Qwen wraps each call in <tool_call> and </tool_call> tags.",
+             "The opener is `<function=name>` followed by its parameters.",
+             "An example:\n```\n<tool_call>\n<function=echo>\n<parameter=message>hi</parameter>\n</function>\n"
+             "</tool_call>\n```\nThat is the whole format.",
+         }) {
+        auto p = parseLlmResponse(text);
+        EXPECT_FALSE(p.toolName.has_value()) << text;
+        EXPECT_FALSE(p.malformedToolCall.has_value()) << text;
+        EXPECT_EQ(p.answer.value_or(""), text);
+    }
+}

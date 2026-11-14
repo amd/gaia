@@ -7,12 +7,12 @@
 // This file is a hand-maintained mirror of the ``model_id`` -> ``tool_calling``
 // column of that table. When a model is added, removed, or has its
 // ``tool_calling`` flag flipped in Python, mirror the change here in the same
-// commit. ``ModelGateTest.MirrorsThePythonModelTableExactly`` in
-// ``cpp/tests/test_native_tool_calls.cpp`` pins the current contents so a silent
-// drift shows up as a test edit in review.
+// commit. ``tests/unit/test_cpp_model_registry_mirror.py`` fails when the two
+// tables differ.
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -43,5 +43,20 @@ GAIA_API const std::vector<ModelCapability>& knownModels();
 /// opts in explicitly with ``AgentConfig::nativeToolCalls =
 /// NativeToolCalls::Always``.
 GAIA_API bool isToolCallingModel(const std::string& modelId);
+
+/// What the table says about ``modelId``, or nothing when it is not listed.
+/// An agent with a server to ask (Agent::processQuery) settles an unlisted
+/// model from the server's own catalog instead of assuming "no".
+GAIA_API std::optional<bool> knownToolCalling(const std::string& modelId);
+
+/// True for a small model that gets the compact feature set: fewer tools and no
+/// prose copy of the tool list, so every step re-reads a shorter prompt. Mirrors
+/// ``feature_tier="compact"`` in Python's ``MODELS``, plus the small local models
+/// gaiacpp has been measured on. Unlisted models get the full set.
+GAIA_API bool isCompactModel(const std::string& modelId);
+
+/// Tools a compact model is not offered: each has a shell or file-tool
+/// equivalent, and their schemas cost every step.
+GAIA_API const std::vector<std::string>& compactWithheldTools();
 
 } // namespace gaia

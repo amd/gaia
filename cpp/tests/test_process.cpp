@@ -4,8 +4,15 @@
 #include <gtest/gtest.h>
 #include <gaia/process.h>
 
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <stdexcept>
+#include <thread>
+#ifndef _WIN32
+#include <csignal>
+#endif
 
 using namespace gaia;
 
@@ -105,6 +112,120 @@ TEST(ProcessRunnerTest, TimeoutKillsProcess) {
     auto result = ProcessRunner::run(sleepCmd, 1000);  // 1 second timeout
 
     EXPECT_TRUE(result.timedOut);
+}
+
+// A build or test command starts other programs; a timeout has to end those too.
+TEST(ProcessRunnerTest, TimeoutKillsWhatTheCommandStarted) {
+    namespace tfs = std::filesystem;
+    const tfs::path dir = tfs::temp_directory_path() /
+                          ("gaia-timeout-tree-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    tfs::create_directories(dir);
+    const auto started = std::chrono::steady_clock::now();
+#ifdef _WIN32
+    // The inner cmd and its ping both hold held.txt open for as long as they live.
+    const auto result = ProcessRunner::run("cmd /c ping -n 60 127.0.0.1 >held.txt", 1000, dir.string());
+#else
+    const auto result = ProcessRunner::run("sleep 60 & echo $! > pid.txt; wait", 1000, dir.string());
+#endif
+    EXPECT_TRUE(result.timedOut);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(20))
+        << "the call waited for what the command had started";
+
+    bool gone = false;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+#ifdef _WIN32
+    while (!gone && std::chrono::steady_clock::now() < deadline) {
+        std::error_code ec;
+        tfs::remove(dir / "held.txt", ec);
+        gone = !ec;  // a sharing violation while a process still has it open
+        if (!gone) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+#else
+    long pid = 0;
+    std::ifstream(dir / "pid.txt") >> pid;
+    ASSERT_GT(pid, 0);
+    while (!gone && std::chrono::steady_clock::now() < deadline) {
+        gone = kill(static_cast<pid_t>(pid), 0) != 0;
+        if (!gone) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+#endif
+    EXPECT_TRUE(gone) << "the process the command started outlived the timeout";
+    std::error_code ec;
+    tfs::remove_all(dir, ec);
+}
+
+// ---------------------------------------------------------------------------
+// stdin
+// ---------------------------------------------------------------------------
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/ioctl.h>
+#include <unistd.h>
+#endif
+
+// This process's stdin can be a host's control pipe (`gaiacpp --stdio`): a
+// command that reads stdin must get end of input, never the host's lines.
+TEST(ProcessRunnerTest, CommandDoesNotReadThisProcessStdin) {
+    const std::string line = "for the parent\n";
+#ifdef _WIN32
+    const char* readsStdin = "findstr parent";
+    SECURITY_ATTRIBUTES sa{sizeof(sa), nullptr, TRUE};
+    HANDLE readEnd = nullptr, writeEnd = nullptr;
+    ASSERT_TRUE(CreatePipe(&readEnd, &writeEnd, &sa, 0));
+    SetHandleInformation(writeEnd, HANDLE_FLAG_INHERIT, 0);
+    DWORD written = 0;
+    ASSERT_TRUE(WriteFile(writeEnd, line.data(), static_cast<DWORD>(line.size()), &written, nullptr));
+    const HANDLE saved = GetStdHandle(STD_INPUT_HANDLE);
+    SetStdHandle(STD_INPUT_HANDLE, readEnd);
+    auto unread = [&] {
+        DWORD n = 0;
+        PeekNamedPipe(readEnd, nullptr, 0, nullptr, &n, nullptr);
+        return static_cast<size_t>(n);
+    };
+#else
+    const char* readsStdin = "cat";
+    int fds[2];
+    ASSERT_EQ(pipe(fds), 0);
+    ASSERT_EQ(write(fds[1], line.data(), line.size()), static_cast<ssize_t>(line.size()));
+    const int saved = dup(STDIN_FILENO);
+    dup2(fds[0], STDIN_FILENO);
+    auto unread = [&] {
+        int n = 0;
+        ioctl(fds[0], FIONREAD, &n);
+        return static_cast<size_t>(n);
+    };
+#endif
+
+    // With the writer still open, a command that got the pipe would wait for more.
+    const auto limited = ProcessRunner::run(readsStdin, 10000);
+    const size_t afterLimited = unread();
+#ifdef _WIN32
+    CloseHandle(writeEnd);
+#else
+    close(fds[1]);
+#endif
+    const auto unlimited = ProcessRunner::run(readsStdin, 0);
+    const size_t afterUnlimited = unread();
+
+#ifdef _WIN32
+    SetStdHandle(STD_INPUT_HANDLE, saved);
+    CloseHandle(readEnd);
+#else
+    dup2(saved, STDIN_FILENO);
+    close(saved);
+    close(fds[0]);
+#endif
+
+    EXPECT_FALSE(limited.timedOut);
+    EXPECT_EQ(limited.stdout_output.find("for the parent"), std::string::npos) << limited.stdout_output;
+    EXPECT_EQ(afterLimited, line.size()) << "the line is still there for this process to read";
+    EXPECT_EQ(unlimited.stdout_output.find("for the parent"), std::string::npos) << unlimited.stdout_output;
+    EXPECT_EQ(afterUnlimited, line.size());
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +617,226 @@ TEST_F(ShellSessionTest, TimeoutKillsTheWholeProcessTree) {
     }
     EXPECT_FALSE(alive) << "orphaned child " << child << " survived the timeout";
 #else
-    GTEST_SKIP() << "Windows needs a Job Object for tree kill (not implemented)";
+    GTEST_SKIP() << "POSIX form of the check; ProcessRunnerTest.TimeoutKillsWhatTheCommandStarted covers Windows";
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// Cancel, non-ASCII folders, the shell's own environment, temp files
+// ---------------------------------------------------------------------------
+
+#include <atomic>
+#include <fstream>
+#include <functional>
+#include <nlohmann/json.hpp>
+
+#include "../agents/bash/bash_tools.h"
+
+namespace {
+
+fs::path freshDir(const std::string& stem) {
+    static std::atomic<int> n{0};
+    const fs::path dir = fs::temp_directory_path() /
+                         fs::u8path(stem + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) +
+                                    "-" + std::to_string(n++));
+    fs::create_directories(dir);
+    return dir;
+}
+
+// The shells a session can run on this machine: the default one, and on
+// Windows the POSIX shell bash_execute prefers when one is installed.
+std::vector<std::string> sessionShells() {
+    std::vector<std::string> shells = {""};
+#ifdef _WIN32
+    const std::string bash = BashTools::detectShell();
+    if (!bash.empty()) shells.push_back(bash);
+#endif
+    return shells;
+}
+
+bool posixSyntax(const std::string& shell) {
+#ifdef _WIN32
+    return !shell.empty();
+#else
+    (void)shell;
+    return true;
+#endif
+}
+
+// Files this process's sessions have in the temp folder right now.
+size_t ownSessionTempFiles() {
+#ifdef _WIN32
+    const std::string prefix = "gaia_shell_" + std::to_string(GetCurrentProcessId()) + "_";
+#else
+    const std::string prefix = "gaia_shell_" + std::to_string(getpid()) + "_";
+#endif
+    size_t count = 0;
+    for (const auto& e : fs::directory_iterator(fs::temp_directory_path())) {
+        count += e.path().filename().u8string().rfind(prefix, 0) == 0 ? 1 : 0;
+    }
+    return count;
+}
+
+// True once nothing holds `held` open any more (Windows), or `pidFile`'s process is gone (POSIX).
+bool treeIsGone(const fs::path& dir) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (std::chrono::steady_clock::now() < deadline) {
+#ifdef _WIN32
+        std::error_code ec;
+        fs::remove(dir / "held.txt", ec);
+        if (!ec) return true;
+#else
+        long pid = 0;
+        std::ifstream(dir / "pid.txt") >> pid;
+        if (pid > 0 && kill(static_cast<pid_t>(pid), 0) != 0) return true;
+#endif
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return false;
+}
+
+#ifdef _WIN32
+const char* kStartThenSleep = "echo x>started.txt & cmd /c ping -n 60 127.0.0.1 >held.txt";
+#else
+const char* kStartThenSleep = "echo x > started.txt; sleep 60 & echo $! > pid.txt; wait";
+#endif
+
+}  // namespace
+
+TEST(ProcessRunnerTest, ACancelEndsTheCommandAndWhatItStarted) {
+    const fs::path dir = freshDir("gaia-cancel-");
+    const auto started = std::chrono::steady_clock::now();
+    ProcessResult result;
+    {
+        // Cancelled as soon as the command has demonstrably started.
+        CommandCancelScope scope([&] { return fs::exists(dir / "started.txt"); });
+        result = ProcessRunner::run(kStartThenSleep, 60000, dir.u8string());
+    }
+    EXPECT_TRUE(result.cancelled);
+    EXPECT_FALSE(result.timedOut);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(20));
+    EXPECT_TRUE(treeIsGone(dir)) << "what the command started outlived the cancel";
+
+    // Outside the scope nothing is cancelled.
+    const auto after = ProcessRunner::run(ECHO_HELLO, 10000, dir.u8string());
+    EXPECT_FALSE(after.cancelled);
+    EXPECT_EQ(after.exitCode, 0);
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
+TEST_F(ShellSessionTest, ACancelEndsTheSessionCommandAndLeavesNoTempFiles) {
+    for (const std::string& shell : sessionShells()) {
+        const fs::path dir = freshDir("gaia-session-cancel-");
+        ShellSession session(dir.u8string(), shell);
+        ASSERT_EQ(session.run(posixSyntax(shell) ? "true" : "rem", 30000).exitCode, 0) << shell;
+        const size_t before = ownSessionTempFiles();
+        const std::string command = posixSyntax(shell) ? "echo x > started.txt; sleep 60"
+                                                        : "echo x>started.txt & ping -n 60 127.0.0.1 >nul";
+        const auto started = std::chrono::steady_clock::now();
+        ProcessResult result;
+        {
+            CommandCancelScope scope([&] { return fs::exists(dir / "started.txt"); });
+            result = session.run(command, 60000);
+        }
+        EXPECT_TRUE(result.cancelled) << shell;
+        EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(20)) << shell;
+        EXPECT_EQ(ownSessionTempFiles(), before) << "a cancelled command left its script files: " << shell;
+
+        const auto timedOut = session.run(posixSyntax(shell) ? "sleep 60" : "ping -n 60 127.0.0.1 >nul", 500);
+        EXPECT_TRUE(timedOut.timedOut) << shell;
+        EXPECT_EQ(ownSessionTempFiles(), before) << "a timed-out command left its script files: " << shell;
+
+        // The session still works afterwards.
+        EXPECT_EQ(session.run(posixSyntax(shell) ? "true" : "rem", 30000).exitCode, 0) << shell;
+        std::error_code ec;
+        fs::remove_all(dir, ec);
+    }
+}
+
+TEST_F(ShellSessionTest, CommandsRunInFoldersWithNonAsciiNames) {
+    for (const std::string& shell : sessionShells()) {
+        const fs::path base = freshDir("gaia-utf8-");
+        const std::string cafe = "caf\xc3\xa9 notes", nihon = "\xe6\x97\xa5\xe6\x9c\xac data";
+        fs::create_directories(base / fs::u8path(cafe));
+        fs::create_directories(base / fs::u8path(nihon));
+        std::ofstream(base / fs::u8path(cafe) / "note.txt") << "remember the milk";
+        const bool posix = posixSyntax(shell);
+
+        ShellSession session((base / fs::u8path(cafe)).u8string(), shell);
+        const auto where = session.run(posix ? "pwd" : "cd", 30000);
+        ASSERT_EQ(where.exitCode, 0) << shell << ": " << where.stderr_output;
+        EXPECT_NE(where.stdout_output.find(cafe), std::string::npos) << shell << ": " << where.stdout_output;
+        EXPECT_NO_THROW(nlohmann::json(where.stdout_output).dump()) << "the folder is reported in UTF-8";
+        EXPECT_NE(session.cwd().find(cafe), std::string::npos) << session.cwd();
+
+        const auto read = session.run(posix ? "cat note.txt" : "type note.txt", 30000);
+        EXPECT_EQ(read.exitCode, 0) << shell << ": " << read.stderr_output;
+        EXPECT_NE(read.stdout_output.find("remember the milk"), std::string::npos) << shell;
+
+        const auto moved = session.run("cd \"../" + nihon + "\"", 30000);
+        EXPECT_EQ(moved.exitCode, 0) << shell << ": " << moved.stderr_output;
+        EXPECT_NE(session.cwd().find(nihon), std::string::npos) << shell << ": " << session.cwd();
+        const auto there = session.run(posix ? "pwd" : "cd", 30000);
+        EXPECT_NE(there.stdout_output.find(nihon), std::string::npos) << shell << ": " << there.stdout_output;
+
+        const auto back = session.run("cd \"../" + cafe + "\"", 30000);
+        EXPECT_EQ(back.exitCode, 0) << shell << ": " << back.stderr_output;
+        EXPECT_NE(session.cwd().find(cafe), std::string::npos) << shell << ": " << session.cwd();
+        const auto again = session.run(posix ? "cat note.txt" : "type note.txt", 30000);
+        EXPECT_NE(again.stdout_output.find("remember the milk"), std::string::npos) << shell;
+
+        EXPECT_TRUE(session.setCwd((base / fs::u8path(nihon)).u8string()));
+        EXPECT_NE(session.cwd().find(nihon), std::string::npos);
+        std::error_code ec;
+        fs::remove_all(base, ec);
+    }
+}
+
+// A shell rewrites the environment it inherits (Git Bash turns PATH into its
+// own form). Only what a command changed counts as the session's.
+TEST_F(ShellSessionTest, EnvironmentHoldsOnlyWhatACommandChanged) {
+    for (const std::string& shell : sessionShells()) {
+        const bool posix = posixSyntax(shell);
+        ShellSession session("", shell);
+        ASSERT_EQ(session.run("echo hello", 30000).exitCode, 0) << shell;
+        std::string names;
+        for (const auto& [name, value] : session.environment()) names += name + " ";
+        EXPECT_TRUE(session.environment().empty()) << shell << " reports: " << names;
+
+        ASSERT_EQ(session.run(posix ? "export GAIA_ONE=1" : "set GAIA_ONE=1", 30000).exitCode, 0);
+        const auto env = session.environment();
+        EXPECT_EQ(env.size(), 1u) << shell;
+        EXPECT_EQ(env.count("GAIA_ONE"), 1u) << shell;
+        const auto echoed = session.run(posix ? "echo $GAIA_ONE" : "echo %GAIA_ONE%", 30000);
+        EXPECT_NE(echoed.stdout_output.find("1"), std::string::npos);
+    }
+}
+
+TEST(ShellSessionTempFiles, LeftoversOfDeadProcessesAreRemovedAndNothingElse) {
+    const fs::path tmp = fs::temp_directory_path();
+#ifdef _WIN32
+    const std::string mine = std::to_string(GetCurrentProcessId());
+#else
+    const std::string mine = std::to_string(getpid());
+#endif
+    // 2147483646 is not a running process on any system this runs on.
+    const std::vector<std::string> stale = {"gaia_shell_2147483646_7.sh", "gaia_shell_2147483646_8.cmd",
+                                            "gaia_shell_2147483646_9.state", "gaia_shell_2147483646_aB3xYz"};
+    const std::vector<std::string> kept = {"gaia_shell_" + mine + "_999999.state",  // this process is alive
+                                           "gaia_shell_2147483646_7.txt",           // not a session file type
+                                           "gaia_shell_notes.txt",                  // no process id
+                                           "gaia_shell_99999999999999_1.sh",        // not a process id
+                                           "my_gaia_shell_2147483646_1.sh"};        // another program's name
+    for (const auto& name : stale) std::ofstream(tmp / name) << "x";
+    for (const auto& name : kept) std::ofstream(tmp / name) << "x";
+
+    const size_t removed = ShellSession::removeStaleTempFiles();
+    EXPECT_GE(removed, stale.size());
+    for (const auto& name : stale) EXPECT_FALSE(fs::exists(tmp / name)) << name;
+    for (const auto& name : kept) {
+        EXPECT_TRUE(fs::exists(tmp / name)) << name;
+        std::error_code ec;
+        fs::remove(tmp / name, ec);
+    }
 }

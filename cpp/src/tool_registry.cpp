@@ -231,17 +231,24 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
             return json{{"status", "error"}, {"error", std::string("Argument validation failed: ") + e.what()}};
         }
     } else if (!tool->parameters.empty()) {
-        // Auto-validate against declared parameter schema
+        // Small models send "5" for 5 and "true" for true; accept the obvious ones.
+        effectiveArgs = coerceArgsToSchema(tool->parameters, effectiveArgs);
         std::string validationError = validateArgsAgainstSchema(tool->parameters, effectiveArgs);
         if (!validationError.empty()) {
             return json{{"status", "error"}, {"error", "Invalid arguments for '" + resolvedName + "': " + validationError}};
         }
     }
 
+    if (preCheck_) {
+        if (auto refused = preCheck_(*tool, effectiveArgs)) return *refused;
+    }
+
     // 3. CONFIRM check
-    if (tool->policy == ToolPolicy::CONFIRM) {
+    if (tool->policy == ToolPolicy::CONFIRM && !(tool->needsConfirm && !tool->needsConfirm(effectiveArgs))) {
         // Fast path: already permanently allowed
-        if (allowedStore_ && allowedStore_->isAlwaysAllowed(resolvedName)) {
+        const std::string grantKey =
+            tool->grantScope ? resolvedName + ":" + tool->grantScope(effectiveArgs) : resolvedName;
+        if (allowedStore_ && allowedStore_->isAlwaysAllowed(grantKey)) {
             // proceed
         } else {
             // Fail-closed: no callback = deny
@@ -252,7 +259,7 @@ json ToolRegistry::executeTool(const std::string& name, const json& args) {
             ToolConfirmResult decision = confirmCallback_(resolvedName, effectiveArgs);
             if (decision == ToolConfirmResult::ALWAYS_ALLOW) {
                 if (allowedStore_) {
-                    allowedStore_->addAlwaysAllowed(resolvedName);
+                    allowedStore_->addAlwaysAllowed(grantKey);
                 }
             } else if (decision == ToolConfirmResult::DENY) {
                 return json{{"status", "error"}, {"error", "Tool '" + resolvedName + "' execution denied by user"}};
@@ -292,12 +299,53 @@ std::string ToolRegistry::toLower(const std::string& s) {
     return result;
 }
 
+json ToolRegistry::coerceArgsToSchema(const std::vector<ToolParameter>& params,
+                                      const json& args) {
+    if (!args.is_object()) return args;
+    json out = args;
+    for (const auto& param : params) {
+        auto it = out.find(param.name);
+        if (it == out.end() || !it->is_string()) continue;
+        const std::string s = it->get<std::string>();
+        if (s.empty()) continue;
+        try {
+            size_t used = 0;
+            if (param.type == ToolParamType::INTEGER) {
+                long long v = std::stoll(s, &used);
+                if (used == s.size()) *it = v;
+            } else if (param.type == ToolParamType::NUMBER) {
+                double v = std::stod(s, &used);
+                if (used == s.size()) *it = v;
+            } else if (param.type == ToolParamType::BOOLEAN) {
+                const std::string l = toLower(s);
+                if (l == "true") *it = true;
+                else if (l == "false") *it = false;
+            }
+        } catch (const std::exception&) {
+            // Not a number: leave it for the type check to reject with its own message.
+        }
+    }
+    return out;
+}
+
 std::string ToolRegistry::validateArgsAgainstSchema(
     const std::vector<ToolParameter>& params, const json& args) {
     // args should be an object (or null/missing treated as empty object)
     json effectiveArgs = (args.is_null() || args.is_discarded()) ? json::object() : args;
     if (!effectiveArgs.is_object()) {
         return "expected object, got " + std::string(effectiveArgs.type_name());
+    }
+
+    if (effectiveArgs.empty()) {
+        std::string required;
+        for (const auto& param : params) {
+            if (param.required) required += (required.empty() ? "'" : ", '") + param.name + "'";
+        }
+        if (!required.empty()) {
+            return "missing required parameter: the call arrived with no arguments; it needs " + required +
+                   ". Send them in the call's arguments object. If an argument is very long, "
+                   "write it to a file in parts instead";
+        }
     }
 
     // Check required parameters are present

@@ -48,8 +48,10 @@ gaia-tui
 
 Every release publishes a native installer per platform at
 [amd-gaia.ai](https://amd-gaia.ai/#install) (the page picks your platform). Each puts
-two binaries on disk and on your PATH — `gaia-tui` (this app) and `gaia-agent` (the flagship agent
-it runs) — so there is nothing to unzip and nothing to `chmod`.
+`gaia-tui` (this app) and `gaia-agent` (the Python GAIA agent) on disk and on your PATH,
+so there is nothing to unzip and nothing to `chmod`. On Windows x64, Linux x64 and Apple
+silicon it also puts `gaiacpp` there, the native GAIA agent, and the terminal runs that one
+instead. See [Which agent program answers](#which-agent-program-answers).
 
 | Platform | File | How to install | Installs to |
 | --- | --- | --- | --- |
@@ -59,7 +61,7 @@ it runs) — so there is nothing to unzip and nothing to `chmod`.
 | Linux x64 (Debian/Ubuntu) | `gaia_<version>_amd64.deb` | `sudo dpkg -i gaia_<version>_amd64.deb` | `/usr/bin` |
 | Linux x64 (Fedora/RHEL) | `gaia-<version>.x86_64.rpm` | `sudo dnf install ./gaia-<version>.x86_64.rpm` | `/usr/bin` |
 
-On macOS and Linux the package carries only those two binaries. The first time you
+On macOS and Linux the package carries only those binaries. The first time you
 open GAIA, setup installs the rest of GAIA (its Python part, the `gaia` command) into
 `~/.gaia`. That takes about two minutes and needs internet. The one-line installer
 (`curl -fsSL https://amd-gaia.ai/install.sh | sh`) installs it up front instead.
@@ -114,7 +116,7 @@ A macOS `.pkg` ships no uninstaller — that is the platform convention, not an
 omission — so remove the files and then forget the receipt:
 
 ```bash
-sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent
+sudo rm -f /usr/local/bin/gaia-tui /usr/local/bin/gaia-agent /usr/local/bin/gaiacpp
 sudo rm -rf /usr/local/share/doc/gaia-tui
 sudo pkgutil --forget ai.amd.gaia.terminal-hub
 sudo pkgutil --forget ai.amd.gaia.terminal-hub.docs
@@ -1008,7 +1010,37 @@ The list shows chats only; `a` in the list (or `/sessions all`) adds eval and
 scheduled runs. Sessions are kept by the GAIA agent the TUI starts itself,
 under `~/.gaia/tui/history/`. When the agent is an installed binary that runs
 through the background service instead, it doesn't keep them yet: `/sessions`
-and `--resume` say so rather than showing an empty list.
+and `--resume` say so rather than showing an empty list. The native agent, `gaiacpp`, doesn't keep sessions yet either: `--resume` with it stops and names the Python agent to use instead.
+
+## Which agent program answers
+
+GAIA's agent comes as two programs: `gaiacpp`, the native one, and `gaia-agent`,
+the Python one. The terminal installers and the one-line installers put `gaiacpp` next
+to `gaia-tui` on Windows x64, Linux x64 and Apple silicon, alongside `gaia-agent`. When
+`gaiacpp` is on the machine (on your PATH, next to `gaia-tui`, or in
+`~/.gaia/agents/gaia`), the terminal UI runs it, and the header says so:
+
+```
+ GAIA  │ agent gaia v0.25.4 (gaiacpp) │ Gemma-4-E4B-it-GGUF
+```
+
+Without `(gaiacpp)` the Python agent is answering, as it does on an Intel Mac,
+Windows on Arm or Linux on Arm, where no `gaiacpp` is built. To pick one yourself, set
+`GAIA_TUI_AGENT` to `gaiacpp`, `gaia-agent`, or the path of either, or pass the
+same value to `--agent-program`:
+
+```bash
+GAIA_TUI_AGENT=gaia-agent gaia-tui
+```
+
+If the one you named is not installed, `gaia-tui` stops and lists where it
+looked; it does not start the other one.
+
+The native agent has no Claude provider. `--use-claude` is refused at launch
+with it, and `/model` with a Claude model is refused in the chat, leaving the
+session on its current model. Use `/provider` to pick a model on this PC or a
+cloud provider that Lemonade offers, or run the Python agent for Claude. The
+developer manual has the [full comparison](/reference/tui-dev#which-agent-program-runs).
 
 ## Running another agent
 

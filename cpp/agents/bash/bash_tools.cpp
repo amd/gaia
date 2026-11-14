@@ -4,6 +4,7 @@
 #include "bash_tools.h"
 
 #include <algorithm>
+#include <filesystem>
 #include <sstream>
 #include <vector>
 
@@ -29,7 +30,19 @@ void BashTools::registerAll(ToolRegistry& registry) {
 // bash_execute
 // ---------------------------------------------------------------------------
 
-ToolInfo BashTools::bashExecute() {
+ShellSession& BashTools::defaultSession() {
+    // One session per process, so cwd and exported variables survive between calls.
+    static ShellSession session("", detectShell());
+    return session;
+}
+
+ToolInfo BashTools::bashExecute() { return bashExecute(nullptr); }
+
+std::shared_ptr<ShellSession> BashTools::newSession(const std::string& dir) {
+    return std::make_shared<ShellSession>(dir, detectShell());
+}
+
+ToolInfo BashTools::bashExecute(std::shared_ptr<ShellSession> session) {
     ToolInfo info;
     info.name = "bash_execute";
     info.description =
@@ -46,13 +59,20 @@ ToolInfo BashTools::bashExecute() {
         {"timeout_ms", ToolParamType::INTEGER, /*required=*/false,
          "Timeout in milliseconds (default: 30000)"},
     };
-    info.callback = doBashExecute;
+    info.callback = [session](const json& args) {
+        return doBashExecute(session ? *session : defaultSession(), args);
+    };
     info.policy = ToolPolicy::CONFIRM;
+    info.grantScope = [](const json& args) { return shellCommandScope(args.value("command", "")); };
+    info.needsConfirm = [](const json& args) {
+        return !isReadOnlyShellCommand(args.value("command", ""), !detectShell().empty());
+    };
     return info;
 }
 
-json BashTools::doBashExecute(const json& args) {
-    // Extract arguments
+bool BashTools::setWorkingDirectory(const std::string& dir) { return defaultSession().setCwd(dir); }
+
+json BashTools::doBashExecute(ShellSession& session, const json& args) {
     std::string command = args.value("command", "");
     if (command.empty()) {
         return {{"error", "command parameter is required"}};
@@ -62,10 +82,6 @@ json BashTools::doBashExecute(const json& args) {
     if (timeoutMs <= 0) {
         timeoutMs = DEFAULT_TIMEOUT_MS;
     }
-
-    // One session per process, so cwd and exported variables survive between
-    // calls. The CONFIRM policy and the output cap below are unchanged.
-    static ShellSession session("", detectShell());
 
     ProcessResult result = session.run(command, timeoutMs, MAX_OUTPUT_BYTES);
 
@@ -84,13 +100,15 @@ json BashTools::doBashExecute(const json& args) {
         stderrStr += TRUNCATION_MSG;
     }
 
-    return {
+    json out = {
         {"stdout", stdoutStr},
         {"stderr", stderrStr},
         {"exit_code", result.exitCode},
         {"timed_out", result.timedOut},
         {"cwd", session.cwd()},
     };
+    if (result.cancelled) out["cancelled"] = true;
+    return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -182,19 +200,64 @@ json BashTools::doEnvInspect(const json& /*args*/) {
 // Shell detection
 // ---------------------------------------------------------------------------
 
+#ifdef _WIN32
+namespace {
+std::vector<std::string> whereAll(const std::string& name) {
+    std::vector<std::string> out;
+    ProcessResult r;
+    try {
+        r = ProcessRunner::run("where " + name + " 2>nul", 3000);
+    } catch (const std::exception&) {
+        return out;
+    }
+    if (r.exitCode != 0) return out;
+    std::istringstream lines(r.stdout_output);
+    for (std::string line; std::getline(lines, line);) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (!line.empty()) out.push_back(line);
+    }
+    return out;
+}
+
+std::string lowered(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+}
+
+std::string findPosixShell() {
+    // System32\bash.exe and the WindowsApps alias launch WSL, whose Linux side
+    // can't see C:\ paths as written.
+    for (const char* name : {"bash", "sh"}) {
+        for (const auto& path : whereAll(name)) {
+            const std::string l = lowered(path);
+            if (l.find("\\windows\\system32\\") != std::string::npos ||
+                l.find("\\windowsapps\\") != std::string::npos) {
+                continue;
+            }
+            return path;
+        }
+    }
+    // Git for Windows usually puts only <git>\cmd on PATH; its bash is beside it.
+    for (const auto& git : whereAll("git")) {
+        const std::filesystem::path root = std::filesystem::path(git).parent_path().parent_path();
+        for (const char* rel : {"bin\\bash.exe", "usr\\bin\\bash.exe"}) {
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(root / rel, ec)) return (root / rel).string();
+        }
+    }
+    return "";
+}
+}  // namespace
+#endif
+
 std::string BashTools::detectShell() {
 #ifdef _WIN32
-    // On Windows, try these in order:
-    // 1. bash (Git Bash, MSYS2, WSL — typically on PATH)
-    // 2. sh (fallback)
-    if (isToolAvailable("bash")) {
-        return "bash";
-    }
-    if (isToolAvailable("sh")) {
-        return "sh";
-    }
-    // No POSIX shell found
-    return "";
+    // Quoted full path of Git Bash / MSYS2, or "" for cmd.exe.
+    static const std::string shell = [] {
+        const std::string path = findPosixShell();
+        return path.empty() ? std::string() : "\"" + path + "\"";
+    }();
+    return shell;
 #else
     // On POSIX, prefer bash, fall back to sh
     if (isToolAvailable("bash")) {

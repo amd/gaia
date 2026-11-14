@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 #include "gaia/mcp_client.h"
+#include "gaia/keyring.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <set>
@@ -632,11 +634,368 @@ json StdioTransport::sendRequest(const std::string& method, const json& params) 
     }
 }
 
+void StdioTransport::sendNotification(const std::string& method, const json& params) {
+    if (!impl_->running) {
+        throw std::runtime_error("Transport not connected");
+    }
+    if (!impl_->isAlive()) {
+        impl_->running = false;
+        throw std::runtime_error("MCP server process died");
+    }
+    json message = {{"jsonrpc", "2.0"}, {"method", method}};
+    if (!params.empty()) message["params"] = params;
+    if (debug_) {
+        std::cerr << "[MCP] Notifying: " << message.dump(2) << std::endl;
+    }
+    impl_->writeLine(message.dump());
+}
+
 bool StdioTransport::isConnected() const {
     return impl_->running && impl_->isAlive();
 }
 
+// ---- MCPTransport default ----
+
+void MCPTransport::sendNotification(const std::string& method, const json& /*params*/) {
+    throw std::logic_error("This MCP transport cannot send notifications (tried '" + method +
+                           "'). Override MCPTransport::sendNotification in the transport.");
+}
+
+// ---- Env expansion ----
+
+std::string expandMcpEnvVars(const std::string& value, const std::string& context) {
+    std::string out;
+    out.reserve(value.size());
+    size_t i = 0;
+    while (i < value.size()) {
+        if (value[i] != '$' || i + 1 >= value.size() || value[i + 1] != '{') {
+            out.push_back(value[i++]);
+            continue;
+        }
+        const size_t close = value.find('}', i + 2);
+        if (close == std::string::npos) {
+            throw std::invalid_argument(context + " has an unterminated '${' in \"" + value +
+                                        "\". Write it as ${VAR_NAME}.");
+        }
+        const std::string var = value.substr(i + 2, close - i - 2);
+        if (var.empty()) {
+            throw std::invalid_argument(context + " has an empty '${}' reference. "
+                                        "Write it as ${VAR_NAME}.");
+        }
+        const char* resolved = std::getenv(var.c_str());  // NOLINT(concurrency-mt-unsafe)
+        if (resolved == nullptr) {
+            throw std::invalid_argument(
+                context + " references the environment variable " + var +
+                ", which is not set. Set " + var +
+                " before starting GAIA, or replace ${" + var + "} in the MCP config "
+                "with the literal value.");
+        }
+        out += resolved;
+        i = close + 1;
+    }
+    return out;
+}
+
+// ---- HttpTransport ----
+
+namespace {
+
+/// Raw JSON-RPC payloads from a server can be large; keep error text readable.
+std::string snippet(const std::string& s) {
+    constexpr size_t kMax = 300;
+    if (s.size() <= kMax) return s;
+    size_t cut = kMax;
+    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) --cut;
+    return s.substr(0, cut) + "... (truncated)";
+}
+
+bool startsWith(const std::string& s, const char* prefix) {
+    return s.rfind(prefix, 0) == 0;
+}
+
+std::string lowerAscii(std::string s) {
+    for (char& c : s) c = toAsciiLower(c);
+    return s;
+}
+
+/// True when `message` is the reply to `requestId`. An error with a null id is
+/// the server rejecting the request itself, so it counts as the reply too.
+bool isReplyTo(const json& message, int requestId) {
+    if (!message.is_object()) return false;
+    auto it = message.find("id");
+    if (it != message.end() && it->is_number_integer()) {
+        return it->get<long long>() == requestId;
+    }
+    return (it == message.end() || it->is_null()) && message.contains("error") &&
+           !message.contains("method");
+}
+
+/// Incremental SSE reader: collects `data:` lines into events and keeps the
+/// first event that is the reply to the request.
+class SseReplyReader {
+public:
+    SseReplyReader(int requestId, std::string url) : requestId_(requestId), url_(std::move(url)) {}
+
+    /// @return false once the reply has been found (stop reading).
+    bool feed(const char* data, size_t len) {
+        buffer_.append(data, len);
+        size_t pos;
+        while (!reply_ && (pos = buffer_.find('\n')) != std::string::npos) {
+            std::string line = buffer_.substr(0, pos);
+            buffer_.erase(0, pos + 1);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            processLine(line);
+        }
+        return !reply_.has_value();
+    }
+
+    /// End of stream: an event without its terminating blank line still counts.
+    void finish() {
+        if (reply_) return;
+        if (!buffer_.empty()) {
+            std::string line = buffer_;
+            buffer_.clear();
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            processLine(line);
+        }
+        dispatch();
+    }
+
+    const std::optional<json>& reply() const { return reply_; }
+
+private:
+    void processLine(const std::string& line) {
+        if (line.empty()) {
+            dispatch();
+            return;
+        }
+        if (startsWith(line, "data:")) {
+            std::string payload = line.substr(5);
+            if (!payload.empty() && payload.front() == ' ') payload.erase(0, 1);
+            if (!data_.empty()) data_ += '\n';
+            data_ += payload;
+        }
+        // `event:`, `id:`, `retry:` and `:` comments carry no JSON-RPC message.
+    }
+
+    void dispatch() {
+        if (data_.empty()) return;
+        std::string payload;
+        payload.swap(data_);
+        json message;
+        try {
+            message = json::parse(payload);
+        } catch (const json::parse_error& e) {
+            throw std::runtime_error("MCP server at " + url_ +
+                                     " sent an SSE event that is not valid JSON (" + e.what() +
+                                     "): " + snippet(payload) +
+                                     ". Check that the URL points at an MCP endpoint.");
+        }
+        if (isReplyTo(message, requestId_)) reply_ = std::move(message);
+    }
+
+    int requestId_;
+    std::string url_;
+    std::string buffer_;
+    std::string data_;
+    std::optional<json> reply_;
+};
+
+} // namespace
+
+HttpTransport::HttpTransport(std::string url, HttpHeaders headers, int timeout, bool debug)
+    : url_(std::move(url)), timeout_(timeout), debug_(debug) {
+    if (!startsWith(url_, "http://") && !startsWith(url_, "https://")) {
+        throw std::invalid_argument("MCP HTTP transport needs an http:// or https:// URL, got \"" +
+                                    url_ + "\".");
+    }
+    if (timeout_ <= 0) {
+        throw std::invalid_argument("MCP HTTP transport timeout must be > 0 seconds, got " +
+                                    std::to_string(timeout_) + ".");
+    }
+    HttpClientConfig cfg;
+    cfg.timeoutSec = timeout_;
+    cfg.connectTimeoutSec = timeout_;
+    cfg.defaultHeaders = std::move(headers);
+    cfg.debug = debug_;
+    http_ = std::make_unique<HttpClient>(cfg);
+}
+
+HttpTransport::~HttpTransport() = default;
+
+bool HttpTransport::connect() {
+    connected_ = true;
+    return true;
+}
+
+void HttpTransport::disconnect() {
+    connected_ = false;
+    sessionId_.clear();
+    protocolVersion_.clear();
+}
+
+bool HttpTransport::isConnected() const {
+    return connected_;
+}
+
+HttpHeaders HttpTransport::requestHeaders() const {
+    HttpHeaders headers = {
+        {"Accept", "application/json, text/event-stream"},
+        {"Content-Type", "application/json"},
+    };
+    if (!sessionId_.empty()) headers["Mcp-Session-Id"] = sessionId_;
+    if (!protocolVersion_.empty()) headers["MCP-Protocol-Version"] = protocolVersion_;
+    return headers;
+}
+
+void HttpTransport::rethrowHttpError(const HttpError& e, const std::string& method) {
+    const int status = e.status();
+    std::string remedy;
+    if (status == 404 && !sessionId_.empty()) {
+        // Spec: 404 on a session id means the server dropped the session.
+        sessionId_.clear();
+        protocolVersion_.clear();
+        connected_ = false;
+        remedy = "The server no longer knows this MCP session; reconnect to start a new one.";
+    } else if (status == 401 || status == 403) {
+        remedy = "Check the credentials in the server's \"headers\" (e.g. Authorization) "
+                 "in the MCP config.";
+    } else if (status == 404 || status == 405) {
+        remedy = "Check that \"url\" in the MCP config is the server's MCP endpoint.";
+    } else if (status >= 500) {
+        remedy = "The MCP server failed; check its logs.";
+    } else if (status == 0) {
+        remedy = "Check that the MCP server is running and that \"url\" in the MCP "
+                 "config is correct.";
+    } else {
+        remedy = "Check the MCP server config for this URL.";
+    }
+    // e.what() already names the URL and the status.
+    throw std::runtime_error("MCP '" + method + "' failed: " + e.what() + " " + remedy);
+}
+
+json HttpTransport::sendRequest(const std::string& method, const json& params) {
+    if (!connected_) {
+        throw std::runtime_error("MCP HTTP transport for " + url_ + " is not connected");
+    }
+    if (method == "initialize") {
+        // A new session starts without the previous one's headers.
+        sessionId_.clear();
+        protocolVersion_.clear();
+    }
+
+    const int id = requestId_++;
+    const json request = {{"jsonrpc", "2.0"}, {"id", id}, {"method", method}, {"params", params}};
+    if (debug_) {
+        std::cerr << "[MCP] POST " << url_ << ": " << request.dump(2) << std::endl;
+    }
+
+    std::string raw;
+    SseReplyReader sse(id, url_);
+    HttpResponse response;
+    try {
+        response = http_->postStreaming(
+            url_, request.dump(),
+            [&](const char* data, size_t len) {
+                raw.append(data, len);
+                return sse.feed(data, len);
+            },
+            requestHeaders(), timeout_, timeout_);
+    } catch (const HttpError& e) {
+        rethrowHttpError(e, method);
+    }
+
+    const std::string contentType = lowerAscii(response.header("Content-Type"));
+    json reply;
+    if (contentType.find("text/event-stream") != std::string::npos) {
+        sse.finish();
+        if (!sse.reply()) {
+            throw std::runtime_error(
+                "MCP server at " + url_ + " closed the SSE stream without answering '" +
+                method + "' (request id " + std::to_string(id) +
+                "). Resuming a stream with Last-Event-ID is not supported.");
+        }
+        reply = *sse.reply();
+    } else if (contentType.find("application/json") != std::string::npos) {
+        json body;
+        try {
+            body = json::parse(raw);
+        } catch (const json::parse_error& e) {
+            throw std::runtime_error("MCP server at " + url_ + " answered '" + method +
+                                     "' with invalid JSON (" + e.what() + "): " + snippet(raw));
+        }
+        if (body.is_array()) {
+            for (auto& message : body) {
+                if (isReplyTo(message, id)) {
+                    reply = std::move(message);
+                    break;
+                }
+            }
+        } else if (isReplyTo(body, id)) {
+            reply = std::move(body);
+        }
+        if (reply.is_null()) {
+            throw std::runtime_error("MCP server at " + url_ + " answered '" + method +
+                                     "' without a JSON-RPC reply to request id " +
+                                     std::to_string(id) + ": " + snippet(raw));
+        }
+    } else {
+        throw std::runtime_error(
+            "MCP server at " + url_ + " answered '" + method + "' with HTTP " +
+            std::to_string(response.status) + " and Content-Type \"" +
+            response.header("Content-Type") +
+            "\"; expected application/json or text/event-stream. Check that \"url\" in "
+            "the MCP config is the server's MCP endpoint.");
+    }
+
+    if (method == "initialize") {
+        sessionId_ = response.header("Mcp-Session-Id");
+        const json result = reply.value("result", json::object());
+        if (result.is_object() && result.contains("protocolVersion") &&
+            result["protocolVersion"].is_string()) {
+            protocolVersion_ = result["protocolVersion"].get<std::string>();
+        }
+    }
+
+    if (debug_) {
+        std::cerr << "[MCP] Received: " << reply.dump(2) << std::endl;
+    }
+    return reply;
+}
+
+void HttpTransport::sendNotification(const std::string& method, const json& params) {
+    if (!connected_) {
+        throw std::runtime_error("MCP HTTP transport for " + url_ + " is not connected");
+    }
+    json message = {{"jsonrpc", "2.0"}, {"method", method}};
+    if (!params.empty()) message["params"] = params;
+    if (debug_) {
+        std::cerr << "[MCP] POST " << url_ << ": " << message.dump(2) << std::endl;
+    }
+
+    HttpResponse response;
+    try {
+        response = http_->post(url_, message.dump(), requestHeaders(), timeout_, timeout_);
+    } catch (const HttpError& e) {
+        rethrowHttpError(e, method);
+    }
+
+    // Spec answer is 202 with no body; a JSON-RPC error body is a rejection.
+    if (response.body.find_first_not_of(" \t\r\n") == std::string::npos) return;
+    json reply = json::parse(response.body, nullptr, /*allow_exceptions=*/false);
+    if (reply.is_object() && reply.contains("error")) {
+        const json& error = reply["error"];
+        const std::string detail =
+            error.is_object() ? error.value("message", error.dump()) : error.dump();
+        throw std::runtime_error("MCP server at " + url_ + " rejected '" + method +
+                                 "' (HTTP " + std::to_string(response.status) + "): " + detail);
+    }
+}
+
 // ---- MCPClient ----
+
+// Same version the Python client requests (src/gaia/mcp/protocol.py).
+constexpr const char* kMcpProtocolVersion = "2025-11-25";
 
 MCPClient::MCPClient(const std::string& name, std::unique_ptr<MCPTransport> transport, bool debug)
     : name_(name), transport_(std::move(transport)), debug_(debug) {}
@@ -649,6 +1008,71 @@ MCPClient MCPClient::fromCommand(const std::string& name, const std::string& com
 
 MCPClient MCPClient::fromConfig(const std::string& name, const json& config,
                                  int timeout, bool debug) {
+    if (!config.is_object()) {
+        throw std::invalid_argument("MCP server '" + name + "' config must be a JSON object");
+    }
+
+    std::string type;
+    if (config.contains("type")) {
+        if (!config["type"].is_string()) {
+            throw std::invalid_argument("MCP server '" + name + "': \"type\" must be a string");
+        }
+        type = config["type"].get<std::string>();
+        if (type != "stdio" && type != "http" && type != "streamable-http") {
+            throw std::invalid_argument(
+                "MCP server '" + name + "' uses the '" + type + "' transport, which GAIA's C++ "
+                "MCP client does not speak. Use \"stdio\" or \"http\" (Streamable HTTP).");
+        }
+    } else if (config.contains("url")) {
+        if (config.contains("command")) {
+            throw std::invalid_argument(
+                "MCP server '" + name + "' has both \"command\" and \"url\"; set \"type\" to "
+                "\"stdio\" or \"http\" to say which transport to use.");
+        }
+        type = "http";
+    } else {
+        type = "stdio";
+    }
+
+    if (type == "http" || type == "streamable-http") {
+        if (!config.contains("url") || !config["url"].is_string() ||
+            config["url"].get<std::string>().empty()) {
+            throw std::invalid_argument(
+                "MCP server '" + name + "' is an HTTP server but has no \"url\". Add the "
+                "server's MCP endpoint, e.g. {\"type\": \"http\", \"url\": "
+                "\"http://localhost:8000/mcp\"}.");
+        }
+        HttpHeaders headers;
+        if (config.contains("headers")) {
+            if (!config["headers"].is_object()) {
+                throw std::invalid_argument("MCP server '" + name +
+                                            "': \"headers\" must be an object of strings");
+            }
+            for (const auto& kv : config["headers"].items()) {
+                const json& hv = kv.value();
+                if (hv.is_object() && hv.contains("$keyring") && hv["$keyring"].is_string()) {
+                    try {
+                        headers[kv.key()] = resolveKeyringReference(hv["$keyring"].get<std::string>());
+                    } catch (const std::exception& e) {
+                        throw std::invalid_argument("MCP server '" + name + "' header \"" +
+                                                    kv.key() + "\": " + e.what());
+                    }
+                    continue;
+                }
+                if (!kv.value().is_string()) {
+                    throw std::invalid_argument("MCP server '" + name + "': headers[\"" +
+                                                kv.key() + "\"] must be a string");
+                }
+                headers[kv.key()] = expandMcpEnvVars(
+                    kv.value().get<std::string>(),
+                    "MCP server '" + name + "' header \"" + kv.key() + "\"");
+            }
+        }
+        auto transport = std::make_unique<HttpTransport>(config["url"].get<std::string>(),
+                                                         std::move(headers), timeout, debug);
+        return MCPClient(name, std::move(transport), debug);
+    }
+
     if (!config.contains("command")) {
         throw std::invalid_argument("Config must include 'command' field");
     }
@@ -664,7 +1088,22 @@ MCPClient MCPClient::fromConfig(const std::string& name, const json& config,
     std::map<std::string, std::string> envVars;
     if (config.contains("env") && config["env"].is_object()) {
         for (const auto& kv : config["env"].items()) {
-            envVars[kv.key()] = kv.value().get<std::string>();
+            const json& v = kv.value();
+            if (v.is_string()) {
+                envVars[kv.key()] = v.get<std::string>();
+            } else if (v.is_number() || v.is_boolean()) {
+                envVars[kv.key()] = v.dump();
+            } else if (v.is_object() && v.contains("$keyring") && v["$keyring"].is_string()) {
+                try {
+                    envVars[kv.key()] = resolveKeyringReference(v["$keyring"].get<std::string>());
+                } catch (const std::exception& e) {
+                    throw std::invalid_argument("MCP server '" + name + "' env \"" + kv.key() +
+                                                "\": " + e.what());
+                }
+            } else {
+                throw std::invalid_argument("MCP server '" + name + "': env[\"" + kv.key() +
+                                            "\"] must be a string or a {\"$keyring\": ...} reference");
+            }
         }
     }
 
@@ -696,7 +1135,7 @@ bool MCPClient::connect() {
     try {
         // Send initialize request
         json response = transport_->sendRequest("initialize", {
-            {"protocolVersion", "1.0.0"},
+            {"protocolVersion", kMcpProtocolVersion},
             {"clientInfo", {
                 {"name", "GAIA C++ MCP Client"},
                 {"version", "0.1.0"}
@@ -712,6 +1151,9 @@ bool MCPClient::connect() {
 
         auto result = response.value("result", json::object());
         serverInfo_ = result.value("serverInfo", json::object());
+        capabilities_ = result.value("capabilities", json::object());
+
+        transport_->sendNotification("notifications/initialized");
 
         if (debug_) {
             std::cerr << "[MCP] Connected to '" << name_ << "' - "
@@ -742,13 +1184,8 @@ std::vector<MCPToolSchema> MCPClient::listTools(bool refresh) {
         return cachedTools_.value();
     }
 
-    json response = transport_->sendRequest("tools/list");
-
-    if (response.contains("error")) {
-        return {};
-    }
-
-    auto result = response.value("result", json::object());
+    // A server that can't list its tools is broken, not tool-less.
+    auto result = request("tools/list", json::object());
     auto toolsData = result.value("tools", json::array());
 
     std::vector<MCPToolSchema> tools;
@@ -799,6 +1236,55 @@ json MCPClient::callTool(const std::string& toolName, const json& arguments) {
     }
 
     return result;
+}
+
+json MCPClient::request(const std::string& method, const json& params) {
+    if (!isConnected()) {
+        throw std::runtime_error("Not connected to MCP server '" + name_ + "'");
+    }
+    json response = transport_->sendRequest(method, params);
+    if (response.contains("error")) {
+        const json& e = response["error"];
+        throw std::runtime_error("MCP server '" + name_ + "' refused " + method + ": " +
+                                 (e.is_object() ? e.value("message", e.dump()) : e.dump()));
+    }
+    return response.value("result", json::object());
+}
+
+json MCPClient::listResources() {
+    json all = json::array();
+    std::string cursor;
+    for (int page = 0; page < 100; ++page) {
+        json params = json::object();
+        if (!cursor.empty()) params["cursor"] = cursor;
+        json r = request("resources/list", params);
+        for (auto& item : r.value("resources", json::array())) all.push_back(item);
+        cursor = r.value("nextCursor", "");
+        if (cursor.empty()) break;
+    }
+    return all;
+}
+
+json MCPClient::readResource(const std::string& uri) {
+    return request("resources/read", {{"uri", uri}}).value("contents", json::array());
+}
+
+json MCPClient::listPrompts() {
+    json all = json::array();
+    std::string cursor;
+    for (int page = 0; page < 100; ++page) {
+        json params = json::object();
+        if (!cursor.empty()) params["cursor"] = cursor;
+        json r = request("prompts/list", params);
+        for (auto& item : r.value("prompts", json::array())) all.push_back(item);
+        cursor = r.value("nextCursor", "");
+        if (cursor.empty()) break;
+    }
+    return all;
+}
+
+json MCPClient::getPrompt(const std::string& name, const json& arguments) {
+    return request("prompts/get", {{"name", name}, {"arguments", arguments}});
 }
 
 } // namespace gaia

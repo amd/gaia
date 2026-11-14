@@ -142,6 +142,7 @@ on:
       - 'pyproject.toml'
       - 'util/release_tag.py'
       - 'util/check_release_assets.py'
+      - 'util/gaiacpp_release_assets.py'
       # custom-agent-mcp-harness runs these against the built wheel.
       - 'src/gaia/agents/base/console.py'
       - 'src/gaia/agents/registry.py'

@@ -10,7 +10,9 @@
 #error "gaia/http_client.h must not include cpp-httplib (it is a PRIVATE dependency)"
 #endif
 
+#include <chrono>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -115,6 +117,94 @@ TEST(HttpClientTest, SetBaseUrlRetargetsSubsequentRequests) {
 
     EXPECT_EQ(http.baseUrl(), server.baseUrl());
     EXPECT_EQ(http.get("/test/echo", {{"X-Gaia-Test", "retargeted"}}).body, "retargeted");
+}
+
+// ---------------------------------------------------------------------------
+// Connection reuse
+// ---------------------------------------------------------------------------
+
+TEST(HttpClientTest, RequestsToOneServerShareOneConnection) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+
+    const std::string first = http.get("/test/peer").body;
+    ASSERT_FALSE(first.empty());
+
+    // Five requests in all: the mock server closes a connection after five.
+    EXPECT_EQ(http.post("/test/peer", "{}").body, first);
+    EXPECT_EQ(http.postMultipart("/test/peer", {{"field", "value", "", ""}}).body, first);
+    std::string streamed;
+    http.postStreaming("/test/peer", "{}", [&](const char* data, std::size_t len) {
+        streamed.append(data, len);
+        return true;
+    });
+    EXPECT_EQ(streamed, first);
+    EXPECT_EQ(http.get(server.baseUrl() + "/test/peer").body, first);
+}
+
+TEST(HttpClientTest, ReconnectsAfterTheServerClosesTheConnection) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+
+    const std::string closed = http.get("/test/peer-close").body;
+    const std::string next   = http.get("/test/peer").body;
+
+    EXPECT_FALSE(next.empty());
+    EXPECT_NE(next, closed);
+    EXPECT_EQ(http.get("/test/peer").body, next);
+}
+
+TEST(HttpClientTest, ReopensAConnectionLeftIdleTooLong) {
+    bench::MockLlmServer server;
+    HttpClientConfig cfg;
+    cfg.baseUrl          = server.baseUrl();
+    cfg.keepAliveIdleSec = 1;
+    HttpClient http(cfg);
+
+    const std::string first = http.get("/test/peer").body;
+    EXPECT_EQ(http.get("/test/peer").body, first);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+
+    const std::string later = http.get("/test/peer").body;
+    EXPECT_FALSE(later.empty());
+    EXPECT_NE(later, first);
+}
+
+TEST(HttpClientTest, ReconnectsAfterAStreamIsStoppedEarly) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+
+    http.postStreaming("/test/peer", "{}", [](const char*, std::size_t) { return false; });
+
+    EXPECT_FALSE(http.get("/test/peer").body.empty());
+}
+
+TEST(HttpClientTest, SeparateServersGetSeparateConnections) {
+    bench::MockLlmServer a;
+    bench::MockLlmServer b;
+    HttpClient http(a.baseUrl());
+
+    const std::string onA = http.get("/test/peer").body;
+    EXPECT_EQ(http.get(b.baseUrl() + "/test/echo", {{"X-Gaia-Test", "b"}}).body, "b");
+    EXPECT_EQ(http.get("/test/peer").body, onA);
+}
+
+TEST(HttpClientTest, RequestDoesNotWaitForABusyConnection) {
+    bench::MockLlmServer server;
+    HttpClient http(server.baseUrl());
+    const std::string kept = http.get("/test/peer").body;
+
+    std::thread slow([&] { http.get("/test/slow"); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+    const auto start = std::chrono::steady_clock::now();
+    const std::string other = http.get("/test/peer").body;
+    const auto waited = std::chrono::steady_clock::now() - start;
+    slow.join();
+
+    EXPECT_NE(other, kept);
+    EXPECT_LT(waited, std::chrono::milliseconds(1500));
+    EXPECT_EQ(http.get("/test/peer").body, kept);
 }
 
 // ---------------------------------------------------------------------------
