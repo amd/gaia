@@ -133,6 +133,18 @@
             "title": "Cancelled",
             "type": "boolean"
           },
+          "documents_left": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many of the turn's attached documents the cancel left unloaded; they load with the next turn. Absent when the run was not loading documents or had loaded them all. The stream a host closes on cancel never carries the loading step's result, so this is where the count comes from.",
+            "title": "Documents Left"
+          },
           "run_id": {
             "title": "Run Id",
             "type": "string"

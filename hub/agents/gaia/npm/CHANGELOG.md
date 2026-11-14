@@ -8,6 +8,13 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **Cancel says how many attached documents were left unloaded.**
+  `POST /v1/gaia/query/{run_id}/cancel` now returns `documents_left` when it
+  stops the loading of the turn's attached documents, including for a cancel
+  that lands just after the run ended. A host that closes the stream on Stop
+  never read the loading step's "Stopped: N documents were not loaded" result,
+  so its user was told nothing. The field is absent when nothing was left.
+
 - **The agent knows an MCP server it set up didn't start.** The notice the
   user sees about MCP servers that couldn't start, couldn't load or went over
   the tool limit now also reaches the model each turn, so asked about one it
