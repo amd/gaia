@@ -7782,7 +7782,7 @@ def _use_hybrid(manager) -> None:
     try:
         settings = HybridSettings.load(cfg)
     except HybridConfigError as e:
-        print(f"❌ {e}", file=sys.stderr)
+        print(f"❌ {_cli_wording(e)}", file=sys.stderr)
         sys.exit(1)
     discovered = {m.id for m in manager.list_models()}
     missing = [

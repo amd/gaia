@@ -776,8 +776,9 @@ Lemonade. `/model` lists downloaded local and discovered cloud chat models,
 grouped by provider, with `(default)` beside the configured default model;
 `/model <id>` switches the live client while preserving conversation and skills.
 A session built on the `hybrid` model id picks a cheap or strong model before
-each turn and runs the whole turn on it; once a turn ran on the strong model the
-session stays there until `/clear`, and a classifier failure means strong.
+each turn and runs the whole turn on it; once the classifier sent a turn to the
+strong model the session stays there until `/clear`. A classifier failure runs
+that one turn on the strong model without pinning the session.
 After 3 failed classifications in a row the turn prints a warning notice with
 the fix. `/model <id>` turns routing off. `process_query`'s result then carries a `route` record (see the
 gateway guide's Hybrid model section).

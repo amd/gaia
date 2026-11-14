@@ -298,10 +298,12 @@ writing stay on the strong model under either policy.
 - **One decision per turn.** Every step of the turn, and every `--attempts`
   attempt, runs on the model chosen at the start, so the tool format and the
   prompt cache stay consistent.
-- **Strong is sticky.** Once a turn in a session ran on the strong model, the
-  rest of that session stays on it without asking the classifier again, so the
-  strong model's prompt cache is never thrown away by a switch back. A new
-  session, or `/clear`, starts fresh.
+- **Strong is sticky.** Once the classifier sends a turn in a session to the
+  strong model, the rest of that session stays on it without asking the
+  classifier again, so the strong model's prompt cache is never thrown away by a
+  switch back. A turn that went strong only because the classifier failed does
+  not pin the session; the next turn is classified again. A new session, or
+  `/clear`, starts fresh.
 - **Unsure means strong, and you are told.** If the classifier errors, times
   out, or answers with anything but a valid label, the turn runs on the strong
   model, and the reason and its fix are logged as a warning (and printed by
@@ -326,8 +328,9 @@ classified (`classified`), how long it took (`seconds`), whether the turn was
 (`classifier_format`), and on a failed classification the `fix`, plus
 `degraded` and its `notice` once failures repeat. Each decision is also logged
 at INFO.
-In the Agent UI, a hybrid chat is labelled as cloud, keeps `hybrid` when you
-switch device, and each answer's footer names the model the turn ran on, with
+A hybrid chat is labelled cloud when its cheap or strong model is a cloud
+model, and local when both run on this PC. In the Agent UI it keeps `hybrid`
+when you switch device, and each answer's footer names the model the turn ran on, with
 the classifier's reason on hover; the degraded notice shows under the answer.
 
 Pick the models with `gaia config`:
@@ -342,8 +345,10 @@ Pick the models with `gaia config`:
 
 Set a model key to `""` to go back to its default. Routing applies to the flagship
 agent's turns in new sessions; picking a model by name (`/model <id>`) ends it for
-that session. Another agent, or a one-off call outside a turn such as a chat
-title or `gaia llm`, uses the cheap model. With
+that session. A `gaia schedule` run is routed too: each run's prompt is
+classified on its own and runs on the model it picks. Another agent, or a
+one-off call outside a turn such as a chat title or `gaia llm`, uses the cheap
+model. With
 [Local only](/reference/cli#local-only) on, a hybrid turn whose models are in
 the cloud is refused before anything is sent. To see how
 a set of prompts would route, run `python util/hybrid_classify_live.py "<prompt>"

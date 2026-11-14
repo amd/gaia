@@ -122,6 +122,7 @@ def configure_console(console: Any, skip_permissions: bool, full_access: bool) -
 
 def _emit_failure(output_format: str, message: str, code: int = 1) -> int:
     """Report a run that never produced a turn, in the shape stdout promises."""
+    message = _cli(message)
     if output_format == "json":
         print(
             json.dumps(
@@ -185,9 +186,12 @@ def run(
             else _run_turn(text, time_limit=time_limit, **turn)
         )
         if route is not None:
-            record["route"] = route.as_record()
+            record["route"] = {
+                k: _cli(v) if k in ("fix", "notice") else v
+                for k, v in route.as_record().items()
+            }
             if record["is_error"] and record.get("error"):
-                record["error"] = (
+                record["error"] = _cli(
                     _explain_routed(settings, route, record["error"]) or record["error"]
                 )
     except KeyboardInterrupt:
@@ -278,13 +282,20 @@ def _route(text: str, model: Optional[str], base_url: Optional[str]):
     )
     print(f"gaia -p: hybrid runs this turn on {route.model} ({label})", file=sys.stderr)
     if route.notice:
-        print(f"⚠️  gaia -p: {route.notice}", file=sys.stderr)
+        print(f"⚠️  gaia -p: {_cli(route.notice)}", file=sys.stderr)
     elif route.fix:
         print(
-            f"⚠️  gaia -p: hybrid's classifier failed. To fix: {route.fix}",
+            f"⚠️  gaia -p: hybrid's classifier failed. To fix: {_cli(route.fix)}",
             file=sys.stderr,
         )
     return route.model, route, router.settings
+
+
+def _cli(text: str) -> str:
+    """*text* with the apps' advice swapped for the CLI's commands."""
+    from gaia.llm.surface_hints import surface_wording
+
+    return surface_wording(text, "cli")
 
 
 def _explain_routed(settings: Any, route: Any, error: Any) -> Optional[str]:

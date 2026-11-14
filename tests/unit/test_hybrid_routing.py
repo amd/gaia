@@ -27,6 +27,7 @@ from gaia.llm.hybrid import (
     prepare_request,
     runs_cheap,
 )
+from gaia.llm.surface_hints import surface_wording
 
 CHEAP = "amd.Cheap"
 STRONG = "amd.Claude-Strong"
@@ -440,11 +441,50 @@ def test_strong_turn_makes_later_turns_strong_without_classifying():
     assert len(client.calls) == 2
 
 
-def test_failed_classification_also_escalates_the_session():
+def test_a_failed_classification_runs_strong_but_does_not_pin_the_session():
     router, client, _ = _router(_http_error(500))
     assert _turn(router, "hello").model == STRONG
+    assert not router.escalated
     client.reply = _label()
-    assert _turn(router, "hello again").sticky
+    route = _turn(router, "hello again")
+    assert route.model == CHEAP and route.classified and not route.sticky
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "not json",
+        "```json\n" + _label() + "\n```",
+        json.dumps({"kind": "write_prose", "difficulty": "1", "stakes": "low"}),
+    ],
+    ids=["garbage", "fenced", "quoted-number"],
+)
+def test_an_unreadable_label_does_not_pin_the_session(reply):
+    router, client, _ = _router(reply)
+    assert _turn(router, "hello").model == STRONG
+    assert not router.escalated
+
+
+def test_a_timed_out_classification_does_not_pin_the_session():
+    router, client, _ = _router(_label(), delay=1.0, timeout=0.1)
+    assert _turn(router, "hello").model == STRONG
+    assert not router.escalated
+
+
+def test_an_empty_request_runs_strong_without_pinning_the_session():
+    router, client, _ = _router(_label())
+    assert _turn(router, "   ").model == STRONG
+    assert not router.escalated
+    assert _turn(router, "Summarise it.").model == CHEAP
+
+
+def test_a_classified_strong_turn_after_failures_still_pins_the_session():
+    router, client, _ = _router(_http_error(500))
+    _turn(router, "hello")
+    client.reply = _label("find_defects", 4, "high")
+    assert _turn(router, "Audit the auth flow.").classified
+    client.reply = _label()
+    assert _turn(router, "Summarise it.").sticky
 
 
 def test_a_strong_pick_that_never_ran_does_not_stick():
@@ -913,21 +953,38 @@ def _cloud_error(status):
 
 
 @pytest.mark.parametrize(
-    "error,fix",
+    "error,fix,cli_fix",
     [
-        (_cloud_error(404), "`gaia gateway models`"),
-        (_http_error(404), "gaia config set hybrid_classifier_model"),
-        (_lemonade_error(401), "`gaia gateway auth`"),
-        (_http_error(403), "`gaia gateway auth`"),
+        (
+            _cloud_error(404),
+            "set hybrid_classifier_model to a model the gateway offers",
+            "`gaia gateway models`",
+        ),
+        (
+            _http_error(404),
+            "hybrid_classifier_model",
+            "`gaia config set hybrid_classifier_model <model id>`",
+        ),
+        (_lemonade_error(401), "AMD LLM gateway key", "`gaia gateway auth`"),
+        (_http_error(403), "AMD LLM gateway key", "`gaia gateway auth`"),
         (
             ClassifierError("the classifier did not answer within 5s"),
-            "hybrid_classifier_timeout",
+            "raise hybrid_classifier_timeout",
+            "`gaia config set hybrid_classifier_timeout <seconds>`",
         ),
-        (_lemonade_error(500), "HTTP 500"),
-        (ConnectionError("refused"), "`gaia gateway test`"),
+        (
+            _lemonade_error(500),
+            "HTTP 500",
+            "`gaia config set hybrid_classifier_model <model id>`",
+        ),
+        (
+            ConnectionError("refused"),
+            "check the connection to the model server",
+            "`gaia gateway test`",
+        ),
     ],
 )
-def test_first_failure_warns_with_its_cause_and_fix(error, fix, caplog):
+def test_first_failure_warns_with_its_cause_and_fix(error, fix, cli_fix, caplog):
     router, _, _ = _router(error)
     with caplog.at_level("WARNING", logger="gaia.llm.hybrid"):
         route = router.decide("Write a short reply to Sam.")
@@ -935,6 +992,9 @@ def test_first_failure_warns_with_its_cause_and_fix(error, fix, caplog):
     assert not route.degraded and route.notice == ""
     (warning,) = [r for r in caplog.records if r.levelname == "WARNING"]
     assert CLASSIFIER in warning.getMessage() and fix in warning.getMessage()
+    # The apps can't run commands, so the fix names none until the CLI swaps one in.
+    assert "`gaia " not in route.fix
+    assert cli_fix in surface_wording(route.fix, "cli")
 
 
 def test_a_bad_label_names_the_classifier_setting():
@@ -957,7 +1017,8 @@ def test_repeated_failures_across_sessions_degrade_loudly(caplog):
     notice = routes[-1].notice
     assert CLASSIFIER in notice and STRONG in notice
     assert f"failed {hybrid.DEGRADED_AFTER + 1} turns in a row" in notice
-    assert "gaia config set hybrid_classifier_model" in notice
+    assert "hybrid_classifier_model" in notice and "`gaia " not in notice
+    assert "gaia config set hybrid_classifier_model" in surface_wording(notice, "cli")
     warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
     # The first failure and the turn it became degraded, not every turn.
     assert len(warnings) == 2
@@ -1141,8 +1202,8 @@ def test_route_failure_names_the_config_key(model, key):
     settings = _router(_label())[0].settings
     message = hybrid.explain_route_failure(settings, model, _cloud_error(404))
     assert message.startswith(f"hybrid routed this turn to {model} ({key})")
-    assert "unavailable" in message
-    assert f"`gaia config set {key} <model id>`" in message
+    assert "unavailable" in message and "`gaia " not in message
+    assert f"`gaia config set {key} <model id>`" in surface_wording(message, "cli")
 
 
 def test_route_failure_without_a_status_is_left_alone():
@@ -1288,3 +1349,50 @@ def test_every_agent_ui_build_names_its_agent():
         for start in calls:
             call = source[start : source.index(")", start)]
             assert "agent_type=" in call, f"{module.__name__}: {call}"
+
+
+# --- the apps' wording names no command; the CLI's does ------------------------
+
+
+@pytest.mark.parametrize(
+    "kwargs,cli_fix",
+    [
+        ({"policy": "fast"}, "`gaia config set hybrid_policy quality`"),
+        ({"classifier_timeout_s": 0}, "`gaia config set hybrid_classifier_timeout 15`"),
+        ({"cheap_model": " "}, "`gaia config set hybrid_cheap_model <model id>`"),
+        (
+            {"strong_model": "Hybrid"},
+            "`gaia config set hybrid_strong_model <model id>`",
+        ),
+    ],
+)
+def test_a_config_error_names_the_file_and_the_cli_its_command(kwargs, cli_fix):
+    with pytest.raises(HybridConfigError) as excinfo:
+        HybridSettings(**{"cheap_model": CHEAP, "strong_model": STRONG, **kwargs})
+    message = str(excinfo.value)
+    assert "~/.gaia/config.json" in message and "`gaia " not in message
+    assert cli_fix in surface_wording(message, "cli")
+    # The service surface is a headless host: it gets the command too.
+    assert cli_fix in surface_wording(message, "service")
+    # The TUI and the Agent UI keep the file wording.
+    assert surface_wording(message, "tui") == message
+    assert surface_wording(message, "agent_ui") == message
+
+
+def test_p_prints_the_cli_command_for_a_failed_classification(
+    print_mode_doubles, capsys
+):
+    print_mode, _, _ = print_mode_doubles
+    fix = hybrid.model_fix("hybrid_classifier_model", CLASSIFIER, _http_error(404))
+    _CountingRouter.route = hybrid.RouteDecision(
+        model=STRONG, reason="classifier failed", fix=fix
+    )
+    try:
+        assert print_mode.run("hi", model="hybrid", output_format="json") == 0
+    finally:
+        _CountingRouter.route = None
+    out, err = capsys.readouterr()
+    record = json.loads(out.strip().splitlines()[-1])
+    command = "`gaia config set hybrid_classifier_model <model id>`"
+    assert command in record["route"]["fix"] and command in err
+    assert "~/.gaia/config.json" not in err

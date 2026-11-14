@@ -196,6 +196,24 @@ async def test_a_relayed_cheap_route_is_billed_as_the_local_model(
     assert "place" not in done["stats"]
 
 
+async def test_a_degraded_route_notice_reads_in_agent_ui_terms(relayed, hybrid_config):
+    """The agent words its fix for the TUI; the Agent UI names its own screen."""
+    from gaia.llm.surface_hints import (
+        AGENT_UI_GATEWAY_KEY_HINT,
+        TUI_GATEWAY_KEY_HINT,
+    )
+
+    notice = f"hybrid: the classifier failed. To fix: {TUI_GATEWAY_KEY_HINT}"
+    route = {**ROUTE, "degraded": True, "notice": notice, "fix": notice}
+    _proxy, done, answer, _record = await _hybrid_turn(relayed, {"route": route})
+
+    for shown in (done["stats"]["route"], answer["inference_stats"]["route"]):
+        assert AGENT_UI_GATEWAY_KEY_HINT in shown["notice"]
+        assert AGENT_UI_GATEWAY_KEY_HINT in shown["fix"]
+        assert "/gateway" not in shown["notice"]
+        assert shown["model"] == GLM
+
+
 @pytest.mark.parametrize(
     "bad",
     [None, "amd.Claude", {"reason": "no model"}, {"model": 7}, ["model", GLM]],

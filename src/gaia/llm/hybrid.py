@@ -8,9 +8,11 @@ decision is made once per user turn, before any step, so every tool step of
 the turn runs on one model with one tool format and one prompt cache.
 
 Anything that stops the classifier from producing a valid label sends the turn
-to the strong model, with the reason recorded. Once a turn in a session ran on
-the strong model, the session's later turns stay on it ("sticky"), so a
-conversation never throws away the strong model's prompt cache by flipping back.
+to the strong model, with the reason recorded. Once the classifier sent a turn
+in a session to the strong model, the session's later turns stay on it
+("sticky"), so a conversation never throws away the strong model's prompt cache
+by flipping back. A turn that went strong only because the classifier failed
+does not make the session sticky.
 """
 
 from __future__ import annotations
@@ -91,6 +93,51 @@ _GAIA_CONTEXT_BLOCK = re.compile(
 #: Consecutive failed classifications in this process before users are told.
 DEGRADED_AFTER = 3
 
+_MODEL_KEYS = ("hybrid_cheap_model", "hybrid_strong_model", "hybrid_classifier_model")
+_CONFIG_FILE = "~/.gaia/config.json"
+
+# The apps have no screen for the hybrid_* settings, so their wording names the
+# config file; surface_wording swaps in the CLI's command for each phrase.
+APP_SET_MODEL = {
+    k: f"set {k} to another model id in {_CONFIG_FILE}" for k in _MODEL_KEYS
+}
+APP_SET_DEPLOYED_MODEL = {
+    k: f"set {k} to a model the gateway offers in {_CONFIG_FILE}" for k in _MODEL_KEYS
+}
+APP_RAISE_TIMEOUT = (
+    f"raise hybrid_classifier_timeout (up to {MAX_CLASSIFIER_TIMEOUT_S} seconds) "
+    f"in {_CONFIG_FILE}"
+)
+APP_RESET_TIMEOUT = (
+    f"set hybrid_classifier_timeout to {DEFAULT_CLASSIFIER_TIMEOUT_S} in {_CONFIG_FILE}"
+)
+APP_RESET_POLICY = f"set hybrid_policy to {DEFAULT_POLICY} in {_CONFIG_FILE}"
+APP_CHECK_CONNECTION = "check the connection to the model server and try again"
+
+#: (app wording, the CLI's) for every phrase above.
+CLI_HYBRID_SWAPS = (
+    *((APP_SET_MODEL[k], f"run `gaia config set {k} <model id>`") for k in _MODEL_KEYS),
+    *(
+        (
+            APP_SET_DEPLOYED_MODEL[k],
+            f"run `gaia gateway models` to see what is deployed, then "
+            f"`gaia config set {k} <model id>`",
+        )
+        for k in _MODEL_KEYS
+    ),
+    (
+        APP_RAISE_TIMEOUT,
+        "raise the limit with `gaia config set hybrid_classifier_timeout "
+        f"<seconds>` (up to {MAX_CLASSIFIER_TIMEOUT_S})",
+    ),
+    (
+        APP_RESET_TIMEOUT,
+        f"run `gaia config set hybrid_classifier_timeout {DEFAULT_CLASSIFIER_TIMEOUT_S}`",
+    ),
+    (APP_RESET_POLICY, f"run `gaia config set hybrid_policy {DEFAULT_POLICY}`"),
+    (APP_CHECK_CONNECTION, "run `gaia gateway test` to check the connection"),
+)
+
 #: Classifier request formats: JSON mode, else plain text read as JSON.
 FORMAT_JSON = "json_object"
 FORMAT_PLAIN = "plain"
@@ -130,14 +177,13 @@ class HybridSettings:
         ):
             if not isinstance(value, str) or not value.strip():
                 raise HybridConfigError(
-                    f"{key} must name a model, but it is {value!r}. Run "
-                    f"`gaia config set {key} <model id>`, or `gaia config set "
-                    f'{key} ""` for the default.'
+                    f"{key} must name a model, but it is {value!r}. To fix, "
+                    f"{APP_SET_MODEL[key]}."
                 )
             if is_hybrid_model(value):
                 raise HybridConfigError(
-                    f"{key} is 'hybrid', which would route to itself. Set it to "
-                    f"a concrete model with `gaia config set {key} <model id>`."
+                    f"{key} is 'hybrid', which would route to itself. To fix, "
+                    f"{APP_SET_MODEL[key]}."
                 )
         if self.cheap_model == self.strong_model:
             raise HybridConfigError(
@@ -154,14 +200,12 @@ class HybridSettings:
         ):
             raise HybridConfigError(
                 f"hybrid_classifier_timeout must be 1-{MAX_CLASSIFIER_TIMEOUT_S} "
-                f"seconds, but it is {timeout!r}. Run `gaia config set "
-                f"hybrid_classifier_timeout {DEFAULT_CLASSIFIER_TIMEOUT_S}`."
+                f"seconds, but it is {timeout!r}. To fix, {APP_RESET_TIMEOUT}."
             )
         if self.policy not in POLICIES:
             raise HybridConfigError(
                 f"hybrid_policy must be one of {', '.join(POLICIES)}, but it is "
-                f"{self.policy!r}. Run `gaia config set hybrid_policy "
-                f"{DEFAULT_POLICY}` for the default."
+                f"{self.policy!r}. To fix, {APP_RESET_POLICY}."
             )
 
     @classmethod
@@ -261,33 +305,34 @@ def _is_timeout(error: BaseException) -> bool:
 
 def model_fix(key: str, model: str, error: BaseException) -> str:
     """What to change when *model*, set by config *key*, failed with *error*."""
+    from gaia.llm.surface_hints import TUI_GATEWAY_KEY_HINT
+
     status = _http_status(error)
-    use_other = f"`gaia config set {key} <model id>`"
+    use_other = APP_SET_MODEL[key]
     if status == 404:
         return (
-            f"the model server reports {model} unavailable (HTTP 404). Run "
-            f"`gaia gateway models` to see what is deployed, then {use_other}."
+            f"the model server reports {model} unavailable (HTTP 404), so "
+            f"{APP_SET_DEPLOYED_MODEL[key]}."
         )
     if status in (401, 403):
         return (
-            f"the request for {model} was refused (HTTP {status}). Run "
-            "`gaia gateway auth` to sign in again."
+            f"the request for {model} was refused (HTTP {status}). "
+            f"{TUI_GATEWAY_KEY_HINT}"
         )
     if _is_timeout(error):
         return (
-            f"{model} answered too slowly. Raise the limit with `gaia config set "
-            f"hybrid_classifier_timeout <seconds>` (up to "
-            f"{MAX_CLASSIFIER_TIMEOUT_S}), or {use_other} for a faster model."
+            f"{model} answered too slowly, so {APP_RAISE_TIMEOUT}, or "
+            f"{use_other} for a faster model."
             if key == "hybrid_classifier_model"
             else f"{model} answered too slowly. Try again, or {use_other}."
         )
     if status == 400:
-        return f"{model} rejected the request (HTTP 400). Use {use_other}."
+        return f"{model} rejected the request (HTTP 400), so {use_other}."
     if isinstance(error, ClassifierError):
-        return f"{model} did not return a valid label. Use {use_other}."
+        return f"{model} did not return a valid label, so {use_other}."
     if status is not None:
         return f"{model} failed (HTTP {status}). Try again, or {use_other}."
-    return f"{model} could not be reached. Run `gaia gateway test`, or {use_other}."
+    return f"{model} could not be reached, so {APP_CHECK_CONNECTION}, or {use_other}."
 
 
 def _config_key(settings: "HybridSettings", model: str) -> Optional[str]:
@@ -658,7 +703,11 @@ class HybridRouter:
             self.escalated = False
 
     def ran(self, decision: RouteDecision) -> None:
-        """Record that a turn ran on *decision*'s model: strong makes it sticky."""
-        if decision.model == self.settings.strong_model:
+        """Record that a turn ran on *decision*'s model.
+
+        Only a turn the classifier judged strong makes the session sticky: one
+        that went strong because the classifier failed must not pin it.
+        """
+        if decision.model == self.settings.strong_model and decision.classified:
             with self._lock:
                 self.escalated = True

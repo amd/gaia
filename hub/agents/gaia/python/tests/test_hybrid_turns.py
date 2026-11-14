@@ -215,7 +215,7 @@ def test_routed_model_refusal_names_its_setting(monkeypatch):
     assert message.startswith(
         f"hybrid routed this turn to {CHEAP} (hybrid_cheap_model)"
     )
-    assert "gaia config set hybrid_cheap_model" in message
+    assert "set hybrid_cheap_model to a model the gateway offers" in message
 
 
 def test_refusal_without_routing_is_unchanged(monkeypatch):

@@ -3683,6 +3683,16 @@ def _turn_route(result: Any) -> Optional[dict]:
     return route if isinstance(route, dict) else None
 
 
+def _ran_on(model_id: Optional[str], route: Optional[dict], agent: Any = None):
+    """The model a turn on *model_id* ran on: a hybrid turn's route picks it.
+
+    A hybrid turn without a route falls to *agent*'s model, else stays ``hybrid``.
+    """
+    if not is_hybrid_model(model_id):
+        return model_id
+    return (route or {}).get("model") or _effective_model(agent, model_id)
+
+
 def _cloud_place(loc: InferenceLocation) -> Optional[str]:
     """A cloud turn's place, e.g. "via Fireworks AI"; None for a local one."""
     return f"via {loc.display}" if loc.remote else None
@@ -5604,12 +5614,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             route = result_holder.get("route") or _turn_route(
                 result_holder.get("result")
             )
-            ran_on = (
-                (route or {}).get("model")
-                or _effective_model(result_holder.get("agent"), model_id)
-                if is_hybrid_model(model_id)
-                else model_id
-            )
+            ran_on = _ran_on(model_id, route, result_holder.get("agent"))
             if is_hybrid_model(model_id) and ran_on == model_id:
                 logger.warning(
                     "Relayed hybrid turn for session %s came back without its "
@@ -5697,7 +5702,15 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             if turn_place:
                 inference_stats = {**(inference_stats or {}), "place": turn_place}
             if route:
-                inference_stats = {**(inference_stats or {}), "route": route}
+                shown = {
+                    k: (
+                        _agent_ui_wording(v)
+                        if k in ("fix", "notice") and isinstance(v, str)
+                        else v
+                    )
+                    for k, v in route.items()
+                }
+                inference_stats = {**(inference_stats or {}), "route": shown}
             # Settings › Model shows each model's speed measured on this PC.
             if inference_stats is not None and ran_on:
                 inference_stats["measured_model"] = ran_on
