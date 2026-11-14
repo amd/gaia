@@ -11,8 +11,9 @@
  */
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { ChatView } from '../ChatView';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ChatView, RESEND_STATUS_LIMIT_MS } from '../ChatView';
+import { useBackendStore } from '../../stores/backendStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useNotificationStore } from '../../stores/notificationStore';
 import type { Message, Session, SystemStatus } from '../../types';
@@ -74,11 +75,16 @@ beforeEach(() => {
     });
     Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', { configurable: true, value: vi.fn() });
     useNotificationStore.setState({ notifications: [] });
+    useBackendStore.setState({ lifecycle: null, restartError: null });
     useChatStore.setState({
         sessions: [SESSION], currentSessionId: SESSION.id, messages: [...server], documents: [],
         isStreaming: false, streamingContent: '', agentSteps: [], cards: [], isLoadingMessages: false,
         pendingPrompt: null, systemStatus: STARTING, messageQueues: {}, pendingDeleteIds: [],
     });
+});
+
+afterEach(() => {
+    vi.useRealTimers();
 });
 
 async function tryAgain() {
@@ -130,5 +136,41 @@ describe('Try again after the backend restarted', () => {
         await waitFor(() => expect(
             (useChatStore.getState().messageQueues[SESSION.id] ?? []).map((m) => m.text),
         ).toEqual([QUESTION]));
+    });
+
+    it('says GAIA is starting at once while the desktop app restarts the backend', async () => {
+        useBackendStore.setState({
+            lifecycle: {
+                status: 'restarting', port: null, since: Date.now(), attempt: 1, maxRestarts: 3,
+                nextAttemptAt: null, lastExit: null, lastError: null, apiBase: null,
+            },
+        });
+        mockedApi.getSystemStatus.mockResolvedValue(READY);
+        await tryAgain();
+
+        await waitFor(() => expect(useNotificationStore.getState().notifications).toHaveLength(1));
+        expect(useNotificationStore.getState().notifications[0].message).toMatch(/still starting/);
+        expect(mockedApi.getSystemStatus).not.toHaveBeenCalled();
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+        expect(sends).toEqual([]);
+    });
+
+    it('stops waiting on a status that never answers, so the next Try again is not ignored', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        mockedApi.getSystemStatus.mockImplementationOnce((signal?: AbortSignal) => new Promise((_, reject) => {
+            signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')));
+        }));
+        await tryAgain();
+        await act(async () => { vi.advanceTimersByTime(RESEND_STATUS_LIMIT_MS); });
+
+        await waitFor(() => expect(useNotificationStore.getState().notifications).toHaveLength(1));
+        expect(useNotificationStore.getState().notifications[0].message).toMatch(/still starting/);
+        expect(mockedApi.deleteMessagesFrom).not.toHaveBeenCalled();
+
+        mockedApi.getSystemStatus.mockResolvedValue(READY);
+        await act(async () => {
+            fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+        });
+        await waitFor(() => expect(sends).toEqual([QUESTION]));
     });
 });

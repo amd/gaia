@@ -10,6 +10,7 @@ import { agentEventToStep } from '../utils/streamSteps';
 import { applyStatusEvent, selectToolStatus } from '../utils/statusEvents';
 import { TOOL_CALL_JSON_SAFETY_RE, carryMessageKeys, fromApiMessages, isEchoOfFailedTool, keepFailedReply, onlyFailureAfter, persistedQuestion, policyReceiptAnchor, stripStreamingEnvelope } from '../utils/chatStream';
 import { useChatStore } from '../stores/chatStore';
+import { useBackendStore } from '../stores/backendStore';
 import { useReadAloudStore } from '../stores/readAloudStore';
 import { readsAloudWhenDone } from '../utils/autoReadAloud';
 import { useReadAloudSettings } from '../hooks/useReadAloudSettings';
@@ -29,7 +30,7 @@ import { isAuthRequiredMessage } from './email/EmailConnectCta';
 import { connectCardProviders, hasConnectCard } from './render/ConnectAccountCard';
 import { ConnectorRetryBanner } from './ConnectorRetryBanner';
 import { answerQuestion, QuestionGoneError, resolveTypedAnswer, waitingQuestionId } from './render/NeedsInputCard';
-import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage } from '../types';
+import type { Message, StreamEvent, AgentStep, RenderCardData, ContextUsage, SystemStatus } from '../types';
 
 import './ChatView.css';
 import { Composer } from './Composer';
@@ -80,6 +81,8 @@ const RECONNECTING_PREFIX = 'Connection lost. Reconnecting';
 
 /** How long Stop waits for the server's closing `done` before the client closes the turn itself. */
 export const STOP_GRACE_MS = 15_000;
+/** How long Try again waits on the status before saying GAIA is still starting. */
+export const RESEND_STATUS_LIMIT_MS = 10_000;
 
 export { QUEUE_BUSY_WAIT_MS } from '../services/queueDispatch';
 
@@ -1291,7 +1294,11 @@ export function ChatView({ sessionId }: ChatViewProps) {
     const resendingRef = useRef(false);
     // True once the text went out or waits in the queue; false when nothing was sent and nothing deleted.
     const handleResendMessage = useCallback(async (message: Message, failedReply?: Message, editedText?: string): Promise<boolean> => {
-        if (isStreaming || message.role !== 'user' || resendingRef.current) return false;
+        if (isStreaming || message.role !== 'user') return false;
+        if (resendingRef.current) {
+            log.chat.info(`Resend of message ${message.id} ignored: an earlier resend is still running`);
+            return false;
+        }
         resendingRef.current = true;
         const text = editedText ?? message.content;
         log.chat.info(`Resending message ${message.id} from session=${sessionId}`, { preview: text.slice(0, 80) });
@@ -1312,9 +1319,26 @@ export function ChatView({ sessionId }: ChatViewProps) {
 
         try {
             // The old turn is deleted below, so first make sure the new one can start.
+            if (useBackendStore.getState().lifecycle?.status === 'restarting') {
+                log.chat.info(`Resend of message ${message.id} refused: the desktop app is restarting the backend`);
+                notify(t('chatError.resendStarting'));
+                return false;
+            }
             if (isStarting(useChatStore.getState().systemStatus)) {
                 // Read while a restarted backend booted, the status may be stale.
-                const status = await api.getSystemStatus();
+                const limit = new AbortController();
+                const timer = setTimeout(() => limit.abort(), RESEND_STATUS_LIMIT_MS);
+                let status: SystemStatus;
+                try {
+                    status = await api.getSystemStatus(limit.signal);
+                } catch (err) {
+                    if (!limit.signal.aborted) throw err;
+                    log.chat.warn(`Resend of message ${message.id} refused: no status within ${RESEND_STATUS_LIMIT_MS} ms`);
+                    notify(t('chatError.resendStarting'));
+                    return false;
+                } finally {
+                    clearTimeout(timer);
+                }
                 useChatStore.getState().setSystemStatus(status);
                 if (isStarting(status)) {
                     notify(t('chatError.resendStarting'));
