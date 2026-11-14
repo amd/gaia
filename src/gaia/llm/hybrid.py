@@ -94,7 +94,8 @@ _GAIA_CONTEXT_BLOCK = re.compile(
 DEGRADED_AFTER = 3
 
 _MODEL_KEYS = ("hybrid_cheap_model", "hybrid_strong_model", "hybrid_classifier_model")
-_CONFIG_FILE = "~/.gaia/config.json"
+# Named, not pathed: GAIA_HOME can move the folder.
+_CONFIG_FILE = "config.json in your GAIA folder"
 
 # The apps have no screen for the hybrid_* settings, so their wording names the
 # config file; surface_wording swaps in the CLI's command for each phrase.

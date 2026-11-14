@@ -1370,7 +1370,7 @@ def test_a_config_error_names_the_file_and_the_cli_its_command(kwargs, cli_fix):
     with pytest.raises(HybridConfigError) as excinfo:
         HybridSettings(**{"cheap_model": CHEAP, "strong_model": STRONG, **kwargs})
     message = str(excinfo.value)
-    assert "~/.gaia/config.json" in message and "`gaia " not in message
+    assert "config.json in your GAIA folder" in message and "`gaia " not in message
     assert cli_fix in surface_wording(message, "cli")
     # The service surface is a headless host: it gets the command too.
     assert cli_fix in surface_wording(message, "service")
@@ -1395,4 +1395,4 @@ def test_p_prints_the_cli_command_for_a_failed_classification(
     record = json.loads(out.strip().splitlines()[-1])
     command = "`gaia config set hybrid_classifier_model <model id>`"
     assert command in record["route"]["fix"] and command in err
-    assert "~/.gaia/config.json" not in err
+    assert "config.json in your GAIA folder" not in err
