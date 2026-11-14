@@ -27,7 +27,8 @@ def fold(text: str) -> str:
     if text.isascii():
         return text.lower()
     decomposed = unicodedata.normalize("NFKD", text)
-    return "".join(c for c in decomposed if not unicodedata.combining(c)).casefold()
+    marks = {ord(c): None for c in set(decomposed) if unicodedata.combining(c)}
+    return decomposed.translate(marks).casefold()
 
 
 def _fold_with_map(text: str) -> Tuple[str, List[int]]:
