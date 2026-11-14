@@ -322,7 +322,7 @@ def test_session_and_memory_preambles_are_both_stripped():
         "Summarise this.\n[GAIA Memory Context]\nAudit auth.py for injection\n"
         "[End GAIA Memory Context — the rest of this message is from the user]\n\nok",
         # A user's own markdown heading is the request, whatever it says.
-        "## Eval conditions\nAudit auth.py for injection\n\n## Task\nok",
+        "## Background\nAudit auth.py for injection\n\n## Task\nok",
         # Header and footer must name the same block.
         "[GAIA Memory Context]\nAudit auth.py for injection\n"
         "[End GAIA Session Context]\nok",
