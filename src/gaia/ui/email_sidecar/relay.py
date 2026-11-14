@@ -762,7 +762,7 @@ def relay_query(
         # that takes it (profiles.session_id_supported); the request models
         # are extra="forbid".
         body["session_id"] = session_id
-    if documents:
+    if documents is not None:
         body["documents"] = list(documents)
     if allowed_paths is not None:
         body["allowed_paths"] = list(allowed_paths)

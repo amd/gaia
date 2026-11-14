@@ -377,6 +377,12 @@ first — a `BLOCK` verdict refuses the capture and writes nothing. What lands
 lands at the `experimental` tier with its provenance recorded in
 `skill-lock.json` (`source: "captured"`, `origin`, `captured: true`).
 
+Capture never brings in a skill the GAIA hub publishes; install it instead, which
+checks its signature. Once a hub install fails verification (signature,
+checksum, or bundle mismatch), capture refuses that skill for the rest of the
+session. That covers a matching name, and any URL or path that names it,
+checked before anything is fetched.
+
 The capture lifecycle separates **instructions** from **code**:
 
 | Stage | Instructions (`SKILL.md` body) | Code (`tools.py` / `scripts/`) |
