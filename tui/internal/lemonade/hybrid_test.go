@@ -92,6 +92,32 @@ func TestBadHybridKeysAreRefusedWithTheFix(t *testing.T) {
 	}
 }
 
+func TestHybridWithOneModelForBothRolesIsRefused(t *testing.T) {
+	for name, doc := range map[string]map[string]any{
+		"both set":                    {"hybrid_cheap_model": "amd.same", "hybrid_strong_model": " amd.same "},
+		"cheap is the strong default": {"hybrid_cheap_model": DefaultHybridStrongModel},
+		"strong is the cheap default": {"hybrid_strong_model": DefaultHybridCheapModel},
+	} {
+		t.Run(name, func(t *testing.T) {
+			useConfig(t, doc)
+			h, err := ReadHybridModels()
+			if err == nil {
+				t.Fatalf("one model for both roles must be refused, got %+v", h)
+			}
+			for _, want := range []string{"nothing to route between", "instead of 'hybrid'"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("err = %q, want it to contain %q", err, want)
+				}
+			}
+		})
+	}
+	// Ids differing only in case are distinct models, as they are in Python.
+	useConfig(t, map[string]any{"hybrid_cheap_model": "amd.Model", "hybrid_strong_model": "amd.model"})
+	if _, err := ReadHybridModels(); err != nil {
+		t.Fatalf("distinct ids must be accepted: %v", err)
+	}
+}
+
 // The TUI checks the models Python routes to, so the defaults must agree.
 func TestHybridDefaultsMatchPython(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "src", "gaia", "llm", "hybrid.py"))

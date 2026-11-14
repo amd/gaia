@@ -116,5 +116,11 @@ func resolveHybrid(doc map[string]any, path string) (HybridModels, error) {
 	if h.Classifier == "" {
 		h.Classifier = h.Cheap
 	}
+	// Same refusal as HybridSettings in gaia.llm.hybrid.
+	if h.Cheap == h.Strong {
+		return HybridModels{}, fmt.Errorf("hybrid_cheap_model and hybrid_strong_model are both '%s', "+
+			"so there is nothing to route between. Set one of them to another model, "+
+			"or pick that model directly instead of 'hybrid'", h.Cheap)
+	}
 	return h, nil
 }
