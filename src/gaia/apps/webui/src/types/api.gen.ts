@@ -245,6 +245,7 @@ export interface AgentStepResponse {
   detail?: string | null;
   fileList?: FileListResponse | null;
   id: number;
+  kept?: boolean | null;
   label: string;
   latencyMs?: number | null;
   mcpOutput?: McpOutputResponse | null;

@@ -238,6 +238,8 @@ interface ChatState {
     updateLastToolStep: (updates: Partial<AgentStep>) => void;
     /** Note a skill_use event; with a step, add it before the running tool call that brought the skill in. */
     addSkillStep: (step: AgentStep | null) => void;
+    /** Add a finished step before the running tool call it happened inside, so steps stay in time order. */
+    addStepBeforeRunningCall: (step: AgentStep) => void;
     /** Counts skill_use events, so the session panel's Skills section re-reads mid-reply. */
     skillUses: number;
     clearAgentSteps: () => void;
@@ -368,6 +370,19 @@ interface ChatState {
 
 /** The sidebar's Memory, Scheduled tasks and Documents: opening one closes the others. */
 const NO_DESTINATION = { showMemoryDashboard: false, showSchedules: false, showDocLibrary: false };
+
+/** *steps* with *step* just before the last tool call if it is still running, else at the end. */
+function beforeRunningCall(steps: AgentStep[], step: AgentStep): AgentStep[] {
+    const next = [...steps];
+    let at = next.length;
+    for (let i = next.length - 1; i >= 0; i--) {
+        if (next[i].type !== 'tool') continue;
+        if (next[i].active) at = i;
+        break;
+    }
+    next.splice(at, 0, step);
+    return next;
+}
 
 export const useChatStore = create<ChatState>((set, get) => ({
     agents: [],
@@ -545,16 +560,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
     addSkillStep: (step) =>
         set((state) => {
             if (!step) return { skillUses: state.skillUses + 1 };
-            const steps = [...state.agentSteps];
-            let at = steps.length;
-            for (let i = steps.length - 1; i >= 0; i--) {
-                if (steps[i].type !== 'tool') continue;
-                if (steps[i].active) at = i;
-                break;
-            }
-            steps.splice(at, 0, step);
-            return { agentSteps: steps, skillUses: state.skillUses + 1 };
+            return { agentSteps: beforeRunningCall(state.agentSteps, step), skillUses: state.skillUses + 1 };
         }),
+    addStepBeforeRunningCall: (step) =>
+        set((state) => ({ agentSteps: beforeRunningCall(state.agentSteps, step) })),
     skillUses: 0,
     clearAgentSteps: () => set({ agentSteps: [], liveStatus: null, livePhase: null, recordingStages: null, recordingSections: null, awaitingUser: false }),
     liveStatus: null,

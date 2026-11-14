@@ -51,6 +51,32 @@ describe('localizeLiveStatus', () => {
         expect(ar('Reading page 4 of 12…')).not.toBe('Reading page 4 of 12…');
     });
 
+    it('says the speech model download in the chosen language, with its percent and size', () => {
+        const running = 'Downloading the speech model, one time — 37% of 1.6 GB';
+        expect(localizeLiveStatus(tEn, running)).toBe(running);
+        expect(localizeLiveStatus(tEn, 'Downloading the speech model, one time (1.6 GB)'))
+            .toBe('Downloading the speech model, one time (1.6 GB)');
+        expect(localizeLiveStatus(tEn, 'Downloaded the speech model (1.6 GB)')).toBe('Downloaded the speech model (1.6 GB)');
+        expect(ar(running)).toContain('37%');
+        expect(ar(running)).toContain('1.6');
+        expect(ar(running)).toContain('نموذج الكلام');
+    });
+
+    it('says the NPU part of the speech model in the chosen language', () => {
+        const percent = 'Downloading the speech model, one time — 37% of 1.6 GB, then 0.7 GB for the NPU';
+        const npu = "Downloading the speech model's NPU part (0.7 GB), no progress shown";
+        const npuNoSize = "Downloading the speech model's NPU part, no progress shown";
+        for (const label of [percent, npu, npuNoSize, 'Loading the speech model']) {
+            expect(localizeLiveStatus(tEn, label)).toBe(label);
+            expect(ar(label)).toContain('نموذج الكلام');
+        }
+        expect(ar(percent)).toContain('37%');
+        expect(ar(percent)).toContain('0.7');
+        expect(ar(npu)).toContain('0.7');
+        // No percent to show for the NPU part, so it says why instead of a bare timer.
+        expect(ar(npu)).toContain('دون عرض للتقدّم');
+    });
+
     it('shows a line it does not know as written', () => {
         for (const label of [
             'Writing file — 120 characters so far',

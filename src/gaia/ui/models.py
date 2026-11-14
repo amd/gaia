@@ -663,6 +663,8 @@ class AgentStepResponse(BaseModel):
     # card from history.
     render: Optional[str] = None
     data: Optional[Any] = None
+    # A finished status the user waited on (a download); a reopened chat still shows it.
+    kept: Optional[bool] = None
     # A model the call needed and didn't find; a reopened chat still offers it.
     needsModel: Optional[str] = None
 

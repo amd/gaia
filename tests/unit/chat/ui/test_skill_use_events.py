@@ -4,7 +4,7 @@
 
 import pytest
 
-from gaia.ui._chat_helpers import _insert_skill_step
+from gaia.ui._chat_helpers import _insert_before_running_call
 from gaia.ui.sse_handler import SSEOutputHandler
 from gaia.ui.sse_translation import CanonicalTranslator
 
@@ -37,7 +37,7 @@ def _tool(step_id, active):
 def test_the_skill_step_goes_before_the_call_that_brought_it_in():
     steps = [{"id": 1, "type": "thinking"}, _tool(2, active=True)]
 
-    _insert_skill_step(steps, {"id": 3, "type": "tool", "tool": "use_skill"})
+    _insert_before_running_call(steps, {"id": 3, "type": "tool", "tool": "use_skill"})
 
     assert [s["id"] for s in steps] == [1, 3, 2]
 
@@ -68,6 +68,6 @@ def test_query_clients_see_the_skill_in_use(how, expected):
 def test_with_no_call_running_the_skill_step_goes_last():
     steps = [_tool(1, active=False), {"id": 2, "type": "thinking"}]
 
-    _insert_skill_step(steps, {"id": 3, "type": "tool", "tool": "use_skill"})
+    _insert_before_running_call(steps, {"id": 3, "type": "tool", "tool": "use_skill"})
 
     assert [s["id"] for s in steps] == [1, 2, 3]

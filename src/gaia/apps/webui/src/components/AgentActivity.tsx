@@ -374,7 +374,7 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
         // Merge consecutive status steps, never over a warning
-        if (step.type === 'status' && prev && prev.type === 'status' && prev.success !== false && step.active !== false) {
+        if (step.type === 'status' && prev && prev.type === 'status' && prev.success !== false && step.active !== false && !prev.kept && !step.kept) {
             result[result.length - 1] = { ...step, label: step.label || prev.label };
             return;
         }
@@ -384,7 +384,7 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
         // Absorb status into adjacent thinking — preserve thinking detail
-        if (step.type === 'status' && step.success !== false && prev && prev.type === 'thinking') {
+        if (step.type === 'status' && step.success !== false && !step.kept && prev && prev.type === 'thinking') {
             result[result.length - 1] = { ...prev, label: step.label || prev.label, active: step.active ?? prev.active };
             return;
         }
@@ -505,6 +505,11 @@ function isTurnError(row: ActivityRow): boolean {
 /** A warning the agent raised mid-turn ("Execution paused"); it carries no phase for the live line, and stays with the turn. */
 function isWarning(row: ActivityRow): boolean {
     return row.type === 'status' && row.success === false;
+}
+
+/** A finished step the user waited on (a download); it stays with the turn, unlike a passing status. */
+function isKept(row: ActivityRow): boolean {
+    return row.type === 'status' && row.kept === true;
 }
 
 /** Whether a row draws anything; the live line, not a row, says what the model is doing. */
@@ -631,7 +636,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
             // While the turn runs, the live checklist below stands in for it.
             return step === livePlan ? null : <PlanChecklist key={step.id} step={step} />;
         }
-        if (step.type === 'status') return <FlowWarning key={step.id} step={step} />;
+        if (step.type === 'status') return step.kept ? <FlowDone key={step.id} step={step} /> : <FlowWarning key={step.id} step={step} />;
         if (step.type === 'error') return <FlowError key={step.id} step={step} />;
         if (step.type === 'policy_alert') return <FlowPolicyAlert key={step.id} step={step} />;
         return null;
@@ -643,7 +648,7 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
 
     const lastIndex = timeline.length - 1;
     const visibleRows = (rows: ActivityRow[]) =>
-        foldThoughts(rows.filter((r) => (shownWhenDone(r) || isWarning(r)) && !isPlanShownLive(r, livePlan)));
+        foldThoughts(rows.filter((r) => (shownWhenDone(r) || isWarning(r) || isKept(r)) && !isPlanShownLive(r, livePlan)));
     // Calls in the runs that are open; folded runs and lone rows have nothing to sift.
     const openCalls = timeline.reduce((n, item, i) => {
         if (item.kind !== 'steps') return n;
@@ -740,6 +745,15 @@ function FlowWarning({ step }: { step: AgentStep }) {
     return (
         <div className="flow-warning" role="status">
             <AlertCircle size={13} />
+            <span>{step.label}</span>
+        </div>
+    );
+}
+
+function FlowDone({ step }: { step: AgentStep }) {
+    return (
+        <div className="flow-done" role="status">
+            <Check size={13} aria-hidden="true" />
             <span>{step.label}</span>
         </div>
     );

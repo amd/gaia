@@ -6,7 +6,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -184,13 +184,13 @@ class TestTranscribeMedia:
             {
                 "start_progress": lambda self, msg: shown.append(("status", msg)),
                 "report_phase": lambda self, phase, msg, **f: shown.append(
-                    (RECORDING_STAGES[f["stage"]], msg)
+                    (RECORDING_STAGES[f["stage"]] if "stage" in f else phase, msg)
                 ),
             },
         )()
 
         def ensure_model(say=None, on_percent=None):
-            say("Downloading Whisper-Large-v3-Turbo through Lemonade (~1.55 GB)")
+            say("Downloading Whisper-Large-v3-Turbo through Lemonade (~1.62 GB)")
             for percent in (0, 40, 100):
                 on_percent(percent)
 
@@ -202,21 +202,33 @@ class TestTranscribeMedia:
         ):
             client.return_value.model = "Whisper-Large-v3-Turbo"
             client.return_value.ensure_model.side_effect = ensure_model
+            client.return_value.npu_part.return_value = None
             client.return_value.transcribe.return_value = _transcript()
             result = host._transcribe_media(
                 str(source), output_path=str(tmp_path / "standup.txt")
             )
 
         assert result["status"] == "success", result
-        downloading = [msg for kind, msg in shown if "speech model" in msg]
+        # A phase of its own: a status without one never reaches the window.
+        downloading = [(kind, msg) for kind, msg in shown if "speech model" in msg]
         assert downloading == [
-            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), one time",
-            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), "
-            "one time — 0%",
-            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), "
-            "one time — 40%",
-            "Downloading the speech model Whisper-Large-v3-Turbo (~1.55 GB), "
-            "one time — 100%",
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time (1.6 GB)",
+            ),
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time — 0% of 1.6 GB",
+            ),
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time — 40% of 1.6 GB",
+            ),
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time — 100% of 1.6 GB",
+            ),
+            ("speech_model_downloaded", "Downloaded the speech model (1.6 GB)"),
         ]
         # Its own state: nothing says "Transcribing" until the download is over.
         first_transcribe = next(
@@ -227,11 +239,13 @@ class TestTranscribeMedia:
         )
         assert last_download < first_transcribe
 
-    def test_a_first_load_is_shown_before_transcribing(self, tmp_path):
-        """Lemonade's load-time NPU cache download must not hide under "Transcribing"."""
+    def _run_with(self, tmp_path, ensure_model, npu_part, loaded=False):
+        """Transcribe a 14 s file and return what the window was shown, in order."""
+        from gaia.audio.lemonade_asr import NpuPart
+
         source = tmp_path / "standup.wav"
         source.write_bytes(b"stub")
-        shown, calls = [], []
+        shown = []
         host = Host()
         host.console = type(
             "Console",
@@ -239,11 +253,10 @@ class TestTranscribeMedia:
             {
                 "start_progress": lambda self, msg: shown.append(("status", msg)),
                 "report_phase": lambda self, phase, msg, **f: shown.append(
-                    (RECORDING_STAGES[f["stage"]], msg)
+                    (RECORDING_STAGES[f["stage"]] if "stage" in f else phase, msg)
                 ),
             },
         )()
-
         with (
             patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
             patch("gaia.audio.media.probe_duration", return_value=14.0),
@@ -252,49 +265,98 @@ class TestTranscribeMedia:
         ):
             asr = client.return_value
             asr.model = "Whisper-Large-v3-Turbo"
-            asr.ensure_model.return_value = True
-            asr.is_loaded.return_value = False
-            asr.load.side_effect = lambda: calls.append("load")
+            asr.ensure_model.side_effect = ensure_model
+            asr.npu_part.return_value = NpuPart(size_gb=npu_part) if npu_part else None
+            asr.is_loaded.return_value = loaded
+            asr.load.side_effect = lambda: shown.append(("load", ""))
             asr.transcribe.side_effect = lambda *a, **k: (
-                calls.append("transcribe") or _transcript()
+                shown.append(("transcribed", "")) or _transcript()
             )
             result = host._transcribe_media(
                 str(source), output_path=str(tmp_path / "standup.txt")
             )
-
         assert result["status"] == "success", result
-        assert calls == ["load", "transcribe"]
-        preparing = [
-            i for i, (_, msg) in enumerate(shown) if msg.startswith("Preparing")
-        ]
-        assert [shown[i][1] for i in preparing] == [
-            "Preparing the speech model Whisper-Large-v3-Turbo, one time — "
-            "this can download more files"
-        ]
-        first_transcribe = next(
-            i for i, (kind, _) in enumerate(shown) if kind == "transcribe"
-        )
-        assert preparing[0] < first_transcribe
+        return shown
 
-    def test_a_loaded_speech_model_is_not_loaded_again(self, tmp_path):
-        source = tmp_path / "standup.wav"
-        source.write_bytes(b"stub")
-        with (
-            patch("gaia.audio.media.ensure_ffmpeg", return_value="ffmpeg"),
-            patch("gaia.audio.media.probe_duration", return_value=14.0),
-            patch("gaia.audio.media.to_wav16k_mono", return_value=source),
-            patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
-        ):
-            client.return_value.model = "Whisper-Large-v3-Turbo"
-            client.return_value.ensure_model.return_value = False
-            client.return_value.is_loaded.return_value = True
-            client.return_value.transcribe.return_value = _transcript()
-            result = Host()._transcribe_media(
-                str(source), output_path=str(tmp_path / "standup.txt")
-            )
+    def test_the_npu_part_of_the_speech_model_is_its_own_download(self, tmp_path):
+        """On an NPU PC the first load fetches 0.7 GB more; it is not "Transcribing"."""
 
-        assert result["status"] == "success", result
-        client.return_value.load.assert_not_called()
+        def ensure_model(say=None, on_percent=None):
+            say("Downloading Whisper-Large-v3-Turbo through Lemonade (~1.62 GB)")
+            on_percent(40)
+
+        shown = self._run_with(tmp_path, ensure_model, npu_part=0.74)
+
+        downloading = [(k, m) for k, m in shown if "speech model" in m or k == "load"]
+        assert downloading == [
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time (2.4 GB)",
+            ),
+            (
+                "speech_model_download",
+                "Downloading the speech model, one time — 40% of 1.6 GB, "
+                "then 0.7 GB for the NPU",
+            ),
+            (
+                "speech_model_download",
+                # No percent to give: the line says so rather than leave a bare timer.
+                "Downloading the speech model's NPU part (0.7 GB), no progress shown",
+            ),
+            ("load", ""),
+            ("speech_model_downloaded", "Downloaded the speech model (2.4 GB)"),
+        ]
+        kinds = [k for k, _ in shown]
+        assert kinds.index("load") < kinds.index("transcribe")
+
+    def test_a_downloaded_model_on_the_npu_loads_before_transcribing(self, tmp_path):
+        shown = self._run_with(tmp_path, lambda **k: None, npu_part=0.74)
+
+        assert ("speech_model_download", "Loading the speech model") in shown
+        kinds = [k for k, _ in shown]
+        assert kinds.index("load") < kinds.index("transcribe")
+        assert "speech_model_downloaded" not in kinds
+
+    def test_a_loaded_model_is_not_loaded_again(self, tmp_path):
+        shown = self._run_with(tmp_path, lambda **k: None, npu_part=0.74, loaded=True)
+
+        assert "load" not in [k for k, _ in shown]
+        assert not [m for _, m in shown if "speech model" in m]
+
+    def test_the_terminal_shows_the_speech_model_download(self):
+        """`gaia chat` draws phases with its spinner; it went quiet during the download."""
+        from gaia.agents.base.console import AgentConsole
+        from gaia.audio.lemonade_asr import NpuPart
+
+        def ensure_model(say=None, on_percent=None):
+            say("Downloading Whisper-Large-v3-Turbo through Lemonade (~1.62 GB)")
+            on_percent(40)
+
+        client = MagicMock(model="Whisper-Large-v3-Turbo")
+        client.ensure_model.side_effect = ensure_model
+        client.npu_part.return_value = NpuPart(size_gb=0.74)
+        client.is_loaded.return_value = False
+        host = Host()
+        host.console = AgentConsole()
+        with patch.object(AgentConsole, "start_progress") as spinner:
+            host._download_speech_model(client)
+
+        shown = [c.args[0] for c in spinner.call_args_list]
+        assert shown == [
+            "Downloading the speech model, one time (2.4 GB)",
+            "Downloading the speech model, one time — 40% of 1.6 GB, "
+            "then 0.7 GB for the NPU",
+            "Downloading the speech model's NPU part (0.7 GB), no progress shown",
+            "Downloaded the speech model (2.4 GB)",
+        ]
+
+    def test_a_first_load_off_the_npu_is_its_own_step(self, tmp_path):
+        """A load is not hidden under "Transcribing" on a GPU or CPU PC either."""
+        shown = self._run_with(tmp_path, lambda **k: None, npu_part=None)
+
+        assert ("speech_model_download", "Loading the speech model") in shown
+        kinds = [k for k, _ in shown]
+        assert kinds.index("load") < kinds.index("transcribe")
 
     def test_a_failed_speech_model_load_is_the_tools_error(self, tmp_path):
         source = tmp_path / "standup.wav"
@@ -306,6 +368,7 @@ class TestTranscribeMedia:
             patch("gaia.audio.lemonade_asr.LemonadeASRClient") as client,
         ):
             client.return_value.model = "Whisper-Large-v3-Turbo"
+            client.return_value.npu_part.return_value = None
             client.return_value.is_loaded.return_value = False
             client.return_value.load.side_effect = LemonadeASRError(
                 "Lemonade returned 500 for load of Whisper-Large-v3-Turbo"
