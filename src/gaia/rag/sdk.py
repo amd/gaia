@@ -62,6 +62,7 @@ from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_tex
 from gaia.rag.html_utils import HTML_EXTENSIONS, extract_html_text
 from gaia.rag.normalize import search_form
 from gaia.rag.pdf_tables import looks_tabular, tables_as_rows
+from gaia.rag.pdf_utils import pdf_parse_limits
 from gaia.rag.text_units import (
     SENTENCE_BREAK,
     estimate_tokens,
@@ -1844,6 +1845,34 @@ class RAGSDK:
         return tables_as_rows(text, layout, header)
 
     def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
+        """:meth:`_read_pdf_text` under :func:`pdf_parse_limits`.
+
+        pypdf parses lazily, so the whole read, not just the open, runs under them.
+        """
+        try:
+            from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+                LimitReachedError,
+            )
+        except ImportError:  # pragma: no cover - PyPDF2 has no such limit
+            LimitReachedError = ()  # type: ignore[assignment,misc]
+
+        try:
+            with pdf_parse_limits():
+                return self._read_pdf_text(pdf_path)
+        except LimitReachedError as e:
+            file_name = Path(pdf_path).name
+            self.log.error(f"PDF past GAIA's parsing limits {pdf_path}: {e}")
+            raise PDFExtractionError(
+                f"Could not read PDF: {file_name}\n"
+                "Reason: the file is too complex for GAIA to read safely "
+                f"(pypdf: {e}).\n"
+                "Suggestions:\n"
+                "  1. Print it to a new PDF (Print, then 'Save as PDF' or "
+                "'Microsoft Print to PDF') and index the new file\n"
+                "  2. Or split it into smaller PDFs and index those"
+            ) from e
+
+    def _read_pdf_text(self, pdf_path: str) -> tuple:
         """
         Extract text from PDF file with VLM for images (always enabled if available).
 

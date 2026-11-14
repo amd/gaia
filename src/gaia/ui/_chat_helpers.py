@@ -6124,11 +6124,14 @@ def _page_total(filepath: Path) -> Optional[int]:
     if filepath.suffix.lower() != ".pdf":
         return None
     from pypdf import PdfReader
-    from pypdf.errors import PdfReadError
+    from pypdf.errors import LimitReachedError, PdfReadError
+
+    from gaia.rag.pdf_utils import pdf_parse_limits
 
     try:
-        return len(PdfReader(str(filepath)).pages)
-    except (PdfReadError, OSError, ValueError) as e:
+        with pdf_parse_limits():
+            return len(PdfReader(str(filepath)).pages)
+    except (PdfReadError, LimitReachedError, OSError, ValueError) as e:
         # Indexing reads the file again and reports the failure properly.
         logger.info("No page count for %s: %s", filepath.name, e)
         return None
