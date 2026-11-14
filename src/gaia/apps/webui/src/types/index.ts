@@ -375,8 +375,8 @@ export interface TurnPerformance {
     /** A null name is tool time measured outside any recorded step. */
     tools: Array<{ name: string | null; seconds: number | null }>;
     loads: Array<{ model: string | null; seconds: number; replaced?: string[]; during?: 'request' }>;
-    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). */
-    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported'; usd: number | null };
+    /** `unreported`: the model is priced, but its usage never came back (a stopped answer). `no_reply`: a cloud turn that failed or was stopped before any reply; spending leaves it out. */
+    cost: { kind: 'local' | 'estimate' | 'unknown' | 'unreported' | 'no_reply'; usd: number | null };
     /** Why a value is unknown, keyed by field. */
     unknown?: Partial<Record<'first_token_seconds' | 'prefill_tokens_per_second' | 'generation_tokens_per_second' | 'tokens' | 'tokens_cached' | 'time', string>>;
 }

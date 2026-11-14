@@ -59,6 +59,7 @@ function documentMeta(say: Say, pages: number[] | undefined, passages: number): 
 function costText(summary: TurnSummary, t: Translate = tEn, stopped = false): string {
     const { cost } = summary;
     if (cost.kind === 'local') return t('rail.costLocal');
+    if (cost.kind === 'no_reply') return t('rail.costNoReply');
     if (cost.kind === 'unreported') return t(stopped ? 'rail.costUnreportedStopped' : 'rail.costUnreported');
     if (cost.kind === 'estimate' && typeof cost.usd === 'number') {
         const usd = cost.usd < 0.01 ? cost.usd.toFixed(4) : cost.usd.toFixed(2);

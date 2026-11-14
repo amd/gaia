@@ -78,6 +78,27 @@ def turn_cost(
     return price(model_id, input_tokens, cached_tokens, output_tokens)
 
 
+#: The saved cost of a cloud turn no reply came from: not a stopped answer.
+NO_REPLY_COST_KIND = "no_reply"
+
+
+def never_answered(failed: bool, stats: Optional[Dict[str, Any]]) -> bool:
+    """Whether a turn failed with no tokens reported: no reply, so nothing billed.
+
+    The one rule for a turn left out of spending, in Settings and the composer.
+    """
+    stats = stats or {}
+    inp, out = stats.get("input_tokens"), stats.get("output_tokens")
+    return failed and not (isinstance(inp, int) and isinstance(out, int) and inp + out)
+
+
+def mark_no_reply(summary: Dict[str, Any]) -> None:
+    """Save a cloud turn's cost as none: no reply came from it."""
+    cost = summary.get("cost")
+    if isinstance(cost, dict) and cost.get("kind") in ("unreported", "unknown"):
+        summary["cost"] = {"kind": NO_REPLY_COST_KIND}
+
+
 def record_turn(
     db,
     model_id: Optional[str],
@@ -93,7 +114,7 @@ def record_turn(
         return
     stats = stats or {}
     inp, out = stats.get("input_tokens"), stats.get("output_tokens")
-    if failed and not (isinstance(inp, int) and isinstance(out, int) and inp + out):
+    if never_answered(failed, stats):
         return
     usd = None
     if isinstance(inp, int) and isinstance(out, int):
@@ -213,9 +234,15 @@ def _answered_at(answer: Dict[str, Any]) -> dt.datetime:
 
 
 def _cloud_answers(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The answers a cloud model gave; a local answer cost nothing and is left out."""
+    """The answers a cloud model gave; a local answer cost nothing and is left out.
+
+    So is a turn no reply came from, as the month leaves it out.
+    """
     return [
-        r for r in rows if r["cost"].get("kind") == "estimate" or r["remote"] is True
+        r
+        for r in rows
+        if r["cost"].get("kind") == "estimate"
+        or (r["remote"] is True and r["cost"].get("kind") != NO_REPLY_COST_KIND)
     ]
 
 
