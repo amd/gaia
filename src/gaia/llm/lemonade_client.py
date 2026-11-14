@@ -50,6 +50,7 @@ from openai import OpenAI
 
 from gaia.env import child_env, load_env
 from gaia.llm import call_ledger, stream_watchdog
+from gaia.llm.degenerate_output import DegenerateOutput, DegenerateOutputGuard
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -4165,6 +4166,20 @@ class ContextReloadUnverifiedError(LemonadeClientError):
     """Reloads at a larger ``ctx_size`` keep reporting a smaller window."""
 
 
+#: Said when a reply stream turned into noise (``degenerate_output``).
+OUTPUT_CORRUPTED_MESSAGE = (
+    "The model's answer came back corrupted, so GAIA stopped it. "
+    "Send your message again."
+)
+
+
+class ModelOutputCorruptedError(LemonadeClientError):
+    """A streamed reply turned into noise and was stopped before it was shown."""
+
+    def __init__(self, message: str = OUTPUT_CORRUPTED_MESSAGE):
+        super().__init__(message)
+
+
 class UsersServerUnchangedError(LemonadeClientError):
     """A request would change the setup of the user's own Lemonade Server.
 
@@ -7400,14 +7415,26 @@ class LemonadeClient:
             # Use the client to stream responses
             self.log.debug(f"Starting streaming chat completion with model: {model}")
             tokens_generated = 0
-            for chunk in self._model_retrier(model, gone_server_waits=True).stream(
+            guard = DegenerateOutputGuard()
+            chunks = self._model_retrier(model, gone_server_waits=True).stream(
                 _open_stream,
                 is_output=_chunk_carries_output,
                 what="Streaming chat completion",
                 state=state,
-            ):
-                tokens_generated += 1
-                yield chunk
+            )
+            try:
+                for chunk in chunks:
+                    for out in guard.feed(chunk):
+                        tokens_generated += 1
+                        yield out
+                for out in guard.flush():
+                    tokens_generated += 1
+                    yield out
+            except DegenerateOutput as noise:
+                chunks.close()
+                raise self._corrupted_output(
+                    model, messages, noise, tokens_generated
+                ) from noise
 
             self.log.debug(
                 f"Completed streaming chat completion. Generated {tokens_generated} tokens."
@@ -7415,6 +7442,8 @@ class LemonadeClient:
             if tokens_generated and self.cloud_model_provider(model):
                 _remember_cloud_availability(model, ok=True)
 
+        except ModelOutputCorruptedError:
+            raise
         except openai.AuthenticationError as e:
             if self.cloud_model_provider(model):
                 if _own_key_refused(getattr(e, "body", None)):
@@ -7466,6 +7495,50 @@ class LemonadeClient:
             )
         finally:
             self._record_retries(state)
+
+    def _corrupted_output(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        noise: DegenerateOutput,
+        chunks_shown: int,
+    ) -> ModelOutputCorruptedError:
+        """Log a reply that turned into noise and unload the model that sent it.
+
+        The noise outlived new conversations on the same loaded model, so the
+        next message must get a freshly loaded one.
+        """
+        chars = sum(len(str(m.get("content") or "")) for m in messages)
+        self.log.error(
+            "%s's reply turned into noise (%s %r) after %d chunk(s); stopped it. "
+            "Request: %d messages, %d chars (~%d tokens).",
+            model,
+            noise.reason,
+            noise.token[:40],
+            chunks_shown,
+            len(messages),
+            chars,
+            chars // 4,
+        )
+        if self.cloud_model_provider(model) or is_cloud_model(model):
+            return ModelOutputCorruptedError()
+        if self.is_users_server():
+            self.log.error(
+                "Left %s loaded: GAIA does not unload models on your own "
+                "Lemonade Server. Unload or reload it there if this repeats.",
+                model,
+            )
+            return ModelOutputCorruptedError()
+        try:
+            self.unload_model(model, ignore_if_not_loaded=True)
+        except LemonadeClientError as e:
+            self.log.error(
+                "Could not unload %s after its corrupted reply, so the next "
+                "message may reuse the same state: %s",
+                model,
+                e,
+            )
+        return ModelOutputCorruptedError()
 
     @guard_inference()
     def completions(
