@@ -896,6 +896,43 @@ test('the Connect card fits a phone', async ({ page }, info) => {
     await shot(page, 'connect-card-phone');
 });
 
+async function withLongChat(page: Page): Promise<void> {
+    const messages = Array.from({ length: 24 }, (_, i) => ({
+        id: i + 1, session_id: ANSWER_SESSION, role: i % 2 ? 'assistant' : 'user', created_at: NOW.toISOString(), rag_sources: null,
+        content: i % 2 ? `Answer ${i}: ${'The canal carried water to the fields long before it carried boats. '.repeat(6)}` : `Question ${i}`,
+    }));
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({ json: { messages, total: messages.length } }));
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`jump to bottom floats clear of the composer, away from the text column's middle (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongChat);
+        await expect(page.getByText('Question 22')).toBeVisible();
+        await page.locator('.messages-scroll').hover();
+        await page.mouse.wheel(0, -20_000);
+        const button = page.locator('.scroll-bottom-btn');
+        await expect(button).toBeVisible();
+        await button.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+        const [btn, composer] = [await button.boundingBox(), await page.locator('.input-column').boundingBox()];
+        // 12px above the composer, never over its border (#7864), at its end, never in the middle of a line.
+        expect(composer!.y - (btn!.y + btn!.height)).toBeGreaterThanOrEqual(11.5);
+        expect(composer!.y - (btn!.y + btn!.height)).toBeLessThanOrEqual(16);
+        const end = locale === 'ar' ? btn!.x - composer!.x : composer!.x + composer!.width - (btn!.x + btn!.width);
+        expect(end).toBeLessThanOrEqual(40);
+        expect(await button.evaluate((el) => {
+            const b = el.getBoundingClientRect();
+            const middle = b.left + b.width / 2;
+            return document.elementFromPoint(middle, b.top + b.height / 2) === el
+                || el.contains(document.elementFromPoint(middle, b.top + b.height / 2));
+        })).toBe(true);
+        // No fade over the list: over a dark code block it showed as a pale band.
+        expect(await page.locator('.messages-scroll').evaluate((el) => getComputedStyle(el).maskImage)).toBe('none');
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`jump-to-bottom-${locale}.png`) });
+    });
+}
+
 async function withLongCode(page: Page): Promise<void> {
     const code = Array.from({ length: 24 }, (_, i) => `    total += row[${i}]  # add column ${i}`).join('\n');
     await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
@@ -961,6 +998,43 @@ for (const locale of ['ar', 'en']) {
         await expect(chips).toHaveText([SPACED_PATH, MULTI_SPACE_PATH, SPACED_ANSWER_PATH]);
         expect(await audit(page)).toEqual([]);
         await page.screenshot({ path: info.outputPath('spaced-paths.png') });
+    });
+}
+
+/** A dropped file (stored with an id in front) and two same-named files, each cited by its path. */
+const CITED_DOCS = [
+    { id: 'drop', filename: 'notes.md', filepath: 'C:\\Users\\me\\.gaia\\documents\\0123456789ab_notes.md' },
+    { id: 'r23', filename: 'report.pdf', filepath: 'C:\\Users\\me\\Finance\\2023\\report.pdf' },
+    { id: 'r24', filename: 'report.pdf', filepath: 'C:\\Users\\me\\Finance\\2024\\report.pdf' },
+].map((d) => ({ ...d, file_size: 2048, chunk_count: 3, indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1, indexing_status: 'complete' }));
+
+async function withCitedDocuments(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === '/api/documents', (route) =>
+        route.fulfill({ json: { documents: CITED_DOCS, total: 3, total_size_bytes: 6144, total_chunks: 9 } }),
+    );
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'Compare revenue in both reports', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: `According to ${CITED_DOCS[1].filepath} (page 2), revenue was 5M; according to ${CITED_DOCS[2].filepath} (page 4), 7M. ${CITED_DOCS[0].filepath}, page 1, lists the reasons.`,
+                    },
+                ],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`citations open the right file and tell same-named files apart (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withCitedDocuments);
+        const cites = page.locator('a.citation-link');
+        await expect(cites).toHaveText(['2023/report.pdf', '2024/report.pdf', 'notes.md']);
+        expect(await cites.evaluateAll((els) => els.map((el) => (el as HTMLElement).dataset.docId))).toEqual(['r23', 'r24', 'drop']);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`cited-documents-${locale}.png`) });
     });
 }
 
@@ -1878,6 +1952,20 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`Delete all chats asks in a dialog (${locale})`, async ({ page }) => {
+        await open(page, '', locale, withSettingsPanes);
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        await page.getByRole('dialog').locator('[data-section="privacy"]').click();
+        await scrollPane(page, 'bottom');
+        await page.locator('.settings-pane .btn-danger').click();
+        const ask = page.getByRole('alertdialog');
+        await expect(ask).toBeVisible();
+        // The safe choice starts focused, so Enter never deletes (#7405).
+        await expect(ask.locator('.btn-secondary')).toBeFocused();
+        await shot(page, `privacy-delete-all-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`a skills search that matches nothing says so (${locale})`, async ({ page }) => {
         await open(page, '', locale, withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -1920,11 +2008,46 @@ for (const locale of ['ar', 'en']) {
         await expect(page.locator('#ctx-size')).toBeInViewport();
         const back = dialog.locator('.settings-back');
         await expect(back).toBeVisible();
+        // Nothing drawn over it: a sticky tab title once covered the link (#7699).
+        const link = await back.boundingBox();
+        if (!link) throw new Error('the Back link did not lay out');
+        expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.settings-back'),
+            [link.x + link.width / 2, link.y + link.height / 2])).toBe(true);
         await shot(page, `setup-row-jump-${locale}`);
         expect(await audit(page)).toEqual([]);
         await back.click();
         await expect(dialog.locator('[data-section="setup"]')).toHaveAttribute('aria-current', 'page');
         await expect(back).toHaveCount(0);
+    });
+
+    test(`GPU memory row lands on it after a slow model list (${locale})`, async ({ page }) => {
+        // Enough downloaded models that the list runs well past the view.
+        const many = [...MODEL_LIST, ...Array.from({ length: 12 }, (_, i) => ({ ...(MODEL_LIST[1] as object), id: `Extra-${i}-GGUF`, display_name: `Extra ${i}`, downloaded: true, state: 'idle' }))];
+        await open(page, '', locale, async (p) => {
+            await withModelPage(p, many, SETUP_PLAN);
+            await p.route('**/api/gpu-memory', (route) => route.fulfill({ json: SETUP_GPU }));
+            await p.route('**/api/onboarding/preflight', (route) => route.fulfill({ json: { gpu_name: 'Radeon 8060S', npu_detected: true, ram_gb: 128 } }));
+            // A busy model server lists its models after GPU memory has drawn.
+            await p.route('**/api/providers/local/models', async (route) => {
+                await new Promise((done) => setTimeout(done, 6500));
+                await route.fallback();
+            });
+        });
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const dialog = page.getByRole('dialog');
+        await dialog.locator('[data-section="setup"]').click();
+        await dialog.locator('.settings-setup-row').filter({ hasText: /GPU memory|ذاكرة GPU/ }).click();
+        const summary = dialog.locator('summary').filter({ has: page.locator('#settings-gpu-title') });
+        await expect(summary).toBeFocused();
+        await expect(dialog.locator('[data-settings-target="models-on-pc"] .model-list')).toHaveCount(1, { timeout: 10_000 });
+        await page.waitForTimeout(300);
+        // Focused and in view, not focused somewhere below the list that arrived above it.
+        expect(await summary.evaluate((el) => {
+            const view = el.closest('.settings-scroll')!.getBoundingClientRect();
+            const box = el.getBoundingClientRect();
+            return box.top >= view.top && box.bottom <= view.bottom;
+        })).toBe(true);
+        await shot(page, `setup-row-gpu-memory-${locale}`);
     });
 
     test(`Local only blocks cloud model picker (${locale})`, async ({ page }) => {
@@ -1935,7 +2058,7 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
-    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+    for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced', 'about']) {
         test(`settings ${section} pane (${locale})`, async ({ page }) => {
             await open(page, '', locale, withSettingsPanes);
             await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -2029,7 +2152,7 @@ for (const locale of ['ar', 'en']) {
             expect(await audit(page)).toEqual([]);
         });
 
-        test('a connected tile offers Personalize, and connecting a server offers it in a banner', async ({ page }) => {
+        test('a connected tile offers Personalize, and connecting a server offers it once, on its card', async ({ page }) => {
             const brave = { id: 'brave-search', display_name: 'Brave Search', type: 'mcp_server', icon: null, category: 'general',
                 tier: 'core', description: 'Lets GAIA work with Brave Search on your behalf.', configurable: true, enabled: true,
                 account_id: null, default_scopes: [], available_scopes: [], mcp_env_keys: ['BRAVE_API_KEY'], oauth_setup_fields: [] };
@@ -2052,6 +2175,9 @@ for (const locale of ['ar', 'en']) {
             await page.locator('.configure-actions .btn-primary').click();
             const offer = page.locator('.connector-personalize--offer');
             await expect(offer).toBeVisible();
+            // One offer, on the card: a second one once sat above the list (#7703).
+            await expect(page.locator('.connector-personalize')).toHaveCount(1);
+            await expect(page.locator('.connector-tile--open .connector-tile-menu')).toHaveCount(0);
             await offer.scrollIntoViewIfNeeded();
             await shot(page, `connectors-${locale}-personalize-offer`);
             expect(await audit(page)).toEqual([]);
@@ -2490,7 +2616,7 @@ test('no spending chip on a model on this PC', async ({ page }) => {
     await expect(page.locator('.spend-meter')).toHaveCount(0);
 });
 
-for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced']) {
+for (const section of ['general', 'permissions', 'skills', 'memory', 'notifications', 'privacy', 'advanced', 'about']) {
     test(`settings ${section} pane has no leftover English`, async ({ page }) => {
         await open(page, '', 'ar', withSettingsPanes);
         await page.getByRole('button', { name: /Settings/ }).first().click();
@@ -3628,6 +3754,31 @@ for (const locale of ['ar', 'en'] as const) {
     });
 }
 
+const LIST_THEN_TABLE = [
+    { type: 'chunk', content: 'Some vegetables:\n\n- **Kale** — a leaf.\n- **Leek** — an allium.\n\n| Crop | Days |\n|---|---|\n| Radish | 25 |\n\nAnd more' },
+];
+
+for (const locale of ['ar', 'en']) {
+    test(`a list keeps its indent while the answer streams (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, LIST_THEN_TABLE);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        await page.locator('textarea').first().fill('list vegetables');
+        await page.keyboard.press('Enter');
+        const live = page.locator('.streaming-bubble');
+        await expect(live.locator('.cursor')).toBeVisible();
+        // Only the paragraph the cursor follows runs inline; the list and table keep their layout.
+        const shape = await live.evaluate((el) => {
+            const ul = el.querySelector('.md-ul')!;
+            const li = ul.querySelector('.md-li')!;
+            const indent = getComputedStyle(ul).direction === 'rtl'
+                ? ul.getBoundingClientRect().right - li.getBoundingClientRect().right
+                : li.getBoundingClientRect().left - ul.getBoundingClientRect().left;
+            return { indent: Math.round(indent), ul: getComputedStyle(ul).display, table: getComputedStyle(el.querySelector('table')!.closest('.md-content > *')!).display };
+        });
+        expect(shape).toEqual({ indent: 24, ul: 'block', table: 'block' });
+    });
+}
+
 const NO_VISION_MODEL = [
     { type: 'tool_start', tool: 'answer_question_about_image', narration: 'Looking at the image' },
     { type: 'tool_result', success: false, needs_model: 'vision', summary: "Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded (about 6 GB)" },
@@ -3647,6 +3798,49 @@ for (const locale of ['ar', 'en'] as const) {
         expect(await audit(page)).toEqual([]);
         if (locale === 'ar') expect(await untranslated(page, '.flow-tool-offer', 'bdi, code')).toEqual([]);
         await shot(page, `vision-offer-${locale}`);
+    });
+}
+
+/** A finished turn, reopened: a document step and an image step that found no vision model. */
+async function withSavedVisionOffer(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: 'What colour is the attached image?', created_at: NOW.toISOString(), rag_sources: null },
+                    {
+                        id: 2, session_id: ANSWER_SESSION, role: 'assistant', created_at: NOW.toISOString(), rag_sources: null,
+                        content: 'I can\'t see the image yet: GAIA needs its vision model to read images.',
+                        agent_steps: [
+                            { id: 1, type: 'tool', label: 'Using tool', tool: 'index_document', detail: 'notes.txt', result: 'Indexed 1 chunk', active: false, success: true },
+                            {
+                                id: 2, type: 'tool', label: 'Using tool', tool: 'answer_question_about_image', active: false, success: false, needsModel: 'vision',
+                                result: "error: Vision extraction failed for page 1, image 1: Vision model 'Gemma-4-E4B-it-GGUF' is not downloaded",
+                            },
+                        ],
+                    },
+                ],
+                total: 2,
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`a reopened chat still offers the vision model, with its steps folded (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withSavedVisionOffer);
+        const reply = page.locator('.msg-assistant').last();
+        await expect(reply.locator('.flow-steps.folded')).toBeVisible();
+        await expect(reply.locator('.flow-tool-offer')).toHaveCount(1);
+        await expect(reply.locator('.flow-tool-offer').getByRole('button')).toBeVisible();
+        await expect(reply).not.toContainText('Gemma-4-E4B-it-GGUF');
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`vision-offer-folded-${locale}.png`) });
+        await reply.locator('.flow-steps-summary').click();
+        await expect(reply.locator('.flow-tool-offer')).toHaveCount(1);
+        await expect(reply.locator('.flow-tool-failure')).toHaveCount(0);
+        expect(await audit(page)).toEqual([]);
+        await reply.screenshot({ path: info.outputPath(`vision-offer-open-${locale}.png`) });
     });
 }
 
@@ -3832,9 +4026,58 @@ for (const locale of ['ar', 'en']) {
         if (ar) expect(await untranslated(page, '.notification-center', '.notification-agent, .notification-title, .notification-message, .notification-policy-reason')).toEqual([]);
         await shot(page, `notification-panel-${locale}`);
     });
+
+    test(`the notification panel hides what is under it in the dark theme (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale, undefined, 'dark');
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await page.locator('.sb-bottom-actions .sb-icon-btn').first().click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // A see-through panel shows the side panel's text inside the list.
+        const background = await panel.evaluate((el) => getComputedStyle(el).backgroundColor);
+        expect(background).toMatch(/^rgb\(/);
+        await shot(page, `notification-panel-dark-${locale}`);
+    });
 }
 
 for (const locale of ['ar', 'en']) {
+    test(`the notification panel opens at the bell, with tabs that fit (${locale})`, async ({ page }) => {
+        await page.addInitScript(streamThenWait, PANEL_EVENTS);
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const bell = page.locator('.sb-bottom-actions .sb-icon-btn').first();
+        // Empty: one line, no filter tabs.
+        await bell.click();
+        const panel = page.locator('.notification-center');
+        await expect(panel.locator('.notification-empty')).toBeVisible();
+        await expect(panel.getByRole('tab')).toHaveCount(0);
+        await shot(page, `notification-panel-empty-${locale}`);
+        await bell.click();
+
+        await page.locator('textarea').first().fill('summarize my sales data');
+        await page.keyboard.press('Enter');
+        await expect(page.locator('.perm-card-title')).toBeVisible();
+        await bell.click();
+        await expect(panel.locator('.notification-item')).toHaveCount(3);
+        // Anchored to the bell (#7416): it opens beside it, not across the window.
+        const b = (await bell.boundingBox())!;
+        const p = (await panel.boundingBox())!;
+        const vw = page.viewportSize()!.width;
+        const nearBell = locale === 'ar' ? vw - (p.x + p.width) < 40 : p.x < 40;
+        expect(nearBell, 'the panel opens on the bell side of the window').toBe(true);
+        expect(p.y + p.height).toBeLessThanOrEqual(b.y);
+        // Every tab is whole: none cut off at the panel's edge.
+        const bar = (await panel.locator('.notification-filter-bar').boundingBox())!;
+        for (const tab of await panel.getByRole('tab').all()) {
+            const box = (await tab.boundingBox())!;
+            expect(box.x >= bar.x - 1 && box.x + box.width <= bar.x + bar.width + 1).toBe(true);
+        }
+        await shot(page, `notification-panel-anchored-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`a scheduled task's failed and finished notices are in the UI language (${locale})`, async ({ page }) => {
         const before = { ...SCHEDULE_ROW, run_count: 8, error_count: 0, last_error: null };
         let loads = 0;
@@ -4294,6 +4537,23 @@ for (const locale of ['ar', 'en']) {
             await checkMemory(page, locale, 'goals-empty');
         });
 
+        // Create once did nothing and said nothing, and the banner said to restart.
+        test('goals, a damaged goal list', async ({ page }) => {
+            const damaged = "GAIA's goal list is damaged (file is not a database), so goals can't be shown or saved. Start a new goal list on this page; the damaged file is kept.";
+            await openMemory(page, locale, {});
+            await page.route('**/api/goals/health', (route) => route.fulfill({ json: { error: damaged, damaged: true } }));
+            await page.route((url) => /\/api\/goals(\/stats)?$/.test(url.pathname), (route) =>
+                route.fulfill({ status: 503, json: { detail: damaged } }));
+            await memoryTab(page, /Goals/);
+            await expect(page.getByRole('button', { name: locale === 'ar' ? /بدء قائمة أهداف جديدة/ : 'Start a new goal list' })).toBeVisible();
+            await expect(page.locator('.mem-goals-tab .mem-empty')).toHaveCount(0);
+            await page.locator('.mem-goals-toolbar .btn-primary').click();
+            await page.locator('.mem-goals-add-form input').fill('Tidy my notes');
+            await page.locator('.mem-goals-add-form .mem-goals-form-row .btn-primary').click();
+            await expect(page.locator('.mem-goals-add-form [role="alert"]')).toContainText('file is not a database');
+            await checkMemory(page, locale, 'goals-damaged');
+        });
+
         test('profile setup, before and after a discovery run', async ({ page }) => {
             await openMemory(page, locale);
             await memoryTab(page, /Profile setup/);
@@ -4495,6 +4755,9 @@ for (const locale of ['ar', 'en']) {
             await expect(page.getByLabel(locale === 'ar' ? /رسالة|Message/ : 'Message').first()).toBeEnabled();
             await shot(page, `pick-load-${locale}-${name}`);
             expect(await audit(page)).toEqual([]);
+            // A long memory-switch label gives way; the model's name is not the chip that is cut.
+            const modelName = page.locator('.composer-row-right .composer-chip-label', { hasText: PICKED });
+            expect(await modelName.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
         });
     }
 }

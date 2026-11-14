@@ -283,6 +283,14 @@ export function NewChat({ onSend, initialText = '', focusRequest = 0 }: NewChatP
         if (focusRequest) inputRef.current?.focus();
     }, [focusRequest]);
 
+    // A prompt put in the box (Try in a new chat) is added to, so typing starts after it.
+    useEffect(() => {
+        const el = inputRef.current;
+        if (!initialText || !el) return;
+        el.focus();
+        el.setSelectionRange(el.value.length, el.value.length);
+    }, [initialText]);
+
     // Sending, not typing, drops the composer to the bottom: the box never moves under the cursor.
     const docked = sending;
     const innerTop = useRef<{ top: number; docked: boolean } | null>(null);

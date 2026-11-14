@@ -392,6 +392,7 @@ describe('NewChat empty state', () => {
         beforeEach(() => {
             useChatStore.setState({ draftFolder: null });
             window.gaiaAPI = { dialog: { pickFolder } } as unknown as NonNullable<typeof window.gaiaAPI>;
+            vi.mocked(api.checkEnvironmentFolder).mockResolvedValue({ refusal: null });
         });
         afterEach(() => {
             delete window.gaiaAPI;
@@ -408,6 +409,41 @@ describe('NewChat empty state', () => {
             expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
             expect(api.browseFiles).not.toHaveBeenCalled();
+            expect(api.checkEnvironmentFolder).toHaveBeenCalledWith('/home/u/site');
+        });
+
+        it('refuses the home folder as soon as it is picked, and says why (#7996)', async () => {
+            const why = "GAIA can't be given /home/u: it is your home directory. Pick a narrower folder.";
+            pickFolder.mockResolvedValue('/home/u');
+            vi.mocked(api.checkEnvironmentFolder).mockResolvedValue({ refusal: why });
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            expect(await screen.findByText(why)).toBeInTheDocument();
+            expect(useChatStore.getState().draftFolder).toBeNull();
+            expect(screen.getByRole('button', { name: 'Add a folder' })).toBeInTheDocument();
+        });
+
+        it('takes a folder outside the home folder, as adding it does', async () => {
+            pickFolder.mockResolvedValue('D:\\Projects\\site');
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            await waitFor(() => expect(useChatStore.getState().draftFolder).toBe('D:\\Projects\\site'));
+            expect(api.browseFiles).not.toHaveBeenCalled();
+        });
+
+        it("adds nothing and says so when the folder couldn't be checked", async () => {
+            pickFolder.mockResolvedValue('/home/u/site');
+            vi.mocked(api.checkEnvironmentFolder).mockRejectedValue(new Error('Failed to fetch'));
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            expect(await screen.findByText("Couldn't check that folder, so it wasn't added: Failed to fetch")).toBeInTheDocument();
+            expect(useChatStore.getState().draftFolder).toBeNull();
         });
 
         it('keeps the folder as it was when the OS picker is cancelled', async () => {
@@ -433,6 +469,14 @@ describe('NewChat empty state', () => {
     it('starts with text handed over from setup', () => {
         render(<NewChat onSend={vi.fn()} initialText="Summarize this: " />);
         expect(screen.getByLabelText('Message')).toHaveValue('Summarize this: ');
+    });
+
+    it('puts the caret after text handed over, so typing adds to it', () => {
+        render(<NewChat onSend={vi.fn()} initialText="Use the summarize skill: " />);
+        const box = screen.getByLabelText('Message') as HTMLTextAreaElement;
+        expect(document.activeElement).toBe(box);
+        expect(box.selectionStart).toBe(box.value.length);
+        expect(box.selectionEnd).toBe(box.value.length);
     });
 
     it('says in one plain sentence that the assistant did not start, with the detail behind Details', async () => {
