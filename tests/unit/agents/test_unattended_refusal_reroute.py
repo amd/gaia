@@ -371,7 +371,7 @@ _NO_PROMPT = ("dir", "findstr") if os.name == "nt" else ("ls", "grep")
 def test_the_refusal_names_the_auto_approved_routes(_isolated):
     agent = _unattended(_isolated)
 
-    error = _shell(agent, "type notes.txt")["error"]
+    error = _shell(agent, "Get-Process")["error"]
 
     for route in ("read_file", "browse_directory", "run_python"):
         assert route in error
