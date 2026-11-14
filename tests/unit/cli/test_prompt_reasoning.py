@@ -69,3 +69,22 @@ def test_reasoning_only_reply_names_max_tokens(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "512-token budget" in out and "--max-tokens" in out
     assert "still thinking" not in out
+
+
+def test_an_answer_that_mentions_think_prints_in_full(monkeypatch, capsys):
+    """A quoted <think> mid-sentence is prose: nothing is cut and the exit is 0."""
+    chunks = [
+        "Qwen wraps its reasoning in <think>",
+        " tags and closes them with </think>",
+        " before the answer.",
+    ]
+
+    assert _prompt(monkeypatch, chunks) == 0
+    assert capsys.readouterr().out == "".join(chunks) + "\n"
+
+
+def test_a_quoted_tag_split_across_chunks_prints_in_full(monkeypatch, capsys):
+    chunks = ["Use <th", "ink> to mark reasoning."]
+
+    assert _prompt(monkeypatch, chunks) == 0
+    assert capsys.readouterr().out == "Use <think> to mark reasoning.\n"
