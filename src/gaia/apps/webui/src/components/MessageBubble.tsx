@@ -9,6 +9,7 @@ import { SAFE_DISALLOWED_ELEMENTS, joinAttachmentLinks, safeUrlTransform, splitA
 import remarkGfm from 'remark-gfm';
 import remarkWindowsPaths from '../utils/remarkWindowsPaths';
 import { remarkSoftBreaks } from '../utils/remarkSoftBreaks';
+import { remarkNumericColumns } from '../utils/remarkNumericColumns';
 import { AgentActivity } from './AgentActivity';
 import { EmailConnectCta, isAuthRequiredMessage } from './email/EmailConnectCta';
 import { RenderCard } from './render/RenderCard';
@@ -23,7 +24,7 @@ import type { Message, AgentStep, RenderCardData } from '../types';
 import { TurnChanges } from './TurnChanges';
 import { ReadAloudButton, ReadAloudError, ReadAloudNote } from './ReadAloudButton';
 import { TroubleshootingReport, namesFailureRecord, type ReportClasses } from './TroubleshootingReport';
-import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, sizeLabel } from './LongContent';
+import { CODE_COLLAPSE_LINES, CODE_PREVIEW_LINES, ExpandToggle, countLines, isLongUserMessage, lineCount, messageExcerpt, sizeLabel } from './LongContent';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { useChatStore } from '../stores/chatStore';
@@ -454,6 +455,22 @@ function formatFullTimestamp(iso: string, t: Translate): string {
     });
 }
 
+/** "11:13 PM" today, "Yesterday, 4:10 PM", "Nov 9, 4:10 PM" this year, with the year before that. */
+export function formatShortTimestamp(iso: string, t: Translate, now: Date = new Date()): string {
+    if (!iso) return '';
+    const when = new Date(iso);
+    const locale = dateLocale(t);
+    const time = when.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit' });
+    const dayStart = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const daysAgo = Math.round((dayStart(now) - dayStart(when)) / 86_400_000);
+    if (daysAgo === 0) return time;
+    if (daysAgo === 1) return t('msg.yesterdayAt', { time });
+    return when.toLocaleString(locale, {
+        month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+        ...(when.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+    });
+}
+
 /** What the server persists for a turn stopped before it wrote any text (_empty_answer_outcome). */
 const SERVER_CANCELLED_TEXT = 'Cancelled.';
 
@@ -616,6 +633,7 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
     const [copied, setCopied] = useState(false);
     const [confirmDelete, setConfirmDelete] = useState(false);
     const collapsibleUser = message.role === 'user' && isLongUserMessage(message.content);
+    const excerpt = useMemo(() => (collapsibleUser ? messageExcerpt(message.content) : null), [collapsibleUser, message.content]);
     const [userExpanded, setUserExpanded] = useState(false);
     const userBodyId = useId();
     const userBodyRef = useRef<HTMLDivElement>(null);
@@ -808,13 +826,21 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                         />
                     ) : collapsibleUser ? (
                         <>
-                            <div
-                                ref={userBodyRef}
-                                id={userBodyId}
-                                className={`msg-collapsible${userExpanded ? '' : ' is-collapsed'}`}
-                            >
-                                <RenderedContent content={cleanedContent} />
-                            </div>
+                            {!userExpanded && excerpt ? (
+                                <div ref={userBodyRef} id={userBodyId} className="msg-excerpt md-content">
+                                    <div className="msg-excerpt-lines" dir="auto">{excerpt.head}</div>
+                                    <div className="msg-excerpt-gap">{t.plural('msg.moreLines', excerpt.hidden)}</div>
+                                    <div className="msg-excerpt-lines" dir="auto">{excerpt.tail}</div>
+                                </div>
+                            ) : (
+                                <div
+                                    ref={userBodyRef}
+                                    id={userBodyId}
+                                    className={`msg-collapsible${userExpanded ? '' : ' is-collapsed'}`}
+                                >
+                                    <RenderedContent content={cleanedContent} />
+                                </div>
+                            )}
                             <ExpandToggle
                                 expanded={userExpanded}
                                 onToggle={toggleUserExpanded}
@@ -892,8 +918,8 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                     {message.role === 'assistant' && !isStreaming && (message.stats || latencyMs != null || message.created_at) && (
                         <div className="msg-stats" aria-label={t('msg.about')}>
                             {message.created_at && (
-                                <span className="msg-stats-ts" title={t('msg.timestamp')}>
-                                    {formatFullTimestamp(message.created_at, t)}
+                                <span className="msg-stats-ts" title={formatFullTimestamp(message.created_at, t)}>
+                                    {formatShortTimestamp(message.created_at, t)}
                                 </span>
                             )}
                             {message.stats?.retried && message.stats.model && (
@@ -1313,11 +1339,12 @@ const MARKDOWN_COMPONENTS: Components = {
         return <hr className="md-hr" />;
     },
     // Table cells set no dir: the table's dir="auto" skips any cell that has its own.
-    td({ children }) {
-        return <td><Linkified>{children}</Linkified></td>;
+    // The markdown's own alignment arrives as `style`, a numbers column as `className`.
+    td({ children, className, style }) {
+        return <td className={className} style={style}><Linkified>{children}</Linkified></td>;
     },
-    th({ children }) {
-        return <th><Linkified>{children}</Linkified></th>;
+    th({ children, className, style }) {
+        return <th className={className} style={style}><Linkified>{children}</Linkified></th>;
     },
 };
 
@@ -1335,7 +1362,7 @@ export function RenderedContent({ content, showCursor, isStreaming = false, writ
         <WrittenFilesContext.Provider value={writtenFiles}>
         <div className="md-content">
             <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkWindowsPaths, remarkSoftBreaks]}
+                remarkPlugins={[remarkGfm, remarkNumericColumns, remarkWindowsPaths, remarkSoftBreaks]}
                 disallowedElements={[...SAFE_DISALLOWED_ELEMENTS]}
                 urlTransform={safeUrlTransform}
                 components={MARKDOWN_COMPONENTS}
