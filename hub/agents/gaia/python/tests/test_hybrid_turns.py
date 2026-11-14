@@ -334,3 +334,20 @@ def test_model_command_to_hybrid_says_what_it_routes_between(monkeypatch):
     assert final["type"] == "final"
     assert "hybrid" in final["answer"] and CHEAP in final["answer"]
     assert STRONG in final["answer"]
+
+
+def test_an_undecidable_turn_drops_the_previous_route(monkeypatch):
+    """A host reading ``last_route`` mid-turn must not bill the previous turn's model."""
+    agent, _client, _steps, _switches = _agent(
+        monkeypatch, [_label("find_defects", 4, "high")]
+    )
+    agent.process_query("Audit it.")
+    assert agent.last_route.model == STRONG
+
+    def refuse(_settings):
+        raise hybrid.HybridConfigError("Local only is on")
+
+    monkeypatch.setattr(hybrid, "check_local_only", refuse)
+    with pytest.raises(hybrid.HybridConfigError):
+        agent.process_query("And again.")
+    assert agent.last_route is None

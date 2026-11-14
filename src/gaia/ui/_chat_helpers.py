@@ -4808,6 +4808,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     result_holder["model_messages"] = getattr(
                         sse_handler, "relayed_model_messages", None
                     )
+                    relayed_route = getattr(sse_handler, "relayed_route", None)
+                    if relayed_route is not None and is_hybrid_model(model_id):
+                        result_holder["route"] = relayed_route
+                        result_holder["model"] = relayed_route.get("model")
                     return
 
                 else:
@@ -5560,13 +5564,23 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # isn't set, leaving stats silently empty in eval traces.
             inference_stats = None
             # A hybrid turn is placed and billed by the model its route picked.
-            route = _turn_route(result_holder.get("result"))
+            route = result_holder.get("route") or _turn_route(
+                result_holder.get("result")
+            )
             ran_on = (
                 (route or {}).get("model")
                 or _effective_model(result_holder.get("agent"), model_id)
                 if is_hybrid_model(model_id)
                 else model_id
             )
+            if is_hybrid_model(model_id) and ran_on == model_id:
+                logger.warning(
+                    "Relayed hybrid turn for session %s came back without its "
+                    "route, so its spend and footer name 'hybrid': it failed "
+                    "before routing, or the GAIA agent predates contract 2.29 "
+                    "(update it).",
+                    session_id[:8],
+                )
             # Named before any Lemonade call: a cloud turn may run with it stopped.
             turn_location = _turn_location(ran_on)
             turn_place = _cloud_place(turn_location)

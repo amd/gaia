@@ -105,7 +105,8 @@ AGENT_ID = "gaia"
 #: 2.27 added ``GET /sessions/{id}/tools``: the tools the session's agent has.
 #: 2.28 added the non-terminal ``context_usage`` event for a caller that sends
 #: ``turns``: the turn's first call is measured before the answer streams.
-API_VERSION = "2.28"
+#: 2.29 added ``final.route``: the model a ``hybrid`` session's turn ran on.
+API_VERSION = "2.29"
 
 #: How long the stream allows the turn's context measurement before naming the
 #: failure on ``final``, and how long the loop's own fallback measurement waits.
@@ -762,6 +763,21 @@ def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any
         ),
         "status": 500,
     }
+
+
+def _run_route(run: "_QueryRun") -> Optional[Dict[str, Any]]:
+    """The route a ``hybrid`` session's turn took (contract >= 2.29), or None.
+
+    Read from the agent while the run's tail is still going: the route is
+    decided before the turn starts, so it is known by the time ``final`` is.
+    """
+    recorded = run.result.get("route") if isinstance(run.result, dict) else None
+    if isinstance(recorded, dict):
+        return recorded
+    if getattr(run.agent, "hybrid_router", None) is None:
+        return None
+    route = getattr(run.agent, "last_route", None)
+    return route.as_record() if route is not None else None
 
 
 def _run_answer(result: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -1597,7 +1613,7 @@ _QUERY_SSE_RESPONSES = {
             "prompt_context?} | needs_input {run_id, request_id, question, "
             "options, allow_free_text, sensitive, respond_url, "
             "timeout_seconds?} | final {answer, usage?, failed?, failure?, "
-            "performance?, context?, context_error?, model_messages?} | "
+            "performance?, context?, context_error?, model_messages?, route?} | "
             "error {detail, status}. A needs_confirmation's `args` are exactly "
             "the arguments the model sent for the gated call, each value capped "
             "at 64,000 characters (`args_truncated: true` when one was cut); "
@@ -1998,7 +2014,7 @@ async def query(request: QueryRequest):
         return _sse(_worded(event, _wording_surface(request)))
 
     async def _with_context(final: Dict[str, Any]) -> Dict[str, Any]:
-        """``final`` carrying the turn's context measurement (contract >= 2.21) and timings."""
+        """``final`` carrying the turn's context measurement (>= 2.21), timings and route."""
         if final.get("type") != "final":
             return final
         if run.result is None and thread.is_alive() and run.received_turns is not None:
@@ -2010,6 +2026,10 @@ async def query(request: QueryRequest):
         performance = turn_record(run.result)
         if performance is not None:
             final = {**final, "performance": performance}
+        route = _run_route(run)
+        if route is not None:
+            # The host bills and labels the turn by the model that ran it.
+            final = {**final, "route": route}
         if final.get("failed"):
             # A failure notice is not a turn the next push carries.
             return final
@@ -2091,6 +2111,9 @@ async def query(request: QueryRequest):
                             usage = _usage_from_result(run.result)
                             if usage:
                                 refusal["usage"] = usage
+                        route = _run_route(run)
+                        if route is not None:
+                            refusal["route"] = route
                         yield _emit(refusal)
                         terminated = True
                         return

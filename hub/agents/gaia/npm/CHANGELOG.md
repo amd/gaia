@@ -37,7 +37,9 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   else on `amd.Claude-Opus-5-5`. A failed classification goes strong, a session
   that went strong stays strong, and an unavailable model fails the turn instead
   of running the other one, naming the `hybrid_*` setting that chose it.
-  `gaia -p` JSON records the decision as `route`. A classifier that keeps
+  `gaia -p` JSON records the decision as `route`, and so does `/query`'s
+  `final` (contract 2.29), so a host bills and labels the turn by the model
+  that ran it. A classifier that keeps
   failing is reported with its fix (a notice on every turn after 3 in a row),
   one that rejects JSON mode is asked in plain text, and `/clear` starts the
   next turn unescalated.

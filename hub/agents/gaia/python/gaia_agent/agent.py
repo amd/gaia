@@ -482,6 +482,8 @@ class GaiaAgent(
         router = self.hybrid_router
         if router is None:
             return None
+        # A turn whose route can't be decided must not report the last one's.
+        self.last_route = None
         route = router.decide(
             user_input if isinstance(user_input, str) else "",
             base_url=getattr(self.chat.config, "base_url", None),
