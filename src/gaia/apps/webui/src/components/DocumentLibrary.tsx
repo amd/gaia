@@ -291,8 +291,11 @@ export function DocumentLibrary() {
         return () => clearInterval(refreshInterval);
     }, [setDocuments]);
 
-    const totalSize = documents.reduce((sum, d) => sum + d.file_size, 0);
-    const unreadableCount = documents.filter((d) => d.indexing_status === 'failed').length;
+    // The row waiting on Undo is already gone from the list, so from the count too.
+    const shownDocs = documents.filter((d) => d.id !== pendingRemoval?.id);
+    const shownCount = shownDocs.length;
+    const totalSize = shownDocs.reduce((sum, d) => sum + d.file_size, 0);
+    const unreadableCount = shownDocs.filter((d) => d.indexing_status === 'failed').length;
 
     /** Attach a document where the user chose, and say where it went. */
     const attachToTarget = useCallback(async (docId: string, filename: string) => {
@@ -367,6 +370,7 @@ export function DocumentLibrary() {
         setIsUploading(true);
         setUploadStatus(t('docs.indexingFile', { name: filename }));
         setUploadError(null);
+        setActionError(null);
         setFolderNotice(null);
         setNotice('');
         try {
@@ -511,6 +515,9 @@ export function DocumentLibrary() {
     const handleDeleteDoc = useCallback((id: string) => {
         const name = documents.find((d) => d.id === id)?.filename || id;
         setActionError(null);
+        setUploadError(null);
+        setFolderNotice(null);
+        setNotice('');
         flushRemoval();
         const pending = { id, name };
         pendingRemovalRef.current = pending;
@@ -861,9 +868,9 @@ export function DocumentLibrary() {
                     )}
 
                     {/* Stats */}
-                    {documents.length > 0 && !pendingRemoval && (
+                    {shownCount > 0 && (
                         <div className="doc-stats">
-                            <span>{t.plural('docs.count', documents.length - unreadableCount)}</span>
+                            <span>{t.plural('docs.count', shownCount - unreadableCount)}</span>
                             {unreadableCount > 0 && (
                                 <span className="doc-stats-failed">{t.plural('docs.unreadable', unreadableCount)}</span>
                             )}

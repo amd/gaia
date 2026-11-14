@@ -69,7 +69,7 @@ describe('a file GAIA could not read', () => {
 
         expect(await screen.findByRole('alert')).toHaveTextContent("broken.pdf couldn't be added");
         expect(mockedApi.attachDocument).not.toHaveBeenCalled();
-        expect(screen.queryByText(/Attached broken\.pdf/)).toBeNull();
+        expect(screen.queryByText(/Added broken\.pdf/)).toBeNull();
     });
 
     it('is not held for the next new chat either', async () => {
@@ -103,7 +103,7 @@ describe('the chat bar with a document that failed', () => {
         });
         render(<SessionDocsBar sessionId="sess-1" onDetachFailed={() => {}} />);
 
-        expect(screen.getByRole('button', { name: "1 indexed · 1 couldn't be read" })).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: "1 document · 1 couldn't be read" })).toBeInTheDocument();
         const failedPill = screen.getByText('broken.pdf').closest('.doc-pill')!;
         expect(failedPill).toHaveClass('doc-pill-failed');
         expect(failedPill.getAttribute('title')).toMatch(/couldn't be read/);
