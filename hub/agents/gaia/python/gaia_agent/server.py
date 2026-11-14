@@ -953,6 +953,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     cancel = getattr(agent, "_cancel_event", None)
     stopped = False
     not_loaded = 0
+    unreadable: set = set()
     for position, doc in enumerate(pending):
         # Stop ends the loading here; what is left stays pending for the next turn.
         if cancel is not None and cancel.is_set():
@@ -965,14 +966,15 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             stopped = True
             break
         if rag is not None and rag.is_full():
-            left = len(pending) - position
+            # Counts one a long document pushed out on the way in, too.
+            not_loaded = sum(
+                1 for d in pending if d not in indexed and d not in unreadable
+            )
             lines.append(
-                f"{left} more not loaded: a conversation searches at most "
-                f"{index_limit(rag)} at once. Ask about one of them by name to "
-                "search it."
+                f"{not_loaded} more not loaded: {index_limit(rag)}. Ask about "
+                "one of them by name to search it."
             )
             _grant_unloaded(agent, pending[position:])
-            not_loaded = left
             break
         name = Path(doc).name
         reason = (
@@ -981,6 +983,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             else _attach_refusal(agent, doc)
         )
         if reason:
+            unreadable.add(doc)
             lines.append(f"{name}: not indexed: {reason}")
             continue
         agent.path_validator.add_allowed_path(doc)
@@ -988,6 +991,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             result = rag.index_document(doc)
         except Exception as exc:  # reported in the visible step below
             logger.exception("Indexing attached document %s failed", doc)
+            unreadable.add(doc)
             lines.append(f"{name}: not indexed: {exc}")
             continue
         if result.get("success") and not result.get("error"):
@@ -995,6 +999,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             indexed.add(doc)
             lines.append(f"{name}: {result.get('num_chunks', 0)} chunks")
         else:
+            unreadable.add(doc)
             error = result.get("error") or "the indexer gave no reason"
             lines.append(f"{name}: not indexed: {error}")
     succeeded = sum(1 for d in pending if d in indexed)

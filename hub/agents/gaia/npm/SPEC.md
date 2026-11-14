@@ -321,7 +321,7 @@ attached to the conversation. Send the whole set on every turn. Before the turn
 runs, the agent indexes the ones it has not indexed yet, so a file attached
 mid-conversation is read on the next turn, and drops from the session's index
 any file an earlier turn sent that this one leaves out, so a detached or deleted
-file is no longer searched. Send an empty list when none are attached. A conversation searches at most 100 documents or 10,000 passages at once: past that the rest are granted but not loaded, the `index_documents` step says how many, and the agent loads one when asked about it by name. Each path is granted as that exact
+file is no longer searched. Send an empty list when none are attached. A conversation searches at most 100 documents or 10,000 passages at once: past that the rest are granted but not loaded, the `index_documents` step says how many and which limit was reached, and the agent loads one when asked about it by name. Each path is granted as that exact
 file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the

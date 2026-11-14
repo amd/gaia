@@ -33,9 +33,8 @@ def _clean_registry():
     _TOOL_REGISTRY.update(saved)
 
 
-@pytest.fixture
-def library(tmp_path):
-    """A real index with fake vectors, 150 station files, and an eviction log."""
+def _index(tmp_path, **config):
+    """A real index with fake vectors and a log of the documents it pushed out."""
     pytest.importorskip("faiss", reason="Real vector-index tests require faiss-cpu")
     with patch("gaia.rag.sdk.AgentSDK"):
         sdk = RAGSDK(
@@ -43,6 +42,7 @@ def library(tmp_path):
                 cache_dir=str(tmp_path / "cache"),
                 allowed_paths=[str(tmp_path)],
                 use_llm_chunking=False,
+                **config,
             )
         )
     sdk._load_embedder = lambda: None
@@ -58,12 +58,40 @@ def library(tmp_path):
         return path
 
     sdk._evict_lru_document = counted
+    return sdk, evicted
+
+
+@pytest.fixture
+def library(tmp_path):
+    """150 one-passage station files: past the 100-document cap."""
+    sdk, evicted = _index(tmp_path)
     docs = tmp_path / "stations"
     docs.mkdir()
     paths = []
     for n in range(ATTACHED):
         path = docs / f"station_{n:03d}.txt"
         path.write_text(f"Station {n:03d} code is CODE-{n:03d}.", encoding="utf-8")
+        paths.append(str(path))
+    return SimpleNamespace(rag=sdk, paths=paths, evicted=evicted, root=tmp_path)
+
+
+@pytest.fixture
+def books(tmp_path):
+    """Five ten-passage books in a 25-passage index: full long before 100 files."""
+    sdk, evicted = _index(tmp_path, chunk_size=20, chunk_overlap=0, max_total_chunks=25)
+    shelf = tmp_path / "books"
+    shelf.mkdir()
+    paths = []
+    for n in range(5):
+        path = shelf / f"book_{n}.txt"
+        path.write_text(
+            "\n\n".join(
+                f"Book {n} part {k} says the code is BOOK-{n}-{k}, a long "
+                "passage of words to fill the chunk."
+                for k in range(10)
+            ),
+            encoding="utf-8",
+        )
         paths.append(str(path))
     return SimpleNamespace(rag=sdk, paths=paths, evicted=evicted, root=tmp_path)
 
@@ -116,19 +144,73 @@ def test_the_agent_ui_loads_up_to_the_cap_and_evicts_nothing(library):
     assert len(library.rag.indexed_files) == 100
     summary = handler.summary()
     assert summary["success"] is True
-    assert "50 more not loaded" in summary["summary"]
-    assert "at most 100 documents or 10,000 passages" in summary["summary"]
+    headline = summary["summary"].split("\n")[0]
+    assert "50 more not loaded" in headline
+    assert "holds at most 100 documents at once" in headline
+    assert "passages" not in headline
 
 
-def test_a_full_passage_cap_stops_loading_and_says_so(library):
+def test_a_full_passage_cap_stops_loading_and_names_it(library):
     library.rag.config.max_total_chunks = 40
     _, handler = _load_in_the_ui(library)
 
     assert library.evicted == []
     assert len(library.rag.chunks) == 40
-    summary = handler.summary()
-    assert "110 more not loaded" in summary["summary"]
-    assert "100 documents or 40 passages" in summary["summary"]
+    headline = handler.summary()["summary"].split("\n")[0]
+    assert "110 more not loaded" in headline
+    assert "holds at most 40 passages at once" in headline
+    assert "100 documents" not in headline
+
+
+def test_long_documents_stop_loading_at_the_first_one_pushed_out(books):
+    _, handler = _load_in_the_ui(books)
+
+    # The third book pushed the first out to fit; loading stopped there.
+    assert books.evicted == [books.paths[0]]
+    assert set(books.rag.indexed_files) == set(books.paths[1:3])
+    headline = handler.summary()["summary"].split("\n")[0]
+    assert headline.startswith("Indexed 2 document(s)")
+    assert "3 more not loaded" in headline
+    assert "documents are long" in headline
+    assert "holds at most 25 passages at once" in headline
+    assert "100 documents" not in headline
+
+
+def test_long_documents_are_not_reloaded_on_the_next_turn(books):
+    from gaia.ui._chat_helpers import _index_rag_with_progress
+
+    host, _ = _load_in_the_ui(books)
+    handler = _Handler()
+    _index_rag_with_progress(host, books.paths, handler)
+
+    # Reloading one each turn would push another out: the index would churn.
+    assert books.evicted == [books.paths[0]]
+    assert "3 more not loaded" in handler.summary()["summary"]
+
+
+def test_a_search_names_the_passage_limit_for_long_documents(books):
+    host, _ = _load_in_the_ui(books)
+    host.register_rag_tools()
+
+    result = _TOOL_REGISTRY["query_documents"]["function"](query="Book 4 code")
+
+    assert result["attached_not_searched"] == 3
+    assert "holds at most 25 passages at once" in result["instruction"]
+    assert "100 documents" not in result["instruction"]
+    assert "never say one is not attached" in result["instruction"]
+
+
+def test_a_long_document_left_out_loads_when_asked_for(books):
+    host, _ = _load_in_the_ui(books)
+    host.register_rag_tools()
+
+    result = _TOOL_REGISTRY["query_specific_file"]["function"](
+        file_path="book_4.txt", query="Book 4 code"
+    )
+
+    assert result["status"] == "success", result
+    assert "BOOK-4-" in " ".join(c["content"] for c in result["chunks"])
+    assert books.paths[4] in books.rag.indexed_files
 
 
 def test_an_attached_document_past_the_cap_loads_when_asked_for(library):
@@ -199,6 +281,48 @@ def test_a_relayed_flagship_loads_up_to_the_cap_and_evicts_nothing(library):
     assert "50 more not loaded" in summary["summary"]
     # The 50 left out are still granted, so asking for one can load it.
     assert agent.path_validator.is_path_allowed(library.paths[149], prompt_user=False)
+
+
+def test_the_flagship_names_the_passage_limit_for_long_documents(books):
+    gaia_agent = pytest.importorskip("gaia_agent.chat_agent")
+    agent = gaia_agent.ChatAgent.__new__(gaia_agent.ChatAgent)
+    agent.config = gaia_agent.ChatAgentConfig()
+    agent._rag = books.rag
+    agent.indexed_files = set()
+    agent.path_validator = PathValidator([str(books.root)])
+    agent.rebuild_system_prompt = lambda: None
+
+    agent._index_documents(books.paths)
+    line = agent._indexed_documents_line()
+
+    assert books.evicted == [books.paths[0]]
+    assert books.paths[0] not in agent.indexed_files
+    assert "3 more documents are attached to this chat" in line
+    assert "holds at most 25 passages at once" in line
+    assert "100 documents" not in line
+    assert "book_0.txt" in line
+
+
+def test_a_relayed_flagship_names_the_passage_limit_for_long_documents(books):
+    server = pytest.importorskip("gaia_agent.server")
+    agent = SimpleNamespace(
+        rag=books.rag,
+        indexed_files=set(),
+        path_validator=PathValidator([str(books.root / "cache")]),
+        rebuild_system_prompt=lambda: None,
+        _cancel_event=None,
+    )
+    handler = _Handler()
+
+    server._index_attached_documents(agent, books.paths, handler)
+
+    assert books.evicted == [books.paths[0]]
+    summary = handler.summary()
+    assert summary["success"] is True
+    assert "3 more not loaded" in summary["summary"]
+    assert "holds at most 25 passages at once" in summary["summary"]
+    assert "100 documents" not in summary["summary"]
+    assert agent.path_validator.is_path_allowed(books.paths[4], prompt_user=False)
 
 
 def test_the_agent_ui_warns_at_the_same_cap():

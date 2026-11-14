@@ -11,8 +11,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 - **More attached documents than one conversation searches.** A conversation
   searches at most 100 documents or 10,000 passages at once. With more in
   `documents`, the agent loads up to that limit instead of loading every one
-  and pushing earlier ones out, says in the `index_documents` step how many it left unloaded, and
-  never calls one of those "not attached": asking about one by name loads it.
+  and pushing earlier ones out, says in the `index_documents` step how many it left unloaded and
+  which limit it reached (the document count, or the passages a few long
+  documents fill), and never calls one of those "not attached": asking about
+  one by name loads it.
 
 - **The agent knows an MCP server it set up didn't start.** The notice the
   user sees about MCP servers that couldn't start, couldn't load or went over

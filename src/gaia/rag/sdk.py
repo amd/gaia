@@ -996,6 +996,8 @@ class RAGSDK:
         self.file_content_keys = {}
         # {file_path: (_stat_key, ns it was taken)} of those same bytes
         self.file_stat_keys = {}
+        # A load pushed a document out to fit under max_total_chunks.
+        self._evicted_for_size = False
         self._state_lock = threading.RLock()
 
         # Create cache directory
@@ -3920,6 +3922,7 @@ These positions indicate where to split the text."""
 
                 # Remove from indexed files
                 self.indexed_files.discard(file_path)
+                self._evicted_for_size = False
 
                 # Clean up LRU tracking
                 if file_path in self.file_access_times:
@@ -4134,6 +4137,8 @@ These positions indicate where to split the text."""
                 )
                 break
             evicted_files.append(path)
+        if evicted_files:
+            self._evicted_for_size = True
 
         # Check indexed files limit
         while (
@@ -4160,15 +4165,26 @@ These positions indicate where to split the text."""
         )
         return chunks_ok and files_ok, evicted_files
 
-    def is_full(self) -> bool:
-        """True when indexing one more document would push out one already held."""
+    def full_by(self) -> Optional[str]:
+        """Which limit stops the index taking one more document without pushing one out.
+
+        ``"size"`` once its passages reach ``max_total_chunks``, or a load had
+        to push a document out to fit under it; ``"files"`` at
+        ``max_indexed_files`` documents; None while there is room.
+        """
         with self._state_lock:
             files = len(self.indexed_files)
             chunks = len(self.chunks)
-        return (
-            0 < self.config.max_indexed_files <= files
-            or 0 < self.config.max_total_chunks <= chunks
-        )
+            evicted_for_size = self._evicted_for_size
+        if evicted_for_size or 0 < self.config.max_total_chunks <= chunks:
+            return "size"
+        if 0 < self.config.max_indexed_files <= files:
+            return "files"
+        return None
+
+    def is_full(self) -> bool:
+        """True when indexing one more document would push out one already held."""
+        return self.full_by() is not None
 
     def _has_indexing_capacity(self, replacing: Optional[str] = None) -> bool:
         """Check if there is capacity to index another document.

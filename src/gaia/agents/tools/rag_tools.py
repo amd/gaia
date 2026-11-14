@@ -326,7 +326,8 @@ def attached_not_loaded(host: Any, rag: Any) -> List[str]:
     """Documents attached to the chat that the index does not hold: past its cap.
 
     *host*'s ``attached_documents`` lists every document attached to the chat;
-    the index holds at most ``max_indexed_files`` of them at once.
+    the index holds at most ``max_indexed_files`` of them, or ``max_total_chunks``
+    passages, at once.
     """
     attached = getattr(host, "attached_documents", None) or []
     if not attached or rag is None:
@@ -337,19 +338,27 @@ def attached_not_loaded(host: Any, rag: Any) -> List[str]:
 
 
 def index_limit(rag: Any) -> str:
-    """What one chat's index holds at once: a document count or a passage count."""
-    return (
-        f"{rag.config.max_indexed_files} documents or "
-        f"{rag.config.max_total_chunks:,} passages, whichever comes first"
-    )
+    """Why the index holds no more of the attached documents, by the limit it reached."""
+    reason = rag.full_by()
+    if reason == "size":
+        return (
+            "the attached documents are long, and the search index holds at most "
+            f"{rag.config.max_total_chunks:,} passages at once"
+        )
+    if reason == "files":
+        return (
+            "the search index holds at most "
+            f"{rag.config.max_indexed_files} documents at once"
+        )
+    return "they are not loaded into the search index yet"
 
 
 def not_loaded_note(count: int, rag: Any) -> str:
     """What the model must know about attached documents it cannot search at once."""
     return (
         f"{count} more document{'s are' if count != 1 else ' is'} attached to this "
-        "chat but not searched by query_documents: a chat searches at most "
-        f"{index_limit(rag)} at once. They ARE attached; "
+        f"chat but not searched by query_documents: {index_limit(rag)}. "
+        "They ARE attached; "
         "never say one is not attached or does not exist. To search one, call "
         "query_specific_file with its file name, which loads it. If the answer "
         "is not found, tell the user only part of the attached documents was "

@@ -972,6 +972,9 @@ class ChatAgent(
                             ) or self._is_path_allowed(real):
                                 result = self.rag.index_document(real)
                                 if result.get("success"):
+                                    _forget_evicted(
+                                        self.indexed_files, result.get("evicted", [])
+                                    )
                                     self.indexed_files.add(doc_path)
                                     logger.info(
                                         "Restored indexed doc from prior turn: %s",

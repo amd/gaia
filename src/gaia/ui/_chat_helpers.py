@@ -1746,6 +1746,7 @@ def _index_rag_with_progress(
     from gaia.agents.tools.rag_tools import _forget_evicted, index_limit
 
     n = len(fpath_list)
+    unreadable = set()
     sse_handler._emit(
         {
             "type": "tool_start",
@@ -1766,7 +1767,13 @@ def _index_rag_with_progress(
             break
         # Full: loading more would push out what was just loaded.
         if agent.rag.is_full():
-            not_loaded = n - i + 1
+            held = {os.path.realpath(p) for p in agent.rag.indexed_files}
+            # Counts one a long document pushed out on the way in, too.
+            not_loaded = sum(
+                1
+                for p in fpath_list
+                if p not in unreadable and os.path.realpath(p) not in held
+            )
             break
         doc_name = Path(fpath).name
         sse_handler._emit(
@@ -1782,6 +1789,7 @@ def _index_rag_with_progress(
             error = result.get("error")
             if error:
                 logger.warning("RAG error for %s: %s", fpath, error)
+                unreadable.add(fpath)
                 doc_stats.append(f"  {doc_name} — ERROR: {error}")
                 sse_handler._emit(
                     {
@@ -1811,6 +1819,7 @@ def _index_rag_with_progress(
                     agent.rebuild_system_prompt()
         except Exception as idx_err:
             logger.warning("Failed to index %s: %s", fpath, idx_err)
+            unreadable.add(fpath)
             doc_stats.append(f"  {doc_name} — FAILED: {idx_err}")
             sse_handler._emit(
                 {
@@ -1827,9 +1836,8 @@ def _index_rag_with_progress(
     )
     if not_loaded:
         headline += (
-            f". {not_loaded} more not loaded: a chat searches at most "
-            f"{index_limit(agent.rag)} at once. Ask about one of them by name "
-            "to search it."
+            f". {not_loaded} more not loaded: {index_limit(agent.rag)}. Ask "
+            "about one of them by name to search it."
         )
     summary_lines = [
         headline,
