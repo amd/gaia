@@ -37,6 +37,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from gaia.logger import get_logger
+from gaia.skills.audit.findings import (
+    BYTECODE_CACHE_DIR,
+    BYTECODE_SUFFIXES,
+    ignore_bytecode_caches,
+)
 from gaia.skills.audit_gate import AuditReport, gate_for_publish
 from gaia.skills.errors import SkillError, SkillValidationError
 from gaia.skills.format import SKILL_FILENAME, Skill, parse_skill_file, validate_skill
@@ -49,10 +54,11 @@ from gaia.skills.tiers import LOWEST_TIER
 log = get_logger(__name__)
 
 #: Files never shipped in a published bundle (build noise, VCS metadata, caches).
+#: ``util/publish_skills.py`` reads both to predict the bundle's contents.
 EXCLUDED_NAMES = frozenset(
-    {".git", ".DS_Store", "__pycache__", ".pytest_cache", ".venv"}
+    {".git", ".DS_Store", BYTECODE_CACHE_DIR, ".pytest_cache", ".venv"}
 )
-EXCLUDED_SUFFIXES = (".pyc", ".pyo")
+EXCLUDED_SUFFIXES = BYTECODE_SUFFIXES
 
 #: Changelog filename picked up from the skill directory, if present.
 CHANGELOG_FILENAME = "CHANGELOG.md"
@@ -154,19 +160,21 @@ def publish_skill(
             "the hub records as the skill's owner."
         )
 
-    # ── The audit gate (#2468) — before signing or packaging, so a BLOCKed skill
-    #    never even gets a signature.
-    audit = gate_for_publish(source, skill_name=skill.name, report_path=audit_report)
-
-    key: Optional[SigningKey] = None
-    if not unsigned:
-        key = load_key(
-            Path(keys_root) if keys_root is not None else user_skills_dir(),
-            name=key_name,
-        )
-
     with tempfile.TemporaryDirectory(prefix="gaia-skill-publish-") as tmp:
         staged = _stage(source, Path(tmp) / skill.name)
+        # The audit gate (#2468) runs on the staged copy, before signing, so the
+        # audited bytes are the ones signed and uploaded.
+        audit = gate_for_publish(
+            staged, skill_name=skill.name, report_path=audit_report
+        )
+
+        key: Optional[SigningKey] = None
+        if not unsigned:
+            key = load_key(
+                Path(keys_root) if keys_root is not None else user_skills_dir(),
+                name=key_name,
+            )
+
         if key is not None:
             sign_bundle(
                 staged,
@@ -257,12 +265,8 @@ def _stage(source: Path, staged: Path) -> Path:
     return staged
 
 
-def _ignore(_directory: str, names: list[str]) -> set[str]:
-    return {
-        name
-        for name in names
-        if name in EXCLUDED_NAMES or name.endswith(EXCLUDED_SUFFIXES)
-    }
+def _ignore(directory: str, names: list[str]) -> set[str]:
+    return ignore_bytecode_caches(directory, names) | (EXCLUDED_NAMES & set(names))
 
 
 def _zip(staged: Path, output: Path) -> Path:

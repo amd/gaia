@@ -197,6 +197,10 @@ class Subcommand:
             it refuses — ``--omit dev`` and ``--omit left-pad`` parse the same
             here. Attached, the value is unambiguous, so ``npm ci --omit=dev``
             works without the value-flag that would swallow a package name.
+        optional_value_flags: Short options whose value is optional and only
+            ever attached (git's ``-M50%``). In a short cluster the rest of the
+            token is their value; a spaced next token is never consumed, because
+            the CLI reads it as a word of its own.
         path_value_flags: Value-taking flags whose value is a FILE this
             command reads or writes (``go test -coverprofile=cover.out``). The
             value must stay inside the checkout, by the same lexical test that
@@ -260,6 +264,7 @@ class Subcommand:
     denied_flag_reasons: Mapping[str, str] = field(default_factory=dict)
     strict_flags: bool = False
     inline_value_flags: frozenset[str] = frozenset()
+    optional_value_flags: frozenset[str] = frozenset()
     path_value_flags: frozenset[str] = frozenset()
     no_operands: bool = False
     confirm: bool = False
@@ -387,6 +392,14 @@ class BinaryPolicy:
             flag token must not be read as a short flag carrying an attached
             value. Getting this wrong is a bypass, not a cosmetic difference —
             see :func:`_split_flag`.
+        abbreviated_options: This CLI parses options the way git's
+            ``parse-options`` does: a unique prefix of a long option selects
+            it (``--ext`` is ``--ext-diff``), and boolean short options cluster
+            (``-an`` is ``-a -n``). Denied flags are then matched in both
+            spellings, not by exact name.
+        exact_options: Real option names of this CLI that are a strict prefix
+            of a denied flag (git's ``--text`` vs ``--textconv``). The CLI takes
+            an exact match over an abbreviation, so these are not read as one.
         confirm_summary: The clause a CONFIRM prompt uses when the rule does
             not override it — "writes to GitHub", "changes this repository".
             One line, and it must be true of every write the policy offers.
@@ -425,6 +438,8 @@ class BinaryPolicy:
     positional: Subcommand | None = None
     substitute: str = ""
     single_dash_long: bool = False
+    abbreviated_options: bool = False
+    exact_options: frozenset[str] = frozenset()
     #: pflag reads ``-ab`` as ``-a -b`` when ``-a`` takes no value, and which
     #: flags take one differs per subcommand. Refuse every single-dash token
     #: longer than a flag, so no table of value flags has to be right.
@@ -818,6 +833,14 @@ _GIT_BRANCH_DENIED_FLAGS = frozenset(
 )
 
 
+#: Short options of git's diff machinery that need a value (``-SOAuth``,
+#: ``-S OAuth``), and those whose value is optional and attached only (``-M50%``).
+#: Either way git reads the rest of a short cluster as the value.
+_GIT_DIFF_VALUE_SHORT = frozenset({"-S", "-G", "-l", "-I"})
+_GIT_DIFF_OPTIONAL_VALUE_SHORT = frozenset({"-U", "-M", "-C", "-B", "-X"})
+_GIT_LOG_VALUE_SHORT = _GIT_DIFF_VALUE_SHORT | {"-n", "-L"}
+
+
 def _git_read(
     *,
     denied_flags: frozenset[str] = frozenset(),
@@ -825,6 +848,7 @@ def _git_read(
     denied_actions: frozenset[str] = frozenset(),
     no_operands: bool = False,
     value_flags: frozenset[str] = frozenset(),
+    optional_value_flags: frozenset[str] = frozenset(),
 ) -> Subcommand:
     """One read-only git subcommand — free-form, because its operands are
     revisions and pathspecs rather than an action word.
@@ -842,6 +866,7 @@ def _git_read(
         free_form=True,
         no_operands=no_operands,
         value_flags=value_flags,
+        optional_value_flags=optional_value_flags,
         denied_actions=denied_actions,
         denied_flags=_GIT_READ_DENIED_FLAGS | denied_flags,
         denied_flag_reasons={
@@ -1668,6 +1693,8 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         # MORE contained, not less, by taking the configured pager (a program)
         # out of the run entirely.
         bare_flags=frozenset({"--version", "--help", "-h", "-P", "--no-pager"}),
+        abbreviated_options=True,
+        exact_options=frozenset({"--text", "--filter"}),
         # The read-only floor this binary had before it had a policy — see
         # BinaryPolicy.ungranted. Unchanged from the shell tool's old
         # SAFE_GIT_COMMANDS, so an agent with no skill loaded behaves as before.
@@ -1688,18 +1715,32 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
         ),
         subcommands={
             "status": _git_read(),
-            "log": _git_read(),
-            "show": _git_read(),
-            "diff": _git_read(),
-            "blame": _git_read(),
-            "shortlog": _git_read(),
+            "log": _git_read(
+                value_flags=_GIT_LOG_VALUE_SHORT,
+                optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+            ),
+            "show": _git_read(
+                value_flags=_GIT_LOG_VALUE_SHORT,
+                optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+            ),
+            "diff": _git_read(
+                value_flags=_GIT_DIFF_VALUE_SHORT,
+                optional_value_flags=_GIT_DIFF_OPTIONAL_VALUE_SHORT,
+            ),
+            "blame": _git_read(
+                value_flags=frozenset({"-L", "-S"}),
+                optional_value_flags=frozenset({"-C", "-M"}),
+            ),
+            "shortlog": _git_read(optional_value_flags=frozenset({"-w"})),
             "describe": _git_read(),
             "rev-parse": _git_read(),
             "merge-base": _git_read(),
-            "ls-files": _git_read(),
+            "ls-files": _git_read(value_flags=frozenset({"-x", "-X"})),
             "ls-tree": _git_read(),
             "cat-file": _git_read(),
-            "grep": _git_read(),
+            "grep": _git_read(
+                value_flags=frozenset({"-e", "-f", "-A", "-B", "-C", "-m"})
+            ),
             # Flags only: `git branch` lists, and `git branch <name>`
             # CREATES a ref, which free-form would have called the same read.
             "branch": _git_read(
@@ -1810,6 +1851,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 "switches branches or overwrites files in the working tree — "
                 "any uncommitted change to a file it touches is lost, and "
                 "nothing recovers it",
+                value_flags=frozenset({"-b"}),
                 denied_flags=frozenset({"-f", "--force", "-B", "--orphan"}),
                 denied_flag_reasons={
                     "-f": "it discards uncommitted changes without reporting "
@@ -1824,6 +1866,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             ),
             "switch": _git_write(
                 "switches branches in this repository",
+                value_flags=frozenset({"-c"}),
                 denied_flags=frozenset(
                     {"-f", "--force", "--discard-changes", "-C", "--orphan"}
                 ),
@@ -2486,20 +2529,95 @@ def _split_flag(
     difference — ``-exec`` splits into an ``-e`` nothing denies, and ``go test
     -exec /bin/sh`` runs a shell. Both spellings normalise to one leading dash
     so a rule need list ``-exec`` only once.
+
+    A token that carries ``=`` returns its attached value even when it is empty
+    (``--jq=`` gives ``""``): the parser has already taken the value from this
+    token, so the next token is a flag or operand of its own, never this
+    flag's value. Only a token with nothing attached returns ``None``.
     """
     if single_dash_long and token.startswith("-"):
-        name, _, attached = token.lstrip("-").partition("=")
-        return f"-{name}", attached or None
+        name, sep, attached = token.lstrip("-").partition("=")
+        return f"-{name}", attached if sep else None
     if token.startswith("--"):
-        name, _, attached = token.partition("=")
-        return name, attached if attached else None
+        name, sep, attached = token.partition("=")
+        return name, attached if sep else None
     name, rest = token[:2], token[2:]
-    return name, rest.lstrip("=") or None
+    if rest.startswith("="):
+        return name, rest[1:]
+    return name, rest or None
 
 
 def _flag_name(token: str, *, single_dash_long: bool = False) -> str:
     """The flag's name, without any value attached to the same token."""
     return _split_flag(token, single_dash_long=single_dash_long)[0]
+
+
+def _long_flag_matches(name: str, full: str) -> bool:
+    """True when *name* is *full* or an abbreviation of it (``--ext`` → ``--ext-diff``)."""
+    return len(name) > 2 and full.startswith(name)
+
+
+def _value_taking_flags(rule: Subcommand) -> frozenset[str]:
+    return (
+        frozenset(rule.value_flags)
+        | frozenset(rule.flag_values)
+        | rule.path_value_flags
+        | rule.inline_value_flags
+        | rule.optional_value_flags
+        | frozenset(rule.flag_value_prefixes)
+    )
+
+
+def _spelled_denied_flag(
+    policy: BinaryPolicy, rule: Subcommand, token: str, name: str
+) -> str | None:
+    """The denied flag *token* spells, or None.
+
+    An exact name always counts. Under :attr:`BinaryPolicy.abbreviated_options`
+    so does a long-option abbreviation, and so does any letter of a short
+    cluster up to the first letter that takes a value (the rest is its value).
+    """
+    denied = rule.denied_flags
+    if name in denied:
+        return name
+    if not policy.abbreviated_options or policy.single_dash_long:
+        return None
+    if token.startswith("--"):
+        if name in policy.exact_options:
+            return None
+        return next(
+            (flag for flag in sorted(denied) if _long_flag_matches(name, flag)), None
+        )
+    value_taking = _value_taking_flags(rule)
+    for letter in token[1:]:
+        if letter == "=":
+            break
+        flag = f"-{letter}"
+        if flag in denied:
+            return flag
+        if flag in value_taking:
+            break
+    return None
+
+
+def _denied_flag_message(
+    policy: BinaryPolicy, prefix: str, token: str, name: str, denied: str, reason: str
+) -> str:
+    """The refusal for a denied flag, naming the flag the CLI reads *token* as."""
+    if denied == name:
+        return f"'{policy.binary} {prefix}{denied}' is not allowed: {reason}."
+    return (
+        f"'{policy.binary} {prefix}{token}' is not allowed "
+        f"({policy.binary} reads it as {denied}): {reason}."
+    )
+
+
+def _empty_value(spelled: str, name: str, *, attached_only: bool = False) -> str:
+    example = f"{name}=<value>" if attached_only else f"{name} <value>"
+    return (
+        f"'{spelled}' is not allowed: {name} needs a value, and nothing follows "
+        f"its '='. Pass the value itself, e.g. '{example}'."
+    )
 
 
 def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None:
@@ -2707,8 +2825,6 @@ def classify_invocation(
             "would run something other than what was checked."
         )
 
-    denied_flags = rule.denied_flags
-
     action: str | None = None
     cursor = 0
     while cursor < len(rest):
@@ -2739,13 +2855,16 @@ def classify_invocation(
         # Checked before the action is classified, so a denied flag refuses the
         # call outright — a confirmable write carrying one never reaches a
         # prompt, because the flag is the escalation, not the write.
-        if name in denied_flags:
+        denied = _spelled_denied_flag(policy, rule, token, name)
+        if denied is not None:
             reason = rule.denied_flag_reasons.get(
-                name,
+                denied,
                 "that flag sends a request body, which makes the call a write",
             )
             return _refuse(
-                f"'{policy.binary} {subcommand} {name}' is not allowed: {reason}."
+                _denied_flag_message(
+                    policy, f"{subcommand} ", token, name, denied, reason
+                )
             )
         if (
             policy.refuse_bundled_short_flags
@@ -2777,6 +2896,14 @@ def classify_invocation(
                     f"spaced: write '{name}=<value>'. Spaced, the value cannot "
                     "be told apart from the operand this subcommand refuses."
                 )
+            if inline == "":
+                return _refuse(
+                    _empty_value(
+                        f"{policy.binary} {subcommand} {token}",
+                        name,
+                        attached_only=True,
+                    )
+                )
             denial = _denied_operand(rule, policy.binary, inline)
             if denial is not None:
                 return _refuse(denial)
@@ -2807,6 +2934,8 @@ def classify_invocation(
             or name in rule.value_flags
             or name in rule.path_value_flags
         )
+        if takes_value and inline == "":
+            return _refuse(_empty_value(f"{policy.binary} {subcommand} {token}", name))
         value = inline
         if takes_value and inline is None:
             value = rest[cursor] if cursor < len(rest) else None
@@ -3024,11 +3153,14 @@ def _classify_positional_invocation(
 
         name, inline = _split_flag(token, single_dash_long=policy.single_dash_long)
 
-        if name in rule.denied_flags:
+        denied = _spelled_denied_flag(policy, rule, token, name)
+        if denied is not None:
             reason = rule.denied_flag_reasons.get(
-                name, "it is outside this grant's read-only flag set"
+                denied, "it is outside this grant's read-only flag set"
             )
-            return _refuse(f"'{policy.binary} {name}' is not allowed: {reason}.")
+            return _refuse(
+                _denied_flag_message(policy, "", token, name, denied, reason)
+            )
 
         if name in rule.allowed_flags or name in policy.bare_flags:
             if inline is not None:
@@ -3054,6 +3186,8 @@ def _classify_positional_invocation(
                 f"covers a fixed set of flags: {', '.join(sorted(known_flags))}."
             )
 
+        if inline == "":
+            return _refuse(_empty_value(f"{policy.binary} {token}", name))
         value = inline
         if inline is None:
             value = tokens[cursor] if cursor < len(tokens) else None

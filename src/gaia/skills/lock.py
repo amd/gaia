@@ -141,6 +141,10 @@ class LockEntry:
     #: Content digest of the bundle the promote audited. Trust is bound to
     #: these bytes: edit the skill after promoting and the code defers again.
     code_digest: str = ""
+    #: The audit engine (:data:`gaia.skills.audit.findings.AUDIT_ENGINE`) whose
+    #: digest rule computed ``content_digest``. Empty on entries written before
+    #: this was recorded, which means the 0.1.0 rule.
+    digest_engine: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
