@@ -616,29 +616,23 @@ SAVE_WHEN_ASKED_PROMPT = (
 )
 
 
-def _category_refusal(category: str) -> Dict[str, Any]:
-    """What remember returns for a category a chat may not write."""
-    why = (
-        f"a chat can't write the '{category}' category"
-        if category in VALID_CATEGORIES
-        else f"'{category}' is not a category"
-    )
-    return {
-        "status": "error",
-        "stored": 0,
-        "message": (
-            f"Not stored yet: {why}. Call remember again with category set to "
-            f"one of: {', '.join(sorted(EXTRACTABLE_CATEGORIES))}."
-        ),
-    }
-
-
 def _saved_despite(ignored: Dict[str, str], knowledge_id: str) -> str:
     """What remember tells the model after saving without a bad optional argument.
 
     Opens with "Saved": the model repeats a tool result's first words to the user.
     """
     parts = ["Saved."]
+    if "category" in ignored:
+        name = ignored["category"]
+        why = (
+            f"a chat can't write the '{name}' category"
+            if name in VALID_CATEGORIES
+            else f"'{name}' is not a category"
+        )
+        parts.append(
+            f"Filed as a fact: {why} "
+            f"(use one of {sorted(EXTRACTABLE_CATEGORIES)}), so it was ignored."
+        )
     if "due_at" in ignored:
         parts.append(
             f"No due date was set: '{ignored['due_at']}' is not an ISO 8601 "
@@ -5845,8 +5839,7 @@ class MemoryMixin(ProceduralMemoryMixin):
 
             Args:
                 fact: The statement to store, in the user's own words.
-                category: fact, preference, error, skill, note, or reminder;
-                    anything else is refused, not stored.
+                category: fact, preference, error, skill, note, or reminder.
                 domain: Sub-type, e.g. 'journal', 'todo', 'work'.
                 due_at: ISO 8601 timestamp; reminders only.
                 sensitive: "true" to mark the entry private.
@@ -5859,13 +5852,13 @@ class MemoryMixin(ProceduralMemoryMixin):
             if not fact or not fact.strip():
                 return {"status": "error", "message": "fact must not be empty."}
 
-            # An empty value is the argument left out, like domain="".
-            category = category or "fact"
-            # Privileged categories lead every prompt, so a chat can't write one.
-            if category not in EXTRACTABLE_CATEGORIES:
-                return _category_refusal(category)
-            # A bad date must not lose the fact: save without it and say so.
+            # A bad label must not lose the fact: save without it and say so.
             ignored: Dict[str, str] = {}
+            # Privileged categories too: those rows lead every prompt, so a
+            # chat can't write one, but the fact itself is kept.
+            if category not in EXTRACTABLE_CATEGORIES:
+                ignored["category"] = category
+                category = "fact"
 
             if category == "error" and MemoryMixin._is_unlearnable_error(fact):
                 return {
