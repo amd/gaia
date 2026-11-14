@@ -68,6 +68,7 @@ from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
 from gaia.agents.tools.rag_tools import (
     _forget_evicted,
+    index_limit,
     not_held,
     not_loaded_summary,
 )
@@ -957,12 +958,17 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     cancel = getattr(agent, "_cancel_event", None)
     stopped = False
     filled = False
+    left = 0
+    stop_index = len(pending)
+    stop_line: Optional[int] = None
     unreadable: set = set()
     loaded_line: Dict[str, int] = {}
     for position, doc in enumerate(pending):
-        # Stop ends the loading here; what is left stays pending for the next turn.
+        # Stop ends the loading here; what is left stays attached for later.
         if cancel is not None and cancel.is_set():
             left = len(pending) - position
+            stop_index = position
+            stop_line = len(lines)
             lines.append(
                 "Stopped: "
                 + ("1 document was" if left == 1 else f"{left} documents were")
@@ -1001,8 +1007,23 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             unreadable.add(doc)
             error = result.get("error") or "the indexer gave no reason"
             lines.append(f"{name}: not indexed: {error}")
-    # Includes one a later, long document pushed out, the last one's too.
-    unloaded = not_held(rag, pending, unreadable) if filled and not stopped else []
+    # On a stop, report only what a load pushed out; the stop count covers the rest.
+    unloaded = []
+    if filled and rag is not None:
+        missed = not_held(rag, pending, unreadable)
+        if stopped:
+            attempted = set(pending[:stop_index])
+            unloaded = [d for d in missed if d in attempted]
+        else:
+            unloaded = missed
+    if stopped and rag is not None and rag.is_full() and stop_line is not None:
+        lines[stop_line] = (
+            "Stopped: "
+            + ("1 document was" if left == 1 else f"{left} documents were")
+            + " not loaded. "
+            + index_limit(rag).capitalize()
+            + "; they load only when you ask about one by name."
+        )
     for doc in unloaded:
         if doc in loaded_line:
             lines[loaded_line[doc]] += " (then pushed out to fit the index)"

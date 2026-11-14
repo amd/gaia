@@ -1745,6 +1745,7 @@ def _index_rag_with_progress(
     """
     from gaia.agents.tools.rag_tools import (
         _forget_evicted,
+        index_limit,
         not_held,
         not_loaded_summary,
     )
@@ -1763,11 +1764,13 @@ def _index_rag_with_progress(
     total_chunks = 0
     cancelled = getattr(sse_handler, "cancelled", None)
     left = 0
+    stop_index = n
     filled = False
     for i, fpath in enumerate(fpath_list, 1):
-        # Stop ends the loading here; what is left is picked up on the next turn.
+        # Stop ends the loading here; what is left stays attached for later.
         if cancelled is not None and cancelled.is_set():
             left = n - i + 1
+            stop_index = i - 1
             break
         # Full: loading more would push out what was just loaded.
         if agent.rag.is_full():
@@ -1831,17 +1834,29 @@ def _index_rag_with_progress(
                 }
             )
     idx_elapsed = round(_time.time() - idx_start, 1)
-    # Includes one a later, long document pushed out, the last one's too.
-    unloaded = (
-        not_held(agent.rag, fpath_list, unreadable) if filled and not left else []
-    )
-    headline = (
-        f"Stopped: {left} of {n} {label} not loaded. They load with your next message."
-        if left
-        else f"Indexed {n - len(unloaded)} {label} in {idx_elapsed}s"
-    )
+    # On a stop, report only what a load pushed out; the stop count covers the rest.
+    unloaded = []
+    if filled:
+        missed = not_held(agent.rag, fpath_list, unreadable)
+        if left:
+            attempted = set(fpath_list[:stop_index])
+            unloaded = [p for p in missed if p in attempted]
+        else:
+            unloaded = missed
+    if left:
+        headline = f"Stopped: {left} of {n} {label} not loaded."
+        if agent.rag.is_full():
+            headline += (
+                f" {index_limit(agent.rag).capitalize()}; they load only when "
+                "you ask about one by name."
+            )
+        else:
+            headline += " They load with your next message."
+    else:
+        headline = f"Indexed {n - len(unloaded)} {label} in {idx_elapsed}s"
     if unloaded:
-        headline += ". " + not_loaded_summary(agent.rag, unloaded)
+        separator = " " if left else ". "
+        headline += separator + not_loaded_summary(agent.rag, unloaded)
     pushed_out = set(unloaded)
     summary_lines = [
         headline,

@@ -382,3 +382,83 @@ def test_the_last_document_pushing_one_out_is_reported_by_the_relay(books):
     assert summary["success"] is True
     assert summary["result_data"]["status"] == "indexed"
     assert agent.path_validator.is_path_allowed(books.paths[0], prompt_user=False)
+
+
+def test_a_stop_right_after_a_push_out_reports_the_pushed_out_document(books):
+    from gaia.ui._chat_helpers import _index_rag_with_progress
+
+    four = books.paths[:4]
+    host = _Host(books.rag, four)
+    handler = _Handler()
+    index = books.rag.index_document
+
+    def index_and_stop(path):
+        result = index(path)
+        if result.get("evicted"):
+            handler.cancelled.set()
+        return result
+
+    books.rag.index_document = index_and_stop
+    _index_rag_with_progress(host, four, handler)
+
+    assert books.evicted == [books.paths[0]]
+    assert set(books.rag.indexed_files) == set(books.paths[1:3])
+    assert books.rag.is_full()
+    summary = handler.summary()
+    text = summary["summary"]
+    headline = text.split("\n")[0]
+    assert summary["success"] is False
+    # The stop count covers only the books never attempted.
+    assert headline.startswith("Stopped: 1 of 4 document(s) not loaded.")
+    assert "book_3.txt" not in text
+    # The pushed-out book is named and marked, and the full index is explained.
+    assert "1 more not loaded" in headline
+    assert "Not loaded: book_0.txt." in headline
+    assert "(then pushed out to fit the index)" in text
+    assert "holds at most 25 passages at once" in headline
+    assert "They load with your next message" not in headline
+    assert ".." not in headline
+
+
+def test_a_relayed_stop_right_after_a_push_out_reports_the_pushed_out_document(books):
+    server = pytest.importorskip("gaia_agent.server")
+    four = books.paths[:4]
+    cancel = threading.Event()
+    agent = SimpleNamespace(
+        rag=books.rag,
+        indexed_files=set(),
+        path_validator=PathValidator([str(books.root / "cache")]),
+        rebuild_system_prompt=lambda: None,
+        _cancel_event=cancel,
+    )
+    handler = _Handler()
+    index = books.rag.index_document
+
+    def index_and_stop(path):
+        result = index(path)
+        if result.get("evicted"):
+            cancel.set()
+        return result
+
+    books.rag.index_document = index_and_stop
+    server._index_attached_documents(agent, four, handler)
+
+    assert books.evicted == [books.paths[0]]
+    assert set(books.rag.indexed_files) == set(books.paths[1:3])
+    assert books.rag.is_full()
+    summary = handler.summary()
+    lines = summary["summary"].split("\n")
+    stop_line = next(line for line in lines if line.startswith("Stopped:"))
+    assert summary["success"] is False
+    assert summary["result_data"]["status"] == "stopped"
+    # The stop count covers only the book never attempted.
+    assert "1 document was not loaded" in stop_line
+    assert "book_3.txt" not in summary["summary"]
+    assert "They load with your next message" not in stop_line
+    assert "holds at most 25 passages at once" in stop_line
+    # The pushed-out book is named, marked, and still loadable by name.
+    assert "book_0.txt: 10 chunks (then pushed out to fit the index)" in lines
+    assert lines[-1].startswith("1 more not loaded:")
+    assert "Not loaded: book_0.txt." in lines[-1]
+    assert "holds at most 25 passages at once" in lines[-1]
+    assert agent.path_validator.is_path_allowed(books.paths[0], prompt_user=False)
