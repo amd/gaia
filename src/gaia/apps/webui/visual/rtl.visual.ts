@@ -2459,6 +2459,20 @@ for (const locale of ['ar', 'en']) {
         expect(await audit(page)).toEqual([]);
     });
 
+    test(`desktop app and updates: skipped, phone width (${locale})`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        const update = { status: 'downloaded', version: '0.26.0', skippedVersion: '0.26.0' };
+        await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, update); });
+        await page.getByRole('button', { name: /Open sidebar/ }).click();
+        await page.getByRole('button', { name: /Settings/ }).first().click();
+        const updates = page.locator('.settings-disclosure', { hasText: /Updates/ });
+        await expect(updates).toBeVisible();
+        await page.locator('#updates-mode').scrollIntoViewIfNeeded();
+        await expect(page.locator('#updates-mode')).toBeInViewport({ ratio: 1 });
+        await shot(page, `updates-${locale}-skipped-phone`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     test(`desktop app and updates: status unreadable (${locale})`, async ({ page }) => {
         const failure = "Error invoking remote method 'gaia-updater:get-status': Error: No handler registered for 'gaia-updater:get-status'";
         await open(page, '', locale, async (p) => { await withSettingsPanes(p); await withDesktopBridges(p, {}, undefined, failure); });
@@ -4420,6 +4434,17 @@ for (const locale of ['ar', 'en']) {
                 await page.screenshot({ path: info.outputPath('chip.png') });
             });
         }
+
+        test('chip: ready, phone width', async ({ page }, info) => {
+            await page.setViewportSize({ width: 390, height: 844 });
+            await open(page, '', locale, withUpdater(UPDATE_STATES.ready));
+            await expect(page.locator('.update-chip')).toBeInViewport({ ratio: 1 });
+            await expect(page.locator('.update-chip__dismiss')).toBeInViewport({ ratio: 1 });
+            await expect(page.locator('.update-chip__action')).toBeInViewport({ ratio: 1 });
+            // The closed sidebar sits off screen at this width, so the full audit doesn't apply.
+            expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+            await page.screenshot({ path: info.outputPath('chip.png') });
+        });
 
         for (const name of ['available', 'ready']) {
             test(`chip: ${name}, dark`, async ({ page }, info) => {
