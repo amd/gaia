@@ -215,9 +215,24 @@ func choiceLabel(provider, model string) string {
 		return model
 	}
 	if lemonade.IsHybridID(model) {
-		return lemonade.Label(lemonade.HybridProvider) + " (cloud)"
+		return hybridLabel()
 	}
 	return lemonade.Label(provider) + " · " + strings.TrimPrefix(model, provider+".")
+}
+
+// hybridLabel names hybrid with where its turns run: cloud when any of its
+// models is, local when all are on this PC.
+func hybridLabel() string {
+	name := lemonade.Label(lemonade.HybridProvider)
+	cloud, err := lemonade.HybridCloudModels()
+	switch {
+	case err != nil:
+		// The switch itself reports the broken config; the label can't say.
+		return name
+	case len(cloud) == 0:
+		return name + " (local)"
+	}
+	return name + " (cloud)"
 }
 
 // startupFailureLine is the one line shown when the opening switch did not take.

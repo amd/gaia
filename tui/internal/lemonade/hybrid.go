@@ -52,6 +52,50 @@ func (h HybridModels) Roles() []HybridRole {
 	return roles
 }
 
+// CloudModels are the models hybrid may send a request to off this PC, the
+// classifier included, as check_local_only in gaia.llm.hybrid counts them.
+func (h HybridModels) CloudModels() []string {
+	var cloud []string
+	seen := map[string]bool{}
+	for _, m := range []string{h.Classifier, h.Cheap, h.Strong} {
+		if seen[m] {
+			continue
+		}
+		seen[m] = true
+		if IsCloudID(m) || strings.HasPrefix(m, "claude-") {
+			cloud = append(cloud, m)
+		}
+	}
+	return cloud
+}
+
+// HybridCloudModels reads the hybrid models and returns the cloud ones; none
+// means hybrid runs entirely on this PC.
+func HybridCloudModels() ([]string, error) {
+	h, err := ReadHybridModels()
+	if err != nil {
+		return nil, err
+	}
+	return h.CloudModels(), nil
+}
+
+// HybridLocalOnlyRefusal is why Local only refuses hybrid, or nil when it
+// allows it: Local only is off, or every hybrid model runs on this PC.
+func HybridLocalOnlyRefusal() error {
+	if !LocalOnly() {
+		return nil
+	}
+	cloud, err := HybridCloudModels()
+	if err != nil {
+		return err
+	}
+	if len(cloud) == 0 {
+		return nil
+	}
+	return fmt.Errorf("Local only is on, so hybrid won't send turns to %s. "+
+		"Pick a local model instead. %s", strings.Join(cloud, ", "), LocalOnlyHint)
+}
+
 // ReadHybridModels reads the hybrid_* keys from config.json with the defaults
 // HybridSettings.load applies: empty is the default, and the classifier is the
 // cheap model unless set. A malformed value is an error, as it is in Python.

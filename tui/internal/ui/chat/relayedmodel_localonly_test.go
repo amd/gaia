@@ -25,3 +25,25 @@ func TestARelayedSwitchToACloudModelIsRefusedUnderLocalOnly(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalOnlyRefusesARelayedSwitchToACloudHybridOnly(t *testing.T) {
+	policy := filepath.Join(t.TempDir(), "policy.json")
+	if err := os.WriteFile(policy, []byte(`{"network_policy":"local_ai_only"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GAIA_POLICY_FILE", policy)
+
+	useHybridConfig(t, `{"hybrid_cheap_model":"`+localModel+`","hybrid_strong_model":"`+gatewayMdl+`"}`)
+	_, err := checkRelayedSwitch(context.Background(), &relayClient{}, fakeLemonade(t), "hybrid", "hybrid")
+	if err == nil || !strings.Contains(err.Error(), "Local only is on") || !strings.Contains(err.Error(), gatewayMdl) {
+		t.Fatalf("err = %v, want a Local only refusal naming %s", err, gatewayMdl)
+	}
+
+	// Both models served on this PC: Local only has nothing to refuse.
+	useHybridConfig(t, `{"hybrid_cheap_model":"`+localModel+`","hybrid_strong_model":"`+secondLocal+`"}`)
+	base := fakeLemonadeWith(t, localModel, secondLocal)
+	id, err := checkRelayedSwitch(context.Background(), &relayClient{}, base, "hybrid", "hybrid")
+	if err != nil || id != "hybrid" {
+		t.Fatalf("an all-local hybrid was refused under Local only: id=%q err=%v", id, err)
+	}
+}

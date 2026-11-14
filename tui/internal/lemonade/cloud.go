@@ -168,7 +168,9 @@ func (m Model) Window() int {
 	return m.ContextLength
 }
 
-// IsCloudID is true for hybrid too: it is virtual and never runs on this PC.
+// IsCloudID is true for hybrid too: nothing named hybrid is downloaded or
+// loaded here. Whether hybrid sends turns off this PC depends on its models;
+// ask HybridCloudModels.
 func IsCloudID(id string) bool {
 	return strings.HasPrefix(id, "fireworks.") || strings.HasPrefix(id, "amd.") || IsHybridID(id)
 }
