@@ -1318,9 +1318,9 @@ def _default_model_for(provider: str) -> str:
         from gaia_agent.agent import GaiaAgentConfig
 
         return GaiaAgentConfig.claude_model
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+    from gaia.llm.lemonade_client import resolve_default_chat_model
 
-    return DEFAULT_MODEL_NAME
+    return resolve_default_chat_model()
 
 
 def _switch_target(session: Any, request: "QueryRequest") -> Optional[str]:
@@ -1705,6 +1705,11 @@ async def query(request: QueryRequest):
                     display,
                 )
             agent = session.agent
+            # A vision model chosen in Settings since the last turn applies now.
+            follow = getattr(agent, "follow_model_switch", None)
+            if callable(follow):
+                # Off the loop: it reads config.json and may ask Lemonade.
+                await _off_loop(follow)
             if request.working_directory is not None:
                 config = getattr(agent, "config", None)
                 if config is not None:

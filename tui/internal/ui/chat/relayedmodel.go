@@ -118,12 +118,18 @@ func checkRelayedSwitch(ctx context.Context, sw client.TurnModelSwitcher, base, 
 		" does not list it — the key may be missing or the provider is not connected")
 }
 
+// sameModelID reports whether two ids name one model: the agent and Lemonade
+// answer with their own spelling of a local id (its case, a "user." prefix).
+func sameModelID(a, b string) bool {
+	return a != "" && (strings.EqualFold(a, b) || lemonade.SameLocalID(a, b))
+}
+
 // handleRelayedSwitch applies a checked switch, or says why it was not made.
 // The opening restore or gate pick reports through the startup path, so a
 // failure there opens the picker the same way it does on the direct route.
 func (m ChatModel) handleRelayedSwitch(msg relayedSwitchMsg) (tea.Model, tea.Cmd) {
 	m.relayedSwitching = false
-	startup := m.startup.inFlight && strings.EqualFold(msg.target, m.startup.model)
+	startup := m.startup.inFlight && sameModelID(msg.target, m.startup.model)
 	if startup {
 		m.startup.inFlight = false
 	}

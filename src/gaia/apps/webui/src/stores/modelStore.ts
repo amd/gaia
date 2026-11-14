@@ -197,7 +197,11 @@ export const useModelStore = create<ModelState>((set, get) => ({
         // An empty list has no model to report, and must not wipe the sidebar.
         if (sessions?.length) useChatStore.getState().setSessions(sessions);
     },
-    queue: (model) => set({ queued: model, queueError: null }),
+    queue: (model) => {
+        set({ queued: model, queueError: null });
+        // The reply may have ended between the click and its render: apply now.
+        if (model && !useChatStore.getState().isStreaming) void get().applyQueued();
+    },
     applyQueued: async () => {
         const model = get().queued;
         if (!model) return;
@@ -234,6 +238,27 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set({ pickLoad: null });
     },
 }));
+
+/**
+ * A setting changed the model outside the picker (a custom model id, Local only):
+ * re-read it everywhere a pick would, and follow the load the backend started.
+ * *before* is the model in use before the change was sent.
+ */
+export async function syncModelAfterSettingChange(before?: string | null): Promise<void> {
+    forgetModelChecks();
+    await useModelStore.getState().refresh();
+    const active = useModelStore.getState().active;
+    // Only a change starts a load; an old warm-up's failure is not this one's.
+    if (active?.model && !active.remote && !sameModelId(active.model, before)) {
+        watchPickLoad(active.model, useModelStore.setState);
+    }
+    try {
+        const sessions = (await api.listSessions()).sessions;
+        if (sessions.length) useChatStore.getState().setSessions(sessions);
+    } catch (err) {
+        log.system.error('Could not refresh chats after a model setting change; the next poll will', err);
+    }
+}
 
 // A pick made during a reply keeps that reply on its model, then applies.
 useChatStore.subscribe((state, prev) => {

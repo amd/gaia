@@ -26,6 +26,7 @@ pytestmark = pytest.mark.real_free_memory
 REPO_ROOT = Path(__file__).resolve().parents[2]
 URL = "http://127.0.0.1:13305/api/v1"
 GEMMA = lc.DEFAULT_MODEL_NAME
+NPU_GEMMA = lc.NPU_DEFAULT_MODEL_NAME
 QWEN = lc.LARGE_DEFAULT_MODEL_NAME
 EMBEDDER = lc.DEFAULT_EMBEDDING_MODEL
 
@@ -79,7 +80,7 @@ def machine(monkeypatch):
     monkeypatch.delenv("GAIA_CTX_SIZE", raising=False)
     monkeypatch.setattr(lc, "_CAPACITY_CACHE", {})
 
-    def set_machine(info, os_memory, loaded=None):
+    def set_machine(info, os_memory, loaded=None, chat_slots=1):
         monkeypatch.setattr(model_fit, "read_os_memory", lambda: os_memory)
         monkeypatch.setattr(
             lc.LemonadeClient,
@@ -87,13 +88,20 @@ def machine(monkeypatch):
             lambda self, verbose=False, timeout=None: info,
         )
         models = [
-            {"model_name": name, "recipe_options": {"ctx_size": ctx}}
+            {
+                "model_name": name,
+                "type": "embedding" if "embed" in name.lower() else "llm",
+                "recipe_options": {"ctx_size": ctx},
+            }
             for name, ctx in (loaded or {}).items()
         ]
         monkeypatch.setattr(
             lc.LemonadeClient,
             "health_check",
-            lambda self, timeout=None: {"all_models_loaded": models},
+            lambda self, timeout=None: {
+                "all_models_loaded": models,
+                "max_models": {"llm": chat_slots},
+            },
         )
 
     return set_machine
@@ -166,6 +174,45 @@ class TestWindow:
         """Loaded at 64K, little else free: re-resolving must not shrink it."""
         machine(CPU_16, _ram(16, 3.5), loaded={GEMMA: 65536, EMBEDDER: 2048})
         assert lc.resolve_ctx_size(GEMMA, base_url=URL) == lc.GPU_CTX_SIZE
+
+    def test_the_chat_model_being_replaced_is_not_charged(self, machine):
+        """NPU Gemma loaded, GPU Gemma picked: Lemonade unloads the first to
+        load the second, so the memory it holds is the new model's to use."""
+        machine(CPU_16, _ram(16, 3.5), loaded={NPU_GEMMA: 65536, EMBEDDER: 2048})
+        assert lc.resolve_ctx_size(GEMMA, base_url=URL) == lc.GPU_CTX_SIZE
+
+    def test_a_chat_model_that_stays_loaded_is_still_charged(self, machine):
+        """A server that keeps several chat models does not unload the other."""
+        machine(
+            CPU_16,
+            _ram(16, 3.5),
+            loaded={NPU_GEMMA: 65536, EMBEDDER: 2048},
+            chat_slots=4,
+        )
+        assert lc.resolve_ctx_size(GEMMA, base_url=URL) == model_fit.MIN_CONTEXT_TOKENS
+
+    def test_an_npu_load_gets_back_only_what_an_npu_model_held(self):
+        """A GPU model's memory is not all the RAM an NPU model loads into."""
+        free = model_fit.FreeMemory(4.0, 4.0)
+        npu = lc.find_model_requirement(NPU_GEMMA)
+
+        leaving_gpu = lc._Resident({GEMMA: 65536})
+        leaving_gpu.replaced_by_chat_load = (GEMMA,)
+        assert lc._with_own_memory(free, leaving_gpu, npu) == free
+
+    def test_a_gpu_load_gets_an_npu_models_ram_only_where_the_gpu_pool_counts_ram(
+        self, machine
+    ):
+        """A discrete card's memory is not the RAM the NPU model gives back."""
+        gpu = lc.find_model_requirement(GEMMA)
+        machine(CPU_16, _ram(16, 3.5), loaded={NPU_GEMMA: 65536})
+        free, resident = lc._free_memory_snapshot(URL)
+        assert lc._with_own_memory(free, resident, gpu).limit_gb > free.limit_gb + 9
+
+        # Another server: /system-info is read once per URL.
+        machine(NVIDIA_24, _ram(64, 3.5), loaded={NPU_GEMMA: 65536})
+        free, resident = lc._free_memory_snapshot("http://127.0.0.1:13306/api/v1")
+        assert free is None and resident.free_without_npu_chat is None
 
     def test_the_window_holds_for_the_process(self, machine):
         """Free memory moving after the decision must not trigger a reload."""

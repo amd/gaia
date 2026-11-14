@@ -7,12 +7,12 @@ import * as api from '../../services/api';
 import { log } from '../../utils/logger';
 import { DEFAULT_MODEL_NAME } from '../../utils/constants';
 import { useModelActions } from '../../hooks/useModelActions';
+import { syncModelAfterSettingChange, useModelStore } from '../../stores/modelStore';
 import { formatGb } from '../../utils/modelLabels';
 import { useT, type Translate } from '../../i18n/useT';
 import { isolate, type MessageKey } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
-import { useModelStore } from '../../stores/modelStore';
 import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
@@ -102,6 +102,7 @@ export function AdvancedSettings() {
     const saveCustomModel = useCallback(async () => {
         const trimmed = customModel.trim();
         const payload = trimmed.length > 0 ? trimmed : '';
+        const modelBefore = useModelStore.getState().active?.model;
         setSavingModel(true);
         setSaveError(null);
         setSaveNote(null);
@@ -112,8 +113,9 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
-            // The chip names the model now in use, without waiting for its poll.
-            void useModelStore.getState().refresh();
+            // The chip, the picker and this pane's own status still name the old model.
+            void syncModelAfterSettingChange(modelBefore);
+            api.getSystemStatus().then(setStatus).catch((err) => log.system.error('Failed to get system status', err));
             setSaveNote(customModelNote(nextValue, updated.model_status));
             setJustSaved(true);
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
