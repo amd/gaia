@@ -70,7 +70,40 @@ SKILL_SPELLINGS = [
     "echo y | gaia skill promote rss-digest",
     "start gaia skill promote rss-digest",
     'gaia skill promote "unterminated',
+    "python -mgaia.cli skill promote rss-digest",
+    "python -mgaia skill promote rss-digest",
+    "python -c \"from gaia.cli import main; main(['skill','promote','x'])\"",
+    'python -c "import importlib; '
+    "importlib.import_module('gaia.skills.capture').promote_skill('x')\"",
+    "python -c \"import runpy; runpy.run_module('gaia.cli', run_name='__main__')\"",
+    "echo $(gaia skill promote rss-digest)",
+    "echo `gaia skill promote rss-digest`",
+    "gaia --model x skill promote rss-digest",
+    "gaia.cmd skill promote rss-digest",
+    "gaia.bat skill promote rss-digest",
+    "powershell -File gaia.ps1 skill promote rss-digest",
+    "powershell -Command \"Start-Process gaia -ArgumentList 'skill promote x'\"",
+    "g^aia sk^ill promote rss-digest",
+    'powershell -Command "g`aia skill promote x"',
 ]
+
+#: Clearing the agent marker is refused outright too.
+MARKER_TAMPERING = [
+    "set GAIA_AGENT_CHILD= && gaia automation list",
+    "env -u GAIA_AGENT_CHILD gaia automation list",
+    "$env:GAIA_AGENT_CHILD=''; gaia automation list",
+]
+
+
+@pytest.mark.parametrize("command", MARKER_TAMPERING)
+def test_clearing_the_agent_marker_is_refused(layout, command):
+    agent = _agent(layout, full_access=True)
+
+    refused = _refusal(agent, command)
+
+    assert refused["tier"] == TIER_REFUSE
+    assert "GAIA_AGENT_CHILD" in refused["error"]
+
 
 NOT_SKILL_COMMANDS = [
     'grep -r "gaia skill" docs',
@@ -84,6 +117,7 @@ NOT_SKILL_COMMANDS = [
     "",
     "   ",
     "&&",
+    "gaia --debug automation list",
 ]
 
 
@@ -425,7 +459,30 @@ PYTHON_SKILL_LAUNCHES = [
     "import os\nos.spawnlp(os.P_WAIT, 'gaia', 'gaia', 'skill', 'promote', 'x')",
     "import subprocess, sys\n"
     "subprocess.run([sys.executable, '-c', 'import os; os.system(\"gaia skill promote x\")'])",
+    "from gaia.skills.capture import promote_skill\npromote_skill('x')",
+    "import importlib\nimportlib.import_module('gaia.skills.capture').promote_skill('x')",
+    "import gaia.cli\ngaia.cli.main()",
+    "import runpy, sys\nsys.argv = ['gaia', 'skill', 'promote', 'x']\n"
+    "runpy.run_module('gaia', run_name='__main__')",
+    "from gaia.skills.signing import TrustStore\nTrustStore.load('.').save()",
 ]
+
+#: Clearing the agent marker is refused as well, before anything runs.
+PYTHON_MARKER_TAMPERING = [
+    "import os\nos.environ.pop('GAIA_AGENT_CHILD', None)",
+    "import os\ndel os.environ['gaia_agent_child']",
+]
+
+
+@pytest.mark.parametrize("code", PYTHON_MARKER_TAMPERING)
+def test_python_that_clears_the_agent_marker_is_refused(layout, code):
+    agent = _agent(layout, full_access=True)
+
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result["executed"] is False
+    assert "GAIA_AGENT_CHILD" in result["error"]
+    assert agent.ran == []
 
 
 @pytest.mark.parametrize("code", PYTHON_SKILL_LAUNCHES)

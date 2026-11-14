@@ -2429,6 +2429,9 @@ def normalize_binary(token: str) -> str:
 #: which skills GAIA trusts, so no approval lets the agent run them.
 HUMAN_ONLY_GAIA_SUBCOMMANDS = frozenset({"skill"})
 
+#: How a refusal names the command family only the user may run.
+HUMAN_ONLY_CALL = "gaia skill"
+
 #: How ``gaia`` is spelled as a program: the binary, the legacy alias, the module.
 _GAIA_PROGRAM_NAMES = frozenset({"gaia", "gaia-cli", "gaia.cli"})
 
@@ -2442,24 +2445,74 @@ def human_only_message(spelled: str) -> str:
     )
 
 
+#: Shell punctuation and escapes around a word: ``$(gaia``, ``g^aia``, ``"gaia"``.
+_WORD_NOISE = re.compile(r"[\^`]")
+_WORD_EDGES = "\"'$(){}[]&;|,"
+
+#: Launcher extensions a ``gaia`` shim may carry.
+_SHIM_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1")
+
+
+def _bare_word(token: str) -> str:
+    """*token* without escapes, edge punctuation, path or launcher suffix."""
+    word = _WORD_NOISE.sub("", token).strip().strip(_WORD_EDGES).lower()
+    word = re.split(r"[\\/]", word)[-1]
+    if word.startswith("-m") and word[2:] in _GAIA_PROGRAM_NAMES:
+        return word[2:]
+    for suffix in _SHIM_SUFFIXES:
+        if word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
+
+#: Modules that run ``gaia skill`` or change skill trust when imported and called.
+TRUST_MODULES = re.compile(
+    r"^gaia\.(?:cli|__main__|skills\.(?:cli|capture|install|signing|drift|publish|"
+    r"link|migrate|human_only))(?!\w)"
+)
+
+
+def human_only_in_code_words(words: Sequence[str]) -> str:
+    """What in an inline script's *words* changes skill trust, or ``""``.
+
+    A module that does it in-process, the agent marker, or a ``gaia skill``
+    call among the script's words.
+    """
+    from gaia.skills.human_only import AGENT_CHILD_ENV
+
+    for word in words:
+        bare = _bare_word(word)
+        if TRUST_MODULES.match(bare):
+            return HUMAN_ONLY_CALL
+        if AGENT_CHILD_ENV.lower() in word.lower():
+            return AGENT_CHILD_ENV
+    return human_only_gaia_call(words)
+
+
 def human_only_gaia_call(words: Sequence[str]) -> str:
     """The ``gaia <subcommand>`` in *words* only a person may run, or ``""``.
 
-    *words* is a flat token list; ``gaia``, ``gaia.exe``, a path to either and
-    ``python -m gaia`` all count. Flags between the program and the subcommand
-    are skipped.
+    *words* is a flat token list; ``gaia``, a shim or path to it, and
+    ``python -m gaia`` (``-mgaia`` too) all count. Options before the
+    subcommand are skipped with the value one may take. An early check only:
+    the commands themselves refuse an agent (:mod:`gaia.skills.human_only`).
     """
     tokens = list(words)
     for index, token in enumerate(tokens):
-        name = re.split(r"[\\/]", token.strip().strip("\"'").lower())[-1]
-        if name.endswith(".exe"):
-            name = name[: -len(".exe")]
-        if name not in _GAIA_PROGRAM_NAMES:
+        if _bare_word(token) not in _GAIA_PROGRAM_NAMES:
             continue
-        rest = [word.lower() for word in tokens[index + 1 :]]
-        subcommand = next((word for word in rest if not word.startswith("-")), "")
-        if subcommand in HUMAN_ONLY_GAIA_SUBCOMMANDS:
-            return f"gaia {subcommand}"
+        takes_value = False
+        for word in tokens[index + 1 :]:
+            first = _bare_word((word.split() or [""])[0])
+            if first in HUMAN_ONLY_GAIA_SUBCOMMANDS:
+                return f"gaia {first}"
+            if word.startswith("-"):
+                takes_value = "=" not in word
+                continue
+            if takes_value:
+                takes_value = False
+                continue
+            break
     return ""
 
 
