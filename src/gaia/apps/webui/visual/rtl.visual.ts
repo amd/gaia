@@ -541,6 +541,17 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+for (const locale of ['en', 'ar']) {
+    test(`the memory chip opens a menu that says what Private does (${locale})`, async ({ page }) => {
+        await open(page, '', locale);
+        await page.locator('.composer-chip-memory').click();
+        const menu = page.getByRole('dialog');
+        await expect(menu.locator('.popover-item')).toHaveCount(2);
+        await shot(page, `memory-menu-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 for (const locale of ['ar', 'en']) {
     for (const width of [1440, 390]) {
         test(`Try chips fit in ${locale} at ${width}px`, async ({ page }) => {
@@ -3772,7 +3783,7 @@ for (const locale of ['ar', 'en']) {
 test('the agent notice and the memory chip are in Arabic', async ({ page }) => {
     await open(page, '', 'ar', withoutFlagship);
     await expect(page.locator('.app-notice')).toContainText('غير مثبّت');
-    await expect(page.getByRole('button', { name: /تفعيل المحادثة الخاصة/ })).toContainText(/\p{Script=Arabic}/u);
+    await expect(page.getByRole('button', { name: /الذاكرة لهذه المحادثة/ })).toContainText(/\p{Script=Arabic}/u);
 });
 
 /** POST /api/chat/send streams `events`, then stays open, as a turn waiting on the user does. */

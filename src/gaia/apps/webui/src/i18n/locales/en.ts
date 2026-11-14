@@ -291,11 +291,16 @@ export const enMessages = {
     'composer.memoryOff': 'Remember across chats: off',
     'composer.memoryUnknown': 'Remember across chats: unknown',
     'composer.memoryOffTitle': 'Remember across chats is off in Settings, so no chat is saved to memory',
-    'composer.memoryUnknownTitle': "Couldn't read the memory setting. Turn on private chat to keep this chat out of memory either way.",
+    'composer.memoryUnknownTitle': "Couldn't read the memory setting. Choose Private chat to keep this chat out of memory either way.",
+    'composer.memoryChipAria': 'Memory for this chat: {state}',
+    'composer.memoryMenu': 'Memory for this chat',
+    'composer.remember': 'Remember this chat',
+    'composer.rememberNote': 'GAIA can learn from this chat and use it in later ones.',
+    'composer.privateChat': 'Private chat',
+    'composer.privateChatNote': "Not saved to memory, not even its first message.",
     'composer.privateOn': 'Turn on private chat',
     'composer.privateOnTitle': "Turn on private chat. It won't be saved to memory.",
     'composer.privateOff': 'Turn off private chat',
-    'composer.privateOffTitle': "Turn off private chat. This chat won't be saved to memory.",
 
     // Notice when the GAIA agent is missing
     'agentNotice.missing': "The GAIA agent isn't installed, so new chats can't start yet.",
