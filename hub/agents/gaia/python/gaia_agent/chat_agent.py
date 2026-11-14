@@ -72,7 +72,13 @@ from gaia.agents.base.context_eviction import (
     DEFAULT_EVICT_THRESHOLD_TOKENS,
 )
 from gaia.agents.base.errors import exit_error
-from gaia.agents.base.file_snapshots import before_change, note_untracked
+from gaia.agents.base.file_snapshots import (
+    SnapshotError,
+    before_change,
+    note_folder_changes,
+    note_untracked,
+    watch_script_folders,
+)
 from gaia.agents.base.goal_store import GOAL_OUTCOMES
 from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.model_features import (
@@ -433,6 +439,16 @@ def _python_run_result(
         if hint:
             result["error"] += f". {hint}"
     return result
+
+
+def _record_folder_changes(watch) -> Optional[str]:
+    """Record what a script added to the folders it names; a note if that failed."""
+    try:
+        note_folder_changes(watch)
+    except SnapshotError as e:
+        logger.error("Could not record the files a script added: %s", e)
+        return f"Undo won't remove the files this added: {e}"
+    return None
 
 
 def _python_script_run_context(
@@ -2714,6 +2730,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         note_untracked("execute_python_file", str(p))
                     # The script's own output folders first: the search is bounded.
                     watch = watch_folders(*folders_named_in(source), run_dir, project)
+                    named = None
+                    if writes:
+                        try:
+                            # A file the script moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(source), "execute_python_file"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     started = time.time()
                     try:
                         job = run_python_job(
@@ -2728,7 +2758,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("execute_python_file", str(p))
+                        _record_folder_changes(named)
                         raise
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2751,7 +2783,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                             retain_excerpt(self, r.stdout, 8000),
                             retain_excerpt(self, r.stderr, 2000),
                             time.monotonic() - start,
-                            finished_job_note(job),
+                            " ".join(
+                                n for n in (finished_job_note(job), undo_note) if n
+                            )
+                            or None,
                         ),
                         check_from_python_run(
                             " ".join([file_path, args]).strip(),
@@ -2913,6 +2948,20 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                 started = time.time()
                 start = time.monotonic()
                 try:
+                    named = None
+                    if writes:
+                        try:
+                            # A file the snippet moves or renames can be put back.
+                            named = watch_script_folders(
+                                folders_named_in(code), "run_python"
+                            )
+                        except SnapshotError as e:
+                            return {
+                                "status": "error",
+                                "error": f"Not run: {e}",
+                                "has_errors": True,
+                                "executed": False,
+                            }
                     try:
                         job = run_python_job(
                             cmd,
@@ -2926,7 +2975,9 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     except BaseException:
                         if not writes:  # it may have run part-way: assume it wrote
                             note_untracked("run_python", detail)
+                        _record_folder_changes(named)
                         raise
+                    undo_note = _record_folder_changes(named)
                     if not writes:
                         # Read-only by its code; the folders it ran in confirm it.
                         written, complete = files_written_by(
@@ -2952,7 +3003,7 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                         logger.warning(
                             "run_python: could not remove %s: %s", snippet_dir, e
                         )
-                notes = [finished_job_note(job)]
+                notes = [finished_job_note(job), undo_note]
                 if moved_from is not None:
                     notes.append(
                         f"The working folder {moved_from} no longer exists, so "

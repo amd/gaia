@@ -13,7 +13,9 @@ changed the file since.
 What a turn cannot account for — a shell command or a Python snippet that may
 have written files on its own — is recorded with :func:`note_untracked`, and
 the turn is reported as "undo may be incomplete". Work noted as read-only is
-kept in the record but does not mark the turn.
+kept in the record but does not mark the turn. A script that may write gets
+the folders its code names copied first (:func:`watch_script_folders`), so the
+files it moves or renames there come back on undo.
 
 A restore is all or nothing: every file is checked before any is touched, and
 a write that fails part-way puts back the files already restored.
@@ -26,6 +28,7 @@ import contextvars
 import difflib
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -37,6 +40,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List, Optional
+
+logger = logging.getLogger(__name__)
 
 MANIFEST = "manifest.json"
 MANIFEST_VERSION = 1
@@ -140,6 +145,22 @@ _ACTIVE: contextvars.ContextVar[Optional["TurnRecorder"]] = contextvars.ContextV
 )
 
 
+def _new_entry(target: Path, tool: Optional[str]) -> Dict[str, Any]:
+    return {
+        "path": str(target),
+        "tool": tool,
+        "existed": False,
+        "before_blob": None,
+        "before_sha256": None,
+        "before_size": None,
+        "mode": None,
+        "created_dirs": [],
+        "after_exists": None,
+        "after_blob": None,
+        "after_sha256": None,
+    }
+
+
 class TurnRecorder:
     """Records the prior state of every file one turn changes."""
 
@@ -173,55 +194,107 @@ class TurnRecorder:
 
     def capture(self, path: os.PathLike | str, tool: Optional[str] = None) -> None:
         """Save *path* as it is now, unless this turn already saved it."""
+        with self._lock:
+            target = self._capture_locked(path, tool)
+            if target is not None:
+                self._save_or_raise(target)
+
+    def capture_folder_files(self, paths: Iterable[str], tool: str) -> bool:
+        """Save every file in *paths* before a script that may move them runs.
+
+        All or none: when one file can't be copied (locked, unreadable), the
+        copies already made for *paths* are dropped and False is returned. The
+        copies of files still unchanged when the turn ends are dropped then.
+        """
+        with self._lock:
+            added: List[Dict[str, Any]] = []
+            try:
+                for path in paths:
+                    if self._capture_locked(path, tool, watched=True) is not None:
+                        added.append(self._manifest["files"][-1])
+            except SnapshotError as e:
+                logger.warning("Undo won't cover a folder a script names: %s", e)
+                for entry in added:
+                    self._manifest["files"].remove(entry)
+                    self._index.pop(os.path.normcase(entry["path"]), None)
+                    if entry["before_blob"]:
+                        (self.dir / "blobs" / entry["before_blob"]).unlink(
+                            missing_ok=True
+                        )
+                return False
+            if added:
+                self._save_or_raise(Path(added[-1]["path"]))
+            return True
+
+    def note_created(self, created: Iterable[tuple], tool: str) -> None:
+        """Record each ``(path, created_dirs)`` as new since a watched script ran."""
+        with self._lock:
+            last = None
+            for path, created_dirs in created:
+                target = Path(os.path.realpath(path))
+                key = os.path.normcase(str(target))
+                if self._closed or key in self._index:
+                    continue
+                entry = _new_entry(target, tool)
+                entry["created_dirs"] = list(created_dirs)
+                self._manifest["files"].append(entry)
+                self._index[key] = entry
+                last = target
+            if last is not None:
+                self._save_or_raise(last)
+
+    def _save_or_raise(self, target: Path) -> None:
+        try:
+            self._save()
+        except OSError as e:
+            raise SnapshotError(
+                f"Could not save the undo record for {target}, so it was left "
+                f"unchanged: {e}. Check free space and permissions under "
+                f"{self.dir.parent.parent}."
+            ) from e
+
+    def _capture_locked(
+        self, path: os.PathLike | str, tool: Optional[str], watched: bool = False
+    ) -> Optional[Path]:
+        """Copy *path* into the turn; returns it when a new entry needs saving."""
         # realpath: one file reached through a link or a short name is one entry.
         target = Path(os.path.realpath(os.fspath(path)))
         key = os.path.normcase(str(target))
-        with self._lock:
-            if self._closed:
-                self._note_late("late_write", str(target))
-                return
-            if key in self._index:
-                return
-            entry: Dict[str, Any] = {
-                "path": str(target),
-                "tool": tool,
-                "existed": False,
-                "before_blob": None,
-                "before_sha256": None,
-                "before_size": None,
-                "mode": None,
-                "created_dirs": [],
-                "after_exists": None,
-                "after_blob": None,
-                "after_sha256": None,
-            }
-            try:
-                if target.is_dir():
-                    raise SnapshotError(
-                        f"{target} is a folder; only files can be saved for undo."
-                    )
-                if target.exists():
-                    blob = f"{len(self._manifest['files']):04d}.before"
-                    (self.dir / "blobs").mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(target, self.dir / "blobs" / blob)
-                    entry.update(
-                        existed=True,
-                        before_blob=blob,
-                        before_sha256=_sha256_file(self.dir / "blobs" / blob),
-                        before_size=target.stat().st_size,
-                        mode=stat.S_IMODE(target.stat().st_mode),
-                    )
-                else:
-                    entry["created_dirs"] = _missing_parents(target)
-                self._manifest["files"].append(entry)
-                self._index[key] = entry
-                self._save()
-            except OSError as e:
+        if self._closed:
+            self._note_late("late_write", str(target))
+            return None
+        if key in self._index:
+            return None
+        entry = _new_entry(target, tool)
+        if watched:
+            entry["watched"] = True
+        try:
+            if target.is_dir():
                 raise SnapshotError(
-                    f"Could not save a copy of {target} before changing it, so "
-                    f"it was left unchanged: {e}. Check free space and "
-                    f"permissions under {self.dir.parent.parent}."
-                ) from e
+                    f"{target} is a folder; only files can be saved for undo."
+                )
+            if target.exists():
+                blob = f"{len(self._manifest['files']):04d}.before"
+                (self.dir / "blobs").mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(target, self.dir / "blobs" / blob)
+                entry.update(
+                    existed=True,
+                    before_blob=blob,
+                    before_sha256=_sha256_file(self.dir / "blobs" / blob),
+                    before_size=target.stat().st_size,
+                    mode=stat.S_IMODE(target.stat().st_mode),
+                )
+            else:
+                entry["created_dirs"] = _missing_parents(target)
+        except OSError as e:
+            raise SnapshotError(
+                f"Could not save a copy of {target} before changing it, so "
+                f"it was left unchanged: {e}. Check free space and "
+                f"permissions under {self.dir.parent.parent}."
+            ) from e
+        self._manifest["files"].append(entry)
+        self._index[key] = entry
+        return target
 
     def note_untracked(
         self,
@@ -281,6 +354,7 @@ class TurnRecorder:
             if self._finished:
                 return
             self._closed = True
+            self._drop_unchanged_watched()
             if not self.has_changes:
                 self._finished = True
                 return
@@ -311,6 +385,16 @@ class TurnRecorder:
             self._manifest["finished_at"] = _now_iso()
             self._save()
             self._finished = True
+
+    def _drop_unchanged_watched(self) -> None:
+        """Forget the copies of watched files the turn left as they were."""
+        kept = []
+        for entry in self._manifest["files"]:
+            if entry.get("watched") and _unchanged_since_copy(entry):
+                (self.dir / "blobs" / entry["before_blob"]).unlink(missing_ok=True)
+                continue
+            kept.append(entry)
+        self._manifest["files"] = kept
 
     def link_message(self, message_id: int) -> None:
         """Tie this turn to the assistant message that answered it."""
@@ -383,6 +467,134 @@ def note_untracked(
     recorder = _ACTIVE.get()
     if recorder is not None:
         recorder.note_untracked(kind, detail, paths, may_write)
+
+
+#: A folder a script names is copied before the script runs only within these
+#: bounds; past them what the script changes there stays untracked work.
+MAX_WATCH_FILES = 1000
+MAX_WATCH_BYTES = 128 * 1024 * 1024
+
+
+@dataclass
+class FolderWatch:
+    """The folders a script names, as they were before it ran."""
+
+    folders: List[str]
+    files: set
+    dirs: set
+    tool: str
+
+
+def _walk_folder(
+    folder: str, max_files: Optional[int] = None, max_bytes: Optional[int] = None
+) -> Optional[tuple]:
+    """``(files, dirs, bytes)`` under *folder*, links not followed.
+
+    None when the folder holds more than *max_files* files or *max_bytes*
+    bytes, or a size can't be read; no limit when they are None.
+    """
+    files: List[str] = []
+    dirs: List[str] = [folder]
+    total = 0
+    bounded = max_files is not None
+    for current, dir_names, file_names in os.walk(folder):
+        dir_names[:] = [
+            d for d in dir_names if not os.path.islink(os.path.join(current, d))
+        ]
+        dirs.extend(os.path.join(current, d) for d in dir_names)
+        for name in file_names:
+            path = os.path.join(current, name)
+            if os.path.islink(path):
+                continue
+            files.append(path)
+            if not bounded:
+                continue
+            try:
+                total += os.stat(path).st_size
+            except OSError:
+                return None
+            if len(files) > max_files or total > max_bytes:
+                return None
+    return files, dirs, total
+
+
+def watch_script_folders(folders: Iterable[str], tool: str) -> Optional[FolderWatch]:
+    """Copy the files in *folders* so a script that moves or renames them can
+    be undone. Call :func:`note_folder_changes` once the script has run.
+
+    Folders are taken in order while together they stay within
+    :data:`MAX_WATCH_FILES` / :data:`MAX_WATCH_BYTES`; one that doesn't fit, or
+    has a file that can't be copied, is left out. Returns None outside a
+    recorded turn or when no folder is watched.
+
+    Raises:
+        SnapshotError: the undo record could not be saved; the script must not run.
+    """
+    recorder = _ACTIVE.get()
+    if recorder is None:
+        return None
+    watched: List[str] = []
+    files: List[str] = []
+    dirs: List[str] = []
+    total = 0
+    for folder in folders:
+        folder = os.path.realpath(os.fspath(folder))
+        if not os.path.isdir(folder):
+            continue
+        listing = _walk_folder(
+            folder, MAX_WATCH_FILES - len(files), MAX_WATCH_BYTES - total
+        )
+        if listing is None:
+            continue
+        if not recorder.capture_folder_files(listing[0], tool):
+            continue
+        watched.append(folder)
+        files += listing[0]
+        dirs += listing[1]
+        total += listing[2]
+    if not watched:
+        return None
+    return FolderWatch(
+        folders=watched,
+        files={os.path.normcase(f) for f in files},
+        dirs={os.path.normcase(d) for d in dirs},
+        tool=tool,
+    )
+
+
+def note_folder_changes(watch: Optional[FolderWatch]) -> None:
+    """Record the files that appeared in *watch*'s folders while the script ran."""
+    recorder = _ACTIVE.get()
+    if recorder is None or watch is None:
+        return
+    created = []
+    for folder in watch.folders:
+        files, _dirs, _size = _walk_folder(folder)
+        for path in files:
+            if os.path.normcase(path) in watch.files:
+                continue
+            new_dirs = []
+            parent = os.path.dirname(path)
+            while os.path.normcase(parent) not in watch.dirs:
+                if os.path.dirname(parent) == parent:
+                    raise SnapshotError(f"{path} is outside {folder}.")
+                new_dirs.append(parent)
+                parent = os.path.dirname(parent)
+            created.append((path, list(reversed(new_dirs))))
+    recorder.note_created(created, watch.tool)
+
+
+def _unchanged_since_copy(entry: Dict[str, Any]) -> bool:
+    """A copied file is still where it was, with the same bytes."""
+    target = Path(entry["path"])
+    try:
+        if not entry["existed"] or not target.is_file():
+            return False
+        if target.stat().st_size != entry["before_size"]:
+            return False
+        return _sha256_file(target) == entry["before_sha256"]
+    except OSError:
+        return False
 
 
 def _may_have_written(manifest: Dict[str, Any]) -> List[Dict[str, Any]]:
