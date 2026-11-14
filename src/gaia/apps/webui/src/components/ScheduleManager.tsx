@@ -251,7 +251,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                 <span>{t.compose((say, code) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(translator(code))) }))}</span>
                 <span>{t.compose((say, code) => say('schedules.card.next', { when: schedule.status === 'paused' ? say('schedules.status.paused') : formatNextRun(schedule.next_run_at, now, say, dateLocale(translator(code))) }))}</span>
             </div>
-            {schedule.last_error && (
+            {schedule.last_error && !(isSelected && !resultsLoading && results.some((r) => r.error)) && (
                 <div className="schedule-card-error">{t('schedules.card.lastFailed', { error: schedule.last_error })}</div>
             )}
             <div className="schedule-card-actions">
@@ -517,6 +517,7 @@ export function ScheduleManager() {
                                         value={schedulePrompt}
                                         onChange={(e) => setSchedulePrompt(e.target.value)}
                                     />
+                                    <div className="schedule-prompt-hint">{t('schedules.promptHint')}</div>
                                 </div>
 
                                 {formError && <p className="schedule-form-error"><bdi>{formError}</bdi></p>}
