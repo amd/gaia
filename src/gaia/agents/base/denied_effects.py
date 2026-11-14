@@ -20,6 +20,7 @@ declining ``cd repo && pytest | tail`` blocks the test run and nothing else.
 from __future__ import annotations
 
 import ast
+import contextvars
 import ipaddress
 import logging
 import os
@@ -38,6 +39,10 @@ COMMAND = "command"
 NETWORK = "network"
 PATH = "path"
 SCRIPT = "script"
+
+#: Set on a refusal nobody chose — no person was there to approve the call —
+#: so it is kept off the ledger and other routes to the effect stay open.
+UNATTENDED_REFUSAL = "unattended_refusal"
 
 #: A file change whose target the code computes: it could be any denied path.
 COMPUTED_PATH = "a path the code works out when it runs"
@@ -266,6 +271,21 @@ _PATH_MUTATORS = frozenset(
         "ac",
         "xcopy",
         "robocopy",
+    }
+)
+#: Those that delete or empty the paths they name.
+_PATH_DELETERS = frozenset(
+    {
+        "rm",
+        "rmdir",
+        "del",
+        "erase",
+        "rd",
+        "unlink",
+        "remove-item",
+        "ri",
+        "truncate",
+        "clear-content",
     }
 )
 #: Switches of those commands whose value is content or a setting, not a path.
@@ -720,6 +740,32 @@ def _python_invocation(args: Sequence[str], cwd: str, depth: int) -> Set[Effect]
     return set()
 
 
+#: The paths a parse deletes, collected while :func:`deletes_a_path` listens.
+_DELETED: "contextvars.ContextVar[Optional[Set[Effect]]]" = contextvars.ContextVar(
+    "denied_effects_deleted", default=None
+)
+
+
+def _note_deleted(effects: Set[Effect]) -> None:
+    sink = _DELETED.get()
+    if sink is not None:
+        sink.update(effects)
+
+
+def deletes_a_path(command: str, cwd: str) -> bool:
+    """True when shell *command* deletes or empties a path, parsed as a denial is.
+
+    Covers every form the ledger reads: aliases, wrappers, ``python -c`` and
+    the scripts a line runs.
+    """
+    token = _DELETED.set(set())
+    try:
+        effects_of_shell_command(command, cwd)
+        return bool(_DELETED.get())
+    finally:
+        _DELETED.reset(token)
+
+
 def effects_of_shell_command(command: str, cwd: str, depth: int = 0) -> Set[Effect]:
     """Every effect a shell command line has, segment by segment."""
     if depth > 3 or not isinstance(command, str):
@@ -953,6 +999,8 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
         path = _norm_path(arg, cwd)
         if path:
             effects.add(Effect(PATH, path))
+            if program in _PATH_DELETERS:
+                _note_deleted({Effect(PATH, path)})
     return effects
 
 
@@ -1011,6 +1059,13 @@ _TRACKED_MODULES = (
 )
 #: ``os.open`` flags that write; a flag it can't name is read as a write.
 _WRITE_FLAGS = frozenset({"O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND"})
+#: The module functions above that delete or empty the path.
+_PY_DELETERS = {
+    "shutil": frozenset({"rmtree"}),
+    "os": frozenset({"remove", "unlink", "rmdir", "removedirs", "truncate"}),
+}
+#: ``pathlib.Path`` methods that delete the path.
+_PATH_DELETER_METHODS = frozenset({"unlink", "rmdir"})
 #: ``pathlib.Path`` methods that delete or overwrite the path, on any receiver.
 _PATH_CHANGERS = frozenset({"unlink", "rmdir", "write_text", "write_bytes"})
 #: Only on a receiver known to be a Path: ``str.replace``, ``tarfile.open``.
@@ -1338,6 +1393,16 @@ class _PyFiles:
         )
 
     def changed(self, call: ast.Call) -> Set[Effect]:
+        found = self._changed(call)
+        module, name = self._callee(call)
+        func = call.func
+        if (name or "") in _PY_DELETERS.get(module or "", ()) or (
+            isinstance(func, ast.Attribute) and func.attr in _PATH_DELETER_METHODS
+        ):
+            _note_deleted(found)
+        return found
+
+    def _changed(self, call: ast.Call) -> Set[Effect]:
         module, name = self._callee(call)
         spec = _FILE_CHANGERS.get(module or "", {}).get(name or "")
         if spec:

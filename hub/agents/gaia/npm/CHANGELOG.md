@@ -27,6 +27,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   Both now carry such a character as `[U+XXXX]`. The grant still covers the
   real file.
 
+- **The agent knows an MCP server it set up didn't start.** The notice the
+  user sees about MCP servers that couldn't start, couldn't load or went over
+  the tool limit now also reaches the model each turn, so asked about one it
+  says it is set up but unavailable rather than that nothing by that name
+  exists. A corrupt `mcp_servers.json` is described in plain words.
 - **A detached document is no longer searched.** A file an earlier turn sent in
   `documents` and this turn leaves out (the user detached it, or deleted it from
   the library) is dropped from the session's index, so answers stop quoting it.
