@@ -203,6 +203,7 @@ _TEXT_RESULT_FIELDS = {
     "description": "snippet",
     "content": "snippet",
     "snippet": "snippet",
+    "snippets": "snippet",
 }
 
 #: A search result's snippet is a summary; longer text is page content.
@@ -261,7 +262,7 @@ def _parse_search_text(text: str) -> List[Dict[str, str]]:
         {
             "title": r.get("title", ""),
             "url": r["url"],
-            "snippet": r.get("snippet", "")[:_SNIPPET_CHARS],
+            "snippet": r.get("snippet", "").strip()[:_SNIPPET_CHARS],
         }
         for r in records
         if r.get("url")

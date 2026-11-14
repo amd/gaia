@@ -1,0 +1,40 @@
+---
+title: "Keenable"
+icon: "magnifying-glass"
+description: "Give GAIA web search and page fetch through Keenable, with no API key."
+---
+
+<Info>
+  **Connector ID:** `mcp-keenable` · **Type:** `mcp_server` · **Package:** `@keenable/mcp@0.1.1` (launched with `npx`; needs Node 18+)
+</Info>
+
+<Warning>
+  Keenable is a cloud service. When this connector is on, your search queries and the URLs you ask it to fetch are sent to Keenable's hosted service at `api.keenable.ai`. Leave it off if your searches must stay on this machine.
+</Warning>
+
+## Step 1 — Configure GAIA
+
+There is no key to get. Add the connector:
+
+```bash
+gaia connectors configure mcp-keenable
+```
+
+Or in the Agent UI: **Connectors** in the sidebar → **Keenable** → **Save**.
+
+## Step 2 — Use it
+
+Grant and activate it for the agent (the tile's **Per-agent** toggle does both):
+
+```bash
+gaia connectors grants grant mcp-keenable installed:gaia --scopes "*"
+gaia connectors activations activate mcp-keenable installed:gaia
+```
+
+The server exposes two tools: `search_web_pages` (web search) and `fetch_page_content` (read a page by URL).
+
+<Note>GAIA already searches the web without a key; Keenable adds a second index and page fetch. When DuckDuckGo is limiting searches, GAIA's `search_web` also falls back to Keenable if it is on for the agent.</Note>
+
+## Revoking access
+
+`gaia connectors disconnect mcp-keenable`, or **Disconnect** on the tile.
