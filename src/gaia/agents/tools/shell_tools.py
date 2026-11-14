@@ -37,6 +37,7 @@ from gaia.agents.base.command_wrappers import command_starts
 from gaia.agents.base.denied_effects import (
     NETWORK,
     UNATTENDED_REFUSAL,
+    deletes_a_path,
     effects_of_shell_command,
     is_cloud_metadata_host,
 )
@@ -930,7 +931,7 @@ def _final_even_unattended(command: str) -> bool:
 
     Refused unattended, such a line stays off every other route that turn.
     """
-    if _one_time_hard_reason(command):
+    if _one_time_hard_reason(command) or deletes_a_path(command, os.getcwd()):
         return True
     return any(
         effect.kind == NETWORK and is_cloud_metadata_host(effect.target)

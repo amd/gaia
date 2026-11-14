@@ -8467,11 +8467,15 @@ Do NOT wrap conversational replies in JSON.
                     if not hasattr(self, "_expired_calls"):
                         self._expired_calls = set()
                     self._expired_calls.add(call_key)
-                elif denied_error == user_denial_message(tool_name):
-                    # Only a person's no covers the effect; "nothing could ask" doesn't.
-                    denied["hint"] = DECLINED_HINT
+                else:
+                    if denied_error == user_denial_message(tool_name):
+                        denied["hint"] = DECLINED_HINT
+                    # "Nothing could ask" is not a no; anything else counts as one.
+                    unasked = getattr(self.console, "confirmation_unattended", None)
                     ledger = getattr(self, "_denied_effects", None)
-                    if ledger is not None:
+                    if ledger is not None and not (
+                        callable(unasked) and unasked(tool_name) is True
+                    ):
                         ledger.record(tool_name, tool_args, denied_error)
                 return denied
             # A call approved once runs against this record, and only once.

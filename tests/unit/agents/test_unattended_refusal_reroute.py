@@ -52,13 +52,16 @@ def _isolated(tmp_path, monkeypatch):
 class _NoSayer(SilentConsole):
     """A person at the prompt who says no to the shell and yes to the rest."""
 
-    def __init__(self, reason=user_denial_message):
+    def __init__(self, reason=user_denial_message, unattended=False):
         super().__init__()
         self.reason = reason
+        self.unattended = unattended
 
     def confirm_tool_execution(self, tool_name, tool_args):
         if tool_name == "run_shell_command":
-            return self.deny_tool_execution(tool_name, self.reason(tool_name))
+            return self.deny_tool_execution(
+                tool_name, self.reason(tool_name), unattended=self.unattended
+            )
         return True
 
 
@@ -180,7 +183,7 @@ def test_a_refused_copy_item_does_not_block_write_file(_isolated):
     "reason", [unattended_denial_message, unaskable_denial_message]
 )
 def test_a_prompt_nothing_could_show_records_no_refusal(_isolated, reason):
-    agent = _agent(_NoSayer(reason), _isolated)
+    agent = _agent(_NoSayer(reason, unattended=True), _isolated)
 
     denied = _shell(agent, "Copy-Item a.txt b.txt")
     written = agent._execute_tool(
@@ -193,9 +196,52 @@ def test_a_prompt_nothing_could_show_records_no_refusal(_isolated, reason):
     assert written["status"] == "success"
 
 
+@pytest.mark.parametrize("terminal", [False, True])
+def test_the_terminal_console_marks_its_unasked_denials(_isolated, terminal):
+    console = SilentConsole()
+    with (
+        patch(
+            "gaia.agents.base.console.terminal_is_interactive", return_value=terminal
+        ),
+        patch.object(SilentConsole, "_display", return_value=False),
+    ):
+        console.confirm_tool_execution("run_shell_command", {"command": "x"})
+
+    assert console.confirmation_unattended("run_shell_command") is True
+
+
+def test_the_agent_ui_and_api_mark_their_unasked_denials(monkeypatch):
+    from gaia.api.sse_handler import SSEOutputHandler as ApiHandler
+    from gaia.ui.sse_handler import SSEOutputHandler as UiHandler
+
+    monkeypatch.setattr(
+        "gaia.agents.base.console.auto_approve_env_enabled", lambda: False
+    )
+    ui = UiHandler()
+    ui.background_mode = True
+    api = ApiHandler()
+
+    for handler in (ui, api):
+        assert handler.confirm_tool_execution("write_file", {}) is False
+        assert handler.confirmation_unattended("write_file") is True
+
+
 # ---------------------------------------------------------------------------
 # What still closes the other routes
 # ---------------------------------------------------------------------------
+
+
+def test_a_no_worded_some_other_way_still_blocks(_isolated):
+    """A console with its own wording for a person's no fails closed."""
+    agent = _agent(_NoSayer(lambda name: "The operator rejected this."), _isolated)
+
+    _shell(agent, "Copy-Item a.txt b.txt")
+    rerouted = agent._execute_tool(
+        "write_file", {"file_path": "b.txt", "content": "copied"}
+    )
+
+    assert rerouted["status"] == "denied"
+    assert agent.ran == []
 
 
 def test_a_persons_no_still_blocks_write_file(_isolated):
@@ -242,24 +288,48 @@ def test_a_hard_policy_block_still_blocks(_isolated):
     assert agent.ran == []
 
 
+_PY_DELETES = [
+    "import shutil\nshutil.rmtree('victim')",
+    "import os\nos.remove('victim')",
+    "import os\nos.unlink('victim')",
+    "import os\nos.rmdir('victim')",
+    "from pathlib import Path\nPath('victim').unlink()",
+    "import shutil as s\ns.rmtree('victim')",
+]
+
+
+def _python_c(code: str) -> str:
+    return 'python -c "' + code.replace("\n", "; ") + '"'
+
+
 @pytest.mark.parametrize(
     "command",
     [
         "rm -rf victim",
+        "rm victim",
+        "del victim",
+        "erase victim",
+        "rd /s /q victim",
+        "rmdir victim",
+        "ri victim",
         "Remove-Item -Recurse victim",
+        'powershell -Command "ri victim"',
+        "cmd /c del victim",
         # A copy that also deletes is judged by its worst step.
         "Copy-Item a.txt b.txt; Remove-Item victim",
+        "python -c \"import os; os.remove('victim/f.txt')\"",
+        *[_python_c(code) for code in _PY_DELETES],
     ],
 )
-def test_a_delete_refused_unattended_stays_off_python(_isolated, command):
+@pytest.mark.parametrize("reroute", _PY_DELETES)
+def test_a_delete_refused_unattended_stays_off_python(_isolated, command, reroute):
     (_isolated / "victim").mkdir()
     agent = _unattended(_isolated)
 
     refused = _shell(agent, command)
-    rerouted = agent._execute_tool(
-        "run_python", {"code": "import shutil\nshutil.rmtree('victim')"}
-    )
+    rerouted = agent._execute_tool("run_python", {"code": reroute})
 
+    assert refused["executed"] is False
     assert UNATTENDED_REFUSAL not in refused
     assert rerouted["status"] == "denied"
     assert agent.ran == []
