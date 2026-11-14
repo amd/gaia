@@ -33,6 +33,9 @@ class _Rag:
         self.indexed.append(path)
         return {"success": True, "num_chunks": 1}
 
+    def is_full(self):
+        return False
+
 
 def _agent(scope):
     validator = PathValidator([str(scope)])

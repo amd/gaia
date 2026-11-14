@@ -1001,6 +1001,23 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A chat with 150 documents attached: more than one chat searches at once. */
+const MANY_DOCS = Array.from({ length: 150 }, (_, i) => ({
+    id: `station-${i}`, filename: `station_${String(i).padStart(3, '0')}.txt`,
+    filepath: `C:\\Users\\me\\Stations\\station_${String(i).padStart(3, '0')}.txt`,
+    file_size: 64, chunk_count: 1, indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 1, indexing_status: 'complete',
+}));
+
+async function withManyDocuments(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === '/api/documents', (route) =>
+        route.fulfill({ json: { documents: MANY_DOCS, total: 150, total_size_bytes: 9600, total_chunks: 150 } }),
+    );
+    const sessions = SESSIONS.map((s) => (s.id === ANSWER_SESSION ? { ...s, document_ids: MANY_DOCS.map((d) => d.id) } : s));
+    await page.route((url) => url.pathname === '/api/sessions', (route) =>
+        route.fulfill({ json: { sessions, total: sessions.length } }),
+    );
+}
+
 /** A path with no spaces, longer than the column; its chip made the whole chat scroll sideways. */
 const LONG_PATH = `C:\\reports\\${'a_very_long_segment_'.repeat(9)}.pdf`;
 
@@ -1015,6 +1032,20 @@ async function withLongPath(page: Page): Promise<void> {
             },
         }),
     );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a chat with more documents than it searches at once says so (${locale})`, async ({ page }, info) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withManyDocuments);
+        const notice = page.locator('.doc-context-past-cap');
+        await expect(notice).toBeVisible();
+        // The whole sentence shows beside the docked panel, never under it.
+        const [box, bar] = await Promise.all([notice.locator('span').boundingBox(), page.locator('.messages-scroll').boundingBox()]);
+        expect(box!.x).toBeGreaterThanOrEqual(bar!.x);
+        expect(box!.x + box!.width).toBeLessThanOrEqual(bar!.x + bar!.width);
+        expect(await audit(page)).toEqual([]);
+        await page.screenshot({ path: info.outputPath(`docs-past-cap-${locale}.png`) });
+    });
 }
 
 for (const locale of ['ar', 'en']) {

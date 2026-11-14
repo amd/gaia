@@ -114,8 +114,11 @@ from gaia.agents.tools import (  # Web browsing and search; Shared tools
 )
 from gaia.agents.tools.path_access import read_access_error, write_access_error
 from gaia.agents.tools.rag_tools import (
+    _forget_evicted,
+    attached_not_loaded,
     documents_failed_indexing,
     documents_still_indexing,
+    not_loaded_note,
 )
 from gaia.agents.tools.workspace_paths import (
     _resolve_target,
@@ -641,6 +644,9 @@ class ChatAgentConfig:
     namespaced_agent_id: Optional[str] = None
 
 
+# Names listed of the attached documents the index does not hold; the rest are counted.
+_NOT_LOADED_SHOWN = 30
+
 # Added to the per-turn document list only when a document is not in Latin script.
 _CROSS_LANGUAGE_NOTE = (
     "[Documents marked with a script such as [Arabic] are written in it. When the "
@@ -847,6 +853,8 @@ class ChatAgent(
         self.observers = []
         self.file_handlers = []  # Track FileChangeHandler instances for telemetry
         self.indexed_files = set()
+        # Every document attached to the chat, held in the index or not.
+        self.attached_documents: List[str] = []
 
         # Initialize file system index service (optional)
         self._fs_index = None
@@ -1028,6 +1036,8 @@ class ChatAgent(
             if loaded:
                 self.current_session = loaded
                 for doc_path in loaded.indexed_documents:
+                    if self.rag.is_full():
+                        break
                     if doc_path not in self.indexed_files and os.path.exists(doc_path):
                         try:
                             real = os.path.realpath(doc_path)
@@ -1036,6 +1046,9 @@ class ChatAgent(
                             ) or self._is_path_allowed(real):
                                 result = self.rag.index_document(real)
                                 if result.get("success"):
+                                    _forget_evicted(
+                                        self.indexed_files, result.get("evicted", [])
+                                    )
                                     self.indexed_files.add(doc_path)
                                     logger.info(
                                         "Restored indexed doc from prior turn: %s",
@@ -1086,6 +1099,14 @@ class ChatAgent(
             lines.append(f"[Indexed documents: {', '.join(entries)}]")
             if any(s and s != ["Latin"] for s in scripts.values()):
                 lines.append(_CROSS_LANGUAGE_NOTE)
+        not_loaded = attached_not_loaded(self, self.rag)
+        if not_loaded:
+            shown = ", ".join(Path(fp).name for fp in not_loaded[:_NOT_LOADED_SHOWN])
+            more = len(not_loaded) - _NOT_LOADED_SHOWN
+            lines.append(
+                f"[{not_loaded_note(len(not_loaded), self.rag)} Not searched: "
+                f"{shown}{f', and {more} more' if more > 0 else ''}]"
+            )
         pending = sorted({Path(fp).name for fp in documents_still_indexing(self.rag)})
         if pending:
             lines.append(
@@ -3850,7 +3871,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
         )
 
     def _index_documents(self, documents: List[str]) -> List[str]:
-        """Index initial documents and return any user-facing failure messages."""
+        """Index the chat's attached documents; return user-facing failure messages.
+
+        Stops loading once the index is full rather than push out documents it
+        just loaded: the rest stay attached, are named to the model as not
+        searched, and load one at a time through ``query_specific_file``.
+        """
+        self.attached_documents = list(documents)
         failures = []
         for doc in documents:
             doc_name = os.path.basename(doc)
@@ -3859,10 +3886,13 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
                     # Naming a file to index is the grant to read it; a folder is never granted.
                     if os.path.isfile(doc):
                         self.path_validator.add_allowed_path(doc)
+                    if self.rag.is_full():
+                        continue
                     logger.info(f"Indexing document: {doc}")
                     result = self.rag.index_document(doc)
 
                     if result.get("success"):
+                        _forget_evicted(self.indexed_files, result.get("evicted", []))
                         self.indexed_files.add(doc)
                         logger.info(
                             f"Successfully indexed: {doc} ({result.get('num_chunks', 0)} chunks)"

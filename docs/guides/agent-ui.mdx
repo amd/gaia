@@ -201,6 +201,12 @@ into the library and is attached to the chat you asked in, the same as one you
 add from the library. A file outside the folders the library reads from goes in
 as a copy, and the chat says so: edits to the original don't reach the copy.
 
+A chat searches at most 100 documents, or 10,000 passages (about nine long
+books), at once. Attach more and the bar above the chat says so, naming the
+limit the chat reached: the document count, or the passages a few long
+documents fill. The first ones attached are searched, and asking about any
+other attached file by name loads it for that question.
+
 While a large document indexes, its row in the library shows how far it has
 got: "Reading page 37 of 229" for a PDF, then "Embedding 412 of 1,180", each
 with a percent. Formats without a page count show a moving bar and the count

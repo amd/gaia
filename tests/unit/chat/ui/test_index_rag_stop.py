@@ -28,6 +28,9 @@ class _Rag:
             self.handler.cancelled.set()
         return {"num_chunks": 1, "from_cache": True}
 
+    def is_full(self):
+        return False
+
 
 class _Agent:
     def __init__(self, rag):
