@@ -204,6 +204,17 @@ def test_prompt_stats_backend_error_exits_non_zero_after_the_answer(
     assert "Lemonade not reachable at http://localhost:1" in captured.err
 
 
+def test_prompt_model_call_error_exits_non_zero(monkeypatch, capsys):
+    class _FailingLLM:
+        def generate(self, **kwargs):
+            raise ConnectionError("Lemonade not reachable at http://localhost:1")
+
+    monkeypatch.setattr(cli, "create_client", lambda *args, **kwargs: _FailingLLM())
+
+    assert _run_main(monkeypatch, "prompt", "hi", "--no-lemonade-check") == 1
+    assert "Lemonade not reachable at http://localhost:1" in capsys.readouterr().out
+
+
 def test_stats_with_none_recorded_is_an_empty_state_not_an_error(
     stub_llm, monkeypatch, capsys
 ):

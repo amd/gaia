@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -101,6 +102,8 @@ def summarize(
         "duration_s": round(duration_s, 2),
         "error_count": int(result.get("error_count") or 0),
     }
+    if result.get("time_limit_reached"):
+        record["time_limit_reached"] = True
     if record["is_error"]:
         record["error"] = _turn_error(result)
     if verbose:
@@ -146,6 +149,7 @@ def run(
     full_access: bool = False,
     base_url: Optional[str] = None,
     attempts: int = 1,
+    time_limit: Optional[int] = None,
 ) -> int:
     """Run one headless turn and print its result. Returns the exit code.
 
@@ -156,6 +160,12 @@ def run(
         raise ValueError(
             f"Unknown --output-format {output_format!r}; choose one of: "
             f"{', '.join(OUTPUT_FORMATS)}."
+        )
+    if time_limit and attempts > 1:
+        return _emit_failure(
+            output_format,
+            "--time-limit can't be combined with --attempts yet. Drop one of them.",
+            code=2,
         )
     route = settings = None
     try:
@@ -172,7 +182,7 @@ def run(
         record = (
             _run_with_attempts(text, attempts, **turn)
             if attempts > 1
-            else _run_turn(text, **turn)
+            else _run_turn(text, time_limit=time_limit, **turn)
         )
         if route is not None:
             record["route"] = route.as_record()
@@ -320,6 +330,7 @@ def _run_turn(
     full_access: bool,
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
+    time_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     from gaia.llm.lemonade_client import resolve_lemonade_base_url
     from gaia.logger import configure
@@ -342,6 +353,7 @@ def _run_turn(
             full_access=full_access,
             base_url=base_url,
             extra_paths=extra_paths,
+            time_limit=time_limit,
         )
     detected_base_url = _start_server(model, base_url)
 
@@ -365,16 +377,45 @@ def _run_turn(
         )
     agent._ensure_tool_loader_reset()  # pylint: disable=protected-access
 
+    timer = _arm_time_limit(agent, time_limit) if time_limit else None
     started = time.time()
     try:
         result = agent.process_query(text) or {}
     finally:
+        if timer is not None:
+            timer.cancel()
         from gaia.agents.base.memory import drain_memory_extraction
 
         drain_memory_extraction(agent)
     return summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )
+
+
+def _arm_time_limit(agent: Any, seconds: int) -> threading.Timer:
+    """Give the turn *seconds*: the agent wraps up before, a stop enforces it.
+
+    The agent warns the model and stops its loop short of the limit so the
+    requested files and the answer still get written. A turn still busy at the
+    limit is stopped: a shell or Python run ends there, a model call already
+    sent is waited for, and the turn ends at its next step.
+    """
+    from gaia.agents.base.agent import TurnCancel
+
+    agent.time_limit_s = seconds
+    cancel = TurnCancel()
+    agent._cancel_event = cancel  # pylint: disable=protected-access
+    timer = threading.Timer(
+        seconds,
+        cancel.cancel,
+        args=[
+            f"Stopped at the {seconds}-second time limit (--time-limit) before "
+            "the turn finished."
+        ],
+    )
+    timer.daemon = True
+    timer.start()
+    return timer
 
 
 def _relay_turn(
@@ -387,6 +428,7 @@ def _relay_turn(
     full_access: bool,
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
+    time_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Run the turn on the GAIA agent's own binary, through the daemon.
 
@@ -397,11 +439,15 @@ def _relay_turn(
 
     from gaia.daemon.agent_query import ConsoleRenderer, run_query
 
-    if skip_permissions or full_access or base_url:
+    if skip_permissions or full_access or base_url or time_limit:
         flag = (
             "--full-access"
             if full_access
-            else "--dangerously-skip-permissions" if skip_permissions else "--base-url"
+            else (
+                "--dangerously-skip-permissions"
+                if skip_permissions
+                else "--base-url" if base_url else "--time-limit"
+            )
         )
         raise RuntimeError(
             f"{flag} needs the GAIA agent in this process, and here it runs as "

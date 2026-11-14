@@ -1760,8 +1760,16 @@ def _index_rag_with_progress(
     Emits tool_start, per-doc status, and tool_result events.
     When *rebuild_per_doc* is True, calls agent.rebuild_system_prompt() after
     each successfully indexed document (used for cache-hit incremental updates).
+    Stops at the index's cap; the rest stay attached and load on request.
     """
+    from gaia.agents.tools.rag_tools import (
+        _forget_evicted,
+        not_held,
+        not_loaded_summary,
+    )
+
     n = len(fpath_list)
+    unreadable = set()
     sse_handler._emit(
         {
             "type": "tool_start",
@@ -1774,10 +1782,15 @@ def _index_rag_with_progress(
     total_chunks = 0
     cancelled = getattr(sse_handler, "cancelled", None)
     left = 0
+    filled = False
     for i, fpath in enumerate(fpath_list, 1):
         # Stop ends the loading here; what is left is picked up on the next turn.
         if cancelled is not None and cancelled.is_set():
             left = n - i + 1
+            break
+        # Full: loading more would push out what was just loaded.
+        if agent.rag.is_full():
+            filled = True
             break
         doc_name = Path(fpath).name
         sse_handler._emit(
@@ -1793,7 +1806,8 @@ def _index_rag_with_progress(
             error = result.get("error")
             if error:
                 logger.warning("RAG error for %s: %s", fpath, error)
-                doc_stats.append(f"  {doc_name} — ERROR: {error}")
+                unreadable.add(fpath)
+                doc_stats.append((fpath, f"  {doc_name} — ERROR: {error}"))
                 sse_handler._emit(
                     {
                         "type": "status",
@@ -1802,6 +1816,8 @@ def _index_rag_with_progress(
                     }
                 )
             else:
+                filled = filled or bool(result.get("evicted"))
+                _forget_evicted(agent.indexed_files, result.get("evicted", []))
                 agent.indexed_files.add(fpath)
                 total_chunks += n_chunks
                 size_mb = result.get("file_size_mb", 0) or 0
@@ -1814,14 +1830,18 @@ def _index_rag_with_progress(
                     size_str = f"{file_size_bytes} B"
                 from_cache = result.get("from_cache", False)
                 doc_stats.append(
-                    f"  {doc_name} — {n_chunks} chunks, {size_str}"
-                    + (" (cached)" if from_cache else "")
+                    (
+                        fpath,
+                        f"  {doc_name} — {n_chunks} chunks, {size_str}"
+                        + (" (cached)" if from_cache else ""),
+                    )
                 )
                 if rebuild_per_doc:
                     agent.rebuild_system_prompt()
         except Exception as idx_err:
             logger.warning("Failed to index %s: %s", fpath, idx_err)
-            doc_stats.append(f"  {doc_name} — FAILED: {idx_err}")
+            unreadable.add(fpath)
+            doc_stats.append((fpath, f"  {doc_name} — FAILED: {idx_err}"))
             sse_handler._emit(
                 {
                     "type": "status",
@@ -1830,16 +1850,26 @@ def _index_rag_with_progress(
                 }
             )
     idx_elapsed = round(_time.time() - idx_start, 1)
+    # Includes one a later, long document pushed out, the last one's too.
+    unloaded = (
+        not_held(agent.rag, fpath_list, unreadable) if filled and not left else []
+    )
     headline = (
         f"Stopped: {left} of {n} {label} not loaded. They load with your next message."
         if left
-        else f"Indexed {n} {label} in {idx_elapsed}s"
+        else f"Indexed {n - len(unloaded)} {label} in {idx_elapsed}s"
     )
+    if unloaded:
+        headline += ". " + not_loaded_summary(agent.rag, unloaded)
+    pushed_out = set(unloaded)
     summary_lines = [
         headline,
         f"Total: {total_chunks} chunks in index",
         "",
-    ] + doc_stats
+    ] + [
+        line + (" (then pushed out to fit the index)" if path in pushed_out else "")
+        for path, line in doc_stats
+    ]
     sse_handler._emit(
         {
             "type": "tool_result",
@@ -4219,14 +4249,23 @@ async def _get_chat_response(
             if hasattr(agent, "config"):
                 agent.config.working_directory = working_directory
             if rag_file_paths and hasattr(agent, "rag") and agent.rag:
+                from gaia.agents.tools.rag_tools import _forget_evicted
+
                 from .agent_documents import not_yet_indexed
 
+                agent.attached_documents = list(rag_file_paths)
                 new_paths = not_yet_indexed(rag_file_paths, agent.indexed_files)
                 for fpath in new_paths:
+                    # Named to the model as not searched; it loads one on request.
+                    if agent.rag.is_full():
+                        break
                     doc_name = Path(fpath).name
                     try:
                         result_idx = agent.rag.index_document(fpath)
                         if result_idx.get("success"):
+                            _forget_evicted(
+                                agent.indexed_files, result_idx.get("evicted", [])
+                            )
                             agent.indexed_files.add(fpath)
                             agent.rebuild_system_prompt()
                         else:
@@ -4698,6 +4737,11 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     from .agent_documents import not_yet_indexed
 
                     new_rag_paths = not_yet_indexed(rag_file_paths, agent.indexed_files)
+                    if hasattr(agent, "rag") and agent.rag:
+                        agent.attached_documents = list(rag_file_paths)
+                        if agent.rag.is_full():
+                            # Named to the model as not searched; it loads one on request.
+                            new_rag_paths = []
                     if new_rag_paths and hasattr(agent, "rag") and agent.rag:
                         _index_rag_with_progress(
                             agent,
@@ -4845,6 +4889,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
 
                         # Index session-attached RAG docs (single pass, with SSE progress).
                         if rag_file_paths and hasattr(agent, "rag") and agent.rag:
+                            agent.attached_documents = list(rag_file_paths)
                             _index_rag_with_progress(agent, rag_file_paths, sse_handler)
 
                         _store_agent(
@@ -6132,11 +6177,14 @@ def _page_total(filepath: Path) -> Optional[int]:
     if filepath.suffix.lower() != ".pdf":
         return None
     from pypdf import PdfReader
-    from pypdf.errors import PdfReadError
+    from pypdf.errors import LimitReachedError, PdfReadError
+
+    from gaia.rag.pdf_utils import pdf_parse_limits
 
     try:
-        return len(PdfReader(str(filepath)).pages)
-    except (PdfReadError, OSError, ValueError) as e:
+        with pdf_parse_limits():
+            return len(PdfReader(str(filepath)).pages)
+    except (PdfReadError, LimitReachedError, OSError, ValueError) as e:
         # Indexing reads the file again and reports the failure properly.
         logger.info("No page count for %s: %s", filepath.name, e)
         return None

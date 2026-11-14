@@ -77,13 +77,32 @@ def _too_long(path: str) -> ValueError:
 
 def _pdf_text(path: str) -> Tuple[str, Dict[str, Any]]:
     try:
-        from pypdf import PdfReader  # pylint: disable=import-outside-toplevel
-        from pypdf.errors import PdfReadError  # pylint: disable=import-outside-toplevel
+        from pypdf.errors import (  # pylint: disable=import-outside-toplevel
+            LimitReachedError,
+        )
     except ImportError as e:
         raise ImportError(
             "Reading PDF text requires pypdf. Install it with: "
             'uv pip install -e ".[rag]"'
         ) from e
+    from gaia.rag.pdf_utils import (  # pylint: disable=import-outside-toplevel
+        pdf_parse_limits,
+    )
+
+    try:
+        with pdf_parse_limits():
+            return _read_pdf_pages(path)
+    except LimitReachedError as e:
+        raise ValueError(
+            f"{os.path.basename(path)} is too complex for GAIA to read safely "
+            f"({e}). Ask the user to print it to a new PDF, or split it, and "
+            "share that file."
+        ) from e
+
+
+def _read_pdf_pages(path: str) -> Tuple[str, Dict[str, Any]]:
+    from pypdf import PdfReader  # pylint: disable=import-outside-toplevel
+    from pypdf.errors import PdfReadError  # pylint: disable=import-outside-toplevel
 
     name = os.path.basename(path)
     try:
