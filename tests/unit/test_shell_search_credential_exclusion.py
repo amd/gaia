@@ -24,8 +24,9 @@ from gaia.agents.tools.shell_tools import (
     SKIPPED_CREDENTIALS_NOTE,
     ShellToolsMixin,
     _credential_exclusions,
+    _grep_exclusion_patterns,
     _parse_line,
-    _search_argv,
+    _search_plan,
 )
 
 WINDOWS_ONLY = pytest.mark.skipif(os.name != "nt", reason="Windows command")
@@ -104,7 +105,7 @@ def _refusal(command, home, cwd=None):
     host = _Host(home)
     steps, error = _parse_line(command, bypass_gates=True)
     assert error is None, error
-    searchable = _search_argv(command, steps) is not None
+    searchable = _search_plan(command, steps) is not None
     for step in steps:
         refusal = host._path_traversal_refusal(
             step, str(cwd or home / "proj"), frozenset(), searchable=searchable
@@ -117,17 +118,17 @@ def _refusal(command, home, cwd=None):
 def _argv(command):
     steps, error = _parse_line(command, bypass_gates=True)
     assert error is None, error
-    return _search_argv(command, steps)
+    return _search_plan(command, steps)
 
 
 def _excluded_by(flavor, name):
-    """Whether *flavor*'s exclusion arguments keep a file called *name* out."""
+    """Whether *flavor*'s exclusions keep a file called *name* out."""
+    if flavor == "grep":
+        return any(
+            fnmatch.fnmatchcase(name, glob) for glob in _grep_exclusion_patterns()
+        )
     for word in _credential_exclusions(flavor):
-        if flavor == "grep":
-            glob = word.removeprefix("--exclude=")
-            if fnmatch.fnmatchcase(name, glob):
-                return True
-        elif flavor == "rg":
+        if flavor == "rg":
             glob = word.removeprefix("--iglob=!")
             if fnmatch.fnmatchcase(name.lower(), glob.lower()):
                 return True
@@ -195,11 +196,7 @@ def test_a_name_count_or_exit_code_probe_runs_without_the_credential_file(
 ):
     steps, _ = _parse_line(command, bypass_gates=True)
 
-    argv = _argv(command)
-
-    # The user's words stay as they were, and the exclusions come last, so
-    # grep's and rg's "last matching include/exclude wins" is ours.
-    assert argv == [*steps[0].segments[0], *_credential_exclusions(flavor)]
+    assert _argv(command) == (steps[0].segments[0], flavor)
     assert _refusal(command, home) is None, command
 
 
@@ -449,7 +446,13 @@ def popen_calls(monkeypatch):
     calls = []
 
     def fake_popen(args, **kwargs):
-        calls.append((args, kwargs))
+        patterns = None
+        for word in args if isinstance(args, list) else ():
+            if word.startswith("--exclude-from="):
+                path = word.removeprefix("--exclude-from=")
+                with open(path, encoding="utf-8") as listed:
+                    patterns = listed.read().splitlines()
+        calls.append((args, {**kwargs, "exclude_patterns": patterns}))
         return _FakeProcess(args)
 
     monkeypatch.setattr(shell_tools.subprocess, "Popen", fake_popen)
@@ -457,6 +460,17 @@ def popen_calls(monkeypatch):
         shell_tools, "_program_on_path", lambda name, cwd: f"/bin/{name}"
     )
     return calls
+
+
+def _assert_grep_exclusions(words, kwargs, home):
+    """grep got its patterns from a file outside the workspace, now removed."""
+    assert len(words) == 1 and words[0].startswith("--exclude-from="), words
+    path = words[0].removeprefix("--exclude-from=")
+    # No wildcard for Git for Windows' grep to expand into a planted name.
+    assert not any(char in words[0] for char in "*?["), words
+    assert not os.path.realpath(path).startswith(os.path.realpath(home))
+    assert kwargs["exclude_patterns"] == _grep_exclusion_patterns()
+    assert not os.path.exists(path)
 
 
 def _run(home, command, full_access=False):
@@ -476,7 +490,7 @@ def test_the_search_runs_as_argv_with_the_exclusions(home, popen_calls, full_acc
     assert not kwargs.get("shell")
     assert os.path.basename(args[0]) in ("grep", "grep.exe")
     assert args[1:4] == ["-rl", "guess", "secrets"]
-    assert args[4:] == _credential_exclusions("grep")
+    _assert_grep_exclusions(args[4:], kwargs, home)
     assert SKIPPED_CREDENTIALS_NOTE in result.get("note", "")
     assert result["command"] == "grep -rl guess secrets"
 
@@ -498,10 +512,9 @@ def test_a_line_a_shell_would_reread_never_runs_without_the_exclusions(
     """Either refused, or run as argv that carries every exclusion."""
     result = _run(home, command, full_access)
 
-    exclusions = _credential_exclusions("grep")
     for args, kwargs in popen_calls:
         assert isinstance(args, list) and not kwargs.get("shell"), (command, args)
-        assert args[-len(exclusions) :] == exclusions, (command, args)
+        _assert_grep_exclusions(args[-1:], kwargs, home)
     if not popen_calls:
         assert result.get("executed") is False, result
     assert "guess-me" not in str(result)
@@ -511,9 +524,9 @@ def test_an_ordinary_recursive_search_still_runs(home, popen_calls):
     result = _run(home, "grep -rn TODO .")
 
     assert len(popen_calls) == 1, result
-    args, _ = popen_calls[0]
+    args, kwargs = popen_calls[0]
     assert args[1:4] == ["-rn", "TODO", "."]
-    assert args[4:] == _credential_exclusions("grep")
+    _assert_grep_exclusions(args[4:], kwargs, home)
 
 
 def test_a_refused_search_never_reaches_the_process_layer(home, popen_calls):
@@ -531,6 +544,69 @@ def test_an_ordinary_command_gets_no_note(home, popen_calls):
 
 
 def test_exclusion_words_survive_posix_quoting():
-    for flavor in ("grep", "rg", "git"):
+    for flavor in ("rg", "git"):
         words = _credential_exclusions(flavor)
         assert shlex.split(" ".join(shlex.quote(w) for w in words)) == words
+
+
+# ------------------------------------- @file words and planted pattern names
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "grep -rl guess . @f",
+        "grep -rl guess src @f",
+        "grep -rl @f guess secrets",
+        "rg -l guess @f",
+        "git grep -l guess @f",
+        'grep -rl guess "@f" src',
+    ],
+)
+def test_an_at_file_word_is_refused_over_a_credential_tree(home, command):
+    """Git for Windows' grep reads ``@f`` as more arguments, ``--`` included."""
+    (home / "proj" / "f").write_text("--\n")
+
+    assert _argv(command) is None, command
+    refusal = _refusal(command, home)
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+
+
+def test_an_at_file_search_of_a_clean_tree_runs(home):
+    (home / "proj" / "secrets" / ".env").unlink()
+
+    assert _refusal("grep -rl guess . @f", home) is None
+
+
+def test_a_planted_pattern_named_file_does_not_weaken_the_exclusions(home, popen_calls):
+    for name in ("--exclude=.env", "--exclude=.[eE][nN][vV]"):
+        try:
+            (home / "proj" / name).write_text("x\n")
+        except OSError:
+            continue  # '[' or '=' not allowed in a file name here
+
+    result = _run(home, "grep -rl guess .")
+
+    assert len(popen_calls) == 1, result
+    args, kwargs = popen_calls[0]
+    _assert_grep_exclusions(args[4:], kwargs, home)
+    assert ".[eE][nN][vV]" in kwargs["exclude_patterns"]
+
+
+def test_the_exclude_file_is_removed_when_the_run_fails(home, monkeypatch):
+    seen = []
+
+    def failing_popen(args, **kwargs):
+        seen.extend(w.removeprefix("--exclude-from=") for w in args[1:])
+        raise OSError("cannot start")
+
+    monkeypatch.setattr(shell_tools.subprocess, "Popen", failing_popen)
+    monkeypatch.setattr(
+        shell_tools, "_program_on_path", lambda name, cwd: f"/bin/{name}"
+    )
+
+    _run(home, "grep -rl guess secrets")
+
+    assert seen and not os.path.exists(seen[-1])

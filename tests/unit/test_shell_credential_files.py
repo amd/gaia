@@ -47,7 +47,7 @@ def _refusal(command, cwd, root):
     host = _Host(root)
     steps, error = _parse_line(command, bypass_gates=True)
     assert error is None, error
-    searchable = shell_tools._search_argv(command, steps) is not None
+    searchable = shell_tools._search_plan(command, steps) is not None
     for step in steps:
         refusal = host._path_traversal_refusal(
             step, str(cwd), frozenset(), searchable=searchable

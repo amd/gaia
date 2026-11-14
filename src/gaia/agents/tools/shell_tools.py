@@ -8,6 +8,7 @@ Provides shell command execution capabilities for file operations and system que
 
 import base64
 import binascii
+import contextlib
 import dataclasses
 import fnmatch
 import ipaddress
@@ -2829,15 +2830,25 @@ def _credential_globs() -> List[str]:
     return names + [f"*{ext}" for ext in sorted(security.SENSITIVE_EXTENSIONS)]
 
 
-def _credential_exclusions(flavor: str) -> List[str]:
+def _grep_exclusion_patterns() -> List[str]:
+    """grep's exclude patterns for every credential file, one per line of its file."""
+    return [_case_folded_glob(glob) for glob in _credential_globs()]
+
+
+def _credential_exclusions(flavor: str, exclude_file: str = "") -> List[str]:
     """The arguments that keep every credential file out of a *flavor* search.
 
     They go after the user's own: in grep and rg the last matching
     include/exclude wins, and an exclude pathspec only ever narrows git's.
+    grep reads its patterns from *exclude_file*: Git for Windows' grep
+    wildcard-expands the arguments it is given, so a pattern there could be
+    replaced by a file name planted to match it.
     """
-    globs = _credential_globs()
     if flavor == "grep":
-        return [f"--exclude={_case_folded_glob(glob)}" for glob in globs]
+        if not exclude_file:
+            raise ValueError("grep's credential exclusions need an exclude file")
+        return [f"--exclude-from={exclude_file}"]
+    globs = _credential_globs()
     if flavor == "rg":
         return [f"--iglob=!{glob}" for glob in globs]
     return [f":(top,exclude,icase,glob)**/{glob}" for glob in globs]
@@ -2896,14 +2907,15 @@ def _needs_shell(text: str) -> bool:
     return bool(quote)
 
 
-def _search_argv(command: str, steps: list) -> Optional[list]:
-    """The argv *command* runs as when it is one grep, rg or git grep, credential files excluded.
+def _search_plan(command: str, steps: list) -> Optional[Tuple[list, str]]:
+    """``(argv, flavor)`` when *command* is one grep, rg or git grep to run excluded.
 
-    None for any other line. It is run with no shell, so nothing re-reads
-    the words: a line using any shell feature (a pipe, ``&&``, ``;``, a
-    redirection, a comment, an expansion, a glob, an assignment) gets None,
-    and the path check refuses it when the tree it searches holds a
-    credential file.
+    None for any other line. :func:`_searched_as_argv` runs it with no shell
+    and the exclusions appended, so nothing re-reads the words: a line using
+    any shell feature (a pipe, ``&&``, ``;``, a redirection, a comment, an
+    expansion, a glob, an assignment) or an ``@file`` word, which Git for
+    Windows' grep expands into more arguments, gets None, and the path check
+    refuses it when the tree it searches holds a credential file.
     """
     if len(steps) != 1 or len(steps[0].segments) != 1:
         return None
@@ -2911,10 +2923,42 @@ def _search_argv(command: str, steps: list) -> Optional[list]:
     if any(step.envs or ()) or any(step.stderr_modes or ()) or _needs_shell(command):
         return None
     segment = step.segments[0]
+    if any(word.startswith("@") for word in segment):
+        return None
     flavor = _rewritable_search(segment)
     if not flavor:
         return None
-    return [*segment, *_credential_exclusions(flavor)]
+    return list(segment), flavor
+
+
+@contextlib.contextmanager
+def _searched_as_argv(step: "_Step", plan: Optional[Tuple[list, str]]):
+    """*step* to run: as argv with the credential exclusions when *plan* says so.
+
+    grep's patterns go in a file of their own in the system temp folder,
+    outside the workspace, removed once the step has run.
+    """
+    if plan is None:
+        yield step
+        return
+    argv, flavor = plan
+    exclude_file = ""
+    if flavor == "grep":
+        handle, exclude_file = tempfile.mkstemp(prefix="gaia-exclude-", suffix=".txt")
+        with os.fdopen(handle, "w", encoding="utf-8", newline="\n") as out:
+            out.write("\n".join(_grep_exclusion_patterns()) + "\n")
+        if _WILDCARD.search(exclude_file):
+            os.unlink(exclude_file)
+            raise RuntimeError(
+                f"The temp folder path {exclude_file!r} has a wildcard character, "
+                "so grep would expand it. Set TEMP/TMPDIR to a plain path."
+            )
+    try:
+        words = _credential_exclusions(flavor, exclude_file)
+        yield dataclasses.replace(step, segments=[[*argv, *words]], argv_only=True)
+    finally:
+        if exclude_file:
+            os.unlink(exclude_file)
 
 
 #: A git object name: an abbreviated or full hash, which may name a blob.
@@ -3062,7 +3106,10 @@ def _bulk_read_roots(words: list, rewritten: bool = False) -> list:
         roots.extend(
             (spec, [], [], True, False) for spec in _other_search_roots(command)
         )
-        if _git_object_reads(command)[1]:
+        # An @file word can add any operand, so the current folder counts too.
+        if _git_object_reads(command)[1] or (
+            any(word.startswith("@") for word in command) and _searches_in(command)
+        ):
             roots.append((".", [], [], True, False))
     roots.extend((*root, True, False) for root in _select_string_roots(words))
     if any(_interpreter_name(w) in _CONTENT_READERS for w in words):
@@ -3669,7 +3716,7 @@ def _bulk_read_credential(
     """``(path, kind)`` for a credential file a folder-wide read in *argv* takes in, or None.
 
     A recursive search's whole tree is checked; a wildcard read's folder only.
-    *rewritten* says *argv* itself runs as :func:`_search_argv`, which keeps
+    *rewritten* says *argv* itself runs as :func:`_search_plan`, which keeps
     credential files out. *kind* is one of ``_BULK_*``; for
     ``_BULK_TOO_LARGE`` and ``_BULK_UNKNOWN``, *path* is the folder that
     could not be checked.
@@ -3874,8 +3921,9 @@ def _search_refusal(command: str, path: str, kind: str) -> Dict[str, Any]:
         "has_errors": True,
         "hint": (
             "Search specific files by name, or run grep -r, rg or git grep on "
-            "its own: no pipe, chaining, redirection, '--' or script around "
-            "it. Run that way, it skips credential files by itself."
+            "its own: no pipe, chaining, redirection, '--', @file or script "
+            "around it, and any wildcard or ~ quoted. Run that way, it skips "
+            "credential files by itself."
         ),
     }
 
@@ -4436,7 +4484,7 @@ class _Step:
     stderr_modes: tuple = ()
     shell_text: str = ""
     envs: tuple = ()
-    #: Run as argv with no shell, whatever the platform: see ``_search_argv``.
+    #: Run as argv with no shell, whatever the platform: see ``_search_plan``.
     argv_only: bool = False
 
     @property
@@ -6647,7 +6695,7 @@ class ShellToolsMixin:
                 outside,
             )
         granted = shell_granted_binaries(self)
-        searchable = _search_argv(command, steps) is not None
+        searchable = _search_plan(command, steps) is not None
         walk_cwd = cwd
         for step in steps:
             if refusal is not None:
@@ -6933,7 +6981,7 @@ class ShellToolsMixin:
         (``PathValidator.is_read_blocked``): a reader, copy source, upload or ``<``
         given it or a link to it, or a wildcard over the folder it sits in.
         A line that is one grep, rg or git grep runs as argv with credential
-        files excluded (:func:`_search_argv`); *searchable* says this step is
+        files excluded (:func:`_search_plan`); *searchable* says this step is
         that line, and when None it is judged as if it were the whole line.
         Any other recursive search is refused when the tree it searches holds
         one, and so is a ``git grep`` of a credential file's blob. ``rm``,
@@ -6971,7 +7019,7 @@ class ShellToolsMixin:
                 if refusal:
                     return refusal
         if searchable is None:
-            searchable = _search_argv(step.text, [step]) is not None
+            searchable = _search_plan(step.text, [step]) is not None
         for seg in segments:
             if not any(seg is kept for kept in scanned):
                 continue
@@ -8139,10 +8187,10 @@ class ShellToolsMixin:
                             return error
 
                 # Run with no shell, so the exclusions are words nothing re-reads.
-                search_argv = _search_argv(command, steps)
+                search_plan = _search_plan(command, steps)
                 for step, step_cwd in zip(steps, step_cwds):
                     error = self._path_traversal_refusal(
-                        step, step_cwd, granted, searchable=search_argv is not None
+                        step, step_cwd, granted, searchable=search_plan is not None
                     )
                     if error:
                         return error
@@ -8240,25 +8288,22 @@ class ShellToolsMixin:
                             else walk_cwd
                         )
                         continue
-                    run_step = step
-                    if search_argv is not None:
-                        run_step = dataclasses.replace(
-                            step, segments=[search_argv], argv_only=True
-                        )
                     try:
-                        result = _run_step(
-                            run_step,
-                            step_cwd,
-                            max(deadline - time.monotonic(), 0),
-                            # A gh read runs with nobody asked, so it runs as argv
-                            # like a skill grant: cmd.exe never re-reads its line.
-                            shell_granted_binaries(self),
-                            # Waiting in short slices is what lets a Stop kill
-                            # the command while it is still running, rather
-                            # than half an hour later when its budget expires.
-                            self._communicate_or_cancel,
-                            bypass,
-                        )
+                        with _searched_as_argv(step, search_plan) as run_step:
+                            result = _run_step(
+                                run_step,
+                                step_cwd,
+                                max(deadline - time.monotonic(), 0),
+                                # A gh read runs with nobody asked, so it runs as
+                                # argv like a skill grant: cmd.exe never re-reads
+                                # its line.
+                                shell_granted_binaries(self),
+                                # Waiting in short slices is what lets a Stop
+                                # kill the command while it is still running,
+                                # not when its budget expires.
+                                self._communicate_or_cancel,
+                                bypass,
+                            )
                     except subprocess.TimeoutExpired as exc:
                         # Truncated here too: a command killed at 30 minutes has
                         # printed far more than one killed at 30 seconds, and
@@ -8430,7 +8475,7 @@ class ShellToolsMixin:
                 if moved:
                     self._shell_cwd_note = None
                     notes.append(moved)
-                if search_argv is not None:
+                if search_plan is not None:
                     notes.append(SKIPPED_CREDENTIALS_NOTE)
                 if notes:
                     outcome["note"] = " ".join(notes)
