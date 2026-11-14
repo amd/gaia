@@ -7,6 +7,7 @@ code spells out — files it reads or changes, folders it lists, and where any
 link it makes points — are held to the allowed folders the file tools use,
 after following links. A path the code only works out when it runs is beyond
 this check, except a link's target: a link nobody can see the end of is refused.
+An outside file or folder is asked about first, as read_file asks.
 """
 
 from __future__ import annotations
@@ -62,12 +63,14 @@ def _code_and_folders(
             continue
         try:
             if script.stat().st_size > _MAX_SCRIPT_BYTES:
-                log.info("Not checking the paths %s names: it is too big", script)
+                log.info("Not checking a script's paths: it is over the size limit")
                 return None
             source = script.read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             # The tool's own read fails the same way and reports it.
-            log.warning("Could not read %s to check its paths: %s", script, exc)
+            log.warning(
+                "Could not read a script to check its paths (errno %s)", exc.errno
+            )
             return None
         return source, [str(script.parent), *cwds]
     return None
@@ -105,19 +108,30 @@ def _in_temp(real: str) -> bool:
     )
 
 
-def _allowed(agent: Any, validator: Any, how: str, real: str) -> Tuple[bool, str]:
-    """Whether *real* may be reached, and why no approval could grant it if not."""
+def _in_scope(validator: Any, how: str, real: str, ask: bool) -> bool:
     if how == READ:
-        in_scope = validator.validate_read(real, prompt_user=False)[0]
-    else:
-        in_scope = validator.is_path_allowed(real, prompt_user=False)
-    if in_scope or _in_temp(real):
+        return bool(validator.validate_read(real, prompt_user=ask)[0])
+    return bool(validator.is_path_allowed(real, prompt_user=ask))
+
+
+def _allowed(agent: Any, validator: Any, how: str, real: str) -> Tuple[bool, str]:
+    """Whether *real* may be reached, and why no approval could grant it if not.
+
+    An outside file or folder is asked about through the same access prompt
+    ``read_file`` uses, which refuses without asking when nobody is watching.
+    A link pointing outside is never asked about.
+    """
+    if _in_scope(validator, how, real, ask=False) or _in_temp(real):
         return True, ""
     final = validator.grant_refusal_reason(real)
+    if final:
+        return False, final
+    if how == LINK:
+        return False, ""
     grants = getattr(agent, "_path_access_grants_unasked", None)
-    if not final and callable(grants) and grants():
+    if callable(grants) and grants():
         return True, ""
-    return False, final
+    return _in_scope(validator, how, real, ask=True), ""
 
 
 def _refusal(error: str) -> Dict[str, Any]:
@@ -163,7 +177,12 @@ def python_scope_refusal(
                 real = os.path.realpath(path)
                 allowed, final = _allowed(agent, validator, how, real)
             except (OSError, ValueError) as exc:
-                log.info("Refused %s: could not resolve %s (%s)", tool_name, path, exc)
+                log.info(
+                    "Refused %s: a path it %s could not be resolved (%s)",
+                    tool_name,
+                    how,
+                    type(exc).__name__,
+                )
                 return _refusal(
                     f"Not run: this Python code {how} '{path}', and where that "
                     f"leads could not be checked ({exc}). " + _ROUTES[how]
@@ -171,16 +190,13 @@ def python_scope_refusal(
             if allowed:
                 continue
             log.info(
-                "Refused %s: it %s %s, outside the allowed folders",
-                tool_name,
-                how,
-                real,
+                "Refused %s: it %s a path outside the allowed folders", tool_name, how
             )
-            return _refusal(_outside_message(how, path, real, final))
+            return _refusal(_outside_message(validator, how, path, real, final))
     return None
 
 
-def _outside_message(how: str, path: str, real: str, final: str) -> str:
+def _outside_message(validator: Any, how: str, path: str, real: str, final: str) -> str:
     same = os.path.normcase(real) == os.path.normcase(os.path.abspath(path))
     leads = "" if same else f", which leads to '{real}'"
     where = (
@@ -188,9 +204,14 @@ def _outside_message(how: str, path: str, real: str, final: str) -> str:
         "this chat may use."
     )
     if final:
-        log.info("No approval may grant %s: %s", real, final)
         return (
             f"{where} It is a protected location: no approval or full access lifts "
             "this, so tell the user it was not done."
+        )
+    declined = getattr(validator, "_declined_by_user", None)
+    if how != LINK and callable(declined) and declined(real):
+        return (
+            f"{where} The user declined access to it when asked. Don't reach it, "
+            "or what it holds, another way."
         )
     return f"{where} {_ROUTES[how]}"

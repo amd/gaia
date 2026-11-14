@@ -27,6 +27,7 @@ from gaia.agents.base.denied_effects import (
     creates_a_link,
     python_link_targets,
 )
+from gaia.agents.base.tool_grants import PATH_ACCESS_PROMPT_TOOL
 from gaia.agents.base.tools import tool
 from gaia.agents.tools.shell_tools import ShellToolsMixin
 from gaia.security import PathValidator
@@ -431,6 +432,96 @@ def test_writing_through_a_link_elsewhere_points_to_the_writers(
     assert refused["status"] == "error", refused
     assert "write_file or edit_file" in refused["error"]
     assert "run_python" not in refused["error"]
+    assert agent.ran == []
+
+
+class _Watching(SilentConsole):
+    """A person at the prompt: approves the tool, answers path access with *grant*."""
+
+    answers_confirmations = True
+
+    def __init__(self, grant):
+        super().__init__()
+        self.grant = grant
+        self.asked = []
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        if tool_name == PATH_ACCESS_PROMPT_TOOL:
+            self.asked.append(tool_args["path"])
+            return self.grant
+        return True
+
+
+_OUTSIDE_CODE = [
+    "print(open({f!r}).read())",
+    "import os\nprint(os.listdir({d!r}))",
+    "open({w!r}, 'w').write('x')",
+    "from pathlib import Path\nprint(Path({f!r}).read_text())",
+]
+
+
+@pytest.mark.parametrize("code", _OUTSIDE_CODE)
+def test_a_watched_outside_path_is_asked_about_and_runs_once_approved(layout, code):
+    outside = layout["elsewhere"]
+    (outside / "notes.txt").write_text("hi")
+    console = _Watching(grant=True)
+    agent = _agent(layout, console)
+
+    ran = _python(
+        agent,
+        code.format(
+            f=str(outside / "notes.txt"), d=str(outside), w=str(outside / "new.txt")
+        ),
+    )
+
+    assert ran["status"] == "success", ran
+    assert len(console.asked) == 1
+    assert len(agent.ran) == 1
+
+
+@pytest.mark.parametrize("code", _OUTSIDE_CODE)
+def test_a_watched_outside_path_the_user_denies_is_refused(layout, code):
+    outside = layout["elsewhere"]
+    (outside / "notes.txt").write_text("hi")
+    console = _Watching(grant=False)
+    agent = _agent(layout, console)
+
+    refused = _python(
+        agent,
+        code.format(
+            f=str(outside / "notes.txt"), d=str(outside), w=str(outside / "new.txt")
+        ),
+    )
+
+    assert refused["status"] == "error", refused
+    assert len(console.asked) == 1
+    assert "declined" in refused["error"]
+    assert agent.ran == []
+
+
+def test_a_watched_link_pointing_outside_is_never_asked_about(layout):
+    console = _Watching(grant=True)
+    agent = _agent(layout, console)
+
+    refused = _python(
+        agent, f"import os\nos.symlink({str(layout['elsewhere'])!r}, 'link')"
+    )
+
+    assert refused["status"] == "error", refused
+    assert console.asked == []
+    assert agent.ran == []
+
+
+def test_a_watched_protected_folder_is_never_asked_about(layout, monkeypatch):
+    _links(monkeypatch, {layout["project"] / "sys": PROTECTED})
+    console = _Watching(grant=True)
+    agent = _agent(layout, console)
+
+    refused = _python(agent, "print(open('sys/hosts').read())")
+
+    assert refused["status"] == "error", refused
+    assert "no approval or full access lifts this" in refused["error"]
+    assert console.asked == []
     assert agent.ran == []
 
 

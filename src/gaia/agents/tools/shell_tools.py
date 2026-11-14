@@ -989,7 +989,9 @@ def _hard_target(command: str) -> str:
         try:
             folder = protected_directory_of(path)
         except (OSError, ValueError) as exc:
-            logger.debug("could not resolve %r to check it: %s", path, exc)
+            logger.debug(
+                "could not resolve a path to check it (%s)", type(exc).__name__
+            )
             continue
         if folder:
             return f"the protected folder {folder}"
@@ -5334,7 +5336,7 @@ class ShellToolsMixin:
         needs = f"`{command}` needs your approval" + (f" ({note})" if note else "")
         hard = _hard_target(command)
         if hard:
-            why = f"it reaches {hard}"
+            why = "it reaches a cloud-metadata address or a protected folder"
             plain = (
                 f"Not run: `{command}` reaches {hard}, which stays off limits "
                 "whatever anyone approves. Tell the user it was not done."
