@@ -830,6 +830,11 @@ The panel reads when it opens, when you expand a section, and when an answer
 finishes. It never checks on a timer, and a closed panel or a collapsed section
 reads nothing.
 
+It leads with what the chat made and may touch: **This answer**, **Outputs**,
+**Changes**, **Folders and access** and **Skills**. How the chat ran, **Context
+& performance** and **Agent info**, sits last under **Details**; those sections
+start collapsed.
+
 - **This answer** shows what the latest turn used and where its data went:
   - **Sources:** the web pages it read and the document passages it drew on,
     named by file and page.
@@ -846,10 +851,8 @@ reads nothing.
   the previous one. When every web lookup in a turn failed, it says **Couldn't
   get live data**, so you know the answer isn't based on current information;
   with the panel closed, its button turns amber.
-- **Environment** shows where the chat runs and what it may touch. Each change
-  applies from GAIA's next step, without a restart:
-  - **Runs on:** this PC with its device and backend (for example
-    `GPU · Vulkan`), the model and the memory in use, or the cloud provider.
+- **Folders and access** shows what the chat may touch and where it runs. Each
+  change applies from GAIA's next step, without a restart:
   - **Can read and write:** the folders and files GAIA may use in this chat,
     and where each came from. **Add folder** gives it another folder, picked
     the same way as from a new chat's folder;
@@ -857,6 +860,9 @@ reads nothing.
     shell tool, even under full access and even inside a wider folder, until
     you add it back. A document attached to the chat is removed from the
     document bar instead, which also takes it out of the chat's search.
+  - **Permission mode:** Ask or Full access, the same setting as the shield in
+    the message box. It covers this chat only; new chats follow **Settings →
+    Permissions**.
   - **Internet:** this is a filter, not a firewall. Turn it off and GAIA
     refuses recognised web, browser, connector, mailbox, Agent Hub and
     network-command tools (such as `git push`, `pip install` or `npx`).
@@ -870,9 +876,8 @@ reads nothing.
     opens full screen. The app does not keep access between sessions: each
     time you turn mobile access on, scan the new QR code, and if the
     home-screen app no longer connects, open the new link and add it again.
-  - **Permission mode:** Ask or Full access, the same setting as the shield in
-    the message box. It covers this chat only; new chats follow **Settings →
-    Permissions**.
+  - **Runs on:** this PC with its device and backend (for example
+    `GPU · Vulkan`), the model and the memory in use, or the cloud provider.
 
   A Hub-installed GAIA, which runs as its own process, is held to the
   internet setting. It can be given another folder, but a folder can't be
