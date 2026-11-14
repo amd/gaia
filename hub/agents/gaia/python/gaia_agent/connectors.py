@@ -16,6 +16,7 @@ from gaia.agents.tools._email.scopes import (
     DECLARED_SCOPES,
     GOOGLE_CONNECTOR_ID,
     MICROSOFT_CONNECTOR_ID,
+    READ_ONLY_SCOPES,
 )
 from gaia.connectors.providers.base import ConnectorRequirement
 
@@ -34,7 +35,9 @@ MAILBOX_REQUIREMENTS: Tuple[ConnectorRequirement, ...] = (
     ),
     ConnectorRequirement(
         connector_id=MICROSOFT_CONNECTOR_ID,
+        # Mail.Read too: a connection made only to read mail carries it.
         scopes=[
+            *READ_ONLY_SCOPES[MICROSOFT_CONNECTOR_ID],
             *DECLARED_SCOPES[MICROSOFT_CONNECTOR_ID],
             CALENDAR_SCOPES[MICROSOFT_CONNECTOR_ID],
         ],

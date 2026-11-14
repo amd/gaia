@@ -977,6 +977,20 @@ def test_nothing_connected_names_the_remedy_before_any_prompt(mailbox, agent_for
     assert drafted["success"] is False
 
 
+def test_in_the_agent_ui_a_send_with_nothing_connected_asks_to_send(mailbox, agent_for):
+    """The Connect card a failed send brings asks for what sending needs."""
+    from types import SimpleNamespace
+
+    mailbox["google"] = None
+    agent = agent_for(_Asked(), _Gmail())
+    agent.config = SimpleNamespace(surface="agent_ui")
+    result = agent._execute_tool("send_now", SEND_NOW)
+    assert result["connect_card"]["scopes"] == {
+        "google": [SCOPE_GMAIL_READONLY, SCOPE_GMAIL_COMPOSE],
+        "microsoft": [SCOPE_MAIL_READWRITE, SCOPE_MAIL_SEND],
+    }
+
+
 def test_read_only_connection_still_reads_but_write_says_reconnect(mailbox, agent_for):
     mailbox["google"] = {
         "scopes": [SCOPE_GMAIL_READONLY],

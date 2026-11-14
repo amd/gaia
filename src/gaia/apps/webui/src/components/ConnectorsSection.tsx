@@ -51,12 +51,25 @@ const SCOPE_LABELS: Record<string, MessageKey> = {
     'https://www.googleapis.com/auth/userinfo.email': 'settings.connectors.scope.email',
     'email': 'settings.connectors.scope.email',
     'profile': 'settings.connectors.scope.profile',
+    'https://graph.microsoft.com/Mail.Read': 'settings.connectors.scope.gmailRead',
     'https://graph.microsoft.com/Mail.ReadWrite': 'settings.connectors.scope.outlookMail',
     'https://graph.microsoft.com/Mail.Send': 'settings.connectors.scope.outlookSend',
     'https://graph.microsoft.com/Calendars.ReadWrite': 'settings.connectors.scope.outlookCalendar',
     'https://graph.microsoft.com/Calendars.Read': 'settings.connectors.scope.outlookCalendarRead',
     'https://graph.microsoft.com/User.Read': 'settings.connectors.scope.microsoftProfile',
 };
+
+/**
+ * What Connect asks for. With agents to grant, nothing: the backend asks for
+ * what they declare, not the connector's whole list (Drive, mail.modify).
+ */
+export function connectScopes(
+    connector: Pick<ConnectorRow, 'available_scopes' | 'default_scopes'>,
+    grantAgents: string[],
+): string[] {
+    if (grantAgents.length > 0) return [];
+    return connector.available_scopes?.length ? connector.available_scopes : connector.default_scopes;
+}
 
 function scopeLabel(scope: string, t: Translate): string {
     const key = SCOPE_LABELS[scope];
@@ -626,9 +639,7 @@ function OAuthConfigureBody({
         try {
             const r = await api.authorizeConnector(
                 connector.id,
-                connector.available_scopes?.length
-                    ? connector.available_scopes
-                    : connector.default_scopes,
+                connectScopes(connector, selectedGrantAgents()),
                 selectedGrantAgents(),
             );
             openAuthUrl(r.authorization_url);
@@ -650,9 +661,7 @@ function OAuthConfigureBody({
         try {
             const info = await api.authorizeConnectorDevice(
                 connector.id,
-                connector.available_scopes?.length
-                    ? connector.available_scopes
-                    : connector.default_scopes,
+                connectScopes(connector, selectedGrantAgents()),
                 selectedGrantAgents(),
             );
             setDeviceInfo(info);
@@ -722,9 +731,7 @@ function OAuthConfigureBody({
         setBusy(true);
         setErr(null);
         try {
-            const scopes = connector.available_scopes?.length
-                ? connector.available_scopes
-                : connector.default_scopes;
+            const scopes = connectScopes(connector, selectedGrantAgents());
             const result = await api.configureConnector(connector.id, {
                 ...setupValues,
                 scopes,

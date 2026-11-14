@@ -433,6 +433,7 @@ def _refusal(action: str, error: Any, **extra: Any) -> Dict[str, Any]:
         error,
         agent_id=EMAIL_AGENT_ID,
         surface=agent_surface(current().agent),
+        scopes={p: (scope,) for p, scope in CALENDAR_SCOPES.items()},
     )
 
 
