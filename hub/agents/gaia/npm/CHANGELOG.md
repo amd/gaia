@@ -13,6 +13,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   the tool limit now also reaches the model each turn, so asked about one it
   says it is set up but unavailable rather than that nothing by that name
   exists. A corrupt `mcp_servers.json` is described in plain words.
+- **A detached document is no longer searched.** A file an earlier turn sent in
+  `documents` and this turn leaves out (the user detached it, or deleted it from
+  the library) is dropped from the session's index, so answers stop quoting it.
+  An empty `documents` list drops them all.
 - **A turn the output limit keeps cutting off says what to do next.** It told
   the user to "retry with a higher output-token limit (max_tokens)", a setting
   the apps don't have, dropped what the turn had done, and sent no token counts,

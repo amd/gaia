@@ -1663,6 +1663,12 @@
 .mem-goals-toolbar { display: flex; gap: 8px; }
 
 /* Add form */
+.mem-form-error {
+    margin: 8px 0 0;
+    color: var(--danger);
+    font-size: 13px;
+}
+
 .mem-goals-add-form {
     display: flex; flex-direction: column; gap: 8px;
     padding: 12px; background: var(--bg-hover);
