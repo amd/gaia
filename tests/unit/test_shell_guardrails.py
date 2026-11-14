@@ -1291,21 +1291,36 @@ class TestHeredocCannotHideARefusedCommand:
         assert check(command, bypass=True) is None
 
     @pytest.mark.parametrize(
-        "command",
+        "make_command",
         [
-            'cat > "' + "${OUT:-x}" * 100 + "/a.txt\" <<'EOF'\nhello\nEOF",
-            'cat > "' + "${a:-" * 100 + "x" + "}" * 100 + "\" <<'EOF'\nhello\nEOF",
-            "echo $((" + "(" * 100 + "1" + ")" * 100 + "))",
-            'cat > "' + "$(" * 100 + "x" + ")" * 100 + "\" <<'EOF'\nhello\nEOF",
+            lambda n: 'cat > "' + "${OUT:-x}" * n + "/a.txt\" <<'EOF'\nhello\nEOF",
+            lambda n: 'cat > "'
+            + "${a:-" * n
+            + "x"
+            + "}" * n
+            + "\" <<'EOF'\nhello\nEOF",
+            lambda n: "echo $((" + "(" * n + "1" + ")" * n + "))",
+            lambda n: 'cat > "' + "$(" * n + "x" + ")" * n + "\" <<'EOF'\nhello\nEOF",
             # Many long names inside an unclosed or rejected $( ).
-            'echo "$(' + " $LONG_VARIABLE_NAME_" * 100 + ' <x" <<EOF\nhello\nEOF',
-            "echo $(" + " $LONG_VARIABLE_NAME_" * 100 + " <x <<EOF\nhello\nEOF",
+            lambda n: 'echo "$('
+            + " $LONG_VARIABLE_NAME_" * n
+            + ' <x" <<EOF\nhello\nEOF',
+            lambda n: "echo $(" + " $LONG_VARIABLE_NAME_" * n + " <x <<EOF\nhello\nEOF",
         ],
     )
-    def test_the_scan_stays_linear(self, command):
-        start = time.perf_counter()
-        _strip_heredoc_bodies(command)
-        assert time.perf_counter() - start < 0.05
+    def test_the_scan_stays_linear(self, make_command):
+        # Growth ratio, not wall time: a loaded runner slows both sizes alike.
+        small, big = make_command(100), make_command(800)
+        small_best = big_best = float("inf")
+        for _ in range(5):
+            start = time.perf_counter()
+            _strip_heredoc_bodies(small)
+            small_best = min(small_best, time.perf_counter() - start)
+            start = time.perf_counter()
+            _strip_heredoc_bodies(big)
+            big_best = min(big_best, time.perf_counter() - start)
+        # 8x the input: linear is ~8x the time, quadratic ~64x.
+        assert big_best < 24 * small_best + 0.005
 
 
 class TestReadOnlySubGuardsLiftUnderBypassOnly:
