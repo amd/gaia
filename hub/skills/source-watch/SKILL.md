@@ -71,7 +71,7 @@ stop to ask about it.
   *skill* on a schedule — `--skill` is rejected at creation time. Until that is
   wired, "watching" means you invoke the skill and it checks.
 - Remembering across conversations needs memory enabled and the user's ask to
-  keep track. Without either, the watcher dedupes only within this
+  keep track. Without both, the watcher dedupes only within this
   conversation and repeats itself in a new one — say so rather than pretending
   it de-duplicated.
 - Fetch only pages you are allowed to poll, and do not hammer a source.
