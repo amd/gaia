@@ -111,7 +111,7 @@
 /* A small window keeps one row: graphs go, tiles share the width. */
 @container (max-width: 860px) {
     .resource-tiles { flex-wrap: nowrap; gap: 12px; }
-    .resource-tile { flex: 1 1 0; min-width: 0; }
+    .resource-tile { flex: 1 1 0; min-width: 0; overflow: hidden; }
     .resource-spark { display: none; }
 }
 
