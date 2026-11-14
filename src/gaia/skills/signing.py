@@ -42,6 +42,7 @@ from typing import Any, Optional
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillValidationError
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.lock import write_text_atomic
 from gaia.skills.tiers import LOWEST_TIER
 
@@ -173,6 +174,7 @@ def generate_key(
     Raises:
         SkillSignatureError: if a key of that name exists and *force* is False.
     """
+    require_user_terminal("gaia skill keygen")
     ed25519 = _ed25519()
     from cryptography.hazmat.primitives import serialization
 
@@ -610,6 +612,7 @@ class TrustStore:
 
     def save(self, path: Optional[Path] = None) -> Path:
         """Persist the store. Returns the path written."""
+        require_user_terminal("gaia skill trust")
         target = Path(path) if path is not None else self.path
         if target is None:
             raise SkillValidationError(

@@ -7820,6 +7820,7 @@ Do NOT wrap conversational replies in JSON.
         each such tool must poll the cancellation flag around its own writes.
         """
         from gaia.agents.base.tools import set_tool_cancel_event
+        from gaia.skills.human_only import agent_tool_running
 
         timeout = self._bounded_tool_timeout(tool_name, tool_args)
         holder: Dict[str, Any] = {}
@@ -7830,7 +7831,8 @@ Do NOT wrap conversational replies in JSON.
             set_tool_cancel_event(cancel)
             _TOOL_USER_WAIT.set(user_wait)
             try:
-                holder["result"] = tool(**tool_args)
+                with agent_tool_running():
+                    holder["result"] = tool(**tool_args)
             except BaseException as exc:  # noqa: BLE001 — re-raised in caller
                 holder["exc"] = exc
             finally:

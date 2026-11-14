@@ -3452,7 +3452,11 @@ def _human_only_command(command: str) -> str:
     may be what the script runs.
     """
     from gaia.skills.binaries import human_only_gaia_call
+    from gaia.skills.human_only import AGENT_CHILD_ENV
 
+    # Clearing the marker is the one way past the command-side refusal.
+    if AGENT_CHILD_ENV.lower() in command.lower():
+        return AGENT_CHILD_ENV
     try:
         argv = _tokenize(command, bypass_gates=True)
     except ValueError:
@@ -3462,20 +3466,23 @@ def _human_only_command(command: str) -> str:
 
 def human_only_in_argv(argv: list) -> str:
     """The ``gaia skill`` call *argv* makes, inline scripts included, or ""."""
-    from gaia.skills.binaries import human_only_gaia_call
+    from gaia.skills.binaries import human_only_gaia_call, human_only_in_code_words
 
     if not argv:
         return ""
     lists = _command_word_lists(list(argv))
-    words = list(lists[0])
-    for script in lists[1:]:
-        words.extend(
-            piece
-            for word in script
-            for piece in _SCRIPT_WORD_SPLIT.split(word)
-            if piece
-        )
-    return human_only_gaia_call(words)
+    script = [
+        piece
+        for words in lists[1:]
+        for word in words
+        for piece in _SCRIPT_WORD_SPLIT.split(word)
+        if piece
+    ]
+    if script:
+        found = human_only_in_code_words(script)
+        if found:
+            return found
+    return human_only_gaia_call([*lists[0], *script])
 
 
 def _human_only_refusal(command: str, spelled: str) -> Dict[str, Any]:
@@ -4559,7 +4566,10 @@ def _segment_env(assignments: Dict[str, str]) -> Dict[str, str]:
     command sets outlives it or reaches the agent. GAIA's internal credentials
     are left out (see ``gaia.env.child_env``).
     """
-    env = child_env(assignments)
+    from gaia.skills.human_only import agent_child_env
+
+    # Marked last, so a command's own assignment can't clear it.
+    env = agent_child_env(child_env(assignments))
     # A killed Python child keeps what it printed only if it never buffered it.
     env.setdefault("PYTHONUNBUFFERED", "1")
     return env
