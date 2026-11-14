@@ -2,7 +2,7 @@
 name: price-watch
 description: Check product pages for a price drop, comparing against the lowest price seen before and alerting only on a new low. Use when the user asks to watch a price, track a deal, or tell them when something gets cheaper.
 license: MIT
-version: 1.0.1
+version: 1.0.2
 metadata:
   gaia:
     security_tier: community
@@ -31,35 +31,46 @@ running extreme, not just a list of things already seen.
 
 ## Procedure
 
-For each product URL, in this order:
+Pick the path that matches the user's message.
 
-1. **Save any price the user states — before anything else.** When the user
-   gives a price in their message (the lowest they have seen, what it costs
-   now, or a target to wait for), call `remember` for it **before** you fetch
-   the page, even if they have not asked you to check yet:
-   - lowest seen or current price →
-     `remember(fact="price:<product-slug>: <amount> <currency> on <YYYY-MM-DD> (stated by the user) — <url>", category="fact")`
-   - target price →
-     `remember(fact="price-floor:<product-slug>: <amount> <currency> — <url>", category="fact")`
+### Watch — the user's message states a price
 
-   The user's number is the baseline step 5 compares against. Saving it first
-   means a fetch that fails, or a later turn, cannot lose it. Do not save a
-   price the user did not state.
-2. **Recall the history.** `recall(query="price:<product-slug>", limit=20)` and
-   take the lowest price recorded, including one the user just stated. Also
+"Watch this, the lowest I've seen is $949" sets a baseline; it does not ask
+for a check. Save exactly the user's number and confirm. Do **not** fetch the
+page: recording today's price here would replace the user's baseline, and the
+next check would compare the page against itself.
+
+- lowest seen or current price →
+  `remember(fact="price:<product-slug>: <amount> <currency> on <YYYY-MM-DD> (stated by the user) — <url>", category="fact")`
+- target price →
+  `remember(fact="price-floor:<product-slug>: <amount> <currency> — <url>", category="fact")`
+
+Never save a price the user did not state. If they also ask for a check in
+the same message, save first, then run the check below.
+
+### Check — the user asks for the current price
+
+1. **Recall the baseline.** `recall(query="price:<product-slug>", limit=20)`
+   and take the lowest price recorded. Also
    `recall(query="price-floor:<product-slug>")` for a target.
-3. **Fetch the page.** `fetch_page(url)`.
-4. **Extract the current price.** Pull the number and its currency. Watch for
+2. **Fetch the page.** `fetch_page(url)`.
+3. **Extract the current price.** Pull the number and its currency. Watch for
    the traps: a struck-through list price next to the real one, a subscription
-   price next to the one-time price, and a per-unit price on a multipack. If you
-   cannot find a price with confidence, say so — do **not** guess, and do not
-   record a guessed number, because a wrong low poisons every future comparison.
-5. **Compare.** Alert when the current price is below the recorded low (or below
-   the floor). Otherwise report the current price and the delta in
-   one line.
-6. **Record the observation.**
+   price next to the one-time price, and a per-unit price on a multipack. If
+   you cannot find a price with confidence, say so — do **not** guess.
+4. **Report the comparison.** A new low is a current price below the recorded
+   low (or below the floor); report it in the format below. Otherwise give the
+   current price, the standing low, and the delta in one line. Report before
+   any memory write.
+5. **Update the low — only if it is lower, or if no price is recorded yet.**
    `remember(fact="price:<product-slug>: <amount> <currency> on <YYYY-MM-DD> — <url>", category="fact")`.
-   Record every observation, not only the lows, so the history is a real series.
+   With no history, the first price you read becomes the baseline. Otherwise
+   never record a price that is not a new low, and never a guessed one: a
+   wrong low poisons every future comparison.
+
+A refused or failed `remember` never replaces the report. Give the report
+anyway and say in one line that the price was not saved. Do not stop to ask
+about saving instead of answering.
 
 ## Report format
 
