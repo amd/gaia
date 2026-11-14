@@ -707,6 +707,79 @@ def test_fetch_rss_accepts_a_feed_whose_content_embeds_a_doctype(description: by
     assert result["count"] == 1
 
 
+# ----------------------------------------------------------------------
+# price-watch step order
+#
+# A pre-fetch save fired on plain re-checks and, once refused, displaced the
+# report; a fetch on "watch this at $X" overwrote the user's baseline.
+# ----------------------------------------------------------------------
+
+
+def _price_watch_paths() -> tuple[str, str]:
+    body = parse_skill_file(STARTER_ROOT / "price-watch").body
+    watch = re.search(r"^### Watch\b(.+?)(?=^### |^## )", body, re.M | re.S)
+    check = re.search(r"^### Check\b(.+?)(?=^### |^## )", body, re.M | re.S)
+    assert watch and check, "price-watch lost its Watch / Check sections"
+    return watch.group(1), check.group(1)
+
+
+def test_price_watch_watch_path_saves_the_stated_price_without_fetching():
+    watch, _ = _price_watch_paths()
+
+    assert "remember(" in watch
+    assert "stated by the user" in watch
+    assert "fetch_page(" not in watch, "a watch turn must not fetch the page"
+    assert re.search(r"Do \*\*not\*\* fetch", watch)
+    assert "Never save a price the user did not state" in watch
+
+
+def test_price_watch_check_path_fetches_then_reports_then_saves():
+    _, check = _price_watch_paths()
+    steps = re.findall(r"^(\d+)\. \*\*(.+?)\*\*", check, re.M)
+    titles = [title.lower() for _, title in steps]
+
+    assert [int(n) for n, _ in steps] == list(range(1, len(steps) + 1))
+    order = [
+        next(i for i, t in enumerate(titles) if key in t)
+        for key in ("recall", "fetch", "extract", "report", "update")
+    ]
+    assert order == sorted(order), f"check steps out of order: {titles}"
+
+    assert check.index("recall(") < check.index("fetch_page(")
+    assert check.index("fetch_page(") < check.index("remember(")
+    assert check.count("remember(") == 1, "the check path writes memory once"
+
+
+def test_price_watch_saves_on_a_check_only_for_a_new_low():
+    _, check = _price_watch_paths()
+    update = check[check.index("**Update the low") :]
+
+    assert "only if it is lower" in update
+    assert "Record every observation" not in check
+
+
+def test_price_watch_a_refused_save_never_replaces_the_report():
+    body = parse_skill_file(STARTER_ROOT / "price-watch").body
+
+    assert "never replaces the report" in body
+    assert "Give the report\nanyway" in body or "Give the report anyway" in body
+    assert "not saved" in body
+
+
+@pytest.mark.parametrize(
+    "stale_rule",
+    [
+        "before anything else",
+        "before** you fetch",
+        "before you fetch",
+        "even if they have not asked you to check",
+    ],
+)
+def test_price_watch_has_no_unconditional_pre_fetch_save(stale_rule: str):
+    body = parse_skill_file(STARTER_ROOT / "price-watch").body
+    assert stale_rule not in body
+
+
 def test_the_guide_consumes_lists_match_the_manifests():
     """The guide names each skill's tools; drift makes it quietly wrong."""
     guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
