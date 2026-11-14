@@ -256,6 +256,52 @@ def test_locked_changed_file_is_not_served(tmp_path, monkeypatch):
     assert str(doc.absolute()) in sdk.indexed_files
 
 
+def _refuse_opening(monkeypatch, doc, error):
+    from gaia.rag import sdk as sdk_module
+
+    real_open = open
+
+    def _open(file, *args, **kwargs):
+        if Path(file) == doc.absolute():
+            raise error
+        return real_open(file, *args, **kwargs)
+
+    monkeypatch.setattr(sdk_module, "open", _open, raising=False)
+
+
+def test_unchanged_file_the_user_can_no_longer_read_is_not_served(
+    tmp_path, monkeypatch
+):
+    """Removing read permission moves no stat field on Windows."""
+    _, (doc, other) = _setup(
+        tmp_path, ("acl_me.txt", OLD, True), ("budget.txt", OTHER, True)
+    )
+    _refuse_opening(
+        monkeypatch, doc, PermissionError(errno.EACCES, "Access is denied", str(doc))
+    )
+
+    scoped = _one_file(doc)
+    assert scoped["status"] == "error", scoped
+    assert "can no longer be read" in scoped["error"]
+    assert "Lisbon" not in str(scoped)
+
+    library = _library()
+    assert "Lisbon" not in str(library)
+    assert "March" in _served(library)
+    assert [f["reason"] for f in library["files_left_out"]] == ["denied"]
+
+
+def test_unchanged_file_another_program_holds_is_called_locked(tmp_path, monkeypatch):
+    _, (doc,) = _setup(tmp_path, ("plan.txt", OLD, True))
+    sharing = PermissionError(errno.EACCES, "in use", str(doc))
+    sharing.winerror = 32
+    _refuse_opening(monkeypatch, doc, sharing)
+
+    scoped = _one_file(doc)
+    assert "another program" in scoped["error"]
+    assert "Lisbon" not in str(scoped)
+
+
 def test_failed_reindex_reports_the_error_and_serves_nothing(tmp_path):
     _, (doc,) = _setup(tmp_path, ("plan.txt", OLD, True))
     doc.write_text("   \n\t \n", encoding="utf-8")

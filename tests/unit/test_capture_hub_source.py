@@ -34,6 +34,7 @@ from gaia.skills.capture import (
 )
 from gaia.skills.capture import published_skill_names as _real_published_skill_names
 from gaia.skills.capture import (
+    refuse_failed_verification_source,
     refuse_hub_url,
 )
 from gaia.skills.errors import SkillError
@@ -395,14 +396,14 @@ class TestFailedVerification:
         assert _nothing_landed(manager)
 
     def test_case_and_rename_variants(self, manager):
-        with pytest.raises(SkillCaptureError, match="failed signature verification"):
+        with pytest.raises(SkillCaptureError, match="failed verification"):
             capture_skill(
                 _markdown("odd-notes"),
                 name="fresh-name",
                 manager=manager,
                 failed_verification=[" ODD-NOTES "],
             )
-        with pytest.raises(SkillCaptureError, match="failed signature verification"):
+        with pytest.raises(SkillCaptureError, match="failed verification"):
             capture_skill(
                 _markdown("fresh-name"),
                 name="odd-notes",
@@ -423,6 +424,99 @@ class TestFailedVerification:
         for route in ("fetch", "capture", "download", "rewrite"):
             assert route in message
         assert "report it" in message
+        assert "failed verification" in message
+        assert "will not install it by another route" in message
+
+
+REFUSED_SOURCES = [
+    "https://raw.githubusercontent.com/o/r/main/skills/odd-notes/SKILL.md",
+    "https://mirror.example/odd-notes-1.0.0.zip",
+    "https://mirror.example/odd-notes.zip",
+    "https://mirror.example/get?name=odd-notes&v=1",
+    "https://ODD-NOTES.mirror.example/SKILL.md",
+    "https://mirror.example/odd%2Dnotes/SKILL.md",
+    "https://mirror.example/odd%25252Dnotes/SKILL.md",
+    "https://mirror.example/odd_notes/SKILL.md",
+    "https://mirror.example/odd%20notes/SKILL.md",
+    "https://mirror.example/a\\odd-notes\\SKILL.md",
+    "  https://mirror.example/odd-notes/SKILL.md  ",
+    "https://hub.amd-gaia.ai/skills/odd-notes/1.0.0/SKILL.md",
+]
+
+NOT_REFUSED_SOURCES = [
+    "https://mirror.example/my-odd-notes/SKILL.md",
+    "https://mirror.example/odd-notes-extra/SKILL.md",
+    "https://mirror.example/oddnotes/SKILL.md",
+    "https://mirror.example/odd-note/SKILL.md",
+    "https://mirror.example/meeting-notes/SKILL.md",
+]
+
+
+class TestFailedVerificationSource:
+    """A source that names a refused skill is refused before anything is fetched."""
+
+    @pytest.mark.parametrize("url", REFUSED_SOURCES)
+    def test_urls_naming_the_skill_are_never_fetched(self, url, manager):
+        client = _Client(_markdown("innocent-name").encode("utf-8"))
+
+        with pytest.raises(SkillCaptureError) as raised:
+            capture_skill(
+                url,
+                manager=manager,
+                web_client=client,
+                failed_verification={"odd-notes"},
+            )
+        assert str(raised.value) == failed_verification_message("odd-notes")
+        assert client.calls == []
+        assert _nothing_landed(manager)
+
+    @pytest.mark.parametrize("url", NOT_REFUSED_SOURCES)
+    def test_near_misses_are_captured(self, url, manager):
+        client = _Client(_markdown("meeting-notes").encode("utf-8"))
+
+        result = capture_skill(
+            url,
+            manager=manager,
+            web_client=client,
+            failed_verification={"odd-notes"},
+        )
+        assert client.calls == [url]
+        assert result.name == "meeting-notes"
+
+    def test_a_local_folder_named_after_the_skill_is_refused(self, manager, tmp_path):
+        folder = tmp_path / "Downloads" / "odd-notes"
+        folder.mkdir(parents=True)
+        (folder / "SKILL.md").write_text(_markdown("innocent-name"), encoding="utf-8")
+
+        with pytest.raises(SkillCaptureError, match="failed verification"):
+            capture_skill(
+                str(folder), manager=manager, failed_verification={"odd-notes"}
+            )
+        assert _nothing_landed(manager)
+
+    def test_a_redirect_onto_the_skill_is_refused(self, manager):
+        client = _Client(
+            _markdown("innocent-name").encode("utf-8"),
+            final_url="https://mirror.example/odd-notes/SKILL.md",
+        )
+
+        with pytest.raises(SkillCaptureError, match="failed verification"):
+            capture_skill(
+                "https://short.example/r/1",
+                manager=manager,
+                web_client=client,
+                failed_verification={"odd-notes"},
+            )
+        assert _nothing_landed(manager)
+
+    @pytest.mark.parametrize("blank", [[""], ["   "], [None], []])
+    def test_a_blank_refused_name_refuses_nothing(self, blank):
+        refuse_failed_verification_source(
+            "https://mirror.example/odd-notes/SKILL.md", blank
+        )
+
+    def test_regex_metacharacters_in_a_name_are_literal(self):
+        refuse_failed_verification_source("https://mirror.example/aXb/", ["a.b"])
 
 
 # ---------------------------------------------------------------------------
