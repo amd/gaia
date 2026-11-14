@@ -220,3 +220,19 @@ def test_snippet_maps_folded_positions_back_to_the_original():
     s = snippet("Straße und Ⅻ résumé", "resume")
     assert s == {"before": "Straße und Ⅻ ", "match": "résumé", "after": ""}
     assert snippet("nothing here", "zzz") is None
+
+
+def test_snippet_shows_words_not_markdown_syntax():
+    table = "| Item | Qty |\n|---|---|\n| Milk | 2 |\n| Eggs | 12 |"
+    s = snippet(table, "eggs")
+    assert "|" not in s["before"] + s["after"]
+    assert s["match"] == "Eggs"
+
+    s = snippet(
+        "Remember: the **deadline** is *Friday*.\n1. First\n2. Second", "friday"
+    )
+    assert s == {
+        "before": "…the deadline is ",
+        "match": "Friday",
+        "after": ". First Second",
+    }

@@ -149,6 +149,46 @@ class TestGoalStateMachine:
         assert updated.status == "in_progress"
         assert updated.progress_notes == "Started."
 
+    def test_requeueing_a_failed_goal_resets_its_try_count(self, store):
+        goal = _make_goal(store)
+        for _ in range(3):
+            store.record_unfinished_run(goal.id, "blocked", max_tries=3, first_wait_s=0)
+        failed = store.get_goal(goal.id)
+        assert failed.status == "failed" and failed.attempts == 3
+
+        requeued = store.update_goal_status(goal.id, "queued")
+
+        assert requeued.status == "queued"
+        assert requeued.attempts == 0
+        assert requeued.retry_at is None
+        again = store.record_unfinished_run(
+            goal.id, "blocked once more", max_tries=3, first_wait_s=0
+        )
+        assert again.status == "queued" and again.attempts == 1
+
+    def test_a_queued_goal_note_keeps_its_try_count(self, store):
+        goal = _make_goal(store)
+        waiting = store.record_unfinished_run(
+            goal.id, "blocked", max_tries=3, first_wait_s=60
+        )
+        assert waiting.attempts == 1 and waiting.retry_at is not None
+
+        noted = store.update_goal_status(
+            goal.id, "queued", progress_notes="Not run: monthly limit"
+        )
+
+        assert noted.attempts == 1
+        assert noted.retry_at == waiting.retry_at
+
+    def test_requeueing_a_cancelled_goal_clears_its_pause(self, store):
+        goal = _make_goal(store)
+        store.defer_goal(goal.id, 3600, "waiting")
+        store.cancel_goal(goal.id)
+
+        requeued = store.update_goal_status(goal.id, "queued")
+
+        assert requeued.retry_at is None
+
     def test_approve_nonexistent_returns_none(self, store):
         assert store.approve_goal("no-such-id") is None
 
