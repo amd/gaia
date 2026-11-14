@@ -1011,6 +1011,8 @@ export const enMessages = {
     'docs.cancelFailed': 'Couldn\'t cancel indexing {name}: {error}',
     'docs.openFolderFailed': 'Couldn\'t open the folder for {name}: {error}',
     'docs.dismissError': 'Dismiss error',
+    'docs.technicalDetails': 'Technical details',
+    'docs.pathSubfolders': 'A folder typed here adds only the files directly inside it; subfolders are skipped.',
     'docs.notAdded': '{name} couldn\'t be added: GAIA can\'t read it. Why, and Retry, are on its row below.',
     'docs.notAddedServer': '{name} couldn\'t be added: GAIA\'s model server isn\'t answering. Retry on its row once it\'s back.',
     'docs.unreadable.one': '{n} couldn\'t be read',

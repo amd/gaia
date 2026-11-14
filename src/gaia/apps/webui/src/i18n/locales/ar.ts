@@ -1011,6 +1011,8 @@ const messages: Messages = {
     'docs.cancelFailed': 'تعذّر إلغاء فهرسة {name}: {error}',
     'docs.openFolderFailed': 'تعذّر فتح المجلد الذي يحتوي {name}: {error}',
     'docs.dismissError': 'إغلاق الخطأ',
+    'docs.technicalDetails': 'تفاصيل تقنية',
+    'docs.pathSubfolders': 'المجلد الذي تكتبه هنا يضيف الملفات الموجودة فيه مباشرة فقط، وتُتخطّى المجلدات الفرعية.',
     'docs.notAdded': 'تعذّرت إضافة {name}: لا يستطيع GAIA قراءته. السبب وزر إعادة المحاولة في صفّه أدناه.',
     'docs.notAddedServer': 'تعذّرت إضافة {name}: خادم النماذج في GAIA لا يستجيب. أعد المحاولة من صفّه عندما يعود.',
     'docs.unreadable.one': 'تعذّرت قراءتها: {n}',

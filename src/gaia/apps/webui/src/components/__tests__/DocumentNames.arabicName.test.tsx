@@ -38,6 +38,24 @@ it('reads an Arabic file name left to right with its extension last in the Docum
     expect(name).toHaveAttribute('dir', 'ltr');
 });
 
+// A long name is split to cut its middle; an Arabic one used to show "docx." at its front.
+it('keeps the extension of a long Arabic file name as its own last piece in the Document library', async () => {
+    const LONG = 'مراجعة الأعمال الفصلية لفريق المبيعات الإقليمي المسودة النهائية الإصدار السابع.docx';
+    const doc = { ...DOC, id: 'doc-ar-long', filename: LONG, filepath: `/home/user/${LONG}` };
+    vi.mocked(api.listDocuments).mockResolvedValue({ documents: [doc], total: 1, total_size_bytes: 2048, total_chunks: 3 });
+    useChatStore.setState({ documents: [doc] });
+
+    render(<DocumentLibrary />);
+
+    const name = await screen.findByTitle(LONG);
+    expect(name.textContent).toBe(LONG);
+    const parts = [...name.children];
+    const ext = parts[parts.length - 1];
+    expect(ext.textContent).toBe('.docx');
+    expect(ext).toHaveAttribute('dir', 'ltr');
+    expect(parts[0].textContent).toBe(LONG.slice(0, -'.docx'.length));
+});
+
 it('reads an Arabic file name left to right with its extension last in the chat documents bar', () => {
     const { container } = render(<SessionDocsBar sessionId="sess-1" onDetachFailed={() => {}} />);
 

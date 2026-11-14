@@ -1357,6 +1357,77 @@ test('document being indexed', async ({ page }) => {
 });
 
 for (const locale of ['en', 'ar']) {
+    // The dialog was centred on its content, so its title and path box jumped as rows came and went.
+    test(`the document library stays put as rows arrive, and long names keep their end (${locale})`, async ({ page }) => {
+        const names = [
+            'Quarterly business review for the regional sales team final draft v7 (reviewed by finance).pdf',
+            'مراجعة الأعمال الفصلية لفريق المبيعات الإقليمي المسودة النهائية الإصدار السابع.docx',
+            'garden-notes.txt',
+        ];
+        let listed = false;
+        await open(page, '', locale, async (p) => {
+            await p.route('**/api/documents', (route) => route.fulfill({ json: listed
+                ? { documents: names.map((filename, i) => ({ id: `d${i}`, filename, filepath: `C:/docs/${filename}`, file_size: 4096, chunk_count: 2, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0 })), total: 3, total_size_bytes: 1, total_chunks: 1 }
+                : { documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 } }));
+        });
+        // Read the top once the panel's slide-in (12px) has landed, or a slow runner measures mid-slide.
+        const settledTop = async () => {
+            const modal = page.locator('.doc-modal');
+            await modal.evaluate((el) => Promise.all(el.getAnimations().map((a) => a.finished)));
+            return (await modal.boundingBox())!.y;
+        };
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.empty-docs')).toBeVisible();
+        const topEmpty = await settledTop();
+        listed = true;
+        // Re-open, which lists again: the same dialog with three rows.
+        await page.keyboard.press('Escape');
+        await expect(page.locator('.doc-modal')).toHaveCount(0);
+        await page.locator('.sb').getByRole('button', { name: /Documents/ }).click();
+        await expect(page.locator('.doc-row')).toHaveCount(3);
+        expect(Math.abs((await settledTop()) - topEmpty)).toBeLessThan(1);
+        const tail = page.locator('.doc-name-tail').first();
+        await expect(tail).toHaveText(/finance\)\.pdf$/);
+        await expect(tail).toBeInViewport();
+        // A name in the other script still starts at the UI's own edge.
+        const other = page.locator('.doc-name-split').nth(locale === 'ar' ? 0 : 1);
+        const [textBox, infoBox] = await other.evaluate((el) => {
+            const parts = [...el.children].map((c) => c.getBoundingClientRect());
+            const info = el.closest('.doc-info')!.getBoundingClientRect();
+            return [
+                { left: Math.min(...parts.map((r) => r.left)), right: Math.max(...parts.map((r) => r.right)) },
+                { left: info.left, right: info.right },
+            ];
+        });
+        if (locale === 'ar') expect(Math.abs(textBox.right - infoBox.right)).toBeLessThan(2);
+        else expect(Math.abs(textBox.left - infoBox.left)).toBeLessThan(2);
+        // A long Arabic name ends with ".docx" read left to right, never "docx." at its front.
+        const arabic = page.locator('.doc-name-split').nth(1);
+        const ext = await arabic.evaluate((el) => {
+            const last = el.lastElementChild!;
+            const text = last.firstChild!;
+            const box = (from: number, to: number) => {
+                const r = document.createRange();
+                r.setStart(text, from);
+                r.setEnd(text, to);
+                return r.getBoundingClientRect();
+            };
+            const at = (text.textContent ?? '').lastIndexOf('.');
+            return {
+                text: last.textContent,
+                box: last.getBoundingClientRect(),
+                dot: box(at, at + 1), word: box(at + 1, at + 5),
+            };
+        });
+        expect(ext.dot.right, 'the dot should come before "docx", read left to right').toBeLessThanOrEqual(ext.word.left + 0.5);
+        expect(ext.text).toBe('.docx');
+        // The name runs right to left, so its end, the extension, is its left-most part.
+        const headBox = await arabic.locator('.doc-name-head').boundingBox();
+        expect(ext.box.right).toBeLessThanOrEqual(headBox!.x + 0.5);
+        await shot(page, `documents-${locale}-long-names`);
+        expect(await audit(page)).toEqual([]);
+    });
+
     // A file GAIA couldn't read used to be counted with the readable ones.
     test(`a document library with a file that could not be read (${locale})`, async ({ page }) => {
         await open(page, '', locale, async (p) => {

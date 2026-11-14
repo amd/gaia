@@ -11,7 +11,7 @@ import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { requestErrorParam } from '../utils/requestErrors';
-import { formatSize, middleTruncate } from '../utils/format';
+import { formatSize } from '../utils/format';
 import { examplePath } from '../utils/platform';
 import { cleanPastedPath } from '../utils/pastedPath';
 import { PERMANENT_FAILURE_HINTS, UploadErrorToast, getUnsupportedCategory, isExtensionSupported } from './UnsupportedFeature';
@@ -126,6 +126,38 @@ function formatFullTimestamp(isoString: string, t: Translate): string {
     } catch {
         return '';
     }
+}
+
+/** Characters a long name keeps at its end, so the extension and any version suffix stay in view. */
+export const NAME_TAIL_CHARS = 14;
+
+/** A file name that, when it doesn't fit, is cut in the middle rather than at the end. */
+function DocName({ name }: { name: string }) {
+    // Code points, so an emoji at the cut isn't split into two broken halves.
+    const chars = Array.from(name);
+    if (chars.length <= NAME_TAIL_CHARS * 2) {
+        // Left to right, so the extension stays last whatever the script.
+        return <span className="doc-name" dir="ltr">{name}</span>;
+    }
+    // dir="auto" picks the direction from the first strong letter; the CSS needs to know it too.
+    const firstStrong = name.match(/\p{L}/u)?.[0] ?? '';
+    const rtlText = /[֐-ࣿיִ-﷿ﹰ-﻿]/.test(firstStrong);
+    if (rtlText) {
+        const ext = name.match(/\.[^.\s]{1,10}$/)?.[0] ?? '';
+        // Splitting inside right-to-left words puts "docx." at the front; cut only the base name instead.
+        return (
+            <span className="doc-name doc-name-split is-rtl-text" dir="auto" title={name}>
+                <span className="doc-name-head">{name.slice(0, name.length - ext.length)}</span>
+                {ext && <span className="doc-name-tail" dir="ltr">{ext}</span>}
+            </span>
+        );
+    }
+    return (
+        <span className="doc-name doc-name-split" dir="auto" title={name}>
+            <span className="doc-name-head">{chars.slice(0, -NAME_TAIL_CHARS).join('')}</span>
+            <span className="doc-name-tail">{chars.slice(-NAME_TAIL_CHARS).join('')}</span>
+        </span>
+    );
 }
 
 export function DocumentLibrary() {
@@ -684,7 +716,14 @@ export function DocumentLibrary() {
                             </button>
                         </div>
                         {hint && <p className="doc-failure-hint">{hint}</p>}
-                        {reason && (reason.more ? (
+                        {/* The hint already says what's wrong; the raw reason is for whoever asks. */}
+                        {hint && reason && (
+                            <details className="doc-failure-reason">
+                                <summary>{t('docs.technicalDetails')}</summary>
+                                <p>{[reason.summary, reason.more].filter(Boolean).join('\n')}</p>
+                            </details>
+                        )}
+                        {!hint && reason && (reason.more ? (
                             <details className="doc-failure-reason">
                                 <summary>{reason.summary}</summary>
                                 <p>{reason.more}</p>
@@ -812,6 +851,7 @@ export function DocumentLibrary() {
                             {t('docs.browse')}
                         </button>
                     </form>
+                    <p className="doc-path-hint">{t('docs.pathSubfolders')}</p>
 
                     {notice && <p className="doc-target-notice" role="status">{notice}</p>}
 
@@ -900,7 +940,7 @@ export function DocumentLibrary() {
                         {documents.filter((d) => d.id !== pendingRemoval?.id).map((doc) => (
                             <div key={doc.id} className={`doc-row ${doc.indexing_status === 'indexing' ? 'doc-row-indexing' : ''}`}>
                                 <div className="doc-info">
-                                    <span className="doc-name" dir="ltr" title={doc.filename}>{middleTruncate(doc.filename, 48)}</span>
+                                    <DocName name={doc.filename} />
                                     {renderDocStatus(doc)}
                                 </div>
                                 <div className="doc-row-actions">
