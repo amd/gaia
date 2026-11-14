@@ -1578,6 +1578,65 @@ def test_a_bare_output_no_run_wrote_is_still_missing(tmp_path):
     assert any("recon_tables.xlsx" in g for g in gaps(ledger, "Done."))
 
 
+@pytest.mark.parametrize("ticks_after_creation", [0, 1])
+def test_a_file_made_in_the_runs_first_clock_tick_is_not_the_runs(
+    tmp_path, monkeypatch, ticks_after_creation
+):
+    """Windows' Python 3.12 clock ticks every 15.6 ms, as NTFS's does."""
+    import types
+
+    import gaia.agents.base.completion as completion
+
+    kx = tmp_path / "kx"
+    kx.mkdir()
+    (kx / "reconciliation.md").write_text("# Recon\n")
+    old = kx / "recon_tables.xlsx"
+    old.write_bytes(b"PK")
+    stamp = old.stat().st_mtime - 3600
+    os.utime(old, (stamp, stamp))
+    tick = old.stat().st_ctime_ns + ticks_after_creation * 15_625_000
+    monkeypatch.setattr(completion, "time", types.SimpleNamespace(time_ns=lambda: tick))
+    query = f"Read {kx / 'reconciliation.md'} and make recon_tables.xlsx from it."
+    ledger = CompletionEvidence(query, str(tmp_path))
+
+    _script_run(ledger, tmp_path / "build.py", lambda: None)
+
+    assert any("recon_tables.xlsx" in g for g in gaps(ledger, "Done."))
+
+
+def test_a_copy_the_run_makes_a_tick_in_is_still_the_runs(tmp_path, monkeypatch):
+    """A copy keeps its source's old mtime; its creation tick is the evidence."""
+    import shutil
+    import types
+
+    import gaia.agents.base.completion as completion
+
+    kx = tmp_path / "kx"
+    kx.mkdir()
+    source = kx / "reconciliation.md"
+    source.write_text("# Recon\n")
+    stamp = source.stat().st_mtime - 3600
+    os.utime(source, (stamp, stamp))
+    clock = {"now": time.time_ns()}
+    monkeypatch.setattr(
+        completion, "time", types.SimpleNamespace(time_ns=lambda: clock["now"])
+    )
+    query = f"Read {source} and make recon_tables.xlsx from it."
+    ledger = CompletionEvidence(query, str(tmp_path))
+    xlsx = kx / "recon_tables.xlsx"
+
+    def copy_a_tick_later():
+        shutil.copy2(source, xlsx)
+        created = xlsx.stat().st_ctime_ns
+        # The run's start is read one tick before the copy's creation stamp.
+        ledger._exec_started = created - 15_625_000 - completion._FILE_CLOCK_SLACK_NS
+        clock["now"] = created + 15_625_000
+
+    _script_run(ledger, tmp_path / "build.py", copy_a_tick_later)
+
+    assert not [g for g in gaps(ledger, "Done.") if "recon_tables" in g]
+
+
 _RUN_START_NS = 10**18
 _MS = 1_000_000
 _HOUR_AGO = _RUN_START_NS - 3600 * 1000 * _MS
@@ -1588,6 +1647,9 @@ _HOUR_AGO = _RUN_START_NS - 3600 * 1000 * _MS
     [
         # Created 10 ms before the run: inside the slack, which is mtime's alone.
         (_HOUR_AGO, _RUN_START_NS - 10 * _MS, False),
+        # Stamped in the run's first clock tick: on a coarse clock, made before it.
+        (_HOUR_AGO, _RUN_START_NS, False),
+        (_HOUR_AGO, _RUN_START_NS + 1, True),
         (_RUN_START_NS - 10 * _MS, _HOUR_AGO, True),
         (_HOUR_AGO, _RUN_START_NS + 10 * _MS, True),
     ],

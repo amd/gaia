@@ -61,6 +61,7 @@ from gaia.logger import get_logger
 from gaia.rag.arabic_text import extract_pdf_page_text, normalize_arabic_pdf_text
 from gaia.rag.html_utils import HTML_EXTENSIONS, extract_html_text
 from gaia.rag.normalize import search_form
+from gaia.rag.pdf_tables import looks_tabular, tables_as_rows
 from gaia.rag.pdf_utils import pdf_parse_limits
 from gaia.rag.text_units import (
     SENTENCE_BREAK,
@@ -1829,6 +1830,20 @@ class RAGSDK:
         ext = Path(file_path).suffix.lower()
         return ext if ext else ".unknown"
 
+    def _page_tables_as_rows(self, page, page_num: int, text: str, header):
+        """``text`` with the page's tables as header-named rows (see pdf_tables)."""
+        try:
+            layout = page.extract_text(extraction_mode="layout") or ""
+        except Exception as e:  # pylint: disable=broad-exception-caught
+            # pypdf's layout mode fails on some fonts; the plain text is still whole.
+            self.log.warning(
+                "Page %d: table rows not rebuilt, layout extraction failed: %s",
+                page_num,
+                e,
+            )
+            return text, header
+        return tables_as_rows(text, layout, header)
+
     def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
         """:meth:`_read_pdf_text` under :func:`pdf_parse_limits`.
 
@@ -1996,6 +2011,7 @@ class RAGSDK:
             unavailable = self._vision_unavailable(vlm_available)
             degraded_pages = []
             page_warnings = {}
+            table_header = None
             attempts = _VisionAttempts(
                 file_name, vlm.vlm_model if vlm else self.config.vlm_model
             )
@@ -2006,6 +2022,10 @@ class RAGSDK:
 
                 # Step 1: Extract text with pypdf
                 pypdf_text = normalize_arabic_pdf_text(extract_pdf_page_text(page))
+                if looks_tabular(pypdf_text):
+                    pypdf_text, table_header = self._page_tables_as_rows(
+                        page, i, pypdf_text, table_header
+                    )
 
                 # Step 2: Check for images
                 has_imgs = False
