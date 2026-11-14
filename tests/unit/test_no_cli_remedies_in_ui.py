@@ -194,6 +194,7 @@ def test_app_hints_name_no_command(name):
     [
         (surface_hints.TUI_SETUP_HINT, "gaia init"),
         (surface_hints.TUI_GATEWAY_KEY_HINT, "gaia gateway auth"),
+        (surface_hints.TUI_GATEWAY_INSTALL_HINT, "gaia gateway install"),
         (surface_hints.APP_RESTART_HINT, "gaia daemon status"),
         (surface_hints.APP_SERVICE_DOWN_HINT, "gaia daemon start"),
     ],
