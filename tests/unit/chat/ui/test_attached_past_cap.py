@@ -415,7 +415,7 @@ def test_a_stop_right_after_a_push_out_reports_the_pushed_out_document(books):
     assert "1 more not loaded" in headline
     assert "Not loaded: book_0.txt." in headline
     assert "(then pushed out to fit the index)" in text
-    assert "holds at most 25 passages at once" in headline
+    assert headline.count("holds at most 25 passages at once") == 1
     assert "They load with your next message" not in headline
     assert ".." not in headline
 

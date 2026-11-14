@@ -1845,13 +1845,14 @@ def _index_rag_with_progress(
             unloaded = missed
     if left:
         headline = f"Stopped: {left} of {n} {label} not loaded."
-        if agent.rag.is_full():
+        if not agent.rag.is_full():
+            headline += " They load with your next message."
+        elif not unloaded:
+            # With a pushed-out document, not_loaded_summary supplies the limit.
             headline += (
                 f" {index_limit(agent.rag).capitalize()}; they load only when "
                 "you ask about one by name."
             )
-        else:
-            headline += " They load with your next message."
     else:
         headline = f"Indexed {n - len(unloaded)} {label} in {idx_elapsed}s"
     if unloaded:
