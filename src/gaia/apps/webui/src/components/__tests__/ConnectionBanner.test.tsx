@@ -106,7 +106,7 @@ describe('the model server is down', () => {
     it('never invents a start command the backend did not give', () => {
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(screen.getByText(/The model server isn't running/)).toBeInTheDocument();
+        expect(screen.getByText(/The model server isn't answering/)).toBeInTheDocument();
         expect(container.querySelector('code')).toBeNull();
         expect(container).not.toHaveTextContent('lemonade-server serve');
     });
@@ -115,7 +115,7 @@ describe('the model server is down', () => {
         const install = 'Lemonade Server is not installed. Run `gaia init` to install it, or set LEMONADE_SERVER_PATH to an existing install.';
         useChatStore.setState({ systemStatus: { lemonade_running: false, start_command: null, start_instruction: install } as SystemStatus });
         const { container } = render(<ConnectionBanner />);
-        expect(container).toHaveTextContent("The model server isn't running. Set up models on this PC");
+        expect(container).toHaveTextContent("The model server isn't answering. Set up models on this PC");
         expect(container).not.toHaveTextContent('gaia init');
         expect(container).not.toHaveTextContent('stopped');
     });
@@ -143,14 +143,13 @@ describe('the model server is down', () => {
         expect(container).toHaveTextContent("The model server isn't answering.");
         expect(container).not.toHaveTextContent('Lemonade');
         expect(container).toHaveTextContent('may be busy');
-        expect(container).not.toHaveTextContent("isn't running");
         expect(container).toHaveTextContent('If it stays this way, restart it:');
         expect(container.querySelector('code')?.textContent).toBe('/usr/bin/lemond');
     });
 
     it.each([
         ['hung', { lemonade_error: 'Lemonade health query failed' }, 'خادم النماذج لا يستجيب', 'فأعد تشغيله'],
-        ['stopped', {}, 'خادم النماذج لا يعمل', 'لتشغيله يدويًا'],
+        ['stopped', {}, 'خادم النماذج لا يستجيب', 'لتشغيله يدويًا'],
     ])('reads in Arabic when the model server is %s, the command kept left to right', (_, extra, message, hint) => {
         useChatStore.setState({ locale: 'ar', systemStatus: {
             lemonade_running: false, start_command: '/usr/bin/lemond', ...extra,

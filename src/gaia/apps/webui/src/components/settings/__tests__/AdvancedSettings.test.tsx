@@ -162,6 +162,7 @@ describe('AdvancedSettings', () => {
 
     it('offers setup, not waiting, when no model server is installed', async () => {
         const notInstalled = status({
+            initialized: false,
             lemonade_running: false, model_loaded: null, start_command: 'gaia init',
             start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
         });
@@ -173,12 +174,41 @@ describe('AdvancedSettings', () => {
         render(<AdvancedSettings />);
 
         expect(await screen.findByText('Not Installed')).toBeInTheDocument();
-        expect(screen.getByText('Set it up to run models on this PC. Cloud providers still work.')).toBeInTheDocument();
+        expect(screen.getByText('GAIA needs it for every chat, cloud ones too. Setup installs it for you.')).toBeInTheDocument();
         expect(screen.queryByText(/normally starts on its own/)).not.toBeInTheDocument();
         // The first sits on the status card; the closed server section carries another.
         fireEvent.click(screen.getAllByRole('button', { name: 'Set up local models' })[0]);
         expect(opened).toHaveBeenCalledOnce();
         window.removeEventListener('gaia:set-up-local', opened);
+    });
+
+    it('a server the user chose that is not answering says so, and never that cloud chats still work', async () => {
+        const down = status({
+            lemonade_running: false, lemonade_probe: 'down', model_loaded: null, start_command: null,
+            start_instruction: "GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.",
+        });
+        mockedApi.getSystemStatus.mockResolvedValue(down);
+        useChatStore.getState().setSystemStatus(down);
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Not answering')).toBeInTheDocument();
+        expect(screen.queryByText('Not Installed')).not.toBeInTheDocument();
+        expect(screen.queryByText(/Cloud providers still work/)).not.toBeInTheDocument();
+        expect(screen.getByText("GAIA doesn't run this model server, so it can't start it. Start it the way you usually do.")).toBeInTheDocument();
+        expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+    });
+
+    it('a set-up PC whose server was removed still offers setup', async () => {
+        const removed = status({
+            initialized: true, lemonade_running: false, model_loaded: null, start_command: null,
+            start_instruction: 'Lemonade Server is not installed. Run `gaia init` to install it.',
+        });
+        mockedApi.getSystemStatus.mockResolvedValue(removed);
+        useChatStore.getState().setSystemStatus(removed);
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Not Installed')).toBeInTheDocument();
+        expect(screen.getAllByRole('button', { name: 'Set up local models' }).length).toBeGreaterThan(0);
     });
 
     it('keeps a stopped server that is installed on its own start hint, with no setup button', async () => {
@@ -189,8 +219,32 @@ describe('AdvancedSettings', () => {
         render(<AdvancedSettings />);
 
         expect(await screen.findByText('Start Lemonade from the tray icon.')).toBeInTheDocument();
-        expect(screen.getByText('Not Running')).toBeInTheDocument();
+        expect(screen.getByText('Not answering')).toBeInTheDocument();
         expect(screen.queryByRole('button', { name: 'Set up local models' })).not.toBeInTheDocument();
+    });
+
+    it("GAIA's own server that is not answering says it starts on its own, with no command", async () => {
+        // The backend sends no start hint for the server GAIA runs.
+        const down = status({
+            lemonade_running: false, lemonade_probe: 'down', model_loaded: null,
+            start_command: null, start_instruction: null,
+        });
+        mockedApi.getSystemStatus.mockResolvedValue(down);
+        useChatStore.getState().setSystemStatus(down);
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('Not answering')).toBeInTheDocument();
+        expect(screen.getByText('Chats wait until it is back, cloud ones too. It normally starts on its own.')).toBeInTheDocument();
+        expect(screen.getByText('It loads once the model server is back.')).toBeInTheDocument();
+        expect(screen.queryByText(/first message/)).not.toBeInTheDocument();
+        expect(document.body.textContent).not.toMatch(/gaia lemonade|run:/i);
+    });
+
+    it('says a model loads with the first message only while the server answers', async () => {
+        mockedApi.getSystemStatus.mockResolvedValue(status({ model_loaded: null }));
+        render(<AdvancedSettings />);
+
+        expect(await screen.findByText('None loaded yet — it loads with the first message.')).toBeInTheDocument();
     });
 
     it('clearing the custom model ID leaves the field empty and re-reads the model in use', async () => {

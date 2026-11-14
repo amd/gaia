@@ -771,7 +771,8 @@ class TestSidecarHTTPErrorDetail:
         )
         assert "gaia " not in agent_errors[0]["content"]
 
-    def test_a_detail_that_names_the_setup_repair_gains_no_hint(self):
+    def test_a_server_that_could_not_start_gets_the_outage_wording(self):
+        """Its raw reason goes to the log; the daemon starts it again on resend."""
         from gaia.llm.surface_hints import AGENT_UI_SETUP_HINT
 
         handler = _FakeHandler()
@@ -779,7 +780,15 @@ class TestSidecarHTTPErrorDetail:
             "GAIA's AI engine couldn't start: lemond timed out. Sending the "
             f"message again won't help until it is repaired. {AGENT_UI_SETUP_HINT}"
         )
-        self._assert_left_alone(detail)
+        proxy = _ScriptedProxy(
+            lambda: _RaisingIterator(
+                SidecarHTTPError(503, detail, path="/v1/gaia/query")
+            )
+        )
+        relay.relay_query(handler, proxy, query="q", context=[])
+        agent_errors = [e for e in handler.events if e["type"] == "agent_error"]
+        assert agent_errors[0]["content"] == relay.ENGINE_START_FAILED_MESSAGE
+        assert "lemond" not in agent_errors[0]["content"]
 
     def test_a_detail_that_already_says_to_resend_gains_no_hint(self):
         self._assert_left_alone(

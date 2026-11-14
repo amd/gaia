@@ -44,6 +44,21 @@ describe('SetupSettings', () => {
         expect(screen.queryByText(/Qwen3\.6/)).toBeNull();
     });
 
+    it('says the model server is not answering instead of Ready while it is down', async () => {
+        useModelStore.setState({
+            active: {
+                provider: 'fireworks', model: 'fireworks.deepseek-v4p1-flash', display_name: 'deepseek-v4p1-flash',
+                label: 'deepseek-v4p1-flash · Fireworks AI', remote: true, is_default: false,
+            } as ActiveModel,
+        });
+        useChatStore.getState().setSystemStatus({ lemonade_running: false, lemonade_probe: 'down', initialized: true } as never);
+        render(<SetupSettings />);
+        expect(await screen.findByText("The model server isn't answering")).toBeTruthy();
+        expect(screen.queryByText('Ready')).toBeNull();
+        expect(screen.queryByText(/^Running /)).toBeNull();
+        useChatStore.getState().setSystemStatus(null);
+    });
+
     it('falls back to the planned model before the active model is known', async () => {
         useModelStore.setState({ active: null });
         render(<SetupSettings />);

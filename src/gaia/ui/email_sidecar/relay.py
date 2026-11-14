@@ -88,6 +88,14 @@ LEMONADE_CONNECTION_HINT = EMAIL_PROFILE.lemonade_hint
 #: stream ends with no terminal event (``gaia.daemon.relay``).
 _DAEMON_RELAY_SOURCE = "daemon_relay"
 
+#: GAIA's own model server failing to start, in the outage bar's words. The
+#: daemon starts it again on the next message, so that comes first.
+ENGINE_START_FAILED_MESSAGE = (
+    "The model server isn't answering, so GAIA can't reply yet. It normally "
+    "starts again on its own, so send your message again in a moment. If it "
+    "keeps happening, open Settings > Setup and press Run setup again."
+)
+
 #: Connection/timeout-shaped fragments of requests/urllib3 error reprs.
 #: Deliberately narrow: a non-match passes through untouched.
 _CONNECTION_SHAPED_RE = re.compile(
@@ -136,7 +144,20 @@ def _augment_error_detail(detail: str, profile: RelayProfile = EMAIL_PROFILE) ->
     """Append (never substitute) an actionable hint to connection-shaped
     error text — boundary translation, not a fallback: the original detail
     is preserved verbatim at the front. Text that already names its next
-    step is left alone, so the user never reads two versions of it."""
+    step is left alone, so the user never reads two versions of it.
+
+    GAIA's own server failing to start is the exception: its reason quotes raw
+    server log lines, so the chat gets the outage wording and the log the rest.
+    """
+    from gaia.llm.providers.lemonade import LemonadeEngineStartError
+
+    if detail.startswith(LemonadeEngineStartError.headline):
+        logger.warning(
+            "%s relay: GAIA's model server could not start: %s",
+            profile.agent_id,
+            detail,
+        )
+        return ENGINE_START_FAILED_MESSAGE
     if (
         profile.lemonade_hint
         and not _ALREADY_ADVISED_RE.search(detail)
