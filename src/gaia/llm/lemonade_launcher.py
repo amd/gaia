@@ -362,11 +362,10 @@ def describe_start_hint(ctx_size: Optional[int] = None) -> StartHint:
     context changes also return manual configuration steps.
     """
     if gaia_runs_lemonade():
+        from gaia.llm.surface_hints import CLI_OWN_SERVER_START_HINT
+
         return StartHint(
-            instruction=(
-                "GAIA starts its Lemonade Server when it needs it. To start it "
-                "now, run: gaia lemonade embedded start"
-            ),
+            instruction=CLI_OWN_SERVER_START_HINT,
             command="gaia lemonade embedded start",
         )
 

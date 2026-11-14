@@ -713,7 +713,8 @@ def _start_failure(exc: BaseException, surface: str) -> HTTPException:
     typed = model_server_failure(exc)
     if typed is None:
         return HTTPException(
-            status_code=500, detail=f"Failed to start the query run: {exc}"
+            status_code=500,
+            detail=surface_wording(f"Failed to start the query run: {exc}", surface),
         )
     logger.warning("%s /query could not start: %s", AGENT_ID, exc)
     # Not the caller's fault and not a bug: the model server is unavailable.

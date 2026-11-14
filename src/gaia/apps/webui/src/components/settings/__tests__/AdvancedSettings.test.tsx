@@ -266,6 +266,23 @@ describe('AdvancedSettings', () => {
             expect(mockedApi.updateSettings).not.toHaveBeenCalled();
         });
 
+        it('offers no Load for a saved ID the model server does not list', async () => {
+            mockedApi.getSystemStatus.mockResolvedValue(status({
+                default_model_is_cloud: false, model_loaded: 'Qwen3-4B-GGUF', model_device: 'gpu',
+                default_model_name: 'no-such-model-xyz-123', model_labels: null,
+            }));
+            mockedApi.getSettings.mockResolvedValue({
+                custom_model: 'no-such-model-xyz-123',
+                model_status: { found: false, checked: true, downloaded: false, loaded: false },
+                dynamic_tools: false, dynamic_tools_locked: false,
+            } as never);
+            render(<AdvancedSettings />);
+
+            expect(await screen.findByText(/the model server doesn't list “no-such-model-xyz-123”/)).toBeInTheDocument();
+            expect(screen.queryByText('Wrong model loaded.')).not.toBeInTheDocument();
+            expect(screen.queryByRole('button', { name: 'Load model' })).not.toBeInTheDocument();
+        });
+
         it('opens with no note on a saved ID the model server lists', async () => {
             mockedApi.getSystemStatus.mockResolvedValue(status({}));
             mockedApi.getSettings.mockResolvedValue({
