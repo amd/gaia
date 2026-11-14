@@ -319,7 +319,9 @@ with a note saying how many characters are missing, so its answer stays in view.
 `documents` (contract ≥ 2.16) carries the absolute paths of the files the user
 attached to the conversation. Send the whole set on every turn. Before the turn
 runs, the agent indexes the ones it has not indexed yet, so a file attached
-mid-conversation is read on the next turn. Each path is granted as that exact
+mid-conversation is read on the next turn, and drops from the session's index
+any file an earlier turn sent that this one leaves out, so a detached or deleted
+file is no longer searched. Send an empty list when none are attached. Each path is granted as that exact
 file, never its folder. A relative path is a `422`. A missing file, a folder, or
 a secret the path policy refuses is reported as not indexed in the turn's
 `index_documents` step, and the turn still runs. Pre-2.16 binaries `422` the
@@ -543,8 +545,9 @@ carries none, and older binaries never send it, so read it only when present.
 A request without `turns` does not wait for timings: its `final` carries them
 only when the loop had already returned.
 
-A `final` with `failed: true` ends a turn a model call broke; its `answer` says
-what was and wasn't done. When the cause is one a front-end can fix, `failure`
+A `final` with `failed: true` ends a turn that did not do what was asked: a
+model call broke, or a confirmation-gated tool was refused on a run nobody can
+answer (§8). Its `answer` says what was and wasn't done. When the cause is one a front-end can fix, `failure`
 names it. `"model_server_down"` means the local model server took no
 connection. Cloud models go through that server too, so the provider was never
 reached; the turn fails at once instead of retrying, and its `answer` names the
