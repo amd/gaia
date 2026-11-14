@@ -413,6 +413,23 @@ def _widen_empty_scopes(
     return sorted(union)
 
 
+# Providers whose missing OAuth client was logged; the list is polled.
+_unconfigured_logged: set = set()
+
+
+def _log_unconfigured(provider_ref: str, error: Exception) -> None:
+    """One INFO line per provider per run; the full setup text goes to DEBUG."""
+    if provider_ref in _unconfigured_logged:
+        return
+    _unconfigured_logged.add(provider_ref)
+    logger.info(
+        "connectors: provider %s has no OAuth client set up, so it cannot "
+        "connect until one is",
+        provider_ref,
+    )
+    logger.debug("connectors: provider %s not configured: %s", provider_ref, error)
+
+
 def _connector_summary(connector_id: str) -> Dict[str, Any]:
     """Build a summary dict for one connector: spec fields + live state.
 
@@ -456,7 +473,7 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
             get_provider(provider_ref)
         except ConfigurationError as e:
             configurable = False
-            logger.info("connectors: provider %s not configured: %s", provider_ref, e)
+            _log_unconfigured(provider_ref, e)
             _pref = provider_ref.upper()
             config_error = (
                 f"OAuth credentials for {provider_ref!r} are not configured. "

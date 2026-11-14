@@ -387,7 +387,7 @@ describe('a private new chat', () => {
             id: 'sess-new-0001', title: 'New Task', message_count: 0, agent_type: 'gaia', private: !!data?.private,
         }));
         render(<App />);
-        const chip = await screen.findByRole('button', { name: 'Memory for this chat: Memory on' });
+        const chip = await screen.findByRole('button', { name: 'Memory for this chat: Remember across chats: on' });
         await userEvent.click(chip);
         await userEvent.click(screen.getByRole('button', { name: /Private chat/ }));
         expect(chip).toHaveAccessibleName('Memory for this chat: Private');

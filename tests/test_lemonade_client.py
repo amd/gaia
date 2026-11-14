@@ -11,6 +11,7 @@ import os
 import sys
 import unittest
 import uuid
+from urllib.parse import urlparse
 
 import pytest
 
@@ -26,10 +27,23 @@ TEST_MODEL = os.environ.get("GAIA_TEST_MODEL", "Gemma-4-E4B-it-GGUF")
 # A thinking model (CI's Qwen3-0.6B) spends a short token cap on reasoning.
 NO_THINKING = {"enable_thinking": False}
 
-HOST = "localhost"
-# Respect LEMONADE_PORT env var so CI can override for non-default setups.
-# Default 13305 matches C++ server / lemonade-server v10.1.0+ (also what Linux CI uses).
-PORT = int(os.environ.get("LEMONADE_PORT", 13305))
+
+def _server_address():
+    """LEMONADE_BASE_URL first, so a run aimed at an unused port never hits 13305."""
+    base_url = os.environ.get("LEMONADE_BASE_URL", "").strip()
+    if base_url:
+        parsed = urlparse(base_url)
+        if not parsed.hostname or parsed.port is None:
+            raise RuntimeError(
+                f"LEMONADE_BASE_URL={base_url!r} must name a host and a port, "
+                "e.g. http://127.0.0.1:13305/api/v1. Fix or unset it before "
+                "running tests/test_lemonade_client.py."
+            )
+        return parsed.hostname, parsed.port
+    return "localhost", int(os.environ.get("LEMONADE_PORT", 13305))
+
+
+HOST, PORT = _server_address()
 API_BASE = f"http://{HOST}:{PORT}/api/v1"
 
 # A small embedding GGUF that no built-in model points at, so registering it
