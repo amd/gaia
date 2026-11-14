@@ -3,6 +3,8 @@
 
 """Sidebar chat search: finds chats by what was said, not just their title."""
 
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -236,3 +238,52 @@ def test_snippet_shows_words_not_markdown_syntax():
         "match": "Friday",
         "after": ". First Second",
     }
+
+
+def _fast_snippet(text, needle):
+    started = time.perf_counter()
+    s = snippet(text, needle)
+    assert time.perf_counter() - started < 1.0
+    return s
+
+
+def test_snippet_of_a_huge_minified_line_is_fast():
+    line = "var a=b*c;x=y*z;" * 40_000 + "needle()" + "q=r*s;" * 70_000
+    assert len(line) > 1_000_000
+    s = _fast_snippet(line, "needle")
+    assert s["match"] == "needle"
+    assert s["before"].startswith("…") and s["after"].endswith("…")
+
+    accented = "é=*_;" * 200_000 + "Résumé()" + "q=r*s;" * 10_000
+    assert _fast_snippet(accented, "resume")["match"] == "Résumé"
+
+    blob = "QUJD" * 262_144 + " needle"
+    assert _fast_snippet(blob, "needle")["match"] == "needle"
+
+
+@pytest.mark.parametrize(
+    "junk",
+    [
+        "\n" * 100_000,  # blank lines: cubic in the old table-rule regex
+        "*a" * 50_000,  # unclosed emphasis on one line
+        "[" * 100_000,  # unclosed link text
+        " " * 100_000 + "|",  # padding around a table pipe
+    ],
+    ids=["blank-lines", "emphasis", "link", "pipe"],
+)
+def test_snippet_of_pathological_markdown_is_fast(junk):
+    text = junk + " the **deadline** is here " + junk
+    assert len(text) >= 200_000
+    s = _fast_snippet(text, "deadline")
+    assert s["match"] == "deadline"
+
+
+def test_long_message_snippet_is_cut_around_the_hit_in_plain_words():
+    filler = "\n".join(f"- line {i} of **filler** text" for i in range(400))
+    text = filler + "\n| Item | Qty |\n|---|---|\n| Résumé | 2 |\n" + filler
+    s = snippet(text, "resume")
+    assert s["match"] == "Résumé"
+    assert s["before"].startswith("…") and s["after"].endswith("…")
+    assert "|" not in s["before"] + s["after"]
+    assert "**" not in s["before"] + s["after"]
+    assert snippet(text, "zzz") is None
