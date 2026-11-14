@@ -191,10 +191,16 @@ gets them subtly wrong, while an LLM writing SQL against them does not.
 ### source-watch
 
 The generic watcher, and the template the next two are forked from: fetch a
-source, extract items, apply a match, suppress anything already reported via
-memory, and speak up only when there is news.
+source, extract items, apply a match, suppress anything already reported, and
+speak up only when there is news. Items reported earlier in the same
+conversation count as seen, so a re-check of an unchanged page says "nothing
+new". The report comes before any memory write, and the watcher saves only the
+reported items' identifiers, only when you ask it to remember or keep track of
+them — memory refuses page text you didn't ask to save. A save that fails or is
+refused never replaces the report.
 
-- **Demonstrates** — the watcher shape; memory used for de-duplication.
+- **Demonstrates** — the watcher shape; de-duplication within a conversation
+  and, when you ask, across conversations through memory.
 - **Consumes** — `fetch_page`, `recall`, `remember`.
 - **Configure** — a source URL, a match condition, and a memory key.
 - **Limit** — **runs when you invoke it.** GAIA's scheduler runs recurring

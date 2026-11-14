@@ -797,6 +797,99 @@ def test_price_watch_has_no_unconditional_pre_fetch_save(stale_rule: str):
     assert stale_rule not in body
 
 
+# ----------------------------------------------------------------------
+# source-watch step order
+#
+# Its record step saved page text memory refuses unasked, so nothing was
+# recalled and an unchanged page was re-listed as news.
+# ----------------------------------------------------------------------
+
+
+def _source_watch_steps() -> tuple[str, list[str], dict[str, str]]:
+    body = parse_skill_file(STARTER_ROOT / "source-watch").body
+    procedure = re.search(r"^## Procedure\b(.+?)(?=^## )", body, re.M | re.S)
+    assert procedure, "source-watch lost its Procedure section"
+    text = procedure.group(1)
+    starts = list(re.finditer(r"^(\d+)\. \*\*(.+?)\*\*", text, re.M | re.S))
+    titles = [" ".join(m.group(2).split()).lower() for m in starts]
+    assert [int(m.group(1)) for m in starts] == list(range(1, len(starts) + 1))
+    steps = {}
+    for i, m in enumerate(starts):
+        end = starts[i + 1].start() if i + 1 < len(starts) else len(text)
+        steps[titles[i]] = " ".join(text[m.start() : end].split())
+    return text, titles, steps
+
+
+def _step(steps: dict[str, str], key: str) -> str:
+    return next(body for title, body in steps.items() if key in title)
+
+
+def test_source_watch_recalls_fetches_reports_then_saves():
+    text, titles, _ = _source_watch_steps()
+    order = [
+        next(i for i, t in enumerate(titles) if key in t)
+        for key in ("recall what", "fetch", "extract", "match", "report or", "record")
+    ]
+
+    assert order == sorted(order), f"steps out of order: {titles}"
+    assert text.index("recall(") < text.index("fetch_page(")
+    assert text.index("fetch_page(") < text.index("remember(")
+    assert text.count("remember(") == 1, "the procedure writes memory once"
+    assert "Report before any memory write" in " ".join(text.split())
+
+
+def test_source_watch_counts_this_conversations_reports_as_seen():
+    """Memory can hold nothing; a re-check in the same chat must still dedupe."""
+    _, _, steps = _source_watch_steps()
+    recall = _step(steps, "recall what")
+
+    assert "earlier in this conversation" in recall
+    assert "even when memory holds nothing" in recall
+    assert '"nothing new"' in _step(steps, "report or")
+
+
+def test_source_watch_saves_only_identifiers_and_only_when_asked():
+    _, _, steps = _source_watch_steps()
+    record = _step(steps, "record")
+    call = re.search(r"remember\(fact=\"([^\"]+)\"", record)
+
+    assert "only if the user asked you to remember or keep track" in record
+    assert '"watch" or "check" alone is not that ask' in record
+    assert call and call.group(1) == "<memory key>: <identifier>"
+    assert "summary" not in call.group(1)
+
+
+def test_source_watch_a_refused_save_never_replaces_the_report():
+    body = " ".join(parse_skill_file(STARTER_ROOT / "source-watch").body.split())
+
+    assert "never replaces the report" in body
+    assert "Give the report anyway" in body
+    assert "not saved" in body
+    assert "Do not retry the save or stop to ask about it" in body
+
+
+@pytest.mark.parametrize(
+    "stale_rule",
+    ["<one-line summary>", 'say "no new matches"', "Step 1 and step 6 need memory"],
+)
+def test_source_watch_drops_the_unconditional_summary_save(stale_rule: str):
+    body = parse_skill_file(STARTER_ROOT / "source-watch").body
+    assert stale_rule not in body
+
+
+def test_source_watch_guide_matches_the_skill():
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = guide[guide.index("### source-watch") :]
+    section = " ".join(section[: section.index("\n### ")].split())
+
+    assert "same conversation count as seen" in section
+    assert "before any memory write" in section
+    assert "never replaces the report" in section
+    assert "suppress anything already reported via memory" not in section
+
+
 def test_the_guide_consumes_lists_match_the_manifests():
     """The guide names each skill's tools; drift makes it quietly wrong."""
     guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
