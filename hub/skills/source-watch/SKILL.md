@@ -24,13 +24,14 @@ other watcher in this pack is a fork of this one.
 
 ## Configure
 
-The user supplies these; ask for any that are missing before the first run.
+The user supplies these; ask for a missing source or match before the first
+run. Never ask for the memory key — derive it from the source.
 
 | Setting | Meaning | Example |
 |---|---|---|
 | Source | The URL to fetch | `https://example.com/releases` |
 | Match | What counts as interesting | "any version above 3.0" |
-| Memory key | Where seen items are recorded | `watch:example-releases` |
+| Memory key | Optional. Where seen items are recorded, only when the user asks you to keep track across chats | `watch:example-releases` |
 
 ## Procedure
 

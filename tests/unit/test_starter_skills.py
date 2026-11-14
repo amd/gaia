@@ -859,6 +859,24 @@ def test_source_watch_saves_only_identifiers_and_only_when_asked():
     assert "summary" not in call.group(1)
 
 
+def test_source_watch_never_asks_for_the_memory_key_up_front():
+    """A plain check uses no key; asking for one stalls the first fetch."""
+    body = parse_skill_file(STARTER_ROOT / "source-watch").body
+    configure = body[body.index("## Configure") : body.index("## Procedure")]
+    key_row = next(line for line in configure.splitlines() if "Memory key" in line)
+
+    assert "ask for any that are missing" not in configure
+    assert "Never ask for the memory key" in configure
+    assert "Optional" in key_row and "keep track" in key_row
+
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = guide[guide.index("### source-watch") :]
+    section = " ".join(section[: section.index("\n### ")].split())
+    assert "A memory key is optional" in section
+
+
 def test_source_watch_a_refused_save_never_replaces_the_report():
     body = " ".join(parse_skill_file(STARTER_ROOT / "source-watch").body.split())
 

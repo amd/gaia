@@ -202,7 +202,8 @@ refused never replaces the report.
 - **Demonstrates** — the watcher shape; de-duplication within a conversation
   and, when you ask, across conversations through memory.
 - **Consumes** — `fetch_page`, `recall`, `remember`.
-- **Configure** — a source URL, a match condition, and a memory key.
+- **Configure** — a source URL and a match condition. A memory key is optional,
+  derived from the source, and used only when you ask it to keep track.
 - **Limit** — **runs when you invoke it.** GAIA's scheduler runs recurring
   *prompts* but cannot yet run a *skill* on a cron; `gaia schedule add --skill`
   is rejected at creation time.
