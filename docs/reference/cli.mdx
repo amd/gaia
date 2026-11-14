@@ -2020,8 +2020,11 @@ commands GAIA otherwise refuses outright (a credential print such as
 Three things hold in every mode, full access included. A shell command or
 Python code that reads a file the file tools refuse (`.env`, a private key,
 `.npmrc`, `secrets.json`) is refused. Writing one, copying over one, or naming
-one as a search pattern still runs, and so does a recursive search such as
-`grep -rn TODO .`, with any lines from those files hidden in its output. Tokens
+one as a search pattern still runs. Credential files never take part in a
+recursive search: `grep -r`, `rg` and `git grep` run with them left out, so
+`grep -rn TODO .` still searches everything else, while a search that can't
+skip them (`findstr /s`, `Select-String` over `Get-ChildItem -Recurse`, a
+search inside a `bash -c` script) is refused when the folder holds one. Tokens
 in shell and Python output, such as the one in a `git remote -v` URL, are
 masked before the model reads it. And a cloud-metadata or link-local address
 (`169.254.169.254`, `fe80::/10`, `metadata.google.internal`) the web fetcher
