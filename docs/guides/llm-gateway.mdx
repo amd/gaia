@@ -342,9 +342,10 @@ Pick the models with `gaia config`:
 
 Set a model key to `""` to go back to its default. Routing applies to the flagship
 agent's turns in new sessions; picking a model by name (`/model <id>`) ends it for
-that session. A one-off call outside a turn, such as a chat title or `gaia llm`,
-uses the cheap model. With [Local only](/reference/cli#local-only) on, a hybrid
-turn whose models are in the cloud is refused before anything is sent. To see how
+that session. Another agent, or a one-off call outside a turn such as a chat
+title or `gaia llm`, uses the cheap model. With
+[Local only](/reference/cli#local-only) on, a hybrid turn whose models are in
+the cloud is refused before anything is sent. To see how
 a set of prompts would route, run `python util/hybrid_classify_live.py "<prompt>"
 ...` from a source checkout.
 

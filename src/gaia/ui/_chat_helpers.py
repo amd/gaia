@@ -1256,6 +1256,10 @@ def _eval_provider_kwargs() -> dict:
     return {"use_claude": True, "claude_model": claude_model}
 
 
+#: The agent that routes a ``hybrid`` session per turn; see gaia.llm.hybrid.
+_HYBRID_ROUTING_AGENT = "gaia"
+
+
 def _build_create_kwargs(
     *,
     custom_model: str | None,
@@ -1263,6 +1267,7 @@ def _build_create_kwargs(
     streaming: bool = False,
     device: str | None = None,
     min_context_size: int | None = None,
+    agent_type: str | None = None,
 ) -> dict:
     """Return the kwargs dict for registry.create_agent().
 
@@ -1286,6 +1291,12 @@ def _build_create_kwargs(
     ``GAIA_EVAL_AGENT_PROVIDER=claude`` (eval-only opt-in, see
     :func:`_eval_provider_kwargs`) additionally passes ``use_claude=True`` and
     ``claude_model`` so the eval harness can run agents off-Lemonade.
+
+    A ``hybrid`` model reaches only the flagship *agent_type*, which routes
+    each turn; any other agent has no router and runs on the cheap model.
+
+    Raises:
+        ValueError: the model is ``hybrid`` and no *agent_type* was given.
     """
     suffix = " (streaming)" if streaming else ""
     kwargs: dict = {"silent_mode": not streaming, "debug": False}
@@ -1306,9 +1317,11 @@ def _build_create_kwargs(
         kwargs["min_context_size"] = min_context_size
 
     if custom_model:
+        custom_model = _agent_model(custom_model, agent_type)
         kwargs["model_id"] = custom_model
         logger.info("create_agent: custom_model override -> %s%s", custom_model, suffix)
     elif model_id and model_id != _DB_DEFAULT_MODEL:
+        model_id = _agent_model(model_id, agent_type)
         kwargs["model_id"] = model_id
         logger.info("create_agent: session-explicit model -> %s%s", model_id, suffix)
     else:
@@ -1322,6 +1335,28 @@ def _build_create_kwargs(
             suffix,
         )
     return kwargs
+
+
+def _agent_model(model_id: str, agent_type: str | None) -> str:
+    """*model_id* as *agent_type* is built on: ``hybrid`` only for the router."""
+    if not is_hybrid_model(model_id):
+        return model_id
+    if agent_type is None:
+        raise ValueError(
+            "_build_create_kwargs needs agent_type for a 'hybrid' model: only "
+            f"the '{_HYBRID_ROUTING_AGENT}' agent routes it per turn."
+        )
+    if agent_type == _HYBRID_ROUTING_AGENT:
+        return model_id
+    from gaia.llm.hybrid import start_model
+
+    cheap = start_model(model_id)
+    logger.info(
+        "create_agent: %s does not route hybrid turns; it runs on %s",
+        agent_type,
+        cheap,
+    )
+    return cheap
 
 
 def _effective_model(agent, fallback: str | None) -> str | None:
@@ -4327,6 +4362,7 @@ async def _get_chat_response(
                             model_id=model_id,
                             device=device,
                             min_context_size=device_ctx,
+                            agent_type=agent_type,
                         ),
                         **_session_agent_kwargs(
                             rag_file_paths=[],
@@ -4864,6 +4900,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     streaming=True,
                                     device=device,
                                     min_context_size=device_ctx,
+                                    agent_type=agent_type,
                                 ),
                                 **_session_agent_kwargs(
                                     rag_file_paths=[],

@@ -360,6 +360,7 @@ def _warm_new_chat_prefix(
                 streaming=True,
                 device=session["device"],
                 min_context_size=device_ctx,
+                agent_type=NEW_CHAT_AGENT,
             ),
             **chat._session_agent_kwargs(
                 rag_file_paths=[],

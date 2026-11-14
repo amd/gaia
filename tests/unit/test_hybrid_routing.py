@@ -1217,3 +1217,74 @@ def test_reset_forgets_sticky_escalation():
     router.reset()
     route = _turn(router, "Summarise the notes.")
     assert route.model == CHEAP and not route.sticky and len(client.calls) == 2
+
+
+# ── Agent UI: only the flagship is built on ``hybrid`` ───────────────────────
+
+
+@pytest.fixture
+def ui_hybrid_config(monkeypatch, tmp_path):
+    monkeypatch.setenv("GAIA_CONFIG_FILE", str(tmp_path / "config.json"))
+    monkeypatch.delenv("GAIA_EVAL_AGENT_PROVIDER", raising=False)
+    GaiaConfig(hybrid_cheap_model="amd.Cheap", hybrid_strong_model="amd.Strong").save()
+
+
+@pytest.mark.parametrize("field", ["model_id", "custom_model"])
+def test_the_flagship_agent_is_built_on_hybrid_to_route_it(ui_hybrid_config, field):
+    from gaia.ui._chat_helpers import _build_create_kwargs
+
+    kwargs = {"model_id": None, "custom_model": None, field: "hybrid"}
+    built = _build_create_kwargs(agent_type="gaia", **kwargs)
+
+    assert built["model_id"] == "hybrid"
+
+
+@pytest.mark.parametrize("agent_type", ["chat", "builder", "email", "Gaia"])
+@pytest.mark.parametrize("field", ["model_id", "custom_model"])
+@pytest.mark.parametrize("spelling", ["hybrid", " HYBRID "])
+def test_another_agent_on_a_hybrid_session_runs_on_the_cheap_model(
+    ui_hybrid_config, agent_type, field, spelling
+):
+    """It has no router, so the literal id would reach the gateway and 404."""
+    from gaia.ui._chat_helpers import _build_create_kwargs
+
+    kwargs = {"model_id": None, "custom_model": None, field: spelling}
+    built = _build_create_kwargs(agent_type=agent_type, **kwargs)
+
+    assert built["model_id"] == "amd.Cheap"
+
+
+def test_a_hybrid_build_with_no_agent_type_is_refused(ui_hybrid_config):
+    from gaia.ui._chat_helpers import _build_create_kwargs
+
+    with pytest.raises(ValueError, match="agent_type"):
+        _build_create_kwargs(custom_model=None, model_id="hybrid")
+
+
+def test_a_concrete_model_is_untouched_for_any_agent(ui_hybrid_config):
+    from gaia.ui._chat_helpers import _build_create_kwargs
+
+    for agent_type in ("gaia", "chat", None):
+        built = _build_create_kwargs(
+            custom_model=None, model_id="amd.Other", agent_type=agent_type
+        )
+        assert built["model_id"] == "amd.Other"
+
+
+def test_every_agent_ui_build_names_its_agent():
+    """A call site that forgot agent_type would refuse every hybrid session."""
+    import inspect
+    import re
+
+    from gaia.ui import _chat_helpers, warmup
+
+    for module in (_chat_helpers, warmup):
+        source = inspect.getsource(module)
+        calls = [
+            m.start()
+            for m in re.finditer(r"\*\*(?:chat\.)?_build_create_kwargs\(", source)
+        ]
+        assert calls, module.__name__
+        for start in calls:
+            call = source[start : source.index(")", start)]
+            assert "agent_type=" in call, f"{module.__name__}: {call}"
