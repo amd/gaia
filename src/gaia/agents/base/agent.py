@@ -96,6 +96,7 @@ from gaia.agents.base.deliverables import (
 from gaia.agents.base.denied_effects import (
     NETWORK,
     PATH,
+    UNATTENDED_REFUSAL,
     Denial,
     DeniedEffects,
     Effect,
@@ -192,7 +193,7 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
-from gaia.credential_shapes import redact_tool_output
+from gaia.credential_shapes import redact_file_content, redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
@@ -2396,6 +2397,32 @@ _CONTENT_ARG_NAMES = frozenset(
 )
 _WHOLE_FILE_WRITE_TOOLS = frozenset(
     {"write_file", "write_markdown_file", "write_python_file"}
+)
+# Tools whose result carries text read out of a file: reads, searches,
+# previews, document chunks, and the excerpts an edit returns.
+FILE_CONTENT_TOOLS = frozenset(
+    {
+        "read_file",
+        "read_python_file",
+        "read_markdown_file",
+        "read_tool_output",
+        "search_file_content",
+        "search_code",
+        "search_code_index",
+        "get_file_info",
+        "file_info",
+        "generate_diff",
+        "edit_file",
+        "edit_python_file",
+        "replace_function",
+        "analyze_data_file",
+        "extract_document_items",
+        "query_documents",
+        "query_specific_file",
+        "search_indexed_chunks",
+        "summarize_document",
+        "dump_document",
+    }
 )
 # Empty is a legitimate edit (it deletes), so only a stand-in is refused here.
 _REPLACEMENT_ARGS = {
@@ -8306,7 +8333,13 @@ Do NOT wrap conversational replies in JSON.
             # Shell policy refusals only: a tool's own preflight ("read it
             # first") is a step to take, not a no. And one refused command
             # shape is not the whole family — the host or file it aimed at is.
-            if ledger is not None and isinstance((tool_args or {}).get("command"), str):
+            # Nor is "nobody was here to approve it" a no.
+            unattended = isinstance(refusal, dict) and refusal.get(UNATTENDED_REFUSAL)
+            if (
+                ledger is not None
+                and not unattended
+                and isinstance((tool_args or {}).get("command"), str)
+            ):
                 ledger.record(
                     tool_name,
                     tool_args,
@@ -8463,8 +8496,12 @@ Do NOT wrap conversational replies in JSON.
                 else:
                     if denied_error == user_denial_message(tool_name):
                         denied["hint"] = DECLINED_HINT
+                    # "Nothing could ask" is not a no; anything else counts as one.
+                    unasked = getattr(self.console, "confirmation_unattended", None)
                     ledger = getattr(self, "_denied_effects", None)
-                    if ledger is not None:
+                    if ledger is not None and not (
+                        callable(unasked) and unasked(tool_name) is True
+                    ):
                         ledger.record(tool_name, tool_args, denied_error)
                 return denied
             # A call approved once runs against this record, and only once.
@@ -8597,6 +8634,9 @@ Do NOT wrap conversational replies in JSON.
             if tool_name in OUTPUT_TOOLS:
                 # Output goes into the prompt; tokens and credential-file lines must not.
                 result = redact_tool_output(result)
+            elif tool_name in FILE_CONTENT_TOOLS:
+                # Masks only what the model sees; edits refuse to write the marker back.
+                result = redact_file_content(result)
             logger.debug(f"Tool execution result: {result}")
             _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)

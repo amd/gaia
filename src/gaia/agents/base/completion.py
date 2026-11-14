@@ -313,7 +313,8 @@ def _changed_in(stamp: tuple, start: int, end: int) -> bool:
     mtime, ctime = stamp[3], stamp[4]
     if max(mtime, ctime) > end:
         return False
-    return mtime >= start or ctime >= start + _FILE_CLOCK_SLACK_NS
+    # Strictly after: a coarse clock gives a file made just before the run its tick.
+    return mtime >= start or ctime > start + _FILE_CLOCK_SLACK_NS
 
 
 def _absolute(path: str) -> bool:
