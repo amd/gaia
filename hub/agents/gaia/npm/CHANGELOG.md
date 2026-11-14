@@ -8,6 +8,19 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **More attached documents than one conversation searches.** A conversation
+  searches at most 100 documents or 10,000 passages at once. With more in
+  `documents`, the agent loads up to that limit instead of loading every one
+  and pushing earlier ones out, says in the `index_documents` step how many it left unloaded and
+  which limit it reached (the document count, or the passages a few long
+  documents fill), and never calls one of those "not attached": asking about
+  one by name loads it.
+
+- **The agent knows an MCP server it set up didn't start.** The notice the
+  user sees about MCP servers that couldn't start, couldn't load or went over
+  the tool limit now also reaches the model each turn, so asked about one it
+  says it is set up but unavailable rather than that nothing by that name
+  exists. A corrupt `mcp_servers.json` is described in plain words.
 - **A detached document is no longer searched.** A file an earlier turn sent in
   `documents` and this turn leaves out (the user detached it, or deleted it from
   the library) is dropped from the session's index, so answers stop quoting it.
@@ -256,6 +269,24 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
 ### Fixed
 
+- **A turn that stops early still writes the file you asked for.** When the
+  agent hits its step limit or keeps repeating a call, it gets one step to
+  write a requested file that doesn't exist yet, and it can only write those
+  files in that step. If the file still isn't written, the answer says so
+  instead of claiming it was. A file written that way is read back like any
+  other edit, and if it is missing, empty or no longer parses, the answer says
+  that too.
+- **A refused action is reported as refused, not as your decision.** When a
+  safety rule blocks a command, the agent says the command was refused, and a
+  refused delete still guards what it would have deleted.
+- **`gaia -p --time-limit SECONDS`** tells the agent how long the run may take,
+  so it wraps up and answers before the deadline instead of being cut off.
+- **`run_python` can check a project's own code.** Any `import gaia…` was
+  refused, so inside a GAIA checkout the agent copied code into the snippet by
+  hand and reported the copy's output as proof. Only reaching for one of its
+  tools through `gaia` (`from gaia import write_file`) is refused now, and a
+  `src/`-layout project has `src/` on the path so its modules import from the
+  checkout, not an installed copy. `execute_python_file` gets the same path.
 - **"Do not run anything, answer only with a plan" gets the plan.** The
   announced-step check sent a requested tool plan back as unfinished work, and
   the look-first check told the model to open the file the user had said not

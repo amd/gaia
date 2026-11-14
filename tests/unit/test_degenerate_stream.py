@@ -8,6 +8,7 @@ and every token reached the chat.
 
 import itertools
 import logging
+import threading
 import time
 from unittest.mock import MagicMock, patch
 
@@ -148,20 +149,27 @@ class _Chunk:
 
 
 class _Stream:
-    """An endless server stream that records how far it was read and if it closed."""
+    """An endless server stream that records how far it was read and if it closed.
 
-    def __init__(self, pieces):
+    The client reads and closes it on its stream worker thread, so the close
+    can land after the call has already raised: wait on *closed*.
+    """
+
+    def __init__(self, pieces, read_delay=0.0):
         self.pieces = pieces
+        self.read_delay = read_delay
         self.read = 0
-        self.closed = False
+        self.closed = threading.Event()
 
     def __iter__(self):
         for n, piece in enumerate(self.pieces):
+            if self.read_delay:
+                time.sleep(self.read_delay)
             self.read += 1
             yield _Chunk(n, piece)
 
     def close(self):
-        self.closed = True
+        self.closed.set()
 
 
 @pytest.fixture
@@ -184,8 +192,12 @@ _MESSAGES = [
 ]
 
 
-def test_an_endless_reserved_token_stream_is_cut_off_and_raises(client, caplog):
-    stream = _Stream(itertools.chain(["The"], itertools.repeat(NOISE)))
+# A slow read is a busy CI runner: the worker closes the stream after the call ends.
+@pytest.mark.parametrize("read_delay", [0.0, 0.01])
+def test_an_endless_reserved_token_stream_is_cut_off_and_raises(
+    client, caplog, read_delay
+):
+    stream = _Stream(itertools.chain(["The"], itertools.repeat(NOISE)), read_delay)
     shown = []
     with _serve(stream), caplog.at_level(logging.ERROR, "gaia.llm.lemonade_client"):
         with pytest.raises(ModelOutputCorruptedError) as caught:
@@ -194,7 +206,7 @@ def test_an_endless_reserved_token_stream_is_cut_off_and_raises(client, caplog):
             ):
                 shown.append(chunk["choices"][0]["delta"]["content"])
     assert shown == ["The"]
-    assert stream.closed
+    assert stream.closed.wait(timeout=10), "the server stream was never closed"
     read = stream.read
     time.sleep(0.2)
     assert stream.read == read  # the server stream stopped being read

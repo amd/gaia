@@ -66,6 +66,11 @@ from starlette.responses import StreamingResponse
 from gaia.agents.base import file_snapshots
 from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
+from gaia.agents.tools.rag_tools import (
+    _forget_evicted,
+    not_held,
+    not_loaded_summary,
+)
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.llm.surface_hints import surface_wording
@@ -204,11 +209,12 @@ class QueryRequest(_Strict):
         description=(
             "Absolute paths of the files the user attached to this conversation "
             "(contract >= 2.16). Each is granted as that exact file, never its "
-            "folder, and indexed before the turn runs. Send the full set every "
-            "turn, an empty list when none are attached: files already indexed "
-            "in a retained session are skipped, so one attached mid-conversation "
-            "is picked up on the next turn, and one sent before but left out "
-            "now is removed from the session's index."
+            "folder, and indexed before the turn runs, up to 100 documents or "
+            "10,000 passages; the rest load when the agent is asked about one. "
+            "Send the full set every turn, an empty list when none are attached: "
+            "files already indexed in a retained session are skipped, so one "
+            "attached mid-conversation is picked up on the next turn, and one "
+            "sent before but left out now is removed from the session's index."
         ),
     )
 
@@ -893,6 +899,13 @@ def _attach_refusal(agent: Any, path: str) -> str:
     return reason if blocked else ""
 
 
+def _grant_unloaded(agent: Any, documents: List[str]) -> None:
+    """Grant attached documents the full index can't hold, so one loads on request."""
+    for doc in documents:
+        if not _attach_refusal(agent, doc):
+            agent.path_validator.add_allowed_path(doc)
+
+
 def _drop_detached_documents(agent: Any, documents: List[str]) -> None:
     """Take the documents attached last turn but not this one out of the index."""
     attached = getattr(agent, "_attached_documents", set())
@@ -920,13 +933,20 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
 
     Grants each as that exact file, never its folder: the scope an in-process
     Agent UI agent gets. Files already indexed are skipped, so a retained
-    session pays only for documents attached since its last turn. A document
-    attached on an earlier turn and left out of *documents* is dropped.
+    session pays only for documents attached since its last turn. Loading
+    stops once the index is full; the rest stay attached and load on request.
+    A document attached on an earlier turn and left out of *documents* is
+    dropped.
     """
     _drop_detached_documents(agent, documents)
+    agent.attached_documents = list(documents)
     indexed = agent.indexed_files
     pending = [d for d in documents if d not in indexed]
     if not pending:
+        return
+    if agent.rag is not None and agent.rag.is_full():
+        # Already said when the index filled; the model is told every turn.
+        _grant_unloaded(agent, pending)
         return
     handler.print_tool_usage(_ATTACH_TOOL)
     handler.pretty_print_json(
@@ -936,6 +956,9 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     lines: List[str] = []
     cancel = getattr(agent, "_cancel_event", None)
     stopped = False
+    filled = False
+    unreadable: set = set()
+    loaded_line: Dict[str, int] = {}
     for position, doc in enumerate(pending):
         # Stop ends the loading here; what is left stays pending for the next turn.
         if cancel is not None and cancel.is_set():
@@ -947,6 +970,9 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             )
             stopped = True
             break
+        if rag is not None and rag.is_full():
+            filled = True
+            break
         name = Path(doc).name
         reason = (
             "document search is not available in this session"
@@ -954,6 +980,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             else _attach_refusal(agent, doc)
         )
         if reason:
+            unreadable.add(doc)
             lines.append(f"{name}: not indexed: {reason}")
             continue
         agent.path_validator.add_allowed_path(doc)
@@ -961,18 +988,32 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             result = rag.index_document(doc)
         except Exception as exc:  # reported in the visible step below
             logger.exception("Indexing attached document %s failed", doc)
+            unreadable.add(doc)
             lines.append(f"{name}: not indexed: {exc}")
             continue
         if result.get("success") and not result.get("error"):
+            filled = filled or bool(result.get("evicted"))
+            _forget_evicted(indexed, result.get("evicted", []))
             indexed.add(doc)
+            loaded_line[doc] = len(lines)
             lines.append(f"{name}: {result.get('num_chunks', 0)} chunks")
         else:
+            unreadable.add(doc)
             error = result.get("error") or "the indexer gave no reason"
             lines.append(f"{name}: not indexed: {error}")
+    # Includes one a later, long document pushed out, the last one's too.
+    unloaded = not_held(rag, pending, unreadable) if filled and not stopped else []
+    for doc in unloaded:
+        if doc in loaded_line:
+            lines[loaded_line[doc]] += " (then pushed out to fit the index)"
+    if unloaded:
+        lines.append(not_loaded_summary(rag, unloaded))
+        _grant_unloaded(agent, unloaded)
+    not_loaded = len(unloaded)
     succeeded = sum(1 for d in pending if d in indexed)
     if succeeded:
         agent.rebuild_system_prompt()
-    all_indexed = succeeded == len(pending)
+    all_indexed = succeeded == len(pending) - not_loaded
     status = "stopped" if stopped else "indexed" if all_indexed else "not all indexed"
     handler._emit(
         {
