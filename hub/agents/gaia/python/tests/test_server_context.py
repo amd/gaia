@@ -476,3 +476,83 @@ def test_a_relayed_chat_is_measured_in_whole_turns_with_its_tool_results(
     assert final["type"] == "final"
     [call] = measured
     assert call["turns"] == earlier + [newest]
+
+
+# ── final.route (contract 2.29) ──────────────────────────────────────────────
+
+_ROUTE = {"model": "amd.Claude-Strong", "reason": "find_defects", "sticky": False}
+
+
+class _Decision:
+    def __init__(self, record):
+        self.record = record
+
+    def as_record(self):
+        return dict(self.record)
+
+
+def test_the_contract_advertises_final_route():
+    major, minor = (int(x) for x in server_mod.API_VERSION.split(".")[:2])
+    assert (major, minor) >= (2, 29)
+
+
+def test_final_carries_a_hybrid_turns_route(built, measured):
+    client, state = built
+    state["result"] = {"answer": "Paris.", "route": dict(_ROUTE)}
+
+    assert _final(client)["route"] == _ROUTE
+
+
+def test_a_failed_hybrid_turn_still_names_its_route(built, measured):
+    """A failed turn that began answering is billed; its route says to whom."""
+    client, state = built
+    state["result"] = {"answer": "Gone.", "model_failed": True, "route": _ROUTE}
+
+    final = _final(client)
+
+    assert final["failed"] is True and final["route"] == _ROUTE
+
+
+def test_route_is_read_from_the_agent_while_the_run_tail_is_running(built, measured):
+    """``final`` can go out before the loop returns; the route is decided earlier."""
+    client, state = built
+
+    def routed(self, query, max_steps=None):
+        self.hybrid_router = object()
+        self.last_route = _Decision(_ROUTE)
+        return {"answer": "Paris."}
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_Agent, "process_query", routed)
+        final = _final(client)
+
+    assert final["route"] == _ROUTE
+
+
+def test_a_turn_without_routing_sends_no_route(built, measured):
+    client, _state = built
+
+    assert "route" not in _final(client)
+
+
+def test_a_stale_route_after_leaving_hybrid_is_not_sent(built, measured):
+    """``/model <id>`` ends routing; the last hybrid turn's route must not linger."""
+    client, _state = built
+
+    def named(self, query, max_steps=None):
+        self.hybrid_router = None
+        self.last_route = _Decision(_ROUTE)
+        return {"answer": "Paris."}
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(_Agent, "process_query", named)
+        final = _final(client)
+
+    assert "route" not in final
+
+
+def test_a_route_that_is_not_an_object_is_not_sent(built, measured):
+    client, state = built
+    state["result"] = {"answer": "Paris.", "route": "amd.Claude-Strong"}
+
+    assert "route" not in _final(client)

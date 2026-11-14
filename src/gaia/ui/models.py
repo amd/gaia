@@ -667,6 +667,17 @@ class AgentStepResponse(BaseModel):
     needsModel: Optional[str] = None
 
 
+class TurnRouteResponse(BaseModel):
+    """The model a ``hybrid`` turn was routed to, and why."""
+
+    model: str
+    reason: str = ""
+    # True once the classifier has failed several turns in a row.
+    degraded: bool = False
+    # A one-line warning for the user when ``degraded``; empty otherwise.
+    notice: str = ""
+
+
 class InferenceStatsResponse(BaseModel):
     """LLM inference performance metrics for a message."""
 
@@ -684,6 +695,8 @@ class InferenceStatsResponse(BaseModel):
     retried: Optional[bool] = None
     # Where the turn was answered, as the footer says it: "on your GPU", "via Fireworks AI".
     place: Optional[str] = None
+    # Set on a ``hybrid`` session's turns.
+    route: Optional[TurnRouteResponse] = None
 
 
 class TurnSummaryPage(BaseModel):

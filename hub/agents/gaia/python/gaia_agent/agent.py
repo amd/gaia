@@ -47,7 +47,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import ClassVar, FrozenSet, List, Optional, Tuple
+from typing import Any, ClassVar, FrozenSet, List, Optional, Tuple
 
 from gaia_agent.chat_agent import ChatAgent, ChatAgentConfig
 from gaia_agent.connectors import MAILBOX_REQUIREMENTS
@@ -78,6 +78,13 @@ from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 from gaia.config import GaiaConfig
 from gaia.connectors.providers.base import ConnectorRequirement
+from gaia.llm.hybrid import (
+    HybridModelError,
+    HybridRouter,
+    RouteDecision,
+    explain_route_failure,
+    is_hybrid_model,
+)
 from gaia.logger import get_logger
 from gaia.project_context import project_context_setting
 from gaia.skills.errors import SkillSetError
@@ -447,10 +454,70 @@ class GaiaAgent(
                 "[gaia] fast mode: conversational profile only — no documents, "
                 "files, web or skills this session"
             )
+        router = None
+        requested = resolved.model_id
+        if requested is None and not resolved.use_claude:
+            requested = GaiaConfig.load().default_model
+        if is_hybrid_model(requested):
+            router = HybridRouter()
+            # Built on the cheap model; each turn's route switches as needed.
+            resolved.model_id = router.settings.cheap_model
         super().__init__(config=resolved)
+        #: Picks each turn's model when the session runs on ``hybrid``.
+        self.hybrid_router: Optional[HybridRouter] = router
+        self.last_route: Optional[RouteDecision] = None
         if self.config.developer_mode:
             self.load_skill(ENGINEERING_SKILL)
             self._start_engineering_setup()
+
+    def process_query(self, user_input, *args, **kwargs):
+        """Run a turn; on ``hybrid``, first move to the model its route picks."""
+        route = self._route_turn(user_input)
+        result = super().process_query(user_input, *args, **kwargs)
+        if route is not None and isinstance(result, dict):
+            result["route"] = route.as_record()
+        return result
+
+    def _route_turn(self, user_input: Any) -> Optional[RouteDecision]:
+        router = self.hybrid_router
+        if router is None:
+            return None
+        # A turn whose route can't be decided must not report the last one's.
+        self.last_route = None
+        route = router.decide(
+            user_input if isinstance(user_input, str) else "",
+            base_url=getattr(self.chat.config, "base_url", None),
+        )
+        self.last_route = route
+        if route.notice:
+            self.console.print_warning(route.notice)
+        if route.model != self.model_id:
+            from gaia_agent.stdio import switch_concrete_model
+
+            # Raises with the model's own remedy; never runs the other model.
+            try:
+                switch_concrete_model(self, route.model)
+            except Exception as exc:
+                explained = explain_route_failure(router.settings, route.model, exc)
+                if explained is None:
+                    raise
+                raise HybridModelError(explained) from exc
+        router.ran(route)
+        return route
+
+    def reset_hybrid_route(self) -> None:
+        """A new conversation starts unescalated, routed afresh."""
+        if self.hybrid_router is not None:
+            self.hybrid_router.reset()
+        self.last_route = None
+
+    def _cloud_account_refusal(self, exc: BaseException) -> Optional[str]:
+        """The base refusal, naming the hybrid setting that chose the model."""
+        refusal = super()._cloud_account_refusal(exc)
+        router, route = self.hybrid_router, self.last_route
+        if refusal is None or router is None or route is None:
+            return refusal
+        return explain_route_failure(router.settings, route.model, refusal) or refusal
 
     @property
     def skill_manager(self):

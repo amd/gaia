@@ -266,7 +266,7 @@ curl http://127.0.0.1:8141/health
 ## 7. Call `POST /v1/gaia/query`
 
 This is the whole agent surface. There is **no typed query client** in this
-package: call it with plain `fetch`. Contract version **2.28**; the stream is
+package: call it with plain `fetch`. Contract version **2.29**; the stream is
 `text/event-stream` terminated by **exactly one** `final` or `error`.
 
 Request body (`extra: "forbid"` — an unknown field is a **422**, not ignored):
@@ -352,7 +352,7 @@ The canonical event shapes, as emitted:
 | `context_usage` | `{ type, window, used, turns_in_view, turns_hidden, ... }`: the context meter, not terminal. A request that sent `turns` gets it before the answer (contract ≥ 2.28), so the meter fills during a long turn; `final.context` follows with the loaded model's own count |
 | `needs_confirmation` | `{ type, run_id, action, summary, confirm_id?, always_scope?, always_label?, risk?, tool_label?, args?, args_truncated?, prompt_context? }` — answer it, or it ends the run; see §8. `summary` shortens long code; `args` is the call itself, exactly the arguments the model sent, each value capped at 64,000 characters (`args_truncated: true` when one was cut — don't auto-approve a call you can't fully see). What GAIA adds to the prompt is in `prompt_context`, never `args`: `working_directory` (where a shell call runs, when the model's arguments don't say), `risk_note` (why GAIA's checks don't cover the call) and `file_path` (the absolute path a write lands at, when the model gave a relative one) |
 | `needs_input` | `{ type, run_id, request_id, question, options[], allow_free_text, sensitive, respond_url, timeout_seconds? }` |
-| `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages? }` — terminal. `failed: true`: the turn did not complete (a model call broke, or a gated tool was refused on a run nobody can answer) and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
+| `final` | `{ type, answer, usage?, failed?, failure?, context?, context_error?, performance?, model_messages?, route? }` — terminal. `route` (contract ≥ 2.29, `hybrid` sessions only): the turn's routing decision; `route.model` is the model it ran on, so bill and label by it. `failed: true`: the turn did not complete (a model call broke, or a gated tool was refused on a run nobody can answer) and `answer` says what was and wasn't done; show it as an error, not a result. `failure: "model_server_down"`: the local model server took no connection (cloud models go through it too), so offer to start it rather than blaming the cloud provider; older binaries never send `failure`. `model_messages` (contract ≥ 2.25, only when the request sent `turns`) is the turn as the model saw it; store it with the reply and send it back in `turns`. `context` / `context_error` and `performance` (the turn's step timings) are optional; see SPEC §5.1 |
 | `error` | `{ type, detail, status }` — terminal, surface `detail` verbatim |
 
 Rules a client must respect:
@@ -790,7 +790,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.28","agentVersion":"0.3.5"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.29","agentVersion":"0.3.5"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
@@ -842,7 +842,8 @@ Keys are entered in a masked field and sent directly to local Lemonade's runtime
 auth API, never as agent queries. `/model` lists supported discovered cloud and
 downloaded local models, marking the configured default with `(default)`;
 `/model fireworks.gemma-4-31b-it` selects Gemma 4 31B IT
-when available. Cloud chat sends conversation history to the selected provider;
+when available. A session started on `hybrid` runs each turn on a cheap or
+strong model picked for that turn, until `/model` names one. Cloud chat sends conversation history to the selected provider;
 embeddings remain on Lemonade. The status event names the actual provider and
 marks remote inference. This is a TUI/stdio capability, not an HTTP query command.
 

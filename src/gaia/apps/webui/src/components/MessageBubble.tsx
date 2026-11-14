@@ -899,8 +899,16 @@ export function MessageBubble({ message, isStreaming, agentSteps, agentStepsActi
                             {message.stats?.retried && message.stats.model && (
                                 <span title={`This answer was kept from Retry with… (${message.stats.model})`}>{displayModelName(message.stats.model)}</span>
                             )}
+                            {!message.stats?.retried && message.stats?.route?.model && (
+                                <span className="msg-stats-route" title={t('msg.route', { reason: message.stats.route.reason ?? '' })}>
+                                    {displayModelName(message.stats.route.model)}
+                                </span>
+                            )}
                             <AnswerStats latencyMs={latencyMs} stats={message.stats} ended={turnEnding(message.content, stopState, isError || Boolean(endedBy))} />
                         </div>
+                    )}
+                    {message.role === 'assistant' && !isStreaming && message.stats?.route?.degraded && message.stats.route.notice && (
+                        <div className="msg-route-notice" role="status">{message.stats.route.notice}</div>
                     )}
                     {message.role === 'assistant' && !isStreaming && message.id > 0 && message.session_id && (
                         <TurnChanges sessionId={message.session_id} messageId={message.id} />

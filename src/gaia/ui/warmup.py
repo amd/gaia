@@ -330,6 +330,9 @@ def _warm_new_chat_prefix(
     client = LemonadeClient(verbose=False)
 
     def skip_reason(model: Optional[str]) -> Optional[str]:
+        from gaia.llm.hybrid import start_model
+
+        model = start_model(model)
         # The catalog read comes first: it is what teaches the cloud check
         # about providers beyond the built-in ones.
         downloaded = client.get_model_info(model)["downloaded"]
@@ -357,6 +360,7 @@ def _warm_new_chat_prefix(
                 streaming=True,
                 device=session["device"],
                 min_context_size=device_ctx,
+                agent_type=NEW_CHAT_AGENT,
             ),
             **chat._session_agent_kwargs(
                 rag_file_paths=[],

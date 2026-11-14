@@ -36,6 +36,7 @@ from fastapi import HTTPException
 from gaia.agents.install_hints import LEGACY_FLAGSHIP_AGENT_IDS
 from gaia.daemon.broker_client import BrokerUnavailableError, LeaseWaitCancelled
 from gaia.llm import lemonade_client as _lemonade_client_mod
+from gaia.llm.hybrid import HybridConfigError, candidate_models, is_hybrid_model
 from gaia.llm.inference_location import InferenceLocation, resolve_inference_location
 from gaia.llm.providers.lemonade import (
     MODEL_SERVER_DOWN,
@@ -721,6 +722,9 @@ def _title_model_for(session_model: str) -> Optional[str]:
     None when the stand-in for a local guard model would be a cloud model: a
     local chat's content never leaves the PC just to name it.
     """
+    from gaia.llm.hybrid import start_model
+
+    session_model = start_model(session_model)
     if not _is_guard_model(session_model):
         return session_model
     from gaia.llm.lemonade_client import resolve_default_chat_model
@@ -1252,6 +1256,10 @@ def _eval_provider_kwargs() -> dict:
     return {"use_claude": True, "claude_model": claude_model}
 
 
+#: The agent that routes a ``hybrid`` session per turn; see gaia.llm.hybrid.
+_HYBRID_ROUTING_AGENT = "gaia"
+
+
 def _build_create_kwargs(
     *,
     custom_model: str | None,
@@ -1259,6 +1267,7 @@ def _build_create_kwargs(
     streaming: bool = False,
     device: str | None = None,
     min_context_size: int | None = None,
+    agent_type: str | None = None,
 ) -> dict:
     """Return the kwargs dict for registry.create_agent().
 
@@ -1282,6 +1291,12 @@ def _build_create_kwargs(
     ``GAIA_EVAL_AGENT_PROVIDER=claude`` (eval-only opt-in, see
     :func:`_eval_provider_kwargs`) additionally passes ``use_claude=True`` and
     ``claude_model`` so the eval harness can run agents off-Lemonade.
+
+    A ``hybrid`` model reaches only the flagship *agent_type*, which routes
+    each turn; any other agent has no router and runs on the cheap model.
+
+    Raises:
+        ValueError: the model is ``hybrid`` and no *agent_type* was given.
     """
     suffix = " (streaming)" if streaming else ""
     kwargs: dict = {"silent_mode": not streaming, "debug": False}
@@ -1302,9 +1317,11 @@ def _build_create_kwargs(
         kwargs["min_context_size"] = min_context_size
 
     if custom_model:
+        custom_model = _agent_model(custom_model, agent_type)
         kwargs["model_id"] = custom_model
         logger.info("create_agent: custom_model override -> %s%s", custom_model, suffix)
     elif model_id and model_id != _DB_DEFAULT_MODEL:
+        model_id = _agent_model(model_id, agent_type)
         kwargs["model_id"] = model_id
         logger.info("create_agent: session-explicit model -> %s%s", model_id, suffix)
     else:
@@ -1318,6 +1335,28 @@ def _build_create_kwargs(
             suffix,
         )
     return kwargs
+
+
+def _agent_model(model_id: str, agent_type: str | None) -> str:
+    """*model_id* as *agent_type* is built on: ``hybrid`` only for the router."""
+    if not is_hybrid_model(model_id):
+        return model_id
+    if agent_type is None:
+        raise ValueError(
+            "_build_create_kwargs needs agent_type for a 'hybrid' model: only "
+            f"the '{_HYBRID_ROUTING_AGENT}' agent routes it per turn."
+        )
+    if agent_type == _HYBRID_ROUTING_AGENT:
+        return model_id
+    from gaia.llm.hybrid import start_model
+
+    cheap = start_model(model_id)
+    logger.info(
+        "create_agent: %s does not route hybrid turns; it runs on %s",
+        agent_type,
+        cheap,
+    )
+    return cheap
 
 
 def _effective_model(agent, fallback: str | None) -> str | None:
@@ -1381,7 +1420,8 @@ def _apply_device_model(
     on the default GPU. Skipped when the user pinned a ``custom_model``.
     """
     device = session.get("device")
-    if custom_model or not device:
+    # A device only picks among local models; hybrid routes to its own.
+    if custom_model or not device or is_hybrid_model(model_id):
         return model_id, None
     dev_model, dev_ctx = resolve_device_model(agent_type, device, registry)
     if not dev_model:
@@ -1424,9 +1464,18 @@ def resolve_session_model(
 
 
 def _ui_cloud_provider(model_id: str) -> str | None:
-    """Classify *model_id*, also recognising cloud ids already seen in the catalog."""
+    """Classify *model_id*, also recognising cloud ids already seen in the catalog.
+
+    ``hybrid`` is cloud when any model it may route to is: some turns leave the PC.
+
+    Raises:
+        HybridConfigError: *model_id* is ``hybrid`` and its settings are unusable.
+    """
     from gaia.llm.lemonade_client import cloud_model_provider, is_cloud_model
 
+    if is_hybrid_model(model_id):
+        providers = (_ui_cloud_provider(m) for m in candidate_models(model_id))
+        return next(filter(None, providers), None)
     metadata = {"recipe": "cloud"} if is_cloud_model(model_id) else None
     return cloud_model_provider(model_id, metadata)
 
@@ -1505,10 +1554,15 @@ def session_inference_location(
             for m in candidates
         ]
 
-    locations = {
-        resolve_inference_location(m, cloud_provider_lookup=_ui_cloud_provider)
-        for m in candidates
-    }
+    try:
+        locations = {
+            resolve_inference_location(m, cloud_provider_lookup=_ui_cloud_provider)
+            for m in candidates
+        }
+    except HybridConfigError as exc:
+        # The turn itself raises this with its remedy; the list just can't say.
+        logger.warning("Inference location unknown: %s", exc)
+        return None
     if len({(loc.provider, loc.remote) for loc in locations}) != 1:
         return None
     if len(locations) == 1:
@@ -3643,6 +3697,9 @@ _DEVICE_NAMES = (("npu", "NPU"), ("gpu", "GPU"), ("cpu", "CPU"))
 
 def _turn_location(model_id: str) -> InferenceLocation:
     """Where a turn with *model_id* was answered; needs no Lemonade."""
+    from gaia.llm.hybrid import start_model
+
+    model_id = start_model(model_id)
     provider_kwargs = _eval_provider_kwargs()
     if provider_kwargs.get("use_claude"):
         return resolve_inference_location(
@@ -3651,6 +3708,22 @@ def _turn_location(model_id: str) -> InferenceLocation:
     return resolve_inference_location(
         model_id, cloud_provider_lookup=_ui_cloud_provider
     )
+
+
+def _turn_route(result: Any) -> Optional[dict]:
+    """The hybrid route record a flagship turn put on its result, or None."""
+    route = result.get("route") if isinstance(result, dict) else None
+    return route if isinstance(route, dict) else None
+
+
+def _ran_on(model_id: Optional[str], route: Optional[dict], agent: Any = None):
+    """The model a turn on *model_id* ran on: a hybrid turn's route picks it.
+
+    A hybrid turn without a route falls to *agent*'s model, else stays ``hybrid``.
+    """
+    if not is_hybrid_model(model_id):
+        return model_id
+    return (route or {}).get("model") or _effective_model(agent, model_id)
 
 
 def _cloud_place(loc: InferenceLocation) -> Optional[str]:
@@ -4332,6 +4405,7 @@ async def _get_chat_response(
                             model_id=model_id,
                             device=device,
                             min_context_size=device_ctx,
+                            agent_type=agent_type,
                         ),
                         **_session_agent_kwargs(
                             rag_file_paths=[],
@@ -4813,6 +4887,10 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     result_holder["model_messages"] = getattr(
                         sse_handler, "relayed_model_messages", None
                     )
+                    relayed_route = getattr(sse_handler, "relayed_route", None)
+                    if relayed_route is not None and is_hybrid_model(model_id):
+                        result_holder["route"] = relayed_route
+                        result_holder["model"] = relayed_route.get("model")
                     return
 
                 else:
@@ -4865,6 +4943,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                                     streaming=True,
                                     device=device,
                                     min_context_size=device_ctx,
+                                    agent_type=agent_type,
                                 ),
                                 **_session_agent_kwargs(
                                     rag_file_paths=[],
@@ -5564,8 +5643,21 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # cases where Lemonade is on a non-default port and the env var
             # isn't set, leaving stats silently empty in eval traces.
             inference_stats = None
+            # A hybrid turn is placed and billed by the model its route picked.
+            route = result_holder.get("route") or _turn_route(
+                result_holder.get("result")
+            )
+            ran_on = _ran_on(model_id, route, result_holder.get("agent"))
+            if is_hybrid_model(model_id) and ran_on == model_id:
+                logger.warning(
+                    "Relayed hybrid turn for session %s came back without its "
+                    "route, so its spend and footer name 'hybrid': it failed "
+                    "before routing, or the GAIA agent predates contract 2.29 "
+                    "(update it).",
+                    session_id[:8],
+                )
             # Named before any Lemonade call: a cloud turn may run with it stopped.
-            turn_location = _turn_location(model_id)
+            turn_location = _turn_location(ran_on)
             turn_place = _cloud_place(turn_location)
             try:
                 import httpx
@@ -5606,7 +5698,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                         )
                     if not turn_location.remote:
                         turn_place = await _local_place(
-                            model_id, stats_client, base_url, _auth
+                            ran_on, stats_client, base_url, _auth
                         )
             except Exception as exc:  # pylint: disable=broad-except
                 # Don't fail the user's response if stats fetching breaks; log
@@ -5642,9 +5734,19 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
                     )
             if turn_place:
                 inference_stats = {**(inference_stats or {}), "place": turn_place}
+            if route:
+                shown = {
+                    k: (
+                        _agent_ui_wording(v)
+                        if k in ("fix", "notice") and isinstance(v, str)
+                        else v
+                    )
+                    for k, v in route.items()
+                }
+                inference_stats = {**(inference_stats or {}), "route": shown}
             # Settings › Model shows each model's speed measured on this PC.
-            if inference_stats is not None and model_id:
-                inference_stats["measured_model"] = model_id
+            if inference_stats is not None and ran_on:
+                inference_stats["measured_model"] = ran_on
             # The model that wrote this answer, so a later model switch can't relabel it.
             # A relayed turn has no agent here, but ran on the model it sent.
             answered_by = result_holder.get("model") or model_id
@@ -5693,7 +5795,7 @@ async def _stream_chat_impl(run, db: ChatDatabase, session: dict, request: ChatR
             # A begun answer may be billed even if stopped; one that failed unanswered is not.
             spending.record_turn(
                 db,
-                model_id,
+                ran_on,
                 inference_stats,
                 failed=turn_failed and not turn_replied,
             )

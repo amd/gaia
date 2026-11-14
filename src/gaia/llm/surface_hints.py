@@ -12,6 +12,7 @@ a whole sentence or a phrase that reads correctly after the swap.
 the Agent UI's setup log swaps for the app's own.
 """
 
+from gaia.llm.hybrid import CLI_HYBRID_SWAPS
 from gaia.llm.local_only import SETTINGS_HINT as CLI_LOCAL_ONLY_HINT
 
 #: How a TUI user picks another model.
@@ -183,6 +184,7 @@ _SWAPS = {
         (APP_RESTART_HINT, CLI_RESTART_HINT),
         (APP_SERVICE_DOWN_HINT, CLI_SERVICE_DOWN_HINT),
         (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
+        *CLI_HYBRID_SWAPS,
     ),
     "service": (
         (TUI_MODEL_SWITCH_HINT, SERVICE_MODEL_SWITCH_HINT),
@@ -194,6 +196,7 @@ _SWAPS = {
         (APP_RESTART_HINT, CLI_RESTART_HINT),
         (APP_SERVICE_DOWN_HINT, SERVICE_SERVICE_DOWN_HINT),
         (APP_WEDGED_SERVER_HINT, CLI_WEDGED_SERVER_HINT),
+        *CLI_HYBRID_SWAPS,
     ),
     "tui": (),
 }

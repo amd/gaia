@@ -34,6 +34,8 @@ class _Proxy:
 
     def __init__(self):
         self.models = []
+        #: Extra fields the sidecar puts on its ``final``.
+        self.final = {}
 
     def init(self):
         return 200, {}
@@ -41,7 +43,7 @@ class _Proxy:
     def query_stream(self, body, read_timeout=None, on_response=None):
         self.models.append(body.get("model"))
         yield {"type": "token", "delta": "Miso."}
-        yield {"type": "final", "answer": "Miso.", "usage": {"tokens": 3}}
+        yield {"type": "final", "answer": "Miso.", "usage": {"tokens": 3}, **self.final}
 
     def cancel_query(self, _rid):
         pass
@@ -142,3 +144,108 @@ async def test_switching_model_keeps_each_earlier_answers_model(relayed):
     first, second = _answers(db, session["id"])
     assert first["inference_stats"]["model"] == DEEPSEEK
     assert second["inference_stats"]["model"] == GLM
+
+
+# ── A relayed hybrid turn is billed by its route ─────────────────────────────
+
+CHEAP = "Gemma-4-E4B-it-GGUF"
+ROUTE = {"model": GLM, "reason": "find_defects", "classified": True}
+
+
+@pytest.fixture
+def hybrid_config(monkeypatch, tmp_path):
+    from gaia.config import GaiaConfig
+
+    monkeypatch.setenv("GAIA_CONFIG_FILE", str(tmp_path / "config.json"))
+    GaiaConfig(hybrid_cheap_model=CHEAP, hybrid_strong_model=GLM).save()
+
+
+async def _hybrid_turn(relayed, final):
+    db, proxy = relayed
+    proxy.final = final
+    session = db.create_session(model="hybrid", agent_type="gaia")
+    with patch.object(helpers.spending, "record_turn") as record_turn:
+        done = await _turn(db, session["id"])
+    (answer,) = _answers(db, session["id"])
+    return proxy, done, answer, record_turn
+
+
+async def test_a_relayed_hybrid_turn_is_billed_to_its_routed_model(
+    relayed, hybrid_config
+):
+    proxy, done, answer, record_turn = await _hybrid_turn(relayed, {"route": ROUTE})
+
+    # The sidecar routes: it is sent ``hybrid``, never a guess at the model.
+    assert proxy.models == ["hybrid"]
+    assert record_turn.call_args.args[1] == GLM
+    assert done["stats"]["model"] == GLM
+    assert done["stats"]["route"] == ROUTE
+    assert answer["inference_stats"]["model"] == GLM
+    assert answer["inference_stats"]["route"]["model"] == GLM
+    assert done["stats"]["place"] == "via Fireworks AI"
+
+
+async def test_a_relayed_cheap_route_is_billed_as_the_local_model(
+    relayed, hybrid_config
+):
+    route = {**ROUTE, "model": CHEAP}
+    _proxy, done, _answer, record_turn = await _hybrid_turn(relayed, {"route": route})
+
+    assert record_turn.call_args.args[1] == CHEAP
+    assert done["stats"]["model"] == CHEAP
+    assert "place" not in done["stats"]
+
+
+async def test_a_degraded_route_notice_reads_in_agent_ui_terms(relayed, hybrid_config):
+    """The agent words its fix for the TUI; the Agent UI names its own screen."""
+    from gaia.llm.surface_hints import (
+        AGENT_UI_GATEWAY_KEY_HINT,
+        TUI_GATEWAY_KEY_HINT,
+    )
+
+    notice = f"hybrid: the classifier failed. To fix: {TUI_GATEWAY_KEY_HINT}"
+    route = {**ROUTE, "degraded": True, "notice": notice, "fix": notice}
+    _proxy, done, answer, _record = await _hybrid_turn(relayed, {"route": route})
+
+    for shown in (done["stats"]["route"], answer["inference_stats"]["route"]):
+        assert AGENT_UI_GATEWAY_KEY_HINT in shown["notice"]
+        assert AGENT_UI_GATEWAY_KEY_HINT in shown["fix"]
+        assert "/gateway" not in shown["notice"]
+        assert shown["model"] == GLM
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [None, "amd.Claude", {"reason": "no model"}, {"model": 7}, ["model", GLM]],
+    ids=["null", "string", "no-model", "model-not-a-string", "list"],
+)
+async def test_a_malformed_route_is_not_billed_as_a_model(
+    relayed, hybrid_config, bad, caplog
+):
+    _proxy, done, _answer, record_turn = await _hybrid_turn(relayed, {"route": bad})
+
+    assert record_turn.call_args.args[1] == "hybrid"
+    assert "route" not in done["stats"]
+    assert "without its route" in caplog.text
+
+
+async def test_an_older_sidecar_without_a_route_is_named_in_the_log(
+    relayed, hybrid_config, caplog
+):
+    _proxy, done, _answer, record_turn = await _hybrid_turn(relayed, {})
+
+    assert record_turn.call_args.args[1] == "hybrid"
+    assert "predates contract 2.29" in caplog.text
+
+
+async def test_a_route_on_a_named_model_turn_is_not_used(relayed):
+    """Only a ``hybrid`` session is placed by a route; a named model is what ran."""
+    db, proxy = relayed
+    proxy.final = {"route": ROUTE}
+    session = db.create_session(model=DEEPSEEK, agent_type="gaia")
+    with patch.object(helpers.spending, "record_turn") as record_turn:
+        done = await _turn(db, session["id"])
+
+    assert record_turn.call_args.args[1] == DEEPSEEK
+    assert done["stats"]["model"] == DEEPSEEK
+    assert "route" not in done["stats"]

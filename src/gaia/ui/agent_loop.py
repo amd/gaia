@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from gaia.agents.install_hints import agent_import_error_message
+from gaia.llm.hybrid import is_hybrid_model
 from gaia.ui import spending
 from gaia.ui.agent_threads import run_in_own_thread, wait_until_off_the_model
 from gaia.ui.run_manager import run_manager
@@ -555,15 +556,20 @@ class AgentLoop:
                     model_id = db.get_setting("custom_model") or session.get("model")
                     if not _may_spend(model_id):
                         return
-                    answer = _helpers.relay_one_prompt(
-                        sse_handler,
-                        tick_prompt,
-                        agent_type="gaia",
-                        model_id=model_id,
-                        memory=_helpers._memory_mode(session, db),
-                        max_steps=None,
-                        stats=result_holder["stats"],
-                    )
+                    try:
+                        answer = _helpers.relay_one_prompt(
+                            sse_handler,
+                            tick_prompt,
+                            agent_type="gaia",
+                            model_id=model_id,
+                            memory=_helpers._memory_mode(session, db),
+                            max_steps=None,
+                            stats=result_holder["stats"],
+                        )
+                    finally:
+                        result_holder["route"] = getattr(
+                            sse_handler, "relayed_route", None
+                        )
                     result_holder["result"] = {"result": answer or ""}
                     return
                 model_id = session.get("model")
@@ -634,8 +640,10 @@ class AgentLoop:
 
                 # Also replaces a prior streaming turn's fired cancel event.
                 agent._cancel_event = cancel_event
+                result_holder["agent"] = agent
                 result = agent.process_query(tick_prompt)
                 result_holder["result"] = result
+                result_holder["route"] = _helpers._turn_route(result)
                 if isinstance(result, dict):
                     result_holder["stats"].update(
                         (k, result[k])
@@ -653,12 +661,30 @@ class AgentLoop:
                     if result_holder.get("model") is not None:
                         spending.record_turn(
                             db,
-                            result_holder["model"],
+                            _billed_model(),
                             result_holder["stats"],
                             failed=result_holder["error"] is not None,
                         )
                 finally:
                     sse_handler.signal_done()
+
+        def _billed_model() -> Optional[str]:
+            """The model the tick ran on; a hybrid tick bills its route's model."""
+            from gaia.ui._chat_helpers import _ran_on
+
+            model = result_holder["model"]
+            ran_on = _ran_on(
+                model, result_holder.get("route"), result_holder.get("agent")
+            )
+            if ran_on != model or not is_hybrid_model(model):
+                return ran_on
+            logger.warning(
+                "AgentLoop: hybrid tick for session %s came back without its "
+                "route, so its spend names 'hybrid': it failed before routing, "
+                "or the GAIA agent predates contract 2.29 (update it).",
+                session_id[:8],
+            )
+            return ran_on
 
         def _may_spend(model_id: Optional[str]) -> bool:
             """False, with the reason kept, once the cloud spending limit is reached."""

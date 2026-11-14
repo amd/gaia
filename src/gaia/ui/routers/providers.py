@@ -29,6 +29,7 @@ import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
+from gaia.llm.hybrid import HybridConfigError, is_hybrid_model
 from gaia.llm.local_only import (
     blocked_reason,
     cloud_blocked,
@@ -678,7 +679,8 @@ def cloud_provider_name(model_id: str) -> Optional[str]:
     provider = provider_of(model_id)
     if provider != LOCAL:
         return _NAMES[provider]
-    return _ui_cloud_provider(model_id)
+    cloud = _ui_cloud_provider(model_id)
+    return _NAMES.get(cloud, cloud) if cloud else None
 
 
 def _is_cloud_model(model_id: str) -> bool:
@@ -710,13 +712,15 @@ def model_label(model_id: str) -> str:
     cloud = cloud_provider_name(model_id)
     if cloud is None:
         return f"{model_id} · local"
-    return f"{model_id.split('.', 1)[1].rsplit('/', 1)[-1]} · {cloud}"
+    return f"{display_name(model_id)} · {cloud}"
 
 
 def display_name(model_id: str) -> str:
     """The name a person reads: friendly for local models, bare for cloud ones."""
     from ..local_models import friendly_name
 
+    if is_hybrid_model(model_id):
+        return "Hybrid"
     if cloud_provider_name(model_id) is None:
         return friendly_name(model_id)
     return model_id.split(".", 1)[1].rsplit("/", 1)[-1]
@@ -731,7 +735,9 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
     try:
         # The model a new chat starts on, so the chip never names another.
         model = chosen or resolved_default_model()
-    except GaiaConfigError as e:
+        _learn_cloud_models(model)
+        cloud = cloud_provider_name(model)
+    except (GaiaConfigError, HybridConfigError) as e:
         # A new chat cannot start either; say why rather than name a model.
         return {
             "provider": LOCAL,
@@ -743,8 +749,6 @@ def _active_view(db: ChatDatabase) -> Dict[str, Any]:
             "is_default": True,
             "config_error": str(e),
         }
-    _learn_cloud_models(model)
-    cloud = cloud_provider_name(model)
     return {
         # The provider tab; ``local`` for a cloud provider GAIA has no tab for.
         "provider": provider_of(model),

@@ -763,6 +763,37 @@ def test_active_names_a_cloud_model_only_lemonade_lists_as_cloud(
     assert body["display_name"] == "big-model"
 
 
+def test_active_names_hybrid_as_a_cloud_model(client, lemonade, keys, db):
+    db.set_setting("custom_model", "hybrid")
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["model"] == "hybrid"
+    assert body["remote"] is True
+    assert body["inference_remote"] is True
+    assert body["downloaded"] is None
+    assert body["provider_name"] == "AMD LLM Gateway"
+    assert body["display_name"] == "Hybrid"
+    assert body["label"] == "Hybrid · AMD LLM Gateway"
+
+
+def test_active_reports_unusable_hybrid_settings(
+    client, lemonade, keys, db, monkeypatch
+):
+    from gaia.llm import hybrid
+
+    def broken(*_a, **_k):
+        raise hybrid.HybridConfigError("hybrid_cheap_model must name a model")
+
+    monkeypatch.setattr(hybrid.HybridSettings, "load", classmethod(broken))
+    db.set_setting("custom_model", "hybrid")
+
+    body = client.get("/api/providers/active").json()
+
+    assert body["model"] is None
+    assert "hybrid_cheap_model" in body["config_error"]
+
+
 def test_active_reads_the_catalog_to_name_a_cloud_model_on_a_cold_start(
     client, lemonade, keys, db, monkeypatch
 ):

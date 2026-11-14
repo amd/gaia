@@ -2315,6 +2315,16 @@
         ],
         "title": "Retried"
       },
+      "route": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/TurnRouteResponse"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "seconds": {
         "anyOf": [
           {
@@ -5517,6 +5527,35 @@
       "approved"
     ],
     "title": "ToolConfirmRequest",
+    "type": "object"
+  },
+  "TurnRouteResponse": {
+    "description": "The model a ``hybrid`` turn was routed to, and why.",
+    "properties": {
+      "degraded": {
+        "default": false,
+        "title": "Degraded",
+        "type": "boolean"
+      },
+      "model": {
+        "title": "Model",
+        "type": "string"
+      },
+      "notice": {
+        "default": "",
+        "title": "Notice",
+        "type": "string"
+      },
+      "reason": {
+        "default": "",
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "model"
+    ],
+    "title": "TurnRouteResponse",
     "type": "object"
   },
   "TurnSummaryCost": {

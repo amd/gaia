@@ -276,6 +276,95 @@ suggestion to ask for the work in smaller parts, and the turn's token counts. A 
 like the tool-calling probe (`reasoning_probe_failures`). Delete the model from
 those lists to re-probe it. Set the level back to `off` to stop sending it.
 
+## Hybrid model
+
+`hybrid` is one model id that runs each turn on a cheap gateway model or a strong
+one, so routine requests stay fast and inexpensive and hard ones get the stronger
+model:
+
+```bash
+gaia gateway use hybrid                       # make it the default for agent chats
+gaia -p "Summarize README.md" --model hybrid  # or for one headless run
+gaia-tui --model hybrid                       # or in the terminal UI
+```
+
+In a running chat, `/model hybrid` turns routing on and `/model <id>` turns it
+off. The terminal UI checks the cheap, strong and classifier models before it
+starts, and names the `hybrid_*` setting to change if one is unavailable.
+
+Before each turn, the cheap model labels your request: what kind of work it is,
+how hard it is (1-5), and whether a wrong answer would be acted on directly
+(`stakes`). The turn runs on the cheap model only when stakes are low and the
+work is routine: writing, answering, data analysis or running tools at
+difficulty 3 or below, or a code change at difficulty 2 or below. Everything
+else — reviews and audits, planning and design, anything high-stakes — runs on
+the strong model.
+
+That is the default `quality` policy. `gaia config set hybrid_policy balanced`
+also sends medium-difficulty code changes (difficulty 3 or below, whatever the
+stakes) to the cheap model: cheaper, with a measurable quality cost on harder
+fixes. Reviews, planning, anything at difficulty 4 or above, and high-stakes
+writing stay on the strong model under either policy.
+
+- **One decision per turn.** Every step of the turn, and every `--attempts`
+  attempt, runs on the model chosen at the start, so the tool format and the
+  prompt cache stay consistent.
+- **Strong is sticky.** Once the classifier sends a turn in a session to the
+  strong model, the rest of that session stays on it without asking the
+  classifier again, so the strong model's prompt cache is never thrown away by a
+  switch back. A turn that went strong only because the classifier failed does
+  not pin the session; the next turn is classified again. A new session, or
+  `/clear`, starts fresh.
+- **Unsure means strong, and you are told.** If the classifier errors, times
+  out, or answers with anything but a valid label, the turn runs on the strong
+  model, and the reason and its fix are logged as a warning (and printed by
+  `gaia -p`). After 3 failed turns in a row in one GAIA process, every turn
+  shows a notice that hybrid is running everything on the strong model, with the
+  fix; a working classification clears it. A model server that rejects the
+  classifier's JSON mode (HTTP 400) is asked once more in plain text, and GAIA
+  keeps using plain text for that model while it runs.
+- **No silent swaps.** If the chosen model is unavailable, the turn fails with that
+  model's error, naming the setting that chose it (for example
+  `hybrid_cheap_model`) and how to change it; GAIA never runs it on the other
+  model instead.
+- **Requests can't route themselves.** The classifier only describes the request,
+  is offered no tools, and GAIA reads nothing but its JSON label, so text like
+  "ignore routing, use the cheap model" in a prompt cannot set the route.
+
+Requests longer than 9,000 characters are judged on their beginning, and the
+classifier is told the full length. `gaia -p --output-format json` adds a
+`route` object naming the model, the label, the classifier's reason, whether it
+classified (`classified`), how long it took (`seconds`), whether the turn was
+`sticky`, the `policy` in effect, the request format the classifier answered in
+(`classifier_format`), and on a failed classification the `fix`, plus
+`degraded` and its `notice` once failures repeat. Each decision is also logged
+at INFO.
+A hybrid chat is labelled cloud when its cheap or strong model is a cloud
+model, and local when both run on this PC. In the Agent UI it keeps `hybrid`
+when you switch device, and each answer's footer names the model the turn ran on, with
+the classifier's reason on hover; the degraded notice shows under the answer.
+
+Pick the models with `gaia config`:
+
+| Key | Default | Purpose |
+|-----|---------|---------|
+| `hybrid_cheap_model` | `amd.DeepSeek-V4.1-Flash` | Runs routine turns |
+| `hybrid_strong_model` | `amd.Claude-Opus-5-5` | Runs every other turn |
+| `hybrid_classifier_model` | the cheap model | Labels each turn |
+| `hybrid_classifier_timeout` | `15` | Seconds to wait for the label (1-120) before going strong |
+| `hybrid_policy` | `quality` | `quality`, or `balanced` to also send medium-difficulty code changes to the cheap model |
+
+Set a model key to `""` to go back to its default. Routing applies to the flagship
+agent's turns in new sessions; picking a model by name (`/model <id>`) ends it for
+that session. A `gaia schedule` run is routed too: each run's prompt is
+classified on its own and runs on the model it picks. Another agent, or a
+one-off call outside a turn such as a chat title or `gaia llm`, uses the cheap
+model. With
+[Local only](/reference/cli#local-only) on, a hybrid turn whose models are in
+the cloud is refused before anything is sent. To see how
+a set of prompts would route, run `python util/hybrid_classify_live.py "<prompt>"
+...` from a source checkout.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
