@@ -787,19 +787,26 @@ class TestSidecarHTTPErrorDetail:
             "refused). Start the model server, then send the message again."
         )
 
-    def test_a_server_the_user_runs_gets_its_start_instruction(self, monkeypatch):
+    def test_a_server_the_user_runs_is_theirs_to_start_with_no_command(
+        self, monkeypatch
+    ):
         from gaia.llm import lemonade_launcher
+        from gaia.llm.surface_hints import APP_OTHER_SERVER_DOWN_HINT
 
-        start = "Start the Lemonade app from Applications, then retry."
         monkeypatch.setattr(lemonade_launcher, "gaia_runs_lemonade", lambda *a: False)
         monkeypatch.setattr(
             lemonade_launcher,
             "describe_start_hint",
-            lambda ctx_size=None: lemonade_launcher.StartHint(instruction=start),
+            lambda ctx_size=None: lemonade_launcher.StartHint(
+                instruction="Lemonade Server is not installed. Run `gaia init`."
+            ),
         )
         detail = "local LLM triage failed: connection refused"
         content = relay._augment_error_detail(detail)
-        assert content == f"{detail}{relay.LEMONADE_CONNECTION_HINT} {start}"
+        assert content == (
+            f"{detail}{relay.LEMONADE_CONNECTION_HINT} {APP_OTHER_SERVER_DOWN_HINT}"
+        )
+        assert "gaia init" not in content
 
     def _assert_left_alone(self, detail):
         handler = _FakeHandler()

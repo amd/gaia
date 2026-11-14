@@ -8,6 +8,12 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **A model server GAIA doesn't run is no longer called "not installed".** When
+  that server stopped answering, a run's `error` ended with this machine's
+  start instruction, which on a PC with no Lemonade of its own read "Lemonade
+  Server is not installed. Run `gaia init`". The `error` now says the model
+  server didn't answer: send the message again, and if it keeps failing the
+  server is its owner's to start, with no command.
 - **A detached document is no longer searched.** A file an earlier turn sent in
   `documents` and this turn leaves out (the user detached it, or deleted it from
   the library) is dropped from the session's index, so answers stop quoting it.
