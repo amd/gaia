@@ -298,6 +298,6 @@ class TestTheDegradedReportReachesTheCaller:
 
         from gaia.rag.sdk import RAGSDK
 
-        source = inspect.getsource(RAGSDK._extract_text_from_pdf)
+        source = inspect.getsource(RAGSDK._read_pdf_text)
         assert '"extraction_warning"' not in source
         assert "page_warnings[i]" in source

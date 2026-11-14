@@ -276,6 +276,8 @@ class GaiaCliClient:
     # Where a failure record looks: Lemonade, unless this client talks to Claude.
     calls_lemonade = True
     lemonade_url: Optional[str] = None
+    # Set when a reply failed, so `gaia prompt` exits non-zero.
+    failed = False
 
     def __init__(
         self,
@@ -309,6 +311,8 @@ class GaiaCliClient:
         self.log.debug(f"model: {self.model}\n max_tokens: {self.max_tokens}")
 
     async def send_message(self, message):
+        from gaia.apps.llm.app import _reasoning_only_error, _ReasoningFilter
+
         try:
             # Use LLMClient.generate with streaming
             response_generator = self.llm_client.generate(
@@ -318,9 +322,18 @@ class GaiaCliClient:
                 max_tokens=self.max_tokens,
             )
 
-            for chunk in response_generator:
+            reasoning = _ReasoningFilter()
+            answered = False
+            for chunk in reasoning(response_generator):
+                if not answered:
+                    chunk = chunk.lstrip()
+                    if not chunk:
+                        continue
+                    answered = True
                 print(chunk, end="", flush=True)
                 yield chunk
+            if reasoning.saw_reasoning and not answered:
+                raise _reasoning_only_error(self.max_tokens)
 
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
@@ -328,6 +341,7 @@ class GaiaCliClient:
             error_message = _cli_error_text(e, self.calls_lemonade, self.lemonade_url)
             self.log.error(error_message)
             print(error_message)
+            self.failed = True
             yield error_message
 
     def get_stats(self):
@@ -569,7 +583,7 @@ async def async_main(action, **kwargs):
             if stats:
                 for key, value in stats.items():
                     print(f"{key}: {value}")
-        return None
+        return 1 if client.failed else None
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)
