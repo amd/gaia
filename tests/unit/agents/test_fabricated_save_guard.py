@@ -171,6 +171,14 @@ SAVE_CLAIMS = [
         id="except-object-ends-the-answer",
     ),
     pytest.param(
+        "Aside from the review notes at out/review.md, I saved nothing.",
+        id="aside-from-review-notes-at-path",
+    ),
+    pytest.param(
+        "I wrote no file, except the new test in tests/test_cart.py.",
+        id="except-the-new-test-in-path",
+    ),
+    pytest.param(
         "Other than the report at `out/r.md`, nothing was saved.",
         id="other-than-the-x-at-path",
     ),
@@ -447,6 +455,27 @@ NON_CLAIMS = [
     pytest.param(
         "Nothing was written, and I read everything other than out/a.md.",
         id="denial-comma-and-read-other-than",
+    ),
+    # An exception that names a look at a file, not a saved output.
+    pytest.param(
+        "I saved nothing, save for a quick look at `report.pdf`.",
+        id="save-for-a-quick-look-at",
+    ),
+    pytest.param(
+        "Apart from a glance at `report.pdf`, I wrote no file.",
+        id="apart-from-a-glance-at",
+    ),
+    pytest.param(
+        "Aside from a check under C:\\data, I saved nothing.",
+        id="aside-from-a-check-under",
+    ),
+    pytest.param(
+        "I wrote no file, except the lookup in config.json.",
+        id="except-the-lookup-in",
+    ),
+    pytest.param(
+        "Other than a few searches in out/logs.txt, I wrote no file.",
+        id="other-than-searches-in",
     ),
     # rc18 round 2: a remembered value described as stored, beside a file.
     pytest.param(

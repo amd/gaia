@@ -2293,10 +2293,13 @@ _EXCEPTION_PHRASE_PATTERN = re.compile(
 )
 # What an exception must be to claim a save: a file, alone or as "the X to
 # <file>", that ends the span. "report.pdf, which I only read", "notes.md is
-# up to date", "reading r.pdf", "that I need access" are other clauses.
+# up to date", "reading r.pdf", "that I need access" are other clauses, and
+# "a look at r.pdf", "the lookup in c.json" are acts on a file, not saves.
 _EXCEPTION_WORD = (
     r"(?!(?:that|which|who|whose|where|being|having|is|are|was|were|has|have"
-    r"|had|be|been|I|we|you|he|she|they|it)\b)[\w-]+"
+    r"|had|be|been|I|we|you|he|she|they|it)\b)"
+    r"(?!(?:look|glance|peek|check|lookup|look-up|search|read|scan|skim"
+    r"|inspection|visit|attempt)(?:s|es)?\b)[\w-]+"
 )
 _EXCEPTED_OBJECT_PATTERN = re.compile(
     r"\s+(?:"
