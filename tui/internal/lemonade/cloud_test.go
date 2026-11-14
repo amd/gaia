@@ -312,3 +312,81 @@ func TestIsAMDGateway(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestClassifiesCloud404(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "unregistered provider",
+			body:    `{"error":{"message":"Cloud provider 'amd' is not installed. Call POST /v1/install first.","type":"invalid_request"}}`,
+			want:    []string{"gaia gateway install", "no cloud provider registered"},
+			notWant: []string{"older than"},
+		},
+		{
+			name:    "detail wins over not_found type",
+			body:    `{"error":{"message":"Cloud provider 'amd' is not installed. Call POST /v1/install first.","type":"not_found"}}`,
+			want:    []string{"gaia gateway install"},
+			notWant: []string{"older than"},
+		},
+		{
+			name:    "old server with not_found type",
+			body:    `{"error":{"message":"not found","type":"not_found"}}`,
+			want:    []string{"older than", MinExternalVersion, UpgradeHint},
+			notWant: []string{"gaia gateway install"},
+		},
+		{
+			name:    "old server with no type",
+			body:    `{"error":{"message":"missing"}}`,
+			want:    []string{"older than", MinExternalVersion},
+			notWant: []string{"gaia gateway install"},
+		},
+		{
+			name:    "other error keeps Lemonade's detail",
+			body:    `{"error":{"message":"provider is misconfigured","type":"invalid_request"}}`,
+			want:    []string{"provider is misconfigured"},
+			notWant: []string{"older than", "gaia gateway install"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LEMONADE_API_KEY", "local-key")
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer s.Close()
+			err := New(s.URL).request(context.Background(), http.MethodPost, "/cloud/auth", map[string]string{"provider": "amd"}, nil)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(err.Error(), notWant) {
+					t.Errorf("error %q unexpectedly contains %q", err, notWant)
+				}
+			}
+		})
+	}
+}
+
+func TestInstall404KeepsTheVersionHint(t *testing.T) {
+	t.Setenv("LEMONADE_API_KEY", "local-key")
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"message":"Cloud provider 'amd' is not installed.","type":"invalid_request"}}`)
+	}))
+	defer s.Close()
+	err := New(s.URL).request(context.Background(), http.MethodPost, "/install", map[string]any{"backend": "cloud"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "older than") ||
+		strings.Contains(err.Error(), "gaia gateway install") {
+		t.Fatalf("install 404 should keep the version hint: %v", err)
+	}
+}
