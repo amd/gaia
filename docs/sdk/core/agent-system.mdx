@@ -1086,8 +1086,11 @@ results merely because the correction budget ran out.
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix is `verified` and gets no note; one
 that passed and then failed after an edit reads `pytest didn't pass`. Only a
-rerun of the same command replaces an earlier run: if `pytest tests/` failed and
-`pytest tests/test_cart.py` then passed, the note still reports the failure.
+rerun of the same check replaces an earlier run. Output trimming (`| tail -40`,
+`2>&1`) and pytest flags that only change the report (`-q`, `-v`, `--tb`, `-rA`,
+`--color`, `--durations`) don't make a different check, but anything that picks
+tests does: if `pytest tests/` failed and `pytest tests/test_cart.py` then
+passed, the note still reports the failure.
 
 ### Grounding checks
 
