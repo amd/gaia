@@ -699,6 +699,8 @@ export interface BrowseResponse {
     parent_path: string | null;
     entries: FileEntry[];
     quick_links: QuickLink[];
+    /** Why a chat can't be given this folder; absent when it can. */
+    folder_refusal?: string | null;
 }
 
 /** Response from the /documents/index-folder endpoint. */
@@ -707,6 +709,8 @@ export interface IndexFolderResponse {
     failed: number;
     /** Files in the folder of a type GAIA doesn't index. */
     skipped?: number;
+    /** Images in the folder; GAIA reads an image only when it is added on its own. */
+    skipped_images?: number;
     documents: Document[];
     errors: string[];
 }
@@ -856,6 +860,8 @@ export interface AgentStep {
     success?: boolean;
     /** The user said no to this call, so it never ran (for type='tool'). */
     declined?: boolean;
+    /** Nobody answered its permission prompt in time, so it never ran (for type='tool'). */
+    timedOut?: boolean;
     /** Whether this step is currently running. */
     active?: boolean;
     /** Plan steps (for type='plan'). */
@@ -891,6 +897,8 @@ export interface AgentStep {
     render?: string;
     /** That card's payload. */
     data?: unknown;
+    /** A model the call needed and didn't find, so the row offers it (for type='tool'). */
+    needsModel?: 'vision';
 }
 
 /** The text an MCP tool returned, capped by the server. */

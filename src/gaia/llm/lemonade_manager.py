@@ -27,6 +27,7 @@ from gaia.llm.lemonade_client import (
     _model_ids_match,
     check_lemonade_version,
     cloud_model_provider,
+    configured_lemonade_url,
     fit_ctx_to_free_memory,
     is_cloud_model_entry,
     is_llm_model_entry,
@@ -418,6 +419,17 @@ class LemonadeManager:
         Args:
             min_context_size: Context size to recommend in error message.
         """
+        # A server the user chose isn't GAIA's to install or start.
+        configured = configured_lemonade_url()
+        if configured:
+            from gaia.llm.lemonade_choice import unreachable_server_message
+
+            print(
+                f"❌ Error: {unreachable_server_message(configured)}",
+                file=sys.stderr,
+            )
+            return
+
         print(
             "❌ Error: Lemonade server is not running or not accessible.",
             file=sys.stderr,

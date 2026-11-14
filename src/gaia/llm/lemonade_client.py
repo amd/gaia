@@ -50,6 +50,7 @@ from openai import OpenAI
 
 from gaia.env import child_env, load_env
 from gaia.llm import call_ledger, stream_watchdog
+from gaia.llm.degenerate_output import DegenerateOutput, DegenerateOutputGuard
 from gaia.llm.lemonade_launcher import (
     build_start_command,
     describe_start_hint,
@@ -148,12 +149,33 @@ def _embedded_lemonade_url() -> str:
     alongside its API key. Nothing exports either, so a client that assumed the
     default port looked at an address with nothing on it and reported the models
     as missing — while the embedded server held every one of them.
+
+    A stopped embedded server resolves to the port it last ran on, where the
+    daemon starts it again, never to the default port: another Lemonade may be
+    listening there, and it is not the one this install was set up with.
     """
     state = _read_embedded_lemonade_state()
     port = state.get("port") if state else None
     if isinstance(port, int) and port > 0:
         return f"http://{DEFAULT_HOST}:{port}"
+    port = _stopped_gaia_lemonade_port()
+    if port is not None:
+        return f"http://{DEFAULT_HOST}:{port}"
     return DEFAULT_LEMONADE_URL
+
+
+def _stopped_gaia_lemonade_port() -> Optional[int]:
+    """The port GAIA's own installed server last ran on, or None.
+
+    None too when GAIA's server is not installed, or has never started.
+    """
+    from gaia.llm.lemonade_embedded import EmbeddedLemonade, is_gaias_to_start
+
+    embedded = EmbeddedLemonade()
+    if not is_gaias_to_start(embedded):
+        return None
+    port = embedded.last_port()
+    return port if isinstance(port, int) and not isinstance(port, bool) else None
 
 
 def _read_embedded_lemonade_state(
@@ -194,6 +216,12 @@ def _read_embedded_lemonade_state(
         if not pid_exists(pid):
             return None
     return state
+
+
+def gaia_lemonade_port() -> Optional[int]:
+    """The port of GAIA's own server: where it runs, or last ran while stopped."""
+    state = _read_embedded_lemonade_state()
+    return state["port"] if state else _stopped_gaia_lemonade_port()
 
 
 def running_embedded_lemonade_url() -> Optional[str]:
@@ -3873,6 +3901,10 @@ class LemonadeAuthError(LemonadeClientError):
     """Raised when Lemonade returns 401 Unauthorized (wrong or missing API key)."""
 
 
+class ModelListShapeError(LemonadeClientError):
+    """The server answered ``/models``, but not with a list of model objects."""
+
+
 class LemonadeUnresponsiveError(LemonadeClientError):
     """Lemonade accepted the connection but sent no answer before the read
     timeout: it is up and busy (often loading a model), or stuck — not down."""
@@ -3960,6 +3992,22 @@ class CloudModelUnavailableError(LemonadeClientError):
         self.model_id = model_id
         self.provider = provider
         self.status = 404
+
+
+class CloudContextOverflowError(LemonadeClientError):
+    """A cloud provider refused the request as longer than the model's window.
+
+    The message is fixed (never the provider's body) and names "maximum context
+    length", so :func:`is_context_overflow_error` matches it after any wrapping.
+    """
+
+    def __init__(self, status: Optional[int]):
+        super().__init__(
+            f"The conversation is too long for the cloud model (HTTP {status}): "
+            "the prompt exceeds the model's maximum context length. Start a "
+            "fresh task, or ask about less at once."
+        )
+        self.status = status
 
 
 class CloudProviderDisconnectedError(LemonadeClientError):
@@ -4064,6 +4112,20 @@ class ContextReloadUnverifiedError(LemonadeClientError):
     """Reloads at a larger ``ctx_size`` keep reporting a smaller window."""
 
 
+#: Said when a reply stream turned into noise (``degenerate_output``).
+OUTPUT_CORRUPTED_MESSAGE = (
+    "The model's answer came back corrupted, so GAIA stopped it. "
+    "Send your message again."
+)
+
+
+class ModelOutputCorruptedError(LemonadeClientError):
+    """A streamed reply turned into noise and was stopped before it was shown."""
+
+    def __init__(self, message: str = OUTPUT_CORRUPTED_MESSAGE):
+        super().__init__(message)
+
+
 class UsersServerUnchangedError(LemonadeClientError):
     """A request would change the setup of the user's own Lemonade Server.
 
@@ -4120,19 +4182,107 @@ def _endpoint_label(base_url: Optional[str]) -> Optional[str]:
     return f"{host}:{port}" if port else host
 
 
+#: Provider error codes/types meaning the prompt outgrew the model's window
+#: (OpenAI-compatible gateways and vLLM; Anthropic's 413 type).
+_OVERFLOW_ERROR_CODES = frozenset({"context_length_exceeded", "request_too_large"})
+#: Most of an error body read for classification; a real one is under 1 KB.
+_MAX_ERROR_BODY_CHARS = 16384
+
+
+def _error_body_fields(node: Any, depth: int = 0) -> Iterator[Tuple[str, str]]:
+    """``("code", value)`` and ``("message", text)`` pairs from an error body.
+
+    Walks the shapes providers and Lemonade use: ``{"error": {...}}``,
+    Anthropic's ``{"type": "error", "error": {...}}`` and Lemonade's
+    ``details.response`` wrapping of the upstream body. Other fields (an echoed
+    request, ``param``) are never read.
+    """
+    if depth > 8:
+        return
+    if isinstance(node, str):
+        text = node[:_MAX_ERROR_BODY_CHARS]
+        if text.lstrip().startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict):
+                yield from _error_body_fields(parsed, depth + 1)
+                return
+        yield ("message", text)
+        return
+    if not isinstance(node, dict):
+        return
+    for key in ("code", "type"):
+        value = node.get(key)
+        if isinstance(value, str):
+            yield ("code", value)
+    if isinstance(node.get("message"), str):
+        yield from _error_body_fields(node["message"], depth + 1)
+    for key in ("error", "details", "response"):
+        if key in node:
+            yield from _error_body_fields(node[key], depth + 1)
+
+
+def is_provider_context_overflow(status: Optional[int], body: Any) -> bool:
+    """Whether a provider's HTTP *status* and error *body* say the prompt is too long.
+
+    Only a 400 or 413 counts, and only the error's code, type and message are
+    read (see :func:`_error_body_fields`); *body* may be the text, parsed JSON,
+    or an SDK exception's ``.body``. Any 413 is too large by definition.
+    """
+    if status == 413:
+        return True
+    if status != 400 or body is None:
+        return False
+    if isinstance(body, bytes):
+        body = body[:_MAX_ERROR_BODY_CHARS].decode("utf-8", errors="replace")
+    for kind, value in _error_body_fields(body):
+        lowered = value.lower()
+        if kind == "code" and lowered in _OVERFLOW_ERROR_CODES:
+            return True
+        if kind == "message" and any(p in lowered for p in CONTEXT_OVERFLOW_PHRASES):
+            return True
+    return False
+
+
+#: Said when the model server's own key check refuses GAIA, not a provider.
+OWN_KEY_REFUSED = (
+    "GAIA's model server refused GAIA's access key (HTTP 401), so the request "
+    "never reached the cloud provider. The server was most likely restarted "
+    "with a new key: restart GAIA so it picks the new one up. If you set "
+    "LEMONADE_API_KEY yourself, update it to the server's current key."
+)
+
+
+def _own_key_refused(body: Any) -> bool:
+    """The model server's key check answered a 401, not a provider behind it.
+
+    Lemonade's own refusal is a bare string (``{"error": "Invalid or missing
+    API key"}``); a provider error it forwards is a structured object.
+    """
+    if isinstance(body, dict):
+        body = body.get("error")
+    return isinstance(body, str)
+
+
 def _cloud_request_error(
     status: Optional[int],
     provider: Optional[str] = None,
     reason: Optional[str] = None,
     model: Optional[str] = None,
     endpoint: Optional[str] = None,
+    body: Any = None,
 ) -> LemonadeClientError:
     """Actionable cloud failures without reflecting provider response bodies.
 
     *reason* is the retry classifier's verdict (``gaia.llm.retry``); it tells a
     status-less hop failure apart from an unexplained one. *endpoint* is the
-    ``host:port`` the request went to (:func:`_endpoint_label`).
+    ``host:port`` the request went to (:func:`_endpoint_label`). *body* is the
+    provider's error body, read only to recognise a context overflow.
     """
+    if is_provider_context_overflow(status, body):
+        return CloudContextOverflowError(status)
     if status in {401, 403}:
         return LemonadeAuthError(
             f"Cloud authentication or access was denied (HTTP {status}). "
@@ -4208,6 +4358,10 @@ CONTEXT_OVERFLOW_PHRASES = (
     "exceeds the available context size",
     "got too long",
     "max length reached",
+    # Cloud providers: OpenAI-compatible gateways, vLLM and Fireworks; Anthropic.
+    "context_length_exceeded",
+    "maximum context length",
+    "prompt is too long",
 )
 
 #: llama.cpp's words when a decode step found no free cell in the KV cache. It
@@ -6729,6 +6883,12 @@ class LemonadeClient:
 
             if response.status_code == 401:
                 if self.cloud_model_provider(model):
+                    try:
+                        refused = _own_key_refused(response.json())
+                    except ValueError:
+                        refused = False
+                    if refused:
+                        raise LemonadeAuthError(OWN_KEY_REFUSED)
                     raise _cloud_request_error(
                         response.status_code, self.cloud_model_provider(model)
                     )
@@ -6748,6 +6908,7 @@ class LemonadeClient:
                             response.status_code,
                             model,
                             reasoning_effort=data.get("reasoning_effort"),
+                            body=body,
                         ),
                         response.status_code,
                         body,
@@ -7200,14 +7361,26 @@ class LemonadeClient:
             # Use the client to stream responses
             self.log.debug(f"Starting streaming chat completion with model: {model}")
             tokens_generated = 0
-            for chunk in self._model_retrier(model, gone_server_waits=True).stream(
+            guard = DegenerateOutputGuard()
+            chunks = self._model_retrier(model, gone_server_waits=True).stream(
                 _open_stream,
                 is_output=_chunk_carries_output,
                 what="Streaming chat completion",
                 state=state,
-            ):
-                tokens_generated += 1
-                yield chunk
+            )
+            try:
+                for chunk in chunks:
+                    for out in guard.feed(chunk):
+                        tokens_generated += 1
+                        yield out
+                for out in guard.flush():
+                    tokens_generated += 1
+                    yield out
+            except DegenerateOutput as noise:
+                chunks.close()
+                raise self._corrupted_output(
+                    model, messages, noise, tokens_generated
+                ) from noise
 
             self.log.debug(
                 f"Completed streaming chat completion. Generated {tokens_generated} tokens."
@@ -7215,8 +7388,12 @@ class LemonadeClient:
             if tokens_generated and self.cloud_model_provider(model):
                 _remember_cloud_availability(model, ok=True)
 
-        except openai.AuthenticationError:
+        except ModelOutputCorruptedError:
+            raise
+        except openai.AuthenticationError as e:
             if self.cloud_model_provider(model):
+                if _own_key_refused(getattr(e, "body", None)):
+                    raise LemonadeAuthError(OWN_KEY_REFUSED) from None
                 raise _cloud_request_error(401) from None
             # Fixed-string error: do NOT include str(e), as the OpenAI SDK's
             # exception may stringify the failing request including its
@@ -7240,6 +7417,7 @@ class LemonadeClient:
                         model,
                         classify_exception(e),
                         reasoning_effort=extra_body.get("reasoning_effort"),
+                        body=getattr(e, "body", None),
                     ),
                     state,
                 ) from None
@@ -7263,6 +7441,50 @@ class LemonadeClient:
             )
         finally:
             self._record_retries(state)
+
+    def _corrupted_output(
+        self,
+        model: str,
+        messages: List[Dict[str, Any]],
+        noise: DegenerateOutput,
+        chunks_shown: int,
+    ) -> ModelOutputCorruptedError:
+        """Log a reply that turned into noise and unload the model that sent it.
+
+        The noise outlived new conversations on the same loaded model, so the
+        next message must get a freshly loaded one.
+        """
+        chars = sum(len(str(m.get("content") or "")) for m in messages)
+        self.log.error(
+            "%s's reply turned into noise (%s %r) after %d chunk(s); stopped it. "
+            "Request: %d messages, %d chars (~%d tokens).",
+            model,
+            noise.reason,
+            noise.token[:40],
+            chunks_shown,
+            len(messages),
+            chars,
+            chars // 4,
+        )
+        if self.cloud_model_provider(model) or is_cloud_model(model):
+            return ModelOutputCorruptedError()
+        if self.is_users_server():
+            self.log.error(
+                "Left %s loaded: GAIA does not unload models on your own "
+                "Lemonade Server. Unload or reload it there if this repeats.",
+                model,
+            )
+            return ModelOutputCorruptedError()
+        try:
+            self.unload_model(model, ignore_if_not_loaded=True)
+        except LemonadeClientError as e:
+            self.log.error(
+                "Could not unload %s after its corrupted reply, so the next "
+                "message may reuse the same state: %s",
+                model,
+                e,
+            )
+        return ModelOutputCorruptedError()
 
     @guard_inference()
     def completions(
@@ -7993,7 +8215,7 @@ class LemonadeClient:
             if bad is None:
                 return
             got = f"entry {bad[0]} of 'data' as a JSON {_json_type_name(bad[1])}"
-        raise LemonadeClientError(
+        raise ModelListShapeError(
             f"The model list{self._from_server()} isn't in the expected shape: "
             f"expected an object whose 'data' is a list of model objects, got "
             f"{got}. Check that LEMONADE_BASE_URL points at Lemonade Server and "
@@ -8027,11 +8249,13 @@ class LemonadeClient:
         model: str,
         reason: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
+        body: Any = None,
     ) -> LemonadeClientError:
         """The error for a failed cloud call; a 404 is also recorded per model.
 
         *reasoning_effort* is the effort the request sent, if any: a 400 then
         names it, since the provider body that would say why is not shown.
+        *body* is the provider's error body, read only to spot an overflow.
         """
         error = _cloud_request_error(
             status,
@@ -8039,8 +8263,13 @@ class LemonadeClient:
             reason,
             model,
             endpoint=_endpoint_label(self.base_url),
+            body=body,
         )
-        if status == 400 and reasoning_effort is not None:
+        if (
+            status == 400
+            and reasoning_effort is not None
+            and not isinstance(error, CloudContextOverflowError)
+        ):
             error = LemonadeClientError(
                 f"{error} The request asked {model} to reason "
                 f"(reasoning_effort={reasoning_effort}), which it may not accept "

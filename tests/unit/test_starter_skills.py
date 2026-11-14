@@ -52,6 +52,7 @@ PROVENANCE_SOURCE = "starter-pack"
 STARTER_PACK = frozenset(
     {
         "analyze-recording",
+        "automations",
         "calculators",
         "calendar",
         "check-in",
@@ -706,6 +707,96 @@ def test_fetch_rss_accepts_a_feed_whose_content_embeds_a_doctype(description: by
     assert result["count"] == 1
 
 
+# ----------------------------------------------------------------------
+# price-watch step order
+#
+# A pre-fetch save fired on plain re-checks and, once refused, displaced the
+# report; a fetch on "watch this at $X" overwrote the user's baseline.
+# ----------------------------------------------------------------------
+
+
+def _price_watch_paths() -> tuple[str, str]:
+    body = parse_skill_file(STARTER_ROOT / "price-watch").body
+    watch = re.search(r"^### Watch\b(.+?)(?=^### |^## )", body, re.M | re.S)
+    check = re.search(r"^### Check\b(.+?)(?=^### |^## )", body, re.M | re.S)
+    assert watch and check, "price-watch lost its Watch / Check sections"
+    return watch.group(1), check.group(1)
+
+
+def test_price_watch_watch_path_saves_the_stated_price_without_fetching():
+    watch, _ = _price_watch_paths()
+
+    assert "remember(" in watch
+    assert "stated by the user" in watch
+    assert "fetch_page(" not in watch, "a watch turn must not fetch the page"
+    assert re.search(r"Do \*\*not\*\* fetch", watch)
+    assert "Never save a price the user did not state" in watch
+
+
+def test_price_watch_check_path_fetches_then_reports_then_saves():
+    _, check = _price_watch_paths()
+    steps = re.findall(r"^(\d+)\. \*\*(.+?)\*\*", check, re.M)
+    titles = [title.lower() for _, title in steps]
+
+    assert [int(n) for n, _ in steps] == list(range(1, len(steps) + 1))
+    order = [
+        next(i for i, t in enumerate(titles) if key in t)
+        for key in ("recall", "fetch", "extract", "report", "update")
+    ]
+    assert order == sorted(order), f"check steps out of order: {titles}"
+
+    assert check.index("recall(") < check.index("fetch_page(")
+    assert check.index("fetch_page(") < check.index("remember(")
+    assert check.count("remember(") == 1, "the check path writes memory once"
+
+
+def test_price_watch_saves_on_a_check_only_for_a_new_low():
+    _, check = _price_watch_paths()
+    update = check[check.index("**Update the low") :]
+
+    assert "only if it is lower" in update
+    assert "Record every observation" not in check
+
+
+def test_price_watch_first_check_with_no_history_builds_a_baseline():
+    """A watch with no stated price must still record something to compare to."""
+    _, check = _price_watch_paths()
+    update = check[check.index("**Update the low") :]
+    title = update.splitlines()[0]
+
+    assert "or if no price is recorded yet" in title
+    assert "no history" in update and "baseline" in update
+
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    section = guide[guide.index("### price-watch") :]
+    section = section[: section.index("\n### ")]
+    assert "no price is recorded yet" in " ".join(section.split())
+
+
+def test_price_watch_a_refused_save_never_replaces_the_report():
+    body = parse_skill_file(STARTER_ROOT / "price-watch").body
+
+    assert "never replaces the report" in body
+    assert "Give the report\nanyway" in body or "Give the report anyway" in body
+    assert "not saved" in body
+
+
+@pytest.mark.parametrize(
+    "stale_rule",
+    [
+        "before anything else",
+        "before** you fetch",
+        "before you fetch",
+        "even if they have not asked you to check",
+    ],
+)
+def test_price_watch_has_no_unconditional_pre_fetch_save(stale_rule: str):
+    body = parse_skill_file(STARTER_ROOT / "price-watch").body
+    assert stale_rule not in body
+
+
 def test_the_guide_consumes_lists_match_the_manifests():
     """The guide names each skill's tools; drift makes it quietly wrong."""
     guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
@@ -912,8 +1003,7 @@ def test_a_fork_that_forgets_to_rename_is_rejected(tmp_path: Path):
 # ----------------------------------------------------------------------
 
 
-def _gaia(*args: str, home: Path) -> subprocess.CompletedProcess:
-    """Run ``gaia <args>`` with every skill root redirected into ``home``."""
+def _cli_env(home: Path) -> dict:
     env = {
         "HOME": str(home),
         "USERPROFILE": str(home),
@@ -927,16 +1017,72 @@ def _gaia(*args: str, home: Path) -> subprocess.CompletedProcess:
     for name in ("SystemRoot", "SystemDrive"):
         if name in os.environ:
             env[name] = os.environ[name]
+    return env
+
+
+def _gaia(*args: str, home: Path) -> subprocess.CompletedProcess:
+    """Run ``gaia <args>`` with every skill root redirected into ``home``."""
     return subprocess.run(
         [sys.executable, "-m", "gaia.cli", *args],
         capture_output=True,
         encoding="utf-8",
         errors="replace",
         cwd=home,
-        env=env,
+        env=_cli_env(home),
         timeout=180,
         check=False,
     )
+
+
+# Runs each argv through the real ``gaia.cli.main`` in one interpreter, so a
+# long command list pays the CLI's multi-second cold import once, not per call.
+_BATCH_DRIVER = """
+import contextlib, io, json, sys
+from gaia.cli import main
+
+commands_path, results_path = sys.argv[1:]
+with open(commands_path, encoding="utf-8") as f:
+    commands = json.load(f)
+results = []
+for argv in commands:
+    out, err = io.StringIO(), io.StringIO()
+    sys.argv = ["gaia", *argv]
+    code = 0
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            main()
+        except SystemExit as exc:
+            code = exc.code if isinstance(exc.code, int) else int(exc.code is not None)
+    results.append({"returncode": code, "stdout": out.getvalue(), "stderr": err.getvalue()})
+with open(results_path, "w", encoding="utf-8") as f:
+    json.dump(results, f)
+"""
+
+
+def _gaia_batch(
+    commands: list[list[str]], home: Path
+) -> list[subprocess.CompletedProcess]:
+    """Run several ``gaia`` commands in order, in one fresh interpreter."""
+    commands_path = home.parent / "batch-commands.json"
+    results_path = home.parent / "batch-results.json"
+    commands_path.write_text(json.dumps(commands), encoding="utf-8")
+    proc = subprocess.run(
+        [sys.executable, "-c", _BATCH_DRIVER, str(commands_path), str(results_path)],
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        cwd=home,
+        env=_cli_env(home),
+        timeout=180,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    results = json.loads(results_path.read_text(encoding="utf-8"))
+    assert len(results) == len(commands), proc.stderr
+    return [
+        subprocess.CompletedProcess(argv, r["returncode"], r["stdout"], r["stderr"])
+        for argv, r in zip(commands, results)
+    ]
 
 
 @pytest.fixture
@@ -995,6 +1141,23 @@ def _within_experimental_ceiling(skill_dir: Path) -> bool:
     return True
 
 
+def test_batched_cli_keeps_each_commands_own_exit_code_and_stderr(cli_home: Path):
+    """Batching must not let one command's failure pass, or leak into the next."""
+    missing = str(cli_home / "no-such-skill")
+    alone = _gaia("skill", "import", missing, home=cli_home)
+
+    failed, listed = _gaia_batch(
+        [["skill", "import", missing], ["skill", "list", "--json"]], home=cli_home
+    )
+
+    assert alone.returncode != 0
+    assert failed.returncode == alone.returncode
+    assert "no-such-skill" in failed.stderr
+    assert listed.returncode == 0, listed.stderr
+    assert "no-such-skill" not in listed.stderr
+    assert json.loads(listed.stdout)["skills"] == []
+
+
 def test_cli_imports_every_starter_skill(cli_home: Path):
     """Every pack skill imports, except those asking for more than 'experimental'.
 
@@ -1004,10 +1167,11 @@ def test_cli_imports_every_starter_skill(cli_home: Path):
     importable = {d.name for d in STARTER_DIRS if _within_experimental_ceiling(d)}
     assert importable and importable != {d.name for d in STARTER_DIRS}
 
-    for skill_dir in STARTER_DIRS:
-        result = _gaia(
-            "skill", "import", str(skill_dir), "--allow-experimental", home=cli_home
-        )
+    results = _gaia_batch(
+        [["skill", "import", str(d), "--allow-experimental"] for d in STARTER_DIRS],
+        home=cli_home,
+    )
+    for skill_dir, result in zip(STARTER_DIRS, results):
         if skill_dir.name in importable:
             assert result.returncode == 0, f"{skill_dir.name}: {result.stderr}"
         else:

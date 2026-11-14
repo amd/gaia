@@ -8,6 +8,7 @@ repeat on that second search, or a fact that really is absent would never get
 its "not in the document" answer.
 """
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -17,6 +18,7 @@ import pytest
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.rag_tools import (
     _SEARCH_AGAIN_NOTE,
+    _SEARCH_ALL_NOTE,
     RAGToolsMixin,
     _answers_in_question_language,
     _asks_once_for_another_search,
@@ -184,6 +186,93 @@ def test_the_question_reminder_stays_last():
 
 
 def test_the_ask_names_its_own_limit():
-    assert "search once more" in _SEARCH_AGAIN_NOTE
+    assert "search the document again" in _SEARCH_AGAIN_NOTE
     assert "If that search misses too" in _SEARCH_AGAIN_NOTE
     assert "document's language" in _SEARCH_AGAIN_NOTE
+
+
+def _positions(text, *phrases):
+    found = [text.find(p) for p in phrases]
+    assert -1 not in found, dict(zip(phrases, found))
+    return found
+
+
+def test_the_ask_goes_document_then_not_found_then_web():
+    """A miss must re-search the document and admit it before any web answer."""
+    again, miss, web = _positions(
+        _SEARCH_AGAIN_NOTE,
+        "search the document again",
+        "not in the document",
+        "Only then offer the web",
+    )
+
+    assert again < miss < web
+    assert "say that answer is from the web" in _SEARCH_AGAIN_NOTE
+
+
+def test_the_ask_never_reads_as_a_cue_to_search_the_web_first():
+    """'Search once more' with no target was taken as 'search the web'."""
+    note = _SEARCH_AGAIN_NOTE.lower()
+
+    assert "search once more" not in note
+    assert note.index("do not search the web") < note.index("search the document again")
+    # Every mention of the web before the not-found step must be a prohibition.
+    before_miss = note[: note.index("not in the document")]
+    assert before_miss.count("web") == before_miss.count("do not search the web")
+
+
+def test_the_ask_names_the_document_it_missed_in():
+    assert "naming it" in _SEARCH_AGAIN_NOTE
+
+
+def _rule_two(prompt: str) -> str:
+    start = prompt.index("2. **Never invent content.**")
+    return prompt[start : prompt.index("\n", start)]
+
+
+def test_the_flagship_rule_matches_the_note_order():
+    """The system prompt's rule must not say 'search once more' while the note says the document."""
+    golden = (
+        Path(__file__).resolve().parents[2]
+        / "fixtures"
+        / "profilespec_characterization"
+        / "row07_doc_indexed_n1.json"
+    )
+    rule = _rule_two(json.loads(golden.read_text(encoding="utf-8"))["prompt"])
+
+    again, miss, web = _positions(
+        rule,
+        "search the document again",
+        "That's not in <document>",
+        "Only then offer the web",
+    )
+
+    assert again < miss < web
+    assert "not the web" in rule[again:miss]
+    assert "search once more" not in rule
+    assert "labeled as such" in rule[web:]
+    # The no-padding guard survives the web clause.
+    assert miss < rule.index('never "approximately X"') < web
+
+
+def test_a_one_file_miss_with_other_documents_attached_asks_to_search_them_all(
+    tmp_path,
+):
+    """Gemma searched the Latin-named files and never the Arabic-named one."""
+    host, doc = _host(tmp_path)
+    other = tmp_path / "مُحَمَّد_report.txt"
+    host.rag.indexed_files = {str(doc), str(other)}
+
+    result = _ask_file(doc)
+
+    assert result["instruction"].endswith(_SEARCH_ALL_NOTE)
+    assert "query_documents" in _SEARCH_ALL_NOTE
+
+
+def test_a_search_across_all_documents_keeps_the_reword_note(tmp_path):
+    host, doc = _host(tmp_path)
+    host.rag.indexed_files = {str(doc), str(tmp_path / "other.md")}
+
+    result = _TOOL_REGISTRY["query_documents"]["function"](query="operating margin")
+
+    assert result["instruction"].endswith(_SEARCH_AGAIN_NOTE)

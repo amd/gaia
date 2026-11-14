@@ -34,6 +34,8 @@ export interface ApiSchemas {
   CreateSessionRequest: CreateSessionRequest;
   CustomModelRequest: CustomModelRequest;
   DeviceUsage: DeviceUsage;
+  DiscordConnectRequest: DiscordConnectRequest;
+  DiscordStartRequest: DiscordStartRequest;
   DiscoveryCommit: DiscoveryCommit;
   DiscoveryCommitItem: DiscoveryCommitItem;
   DocumentListResponse: DocumentListResponse;
@@ -250,6 +252,7 @@ export interface AgentStepResponse {
   mcpServerLabel?: string | null;
   mcpTool?: string | null;
   narration?: string | null;
+  needsModel?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
@@ -259,6 +262,7 @@ export interface AgentStepResponse {
   result?: string | null;
   ruleIds?: string[] | null;
   success?: boolean | null;
+  timedOut?: boolean | null;
   timestamp?: number;
   tool?: string | null;
   type: string;
@@ -320,6 +324,7 @@ export interface BodyUploadFileApiFilesUploadPost {
 export interface BrowseResponse {
   current_path: string;
   entries: FileEntry[];
+  folder_refusal?: string | null;
   parent_path?: string | null;
   quick_links?: QuickLink[];
 }
@@ -466,6 +471,14 @@ export interface DeviceUsage {
    * Load of the device's busiest engine.
    */
   percent: number;
+}
+export interface DiscordConnectRequest {
+  model?: string | null;
+  token: string;
+}
+export interface DiscordStartRequest {
+  model?: string | null;
+  take_over?: boolean;
 }
 export interface DiscoveryCommit {
   items: DiscoveryCommitItem[];
@@ -701,6 +714,7 @@ export interface IndexFolderResponse {
   failed?: number;
   indexed?: number;
   skipped?: number;
+  skipped_images?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];

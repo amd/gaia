@@ -163,8 +163,11 @@ the same question again with the same model.
 ### Compare Models on Your Question
 
 To see how another model answers, use **Retry with…** on the latest answer and
-pick a model downloaded on this PC. Both answers appear side by side with the
-time each took and its speed. **Keep this answer** on either one, and the chat
+pick a model downloaded on this PC. On a chat answered by a cloud service, the
+menu lists that service's other models first, then the models on this PC; a
+cloud model answers without loading anything here, and nothing goes to another
+service. Both answers appear side by side with the time each took and, for a
+model on this PC, its speed. **Keep this answer** on either one, and the chat
 continues from it. The other model answers from what the first reply already
 gathered and doesn't run tools again. It loads after the first answer, since
 the model server holds one model at a time, so the reported time includes
@@ -206,6 +209,9 @@ so far.
 When an answer names a document from your library, the name is a link that
 opens the document, and each page it cites ("pages 175 and 205", "الصفحتان
 6–7") opens that page. In the desktop app they open in your web browser.
+When two documents share a name, each link shows the folder that tells them
+apart (`2023/report.pdf`), and a bare shared name stays plain text rather than
+opening the wrong one.
 
 ### Recipes, Workouts, Plans and Calculators as Cards
 
@@ -512,7 +518,8 @@ system settings, the dots hold still.
   chat is remembered as usual, and a click makes it private. While the chat is
   private the button is filled and shows a crossed-out eye, the same eye that
   marks the chat in the sidebar, and a click turns private off. A private chat
-  isn't saved to memory. To keep a new chat's first message out too, turn on
+  isn't saved to memory and can't change or erase what is already there. To
+  keep a new chat's first message out too, turn on
   **Private** next to the message box before you send it.
 - **While GAIA works** the reply builds up as a timeline. Short notes GAIA
   writes before a tool call ("I'll check the forecast first") appear in full,
@@ -949,9 +956,10 @@ much they use now.
 One window with General (language; appearance: Light, Dark, Match system; colors; the
 [desktop app's tray switches](#the-tray-icon); shortcuts),
 Model, Permissions, Skills (what GAIA can load, grouped by where each came from: built into GAIA, your `~/.gaia/skills` folder, the `.claude/skills` folder of the project GAIA is working in, or your other Claude Code skill folders, with **Use** to try one, and **Add skills** to add them from a link — see [Add skills from a link](/guides/starter-skills#add-skills-from-a-link)),
-Connectors, Memory, Notifications, Read aloud, Privacy and Advanced (model server and
-llama.cpp backend, custom model ID, beta options, MCP servers, version and roll
-back).
+Connectors, Memory, Notifications, Read aloud, Privacy (where your data is kept, with
+**Open folder**), Advanced (model server and llama.cpp backend, custom model ID, beta
+options, MCP servers, roll back) and About (the version, with **Copy version**, and
+links to what's new, the documentation and the issue tracker).
 
 If you chose a cloud provider during setup and this PC has no model server yet,
 the banner, **Settings → Model** and **Settings → Advanced** offer **Set up local
@@ -1035,7 +1043,8 @@ choice: the provider's top pick is marked **Default** and picked, and the
 model you pick is the one chat uses. Once the key works, setup says so and
 names that model. The AMD LLM Gateway is listed only on a network that can
 reach it, unless you picked it before. **Settings → Model** also shows what
-this month's cloud chats have cost and lets you set a monthly limit. GAIA warns
+this month's cloud chats (background goal runs included) have cost and lets
+you set a monthly limit; once it is reached, goals wait instead of running. GAIA warns
 when you're close, and once you reach it, it stops before sending a chat to the
 cloud and tells you how to go on: raise the limit, allow more for this month,
 or use a model on this PC. The total is an estimate at list price, with cached
@@ -1047,9 +1056,11 @@ is the final word.
 While a chat runs on a priced cloud model, the composer shows what it has cost
 so far and what all your chats have cost today, such as "$0.04 · today $0.31".
 Click it for each answer's cost, newest first, and a link to this month's total
-and limit. The amounts add up the cost each answer's details show, priced the
-same way as the monthly total. "Today"
-is your own calendar day and counts the chats you still have. A stopped answer
+and limit. The chat's amount adds up the cost each answer's details show, priced
+the same way as the monthly total. "Today"
+is your own calendar day and counts every cloud turn billed in it, as the
+monthly total does, including answers you later edited, retried or deleted;
+its count of chats covers only the chats you still have. A stopped answer
 sends no token count, so its cost is unknown: it shows "Not reported", the
 total it belongs to reads as a floor, such as "≥ $0.04", and the breakdown says
 how many were left out, since the provider may still bill them. On a model on
@@ -1087,6 +1098,11 @@ whenever suits you; quitting GAIA also installs it. The update carries the new
 version's backend, so the first launch afterwards downloads nothing for it. A restart
 that would leave no working app, such as one with no disk space, is refused with the
 reason.
+
+**On a Mac** the app can't install updates itself yet, because its builds aren't
+signed with an Apple Developer ID ([#7061](https://github.com/amd/gaia/issues/7061)).
+A new release still shows, with a **Download** link to its release page instead of
+**Update now**; install the `.dmg` from there.
 
 **Pinning:** after installing a specific version, GAIA stays on it and offers no
 updates. The Updates section shows "Pinned to vX.Y.Z"; click **Unpin** to resume.
@@ -1211,7 +1227,7 @@ Behavior notes:
 
 - Scheduled runs use the GAIA agent and the model you picked; with a local model nothing leaves your machine.
 - Nobody is there to approve a tool call during a scheduled run, so a run that reaches a step needing approval (a shell command, a file write) stops there and fails, naming the step. Do that work in a chat, where you can approve it.
-- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab.
+- A run that fails shows its error on the schedule card and raises a notification in the notification center's **Errors** tab. A run that finishes cleanly raises an unread notification with the start of its answer; runs that finished before the app opened don't.
 - Runs are **suspended while mobile access (tunnel) is active**, matching the autonomous agent loop's security posture. Set `GAIA_AUTONOMOUS_ALLOW_TUNNEL=1` to override.
 - One run executes at a time; overlapping schedules queue.
 - Per-run timeout defaults to 300 s; override with `GAIA_SCHEDULE_TIMEOUT`.

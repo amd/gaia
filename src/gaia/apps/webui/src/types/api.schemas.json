@@ -417,6 +417,17 @@
         ],
         "title": "Narration"
       },
+      "needsModel": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Needsmodel"
+      },
       "planNarrations": {
         "anyOf": [
           {
@@ -524,6 +535,17 @@
           }
         ],
         "title": "Success"
+      },
+      "timedOut": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Timedout"
       },
       "timestamp": {
         "default": 0,
@@ -648,6 +670,17 @@
         },
         "title": "Entries",
         "type": "array"
+      },
+      "folder_refusal": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Folder Refusal"
       },
       "parent_path": {
         "anyOf": [
@@ -1189,6 +1222,52 @@
       "history"
     ],
     "title": "DeviceUsage",
+    "type": "object"
+  },
+  "DiscordConnectRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "token": {
+        "title": "Token",
+        "type": "string"
+      }
+    },
+    "required": [
+      "token"
+    ],
+    "title": "DiscordConnectRequest",
+    "type": "object"
+  },
+  "DiscordStartRequest": {
+    "properties": {
+      "model": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Model"
+      },
+      "take_over": {
+        "default": false,
+        "title": "Take Over",
+        "type": "boolean"
+      }
+    },
+    "title": "DiscordStartRequest",
     "type": "object"
   },
   "DiscoveryCommit": {
@@ -2094,6 +2173,11 @@
       "skipped": {
         "default": 0,
         "title": "Skipped",
+        "type": "integer"
+      },
+      "skipped_images": {
+        "default": 0,
+        "title": "Skipped Images",
         "type": "integer"
       }
     },

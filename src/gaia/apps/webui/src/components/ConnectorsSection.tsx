@@ -65,6 +65,14 @@ function scopeLabel(scope: string, t: Translate): string {
 
 const SEARCH_ABOVE = 6;
 
+// Words people search by that a connector's name and description never say.
+const MAIL_ACCOUNT_KEYWORDS = ['email', 'e-mail', 'inbox', 'calendar'];
+const SEARCH_KEYWORDS: Record<string, string[]> = {
+    google: MAIL_ACCOUNT_KEYWORDS,
+    microsoft: MAIL_ACCOUNT_KEYWORDS,
+    microsoft_work: MAIL_ACCOUNT_KEYWORDS,
+};
+
 // Canonical scope for MCP-server grants. Agents that consume MCP servers
 // dynamically declare no scopes of their own, so one-click activation
 // auto-grants this when no prior grant exists.
@@ -173,10 +181,19 @@ export function ConnectorsSection() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [disconnectNotice, setDisconnectNotice] = useState<string | null>(null);
-    const [expanded, setExpanded] = useState<string | null>(null);
+    const focus = useChatStore((s) => s.settingsConnector);
+    const [expanded, setExpanded] = useState<string | null>(focus);
     const [query, setQuery] = useState('');
-    // Set when a refresh shows a connector going from not connected to connected.
-    const [justConnected, setJustConnected] = useState<ConnectorRow | null>(null);
+    // Opened at one connector (from the chat's Connect card): open its tile.
+    useEffect(() => {
+        if (focus) setExpanded(focus);
+    }, [focus]);
+    // Groups are settled when the list loads, so a tile that connects stays under the pointer.
+    const [connectedAtLoad, setConnectedAtLoad] = useState<ReadonlySet<string>>(new Set());
+    // The connector a refresh just showed going from not connected to connected.
+    const [justConnected, setJustConnected] = useState<string | null>(null);
+    // A connector just disconnected and moved back to its group, which opens to show it.
+    const [movedBack, setMovedBack] = useState<string | null>(null);
     const connectorsRef = useRef<ConnectorListEntry[]>([]);
     connectorsRef.current = connectors;
     // Kept here, not in the tile: a first save moves the tile into "Connected" and remounts it.
@@ -215,6 +232,7 @@ export function ConnectorsSection() {
                 api.listAgentMcps(),
             ]);
             setConnectors(rows);
+            setConnectedAtLoad(new Set(rows.filter((c) => !('error' in c) && c.configured).map((c) => c.id)));
             setAgentMcps(mcps);
             setError(null);
         } catch (e) {
@@ -226,6 +244,16 @@ export function ConnectorsSection() {
 
     useEffect(() => { void load(); }, [load]);
 
+    // The tile left the group it was in; keep it in view, and keep focus on it if it went with the tile.
+    useEffect(() => {
+        if (!movedBack) return;
+        const tile = [...document.querySelectorAll<HTMLElement>('.connector-tile')].find((el) => el.dataset.connectorId === movedBack);
+        const header = tile?.querySelector<HTMLElement>('.connector-tile-header');
+        if (!header) return;
+        header.scrollIntoView?.({ block: 'nearest' });
+        if (!document.activeElement || document.activeElement === document.body) header.focus({ preventScroll: true });
+    }, [movedBack]);
+
     const toggle = (id: string) =>
         setExpanded((prev) => (prev === id ? null : id));
 
@@ -235,10 +263,17 @@ export function ConnectorsSection() {
             const row = await api.getConnector(id);
             const before = connectorsRef.current.find((c) => c.id === id);
             if (before && 'configured' in before && !before.configured && row.configured) {
-                setJustConnected(row);
+                setJustConnected(id);
+                // Its card carries the one Personalize offer; open it unless the user is reading another.
+                setExpanded((prev) => prev ?? id);
             } else if (!row.configured || row.enabled === false) {
                 // A disconnect or disable takes back the offer made for that connector.
-                setJustConnected((prev) => (prev?.id === id ? null : prev));
+                setJustConnected((prev) => (prev === id ? null : prev));
+            }
+            if (before && 'configured' in before && before.configured && !row.configured) {
+                // Disconnected: back to its own group, counted there, not left under "Connected".
+                setConnectedAtLoad((prev) => new Set([...prev].filter((c) => c !== id)));
+                setMovedBack(id);
             }
             setConnectors((prev) => prev.map((c) => (c.id === id ? row : c)));
         } catch {
@@ -272,14 +307,20 @@ export function ConnectorsSection() {
 
     const q = query.trim().toLowerCase();
     const searchText = (c: ConnectorListEntry) =>
-        'error' in c ? [c.display_name] : [c.display_name, c.description, connectorDescriptionBare(t, c)];
+        'error' in c
+            ? [c.display_name]
+            : [c.display_name, c.description, connectorDescriptionBare(t, c), ...(SEARCH_KEYWORDS[c.id] ?? [])];
     const shown = connectors.filter((c) => !q || searchText(c).some((s) => s.toLowerCase().includes(q)));
     const unavailable = shown.filter((c): c is UnavailableConnectorRow => 'error' in c);
     const available = shown.filter((c): c is ConnectorRow => !('error' in c));
-    const connected = available.filter((c) => c.configured);
-    const accounts = available.filter((c) => !c.configured && c.type === 'oauth_pkce');
-    const servers = available.filter((c) => !c.configured && c.type !== 'oauth_pkce');
+    const connected = available.filter((c) => connectedAtLoad.has(c.id));
+    const accounts = available.filter((c) => !connectedAtLoad.has(c.id) && c.type === 'oauth_pkce');
+    const servers = available.filter((c) => !connectedAtLoad.has(c.id) && c.type !== 'oauth_pkce');
     const nothingConnected = !connectors.some((c) => !('error' in c) && c.configured);
+    // Re-keyed so the group the tile moved into opens on it.
+    const groupKey = (name: string, rows: ConnectorRow[]) =>
+        (movedBack && rows.some((c) => c.id === movedBack) ? `${name}:${movedBack}` : name);
+    const holdsMoved = (rows: ConnectorRow[]) => !!movedBack && rows.some((c) => c.id === movedBack);
 
     const tiles = (rows: ConnectorRow[]) => (
         <div className="connectors-list">
@@ -287,6 +328,9 @@ export function ConnectorsSection() {
                 <ConnectorTile
                     key={c.id}
                     connector={c}
+                    wasConnected={connectedAtLoad.has(c.id) || movedBack === c.id}
+                    justConnected={justConnected === c.id}
+                    onPersonalizeStarted={() => setJustConnected(null)}
                     expanded={expanded === c.id}
                     onToggle={() => toggle(c.id)}
                     onChanged={() => void onChanged(c.id)}
@@ -320,19 +364,6 @@ export function ConnectorsSection() {
                 </div>
             )}
 
-            {justConnected && (
-                <div className="connector-personalize connector-personalize--offer" role="status">
-                    <p>
-                        <strong>{t('settings.connectors.personalize.connected', { name: justConnected.display_name })}</strong>{' '}
-                        {t('settings.connectors.personalize.offer', { source: personalizeSourceRef(justConnected) })}
-                    </p>
-                    <PersonalizeButton connector={justConnected} primary onStarted={() => setJustConnected(null)} />
-                    <button type="button" className="btn-secondary" onClick={() => setJustConnected(null)}>
-                        {t('settings.connectors.personalize.notNow')}
-                    </button>
-                </div>
-            )}
-
             {loading ? (
                 <div className="connectors-loading">
                     <Loader2 size={16} className="spin" />
@@ -359,17 +390,17 @@ export function ConnectorsSection() {
                         </SettingsDisclosure>
                     )}
                     {connected.length > 0 && (
-                        <SettingsDisclosure title={t('settings.connectors.connected')} count={connected.length} defaultOpen forceOpen={!!q}>
+                        <SettingsDisclosure title={t('settings.connectors.connected')} count={connected.filter((c) => c.configured).length} defaultOpen forceOpen={!!q}>
                             {tiles(connected)}
                         </SettingsDisclosure>
                     )}
                     {accounts.length > 0 && (
-                        <SettingsDisclosure title={t('settings.connectors.accounts')} hint={t('settings.connectors.accountsHint')} count={accounts.length} defaultOpen={nothingConnected} forceOpen={!!q}>
+                        <SettingsDisclosure key={groupKey('accounts', accounts)} title={t('settings.connectors.accounts')} hint={t('settings.connectors.accountsHint')} count={accounts.length} defaultOpen={nothingConnected || holdsMoved(accounts)} forceOpen={!!q}>
                             {tiles(accounts)}
                         </SettingsDisclosure>
                     )}
                     {servers.length > 0 && (
-                        <SettingsDisclosure title={t('settings.connectors.servers')} hint={t('settings.connectors.serversHint')} count={servers.length} forceOpen={!!q}>
+                        <SettingsDisclosure key={groupKey('servers', servers)} title={t('settings.connectors.servers')} hint={t('settings.connectors.serversHint')} count={servers.length} defaultOpen={holdsMoved(servers)} forceOpen={!!q}>
                             {tiles(servers)}
                         </SettingsDisclosure>
                     )}
@@ -417,6 +448,9 @@ type McpCheck =
 
 function ConnectorTile({
     connector,
+    wasConnected,
+    justConnected,
+    onPersonalizeStarted,
     expanded,
     onToggle,
     onChanged,
@@ -425,12 +459,18 @@ function ConnectorTile({
     onClearCheck,
 }: {
     connector: ConnectorRow;
+    /** Listed under "Connected" since Settings opened, whatever it is now. */
+    wasConnected: boolean;
+    /** Connected a moment ago: the card's Personalize offer is the one that asks. */
+    justConnected: boolean;
+    onPersonalizeStarted: () => void;
     expanded: boolean;
     onToggle: () => void;
     onChanged: () => void;
     check: McpCheck | null;
     onRunCheck: () => void;
     onClearCheck: () => void;
+    /** The just-connected banner already offers personalization for this connector. */
 }) {
     const t = useT();
     const { agents } = useChatStore();
@@ -439,23 +479,25 @@ function ConnectorTile({
     // so it only flags one that needs setup first.
     const renderStatus = () => {
         if (!connector.configured) {
+            // Still in the "Connected" group it was listed in, so the row has to say it left.
+            if (wasConnected) return <span className="connector-status idle" role="status">{t('settings.connectors.disconnected')}</span>;
             return connector.configurable === false
                 ? <span className="connector-status idle">{t('settings.connectors.setupRequired')}</span>
                 : null;
         }
         if (connector.type === 'mcp_server' && connector.enabled === false) {
-            return <span className="connector-status disabled">{t('settings.connectors.disabled')}</span>;
+            return <span className="connector-status disabled">{t('settings.connectors.paused')}</span>;
         }
         return (
             <span className="connector-status ok">
                 <CheckCircle2 size={12} />
-                {connector.account_id ? <bdi dir="ltr">{connector.account_id}</bdi> : t('settings.connectors.configured')}
+                {connector.account_id ? <bdi dir="ltr">{connector.account_id}</bdi> : t('settings.connectors.connected')}
             </span>
         );
     };
 
     return (
-        <div className={`connector-tile${expanded ? ' connector-tile--open' : ''}`}>
+        <div className={`connector-tile${expanded ? ' connector-tile--open' : ''}`} data-connector-id={connector.id}>
             <div className="connector-tile-row">
                 <button
                     type="button"
@@ -472,7 +514,8 @@ function ConnectorTile({
                         {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                     </span>
                 </button>
-                <ConnectorTileMenu connector={connector} onChanged={onChanged} />
+                {/* An open card already shows these actions. */}
+                {!expanded && <ConnectorTileMenu connector={connector} onChanged={onChanged} />}
             </div>
 
             {expanded && (
@@ -490,9 +533,9 @@ function ConnectorTile({
                         />
                     )}
                     {connector.configured && connector.enabled !== false && (
-                        <div className="connector-personalize">
-                            <p>{t('settings.connectors.personalize.tile', { source: personalizeSourceRef(connector) })}</p>
-                            <PersonalizeButton connector={connector} />
+                        <div className={`connector-personalize${justConnected ? ' connector-personalize--offer' : ''}`} role={justConnected ? 'status' : undefined}>
+                            <p>{t(justConnected ? 'settings.connectors.personalize.offer' : 'settings.connectors.personalize.tile', { source: personalizeSourceRef(connector), name: connector.display_name })}</p>
+                            <PersonalizeButton connector={connector} primary={justConnected} onStarted={onPersonalizeStarted} />
                         </div>
                     )}
                     {connector.configured && (
@@ -633,7 +676,15 @@ function OAuthConfigureBody({
             (event) => {
                 if (event.connectorId !== connector.id) return;
                 if (event.reason === 'oauth_error') {
-                    setErr(String(event.payload.error ?? t('settings.connectors.deviceFailed')));
+                    // A browser sign-in says why it ended; its raw error stays in the log.
+                    const why = event.payload.reason;
+                    setErr(
+                        why === 'cancelled'
+                            ? t('connectCard.cancelled')
+                            : why
+                              ? t('connectCard.failed')
+                              : String(event.payload.error ?? t('settings.connectors.deviceFailed')),
+                    );
                     setDeviceInfo(null);
                 } else if (event.reason === 'oauth_completed') {
                     setDeviceInfo(null);
@@ -990,7 +1041,7 @@ function OAuthClientEditor({
                     )}
                     <div className="configure-actions">
                         <button
-                            className={`btn-model-save${saved ? ' saved' : ''}`}
+                            className="btn-primary"
                             disabled={busy || !values['client_id']?.trim()}
                             onClick={() => void handleSave()}
                         >
@@ -1210,7 +1261,7 @@ function MCPServerConfigureBody({
             <div className="configure-actions">
                 {!(keyless && connector.configured) && (
                     <button
-                        className={`btn-model-save${saved ? ' saved' : ''}`}
+                        className="btn-primary"
                         disabled={busy || (!keyless && nothingTyped)}
                         onClick={() => void handleSave()}
                     >
@@ -1425,7 +1476,7 @@ function AgentMcpTile({
                 <span className="agent-mcp-server-name">{server.server_name}</span>
                 <span className="agent-mcp-agent-label">{t('settings.connectors.via', { name: server.agent_name })}</span>
                 {server.disabled ? (
-                    <span className="agent-mcp-status disabled">{t('settings.connectors.disabled')}</span>
+                    <span className="agent-mcp-status disabled">{t('settings.connectors.paused')}</span>
                 ) : (
                     <span className="agent-mcp-status enabled">
                         <CheckCircle2 size={11} /> {t('settings.connectors.active')}
@@ -1554,28 +1605,24 @@ function ConnectorAgentGrants({
               )
             : [];
 
-    // "No agents require access" above a switch that grants access reads as a
-    // contradiction, so the grants block appears only when it has a row or
-    // nothing else does.
-    const showGrants = relevantAgents.length > 0 || activatableAgents.length === 0;
+    // A grants block with no agent in it is only noise in a one-agent app.
+    if (relevantAgents.length === 0 && activatableAgents.length === 0) return null;
 
     return (
         <div className="connection-grants">
-            {showGrants && (
-                <div className="grants-header">{t('settings.connectors.grants')}</div>
-            )}
-            {!showGrants ? null : relevantAgents.length === 0 ? (
-                <div className="grants-empty">{t('settings.connectors.noGrants')}</div>
-            ) : (
-                relevantAgents.map((agent) => (
-                    <AgentGrantCard
-                        key={agent.namespaced_agent_id}
-                        agent={agent}
-                        connectorId={connectorId}
-                        grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
-                        onChanged={() => void load()}
-                    />
-                ))
+            {relevantAgents.length > 0 && (
+                <>
+                    <div className="grants-header">{t('settings.connectors.grants')}</div>
+                    {relevantAgents.map((agent) => (
+                        <AgentGrantCard
+                            key={agent.namespaced_agent_id}
+                            agent={agent}
+                            connectorId={connectorId}
+                            grantedScopes={grants[agent.namespaced_agent_id!] ?? []}
+                            onChanged={() => void load()}
+                        />
+                    ))}
+                </>
             )}
 
             {/* Activations gate MCP tool visibility. OAuth connectors have no
