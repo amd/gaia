@@ -720,16 +720,21 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     // The plan screen's two ways to run GAIA; this PC is the one recommended.
     const [where, setWhere] = useState<'local' | 'cloud'>('local');
 
+    // Chat already runs in the cloud: carry on there rather than recommend a local download.
+    const inUseCloud = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.provider : null));
+    const inUseModel = useModelStore((s) => (s.active?.remote ? s.active.model : null));
+
     const toCloud = useCallback((provider: 'fireworks' | 'amd') => {
         if (running && viewing != null) return;
         setCustomizing(false);
         setChoice(provider);
+        // Back returns to the cloud choice, and the model in use stays picked.
+        setWhere('cloud');
+        setCloudPick(provider === inUseCloud ? inUseModel : null);
         stepTo('key');
-    }, [stepTo, running, viewing]);
+    }, [stepTo, running, viewing, inUseCloud, inUseModel]);
     const useCloud = useCallback(() => toCloud(readChoice() === 'amd' ? 'amd' : 'fireworks'), [toCloud]);
 
-    // Chat already runs in the cloud: carry on there rather than recommend a local download.
-    const inUseCloud = useModelStore((s) => (s.active?.remote && s.active.provider !== 'local' ? s.active.provider : null));
     const continueFromChecks = useCallback(() => {
         if (inUseCloud) toCloud(inUseCloud);
         else stepTo('plan');
@@ -844,10 +849,10 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
     const switchCloud = useCallback((id: ProviderId) => {
         saveChoice(id);
         setChoice(id);
-        setCloudPick(null);
+        setCloudPick(id === inUseCloud ? inUseModel : null);
         setCloudDefault(null);
         setKeyState({ busy: false, error: null, done: false });
-    }, []);
+    }, [inUseCloud, inUseModel]);
 
     // Extras added during the run: fetched and tested the same way, once it ends.
     useEffect(() => {
@@ -1071,7 +1076,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             <SetupChecks hardware={hardware} hardwareError={hardwareError} plan={plan} serverRun={serverRun} awaitingChoice={!!lemonadeFound && !lemonadeSettled} />
                             {serverRun?.state === 'running' && (
                                 <>
-                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} />
+                                    <RunActivity run={serverRun} idle={t('setup.check.serverWorking')} bar={false} />
                                     <SetupFooter>
                                         <button type="button" className="btn-secondary" onClick={() => void cancel()}>{t('setup.progress.cancel')}</button>
                                     </SetupFooter>
@@ -1170,7 +1175,8 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 </section>
                             </div>
                             <SetupFooter>
-                                <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>
+                                {/* Both pick local models, which a cloud setup doesn't download. */}
+                                {where !== 'cloud' && <button type="button" className="btn-secondary" onClick={customize} disabled={busy || runGoing}>{t('setup.plan.customize')}</button>}
                                 {where === 'cloud' ? (
                                     <button type="button" className="btn-primary" onClick={useCloud} disabled={runGoing}>{t('setup.continue')}</button>
                                 ) : (
@@ -1195,10 +1201,12 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                             )}
                             {short && <p className="setup-error" role="alert">{t('setup.summary.short', { need: formatSize(short.needGb), free: formatSize(short.freeGb), drive: t('setup.summary.theDrive'), freeUp: formatSize(short.freeUpGb) })}</p>}
                             {(actionError ?? startError) && <SetupAlert text={(actionError ?? startError)!} />}
-                            <details className="setup-disclosure">
-                                <summary>{t('setup.plan.whatDownloads')}</summary>
-                                <DownloadContents plan={plan} models={pending} />
-                            </details>
+                            {where !== 'cloud' && (
+                                <details className="setup-disclosure">
+                                    <summary>{t('setup.plan.whatDownloads')}</summary>
+                                    <DownloadContents plan={plan} models={pending} />
+                                </details>
+                            )}
                         </>
                     )}
 
@@ -1212,6 +1220,7 @@ export function SetupScreen({ onReady, onClose }: SetupScreenProps) {
                                 mode="setup"
                                 headingId="setup-title"
                                 names={names}
+                                cloud={choice !== 'local'}
                                 onBack={backOne}
                                 onSkip={() => stepTo(gpuFrom)}
                                 onContinue={() => stepTo(gpuFrom)}

@@ -428,6 +428,17 @@
         ],
         "title": "Narration"
       },
+      "needsModel": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Needsmodel"
+      },
       "planNarrations": {
         "anyOf": [
           {
@@ -2173,6 +2184,11 @@
       "skipped": {
         "default": 0,
         "title": "Skipped",
+        "type": "integer"
+      },
+      "skipped_images": {
+        "default": 0,
+        "title": "Skipped Images",
         "type": "integer"
       }
     },
