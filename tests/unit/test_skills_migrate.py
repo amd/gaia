@@ -36,6 +36,8 @@ from gaia.skills.migrate import (
     migrate_text,
 )
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 REAL_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "openclaw_skills"
 
 

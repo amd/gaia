@@ -34,6 +34,8 @@ from tests.unit.skills_helpers import (
     write_audit_report,
 )
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AMD_KEY_ID = "32197c4382b36336fa69e041750dd0d9"
 

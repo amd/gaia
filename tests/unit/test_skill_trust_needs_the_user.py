@@ -37,6 +37,8 @@ from gaia.skills.manager import SkillManager
 from gaia.skills.publish import publish_skill
 from gaia.skills.signing import TrustStore, generate_key
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 SRC = Path(gaia.__file__).resolve().parent.parent
 
 
@@ -152,6 +154,21 @@ def test_the_tool_context_ends_with_the_tool():
     with agent_tool_running():
         assert started_by_agent()
     assert not started_by_agent()
+
+
+def test_the_user_terminal_fixture_drops_an_inherited_marker():
+    """Run under GAIA's own tools, pytest inherits the marker; opted-in tests don't."""
+    assert AGENT_CHILD_ENV not in os.environ
+    assert not started_by_agent()
+
+
+def test_the_user_terminal_fixture_still_lets_a_test_set_the_marker(
+    manager, monkeypatch
+):
+    monkeypatch.setenv(AGENT_CHILD_ENV, "1")
+
+    with pytest.raises(SkillHumanOnlyError):
+        promote_skill("anything", manager=manager)
 
 
 def test_the_agent_tool_runner_marks_its_tool_bodies():

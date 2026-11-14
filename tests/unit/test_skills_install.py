@@ -41,6 +41,8 @@ from tests.unit.skills_helpers import (
     write_audit_report,
 )
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 SKILL_BODY = """# Web Research
 
 1. Call `web-research/search_web` with the user's question.

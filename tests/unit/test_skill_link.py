@@ -19,6 +19,8 @@ from gaia.skills.link import (
 )
 from gaia.skills.manager import SkillManager
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 CODELOAD = "https://codeload.github.com"
 
 
