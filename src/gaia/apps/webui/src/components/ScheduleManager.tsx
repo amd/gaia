@@ -240,16 +240,16 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
             onClick={() => selectSchedule(isSelected ? null : schedule.name)}
         >
             <div className="schedule-card-header">
-                <span className="schedule-card-name" dir="auto">{schedule.name}</span>
+                <span className="schedule-card-name" dir="auto" title={schedule.name}>{schedule.name}</span>
                 <span className={`schedule-card-status ${schedule.status}`}>{t(STATUS_LABEL[schedule.status])}</span>
             </div>
-            <div className="schedule-card-prompt" dir="auto">{schedule.prompt}</div>
+            <div className="schedule-card-prompt" dir="auto" title={schedule.prompt}>{schedule.prompt}</div>
             <div className="schedule-card-meta">
                 <span title={stripIsolates(described ?? schedule.description)}><Clock size={11} /> {described ?? <bdi>{schedule.description}</bdi>}</span>
                 <span>{t('schedules.card.runs', { n: schedule.run_count })}</span>
                 {schedule.error_count > 0 && <span>{t('schedules.card.errors', { n: schedule.error_count })}</span>}
-                <span>{t.compose((say) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(t)) }))}</span>
-                <span>{t.compose((say) => say('schedules.card.next', { when: schedule.status === 'paused' ? say('schedules.status.paused') : formatNextRun(schedule.next_run_at, now, say, dateLocale(t)) }))}</span>
+                <span>{t.compose((say, code) => say('schedules.card.last', { when: formatTime(schedule.last_run_at, say, undefined, dateLocale(translator(code))) }))}</span>
+                <span>{t.compose((say, code) => say('schedules.card.next', { when: schedule.status === 'paused' ? say('schedules.status.paused') : formatNextRun(schedule.next_run_at, now, say, dateLocale(translator(code))) }))}</span>
             </div>
             {schedule.last_error && (
                 <div className="schedule-card-error">{t('schedules.card.lastFailed', { error: schedule.last_error })}</div>
@@ -289,7 +289,7 @@ function ScheduleCard({ schedule }: { schedule: Schedule }) {
                         <div className="schedule-results-list">
                             {results.map((r) => (
                                 <div key={r.id} className="schedule-result-item">
-                                    <div className="schedule-result-time">{t.compose((say) => formatTime(r.executed_at, say, undefined, dateLocale(t)))}</div>
+                                    <div className="schedule-result-time">{t.compose((say, code) => formatTime(r.executed_at, say, undefined, dateLocale(translator(code))))}</div>
                                     {r.error ? (
                                         <div className="schedule-result-content schedule-result-error"><bdi>{r.error}</bdi></div>
                                     ) : (
@@ -316,10 +316,11 @@ export function ScheduleManager() {
     useDialogFocus(dialogRef, true);
 
     // Create form state
-    const [showCreate, setShowCreate] = useState(false);
-    const [nlInput, setNlInput] = useState('');
-    const [scheduleName, setScheduleName] = useState('');
-    const [schedulePrompt, setSchedulePrompt] = useState('');
+    const [draft] = useState(() => useScheduleStore.getState().draft);
+    const [showCreate, setShowCreate] = useState(draft !== null);
+    const [nlInput, setNlInput] = useState(draft?.when ?? '');
+    const [scheduleName, setScheduleName] = useState(draft?.name ?? '');
+    const [schedulePrompt, setSchedulePrompt] = useState(draft?.prompt ?? '');
     const [parsed, setParsed] = useState<ParsedSchedule | null>(null);
     const [parsing, setParsing] = useState(false);
     const [creating, setCreating] = useState(false);
@@ -335,6 +336,11 @@ export function ScheduleManager() {
     const scheduleRejected = !parsing && parsed !== null && !parsed.valid;
     // The parser's reason is English; with no English in the input, the hint says what to fix.
     const showRejectReason = scheduleRejected && /[A-Za-z]/.test(nlInput);
+
+    useEffect(() => {
+        const filled = nlInput.trim() || scheduleName.trim() || schedulePrompt.trim();
+        useScheduleStore.getState().setDraft(filled ? { when: nlInput, name: scheduleName, prompt: schedulePrompt } : null);
+    }, [nlInput, scheduleName, schedulePrompt]);
 
     // Debounced parse of NL input
     const parseTimerRef = useRef<number | null>(null);
@@ -385,6 +391,7 @@ export function ScheduleManager() {
         try {
             // Pass the raw NL input as interval - backend will re-parse it
             await createSchedule(scheduleName.trim(), nlInput.trim(), schedulePrompt.trim());
+            useScheduleStore.getState().setDraft(null);
             setNlInput('');
             setScheduleName('');
             setSchedulePrompt('');
@@ -457,7 +464,7 @@ export function ScheduleManager() {
                                                 )}
                                                 {parsed.valid && parsed.next_run_at && (
                                                     <div className="schedule-parsed-next">
-                                                        {t('schedules.nextRun', { when: new Date(parsed.next_run_at).toLocaleString(dateLocale(t)) })}
+                                                        {t.compose((say, code) => say('schedules.nextRun', { when: formatNextRun(parsed.next_run_at, undefined, say, dateLocale(translator(code))) }))}
                                                     </div>
                                                 )}
                                                 {parsed.valid && (

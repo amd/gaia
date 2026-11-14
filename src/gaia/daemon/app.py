@@ -13,12 +13,14 @@ where to look — no silent fallback to an unauthenticated response.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import secrets
 import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
 
+from gaia.client_hangups import quiet_client_hangups
 from gaia.daemon.constants import (
     API_PREFIX,
     AUTH_SCHEME,
@@ -27,6 +29,7 @@ from gaia.daemon.constants import (
 )
 from gaia.daemon.paths import instance_path
 from gaia.daemon.timeouts import agent_read_timeout
+from gaia.listener_guard import keep_listening_after_client_resets
 
 
 def build_require_token(token: str):
@@ -140,6 +143,10 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(_app):
+        # A client quitting mid-connection is not an error here.
+        quiet_client_hangups(asyncio.get_running_loop())
+        # A client resetting a queued connection must not close the listener.
+        keep_listening_after_client_resets(asyncio.get_running_loop())
         if on_startup is not None:
             on_startup()
         try:

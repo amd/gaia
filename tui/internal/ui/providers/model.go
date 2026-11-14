@@ -14,6 +14,7 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/gaiamodel"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/setupapi"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -375,8 +376,48 @@ func loadCatalog(ctx context.Context, c *lemonade.Client, provider string) model
 			note = "Your added models aren't listed: " + err.Error()
 		}
 	}
-	entries, err := c.Catalog(ctx, provider, capacity, capErr, added...)
+	var npu lemonade.NPUVerdict
+	if provider == "local" {
+		npu = readNPUVerdict(ctx)
+	}
+	entries, err := c.Catalog(ctx, provider, capacity, capErr, npu, added...)
+	if provider == "local" && err == nil {
+		chosen, cerr := readChosenModels()
+		if cerr != nil {
+			note = "The model you chose last isn't listed: " + cerr.Error()
+		}
+		entries = lemonade.OnlyProvenNPU(entries, chosen)
+	}
 	return modelsMsg{source: c, entries: entries, capacity: line, err: err, note: note}
+}
+
+// newSetupAPI and planTimeout are hooks so tests reach no daemon.
+var (
+	newSetupAPI    = func() setupapi.API { return setupapi.NewAttachedDaemon() }
+	planTimeout    = 10 * time.Second
+	readNPUVerdict = func(ctx context.Context) lemonade.NPUVerdict { return readNPUVerdictFrom(ctx, newSetupAPI()) }
+)
+
+// readNPUVerdictFrom asks the daemon what it knows about this PC's NPU. A plan
+// that cannot be read is unknown, never "no NPU": the memory rule decides, and
+// only a known verdict may claim absence or unreadiness.
+func readNPUVerdictFrom(ctx context.Context, api setupapi.API) lemonade.NPUVerdict {
+	ctx, cancel := context.WithTimeout(ctx, planTimeout)
+	defer cancel()
+	plan, err := api.Plan(ctx)
+	if err != nil || plan.NPU == nil {
+		return lemonade.NPUVerdict{}
+	}
+	reasons := make([]string, 0, len(plan.NPU.Problems))
+	for _, p := range plan.NPU.Problems {
+		reasons = append(reasons, strings.TrimSpace(strings.TrimRight(p.Title+" "+p.Fix, ".")))
+	}
+	return lemonade.NPUVerdict{
+		Present: plan.NPU.Present,
+		Ready:   plan.NPU.Ready,
+		Known:   true,
+		Reasons: reasons,
+	}
 }
 
 func waitPull(ch chan tea.Msg) tea.Cmd {

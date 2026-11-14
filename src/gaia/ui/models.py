@@ -663,6 +663,8 @@ class AgentStepResponse(BaseModel):
     # card from history.
     render: Optional[str] = None
     data: Optional[Any] = None
+    # A model the call needed and didn't find; a reopened chat still offers it.
+    needsModel: Optional[str] = None
 
 
 class InferenceStatsResponse(BaseModel):
@@ -862,6 +864,8 @@ class BrowseResponse(BaseModel):
     parent_path: Optional[str] = None
     entries: List[FileEntry]
     quick_links: List[QuickLink] = Field(default_factory=list)
+    # Why a chat can't be given this folder (home, a drive root, ...); None if it can.
+    folder_refusal: Optional[str] = None
 
 
 # ── Folder Indexing ────────────────────────────────────────────────────────
@@ -881,6 +885,8 @@ class IndexFolderResponse(BaseModel):
     failed: int = 0
     # Files in the folder that aren't a type GAIA indexes.
     skipped: int = 0
+    # Images in the folder: GAIA reads them only when picked one by one.
+    skipped_images: int = 0
     documents: List[DocumentResponse] = Field(default_factory=list)
     errors: List[str] = Field(default_factory=list)
 

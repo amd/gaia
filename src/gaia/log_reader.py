@@ -74,6 +74,11 @@ _REDACTIONS = (
     ),
     # A bare "token" only as key=value: llama.cpp prints "token: 1 '<eos>'" about vocabulary.
     (re.compile(r"(?i)\b(token=)[^\s\"',}&]+"), r"\1" + REDACTED),
+    # An OAuth redirect's query, e.g. an access-log line for the sign-in callback.
+    (
+        re.compile(r"(?i)([?&](?:code|state|code_verifier|session_state)=)[^\s&\"'#]+"),
+        r"\1" + REDACTED,
+    ),
     (re.compile(r"\bhf_[A-Za-z0-9]{16,}\b"), REDACTED),
     (re.compile(r"\bsk-[A-Za-z0-9_-]{16,}\b"), REDACTED),
     (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"), REDACTED),
@@ -98,6 +103,10 @@ _TRIGGERS = (
     "gh",
     "xox",
     "token=",
+    "?code",
+    "&code",
+    "?state",
+    "&state",
     "--token",
     *(
         f"{kind}{sep}token"

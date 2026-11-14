@@ -252,6 +252,7 @@ export interface AgentStepResponse {
   mcpServerLabel?: string | null;
   mcpTool?: string | null;
   narration?: string | null;
+  needsModel?: string | null;
   planNarrations?: string[] | null;
   planSteps?: string[] | null;
   policyVersion?: string | null;
@@ -323,6 +324,7 @@ export interface BodyUploadFileApiFilesUploadPost {
 export interface BrowseResponse {
   current_path: string;
   entries: FileEntry[];
+  folder_refusal?: string | null;
   parent_path?: string | null;
   quick_links?: QuickLink[];
 }
@@ -712,6 +714,7 @@ export interface IndexFolderResponse {
   failed?: number;
   indexed?: number;
   skipped?: number;
+  skipped_images?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];

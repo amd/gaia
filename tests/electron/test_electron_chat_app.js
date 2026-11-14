@@ -967,7 +967,7 @@ describe('Chat App Integration', () => {
     it('should have keyboard accessibility on session items', () => {
       // Session rows are native buttons, so Tab/Enter/Space work without handlers.
       expect(sidebarContent).toMatch(
-        /<button\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
+        /<button\s+ref=\{mainRef\}\s+type="button"\s+id=\{rowId\}\s+className="sb-row-main"\s+onClick=\{\(\) => onSelect\(session\.id\)\}/
       );
       expect(sidebarContent).not.toContain('role="button"');
     });
@@ -1150,7 +1150,7 @@ describe('Chat App Integration', () => {
     it('should have drag-and-drop with visual overlay', () => {
       expect(chatContent).toContain('isDragOver');
       expect(chatContent).toContain('drag-overlay');
-      expect(chatContent).toContain('Drop files to index');
+      expectTranslated(chatContent, "{t('chat.dropOverlay')}", 'chat.dropOverlay', 'Drop files to index them for this chat');
     });
 
     it('should auto-upload dropped files', () => {
@@ -1181,8 +1181,8 @@ describe('Chat App Integration', () => {
       expectTranslated(composerContent, "aria-label={t('composer.stop')}", 'composer.stop', 'Stop');
       expectTranslated(composerContent, "aria-label={t('composer.attach')}", 'composer.attach', 'Attach files');
       expect(chatContent).toContain('aria-label="Chat title"');
-      expect(chatContent).toContain('aria-label="Export chat"');
-      expect(chatContent).toContain('aria-label="Browse files on this PC"');
+      expectTranslated(chatContent, "aria-label={t('chat.exportLabel')}", 'chat.exportLabel', 'Export chat');
+      expectTranslated(chatContent, "aria-label={t('chat.browseFiles')}", 'chat.browseFiles', 'Browse files on this PC');
     });
   });
 
@@ -1344,8 +1344,8 @@ describe('Chat App Integration', () => {
     });
 
     it('should use dynamic version from build constant', () => {
-      expect(advancedContent).toContain('const version = __APP_VERSION__');
-      expect(advancedContent).toContain('GAIA v{version}');
+      const aboutContent = fs.readFileSync(path.join(settingsDir, 'AboutSettings.tsx'), 'utf8');
+      expect(aboutContent).toContain('`GAIA v${__APP_VERSION__}`');
     });
 
     it('should render as a modal settings dialog with section nav', () => {
@@ -1379,9 +1379,11 @@ describe('Chat App Integration', () => {
       expect(privacyContent).toContain('className="btn-danger"');
     });
 
-    it('should have danger zone warning text and two-step confirm', () => {
+    it('should have danger zone warning text and a confirmation sheet', () => {
       expect(privacyContent).toContain("t('settings.privacy.deleteWarning')");
-      expect(privacyContent).toContain("confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')");
+      expect(privacyContent).toContain('<ConfirmSheet');
+      expect(privacyContent).toContain("'settings.privacy.deleteYes'");
+      expect(privacyContent).toContain("t('settings.privacy.deleteCancel')");
     });
   });
 

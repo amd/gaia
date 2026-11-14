@@ -77,6 +77,20 @@ export function useFollowScroll(
         if (e.target === e.currentTarget) scrollbarHeldRef.current = true;
     }, []);
 
+    // A bar appearing above the list shrinks it without a scroll event: keep a follower at the end.
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        let height = el.clientHeight;
+        const observer = new ResizeObserver(() => {
+            const shrank = el.clientHeight < height;
+            height = el.clientHeight;
+            if (shrank && followRef.current && !userScrolling()) el.scrollTop = el.scrollHeight;
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [scrollRef, followRef, userScrolling]);
+
     useEffect(() => {
         const release = () => { scrollbarHeldRef.current = false; };
         const onKey = (e: KeyboardEvent) => {
@@ -94,6 +108,20 @@ export function useFollowScroll(
             window.removeEventListener('keydown', onKey);
         };
     }, [markUserScroll, clearUserScroll]);
+
+    // A card opening in the composer shrinks the list without a scroll event, hiding its last rows.
+    useEffect(() => {
+        const el = scrollRef.current;
+        if (!el || typeof ResizeObserver === 'undefined') return;
+        let height = el.clientHeight;
+        const observer = new ResizeObserver(() => {
+            const shrank = el.clientHeight < height;
+            height = el.clientHeight;
+            if (shrank && followRef.current && !userScrolling()) el.scrollTop = el.scrollHeight;
+        });
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [scrollRef, followRef, userScrolling]);
 
     return { userScrolling, clearUserScroll, listProps: { onScroll, onWheel, onTouchMove: markUserScroll, onPointerDown } };
 }
