@@ -100,6 +100,22 @@
     color: var(--text-primary);
 }
 
+/* Settings > About: one link per line. */
+.settings-about-links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    list-style: none;
+}
+
+.settings-about-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-size: 13.5px;
+}
+
 /* "Back to Setup" after a Setup row opened another section. */
 .settings-back {
     display: inline-flex;
@@ -535,6 +551,7 @@
     margin-inline-start: 0;
 }
 
+/* One fact per line, so two never run into each other. */
 .model-chips .settings-more > .model-row-meta {
     display: block;
 }

@@ -11,8 +11,8 @@
     overflow: hidden;
     font-variant-numeric: tabular-nums;
 }
-/* Every tab sits in the same centred column; About you keeps its narrower reading width. */
-.memory-dashboard-body > :not(.mem-about) {
+/* Every tab sits in the same centred column, so switching tabs never moves the edges. */
+.memory-dashboard-body > * {
     max-width: 1080px;
     margin-inline: auto;
 }
@@ -1663,6 +1663,12 @@
 .mem-goals-toolbar { display: flex; gap: 8px; }
 
 /* Add form */
+.mem-form-error {
+    margin: 8px 0 0;
+    color: var(--danger);
+    font-size: 13px;
+}
+
 .mem-goals-add-form {
     display: flex; flex-direction: column; gap: 8px;
     padding: 12px; background: var(--bg-hover);
@@ -1817,10 +1823,6 @@ textarea.mem-input { resize: vertical; }
 }
 
 /* ── About you: what GAIA knows about the user ─────────────────────── */
-.mem-about {
-    max-width: 760px;
-    margin: 0 auto;
-}
 .mem-about-title {
     font-size: 20px;
     font-weight: 600;

@@ -30,6 +30,7 @@ from gaia.agents.tools.workspace_paths import _resolve_target, _workspace_defaul
 from gaia.llm.lemonade_client import no_thinking_kwargs
 from gaia.logger import get_logger
 from gaia.rag.keyword_search import keyword_index
+from gaia.rag.normalize import search_form
 from gaia.rag.sdk import (
     EmbeddingUnavailableError,
     folder_index_skip_reason,
@@ -821,6 +822,40 @@ def _asks_once_for_another_search(mixin: Any):
     return wrap
 
 
+# A table row as indexed: ``Header: value | Header: value | Header: value``.
+_TABLE_ROW = re.compile(r"^[^|\n]+: [^|\n]*(?: \| [^|\n]+: [^|\n]*){2,}$", re.MULTILINE)
+
+_TABLE_MATH_NOTE = (
+    "\n\nSome chunks are table rows. For a total, count, average, largest or "
+    "smallest over rows, copy the values into run_python and report what it "
+    "prints; do not work it out in your head. Read a row's values from its own "
+    "line only."
+)
+
+
+def _computes_table_math(mixin: Any):
+    """Send arithmetic over retrieved table rows to run_python, where it exists."""
+
+    def wrap(search: Callable[..., Dict[str, Any]]):
+        @functools.wraps(search)
+        def wrapper(*args, **kwargs) -> Dict[str, Any]:
+            result = search(*args, **kwargs)
+            if (
+                result.get("status") == "success"
+                and "run_python" in getattr(mixin, "_tools_registry", {})
+                and any(
+                    _TABLE_ROW.search(str(chunk.get("content", "")))
+                    for chunk in result.get("chunks") or []
+                )
+            ):
+                result["instruction"] = result.get("instruction", "") + _TABLE_MATH_NOTE
+            return result
+
+        return wrapper
+
+    return wrap
+
+
 def _documents_instruction(has_pages: bool, all_paged: bool = True) -> str:
     """How query_documents asks the model to cite: the full path, plus pages if any."""
     instruction = (
@@ -1049,6 +1084,7 @@ class RAGToolsMixin:
         )
         @_answers_in_question_language(self)
         @_asks_once_for_another_search(self)
+        @_computes_table_math(self)
         def query_documents(
             query: str, debug: bool = False  # pylint: disable=unused-argument
         ) -> Dict[str, Any]:
@@ -1458,6 +1494,7 @@ class RAGToolsMixin:
         )
         @_answers_in_question_language(self)
         @_asks_once_for_another_search(self)
+        @_computes_table_math(self)
         def query_specific_file(file_path: str, query: str) -> Dict[str, Any]:
             """
             Query a specific file for fast, targeted retrieval.
@@ -1958,7 +1995,8 @@ class RAGToolsMixin:
                 # so exact matches retain their source file and PDF page.
                 matching_chunks = []
                 matching_details = []
-                pattern_lower = pattern.lower()
+                # Digits, vowel marks and compatibility forms written either way match.
+                pattern_lower = search_form(pattern).lower()
 
                 if debug_info:
                     debug_info["total_chunks_searched"] = len(searched)
@@ -1967,7 +2005,7 @@ class RAGToolsMixin:
                     )
 
                 for index, chunk, source_file in searched:
-                    if pattern_lower in chunk.lower():
+                    if pattern_lower in search_form(chunk).lower():
                         matching_chunks.append(chunk)
                         matching_details.append((index, chunk, source_file))
 
@@ -1976,7 +2014,9 @@ class RAGToolsMixin:
                             # Find the line containing the pattern
                             lines = chunk.split("\n")
                             matching_lines = [
-                                line for line in lines if pattern_lower in line.lower()
+                                line
+                                for line in lines
+                                if pattern_lower in search_form(line).lower()
                             ]
                             debug_info["chunks_with_matches"].append(
                                 {
@@ -2035,7 +2075,7 @@ class RAGToolsMixin:
                         matching_entries = [
                             entry
                             for entry in page_entries
-                            if pattern_lower in entry["content"].lower()
+                            if pattern_lower in search_form(entry["content"]).lower()
                         ]
                         if matching_entries:
                             matched_content = matching_entries[0]["content"]
