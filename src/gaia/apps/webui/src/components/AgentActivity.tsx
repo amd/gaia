@@ -15,6 +15,7 @@ import {
     BookOpen,
     Database,
     FolderOpen,
+    Folder,
     BarChart3,
     Globe,
     FileEdit,
@@ -44,6 +45,7 @@ import { StepResult } from './LongContent';
 import { isMessageKey, ref, type MessageKey, type MessageRef } from '../i18n/registry';
 import { tEn, useT, type Translate } from '../i18n/useT';
 import { localizeLiveStatus } from '../utils/liveStatus';
+import { ensureModel } from '../stores/modelNeededStore';
 import './AgentActivity.css';
 
 // ── Tool metadata: friendly names, icons, colors ──────────────────────────
@@ -181,6 +183,7 @@ function toolFallbackLabel(step: AgentStep, t: Translate): string {
     const unfinished = step.success == null && !step.result;
     return step.active
         ? say(t, meta.activeLabel)
+        : step.timedOut ? t('tool.timedOut', { label: meta.activeLabel })
         : step.declined ? t('tool.declined', { label: meta.activeLabel })
         : step.success === false ? t('tool.failed', { label: meta.activeLabel })
         : unfinished ? t('tool.unfinished', { label: meta.activeLabel }) : say(t, meta.label);
@@ -192,8 +195,8 @@ export function toolRowText(step: AgentStep, t: Translate = tEn): string {
     if (step.mcpServerLabel) return toolFallbackLabel(step, t);
     // GAIA writes this row itself, so it can say it in the UI's language.
     if (step.tool === 'use_skill' && step.detail) return t('activity.usingSkill', { name: step.detail });
-    // A present-tense narration would read as if the call you declined ran.
-    if (step.declined && !step.active) return toolFallbackLabel(step, t);
+    // A present-tense narration would read as if a call that never ran had run.
+    if ((step.declined || step.timedOut) && !step.active) return toolFallbackLabel(step, t);
     return step.narration ? compactNarration(step.narration) : toolFallbackLabel(step, t);
 }
 
@@ -204,6 +207,18 @@ const MCP_OUTPUT_PREVIEW_LINES = 5;
 
 /** Below this many call rows the list is short enough to scan without a filter. */
 const FILTER_MIN_TOOL_ROWS = 6;
+
+const FETCH_ERROR = /^Error fetching page:\s*(\d{3})?/;
+
+/** What a failed page fetch shows on its row; the library's own error stays in the opened step. */
+export function failureText(step: AgentStep, t: Translate): string {
+    const result = step.result ?? '';
+    const match = step.tool === 'fetch_page' ? FETCH_ERROR.exec(result) : null;
+    if (!match) return result;
+    const code = match[1];
+    if (code && ['401', '403', '429'].includes(code)) return t('activity.fetchBlocked', { code });
+    return t('activity.fetchFailed');
+}
 
 /**
  * Shorten the detail of "Reading file: <long path>" to the part that differs
@@ -350,9 +365,11 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
 
-        // Merge consecutive thinking steps; concatenate so accumulated text survives.
+        // Merge consecutive thinking steps; concatenate so accumulated text survives. A step
+        // that has a duration ends a thought; saved token pieces have none until their last.
         if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-            const merged = (prev.detail || '') + (step.detail || '');
+            const gap = prev.latencyMs != null && /\S$/.test(prev.detail || '') && /^\S/.test(step.detail || '') ? '\n\n' : '';
+            const merged = (prev.detail || '') + gap + (step.detail || '');
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
         }
@@ -443,7 +460,8 @@ export function stepsSummary(rows: ActivityRow[], t: Translate = tEn): string {
     for (const row of rows) {
         let label: MessageRef;
         let failedLabel: MessageRef | undefined;
-        if (row.type === 'tool' && row.declined) label = ref('activity.youDeclined');
+        if (row.type === 'tool' && row.timedOut) label = ref('activity.timedOut');
+        else if (row.type === 'tool' && row.declined) label = ref('activity.youDeclined');
         else if (row.type === 'tool') {
             const meta = getToolMeta(row.tool, row);
             const skill = skillName(row);
@@ -534,6 +552,21 @@ interface AgentActivityProps {
     toolStatus?: string | null;
     /** The turn's answer, so a note it repeats is not shown twice. */
     answer?: string;
+}
+
+const needsVision = (step: AgentStep) => step.type === 'tool' && step.needsModel === 'vision' && !step.active;
+
+/** The download an image step needs, offered where the user is looking. */
+function VisionOffer() {
+    const t = useT();
+    return (
+        <div className="flow-tool-offer">
+            <span>{t('activity.visionNeeded')}</span>
+            <button type="button" className="btn-secondary" onClick={() => { void ensureModel('vision'); }}>
+                {t('activity.getVisionModel')}
+            </button>
+        </div>
+    );
 }
 
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
@@ -650,7 +683,9 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                                 >
                                     {failed
                                         ? <AlertCircle size={13} className="agent-icon-error" />
-                                        : <CheckCircle2 size={13} className="flow-steps-done" />}
+                                        : visible.some((r) => r.type === 'tool' && r.declined)
+                                            ? <Ban size={13} className="flow-steps-done" />
+                                            : <CheckCircle2 size={13} className="flow-steps-done" />}
                                     <span className="flow-steps-text">{stepsSummary(visible, t)}</span>
                                     <ChevronRight size={12} className={`flow-tool-chevron ${open ? 'expanded' : ''}`} />
                                 </button>
@@ -658,6 +693,8 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                             {open && <div className="flow-steps-rows">{shown.map(renderRow)}</div>}
                             {/* A warning never hides behind the fold. */}
                             {!open && visible.filter(isWarning).map(renderRow)}
+                            {/* Nor does the download an image step asked for. */}
+                            {!open && !live && visible.some(needsVision) && <VisionOffer />}
                         </div>
                     );
                 })}
@@ -813,7 +850,7 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
     return <>{parts}</>;
 }
 
-// ── Flow: File list from file search tools ───────────────────────────────
+// ── Flow: File list from file search and folder listing tools ────────────
 
 function FileListView({ fileList }: { fileList: { files: Array<Record<string, unknown>>; total: number } }) {
     const t = useT();
@@ -837,7 +874,9 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
         <div className="file-list-view">
             {displayFiles.map((f, i) => (
                 <div key={i} className="file-list-item">
-                    <File size={11} className="file-list-icon" />
+                    {f.kind === 'folder'
+                        ? <Folder size={11} className="file-list-icon" data-kind="folder" />
+                        : <File size={11} className="file-list-icon" />}
                     <span className="file-list-name">{getFileName(f, i)}</span>
                     {getDirectory(f) && <span className="file-list-dir">{getDirectory(f)}</span>}
                 </div>
@@ -879,8 +918,9 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const line = waiting ? t('activity.waiting') : live || toolRowText(step, t);
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
-    const declined = !!step.declined && !step.active;
-    const failure = step.success === false && step.result && !declined ? step.result : '';
+    const notRun = (!!step.declined || !!step.timedOut) && !step.active;
+    // A missing vision model is said by the offer under the row, not by the tool's raw error.
+    const failure = step.success === false && step.result && !notRun && !step.needsModel ? failureText(step, t) : '';
     const timing = waiting
         ? ''
         : step.active
@@ -888,7 +928,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
         : step.latencyMs != null ? formatToolLatency(step.latencyMs) : '';
 
     return (
-        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false && !declined ? 'error' : ''} ${declined ? 'declined' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
+        <div className={`flow-tool ${step.active ? 'active' : ''} ${step.success === false && !notRun ? 'error' : ''} ${notRun ? 'declined' : ''} ${SKILL_USE_TOOLS.has(step.tool ?? '') ? 'skill' : ''}`}>
             <button
                 className="flow-tool-header"
                 onClick={onToggle}
@@ -903,7 +943,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     {/* What the step did, not whether it worked: only a running or failed step says otherwise. */}
                     {step.active && !waiting ? (
                         <Loader2 size={13} className="flow-tool-spinner" />
-                    ) : declined ? (
+                    ) : notRun ? (
                         <Ban size={13} className="flow-tool-icon" />
                     ) : step.success === false ? (
                         <AlertCircle size={13} style={{ color: 'var(--danger)' }} />
@@ -929,6 +969,8 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                     </span>
                 </div>
             </button>
+
+            {step.needsModel === 'vision' && !step.active && <VisionOffer />}
 
             {isExpanded && (
                 <div className="flow-tool-detail">

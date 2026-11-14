@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import tempfile
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1233,7 +1234,10 @@ class TestCustomModelIsTheChosenModel:
 
         assert resp.status_code == 409
         detail = resp.json()["detail"]
-        assert "Can't switch to big-model · othercloud: Local only is on." in detail
+        assert (
+            "Can't switch to big-model · othercloud: Local only is on, so it was blocked: it is a cloud model."
+            in detail
+        )
         assert "Settings > Privacy" in detail and "gaia config" not in detail
         assert asked == [("GET", "models?show_all=true")]
         assert GaiaConfig.load().last_model == "Qwen3.6-35B-A3B-GGUF"
@@ -1994,6 +1998,38 @@ class TestExportEndpoint:
 
         content = client.get(f"/api/sessions/{sid}/export").json()["content"]
         assert "*Model: Only-GGUF*" in content
+
+    def test_export_reads_like_a_document_not_a_database_dump(self, client, db):
+        sid = client.post(
+            "/api/sessions", json={"model": "fireworks.deepseek-v4p1-flash"}
+        ).json()["id"]
+        db.add_message(
+            sid,
+            "user",
+            "What color is it?\n\n"
+            "[notes.txt](/api/files/uploads/a23f365ad6b1_notes.txt)\n"
+            "![red square.png](/api/files/uploads/5f7e41b718f3_red_square.png)",
+        )
+        db.add_message(
+            sid,
+            "assistant",
+            "Red.",
+            inference_stats={"model": "fireworks.deepseek-v4p1-flash"},
+        )
+
+        content = client.get(f"/api/sessions/{sid}/export").json()["content"]
+
+        assert "+00:00" not in content
+        assert re.search(
+            r"\*Created: [A-Z][a-z]+ \d{1,2}, \d{4}, \d{1,2}:\d{2} [AP]M\*", content
+        )
+        assert "*Model: deepseek-v4p1-flash*" in content
+        assert "**Assistant (deepseek-v4p1-flash):**" in content
+        assert "fireworks." not in content
+        assert "/api/files/uploads" not in content
+        assert "a23f365ad6b1" not in content
+        assert "Attached: notes.txt" in content
+        assert "Attached: red square.png" in content
 
     def test_export_json(self, client, db):
         create_resp = client.post("/api/sessions", json={"title": "JSON Export"})

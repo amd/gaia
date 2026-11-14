@@ -15,6 +15,7 @@ import { STATE_LABELS, isDownloading, modelState, placementText } from './modelM
 import { InfoBubble } from './InfoBubble';
 import { formatPrice } from './settings/cloudPrice';
 import { useT } from '../i18n/useT';
+import { providerName, providerNotice } from '../utils/providerText';
 import { MarkedText, markLtr } from './MarkedText';
 import type { ProviderInfo, ProviderModel } from '../types';
 
@@ -406,7 +407,7 @@ export function ModelChip() {
                         ? UNKNOWN_PLACE_TITLE
                         // The server writes the model name as Markdown code; a tooltip shows backticks literally.
                         : place.description?.replace(/`/g, '')
-                            ?? (place.remote ? `Runs on ${place.label} — chat history leaves this PC` : 'Runs on this PC');
+                            ?? (place.remote ? t('modelStatus.runsRemote', { name: place.label }) : t('modelStatus.runsHere'));
 
     return (
         <div className="composer-chip-wrap">
@@ -426,7 +427,7 @@ export function ModelChip() {
                 {autoSwitchError && <AlertCircle size={12} aria-label="Model switch failed" />}
                 <ChevronDown size={12} aria-hidden="true" />
             </button>
-            <Popover open={open} onClose={close} anchor={anchor} label={t('modelMenu.label')} align="end">
+            <Popover open={open} onClose={close} anchor={anchor} label={t('modelMenu.label')} align="end" className="model-menu">
                 {turnRunning && (
                     <div className="popover-message" role="status">
                         {chipModel
@@ -444,7 +445,7 @@ export function ModelChip() {
                 <div ref={list} role="listbox" aria-label={t('modelMenu.models')} onKeyDown={onListKey}>
                 {shownGroups!.map(({ provider, models, error: groupError }) => (
                     <div key={provider.id} role="group" aria-labelledby={`${listId}-${provider.id}`}>
-                        <div className="popover-heading" id={`${listId}-${provider.id}`}>{provider.name}</div>
+                        <div className="popover-heading" id={`${listId}-${provider.id}`}>{providerName(t, provider)}</div>
                         {groupError && <div className="popover-message is-error">{groupError}</div>}
                         {provider.key_state === KEY_WAITING ? (
                             <div className="popover-message" role="status">
@@ -583,9 +584,9 @@ export function ModelChip() {
                                     {pendingCloud?.model === m.id && pendingCloud.provider.id === provider.id && (
                                         // Next to the clicked row, so a long list can't hide it.
                                         <div ref={consent} className="popover-message" role="alert">
-                                            {pendingCloud.provider.privacy_notice}{' '}
+                                            {providerNotice(t, pendingCloud.provider)}{' '}
                                             <button type="button" className="link-btn" onClick={() => choose(pendingCloud.model, pendingCloud.provider)}>
-                                                Use {displayModelName(pendingCloud.model)}
+                                                {t('modelMenu.useModel', { name: displayModelName(pendingCloud.model) })}
                                             </button>
                                         </div>
                                     )}

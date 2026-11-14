@@ -399,6 +399,10 @@ export function MemoryDashboard() {
     const [goalStats, setGoalStats] = useState<GoalStats | null>(null);
     const [goalsLoading, setGoalsLoading] = useState(false);
     const goalStoreError = useGoalHealthStore((s) => s.error);
+    const goalStoreDamaged = useGoalHealthStore((s) => s.damaged);
+    const [goalsLoadError, setGoalsLoadError] = useState<string | null>(null);
+    const [goalFormError, setGoalFormError] = useState<string | null>(null);
+    const [resettingGoalStore, setResettingGoalStore] = useState(false);
     const [expandedGoalId, setExpandedGoalId] = useState<string | null>(null);
     const [confirmGoalDeleteId, setConfirmGoalDeleteId] = useState<string | null>(null);
     const [showAddGoalForm, setShowAddGoalForm] = useState(false);
@@ -600,8 +604,10 @@ export function MemoryDashboard() {
             ]);
             setGoals(goalsRes.goals);
             setGoalStats(statsRes);
+            setGoalsLoadError(null);
         } catch (err) {
             log.system.warn('Failed to load goals', err);
+            setGoalsLoadError(errorText(err));
         } finally {
             setGoalsLoading(false);
         }
@@ -615,6 +621,41 @@ export function MemoryDashboard() {
             log.system.error(`Goal action failed (${failure})`, err);
             showToast(t('mem.goals.failed', { what: ref(failure), error: errorText(err) }), 'error');
             return;
+        }
+        loadGoals();
+    }, [loadGoals, showToast, t]);
+
+    const createGoal = useCallback(async () => {
+        if (!goalForm.title.trim()) return;
+        setGoalFormError(null);
+        try {
+            await memoryApi.createGoal(goalForm);
+        } catch (err) {
+            log.system.error('Goal create failed', err);
+            // Said on the form itself: a toast is gone before anyone reads it.
+            setGoalFormError(t('mem.goals.failed', { what: ref('mem.goals.createFailed'), error: errorText(err) }));
+            return;
+        }
+        setGoalForm({ title: '', description: '', priority: 'medium' });
+        setShowAddGoalForm(false);
+        loadGoals();
+    }, [goalForm, loadGoals, t]);
+
+    // A goal list that reads again makes a "list is damaged" form error stale.
+    useEffect(() => {
+        if (!goalStoreError) setGoalFormError(null);
+    }, [goalStoreError]);
+
+    const startNewGoalList = useCallback(async () => {
+        setResettingGoalStore(true);
+        try {
+            const { kept } = await memoryApi.resetGoalStore();
+            showToast(t('mem.goals.newListStarted', { file: kept }), 'success');
+        } catch (err) {
+            log.system.error('Starting a new goal list failed', err);
+            showToast(t('mem.goals.failed', { what: ref('mem.goals.startNewListFailed'), error: errorText(err) }), 'error');
+        } finally {
+            setResettingGoalStore(false);
         }
         loadGoals();
     }, [loadGoals, showToast, t]);
@@ -1305,7 +1346,7 @@ export function MemoryDashboard() {
                             )}
                             {/* ── 1. Header Stat Cards ─────────────── */}
                             <div className="mem-stat-cards">
-                                <div className="mem-stat-card" data-accent="purple">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">{stats?.knowledge?.total ?? 0}</div>
                                     <div className="mem-stat-label">{t('mem.stat.stored')}</div>
                                     <div className="mem-stat-sub">
@@ -1324,7 +1365,7 @@ export function MemoryDashboard() {
                                         })()}
                                     </div>
                                 </div>
-                                <div className="mem-stat-card" data-accent="gold">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">{stats?.knowledge?.total_retrievals ?? 0}</div>
                                     <div className="mem-stat-label">{t('mem.stat.retrieved')}</div>
                                     <div className="mem-stat-sub">
@@ -1333,7 +1374,7 @@ export function MemoryDashboard() {
                                             : t('mem.stat.noRecalls')}
                                     </div>
                                 </div>
-                                <div className="mem-stat-card" data-accent="blue">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">{stats?.conversations?.total_sessions ?? 0}</div>
                                     <div className="mem-stat-label">{t('mem.stat.sessions')}</div>
                                     <div className="mem-stat-sub">
@@ -1344,14 +1385,14 @@ export function MemoryDashboard() {
                                         ) || t('mem.stat.totalTurns', { n: stats?.conversations?.total_turns ?? 0 })}
                                     </div>
                                 </div>
-                                <div className="mem-stat-card" data-accent="green">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">{stats?.tools?.total_calls ?? 0}</div>
                                     <div className="mem-stat-label">{t('mem.stat.toolCalls')}</div>
                                     <div className="mem-stat-sub" title={t('mem.stat.toolsNotLogged')}>
                                         {t('mem.stat.toolsExclMemory', { n: stats?.tools?.unique_tools ?? 0 })}
                                     </div>
                                 </div>
-                                <div className="mem-stat-card" data-accent="red">
+                                <div className="mem-stat-card">
                                     <div className="mem-stat-value">
                                         {stats?.tools?.overall_success_rate != null && (stats.tools.total_calls ?? 0) > 0
                                             ? `${Math.round(stats.tools.overall_success_rate * 100)}%`
@@ -2107,7 +2148,7 @@ export function MemoryDashboard() {
                                         aria-pressed={memoryEnabled}
                                         aria-label={t(memoryEnabled ? 'mem.settings.memoryOn' : 'mem.settings.memoryOff')}
                                     >
-                                        {t.bare(memoryEnabled ? 'mem.on' : 'mem.off')}
+                                        <span className="mem-toggle-knob" aria-hidden="true" />
                                     </button>
                                 </div>
                                 {/* Floating beta confirmation modal */}
@@ -2261,7 +2302,7 @@ export function MemoryDashboard() {
                                         aria-label={t('mem.settings.mcpToggle')}
                                         aria-pressed={mcpMemoryEnabled}
                                     >
-                                        {t.bare(mcpMemoryEnabled ? 'mem.on' : 'mem.off')}
+                                        <span className="mem-toggle-knob" aria-hidden="true" />
                                     </button>
                                 </div>
                                 <div className="mem-setting-row">
@@ -2293,7 +2334,7 @@ export function MemoryDashboard() {
                                         aria-label={t('mem.settings.discoveryToggle')}
                                         aria-pressed={systemDiscoveryConsent}
                                     >
-                                        {t.bare(systemDiscoveryConsent ? 'mem.on' : 'mem.off')}
+                                        <span className="mem-toggle-knob" aria-hidden="true" />
                                     </button>
                                 </div>
                                 <div className="mem-setting-row mem-setting-row-danger">
@@ -2423,6 +2464,7 @@ export function MemoryDashboard() {
                     {/* ── Profile Setup Tab ──────────────────────────── */}
                     {activeTab === 'profile' && (
                         <div className="mem-profile-grid">
+                            <p className="mem-tab-intro">{t('mem.profile.intro')}</p>
                             {/* Card A: System Discovery */}
                             <div className="mem-profile-card">
                                 <div className="mem-profile-card-title">
@@ -2614,11 +2656,19 @@ export function MemoryDashboard() {
                     {/* ── Goals Tab ──────────────────────────────────────── */}
                     {activeTab === 'goals' && (
                         <div className="mem-goals-tab">
-                            {goalStoreError && (
+                            <p className="mem-tab-intro">{t('mem.goals.intro')}</p>
+                            {goalStoreError && (goalStoreDamaged ? (
+                                <div className="mem-advanced-error" role="alert">
+                                    <AlertTriangle size={14} /> {t('mem.goals.storeDamaged')}{' '}
+                                    <button type="button" className="link-btn" disabled={resettingGoalStore} onClick={startNewGoalList}>
+                                        {t('mem.goals.startNewList')}
+                                    </button>
+                                </div>
+                            ) : (
                                 <div className="mem-advanced-error" role="alert">
                                     <AlertTriangle size={14} /> {t('mem.goals.storeError')}: <bdi>{goalStoreError}</bdi>
                                 </div>
-                            )}
+                            ))}
                             {/* Header stat row */}
                             <div className="mem-goals-stats-row">
                                 {(['queued','in_progress','completed','failed'] as const).map(s => (
@@ -2656,7 +2706,7 @@ export function MemoryDashboard() {
 
                             {/* Add goal button */}
                             <div className="mem-goals-toolbar">
-                                <button className="btn-primary" onClick={() => setShowAddGoalForm(v => !v)}>
+                                <button className="btn-primary" onClick={() => { setGoalFormError(null); setShowAddGoalForm(v => !v); }}>
                                     <Plus size={14} /> {t('mem.goals.new')}
                                 </button>
                             </div>
@@ -2687,22 +2737,18 @@ export function MemoryDashboard() {
                                             <option value="medium">{t.bare('mem.goals.priorityMedium')}</option>
                                             <option value="high">{t.bare('mem.goals.priorityHigh')}</option>
                                         </select>
-                                        <button className="btn-primary" onClick={() => {
-                                            if (!goalForm.title.trim()) return;
-                                            runGoalAction(async () => {
-                                                await memoryApi.createGoal(goalForm);
-                                                setGoalForm({ title: '', description: '', priority: 'medium' });
-                                                setShowAddGoalForm(false);
-                                            }, 'mem.goals.createFailed');
-                                        }}>{t('mem.goals.create')}</button>
-                                        <button className="btn-secondary" onClick={() => setShowAddGoalForm(false)}>{t('mem.cancel')}</button>
+                                        <button className="btn-primary" disabled={!goalForm.title.trim()} onClick={createGoal}>{t('mem.goals.create')}</button>
+                                        <button className="btn-secondary" onClick={() => { setGoalFormError(null); setShowAddGoalForm(false); }}>{t('mem.cancel')}</button>
                                     </div>
+                                    {goalFormError && <p className="mem-form-error" role="alert"><bdi>{goalFormError}</bdi></p>}
                                 </div>
                             )}
 
                             {/* Goal list */}
                             {goalsLoading ? (
                                 <div className="mem-loading"><div className="mem-spinner" /> {t('mem.goals.loading')}</div>
+                            ) : goalsLoadError ? (
+                                <p className="mem-form-error" role="alert">{t('mem.goals.loadFailed')} <bdi>{goalsLoadError}</bdi></p>
                             ) : goals.filter(g => g.status !== 'pending_approval' && g.status !== 'rejected').length === 0 ? (
                                 <div className="mem-empty">
                                     <div className="mem-empty-icon"><Target size={32} /></div>
@@ -2732,6 +2778,9 @@ export function MemoryDashboard() {
                                                     <span className={`mem-goal-status-dot status-${goal.status.replace('_','-')}`} />
                                                     <bdi className="mem-goal-title">{goal.title}</bdi>
                                                     <span className={`mem-goal-priority mem-priority-${goal.priority}`}><Code value={goal.priority} keys={PRIORITY_KEYS} /></span>
+                                                    {goal.status === 'cancelled' && (
+                                                        <span className="mem-goal-priority mem-goal-cancelled-label">{t(STATUS_KEYS.cancelled)}</span>
+                                                    )}
                                                     {goal.source !== 'user' && (
                                                         <span className="mem-goal-source-badge">
                                                             <Zap size={10} /> <Code value={goal.source} keys={GOAL_SOURCE_KEYS} />
@@ -2793,9 +2842,9 @@ export function MemoryDashboard() {
                                                                 </div>
                                                             ))}
                                                         </div>
-                                                    ) : (
+                                                    ) : goal.status === 'queued' || goal.status === 'in_progress' ? (
                                                         <p className="mem-goal-no-tasks">{t('mem.goals.noTasks')}</p>
-                                                    )}
+                                                    ) : null}
                                                 </div>
                                             )}
                                         </div>
