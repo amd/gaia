@@ -24,7 +24,8 @@ validator = PathValidator()
 session = PathValidator(allowed_paths=["/home/user/documents/report.pdf"])
 
 # Reads: scope AND secrets. `.env`, id_rsa, *.pem, ~/.ssh/* are refused even
-# when they sit inside an allowed directory.
+# when they sit inside an allowed directory, and so is a hard link elsewhere to
+# a file in a credential folder such as ~/.ssh.
 is_allowed, reason = session.validate_read("/home/user/documents/report.pdf")
 
 # Writes: additionally refuses blocked directories and files that execute on
@@ -107,9 +108,12 @@ v.is_path_allowed("/home/user/evals/answers.json")   # False, and never prompts
   server and the flagship sidecar check it before they start serving.
 
 <Warning>
-  This confines GAIA's tools, not code they run. A `run_python` script or shell
-  command can still open any file the OS user can read. Real isolation needs OS-level
-  separation: a separate user account, a container, or a VM.
+  This confines GAIA's tools, not code they run. A `run_python` or
+  `execute_python_file` script is refused only the credential folders (`~/.ssh`,
+  `~/.aws` and the like), checked when it opens a file, however it builds the path;
+  a shell command, or a process a script starts, can still open any file the OS
+  user can read. Real isolation needs OS-level separation: a separate user account,
+  a container, or a VM.
 </Warning>
 
 ---
