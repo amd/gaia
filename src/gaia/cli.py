@@ -35,7 +35,6 @@ from gaia.llm.lemonade_client import (
 )
 from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.llm.providers.claude import DEFAULT_CLAUDE_MODEL as DEFAULT_CLAUDE_CHAT_MODEL
-from gaia.llm.reasoning import ReasoningStreamFilter
 from gaia.log_rotation import log_family
 from gaia.logger import get_logger
 from gaia.login_path import apply_login_path
@@ -277,6 +276,8 @@ class GaiaCliClient:
     # Where a failure record looks: Lemonade, unless this client talks to Claude.
     calls_lemonade = True
     lemonade_url: Optional[str] = None
+    # Set when a reply failed, so `gaia prompt` exits non-zero.
+    failed = False
 
     def __init__(
         self,
@@ -310,6 +311,8 @@ class GaiaCliClient:
         self.log.debug(f"model: {self.model}\n max_tokens: {self.max_tokens}")
 
     async def send_message(self, message):
+        from gaia.apps.llm.app import _reasoning_only_error, _ReasoningFilter
+
         try:
             # Use LLMClient.generate with streaming
             response_generator = self.llm_client.generate(
@@ -319,17 +322,18 @@ class GaiaCliClient:
                 max_tokens=self.max_tokens,
             )
 
-            # A reasoning model's <think> block is not the answer stdout promises.
-            answer = ReasoningStreamFilter()
-            for chunk in response_generator:
-                shown = answer.feed(chunk)
-                if shown:
-                    print(shown, end="", flush=True)
-                    yield shown
-            shown = answer.flush()
-            if shown:
-                print(shown, end="", flush=True)
-                yield shown
+            reasoning = _ReasoningFilter()
+            answered = False
+            for chunk in reasoning(response_generator):
+                if not answered:
+                    chunk = chunk.lstrip()
+                    if not chunk:
+                        continue
+                    answered = True
+                print(chunk, end="", flush=True)
+                yield chunk
+            if reasoning.saw_reasoning and not answered:
+                raise _reasoning_only_error(self.max_tokens)
 
         except Exception as e:
             # A backend string like "Max length reached!" tells the user
@@ -337,6 +341,7 @@ class GaiaCliClient:
             error_message = _cli_error_text(e, self.calls_lemonade, self.lemonade_url)
             self.log.error(error_message)
             print(error_message)
+            self.failed = True
             yield error_message
 
     def get_stats(self):
@@ -578,7 +583,7 @@ async def async_main(action, **kwargs):
             if stats:
                 for key, value in stats.items():
                     print(f"{key}: {value}")
-        return None
+        return 1 if client.failed else None
     elif action == "chat":
         if agent_registry is not None:
             return _run_registered_agent(kwargs["agent"], kwargs, agent_registry)

@@ -493,6 +493,12 @@ class GoalStore:
     ) -> Optional[Goal]:
         """Update a goal's status and optionally append progress notes.
 
+        Moving a goal back to ``queued`` from another status starts a fresh
+        retry budget: the unfinished-run count and any pause are cleared, so a
+        re-queued goal gets the full number of tries again. A status update
+        that leaves the goal ``queued`` (a progress note, for instance) keeps
+        the count it has.
+
         Raises:
             ValueError: ``status`` is not a ``GoalStatus``.
         """
@@ -500,10 +506,23 @@ class GoalStore:
         now = _now_iso()
         with self._lock:
             conn = self._get_conn()
-            conn.execute(
-                "UPDATE goals SET status=?, progress_notes=COALESCE(?, progress_notes), updated_at=? WHERE id=?",
-                (status, progress_notes, now, goal_id),
-            )
+            row = conn.execute(
+                "SELECT status FROM goals WHERE id=?", (goal_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            if status == "queued" and row["status"] != "queued":
+                conn.execute(
+                    "UPDATE goals SET status=?, attempts=0, retry_at=NULL, "
+                    "progress_notes=COALESCE(?, progress_notes), updated_at=? "
+                    "WHERE id=?",
+                    (status, progress_notes, now, goal_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE goals SET status=?, progress_notes=COALESCE(?, progress_notes), updated_at=? WHERE id=?",
+                    (status, progress_notes, now, goal_id),
+                )
             conn.commit()
         return self.get_goal(goal_id)
 

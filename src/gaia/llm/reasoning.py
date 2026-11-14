@@ -70,12 +70,14 @@ class ReasoningStreamFilter:
     still streams. A reply cut off inside its block is reasoning to the end.
     Text before a lone ``</think>`` (the template opened the block in the
     prompt) has already been shown by then; only the tag itself is dropped.
+    ``saw_reasoning`` records whether a leading tag was dropped.
     """
 
     def __init__(self) -> None:
         self._held = ""
         self._inside = False
         self._answered = False
+        self.saw_reasoning = False
 
     def feed(self, chunk: str) -> str:
         """The part of *chunk* that is answer and safe to show now."""
@@ -97,6 +99,7 @@ class ReasoningStreamFilter:
                 if lead.startswith(tag):
                     self._held = lead[len(tag) :]
                     self._inside = tag == THINK_OPEN
+                    self.saw_reasoning = True
                     break
             else:
                 if (
