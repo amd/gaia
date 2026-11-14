@@ -96,6 +96,7 @@ from gaia.agents.base.deliverables import (
 from gaia.agents.base.denied_effects import (
     NETWORK,
     PATH,
+    UNATTENDED_REFUSAL,
     Denial,
     DeniedEffects,
     Effect,
@@ -8306,7 +8307,13 @@ Do NOT wrap conversational replies in JSON.
             # Shell policy refusals only: a tool's own preflight ("read it
             # first") is a step to take, not a no. And one refused command
             # shape is not the whole family — the host or file it aimed at is.
-            if ledger is not None and isinstance((tool_args or {}).get("command"), str):
+            # Nor is "nobody was here to approve it" a no.
+            unattended = isinstance(refusal, dict) and refusal.get(UNATTENDED_REFUSAL)
+            if (
+                ledger is not None
+                and not unattended
+                and isinstance((tool_args or {}).get("command"), str)
+            ):
                 ledger.record(
                     tool_name,
                     tool_args,
@@ -8460,9 +8467,9 @@ Do NOT wrap conversational replies in JSON.
                     if not hasattr(self, "_expired_calls"):
                         self._expired_calls = set()
                     self._expired_calls.add(call_key)
-                else:
-                    if denied_error == user_denial_message(tool_name):
-                        denied["hint"] = DECLINED_HINT
+                elif denied_error == user_denial_message(tool_name):
+                    # Only a person's no covers the effect; "nothing could ask" doesn't.
+                    denied["hint"] = DECLINED_HINT
                     ledger = getattr(self, "_denied_effects", None)
                     if ledger is not None:
                         ledger.record(tool_name, tool_args, denied_error)

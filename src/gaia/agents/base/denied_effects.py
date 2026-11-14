@@ -40,6 +40,10 @@ NETWORK = "network"
 PATH = "path"
 SCRIPT = "script"
 
+#: Set on a refusal nobody chose — no person was there to approve the call —
+#: so it is kept off the ledger and other routes to the effect stay open.
+UNATTENDED_REFUSAL = "unattended_refusal"
+
 #: A file change whose target the code computes: it could be any denied path.
 COMPUTED_PATH = "a path the code works out when it runs"
 
