@@ -853,13 +853,22 @@ class GatewayManager:
                 f"they need {GATEWAY_ENV_VAR} set to it in GAIA's environment too."
             )
         if response.status_code == 404 and "cloud" in url:
-            from gaia.llm.lemonade_launcher import describe_upgrade_hint
+            if "is not installed" in detail:
+                return GatewayError(
+                    f"Lemonade at {self.base_url} has no cloud provider registered "
+                    f"for this gateway, so it cannot accept a token yet. Run "
+                    f"`gaia gateway install` to register it, then run "
+                    f"`gaia gateway auth` again."
+                )
+            # An empty type is what an older server's 404 body looks like.
+            if error_type in ("", "not_found"):
+                from gaia.llm.lemonade_launcher import describe_upgrade_hint
 
-            return GatewayError(
-                f"Lemonade at {self.base_url} has no cloud-provider API, so it "
-                f"is older than v{LEMONADE_MIN_VERSION}, the oldest version GAIA "
-                f"supports. {describe_upgrade_hint(self.base_url)}"
-            )
+                return GatewayError(
+                    f"Lemonade at {self.base_url} has no cloud-provider API, so it "
+                    f"is older than v{LEMONADE_MIN_VERSION}, the oldest version GAIA "
+                    f"supports. {describe_upgrade_hint(self.base_url)}"
+                )
         return GatewayError(
             f"{method} {url} failed with HTTP {response.status_code}"
             + (f": {detail}" if detail else "")

@@ -324,6 +324,64 @@ class TestErrors:
             with pytest.raises(GatewayError, match="oldest version GAIA supports"):
                 manager.clear_token()
 
+    def test_404_for_an_uninstalled_cloud_provider_points_at_gateway_install(
+        self, manager
+    ):
+        """A fresh Lemonade has the cloud API but no provider registered yet, and
+        says so in the body. Calling that server too old sends the user to
+        `gaia daemon restart`, which cannot register anything."""
+        body = {
+            "error": {
+                "message": "Cloud provider 'amd' is not installed. Call POST "
+                "/v1/install with backend=cloud, provider, and base_url first.",
+                "type": "invalid_request",
+            }
+        }
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=404, body=body),
+        ):
+            with pytest.raises(GatewayError, match="`gaia gateway install`") as excinfo:
+                manager.clear_token()
+        message = str(excinfo.value)
+        assert "older than" not in message
+        assert "daemon restart" not in message
+
+    def test_404_for_a_missing_cloud_endpoint_keeps_the_version_requirement(
+        self, manager
+    ):
+        body = {
+            "error": {
+                "message": "The requested endpoint does not exist",
+                "type": "not_found",
+            }
+        }
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=404, body=body),
+        ):
+            with pytest.raises(GatewayError, match="oldest version GAIA supports"):
+                manager.clear_token()
+
+    def test_404_with_an_unexpected_cloud_body_keeps_lemonades_detail(self, manager):
+        body = {
+            "error": {
+                "message": "the routing table is empty",
+                "type": "invalid_request",
+            }
+        }
+        with patch(
+            "gaia.llm.gateway.requests.request",
+            return_value=_response(status_code=404, body=body),
+        ):
+            with pytest.raises(
+                GatewayError, match="HTTP 404: the routing table is empty"
+            ) as excinfo:
+                manager.clear_token()
+        message = str(excinfo.value)
+        assert "`gaia gateway install`" not in message
+        assert "older than" not in message
+
     @pytest.mark.parametrize("status", [401, 403, 301, 302, 303, 307, 308])
     def test_probe_treats_auth_required_as_reachable(self, manager, status):
         """The chicken-and-egg case, caught against the live gateway.
