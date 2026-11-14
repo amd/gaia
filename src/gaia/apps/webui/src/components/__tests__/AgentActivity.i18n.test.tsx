@@ -28,11 +28,11 @@ describe('folded-run summary', () => {
     const rows = [tool(1, 'index_documents'), tool(2, 'query_specific_file'), tool(3, 'query_specific_file')];
 
     it('stays byte-identical in English', () => {
-        expect(stepsSummary(rows)).toBe('Indexed documents, queried file ×2');
+        expect(stepsSummary(rows)).toBe('Added documents, queried file ×2');
     });
 
     it('reads in Arabic with the whole English line in brackets once', () => {
-        expect(plain(stepsSummary(rows, ar))).toBe('فهرس المستندات، استعلم في ملف ×2 (Indexed documents, queried file ×2)');
+        expect(plain(stepsSummary(rows, ar))).toBe('أضاف المستندات، استعلم في ملف ×2 (Added documents, queried file ×2)');
     });
 
     it('says how many more kinds there were', () => {
@@ -40,9 +40,9 @@ describe('folded-run summary', () => {
             tool(1, 'index_documents'), tool(2, 'query_documents'), tool(3, 'read_file'),
             tool(4, 'web_search'), { id: 5, type: 'error', label: 'x', timestamp: 5 } as ActivityRow,
         ];
-        expect(stepsSummary(many)).toBe('Indexed documents, queried documents, read file and 2 more');
+        expect(stepsSummary(many)).toBe('Added documents, queried documents, read file and 2 more');
         expect(plain(stepsSummary(many, ar)))
-            .toBe('فهرس المستندات، استعلم في المستندات، قرأ ملفًا و2 أخرى (Indexed documents, queried documents, read file and 2 more)');
+            .toBe('أضاف المستندات، استعلم في المستندات، قرأ ملفًا و2 أخرى (Added documents, queried documents, read file and 2 more)');
     });
 
     it('names plans, errors, policy blocks and pure reasoning', () => {
@@ -109,6 +109,6 @@ describe('tool rows', () => {
     it('renders the folded summary in Arabic in the timeline', () => {
         act(() => useChatStore.getState().setLocale('ar'));
         render(<AgentActivity steps={[tool(1, 'index_documents'), tool(2, 'query_specific_file')]} isActive={false} />);
-        expect(screen.getByText(readsAs('فهرس المستندات، استعلم في ملف (Indexed documents, queried file)'))).toBeInTheDocument();
+        expect(screen.getByText(readsAs('أضاف المستندات، استعلم في ملف (Added documents, queried file)'))).toBeInTheDocument();
     });
 });
