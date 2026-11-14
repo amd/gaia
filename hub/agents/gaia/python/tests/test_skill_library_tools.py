@@ -53,6 +53,8 @@ from gaia.skills.manager import SkillManager  # noqa: E402
 from gaia.skills.signing import TrustStore  # noqa: E402
 from tests.unit.skills_helpers import fake_hub, write_audit_report  # noqa: E402
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 SKILLS_PROMPT_HEADER = "==== LOADED SKILLS ===="
 
 # Distinctive strings so "is the body in the prompt" is a real assertion and not

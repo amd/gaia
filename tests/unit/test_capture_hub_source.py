@@ -41,6 +41,8 @@ from gaia.skills.errors import SkillError
 from gaia.skills.hub import SkillHubError, SkillSearchResult
 from tests.unit.skills_helpers import isolated_manager
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 PUBLISHED = "rss-digest"
 
 

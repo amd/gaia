@@ -36,6 +36,8 @@ from gaia.skills.errors import SkillDriftError, SkillValidationError
 from gaia.skills.lock import SOURCE_HUB, SOURCE_LOCAL, SkillLock
 from tests.unit.skills_helpers import make_marketplace
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 SKILL_BODY = """# Web Research
 
 1. Call `web-research/search_web` with the user's question.

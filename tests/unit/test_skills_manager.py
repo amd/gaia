@@ -35,6 +35,8 @@ from gaia.skills.manager import (
 )
 from tests.unit.skills_helpers import copy_fixture, isolated_manager, write_skill_dir
 
+pytestmark = pytest.mark.usefixtures("user_terminal")
+
 
 @pytest.fixture(autouse=True)
 def _clean_tool_registry():
