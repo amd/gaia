@@ -34,6 +34,13 @@ from gaia.agents.base.call_risk import (
 )
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.command_wrappers import command_starts
+from gaia.agents.base.denied_effects import (
+    NETWORK,
+    UNATTENDED_REFUSAL,
+    deletes_a_path,
+    effects_of_shell_command,
+    is_cloud_metadata_host,
+)
 from gaia.agents.base.errors import exit_error
 from gaia.agents.base.file_snapshots import SnapshotError, before_change, note_untracked
 from gaia.agents.base.verification import EXECUTED_KEY, NOT_EXECUTED
@@ -726,7 +733,7 @@ def _address_in_name(name: str) -> Optional[ipaddress._BaseAddress]:
 
 
 def private_destination(host: str) -> str:
-    """Where *host* is, when the web tools would refuse to fetch it; else "".
+    """Where *host* is, when it is on this PC or a local network; else "".
 
     Judged from the text alone: an address in any spelling a fetcher accepts,
     ``localhost``, a name that always answers with a local address, or a name
@@ -879,10 +886,57 @@ def _private_hosts(
     return found
 
 
+def web_tools_refuse(host: str) -> bool:
+    """True when GAIA's web fetcher would refuse *host*, by its own allowlist check.
+
+    Read from the text as :func:`private_destination` reads it: a name is
+    taken to answer with the address it always gives, never looked up.
+    """
+    from gaia.web.client import BlockedHostError, _assert_ip_allowed
+
+    where = private_destination(host)
+    if not where:
+        return False
+    # The fetcher matches GAIA_WEB_ALLOWED_HOSTS against the URL's hostname as written.
+    hostname = _folded(host).strip("[]").lower()
+    bare = hostname.split("%", 1)[0].rstrip(".")
+    try:
+        ip = ipaddress.ip_address(bare)
+    except ValueError:
+        ip = _numeric_ipv4(bare) or _address_in_name(bare)
+    if ip is None:
+        if where != "this PC":
+            return True
+        ip = ipaddress.IPv4Address("127.0.0.1")
+    try:
+        _assert_ip_allowed(str(ip), hostname)
+    except BlockedHostError:
+        return True
+    return False
+
+
 def private_fetch_note(found: List[Tuple[str, str]]) -> str:
     """The card's line for a command that reaches the addresses in *found*."""
-    host, where = found[0]
-    return f"Reaches {host} on {where}, an address GAIA's web tools refuse to fetch."
+    refused = [(host, where) for host, where in found if web_tools_refuse(host)]
+    host, where = (refused or found)[0]
+    if refused:
+        return (
+            f"Reaches {host} on {where}, an address GAIA's web tools refuse to fetch."
+        )
+    return f"Reaches {host} on {where}."
+
+
+def _final_even_unattended(command: str) -> bool:
+    """True when *command* deletes, hides what it runs, or reaches cloud metadata.
+
+    Refused unattended, such a line stays off every other route that turn.
+    """
+    if _one_time_hard_reason(command) or deletes_a_path(command, os.getcwd()):
+        return True
+    return any(
+        effect.kind == NETWORK and is_cloud_metadata_host(effect.target)
+        for effect in effects_of_shell_command(command, os.getcwd())
+    )
 
 
 def _not_approvable(error: Dict[str, Any]) -> Dict[str, Any]:
@@ -5202,7 +5256,34 @@ class ShellToolsMixin:
         once = error.get("tier") == TIER_CONFIRM_ONCE
         dropped = ("examples",) if once else ("hint", "examples")
         unasked = {key: value for key, value in error.items() if key not in dropped}
-        return {**unasked, "tier": TIER_REFUSE, "error": plain}
+        if _final_even_unattended(command):
+            return {**unasked, "tier": TIER_REFUSE, "error": plain}
+        return {
+            **unasked,
+            "tier": TIER_REFUSE,
+            "error": f"{plain} {self._unattended_routes()}",
+            UNATTENDED_REFUSAL: True,
+        }
+
+    def _unattended_routes(self) -> str:
+        """One sentence naming the routes this run takes without anyone approving."""
+        tools = getattr(self, "_tools_registry", None) or {}
+        asks = getattr(self, "_tool_requires_confirmation", None)
+        nobody = getattr(self, "console", None) is None
+
+        def runs(name: str) -> bool:
+            # With no console, a tool that asks can't run either.
+            return name in tools and not (nobody and callable(asks) and asks(name))
+
+        readers = [name for name in ("read_file", "browse_directory") if runs(name)]
+        routes = [f"{' or '.join(readers)} to read or list files"] if readers else []
+        if runs("run_python"):
+            routes.append("run_python to compute")
+        shown = "`dir` or `findstr`" if os.name == "nt" else "`ls` or `grep`"
+        routes.append(f"a no-prompt command such as {shown}")
+        if len(routes) == 1:
+            return f"Use {routes[0]} instead."
+        return f"Use {', '.join(routes[:-1])}, or {routes[-1]} instead."
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
