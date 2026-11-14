@@ -49,6 +49,7 @@ from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
 # to prove pre-scan never wires the LLM (test_pre_scan_counts.py).
 from gaia_agent_email.tools.llm_triage import make_llm_classifier  # noqa: F401
+from gaia_agent_email.tools.lookalikes import ASCII_FOLD, LOOKALIKES
 from gaia_agent_email.tools.triage_condense import condense_triage_result
 
 # Read-only reuse of the existing automated-sender signal for needs_review's
@@ -202,26 +203,39 @@ def _neutralize_fence_runs(body: str) -> str:
     return "".join(out)
 
 
+def _marker_letters(char: str) -> str:
+    """The ASCII letters and digits *char* reads as, for comparing marker names.
+
+    NFKC folds width, the UTS #39 table maps other look-alikes (Cyrillic, Greek,
+    Cherokee and so on) to the letters they imitate, and the ASCII fold makes
+    ``m`` and ``rn``, or ``I``, ``l`` and ``1``, compare equal.
+    """
+    mapped = "".join(LOOKALIKES.get(c, c) for c in unicodedata.normalize("NFKC", char))
+    return "".join(
+        ASCII_FOLD.get(c, c) for c in mapped.casefold() if c.isascii() and c.isalnum()
+    )
+
+
 def _skeleton(name: str) -> str:
-    folded = unicodedata.normalize("NFKC", name).casefold()
-    return "".join(c for c in folded if c.isascii() and c.isalnum())
+    return "".join(_marker_letters(char) for char in name)
 
 
 def neutralize_marker_names(text: str, names: Tuple[str, ...]) -> str:
     """*text* with every spelling of a fence marker's name replaced.
 
     Names are compared on ASCII letters and digits alone, after width and case
-    fold, so brackets of any shape, spacing, or line breaks can't rebuild one.
+    fold and with Unicode look-alikes read as the letters they imitate, so
+    brackets of any shape, spacing, line breaks or another script's letters
+    can't rebuild one.
     """
     targets = [_skeleton(name) for name in names]
     while True:
         letters: List[str] = []
         origin: List[int] = []
         for at, char in enumerate(text):
-            for folded in unicodedata.normalize("NFKC", char).casefold():
-                if folded.isascii() and folded.isalnum():
-                    letters.append(folded)
-                    origin.append(at)
+            for folded in _marker_letters(char):
+                letters.append(folded)
+                origin.append(at)
         skeleton = "".join(letters)
         spans = []
         for target in targets:

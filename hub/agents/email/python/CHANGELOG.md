@@ -21,6 +21,12 @@ contract version is tracked separately as
   (#2034).** Marker-like text inside a body is neutralized before the body is
   fenced, so the model keeps reading all of it as data.
 
+- **A fence marker's name spelled with look-alike letters is neutralized too
+  (#7853).** Letters from another script that read as Latin ones (Cyrillic,
+  Greek, Cherokee and so on), and ASCII swaps such as `rn` for `m`, are read as
+  the letters they imitate, so a near-copy of a marker no longer reaches the
+  model.
+
 - **Under the daemon, a forwarded-token hiccup no longer asks for a browser
   re-sign-in (#6995).** A token the daemon hasn't re-forwarded yet, or an
   unexpected error in the check, now reports `error` ("couldn't check") like the
