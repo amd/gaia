@@ -47,6 +47,7 @@ from gaia.logger import get_logger
 from gaia.skills.audit.findings import content_digest
 from gaia.skills.errors import SkillDriftError, SkillError
 from gaia.skills.format import SKILL_FILENAME, Skill, parse_skill_metadata
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.lock import (
     LOCK_FILENAME,
     SOURCE_HUB,
@@ -557,6 +558,7 @@ def relock(skills_root: Path | str) -> RelockResult:
             :meth:`gaia.skills.lock.SkillLock.load`); relock will not start over
             from scratch and silently discard provenance.
     """
+    require_user_terminal("gaia skill lock --relock")
     root = Path(skills_root)
     # Held throughout, so an install that lands mid-relock is not dropped by it.
     with SkillLock.locked(root) as lock:

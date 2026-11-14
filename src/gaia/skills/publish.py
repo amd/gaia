@@ -41,6 +41,7 @@ from gaia.skills.audit_gate import AuditReport, gate_for_publish
 from gaia.skills.errors import SkillError, SkillValidationError
 from gaia.skills.format import SKILL_FILENAME, Skill, parse_skill_file, validate_skill
 from gaia.skills.hub import PublishRequest, Uploader, publish_url, upload_publish
+from gaia.skills.human_only import require_user_terminal
 from gaia.skills.manager import user_skills_dir
 from gaia.skills.permissions import refuse_unbridged_permissions
 from gaia.skills.signing import SIGNATURE_FILENAME, SigningKey, load_key, sign_bundle
@@ -122,6 +123,7 @@ def publish_skill(
         SkillPermissionError: the skill declares an un-bridged local capability.
         SkillAuditUnavailableError / SkillAuditFailedError: the audit gate.
     """
+    require_user_terminal("gaia skill publish")
     source = Path(directory).expanduser()
     if not source.is_dir():
         raise SkillValidationError(

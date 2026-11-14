@@ -1721,8 +1721,10 @@ def python_file_reads(code: str, cwd: str) -> Tuple[List[str], List[List[str]]]:
                 add(func.value)
         elif module == "shutil" and name in _SHUTIL_READERS:
             add(_arg(node, 0, "src"))
-        elif name in _SUBPROCESS_FUNCS or (
-            module == "os" and name in ("system", "popen")
+        elif (
+            name in _SUBPROCESS_FUNCS
+            or (module == "os" and name in ("system", "popen"))
+            or (module == "pty" and name == "spawn")
         ):
             first = _arg(node, 0, "args")
             if first is None:
@@ -1734,7 +1736,25 @@ def python_file_reads(code: str, cwd: str) -> Tuple[List[str], List[List[str]]]:
                 argv, _ = files.argv(first)
                 if argv:
                     commands.append(argv)
+        elif module == "os" and name and name.startswith(("exec", "spawn")):
+            argv = _os_exec_argv(files, node, name)
+            if argv:
+                commands.append(argv)
     return paths, commands
+
+
+def _os_exec_argv(files: "_PyFiles", node: ast.Call, name: str) -> List[str]:
+    """The argv an ``os.exec*`` / ``os.spawn*`` call runs, as far as it is spelled."""
+    # spawn* takes a mode first; then the program, then its arguments.
+    start = 2 if name.startswith("spawn") else 1
+    flavour = name[len("spawn") if name.startswith("spawn") else len("exec") :]
+    if flavour.startswith("v"):
+        if len(node.args) <= start:
+            return []
+        argv, _ = files.argv(node.args[start])
+        return argv
+    words = [files.text(arg) for arg in node.args[start:]]
+    return [word for word in words if word is not None]
 
 
 def python_link_targets(code: str, cwd: str) -> List[Optional[str]]:

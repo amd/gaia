@@ -1384,7 +1384,8 @@ def _formatter(
 BINARY_POLICIES: dict[str, BinaryPolicy] = {
     # GAIA's own CLI, for the automations skill only: its automations and the
     # Discord bridge's GitHub watches. Nothing else of `gaia` is reachable from
-    # a skill — no setup, no config, no connectors.
+    # a skill — no setup, no config, no connectors — and `gaia skill` is never
+    # offered at all (HUMAN_ONLY_GAIA_SUBCOMMANDS).
     "gaia": BinaryPolicy(
         binary="gaia",
         confirm_summary="changes what GAIA does on its own and reports to you",
@@ -1684,6 +1685,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 "describe",
                 "rev-parse",
                 "help",
+                "blame",
             }
         ),
         subcommands={
@@ -2423,6 +2425,97 @@ def normalize_binary(token: str) -> str:
     return name if BINARY_NAME_RE.match(name) else ""
 
 
+#: ``gaia`` subcommands only a person at their own terminal may run. They decide
+#: which skills GAIA trusts, so no approval lets the agent run them.
+HUMAN_ONLY_GAIA_SUBCOMMANDS = frozenset({"skill"})
+
+#: How a refusal names the command family only the user may run.
+HUMAN_ONLY_CALL = "gaia skill"
+
+#: How ``gaia`` is spelled as a program: the binary, the legacy alias, the module.
+_GAIA_PROGRAM_NAMES = frozenset({"gaia", "gaia-cli", "gaia.cli"})
+
+
+def human_only_message(spelled: str) -> str:
+    """The refusal for *spelled*, a ``gaia`` command only the user may run."""
+    return (
+        f"'{spelled}' is not permitted for GAIA: promoting, installing or "
+        "trusting a skill is the user's decision, made from their own "
+        "terminal, and no approval lets the agent run it"
+    )
+
+
+#: Shell punctuation and escapes around a word: ``$(gaia``, ``g^aia``, ``"gaia"``.
+_WORD_NOISE = re.compile(r"[\^`]")
+_WORD_EDGES = "\"'$(){}[]&;|,"
+
+#: Launcher extensions a ``gaia`` shim may carry.
+_SHIM_SUFFIXES = (".exe", ".cmd", ".bat", ".ps1")
+
+
+def _bare_word(token: str) -> str:
+    """*token* without escapes, edge punctuation, path or launcher suffix."""
+    word = _WORD_NOISE.sub("", token).strip().strip(_WORD_EDGES).lower()
+    word = re.split(r"[\\/]", word)[-1]
+    if word.startswith("-m") and word[2:] in _GAIA_PROGRAM_NAMES:
+        return word[2:]
+    for suffix in _SHIM_SUFFIXES:
+        if word.endswith(suffix):
+            return word[: -len(suffix)]
+    return word
+
+
+#: Modules that run ``gaia skill`` or change skill trust when imported and called.
+TRUST_MODULES = re.compile(
+    r"^gaia\.(?:cli|__main__|skills\.(?:cli|capture|install|signing|drift|publish|"
+    r"link|migrate|human_only))(?!\w)"
+)
+
+
+def human_only_in_code_words(words: Sequence[str]) -> str:
+    """What in an inline script's *words* changes skill trust, or ``""``.
+
+    A module that does it in-process, the agent marker, or a ``gaia skill``
+    call among the script's words.
+    """
+    from gaia.skills.human_only import AGENT_CHILD_ENV
+
+    for word in words:
+        bare = _bare_word(word)
+        if TRUST_MODULES.match(bare):
+            return HUMAN_ONLY_CALL
+        if AGENT_CHILD_ENV.lower() in word.lower():
+            return AGENT_CHILD_ENV
+    return human_only_gaia_call(words)
+
+
+def human_only_gaia_call(words: Sequence[str]) -> str:
+    """The ``gaia <subcommand>`` in *words* only a person may run, or ``""``.
+
+    *words* is a flat token list; ``gaia``, a shim or path to it, and
+    ``python -m gaia`` (``-mgaia`` too) all count. Options before the
+    subcommand are skipped with the value one may take. An early check only:
+    the commands themselves refuse an agent (:mod:`gaia.skills.human_only`).
+    """
+    tokens = list(words)
+    for index, token in enumerate(tokens):
+        if _bare_word(token) not in _GAIA_PROGRAM_NAMES:
+            continue
+        takes_value = False
+        for word in tokens[index + 1 :]:
+            first = _bare_word((word.split() or [""])[0])
+            if first in HUMAN_ONLY_GAIA_SUBCOMMANDS:
+                return f"gaia {first}"
+            if word.startswith("-"):
+                takes_value = "=" not in word
+                continue
+            if takes_value:
+                takes_value = False
+                continue
+            break
+    return ""
+
+
 #: Interpreters whose ``-m <module>`` form can stand in for a policy's binary.
 PYTHON_LAUNCHERS = frozenset({"python", "python3", "py"})
 
@@ -2652,6 +2745,10 @@ def classify_invocation(
         return _ALLOWED  # bare `gh`, `gh --version` — help text only
 
     subcommand = tokens[index].lower()
+    if policy.binary == "gaia" and subcommand in HUMAN_ONLY_GAIA_SUBCOMMANDS:
+        return InvocationDecision(
+            REFUSE, human_only_message(f"gaia {subcommand}") + ".", never_offered=True
+        )
     rule = policy.subcommands.get(subcommand)
     if rule is None:
         # Only mention the write tier when this policy actually has one — a
