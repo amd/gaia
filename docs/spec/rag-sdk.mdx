@@ -193,8 +193,8 @@ class RAGSDK:
 
     def freshness(self, file_path: str) -> str:
         """
-        "current", "changed", "missing", "locked", "unreadable" or
-        "not_indexed". Cheap enough to call before every search: it hashes
+        "current", "changed", "missing", "locked", "denied" (the
+        user may no longer read it), "unreadable" or "not_indexed". Cheap enough to call before every search: it hashes
         only when the file's size, mtime, inode or (POSIX) ctime moved since
         indexing, or it was written within 2 s of that stat. On Windows an
         edit that later restores both size and mtime is caught by

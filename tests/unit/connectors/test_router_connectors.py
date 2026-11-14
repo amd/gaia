@@ -243,6 +243,30 @@ class TestConfigurableField:
         assert body["configurable"] is False
         assert "GAIA_GOOGLE_CLIENT_ID" in (body["config_error"] or "")
 
+    def test_an_unconfigured_provider_is_logged_once_in_one_line(
+        self, ui_api_client, monkeypatch, fresh_google_provider, caplog
+    ):
+        """The Connect card polls the list; each poll must not repeat the
+        setup walkthrough into gaia.log."""
+        import logging
+
+        import gaia.ui.routers.connectors as router_mod
+
+        monkeypatch.setattr(router_mod, "_unconfigured_logged", set(), raising=False)
+        monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
+        with caplog.at_level(logging.INFO, logger="gaia.ui.routers.connectors"):
+            for _ in range(3):
+                assert ui_api_client.get("/api/connectors").status_code == 200
+
+        shown = [
+            r
+            for r in caplog.records
+            if r.levelno >= logging.INFO and "google" in r.getMessage()
+        ]
+        assert len(shown) == 1, [r.getMessage() for r in shown]
+        assert "\n" not in shown[0].getMessage()
+        assert "gaia connectors" not in shown[0].getMessage()
+
     def test_configurable_true_when_provider_ok(
         self, ui_api_client, monkeypatch, fresh_google_provider
     ):

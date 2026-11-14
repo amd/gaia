@@ -679,9 +679,10 @@
 }
 
 /* ── Terminal cursor — a solid accent write head ──────────────── */
-/* Sits inline after the last text element so it follows the content. */
+/* Sits inline after a closing paragraph so it follows the text. Only that one:
+   an inline list or table drops its indent, then jumps back when the answer ends. */
 .md-content > .cursor { display: inline-block; }
-.md-content:has(> .cursor) > :last-of-type:not(.cursor) {
+.md-content > .md-p:has(+ .cursor) {
     display: inline;
 }
 /* Hide empty pre/code blocks that react-markdown sometimes generates from LLM noise.
