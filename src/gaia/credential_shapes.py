@@ -33,11 +33,11 @@ TOKEN_SHAPES: Tuple[str, ...] = (
 URL_USERINFO = r"(?<=://)[^/\s@?#]+(?=@)"
 
 #: A query parameter whose value is a credential: ``?access_token=…``.
-_URL_SECRET_QUERY = re.compile(
+_SECRET_QUERY_NAME = (
     r"([?&](?:access_token|private_token|token|api_key|apikey|key|secret"
-    r"|password|passwd|auth|sig|signature)=)[^&\s#\"'<>]+",
-    re.IGNORECASE,
+    r"|password|passwd|auth|sig|signature)=)"
 )
+_URL_SECRET_QUERY = re.compile(_SECRET_QUERY_NAME + r"[^&\s#\"'<>]+", re.IGNORECASE)
 
 _TOKENS = tuple(re.compile(p, re.IGNORECASE) for p in TOKEN_SHAPES)
 _USERINFO = re.compile(URL_USERINFO)
@@ -186,8 +186,8 @@ _PLACEHOLDER_WORDS = frozenset(
 _PLACEHOLDER_SHAPE = re.compile(
     r"^(?:"
     r"\{\{?[^{}]*\}\}?"  # {name}, {{ name }}
-    r"|\$\{[^{}]*\}"  # ${NAME}
-    r"|\$[A-Za-z_][A-Za-z0-9_]*"  # $NAME
+    r"|\$\{(?:[A-Z_][A-Z0-9_]*|[a-z][A-Za-z0-9]*)\}"  # ${NAME}, ${apiKey}
+    r"|\$[A-Z_][A-Z0-9_]*"  # $NAME
     r"|%\([^()]*\)[sd]"  # %(name)s
     r"|<[^<>]*>"  # <token>
     r"|(?:YOUR|MY)_[A-Z0-9_]+"  # YOUR_TOKEN, YOUR_TOKEN_HERE
@@ -195,6 +195,9 @@ _PLACEHOLDER_SHAPE = re.compile(
     r"|x+|X+|\*+|\.+"
     r")$"
 )
+
+#: A query value in file text also ends where code closes the string or call.
+_FILE_SECRET_QUERY = re.compile(_SECRET_QUERY_NAME + r"[^&\s#\"'`<>()]+", re.IGNORECASE)
 
 #: A run of key-like characters a generated token has and a hyphenated name lacks.
 _RANDOM_RUN = re.compile(r"[A-Za-z0-9_]{16,}")
@@ -252,7 +255,7 @@ def redact_file_text(text: str) -> str:
     if not text:
         return text
     text = _FILE_USERINFO.sub(_mask_file_userinfo, text)
-    text = _URL_SECRET_QUERY.sub(_mask_file_query, text)
+    text = _FILE_SECRET_QUERY.sub(_mask_file_query, text)
     for pattern in _TOKENS:
         text = pattern.sub(_mask_file_token, text)
     return text

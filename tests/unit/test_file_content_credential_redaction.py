@@ -395,6 +395,9 @@ NOT_SECRETS = [
     "https://user:<token>@github.com/a.git",
     "https://example.com/x?token={{ api_token }}",
     "https://example.com/x?access_token=YOUR_ACCESS_TOKEN",
+    "fetch(`https://x.com/?api_key=${apiKey}`)",
+    "requests.get(f'https://x.com/?token={token}')",
+    "https://user:${DB_PASSWORD}@db/app",
 ]
 
 SK_PROJ = "sk-proj-" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z"
@@ -413,6 +416,8 @@ REAL_SECRETS = [
     ("postgresql://app:Pa$$w0rd2024@db/app", "Pa$$w0rd2024"),
     ("postgresql://app:{x}Pa55word@db/app", "Pa55word"),
     ("postgresql://app:HUNTERPASS@db/app", "HUNTERPASS"),
+    ("mysql://root:$ecretP4ss@db/app", "$ecretP4ss"),
+    ("mysql://root:${mixed_Case9}@db/app", "mixed_Case9"),
     (
         "https://acct.blob.core.windows.net/c/b?sv=2022-11-02&sp=r"
         "&sig=Xk2bLq9vPz4Rt7Yw1Mn5Cd8Ef3Gh6Jk0%2BaBcD%2FeFgH%3D%3D",
@@ -435,7 +440,7 @@ def test_real_secrets_in_file_text_are_still_masked(line, secret):
     assert holds_credentials(line)
 
 
-@pytest.mark.parametrize("line", NOT_SECRETS[:4])
+@pytest.mark.parametrize("line", [*NOT_SECRETS[:4], NOT_SECRETS[-3]])
 def test_a_file_with_secret_shaped_text_stays_editable(agent, tmp_path, line):
     path = tmp_path / "settings.txt"
     original = f"{line}\nname = demo\n"
