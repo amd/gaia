@@ -474,6 +474,35 @@ for (const locale of ['en', 'ar']) {
     });
 }
 
+const BIG_LIBRARY = Array.from({ length: 600 }, (_, i) => ({
+    id: `lib-${i}`, filename: `meeting-notes-${i}.txt`, filepath: `C:/library/meeting-notes-${i}.txt`, file_size: 512,
+    chunk_count: 1, indexing_status: 'complete', indexed_at: NOW.toISOString(), last_accessed_at: null, sessions_using: 0,
+}));
+
+for (const locale of ['en', 'ar']) {
+    // 600 attached documents drew 600 chips and pushed the message box off the screen.
+    test(`a new chat with a whole large library attached keeps the message box on screen (${locale})`, async ({ page }) => {
+        await open(page, '', locale, (p) => p.route('**/api/documents', (route) => route.fulfill({
+            json: { documents: BIG_LIBRARY, total: 600, total_size_bytes: 307_200, total_chunks: 600 },
+        })));
+        const box = page.locator('.new-chat textarea').first();
+        const onScreen = async (why: string) => {
+            const r = (await box.boundingBox())!;
+            const vh = page.viewportSize()!.height;
+            expect(r.y >= 0 && r.y + r.height <= vh, `${why}: the message box is at y=${r.y}`).toBe(true);
+        };
+        await page.locator('.new-chat-docs .link-btn').first().click();
+        await expect(page.locator('.new-chat-doc')).toHaveCount(5);
+        await onScreen('five chips and +595 more');
+        await shot(page, `new-chat-600-docs-${locale}`);
+        await page.locator('.new-chat-doc-toggle').click();
+        await expect(page.locator('.new-chat-doc')).toHaveCount(600);
+        await onScreen('the whole list opened');
+        await shot(page, `new-chat-600-docs-open-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 for (const locale of ['en', 'ar']) {
     test(`the folder control says what it does, not GAIA's own folder name (${locale})`, async ({ page }) => {
         await open(page, '', locale, (p) => p.route('**/api/onboarding/start', (route) => route.fulfill({

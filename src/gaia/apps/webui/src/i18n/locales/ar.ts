@@ -209,6 +209,8 @@ const messages: Messages = {
     'newChat.docs.attachIt': 'إرفاقه',
     'newChat.docs.attachAll': 'إرفاق المستندات كلها ({n})',
     'newChat.docs.choose': 'اختيار',
+    'newChat.docs.hidden': '+{n} أخرى',
+    'newChat.docs.fewer': 'عرض أقل',
 
     // مجلدات المحادثة الجديدة
     'folderChip.add': 'إضافة مجلد',
