@@ -1,14 +1,12 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""A bad optional argument must not cost the user the fact they asked to keep.
+"""A bad category is refused out loud; a bad date still keeps the fact.
 
-On v0.26.0-rc18 ``remember(category="banana")`` returned "Invalid category",
-the answer said "nothing was stored", and seconds later the turn's extraction
-stored the fact, as the user had asked. A reworded error still opened with
-"This call stored nothing", which the model repeated. The save no longer fails
-on a label: the fact is stored as a plain fact, or without a date, and the
-result opens with "Saved" and names what was ignored.
+``remember(category="banana")`` stores nothing and says which categories it
+takes, so the model retries with a real one instead of a guess being filed
+for it. A bad due date is only a missing detail: the fact is stored without
+it, and the result opens with "Saved" and names what was ignored.
 """
 
 from __future__ import annotations
@@ -68,18 +66,43 @@ def _rows(store: MemoryStore):
     ).fetchall()
 
 
-def test_an_unknown_category_saves_the_fact_as_a_fact(store):
+def test_an_unknown_category_is_refused_with_the_valid_ones(store):
     with _tools(_Host(store)) as tools:
         result = tools["remember"](fact=FACT, category="banana")
 
-    assert result["status"] == "stored"
-    assert result["ignored"] == {"category": "banana"}
-    assert _rows(store) == [(FACT, "fact", None)]
+    assert result["status"] == "error"
+    assert result["stored"] == 0
+    assert _rows(store) == []
     message = result["message"]
-    assert message.startswith("Saved.")
-    assert "'banana'" in message
-    assert str(sorted(EXTRACTABLE_CATEGORIES)) in message
-    assert not any(word in message.lower() for word in NOT_KEPT), message
+    assert "'banana' is not a category" in message
+    assert ", ".join(sorted(EXTRACTABLE_CATEGORIES)) in message
+    assert "Call remember again" in message
+
+
+@pytest.mark.parametrize("category", ["Fact", " fact", "facts", "reminders", "None"])
+def test_a_near_miss_category_is_refused_too(store, category):
+    with _tools(_Host(store)) as tools:
+        result = tools["remember"](fact=FACT, category=category)
+
+    assert result["status"] == "error"
+    assert _rows(store) == []
+
+
+def test_an_empty_category_is_the_default(store):
+    with _tools(_Host(store)) as tools:
+        result = tools["remember"](fact=FACT, category="")
+
+    assert result["status"] == "stored"
+    assert _rows(store) == [(FACT, "fact", None)]
+
+
+def test_the_retry_the_error_asks_for_is_stored(store):
+    with _tools(_Host(store)) as tools:
+        tools["remember"](fact=FACT, category="banana")
+        result = tools["remember"](fact=FACT, category="fact")
+
+    assert result["status"] == "stored"
+    assert _rows(store) == [(FACT, "fact", None)]
 
 
 def test_a_bad_due_date_saves_the_reminder_without_one(store):
@@ -99,12 +122,13 @@ def test_a_bad_due_date_saves_the_reminder_without_one(store):
     assert not any(word in message.lower() for word in NOT_KEPT), message
 
 
-def test_both_bad_arguments_are_named(store):
+def test_a_bad_category_is_refused_before_the_date_is_read(store):
     with _tools(_Host(store)) as tools:
         result = tools["remember"](fact=FACT, category="banana", due_at="soon")
 
-    assert result["ignored"] == {"category": "banana", "due_at": "soon"}
-    assert _rows(store) == [(FACT, "fact", None)]
+    assert result["status"] == "error"
+    assert "'banana'" in result["message"]
+    assert _rows(store) == []
 
 
 def test_the_date_can_be_added_as_the_result_says(store):
@@ -119,22 +143,19 @@ def test_the_date_can_be_added_as_the_result_says(store):
 
 
 @pytest.mark.parametrize("category", ["profile", "system", "permission"])
-def test_a_privileged_category_saves_the_fact_as_a_fact(store, category):
-    """A chat still can't write these rows, which lead every prompt. The fact
-    is kept as a plain one, so the answer and the Memory page agree: a refusal
-    read as "not in memory" while extraction stored the fact seconds later."""
+def test_a_privileged_category_is_refused(store, category):
+    """A chat can't write these rows, which lead every prompt, and nothing is
+    filed under another category in their place."""
     with _tools(_Host(store)) as tools:
         result = tools["remember"](fact=FACT, category=category)
 
-    assert result["status"] == "stored"
-    assert result["ignored"] == {"category": category}
-    assert _rows(store) == [(FACT, "fact", None)]
+    assert result["status"] == "error"
+    assert _rows(store) == []
     message = result["message"]
-    assert message.startswith("Saved.")
     assert f"a chat can't write the '{category}' category" in message
     assert "is not a category" not in message
-    assert str(sorted(EXTRACTABLE_CATEGORIES)) in message
-    assert not any(word in message.lower() for word in NOT_KEPT), message
+    assert ", ".join(sorted(EXTRACTABLE_CATEGORIES)) in message
+    assert category not in ", ".join(sorted(EXTRACTABLE_CATEGORIES))
 
 
 def test_valid_arguments_report_nothing_ignored(store):
@@ -150,7 +171,7 @@ def test_extraction_after_the_save_leaves_one_memory(store):
     """The turn's extraction restates the fact; it must merge, not double it."""
     host = _Host(store)
     with _tools(host) as tools:
-        tools["remember"](fact=FACT, category="banana")
+        tools["remember"](fact=FACT, category="fact")
         host._execute_extraction_operations(
             [
                 {
@@ -168,7 +189,7 @@ def test_extraction_after_the_save_leaves_one_memory(store):
 
 
 def test_an_empty_fact_is_still_an_error(store):
-    """Only an optional label is forgiven; there is nothing to save here."""
+    """There is nothing to save here, whatever the label."""
     with _tools(_Host(store)) as tools:
         result = tools["remember"](fact="  ", category="banana")
 
@@ -180,7 +201,7 @@ def test_a_refused_credential_is_still_refused(store):
     with _tools(_Host(store)) as tools:
         result = tools["remember"](
             fact="My API key is sk-ant-api03-abcdefghijklmnopqrstuvwx",
-            category="banana",
+            category="fact",
         )
 
     assert result["status"] == "skipped"

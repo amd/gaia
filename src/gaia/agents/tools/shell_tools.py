@@ -1020,18 +1020,23 @@ def _changes_files(command: str) -> bool:
     )
 
 
+def _read_paths(words: list) -> list:
+    """The words in *words* that are read as files or are spelled like paths."""
+    found = list(read_targets_in_words(words))
+    found += [
+        word
+        for word in words[1:]
+        if not word.startswith("-")
+        and "://" not in word
+        and re.search(r"[\\/]|\.[A-Za-z0-9]{1,5}$", word)
+    ]
+    return list(dict.fromkeys(found))
+
+
 def _reads_files(command: str) -> bool:
     """Whether *command* reads or lists a path; a line that won't split may."""
     words = _command_words(command)
-    if words is None:
-        return True
-    if read_targets_in_words(words):
-        return True
-    return any(
-        "://" not in word and re.search(r"[\\/]|\.[A-Za-z0-9]{1,5}$", word)
-        for word in words[1:]
-        if not word.startswith("-")
-    )
+    return words is None or bool(_read_paths(words))
 
 
 def _not_approvable(error: Dict[str, Any]) -> Dict[str, Any]:
@@ -3436,6 +3441,53 @@ def _command_word_lists(argv: list) -> list:
     return lists
 
 
+#: What can sit between words inside an inline script's strings and lists.
+_SCRIPT_WORD_SPLIT = re.compile(r"[\s'\",;()\[\]{}]+")
+
+
+def _human_only_command(command: str) -> str:
+    """The ``gaia skill`` call *command* makes, or "": only the user runs those.
+
+    Inline scripts are over-read, their strings included, since a string there
+    may be what the script runs.
+    """
+    from gaia.skills.binaries import human_only_gaia_call
+
+    try:
+        argv = _tokenize(command, bypass_gates=True)
+    except ValueError:
+        return human_only_gaia_call(_SCRIPT_WORD_SPLIT.split(command))
+    if not argv:
+        return ""
+    lists = _command_word_lists(argv)
+    words = list(lists[0])
+    for script in lists[1:]:
+        words.extend(
+            piece
+            for word in script
+            for piece in _SCRIPT_WORD_SPLIT.split(word)
+            if piece
+        )
+    return human_only_gaia_call(words)
+
+
+def _human_only_refusal(command: str, spelled: str) -> Dict[str, Any]:
+    """The final refusal for a line that runs a ``gaia`` command only the user may."""
+    from gaia.skills.binaries import human_only_message
+
+    return {
+        "status": "error",
+        "tier": TIER_REFUSE,
+        "error": f"Not offered: `{command}` — {human_only_message(spelled)}.",
+        "hint": (
+            "Tell the user plainly what was asked for and the exact command, so "
+            f"they can decide whether to run it themselves. {NOT_APPROVABLE}"
+        ),
+        "has_errors": True,
+        **NOT_EXECUTED,
+    }
+
+
 def _bulk_read_credential(
     argv: list, cwd: str, downstream: Optional[list] = None
 ) -> Optional[str]:
@@ -5752,7 +5804,8 @@ class ShellToolsMixin:
         """One sentence naming the routes this run takes without anyone approving.
 
         A line that changes files is pointed at the file tools, which keep to
-        the allowed folders; run_python is offered only for computation.
+        the allowed folders; run_python is offered for computation and for
+        reads that stay inside them.
         """
         tools = getattr(self, "_tools_registry", None) or {}
         asks = getattr(self, "_tool_requires_confirmation", None)
@@ -5769,13 +5822,44 @@ class ShellToolsMixin:
             return f"Use {' or '.join(writers)} to create or change files instead."
         readers = [name for name in ("read_file", "browse_directory") if runs(name)]
         routes = [f"{' or '.join(readers)} to read or list files"] if readers else []
-        if runs("run_python") and not _reads_files(command):
+        if runs("run_python") and (
+            not _reads_files(command) or self._reads_stay_inside(command)
+        ):
             routes.append("run_python to compute")
         shown = "`dir` or `findstr`" if os.name == "nt" else "`ls` or `grep`"
         routes.append(f"a no-prompt command such as {shown}")
         if len(routes) == 1:
             return f"Use {routes[0]} instead."
         return f"Use {', '.join(routes[:-1])}, or {routes[-1]} instead."
+
+    def _reads_stay_inside(self, command: str) -> bool:
+        """Whether every path *command* reads really lies in the allowed folders.
+
+        Links are followed. A protected or credential path, a host with no
+        allowed folders, or a line that won't split counts as outside.
+        """
+        from gaia.security import protected_directory_of
+
+        validator = getattr(self, "path_validator", None)
+        if validator is None and not hasattr(self, "_is_path_allowed"):
+            return False
+        words = _command_words(command)
+        if words is None:
+            return False
+        cwd = self._live_session_cwd()
+        for word in _read_paths(words):
+            try:
+                real = os.path.realpath(os.path.join(cwd, os.path.expanduser(word)))
+                if protected_directory_of(real) or _protected_folder(real):
+                    return False
+            except (OSError, ValueError) as exc:
+                logger.debug("could not resolve %r (%s)", word, type(exc).__name__)
+                return False
+            if validator is not None and validator.is_read_blocked(real)[0]:
+                return False
+            if not self._path_allowed(real, prompt_user=False):
+                return False
+        return True
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -6198,6 +6282,11 @@ class ShellToolsMixin:
         ``npm -g``) is the exception: it is a one-time approval normally, and
         refused under full access, where nobody is asked.
         """
+        # Before full access too: trusting a skill stays a terminal action.
+        human_only = _human_only_command(command)
+        if human_only:
+            logger.warning("Refusing %r: %s is the user's to run", command, human_only)
+            return _human_only_refusal(command, human_only), []
         error, steps = self._validate_shell_command(command)
         if error is None or _reaches_the_prompt(error):
             install = self._system_install_block(steps, working_directory)

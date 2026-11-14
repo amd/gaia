@@ -1384,7 +1384,8 @@ def _formatter(
 BINARY_POLICIES: dict[str, BinaryPolicy] = {
     # GAIA's own CLI, for the automations skill only: its automations and the
     # Discord bridge's GitHub watches. Nothing else of `gaia` is reachable from
-    # a skill — no setup, no config, no connectors.
+    # a skill — no setup, no config, no connectors — and `gaia skill` is never
+    # offered at all (HUMAN_ONLY_GAIA_SUBCOMMANDS).
     "gaia": BinaryPolicy(
         binary="gaia",
         confirm_summary="changes what GAIA does on its own and reports to you",
@@ -1684,6 +1685,7 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
                 "describe",
                 "rev-parse",
                 "help",
+                "blame",
             }
         ),
         subcommands={
@@ -2423,6 +2425,44 @@ def normalize_binary(token: str) -> str:
     return name if BINARY_NAME_RE.match(name) else ""
 
 
+#: ``gaia`` subcommands only a person at their own terminal may run. They decide
+#: which skills GAIA trusts, so no approval lets the agent run them.
+HUMAN_ONLY_GAIA_SUBCOMMANDS = frozenset({"skill"})
+
+#: How ``gaia`` is spelled as a program: the binary, the legacy alias, the module.
+_GAIA_PROGRAM_NAMES = frozenset({"gaia", "gaia-cli", "gaia.cli"})
+
+
+def human_only_message(spelled: str) -> str:
+    """The refusal for *spelled*, a ``gaia`` command only the user may run."""
+    return (
+        f"'{spelled}' is not permitted for GAIA: promoting, installing or "
+        "trusting a skill is the user's decision, made from their own "
+        "terminal, and no approval lets the agent run it"
+    )
+
+
+def human_only_gaia_call(words: Sequence[str]) -> str:
+    """The ``gaia <subcommand>`` in *words* only a person may run, or ``""``.
+
+    *words* is a flat token list; ``gaia``, ``gaia.exe``, a path to either and
+    ``python -m gaia`` all count. Flags between the program and the subcommand
+    are skipped.
+    """
+    tokens = list(words)
+    for index, token in enumerate(tokens):
+        name = re.split(r"[\\/]", token.strip().strip("\"'").lower())[-1]
+        if name.endswith(".exe"):
+            name = name[: -len(".exe")]
+        if name not in _GAIA_PROGRAM_NAMES:
+            continue
+        rest = [word.lower() for word in tokens[index + 1 :]]
+        subcommand = next((word for word in rest if not word.startswith("-")), "")
+        if subcommand in HUMAN_ONLY_GAIA_SUBCOMMANDS:
+            return f"gaia {subcommand}"
+    return ""
+
+
 #: Interpreters whose ``-m <module>`` form can stand in for a policy's binary.
 PYTHON_LAUNCHERS = frozenset({"python", "python3", "py"})
 
@@ -2652,6 +2692,10 @@ def classify_invocation(
         return _ALLOWED  # bare `gh`, `gh --version` — help text only
 
     subcommand = tokens[index].lower()
+    if policy.binary == "gaia" and subcommand in HUMAN_ONLY_GAIA_SUBCOMMANDS:
+        return InvocationDecision(
+            REFUSE, human_only_message(f"gaia {subcommand}") + ".", never_offered=True
+        )
     rule = policy.subcommands.get(subcommand)
     if rule is None:
         # Only mention the write tier when this policy actually has one — a

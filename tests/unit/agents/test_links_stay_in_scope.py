@@ -245,12 +245,21 @@ def test_a_file_changing_refusal_points_to_the_file_tools(layout, command):
     assert "run_python" not in refused["error"]
 
 
-def test_a_read_refusal_points_to_the_readers_not_python(layout):
+def test_a_read_inside_the_allowed_folders_points_to_readers_and_python(layout):
     agent = _agent(layout)
 
     error = _shell(agent, "type notes.txt")["error"]
 
     assert "read_file" in error and "browse_directory" in error
+    assert "run_python to compute" in error
+
+
+def test_a_read_outside_the_allowed_folders_points_to_the_readers_not_python(layout):
+    agent = _agent(layout)
+
+    error = _shell(agent, f'type "{layout["elsewhere"] / "notes.txt"}"')["error"]
+
+    assert "read_file" in error
     assert "run_python" not in error
 
 
