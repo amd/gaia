@@ -1084,6 +1084,18 @@ claim remains unsupported, or no correction step remains, the framework replaces
 it with an explicit incomplete result. Unsupported claims never become successful
 results merely because the correction budget ran out.
 
+Only an edit a test could depend on makes an earlier run stale. Writing a doc
+or data file (`.md`, `.mdx`, `.rst`, `.txt`, `.csv`, a bare `CHANGELOG` or
+`README`, …) leaves the run standing, and so does writing a non-code file the
+request asked for as its output (`OUTPUT.md`, `result.json`). These still count
+as changes, even when the request named them as its output: any source file
+(`.py`, `.ts`, …, even one named `README.py`), a file under a `tests`, `test`,
+`fixtures`, `testdata` or `__snapshots__` folder, a file in or below a Python
+package folder (a prompt `.md` the code loads), and build, install or test
+configuration (`requirements*.txt`, `pyproject.toml`, `pytest.ini`,
+`package.json`, `CMakeLists.txt`, …). The verify-after-change nudge uses the
+same rule.
+
 A check that ran more than once in the turn is judged by its most recent run. A
 test that failed and then passed after a fix is `verified` and gets no note; one
 that passed and then failed after an edit reads `pytest didn't pass`. Only a

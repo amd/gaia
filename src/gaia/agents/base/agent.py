@@ -10850,8 +10850,19 @@ Do NOT wrap conversational replies in JSON.
         log = getattr(self, "_turn_tool_executions", None)
         if log is None:
             return
+        evidence = getattr(self, "_completion_evidence", None)
+        outputs = list(getattr(evidence, "outputs", None) or [])
         record = verification_record(
-            tool_name, tool_args, result, errored=self._is_error_result(result)
+            tool_name,
+            tool_args,
+            result,
+            errored=self._is_error_result(result),
+            is_deliverable=(
+                (lambda path: evidence.output_written_by(path, outputs) is not None)
+                if outputs
+                else None
+            ),
+            root=getattr(evidence, "root", None),
         )
         # A snippet that prints a failing summary still exits 0.
         record["failed"] = record["failed"] or summary_reports_failure(
@@ -10861,7 +10872,6 @@ Do NOT wrap conversational replies in JSON.
         record["output"] = check_output(tool_name, result)
         record["observed"] = observed_excerpt(observed_text(result))
         log.append(record)
-        evidence = getattr(self, "_completion_evidence", None)
         if evidence is not None:
             evidence.record(
                 tool_name,

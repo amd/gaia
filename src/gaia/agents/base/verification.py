@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Dict, FrozenSet, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Sequence, Tuple
 
 from gaia.agents.base.checks import (
     CheckResult,
@@ -511,6 +511,7 @@ _NON_CODE_SUFFIXES: FrozenSet[str] = frozenset(
         ".log",
         ".markdown",
         ".md",
+        ".mdx",
         ".pdf",
         ".png",
         ".rst",
@@ -520,6 +521,90 @@ _NON_CODE_SUFFIXES: FrozenSet[str] = frozenset(
         ".xlsx",
     }
 )
+
+#: Doc files often written with no suffix.
+_DOC_NAMES: FrozenSet[str] = frozenset(
+    {"authors", "changelog", "changes", "contributing", "history", "license"}
+    | {"licence", "news", "notice", "readme"}
+)
+
+#: A folder whose files a test reads: an expected-output .md there is a fixture.
+_TEST_DIRS: FrozenSet[str] = frozenset(
+    {"__snapshots__", "fixtures", "test", "testdata", "tests"}
+)
+
+#: Files that configure a build, an install or a test run, whatever their suffix.
+_BUILD_INPUT = re.compile(
+    r"(?:requirements|constraints)[\w.-]*\.txt|cmakelists\.txt|pyproject\.toml"
+    r"|setup\.cfg|tox\.ini|pytest\.ini|\.coveragerc|makefile|pipfile(?:\.lock)?"
+    r"|poetry\.lock|package(?:-lock)?\.json|tsconfig[\w.-]*\.json|go\.(?:mod|sum)"
+    r"|cargo\.(?:toml|lock)|[\w.-]+\.config\.(?:json|ya?ml)"
+)
+
+#: How far up a file's folders a package marker still makes it package data.
+_PACKAGE_DEPTH = 3
+
+#: Source files: one of these is code even when the request named it as output.
+_CODE_SUFFIXES: FrozenSet[str] = frozenset(
+    {".bat", ".c", ".cc", ".cjs", ".cpp", ".cs", ".go", ".h", ".hpp", ".java"}
+    | {".js", ".jsx", ".kt", ".lua", ".mjs", ".php", ".ps1", ".py", ".pyi"}
+    | {".pyx", ".rb", ".rs", ".scala", ".sh", ".svelte", ".swift", ".ts"}
+    | {".tsx", ".vue"}
+)
+
+
+def feeds_tests(path: str, root: Optional[str] = None) -> bool:
+    """True when a test run can read *path*, whatever its suffix.
+
+    Under a test folder, inside a Python package (a ``.md`` there can be a
+    prompt the code loads at runtime), or a build, install or test config.
+    A relative *path* is resolved against *root* when given.
+    """
+    import os
+
+    path = (path or "").strip()
+    parts = [p for p in re.split(r"[\\/]+", path.lower()) if p]
+    if not parts:
+        return False
+    *folders, name = parts
+    if any(folder in _TEST_DIRS for folder in folders) or _BUILD_INPUT.fullmatch(name):
+        return True
+    if root and not os.path.isabs(path):
+        path = os.path.join(root, path)
+    folder = os.path.dirname(os.path.abspath(path))
+    for _ in range(_PACKAGE_DEPTH):
+        if os.path.isfile(os.path.join(folder, "__init__.py")):
+            return True
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    return False
+
+
+def is_doc_path(path: str, root: Optional[str] = None) -> bool:
+    """True for a doc or data file no test or build reads.
+
+    A non-code suffix (or a bare ``CHANGELOG``-style name) that
+    :func:`feeds_tests` doesn't claim.
+    """
+    import os
+
+    name = re.split(r"[\\/]+", (path or "").strip().lower())[-1]
+    if not name or feeds_tests(path, root):
+        return False
+    stem, suffix = os.path.splitext(name)
+    if suffix:
+        return suffix in _NON_CODE_SUFFIXES
+    return stem in _DOC_NAMES
+
+
+def is_code_path(path: str) -> bool:
+    """True when *path* has a source-code suffix."""
+    import os
+
+    return os.path.splitext((path or "").strip().lower())[1] in _CODE_SUFFIXES
+
 
 #: Tools whose *output* can show a test run, whatever the command looked like.
 _TEST_OUTPUT_TOOLS: FrozenSet[str] = frozenset(
@@ -658,11 +743,14 @@ def _is_project_change(execution: Dict[str, Any], project_root: str) -> bool:
     paths = _changed_paths(execution)
     if paths is None:
         return False
+    # The record already judged this write: a doc or the requested output.
+    if execution.get("mutated") is False and is_file_mutation(execution.get("tool")):
+        return False
     if not paths:
         return True
     root = os.path.realpath(project_root)
     for path in paths:
-        if os.path.splitext(path)[1].lower() in _NON_CODE_SUFFIXES:
+        if is_doc_path(path, project_root):
             continue
         if os.path.isabs(path):
             real = os.path.realpath(path)
@@ -820,8 +908,49 @@ def is_file_mutation(tool_name: str) -> bool:
     return (tool_name or "").strip() in _FILE_MUTATION_TOOLS
 
 
+def is_code_mutation(
+    tool_name: str,
+    tool_args: Any,
+    is_deliverable: Optional[Callable[[str], bool]] = None,
+    root: Optional[str] = None,
+) -> bool:
+    """True when this call rewrote a file a test run could depend on.
+
+    A write to a doc (:func:`is_doc_path`), or to a non-code file the request
+    asked for as its output (*is_deliverable*) that no test reads, leaves an
+    earlier test run standing. A call whose target can't be read counts as a
+    change.
+    """
+    if not is_file_mutation(tool_name):
+        return False
+    args = tool_args if isinstance(tool_args, dict) else {}
+    paths = [
+        value
+        for key in _PATH_ARG_KEYS
+        if isinstance((value := args.get(key)), str) and value.strip()
+    ]
+    if not paths:
+        return True
+    return not all(
+        is_doc_path(path, root)
+        or (
+            is_deliverable is not None
+            and not is_code_path(path)
+            and not feeds_tests(path, root)
+            and is_deliverable(path)
+        )
+        for path in paths
+    )
+
+
 def verification_record(
-    tool_name: str, tool_args: Any, result: Any, *, errored: bool
+    tool_name: str,
+    tool_args: Any,
+    result: Any,
+    *,
+    errored: bool,
+    is_deliverable: Optional[Callable[[str], bool]] = None,
+    root: Optional[str] = None,
 ) -> Dict[str, Any]:
     """One tool call as :func:`build_verification_scope` reads it.
 
@@ -855,7 +984,7 @@ def verification_record(
         "ran": check_was_executed(result),
         "checked_absent": isinstance(result, dict)
         and result.get(CHECKED_ABSENT_KEY) is True,
-        "mutated": is_file_mutation(tool_name),
+        "mutated": is_code_mutation(tool_name, tool_args, is_deliverable, root),
         "declared": declared,
     }
 

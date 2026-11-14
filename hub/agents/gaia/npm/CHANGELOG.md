@@ -16,6 +16,12 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   documents fill), and never calls one of those "not attached": asking about
   one by name loads it.
 
+- **Writing the report after the tests no longer counts as an untested
+  change.** A task that ran its tests and then wrote its summary file, or a
+  changelog entry, was told its passing tests "ran before the last change" and
+  re-ran them for nothing. Only a write a test could depend on (source, test
+  fixtures, build inputs, files inside a package) makes an earlier run stale
+  now; docs and the output file the request asked for do not.
 - **Large files and outputs are read in fewer, larger pieces.** Reading a file
   too large for one result returned small archived parts the agent fetched one
   per call. It now returns the file's first lines and a line-numbered outline
