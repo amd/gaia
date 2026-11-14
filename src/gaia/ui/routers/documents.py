@@ -17,12 +17,15 @@ import logging
 import os
 import sys
 import tempfile
+import unicodedata
 import uuid
 from pathlib import Path
 from typing import List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
+
+from gaia.utils.image_formats import IMAGE_EXTENSIONS
 
 from .._chat_helpers import UnreadableDocumentError, index_progress
 from ..database import ChatDatabase
@@ -152,7 +155,7 @@ def _sanitize_stem(stem: str, max_length: int = 80) -> str:
             if c in _ILLEGAL_FILENAME_CHARS or c in _SHELL_QUOTING_CHARS or ord(c) < 32
             else c
         )
-        for c in stem
+        for c in unicodedata.normalize("NFC", stem)
     )
     cleaned = cleaned.strip(" .")
     cleaned = cleaned[:max_length]
@@ -385,7 +388,8 @@ async def upload_document_blob(
     # Strip any path components the client might have sent (defense in depth;
     # we never use this value as a filesystem path, but it's stored in the
     # db for display and returned to the frontend).
-    display_name = Path(file.filename).name
+    # Composed, so a macOS (decomposed) name matches the one the model writes.
+    display_name = unicodedata.normalize("NFC", Path(file.filename).name)
     ext = Path(display_name).suffix.lower()
 
     # 2. Validate extension against the strict document set
@@ -422,12 +426,14 @@ async def upload_document_blob(
                         break
                     bytes_written += len(chunk)
                     if bytes_written > MAX_DOCUMENT_UPLOAD_SIZE:
+                        max_mb = f"{MAX_DOCUMENT_UPLOAD_SIZE // (1024 * 1024)}"
                         raise HTTPException(
                             status_code=413,
-                            detail=(
-                                f"File too large. Maximum size is "
-                                f"{MAX_DOCUMENT_UPLOAD_SIZE // (1024 * 1024)} MB."
-                            ),
+                            detail={
+                                "status": "too_large",
+                                "message": f"File too large. Maximum size is {max_mb} MB.",
+                                "max_mb": max_mb,
+                            },
                         )
                     hasher.update(chunk)
                     out.write(chunk)
@@ -582,6 +588,17 @@ async def get_document_file(doc_id: str, db: ChatDatabase = Depends(get_db)):
             status_code=404,
             detail=f"{doc.get('filename') or doc_id} is no longer on disk at {path}",
         )
+    # FileResponse opens the file only once headers are out, cutting the reply.
+    try:
+        with open(real, "rb"):
+            pass
+    except PermissionError as e:
+        raise HTTPException(
+            status_code=403,
+            detail=f"{doc.get('filename') or doc_id} can't be opened: "
+            "this account isn't allowed to read it, or another program has it "
+            "locked.",
+        ) from e
     response = FileResponse(
         path=str(real),
         media_type=_INLINE_MEDIA_TYPES.get(
@@ -706,13 +723,44 @@ async def delete_document(doc_id: str, db: ChatDatabase = Depends(get_db)):
     return {"deleted": True}
 
 
+def _record_failed_document(
+    db: ChatDatabase, filepath: Path, file_hash: str, error: Exception
+) -> None:
+    """Give a file that failed to index a library row saying why, to retry from."""
+    try:
+        file_stat = filepath.stat()
+    except OSError:
+        file_stat = None
+    doc = db.add_document(
+        filename=filepath.name,
+        filepath=str(filepath),
+        file_hash=file_hash,
+        file_size=file_stat.st_size if file_stat else 0,
+        chunk_count=0,
+        file_mtime=file_stat.st_mtime if file_stat else None,
+    )
+    # The same bytes indexed fine, or are indexing, from elsewhere: leave that row.
+    if doc.get("indexing_status") in ("pending", "indexing") or (
+        doc.get("indexing_status") == "complete" and doc.get("chunk_count")
+    ):
+        return
+    db.update_document_status(
+        doc["id"],
+        "failed",
+        last_error=str(error),
+        error_kind=getattr(error, "kind", None),
+    )
+
+
 @router.post("/api/documents/index-folder", response_model=IndexFolderResponse)
 async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(get_db)):
     """Index all supported documents in a folder.
 
     Scans the given folder for files with extensions in
     FOLDER_INDEX_EXTENSIONS and indexes each one using the RAG pipeline.
-    Images are skipped: they index only when picked one by one.
+    Images are skipped and counted apart: they index only when picked one by
+    one. A file that fails gets a ``failed`` library row with the reason, so
+    it can be retried, and is left out of ``documents``.
     Indexing runs in a thread-pool executor to avoid blocking the
     event loop.
 
@@ -749,6 +797,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
     # Collect all candidate files
     candidate_files: List[Path] = []
     skipped = 0
+    skipped_images = 0
     try:
         pattern_iter = resolved.rglob("*") if request.recursive else resolved.iterdir()
         for item in pattern_iter:
@@ -756,6 +805,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
                 continue
             if item.suffix.lower() in FOLDER_INDEX_EXTENSIONS:
                 candidate_files.append(item)
+            elif item.suffix.lower() in IMAGE_EXTENSIONS:
+                skipped_images += 1
             else:
                 skipped += 1
     except PermissionError:
@@ -766,7 +817,12 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
 
     if not candidate_files:
         return IndexFolderResponse(
-            indexed=0, failed=0, skipped=skipped, documents=[], errors=[]
+            indexed=0,
+            failed=0,
+            skipped=skipped,
+            skipped_images=skipped_images,
+            documents=[],
+            errors=[],
         )
 
     logger.info(
@@ -784,6 +840,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
 
     with one_embedder_load():
         for filepath in candidate_files:
+            file_hash = None
             try:
                 file_hash = await asyncio.get_running_loop().run_in_executor(
                     None, compute_file_hash, filepath
@@ -793,6 +850,8 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
                 file_mtime = file_stat.st_mtime
 
                 chunk_count = await _index_document(filepath)
+                if chunk_count == 0:
+                    raise ValueError("indexing produced 0 chunks")
 
                 doc = db.add_document(
                     filename=filepath.name,
@@ -807,6 +866,19 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
                 error_msg = f"{filepath.name}: {e}"
                 logger.warning("Failed to index %s: %s", filepath, e)
                 errors.append(error_msg)
+                # Unhashable means unreadable: no content key to file a row under.
+                if file_hash is not None:
+                    try:
+                        _record_failed_document(db, filepath, file_hash, e)
+                    except Exception as record_err:  # pylint: disable=broad-except
+                        # One file's failure must not lose the folder's results.
+                        logger.error(
+                            "Could not record the failed row for %s: %s",
+                            filepath,
+                            record_err,
+                            exc_info=True,
+                        )
+                        errors[-1] += f" (no library row: {record_err})"
 
     logger.info(
         "Folder indexing complete: %d indexed, %d failed",
@@ -818,6 +890,7 @@ async def index_folder(request: IndexFolderRequest, db: ChatDatabase = Depends(g
         indexed=len(indexed_docs),
         failed=len(errors),
         skipped=skipped,
+        skipped_images=skipped_images,
         documents=indexed_docs,
         errors=errors,
     )

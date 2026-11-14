@@ -35,6 +35,17 @@ beforeEach(() => {
     URL.revokeObjectURL = vi.fn();
 });
 
+describe('Composer with an Arabic-named file', () => {
+    it('reads the name left to right so the extension stays last', async () => {
+        const name = 'ملاحظات الاجتماع.txt';
+        mockedApi.uploadFile.mockResolvedValue({ filename: 'n-ab.txt', original_name: name, url: '/api/files/uploads/n-ab.txt', size: 5, content_type: 'text/plain', is_image: false });
+        render(<Harness />);
+        fireEvent.change(document.querySelector('input[type="file"]') as HTMLInputElement, { target: { files: [new File(['x'], name, { type: 'text/plain' })] } });
+
+        expect(await screen.findByText(name)).toHaveAttribute('dir', 'ltr');
+    });
+});
+
 describe('Composer with a recording', () => {
     const video = new File(['media'], 'class.mp4', { type: 'video/mp4' });
     const uploaded = { filename: 'class-ab.mp4', original_name: 'class.mp4', url: '/api/files/uploads/class-ab.mp4', size: 5, content_type: 'video/mp4', is_image: false };

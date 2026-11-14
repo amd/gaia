@@ -283,7 +283,10 @@ describe('SetupScreen: a cold PC (no model server yet)', () => {
         mockedApi.cancelSetup.mockResolvedValue({ cancelled: true });
         renderSetup();
         expect(await screen.findByText("Getting GAIA's model server ready…")).toBeInTheDocument();
-        expect(screen.getByRole('progressbar', { name: "Getting GAIA's model server ready…" })).toHaveAttribute('value', '40');
+        // One bar on the screen, the checks' own; the server's progress is a number on its line (#7711).
+        expect(screen.getByText('40%')).toBeInTheDocument();
+        expect(screen.queryByRole('progressbar', { name: "Getting GAIA's model server ready…" })).toBeNull();
+        expect(screen.getAllByRole('progressbar')).toHaveLength(1);
         const bar = document.querySelector('.setup-footer') as HTMLElement;
         fireEvent.click(within(bar).getByRole('button', { name: 'Cancel' }));
         await waitFor(() => expect(mockedApi.cancelSetup).toHaveBeenCalledWith());
@@ -344,7 +347,8 @@ describe('SetupScreen: the recommendation', () => {
         expect(cloud).not.toBeChecked();
         expect(screen.getByRole('region', { name: 'Recommended setup' })).toHaveTextContent('Recommended for this PC');
         const cloudCard = screen.getByRole('region', { name: 'Cloud model' });
-        expect(cloudCard).toHaveTextContent('Nothing to download');
+        expect(cloudCard).toHaveTextContent('GAIA still sets up graphics support and a small model on this PC');
+        expect(cloudCard).not.toHaveTextContent('Nothing to download');
         expect(cloudCard).toHaveTextContent('Each message and the chat history are sent to the provider.');
         expect(cloudCard).not.toHaveTextContent('Recommended');
         // Customize is its own button in the bottom bar, not a link beside the cloud choice.
@@ -355,6 +359,9 @@ describe('SetupScreen: the recommendation', () => {
         fireEvent.click(cloudCard);
         expect(cloud).toBeChecked();
         expect(bar.queryByRole('button', { name: /Download and start/ })).toBeNull();
+        // Nothing local is chosen or downloaded on the cloud path, so neither control is offered (#7711).
+        expect(bar.queryByRole('button', { name: 'Customize' })).toBeNull();
+        expect(screen.queryByText('See everything that will be downloaded')).toBeNull();
         clickContinue();
         await screen.findByRole('heading', { name: 'Connect a cloud provider' });
         expect(mockedApi.startSetup).not.toHaveBeenCalled();
@@ -437,6 +444,19 @@ describe('SetupScreen: the recommendation', () => {
         mockedApi.getSetupPlan.mockResolvedValue(plan([{ ...QWEN, downloaded: true, size_gb: 0 }, GEMMA, EMBED]));
         renderSetup();
         expect(await screen.findByText(/Some of your models are already on this PC\./)).toBeInTheDocument();
+    });
+
+    it('says models are on this PC when the only ones downloaded are outside the plan', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED, FLM]));
+        renderSetup();
+        expect(await screen.findByText(/Some models are already on this PC, but none of them are in your plan yet\./)).toBeInTheDocument();
+        expect(screen.queryByText(/No models have downloaded yet/)).not.toBeInTheDocument();
+    });
+
+    it('says no models have downloaded when nothing is on this PC', async () => {
+        mockedApi.getSetupPlan.mockResolvedValue(plan([QWEN, GEMMA, EMBED]));
+        renderSetup();
+        expect(await screen.findByText(/No models have downloaded yet\./)).toBeInTheDocument();
     });
 
     it('offers Test and start when there is nothing to download', async () => {

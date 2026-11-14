@@ -228,6 +228,12 @@
     font-size: 13px;
 }
 
+.render-diff__path {
+    color: var(--text-secondary);
+    margin: -4px 0 6px;
+    overflow-wrap: anywhere;
+}
+
 .render-diff__body {
     margin: 0;
     overflow-x: auto;
@@ -625,6 +631,16 @@
     color: var(--danger);
     font-size: 12px;
     overflow-wrap: anywhere;
+}
+
+.render-connect__setup {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    max-width: 44ch;
+    color: var(--text-secondary);
+    font-size: 12px;
 }
 
 .render-connect__settings {

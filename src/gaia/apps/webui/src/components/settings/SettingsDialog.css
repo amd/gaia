@@ -66,6 +66,7 @@
 .settings-body {
     position: relative;
     display: flex;
+    flex-direction: column;
     flex: 1;
     min-width: 0;
     min-height: 0;
@@ -99,12 +100,31 @@
     color: var(--text-primary);
 }
 
+/* Settings > About: one link per line. */
+.settings-about-links {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    list-style: none;
+}
+
+.settings-about-links a {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--accent);
+    font-size: 13.5px;
+}
+
 /* "Back to Setup" after a Setup row opened another section. */
 .settings-back {
     display: inline-flex;
     align-items: center;
+    flex: none;
+    align-self: flex-start;
     gap: 4px;
-    margin-block-end: 8px;
+    margin-block: 14px 0;
+    margin-inline: 26px 60px;
     padding-block: 2px;
     padding-inline: 2px 6px;
     border-radius: var(--radius-sm);
@@ -119,7 +139,7 @@
 
 /* The setting a Setup row pointed at, marked for a moment after landing. */
 .settings-target-hit {
-    scroll-margin-top: 64px;
+    scroll-margin-top: 76px;
     outline: 2px solid var(--accent);
     outline-offset: 4px;
 }
@@ -531,6 +551,7 @@
     margin-inline-start: 0;
 }
 
+/* One fact per line, so two never run into each other. */
 .model-chips .settings-more > .model-row-meta {
     display: block;
 }
@@ -748,6 +769,22 @@
     overflow: hidden;
 }
 
+.skill-row-desc.is-open {
+    display: block;
+    overflow: visible;
+}
+
+.skill-row-more {
+    align-self: flex-start;
+    padding: 0;
+    color: var(--text-primary);
+    font-size: 12.5px;
+    text-decoration: underline;
+    background: none;
+    border: 0;
+    cursor: pointer;
+}
+
 .model-row > button,
 .skill-row > button {
     flex-shrink: 0;
@@ -902,7 +939,7 @@
     text-align: start;
 }
 
-.settings-setup-row:hover {
+.settings-setup-row:not(.is-fact):hover {
     background: var(--bg-hover);
 }
 

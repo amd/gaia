@@ -15,6 +15,7 @@ import { useDialogFocus } from '../hooks/useDialogFocus';
 import * as api from '../services/api';
 import { log } from '../utils/logger';
 import { formatSize } from '../utils/format';
+import { isMacPlatform } from '../utils/platform';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import type { MessageKey } from '../i18n/registry';
 import { UploadErrorToast, isExtensionSupported, getUnsupportedCategory } from './UnsupportedFeature';
@@ -38,8 +39,10 @@ function formatDate(iso: string | null, t: Translate): string {
     const d = new Date(iso);
     const now = new Date();
     const diff = now.getTime() - d.getTime();
-    const hours = Math.floor(diff / 3600000);
-    if (hours < 1) return t('time.justNow');
+    if (diff < 60000) return t('time.justNow');
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return t('time.minutesAgo', { n: mins });
+    const hours = Math.floor(mins / 60);
     if (hours < 24) return t('time.hoursAgo', { n: hours });
     const days = Math.floor(hours / 24);
     if (days < 7) return t('time.daysAgo', { n: days });
@@ -99,6 +102,8 @@ interface IndexResult {
     unsupported: string[];
     failed: number;
     lastError: string;
+    /** Images inside added folders, which GAIA reads only when added one by one. */
+    skippedImages: number;
 }
 
 /**
@@ -126,6 +131,7 @@ async function indexAndAttachFiles(
     const succeededFiles: string[] = [];
     let failed = 0;
     let lastError = '';
+    let skippedImages = 0;
     const folderPaths = new Set(entries.filter(e => e.type === 'folder').map(e => e.path));
 
     for (const filepath of supported) {
@@ -134,6 +140,12 @@ async function indexAndAttachFiles(
                 const result = await api.indexFolder(filepath);
                 const newIds: string[] = [];
                 result.documents.forEach(d => { if (d.id) newIds.push(d.id); });
+                skippedImages += result.skipped_images ?? 0;
+                // Each failed file has a library row saying why, to retry from.
+                if (result.failed > 0) {
+                    failed += result.failed;
+                    lastError = result.errors[0] ?? lastError;
+                }
                 if (newIds.length > 0) {
                     newIds.forEach(id => docIds.push(id));
                     succeededFiles.push(filepath);
@@ -177,8 +189,8 @@ async function indexAndAttachFiles(
         // No chat is open: the agent only sees attached documents, so hold them for the next one.
         useChatStore.getState().addDraftDocuments(docIds);
     }
-    // The chat's document bar lists only documents the store knows about.
-    if (docIds.length > 0) {
+    // The chat's document bar and the library list only documents the store knows about.
+    if (docIds.length > 0 || failed > 0) {
         try {
             const data = await api.listDocuments();
             useChatStore.getState().setDocuments(data.documents || []);
@@ -187,7 +199,7 @@ async function indexAndAttachFiles(
         }
     }
 
-    return { docIds, supported, succeededFiles, unsupported, failed, lastError };
+    return { docIds, supported, succeededFiles, unsupported, failed, lastError, skippedImages };
 }
 
 const isHiddenName = (name: string) => name.startsWith('.');
@@ -213,6 +225,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
     const [quickLinks, setQuickLinks] = useState<QuickLink[]>([]);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [deniedName, setDeniedName] = useState<string | null>(null);
     const [showHidden, setShowHidden] = useState(false);
 
     // Search state
@@ -241,6 +254,7 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
     const loadDirectory = useCallback(async (path?: string) => {
         setLoading(true);
         setError(null);
+        setDeniedName(null);
         setSearchResults(null);
         setSearchQuery('');
         setSearchedLocations([]);
@@ -252,8 +266,15 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
             if (data.quick_links.length > 0) setQuickLinks(data.quick_links);
             log.ui.info(`Browsing: ${data.current_path} (${data.entries.length} items)`);
         } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Failed to load directory';
-            setError(msg);
+            if (path && (err as { reason?: unknown }).reason === 'os_denied') {
+                const name = path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || path;
+                setCurrentPath(path);
+                setParentPath(null);
+                setEntries([]);
+                setDeniedName(name);
+            } else {
+                setError(err instanceof Error ? err.message : 'Failed to load directory');
+            }
             log.ui.error('Browse failed', err);
         } finally {
             setLoading(false);
@@ -368,9 +389,10 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                 });
             } else {
                 const added = t.plural('fileBrowser.added', result.docIds.length);
-                setIndexStatus(result.unsupported.length > 0
-                    ? `${added} ${t.plural('fileBrowser.skipped', result.unsupported.length)}`
-                    : added);
+                const parts = [added];
+                if (result.unsupported.length > 0) parts.push(t.plural('fileBrowser.skipped', result.unsupported.length));
+                if (result.skippedImages > 0) parts.push(t.plural('docs.folder.images', result.skippedImages));
+                setIndexStatus(parts.join(' '));
             }
             if (indexStatusTimerRef.current) clearTimeout(indexStatusTimerRef.current);
             indexStatusTimerRef.current = setTimeout(() => setIndexStatus(null), 5000);
@@ -615,14 +637,18 @@ export function FileBrowser({ onStartChat }: FileBrowserProps) {
                     )}
 
                     {/* Error */}
-                    {error && <div className="fb-error">{error}</div>}
+                    {(error || deniedName) && (
+                        <div className="fb-error">
+                            {deniedName ? t(isMacPlatform() ? 'fileBrowser.deniedMac' : 'fileBrowser.denied', { name: deniedName }) : error}
+                        </div>
+                    )}
 
                     {/* File list + Preview split */}
                     <div className="fb-content">
                         <div className="fb-file-list">
                             {loading && <div className="fb-loading">{t('fileBrowser.loading')}</div>}
 
-                            {!loading && displayItems.length === 0 && (
+                            {!loading && !error && !deniedName && displayItems.length === 0 && (
                                 <div className="fb-empty">
                                     {searchResults
                                         ? t('fileBrowser.noFiles')

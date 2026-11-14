@@ -13,6 +13,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/gaiainit"
 	"github.com/amd/gaia/tui/internal/lemonade"
+	"github.com/amd/gaia/tui/internal/setupapi"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/status"
 )
@@ -42,7 +43,7 @@ type ChatOption struct {
 }
 
 // ChatChosenMsg tells the host where the user chose to run chat, so a gate it
-// rebuilds later — after the provider panel, say — keeps the choice.
+// rebuilds later, after the provider panel for example, keeps the choice.
 type ChatChosenMsg struct {
 	AgentID  string
 	Provider string
@@ -175,25 +176,83 @@ func (l localRunner) localFit(ctx context.Context, rep Report, models []gaiainit
 		return later
 	}
 	chat, ok := gaiainit.Status{Models: models}.Chat()
-	return fitLine(capacity, chat, ok)
+	var npu setupapi.NPU
+	known := false
+	if isFLMModel(chat.ID) {
+		npu, known = readNPUVerdict(ctx)
+	}
+	return fitLine(capacity, npu, known, chat, ok)
+}
+
+// isFLMModel reports whether the chat model runs on the Ryzen AI NPU. Only
+// these models need the setup plan's NPU verdict.
+func isFLMModel(id string) bool {
+	return strings.HasSuffix(strings.ToLower(id), "-flm")
+}
+
+// readNPUVerdict is the plan's NPU readiness, and whether the plan was read at
+// all. It attaches to a running daemon rather than starting one: a first-run
+// screen must not leave a background process behind just to draw a fit line.
+// A plan that can't be read is not a claim that the PC has no NPU: the caller
+// must not report absence it did not observe.
+var readNPUVerdict = func(ctx context.Context) (setupapi.NPU, bool) {
+	return readNPUVerdictFrom(ctx, setupapi.NewAttachedDaemon())
+}
+
+func readNPUVerdictFrom(ctx context.Context, api setupapi.API) (setupapi.NPU, bool) {
+	ctx, cancel := context.WithTimeout(ctx, lemonadeProbeTimeout)
+	defer cancel()
+	plan, err := api.Plan(ctx)
+	if err != nil || plan.NPU == nil {
+		return setupapi.NPU{}, false
+	}
+	return *plan.NPU, true
 }
 
 // gbPerGiB turns Lemonade's GiB into the decimal GB setup shows.
 const gbPerGiB = 1.073741824
 
-func fitLine(c lemonade.Capacity, chat gaiainit.Model, known bool) string {
-	if strings.HasSuffix(strings.ToLower(chat.ID), "-flm") {
-		npu, ok := c.NPU()
-		if !ok {
+// fitLine says whether the local chat model fits this PC. An NPU model is
+// judged by the plan's own NPU verdict first, in four states that must stay
+// distinct: no NPU found says so; one that is there but can't load a model yet
+// keeps the model listed and says why, with the server's reasons; a ready NPU
+// is judged on memory. When the plan could not be read (known false) the line
+// keeps Lemonade's memory verdict and says readiness was not checked, claiming
+// neither absence nor readiness.
+func fitLine(c lemonade.Capacity, npu setupapi.NPU, known bool, chat gaiainit.Model, knownSize bool) string {
+	readinessUnknown := false
+	if isFLMModel(chat.ID) {
+		if !known {
+			n, ok := c.NPU()
+			if !ok {
+				return chat.ID + " needs a Ryzen AI NPU, and whether this PC's NPU is ready could not be checked."
+			}
+			c = n
+			readinessUnknown = true
+		} else if !npu.Present {
 			return chat.ID + " will not fit: it runs on a Ryzen AI NPU, and Lemonade reports none on this PC."
+		} else if !npu.Ready {
+			return chat.ID + " is not set up yet: " + npuProblemsLine(npu.Problems) +
+				". It needs this PC's NPU ready before chat can run on it."
+		} else {
+			n, ok := c.NPU()
+			if !ok {
+				// The plan says the NPU is ready; Lemonade's memory report is the
+				// one that can't say how much of it there is.
+				return chat.ID + " needs a Ryzen AI NPU, and Lemonade reports no NPU memory for it."
+			}
+			c = n
 		}
-		c = npu
+	}
+	caveat := ""
+	if readinessUnknown {
+		caveat = " Whether the NPU is set up could not be checked."
 	}
 	// Lemonade counts GiB; shown in decimal GB with one decimal, the figure
 	// the setup plan reports (model_choice.to_decimal_gb), so both agree.
 	have := fmt.Sprintf("this PC has %.1f GB for models (%s)", c.MemoryGB*gbPerGiB, c.MemorySource)
-	if !known || chat.SizeGB == nil {
-		return "Setup picks the model that fits; " + have + "."
+	if !knownSize || chat.SizeGB == nil {
+		return "Setup picks the model that fits; " + have + "." + caveat
 	}
 	kv := 0.0
 	for _, r := range lemonade.RecommendedFor("local") {
@@ -202,9 +261,26 @@ func fitLine(c lemonade.Capacity, chat gaiainit.Model, known bool) string {
 		}
 	}
 	if fits, why := c.Fit(*chat.SizeGB, kv); !fits {
-		return chat.ID + " will not fit: " + why + "."
+		return chat.ID + " will not fit: " + why + "." + caveat
 	}
-	return chat.ID + " fits: " + have + "."
+	return chat.ID + " fits: " + have + "." + caveat
+}
+
+// npuProblemsLine is the plan's NPU problems as one clause: the first reason's
+// title and fix joined, without a trailing full stop so the caller's sentence
+// keeps one. It names the first reason and counts the rest, the way the picker
+// caps its own warning.
+func npuProblemsLine(problems []setupapi.NPUProblem) string {
+	if len(problems) == 0 {
+		return "its NPU is not ready"
+	}
+	p := problems[0]
+	line := strings.TrimSpace(p.Title + " " + p.Fix)
+	line = strings.TrimRight(line, ".")
+	if len(problems) > 1 {
+		line += fmt.Sprintf(" (and %d more)", len(problems)-1)
+	}
+	return line
 }
 
 // --- the choice on screen ---------------------------------------------------
@@ -280,7 +356,7 @@ func (m Model) chooseChat() (tea.Model, tea.Cmd) {
 // chooserLines is the body while the question is up. Every option keeps a text
 // marker and a number, so the screen reads the same without colour and to a
 // screen reader; when it does not fit, the blank lines go first, then the
-// detail of the options not selected — their names always stay.
+// detail of the options not selected, their names always stay.
 func (m Model) chooserLines(w, budget int) []string {
 	options := m.chatOptions()
 	textW := w - 2*indentW - 7

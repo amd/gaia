@@ -15,6 +15,7 @@ import {
     BookOpen,
     Database,
     FolderOpen,
+    Folder,
     BarChart3,
     Globe,
     FileEdit,
@@ -364,9 +365,11 @@ export function consolidateSteps(steps: AgentStep[], isActive: boolean): Activit
             return;
         }
 
-        // Merge consecutive thinking steps; concatenate so accumulated text survives.
+        // Merge consecutive thinking steps; concatenate so accumulated text survives. A step
+        // that has a duration ends a thought; saved token pieces have none until their last.
         if (step.type === 'thinking' && prev && prev.type === 'thinking') {
-            const merged = (prev.detail || '') + (step.detail || '');
+            const gap = prev.latencyMs != null && /\S$/.test(prev.detail || '') && /^\S/.test(step.detail || '') ? '\n\n' : '';
+            const merged = (prev.detail || '') + gap + (step.detail || '');
             result[result.length - 1] = { ...step, timestamp: prev.timestamp, detail: merged || prev.detail };
             return;
         }
@@ -551,6 +554,21 @@ interface AgentActivityProps {
     answer?: string;
 }
 
+const needsVision = (step: AgentStep) => step.type === 'tool' && step.needsModel === 'vision' && !step.active;
+
+/** The download an image step needs, offered where the user is looking. */
+function VisionOffer() {
+    const t = useT();
+    return (
+        <div className="flow-tool-offer">
+            <span>{t('activity.visionNeeded')}</span>
+            <button type="button" className="btn-secondary" onClick={() => { void ensureModel('vision'); }}>
+                {t('activity.getVisionModel')}
+            </button>
+        </div>
+    );
+}
+
 /** The turn as a timeline: the agent's notes in full, the steps between them folded once done. */
 export function AgentActivity({ steps, isActive, running = isActive, awaitingUser = false, liveLine, toolStatus = null, answer }: AgentActivityProps) {
     const t = useT();
@@ -675,6 +693,8 @@ export function AgentActivity({ steps, isActive, running = isActive, awaitingUse
                             {open && <div className="flow-steps-rows">{shown.map(renderRow)}</div>}
                             {/* A warning never hides behind the fold. */}
                             {!open && visible.filter(isWarning).map(renderRow)}
+                            {/* Nor does the download an image step asked for. */}
+                            {!open && !live && visible.some(needsVision) && <VisionOffer />}
                         </div>
                     );
                 })}
@@ -830,7 +850,7 @@ export function linkifyPaths(text: string, t: Translate = tEn): React.ReactNode 
     return <>{parts}</>;
 }
 
-// ── Flow: File list from file search tools ───────────────────────────────
+// ── Flow: File list from file search and folder listing tools ────────────
 
 function FileListView({ fileList }: { fileList: { files: Array<Record<string, unknown>>; total: number } }) {
     const t = useT();
@@ -854,7 +874,9 @@ function FileListView({ fileList }: { fileList: { files: Array<Record<string, un
         <div className="file-list-view">
             {displayFiles.map((f, i) => (
                 <div key={i} className="file-list-item">
-                    <File size={11} className="file-list-icon" />
+                    {f.kind === 'folder'
+                        ? <Folder size={11} className="file-list-icon" data-kind="folder" />
+                        : <File size={11} className="file-list-icon" />}
                     <span className="file-list-name">{getFileName(f, i)}</span>
                     {getDirectory(f) && <span className="file-list-dir">{getDirectory(f)}</span>}
                 </div>
@@ -897,7 +919,8 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
     const count = step.count ?? 1;
     // A failed call's reason belongs on its row; a success's output stays one click deeper.
     const notRun = (!!step.declined || !!step.timedOut) && !step.active;
-    const failure = step.success === false && step.result && !notRun ? failureText(step, t) : '';
+    // A missing vision model is said by the offer under the row, not by the tool's raw error.
+    const failure = step.success === false && step.result && !notRun && !step.needsModel ? failureText(step, t) : '';
     const timing = waiting
         ? ''
         : step.active
@@ -947,14 +970,7 @@ function FlowToolCard({ step, isExpanded, onToggle, now, awaitingUser = false, s
                 </div>
             </button>
 
-            {step.needsModel === 'vision' && !step.active && (
-                <div className="flow-tool-offer">
-                    <span>{t('activity.visionNeeded')}</span>
-                    <button type="button" className="btn-secondary" onClick={() => { void ensureModel('vision'); }}>
-                        {t('activity.getVisionModel')}
-                    </button>
-                </div>
-            )}
+            {step.needsModel === 'vision' && !step.active && <VisionOffer />}
 
             {isExpanded && (
                 <div className="flow-tool-detail">

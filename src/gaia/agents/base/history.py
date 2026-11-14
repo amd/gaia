@@ -15,6 +15,34 @@ from gaia.logger import get_logger
 
 logger = get_logger(__name__)
 
+#: Prefix of the loop's answer checks (grounding, completion, edits, ...).
+CHECK_TAG = "[check:"
+
+
+def without_superseded_drafts(turn: list[dict]) -> list[dict]:
+    """*turn* without its answer checks and the draft answers they replaced.
+
+    The user never saw either. Replayed in a later turn they read as a question
+    still being worked on, and the model answers it again instead of the new one.
+    """
+    kept: list[dict] = []
+    for message in turn:
+        content = message.get("content")
+        if (
+            message.get("role") == "user"
+            and isinstance(content, str)
+            and content.startswith(CHECK_TAG)
+        ):
+            if (
+                kept
+                and kept[-1].get("role") == "assistant"
+                and not kept[-1].get("tool_calls")
+            ):
+                kept.pop()
+            continue
+        kept.append(message)
+    return kept
+
 
 class TurnMessages(list):
     """Keep the original evidence when overflow recovery shrinks model input."""
@@ -53,7 +81,7 @@ class TurnMessages(list):
                 )
             pending.clear()
 
-        for message in deepcopy(self.recorded):
+        for message in without_superseded_drafts(deepcopy(self.recorded)):
             if message.get("role") != "tool":
                 close_pending()
             if message.get("tool_calls"):
@@ -464,7 +492,8 @@ def transcript_turns(messages: list[dict]) -> list[list[dict]]:
         elif role in ("assistant", "autonomous"):
             recorded = message.get("model_messages")
             if recorded is not None:
-                turns.append(recorded)
+                # Turns saved before checks were dropped at record time.
+                turns.append(without_superseded_drafts(recorded))
             elif role == "assistant" and pending is not None:
                 turns.append(
                     [pending, {"role": "assistant", "content": message["content"]}]
@@ -591,6 +620,15 @@ def _reply_reserve(agent: Any) -> int:
     return getattr(config, "max_tokens", DEFAULT_REPLY_TOKENS)
 
 
+def prompt_text(agent: Any) -> str:
+    """System prompt plus the session context sent in the first user message."""
+    parts = (
+        getattr(agent, "system_prompt", "") or "",
+        getattr(agent, "session_context", "") or "",
+    )
+    return "\n\n".join(p for p in parts if isinstance(p, str) and p)
+
+
 def _budget_in_window(ctx: int, overhead: int, reply_reserve: int) -> int:
     return min(ctx // 2, ctx - overhead - reply_reserve - 2048)
 
@@ -598,7 +636,7 @@ def _budget_in_window(ctx: int, overhead: int, reply_reserve: int) -> int:
 def history_budget(agent: Any, query: str) -> int:
     """Reserve prompt, tools, output and safety margin for any transport."""
     ctx = context_window(agent)
-    prompt = getattr(agent, "system_prompt", "")
+    prompt = prompt_text(agent)
     # Looked up on the class so a test double's auto-attributes don't count.
     budgeted = getattr(type(agent), "_history_tool_schemas", None)
     tools = budgeted(agent) if budgeted else getattr(agent, "_openai_tools", [])
@@ -735,6 +773,70 @@ def frame_user_message(context: str, user_input: str) -> str:
     return f"{context}\n{_FOOTER_BREAK}{user_input}"
 
 
+#: Opens the per-session prompt text that rides in the first user message.
+SESSION_CONTEXT_HEADER = "[GAIA Session Context]"
+
+#: Closes that block, so nothing inside it reads as the user's words.
+SESSION_CONTEXT_FOOTER = (
+    "[End GAIA Session Context — the rest of this message is from the user]"
+)
+
+_SESSION_FOOTER_LIKE_LINE = re.compile(
+    rf"^.*\bend{_FOOTER_SEPARATOR}gaia{_FOOTER_SEPARATOR}session"
+    rf"{_FOOTER_SEPARATOR}context\b.*(?:\n|$)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def frame_session_context(context: str, content: Any) -> Any:
+    """*content* (text or content parts) behind the fenced session context."""
+    if not context:
+        return content
+    # Memories and skill bodies can quote either fence; neither may close it early.
+    context = _FOOTER_LIKE_LINE.sub("", context)
+    context = _SESSION_FOOTER_LIKE_LINE.sub("", context).rstrip()
+    block = f"{SESSION_CONTEXT_HEADER}\n{context}\n{SESSION_CONTEXT_FOOTER}"
+    if isinstance(content, list):
+        return [{"type": "text", "text": block}, *content]
+    return f"{block}\n\n{content or ''}"
+
+
+def with_session_context(
+    messages: list[dict[str, Any]], context: str
+) -> list[dict[str, Any]]:
+    """A copy of *messages* whose first user question opens with *context*.
+
+    Only the framed message is copied; *messages* itself is left as it is, so
+    the block never reaches stored history and is rebuilt for every request.
+    """
+    if not context:
+        return messages
+    first_user = None
+    for index, message in enumerate(messages):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        if first_user is None:
+            first_user = index
+        if isinstance(content, list) or (
+            isinstance(content, str) and not content.startswith(_RECORDED_RESULT_PREFIX)
+        ):
+            first_user = index
+            break
+    if first_user is None:
+        raise ValueError(
+            "A model request with session context has no user message to carry "
+            "it; the memory, skills and working-directory text would be lost. "
+            "Every agent request must include the user's message."
+        )
+    message = messages[first_user]
+    framed = {
+        **message,
+        "content": frame_session_context(context, message.get("content")),
+    }
+    return [*messages[:first_user], framed, *messages[first_user + 1 :]]
+
+
 def user_text_of(content: str) -> str:
     """The user's own words in a message ``frame_user_message`` built."""
     if content.startswith(MEMORY_CONTEXT_HEADER) and _FOOTER_BREAK in content:
@@ -746,6 +848,7 @@ def _turn_preview(turn: list[dict[str, Any]], limit: int = 60) -> str:
     for message in turn:
         content = message.get("content")
         if message.get("role") == "user" and isinstance(content, str) and content:
+            content = content.removeprefix(HIDDEN_TURNS_NOTE).lstrip("\n")
             text = " ".join(user_text_of(content).split())
             if not text:
                 continue
@@ -801,7 +904,7 @@ def context_usage(
     """
     window = context_window(agent)
     budget = history_budget(agent, query)
-    prompt = getattr(agent, "system_prompt", "") or ""
+    prompt = prompt_text(agent)
     schemas = getattr(agent, "_openai_tools", None) or []
     tool_definitions = count(json.dumps(schemas, ensure_ascii=False)) if schemas else 0
     usage = {

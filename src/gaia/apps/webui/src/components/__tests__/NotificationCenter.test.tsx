@@ -40,7 +40,29 @@ beforeEach(() => {
 describe('NotificationCenter', () => {
     it('renders an empty panel without looping', () => {
         expect(() => render(<NotificationCenter onClose={vi.fn()} />)).not.toThrow();
-        expect(screen.getByText('No notifications')).toBeTruthy();
+        expect(screen.getByText("You're all caught up")).toBeTruthy();
+        // Nothing to filter, so no filter tabs.
+        expect(screen.queryByRole('tab')).toBeNull();
+    });
+
+    it('offers only the filters that have something in them', () => {
+        useNotificationStore.setState({
+            notifications: [
+                notif('n-1', 'Model finished loading'),
+                { ...notif('n-2', 'Could not index'), type: 'error' },
+            ],
+        });
+        render(<NotificationCenter onClose={vi.fn()} />);
+        expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['All', 'Errors', 'Info']);
+    });
+
+    it('keeps the chosen filter offered even when it empties', () => {
+        useNotificationStore.setState({
+            notifications: [notif('n-1', 'Model finished loading')],
+            typeFilter: 'error',
+        });
+        render(<NotificationCenter onClose={vi.fn()} />);
+        expect(screen.getAllByRole('tab').map((tab) => tab.textContent)).toEqual(['All', 'Errors', 'Info']);
     });
 
     it('renders notifications without looping', () => {
@@ -103,7 +125,7 @@ describe('NotificationCenter permission prompts follow the interface language', 
     it('words a tool prompt in Arabic, the tool kept left to right', () => {
         setUiLocale('ar');
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         const title = container.querySelector('.notification-title')!;
@@ -130,7 +152,7 @@ describe('NotificationCenter permission prompts follow the interface language', 
 
     it('reads the same as before in English', () => {
         useNotificationStore.setState({
-            notifications: [prompt({ tool: 'edit_file', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
+            notifications: [prompt({ tool: 'some_new_tool', toolLabel: 'editing file', toolArgs: { file_path: 'a.txt' } })],
         });
         const { container } = render(<NotificationCenter onClose={vi.fn()} />);
         expect(stripIsolates(container.querySelector('.notification-title')!.textContent!)).toBe('Allow editing file?');

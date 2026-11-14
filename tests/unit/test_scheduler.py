@@ -11,6 +11,7 @@ Tests cover:
 """
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 import pytest_asyncio
@@ -502,11 +503,41 @@ class TestRunNow:
             await asyncio.sleep(0)
             task = sched._tasks["slow"]
             await sched._execute_task(task)
-            assert task.run_count == 1
 
             release.set()
             await asyncio.gather(*sched._manual_runs)
+            assert task.run_count == 1
             assert sched.get_task("slow")["running"] is False
+        finally:
+            await sched.shutdown()
+
+    async def test_run_is_not_counted_until_it_ends(self, fake_db):
+        release = asyncio.Event()
+
+        async def slow(prompt):
+            await release.wait()
+            raise RuntimeError("boom")
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        try:
+            await sched.create_task("slow", "every 1h", "P")
+            await sched.run_task_now("slow")
+            await asyncio.sleep(0)
+
+            running = sched.get_task("slow")
+            assert running["running"] is True
+            assert running["run_count"] == 0
+            assert running["last_run_at"] is None
+
+            await asyncio.sleep(0.02)
+            mid_run = datetime.now(timezone.utc)
+            release.set()
+            await asyncio.gather(*sched._manual_runs)
+            done = sched.get_task("slow")
+            assert done["run_count"] == 1
+            assert datetime.fromisoformat(done["last_run_at"]) >= mid_run
+            assert done["error_count"] == 1
         finally:
             await sched.shutdown()
 
@@ -541,3 +572,48 @@ class TestRunNowStops:
         sched, run = await self._start_slow(fake_db)
         await sched.shutdown()
         assert run.cancelled()
+
+
+class TestRunCutShortByTheSchedule:
+    """A run stopped by deleting or pausing its schedule closes its chat turn."""
+
+    @staticmethod
+    async def _running(fake_db):
+        started = asyncio.Event()
+
+        async def slow(_prompt):
+            started.set()
+            await asyncio.Event().wait()
+
+        sched = Scheduler(db=fake_db, executor=slow)
+        await sched.start()
+        await sched.create_task("heartbeat", "every 1h", "Write a file")
+        task = sched._tasks["heartbeat"]
+        task._timer_task.cancel()
+        task._timer_task = asyncio.create_task(sched._execute_task_once(task, True))
+        await asyncio.wait_for(started.wait(), 5)
+        return sched, task
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "stop, notice",
+        [
+            ("delete_task", scheduler_module.RUN_STOPPED_SCHEDULE_DELETED),
+            ("pause_task", scheduler_module.RUN_STOPPED_SCHEDULE_PAUSED),
+        ],
+    )
+    async def test_the_run_says_why_it_stopped(self, fake_db, stop, notice):
+        sched, task = await self._running(fake_db)
+        await getattr(sched, stop)("heartbeat")
+        messages = fake_db.get_messages(task.session_id)
+        assert [m["content"] for m in messages][-2:] == ["Write a file", notice]
+        assert fake_db.turns_in_progress() == []
+        await sched.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_a_shutdown_leaves_the_run_to_restart_recovery(self, fake_db):
+        sched, task = await self._running(fake_db)
+        await sched.shutdown()
+        assert [t["session_id"] for t in fake_db.turns_in_progress()] == [
+            task.session_id
+        ]

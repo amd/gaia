@@ -25,7 +25,8 @@ export type SettingsSection =
     | 'privacy'
     | 'notifications'
     | 'voice'
-    | 'advanced';
+    | 'advanced'
+    | 'about';
 
 export interface SettingsJump {
     section: SettingsSection;
@@ -300,6 +301,8 @@ interface ChatState {
     runSetupAgain: (on: boolean) => void;
     /** Provider tab Settings > Model opens on; null follows the active model. */
     settingsProvider: ProviderId | null;
+    /** The connector Settings › Connectors opens at, if one was asked for. */
+    settingsConnector: string | null;
     /** A setting to scroll to in the open section, and the section that sent the user there. */
     settingsJump: SettingsJump | null;
     /** The section Settings was last closed on, so it reopens there this session. */
@@ -339,6 +342,8 @@ interface ChatState {
     setShowDocLibrary: (show: boolean) => void;
     setShowFileBrowser: (show: boolean) => void;
     openSettings: (section?: SettingsSection, provider?: ProviderId) => void;
+    /** Open Settings › Connectors with *connectorId*'s tile open. */
+    openConnectorSettings: (connectorId: string) => void;
     jumpToSetting: (jump: SettingsJump, provider?: ProviderId) => void;
     closeSettings: () => void;
     setShowMemoryDashboard: (show: boolean) => void;
@@ -512,11 +517,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
             const steps = [...state.agentSteps];
             const last = steps[steps.length - 1];
             if (last.type !== 'thinking') return state;
+            const prior = last.detail ?? '';
+            // Streamed pieces carry their own spacing; a closed thought ends with a break, as in consolidateSteps.
+            const gap = !last.active && last.latencyMs != null && /\S$/.test(prior) && /^\S/.test(content) ? '\n\n' : '';
             steps[steps.length - 1] = {
                 ...last,
-                // Streamed pieces carry their own spacing, as the saved turn joins them.
-                detail: (last.detail ?? '') + content,
+                detail: prior + gap + content,
                 active: true,
+                latencyMs: undefined,
             };
             return { agentSteps: steps };
         }),
@@ -623,6 +631,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     setupAgain: false,
     runSetupAgain: (on) => set({ setupAgain: on }),
     settingsProvider: null,
+    settingsConnector: null,
     settingsJump: null,
     lastSettingsSection: 'general',
     showMemoryDashboard: false,
@@ -678,12 +687,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
     openSettings: (section, provider) => set((s) => ({
         settingsSection: section ?? s.lastSettingsSection,
         settingsProvider: provider ?? null,
+        settingsConnector: null,
         settingsJump: null,
     })),
-    jumpToSetting: (jump, provider) => set({ settingsSection: jump.section, settingsProvider: provider ?? null, settingsJump: jump }),
+    openConnectorSettings: (connectorId) => set({
+        settingsSection: 'connectors',
+        settingsProvider: null,
+        settingsConnector: connectorId,
+        settingsJump: null,
+    }),
+    jumpToSetting: (jump, provider) => set({ settingsSection: jump.section, settingsProvider: provider ?? null, settingsConnector: null, settingsJump: jump }),
     closeSettings: () => set((s) => ({
         settingsSection: null,
         settingsProvider: null,
+        settingsConnector: null,
         settingsJump: null,
         lastSettingsSection: s.settingsSection ?? s.lastSettingsSection,
     })),
