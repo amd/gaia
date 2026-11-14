@@ -359,6 +359,123 @@ def test_partial_fanout_records_missing_results_before_answer():
     assert saved[4] == {"role": "assistant", "content": ""}
 
 
+def _valves_turn():
+    """The price-table turn whose grounding check pulled the next turn back."""
+    return [
+        {
+            "role": "user",
+            "content": "What is the sum of the unit prices of all Valves?",
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "query_documents", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "PT-4039 Valves 891.11"},
+        {"role": "assistant", "content": "The total is **13,005.65**."},
+        {
+            "role": "user",
+            "content": "[check:grounding] These values in your answer appear in no "
+            "tool output this turn: 13,005.65. Then give your complete answer "
+            "again: it replaces the one above, which the user will not see.",
+        },
+        {
+            "role": "assistant",
+            "content": "The total comes out to 13,005.65 (unverified).",
+        },
+    ]
+
+
+def test_recorded_turn_drops_answer_checks_and_the_drafts_they_replaced():
+    turn = TurnMessages()
+    turn.extend(_valves_turn())
+
+    saved = turn.finish("The total comes out to 13,005.65 (unverified).")
+
+    assert [m["role"] for m in saved] == ["user", "assistant", "tool", "assistant"]
+    assert "[check:" not in json.dumps(saved)
+    assert "**13,005.65**" not in json.dumps(saved)
+    assert saved[-1]["content"] == "The total comes out to 13,005.65 (unverified)."
+
+
+def test_a_check_answered_with_tool_calls_keeps_those_calls():
+    turn = TurnMessages()
+    turn.extend(_valves_turn()[:5])
+    turn.append(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call-2",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+        }
+    )
+    turn.append({"role": "tool", "tool_call_id": "call-2", "content": "re-read"})
+
+    saved = turn.finish("Checked: 13,005.65.")
+
+    assert [m.get("tool_call_id") for m in saved if m["role"] == "tool"] == [
+        "call-1",
+        "call-2",
+    ]
+    assert "[check:" not in json.dumps(saved)
+    assert "**13,005.65**" not in json.dumps(saved)
+
+
+def test_turns_saved_with_checks_replay_without_them():
+    stored = [
+        {
+            "role": "user",
+            "content": "What is the sum of the unit prices of all Valves?",
+        },
+        {"role": "assistant", "content": "unused", "model_messages": _valves_turn()},
+        {"role": "user", "content": "Which item is the most expensive?"},
+    ]
+
+    turns = transcript_turns(stored)
+
+    assert len(turns) == 1
+    assert "[check:" not in json.dumps(turns)
+    assert turns[0][-1]["content"].startswith("The total comes out to")
+    assert turns[0][-2]["role"] == "tool"
+
+
+def test_next_turn_request_ends_on_the_new_question_without_old_checks(agent):
+    agent.conversation_history = transcript_turns(
+        [
+            {"role": "user", "content": "sum of valves"},
+            {"role": "assistant", "content": "x", "model_messages": _valves_turn()},
+        ]
+    )[0]
+    sent = []
+    _stub_chat(agent, "PT-4377 is the most expensive.")
+    original = agent.chat.send_messages.side_effect
+
+    def _capture(messages, *args, **kwargs):
+        sent.append(json.loads(json.dumps(messages, default=str)))
+        return original(messages, *args, **kwargs)
+
+    agent.chat.send_messages.side_effect = _capture
+
+    agent.process_query("Which item in the price table is the most expensive?")
+
+    request = json.dumps(sent[0])
+    assert "[check:grounding]" not in request
+    assert "**13,005.65**" not in request
+    users = [m for m in sent[0] if m["role"] == "user"]
+    assert "most expensive" in json.dumps(users[-1])
+
+
 def test_real_agent_returns_only_current_turn_with_tool_evidence(agent):
     _register_tool("read_fact", lambda: {"fact": "violet-otter-92"})
     agent.conversation_history = _turn("old")
