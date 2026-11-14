@@ -3,12 +3,10 @@
 
 """Credential files never take part in a recursive search.
 
-A search that printed nothing from ``.env`` could still name it (``-l``),
-count its matches (``-c``) or answer through its exit code (``-q``), which
-says whether the file contains a guess. So grep, rg and git grep run with
-every credential file excluded, and a search that cannot be given those
-exclusions (findstr /s, Select-String, one inside a script, one after ``--``)
-is refused when the tree it searches holds a credential file.
+A line that is one grep, rg or git grep runs as argv, with no shell, and
+with every credential file excluded. Any other recursive search (findstr /s,
+Select-String, one inside a script, piped, chained, or using any shell
+feature) is refused when the tree it searches holds a credential file.
 
 These are classification tests: the process layer is stubbed throughout.
 """
@@ -16,7 +14,6 @@ These are classification tests: the process layer is stubbed throughout.
 import fnmatch
 import os
 import shlex
-import subprocess
 
 import pytest
 
@@ -27,8 +24,8 @@ from gaia.agents.tools.shell_tools import (
     SKIPPED_CREDENTIALS_NOTE,
     ShellToolsMixin,
     _credential_exclusions,
-    _excluded_search_step,
     _parse_line,
+    _search_argv,
 )
 
 WINDOWS_ONLY = pytest.mark.skipif(os.name != "nt", reason="Windows command")
@@ -107,20 +104,20 @@ def _refusal(command, home, cwd=None):
     host = _Host(home)
     steps, error = _parse_line(command, bypass_gates=True)
     assert error is None, error
+    searchable = _search_argv(command, steps) is not None
     for step in steps:
         refusal = host._path_traversal_refusal(
-            step, str(cwd or home / "proj"), frozenset()
+            step, str(cwd or home / "proj"), frozenset(), searchable=searchable
         )
         if refusal:
             return refusal
     return None
 
 
-def _only_step(command, bypass=False):
-    steps, error = _parse_line(command, bypass_gates=bypass)
+def _argv(command):
+    steps, error = _parse_line(command, bypass_gates=True)
     assert error is None, error
-    assert len(steps) == 1
-    return steps[0]
+    return _search_argv(command, steps)
 
 
 def _excluded_by(flavor, name):
@@ -175,6 +172,7 @@ def test_an_ordinary_file_is_still_searched(flavor, name):
         ("grep -rl --include=.env guess .", "grep"),
         ("grep -rl --include .env guess .", "grep"),
         ("egrep -rl 'TOKEN=g.*' .", "grep"),
+        ('grep -rn "a b" .', "grep"),
         ("grep -Rl guess secrets", "grep"),
         ("rg -l guess secrets", "rg"),
         ("rg -c guess secrets", "rg"),
@@ -182,53 +180,47 @@ def test_an_ordinary_file_is_still_searched(flavor, name):
         ("rg --files-with-matches --hidden -uu guess", "rg"),
         ("rg -l -g .env guess", "rg"),
         ("rg -l --iglob .ENV guess secrets", "rg"),
+        ("rg -n -g '!node_modules' TODO", "rg"),
         ("git grep -l guess", "git"),
         ("git grep -c guess", "git"),
         ("git grep -q guess", "git"),
         ("git grep --untracked -l guess -- secrets", "git"),
         ("git grep --no-index -l guess secrets", "git"),
+        ("git grep -l guess HEAD:secrets", "git"),
         ("git -C secrets grep -l guess", "git"),
     ],
 )
 def test_a_name_count_or_exit_code_probe_runs_without_the_credential_file(
     home, command, flavor
 ):
-    step = _only_step(command)
-    run, rewritten = _excluded_search_step(step, bypass=False)
+    steps, _ = _parse_line(command, bypass_gates=True)
 
-    assert rewritten == {0}
-    words = _credential_exclusions(flavor)
+    argv = _argv(command)
+
     # The user's words stay as they were, and the exclusions come last, so
     # grep's and rg's "last matching include/exclude wins" is ours.
-    assert run.segments[0] == [*step.segments[0], *words]
+    assert argv == [*steps[0].segments[0], *_credential_exclusions(flavor)]
     assert _refusal(command, home) is None, command
-
-
-@pytest.mark.parametrize(
-    "command, flavor",
-    [
-        ("grep -rl guess secrets/ && echo found", "grep"),
-        ("grep -rq guess secrets/ || echo absent", "grep"),
-        ("rg -q guess secrets && echo found", "rg"),
-        ("git grep -q guess; echo $?", "git"),
-    ],
-)
-def test_an_exit_code_probe_on_a_chained_line_skips_the_file(home, command, flavor):
-    steps, error = _parse_line(command)
-    assert error is None, error
-
-    run, rewritten = _excluded_search_step(steps[0], bypass=False)
-
-    assert rewritten == {0}
-    assert run.segments[0][-len(_credential_exclusions(flavor)) :] == (
-        _credential_exclusions(flavor)
-    )
-    assert _refusal(command, home) is None
 
 
 @pytest.mark.parametrize(
     "command",
     [
+        # Shell features: the words are not plain argv, so nothing is rewritten.
+        "grep -rl guess . # trailing comment",
+        "grep -rl guess secrets/ && echo found",
+        "grep -rq guess secrets/ || echo absent",
+        "rg -q guess secrets; echo $?",
+        "grep -rc guess secrets | sort",
+        "grep -rl guess secrets 2>&1",
+        "grep -rl guess $HOME/proj/secrets",
+        'grep -rl guess "$PWD"',
+        "grep -rl guess `pwd`",
+        "grep -rl guess secrets/*",
+        "grep -rl guess ~/proj/secrets",
+        "LC_ALL=C grep -rl guess secrets",
+        "cd secrets && grep -rl guess .",
+        # Forms the exclusions could be misread in.
         "grep -rl guess -- secrets/",
         "grep -r -e guess -- secrets",
         "rg -l guess -- secrets",
@@ -237,7 +229,13 @@ def test_an_exit_code_probe_on_a_chained_line_skips_the_file(home, command, flav
         "grep -rl --frobnicate guess secrets",
         "rg -l --frobnicate guess secrets",
         "git grep --frobnicate -l guess",
-        "POSIXLY_CORRECT=1 grep -rl guess secrets",
+        # Launchers and scripts.
+        "env grep -rl guess secrets",
+        "timeout 5 grep -rq guess secrets",
+        "nice -n 5 rg -l guess secrets",
+        "xargs grep -l guess",
+        "find secrets -type f | xargs grep -c guess",
+        "xargs rg -l guess",
         "env POSIXLY_CORRECT=1 grep -rl guess secrets",
         'bash -c "grep -rl guess secrets"',
         'sh -c "rg -l guess secrets"',
@@ -246,13 +244,14 @@ def test_an_exit_code_probe_on_a_chained_line_skips_the_file(home, command, flav
         pytest.param("findstr /s /c:guess secrets\\*", marks=WINDOWS_ONLY),
         pytest.param("findstr /s /m guess *", marks=WINDOWS_ONLY),
         pytest.param("findstr /S /M /I GUESS *.*", marks=WINDOWS_ONLY),
-        pytest.param("findstr /s /m guess *.env", marks=WINDOWS_ONLY),
         'powershell -Command "Get-ChildItem secrets -Recurse | Select-String guess -List"',
         'powershell -Command "gci -r | sls guess -Quiet"',
         'powershell -Command "Select-String -Path * -Pattern guess -Recurse"',
     ],
 )
-def test_a_search_that_cannot_be_given_exclusions_is_refused(home, command):
+def test_a_search_that_cannot_run_with_exclusions_is_refused(home, command):
+    assert _argv(command) is None, command
+
     refusal = _refusal(command, home)
 
     assert refusal is not None, command
@@ -265,6 +264,8 @@ def test_a_search_that_cannot_be_given_exclusions_is_refused(home, command):
     "command",
     [
         "grep -rl guess -- src",
+        "grep -rc TODO src | sort",
+        "env grep -rn TODO src",
         'bash -c "grep -rn TODO src"',
         pytest.param("findstr /s /m guess src\\*", marks=WINDOWS_ONLY),
         pytest.param("findstr /s /m guess *.py", marks=WINDOWS_ONLY),
@@ -274,6 +275,90 @@ def test_a_search_that_cannot_be_given_exclusions_is_refused(home, command):
 )
 def test_the_same_search_of_a_clean_tree_runs(home, command):
     assert _refusal(command, home) is None, command
+
+
+@pytest.mark.parametrize(
+    "command", ["grep -rn TODO .", "rg -n TODO", "git grep -n TODO"]
+)
+def test_an_ordinary_search_of_a_folder_with_credentials_still_runs(home, command):
+    assert _argv(command) is not None
+    assert _refusal(command, home) is None
+
+
+# --------------------------------------------- git grep of an object or a blob
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git grep -l guess HEAD:.env",
+        "git grep -c guess HEAD:secrets/.env",
+        "git grep -q TOKEN main~2:config/secrets.json",
+        "git grep guess HEAD:keys/deploy.PEM",
+        "git grep -l guess -- HEAD:.env",
+    ],
+)
+def test_a_git_grep_of_a_credential_blob_is_refused(home, command):
+    """git greps a ``<rev>:<path>`` blob whole, past any exclusion pathspec."""
+    refusal = _refusal(command, home)
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+    assert "credentials" in refusal["error"]
+
+
+@pytest.mark.parametrize(
+    "command", ["git grep -l guess 1a2b3c4d", "git grep -l guess HEAD^{blob}"]
+)
+def test_a_git_grep_of_an_unnamed_object_is_refused_over_credentials(home, command):
+    assert _refusal(command, home) is not None, command
+    (home / "proj" / "secrets" / ".env").unlink()
+    assert _refusal(command, home) is None, command
+
+
+# ------------------------------------------------- other tree-walking search tools
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "busybox grep -rl guess secrets",
+        "busybox grep -r -c guess .",
+        "rgrep -l guess secrets",
+        "ugrep -rl guess secrets",
+        "ug -l guess",
+        "ag -l guess",
+        "ag -l guess secrets",
+        "ack -l guess",
+        "sift -l guess .",
+        "fd . secrets -x grep -l guess",
+        "fd -X grep -c guess",
+        "fd --exec=cat",
+        "find . -type f -exec grep -l guess {} +",
+        "find secrets -exec cat {} +",
+        "grep -rl guess $(pwd)",
+        "find . -name *.txt -execdir grep -c guess {} +",
+        "timeout 5 ag -l guess",
+        'bash -c "ag -l guess"',
+    ],
+)
+def test_another_tree_walking_search_is_refused_over_credentials(home, command):
+    refusal = _refusal(command, home)
+
+    assert refusal is not None, command
+    assert refusal["executed"] is False
+    assert "credentials" in refusal["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["find src -type f -exec grep -l guess {} +", "busybox grep -l guess src/a.py"],
+)
+def test_another_search_of_a_clean_tree_runs(home, command):
+    assert _refusal(command, home) is None, command
+
+
+# ----------------------------------------------------------- the tree check
 
 
 def test_a_credential_file_deep_in_the_tree_is_found(home):
@@ -327,117 +412,10 @@ def test_a_disguised_link_deep_in_a_followed_tree_is_refused(home):
     assert _refusal("grep -rl guess src", home) is None
 
 
-def test_a_rg_wildcard_operand_naming_a_credential_file_is_refused(home):
-    """rg reads a file named on its command line whatever its globs say."""
-    (home / "proj" / "secrets" / "secrets.json").write_text("{}\n")
-
-    refusal = _refusal("rg -l guess secrets/s*", home)
-
-    assert refusal is not None and "secrets.json" in refusal["error"]
-
-
-# ------------------------------------------------ a search behind a launcher
-
-
-@pytest.mark.parametrize(
-    "command, flavor, index",
-    [
-        ("env grep -rl guess secrets", "grep", 0),
-        ("env LC_ALL=C grep -rc guess secrets", "grep", 0),
-        ("timeout 5 grep -rq guess secrets", "grep", 0),
-        ("nice -n 5 rg -l guess secrets", "rg", 0),
-        ("xargs grep -l guess", "grep", 0),
-        ("find secrets -type f | xargs grep -c guess", "grep", 1),
-        ("ls secrets | xargs -I{} grep -l guess secrets/{}", "grep", 1),
-        ("git ls-files | xargs git grep -l guess", "git", 1),
-    ],
-)
-def test_a_search_behind_a_launcher_gets_the_exclusions(home, command, flavor, index):
-    step = _only_step(command)
-
-    run, rewritten = _excluded_search_step(step, bypass=False)
-
-    assert rewritten == {index}
-    words = _credential_exclusions(flavor)
-    assert run.segments[index] == [*step.segments[index], *words]
-    assert _refusal(command, home) is None, command
-
-
-@pytest.mark.parametrize(
-    "command",
-    [
-        "xargs rg -l guess",
-        "find . -type f | xargs rg -c guess",
-        "env POSIXLY_CORRECT=1 grep -rl guess secrets",
-        "timeout 5 grep -rl guess -- secrets",
-    ],
-)
-def test_a_search_behind_a_launcher_that_cannot_skip_the_file_is_refused(home, command):
-    refusal = _refusal(command, home)
-
-    assert refusal is not None, command
-    assert refusal["executed"] is False
-
-
-# ----------------------------------------------- the text a shell runs matches
-
-
-@pytest.mark.parametrize("dialect", ["posix", "cmd"])
-@pytest.mark.parametrize(
-    "command, index",
-    [
-        ("grep -rl guess secrets", 0),
-        ("grep -rn TODO . | head -5", 0),
-        ("ls | grep -rl guess secrets", 1),
-        ("grep -rn TODO . 2>&1 | sort", 0),
-        ("rg -l 'a b' secrets | wc -l", 0),
-        ("git grep -l guess -- secrets | sort", 0),
-    ],
-)
-def test_the_shell_text_runs_the_same_words_as_the_argv(
-    monkeypatch, dialect, command, index
-):
-    monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: dialect)
-    step = _only_step(command)
-
-    run, rewritten = _excluded_search_step(step, bypass=True)
-
-    assert rewritten == {index}
-    for text in (run.text, run.shell_text):
-        pieces = shell_tools._split_shell_pipes(text)
-        assert len(pieces) == len(run.segments)
-        for piece, segment in zip(pieces, run.segments):
-            words = shell_tools._tokenize(
-                shell_tools._take_stderr_redirections(piece)[0]
-            )
-            assert words == segment, (dialect, text)
-
-
-def test_a_cmd_line_ending_in_a_caret_is_not_rewritten(monkeypatch):
-    monkeypatch.setattr(shell_tools, "_pipe_dialect", lambda: "cmd")
-    step = _only_step("grep -rl guess secrets^")
-
-    run, rewritten = _excluded_search_step(step, bypass=True)
-
-    assert rewritten == frozenset() and run is step
-
-
-def test_a_step_with_an_assignment_runs_as_argv_and_is_rewritten(home):
-    step = _only_step("LC_ALL=C grep -rl guess secrets")
-
-    run, rewritten = _excluded_search_step(step, bypass=True)
-
-    assert rewritten == {0}
-    assert run.segments[0][-1] == _credential_exclusions("grep")[-1]
-    assert run.text == step.text
-
-
 def test_posix_argument_order_in_the_environment_is_not_rewritten(home, monkeypatch):
     monkeypatch.setenv("POSIXLY_CORRECT", "1")
 
-    run, rewritten = _excluded_search_step(_only_step("grep -rl guess ."), False)
-
-    assert rewritten == frozenset()
+    assert _argv("grep -rl guess secrets") is None
     assert _refusal("grep -rl guess secrets", home) is not None
 
 
@@ -446,64 +424,108 @@ def test_posix_argument_order_in_the_environment_is_not_rewritten(home, monkeypa
     ["grep -l guess secrets/notes.txt", "rg --version", "git log -1", "ls -R"],
 )
 def test_a_command_that_is_not_a_recursive_search_is_left_alone(command):
-    step = _only_step(command)
-
-    run, rewritten = _excluded_search_step(step, bypass=True)
-
-    assert rewritten == frozenset() and run is step
+    assert _argv(command) is None
 
 
-# ---------------------------------------------------- the run gets the exclusions
+# ------------------------------------- what reaches the process is plain argv
+
+
+class _FakeProcess:
+    def __init__(self, args):
+        self.args = args
+        self.returncode = 1
+        self.pid = 0
+
+    def communicate(self, timeout=None):
+        return "", ""
+
+    def poll(self):
+        return self.returncode
 
 
 @pytest.fixture
-def captured_runs(monkeypatch):
-    runs = []
+def popen_calls(monkeypatch):
+    """Every process the shell tool starts, as ``(args, kwargs)``; none really runs."""
+    calls = []
 
-    def fake_run_step(step, cwd, timeout, granted, waiter=None, bypass=False):
-        runs.append(step)
-        return subprocess.CompletedProcess(step.text, 1, "", "")
+    def fake_popen(args, **kwargs):
+        calls.append((args, kwargs))
+        return _FakeProcess(args)
 
-    monkeypatch.setattr(shell_tools, "_run_step", fake_run_step)
-    return runs
+    monkeypatch.setattr(shell_tools.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        shell_tools, "_program_on_path", lambda name, cwd: f"/bin/{name}"
+    )
+    return calls
 
 
-@pytest.mark.parametrize("full_access", [False, True])
-def test_the_executed_search_carries_the_exclusions(home, captured_runs, full_access):
+def _run(home, command, full_access=False):
     host = _Host(home, full_access=full_access)
     host.register_shell_tools()
     run = get_tool_metadata("run_shell_command")["function"]
+    return run(command=command, working_directory=str(home / "proj"))
 
-    result = run(command="grep -rl guess secrets", working_directory=str(home / "proj"))
 
-    assert len(captured_runs) == 1, result
-    segment = captured_runs[0].segments[0]
-    assert segment[:4] == ["grep", "-rl", "guess", "secrets"]
-    assert segment[4:] == _credential_exclusions("grep")
+@pytest.mark.parametrize("full_access", [False, True])
+def test_the_search_runs_as_argv_with_the_exclusions(home, popen_calls, full_access):
+    result = _run(home, "grep -rl guess secrets", full_access)
+
+    assert len(popen_calls) == 1, result
+    args, kwargs = popen_calls[0]
+    assert isinstance(args, list)
+    assert not kwargs.get("shell")
+    assert os.path.basename(args[0]) in ("grep", "grep.exe")
+    assert args[1:4] == ["-rl", "guess", "secrets"]
+    assert args[4:] == _credential_exclusions("grep")
     assert SKIPPED_CREDENTIALS_NOTE in result.get("note", "")
     assert result["command"] == "grep -rl guess secrets"
 
 
-def test_a_refused_search_never_reaches_the_process_layer(home, captured_runs):
-    host = _Host(home, full_access=True)
-    host.register_shell_tools()
-    run = get_tool_metadata("run_shell_command")["function"]
+@pytest.mark.parametrize("full_access", [False, True])
+@pytest.mark.parametrize(
+    "command",
+    [
+        'grep -rl guess . "x\\"',
+        "grep -rl guess . # comment",
+        "grep -rl guess . #",
+        'grep -rl guess "secrets" "x\\" -e guess',
+        "grep -rl guess . ;",
+    ],
+)
+def test_a_line_a_shell_would_reread_never_runs_without_the_exclusions(
+    home, popen_calls, full_access, command
+):
+    """Either refused, or run as argv that carries every exclusion."""
+    result = _run(home, command, full_access)
 
-    result = run(
-        command="grep -rl guess -- secrets", working_directory=str(home / "proj")
-    )
+    exclusions = _credential_exclusions("grep")
+    for args, kwargs in popen_calls:
+        assert isinstance(args, list) and not kwargs.get("shell"), (command, args)
+        assert args[-len(exclusions) :] == exclusions, (command, args)
+    if not popen_calls:
+        assert result.get("executed") is False, result
+    assert "guess-me" not in str(result)
 
-    assert captured_runs == []
+
+def test_an_ordinary_recursive_search_still_runs(home, popen_calls):
+    result = _run(home, "grep -rn TODO .")
+
+    assert len(popen_calls) == 1, result
+    args, _ = popen_calls[0]
+    assert args[1:4] == ["-rn", "TODO", "."]
+    assert args[4:] == _credential_exclusions("grep")
+
+
+def test_a_refused_search_never_reaches_the_process_layer(home, popen_calls):
+    result = _run(home, "grep -rl guess -- secrets", full_access=True)
+
+    assert popen_calls == []
     assert result["executed"] is False
     assert "guess-me" not in str(result)
 
 
-def test_an_ordinary_command_gets_no_note(home, captured_runs):
-    host = _Host(home, full_access=True)
-    host.register_shell_tools()
-    run = get_tool_metadata("run_shell_command")["function"]
-
-    result = run(command="ls", working_directory=str(home / "proj"))
+def test_an_ordinary_command_gets_no_note(home, popen_calls):
+    result = _run(home, "ls", full_access=True)
 
     assert SKIPPED_CREDENTIALS_NOTE not in result.get("note", "")
 

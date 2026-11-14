@@ -47,8 +47,11 @@ def _refusal(command, cwd, root):
     host = _Host(root)
     steps, error = _parse_line(command, bypass_gates=True)
     assert error is None, error
+    searchable = shell_tools._search_argv(command, steps) is not None
     for step in steps:
-        refusal = host._path_traversal_refusal(step, str(cwd), frozenset())
+        refusal = host._path_traversal_refusal(
+            step, str(cwd), frozenset(), searchable=searchable
+        )
         if refusal:
             return refusal
     return None
@@ -432,15 +435,6 @@ def test_a_backslash_escaped_grep_pattern_is_not_a_credential_read(home):
         "grep -rh TOKEN .",
         "grep -r --no-filename TOKEN .",
         "grep -rz TOKEN .",
-        "grep -rn TODO . | head -20",
-        "grep -rn TODO . | sort | head",
-        "grep -rn TODO . | grep -v test",
-        "grep -rn TODO . | wc -l",
-        "grep -r TOKEN . | cut -d: -f2-",
-        "grep -r TOKEN . | tail -c 200",
-        "grep -r TOKEN . | grep -o 'TOKEN=.*'",
-        "grep -r TOKEN . | sed s/^.*://",
-        "grep -rl TOKEN . | xargs cat",
     ],
 )
 def test_a_recursive_search_of_a_folder_with_credentials_runs(home, command):
@@ -450,6 +444,23 @@ def test_a_recursive_search_of_a_folder_with_credentials_runs(home, command):
 @pytest.mark.parametrize(
     "command",
     [
+        # Piped, so not run as plain argv with the exclusions.
+        "grep -rn TODO . | head -20",
+        "grep -rn TODO . | sort | head",
+        "grep -rn TODO . | grep -v test",
+        "grep -rn TODO . | wc -l",
+        "grep -r TOKEN . | cut -d: -f2-",
+        "grep -r TOKEN . | tail -c 200",
+        "grep -r TOKEN . | grep -o 'TOKEN=.*'",
+        "grep -r TOKEN . | sed s/^.*://",
+        "grep -rl TOKEN . | xargs cat",
+        "grep -rn TODO . | head --byt 2000",
+        "grep -rn TODO . | tail -n 5",
+        "grep -rn TODO . | tail --lines 5",
+        "grep -rn TODO . | grep --invert x",
+        "grep -rn TOKEN . | grep --only x",
+        "grep -rn TOKEN . | tail -c 100",
+        "grep -rn TOKEN . | head --frob",
         'bash -c "grep -rn TODO ."',
         'bash -c "grep -r TOKEN . | cut -d: -f2"',
         'bash -c "grep -r TOKEN . > out.txt"',
@@ -508,13 +519,6 @@ def test_a_recursive_search_over_a_disguised_link_is_refused(home, monkeypatch):
         "grep -drecurse --no-file TOKEN .",
         "grep --dir=recurse -h TOKEN .",
         "grep -r --null-d TOKEN .",
-        "grep -rn TODO . | head --byt 2000",
-        "grep -rn TODO . | tail -n 5",
-        "grep -rn TODO . | tail --lines 5",
-        "grep -rn TODO . | grep --invert x",
-        "grep -rn TOKEN . | grep --only x",
-        "grep -rn TOKEN . | tail -c 100",
-        "grep -rn TOKEN . | head --frob",
         "rg TODO",
         "rg -n TODO src",
         "rg --hidden TODO",
