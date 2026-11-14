@@ -250,6 +250,7 @@ export const enMessages = {
     'composer.uploadingPercent': 'Uploading… {percent}%',
     'composer.upload.noExtension': 'This file has no extension. Add one, such as .txt, and try again.',
     'composer.upload.unsupported': "GAIA can't read {ext} files. Attach an image, PDF, Word, PowerPoint, Excel, text, CSV or code file.",
+    'composer.removeRefused': "Remove {names} before sending: GAIA can't read it, so it would be left out.",
     'composer.upload.legacyOffice': "{ext} is an old Office format GAIA can't read. Open it and save it as {modern}, then attach that.",
     'composer.upload.empty': 'This file is empty.',
     'composer.upload.tooLarge': 'This file is {size} MB. The limit is {max} MB.',
