@@ -15276,9 +15276,11 @@ Do NOT wrap conversational replies in JSON.
         self.console.start_progress(self._progress_label())
         try:
             reply = self.chat.send_messages(
-                messages=messages,
+                messages=self._with_session_context(messages),
                 system_prompt=self.system_prompt,
                 tools=self._openai_tools,
+                max_tokens=self._max_output_tokens(),
+                **self._conversation_request_kwargs(),
                 **self._reasoning_request_kwargs(),
             )
             response, inline_reasoning = _split_reasoning(reply.text or "")
