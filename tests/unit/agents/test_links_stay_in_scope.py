@@ -660,3 +660,17 @@ def test_a_block_through_a_link_covers_the_real_path(layout, monkeypatch):
     assert ledger.conflict(
         "run_python", {"code": f"open({str(elsewhere / 'report.md')!r}, 'w')"}
     )
+
+
+@pytest.mark.parametrize("switch", ["/J", "/d", "/H"])
+def test_mklink_keeps_a_slash_target_and_drops_only_its_switches(tmp_path, switch):
+    from gaia.agents.base.denied_effects import effects_of_shell_command
+
+    found = {
+        e.target
+        for e in effects_of_shell_command(f"mklink {switch} link /etc", str(tmp_path))
+        if e.kind == PATH
+    }
+
+    assert _norm_path("/etc", str(tmp_path)) in found
+    assert _norm_path(switch, str(tmp_path)) not in found

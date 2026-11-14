@@ -308,9 +308,9 @@ _NON_PATH_VALUE_FLAGS = frozenset(
     }
 )
 #: cmd programs whose ``/X`` arguments are switches, not paths.
-_SLASH_SWITCH_PROGRAMS = frozenset(
-    {"xcopy", "robocopy", "copy", "move", "del", "rd", "mklink"}
-)
+_SLASH_SWITCH_PROGRAMS = frozenset({"xcopy", "robocopy", "copy", "move", "del", "rd"})
+#: ``mklink``'s only switches; any other ``/x`` is a path such as ``/etc``.
+_MKLINK_SWITCHES = frozenset({"/d", "/h", "/j"})
 _SLASH_SWITCH_RE = re.compile(r"^/[A-Za-z]{1,8}(?::\S*)?$")
 #: ``New-Item -ItemType`` values that make a link to another path.
 _LINK_ITEM_TYPES = ("junction", "symboliclink", "hardlink")
@@ -1078,6 +1078,7 @@ def _effects_of_argv(argv: Sequence[str], cwd: str, depth: int) -> Set[Effect]:
             for arg in _positionals(rest, _NON_PATH_VALUE_FLAGS)
             # ``xcopy a b /Y``: a cmd switch, not a folder at the drive root.
             if not (program in _SLASH_SWITCH_PROGRAMS and _SLASH_SWITCH_RE.match(arg))
+            and not (program == "mklink" and arg.lower() in _MKLINK_SWITCHES)
         ]
     elif program == "dd":
         changed = [arg[3:] for arg in rest if arg.startswith("of=")]

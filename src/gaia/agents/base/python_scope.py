@@ -178,9 +178,8 @@ def python_scope_refusal(
                 allowed, final = _allowed(agent, validator, how, real)
             except (OSError, ValueError) as exc:
                 log.info(
-                    "Refused %s: a path it %s could not be resolved (%s)",
+                    "Refused %s: a path it names could not be resolved (%s)",
                     tool_name,
-                    how,
                     type(exc).__name__,
                 )
                 return _refusal(
@@ -190,7 +189,7 @@ def python_scope_refusal(
             if allowed:
                 continue
             log.info(
-                "Refused %s: it %s a path outside the allowed folders", tool_name, how
+                "Refused %s: it names a path outside the allowed folders", tool_name
             )
             return _refusal(_outside_message(validator, how, path, real, final))
     return None
