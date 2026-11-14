@@ -1180,6 +1180,12 @@ Cleanup claims likewise need concrete paths observed disappearing during the
 turn; a general statement that everything was cleaned up is not proof. A claimed
 path that is absent and untouched already agrees with the claim, and removal from
 an index or list is not a file deletion.
+An answer that says it read every one of N files ("I read the actual content of
+every one", "I opened all 40 files") is compared with the files this turn's
+calls were given to read, not counting files it wrote. When fewer than half
+were opened, the answer is kept and a closing note says how many were, including
+on a turn that ends at the step limit or on an error. After a
+script or an indexer ran, any file may have been read, so the claim stands.
 
 The loop offers one bounded correction for missing artifact evidence. That
 correction reopens the turn, so writing the output, running the script that
