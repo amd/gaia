@@ -23,10 +23,10 @@ beforeEach(() => {
 });
 
 describe('PrivateChip', () => {
-    it('shows "Memory on" when off and "Private" when on, and says what a click does', async () => {
+    it('shows "Remember across chats: on" when off and "Private" when on, and says what a click does', async () => {
         render(<PrivateChip />);
         const chip = await screen.findByRole('button', { name: 'Turn on private chat' });
-        expect(chip).toHaveTextContent('Memory on');
+        expect(chip).toHaveTextContent('Remember across chats: on');
         expect(chip).not.toHaveClass('is-on');
 
         await userEvent.click(chip);
@@ -36,12 +36,12 @@ describe('PrivateChip', () => {
         expect(useChatStore.getState().draftPrivate).toBe(true);
     });
 
-    it('shows "Memory off", disabled, when memory is turned off in Settings', async () => {
+    it('shows "Remember across chats: off", disabled, when memory is turned off in Settings', async () => {
         getSettings.mockResolvedValue(memory(false));
         render(<PrivateChip />);
-        const chip = await screen.findByRole('button', { name: 'Memory off' });
+        const chip = await screen.findByRole('button', { name: 'Remember across chats: off' });
         expect(chip).toBeDisabled();
-        expect(chip).toHaveAttribute('title', expect.stringMatching(/memory is off/i));
+        expect(chip).toHaveAttribute('title', expect.stringMatching(/is off in Settings/i));
     });
 
     it('picks up memory being switched off once Settings closes', async () => {
@@ -51,7 +51,7 @@ describe('PrivateChip', () => {
         getSettings.mockResolvedValue(memory(false));
         act(() => useChatStore.setState({ settingsSection: 'memory' }));
         act(() => useChatStore.setState({ settingsSection: null }));
-        expect(await screen.findByRole('button', { name: 'Memory off' })).toBeDisabled();
+        expect(await screen.findByRole('button', { name: 'Remember across chats: off' })).toBeDisabled();
     });
 
     it('drops a Private choice once memory is switched off, so the next chat is not silently private', async () => {
@@ -62,14 +62,14 @@ describe('PrivateChip', () => {
         getSettings.mockResolvedValue(memory(false));
         act(() => useChatStore.setState({ settingsSection: 'memory' }));
         act(() => useChatStore.setState({ settingsSection: null }));
-        await screen.findByRole('button', { name: 'Memory off' });
+        await screen.findByRole('button', { name: 'Remember across chats: off' });
         await waitFor(() => expect(useChatStore.getState().draftPrivate).toBe(false));
 
         // Memory back on: the chip and the draft agree the chat is not private.
         getSettings.mockResolvedValue(memory(true));
         act(() => useChatStore.setState({ settingsSection: 'memory' }));
         act(() => useChatStore.setState({ settingsSection: null }));
-        expect(await screen.findByRole('button', { name: 'Turn on private chat' })).toHaveTextContent('Memory on');
+        expect(await screen.findByRole('button', { name: 'Turn on private chat' })).toHaveTextContent('Remember across chats: on');
         expect(useChatStore.getState().draftPrivate).toBe(false);
     });
 
@@ -77,7 +77,7 @@ describe('PrivateChip', () => {
         useChatStore.setState({ draftPrivate: true });
         getSettings.mockResolvedValue(memory(false));
         render(<PrivateChip />);
-        await screen.findByRole('button', { name: 'Memory off' });
+        await screen.findByRole('button', { name: 'Remember across chats: off' });
         await waitFor(() => expect(useChatStore.getState().draftPrivate).toBe(false));
     });
 
@@ -96,8 +96,8 @@ describe('PrivateChip', () => {
         getSettings.mockRejectedValue(new Error('backend down'));
         render(<PrivateChip />);
 
-        const chip = await screen.findByText('Memory unknown');
-        expect(screen.queryByText('Memory on')).toBeNull();
+        const chip = await screen.findByText('Remember across chats: unknown');
+        expect(screen.queryByText('Remember across chats: on')).toBeNull();
         expect(chip.closest('button')).toHaveAttribute('title', expect.stringMatching(/couldn't read the memory setting/i));
         expect(logged).toHaveBeenCalledWith(expect.stringMatching(/memory setting/i), expect.any(Error));
         expect(raw).not.toHaveBeenCalledWith(expect.stringContaining('[PrivateChip]'), expect.anything());
@@ -114,10 +114,10 @@ describe('PrivateChip', () => {
         vi.spyOn(log.ui, 'error').mockImplementation(() => {});
         getSettings.mockRejectedValueOnce(new Error('backend down'));
         render(<PrivateChip />);
-        await screen.findByText('Memory unknown');
+        await screen.findByText('Remember across chats: unknown');
 
         act(() => useChatStore.setState({ settingsSection: 'memory' }));
         act(() => useChatStore.setState({ settingsSection: null }));
-        expect(await screen.findByText('Memory on')).toBeInTheDocument();
+        expect(await screen.findByText('Remember across chats: on')).toBeInTheDocument();
     });
 });

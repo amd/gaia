@@ -28,6 +28,7 @@ Example:
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from gaia.agents.tools.connect_card import AGENT_UI, agent_surface
 from gaia.agents.tools.path_access import read_access_error
 from gaia.llm.vlm_client import VisionModelMissingError
 from gaia.logger import get_logger
@@ -45,14 +46,32 @@ VISION_MISSING_HINT = (
 )
 
 
-def _vision_model_missing(error: VisionModelMissingError, path: Path) -> Dict[str, Any]:
+#: The same in the Agent UI, which shows a download button under the step:
+#: the answer points at it rather than at a model file or another app.
+VISION_MISSING_IN_APP_ERROR = (
+    "GAIA's vision model isn't downloaded, so it can't read images yet."
+)
+VISION_MISSING_IN_APP_HINT = (
+    "Reading images needs the vision model, which isn't downloaded. Do not try "
+    "to read the image another way (code, a script, the file's bytes). GAIA is "
+    "showing the user a 'Get the vision model' button under this step. Tell "
+    "the user in a sentence or two that GAIA needs its vision model to see "
+    "images, that the button downloads it, and to ask again afterwards. Do not "
+    "name a model file, a size, a settings path or another app. Then stop."
+)
+
+
+def _vision_model_missing(
+    error: VisionModelMissingError, path: Path, surface: Optional[str] = None
+) -> Dict[str, Any]:
     """The tool result for an image no vision model can read yet; the UI offers the download."""
+    in_app = surface == AGENT_UI
     return {
         "status": "error",
-        "error": str(error),
+        "error": VISION_MISSING_IN_APP_ERROR if in_app else str(error),
         "image_path": str(path),
         "needs_model": "vision",
-        "hint": VISION_MISSING_HINT,
+        "hint": VISION_MISSING_IN_APP_HINT if in_app else VISION_MISSING_HINT,
     }
 
 
@@ -229,7 +248,7 @@ class VLMToolsMixin:
             }
 
         except VisionModelMissingError as e:
-            return _vision_model_missing(e, path)
+            return _vision_model_missing(e, path, agent_surface(self))
         except Exception as e:
             logger.error(f"Image analysis failed: {e}", exc_info=True)
             return {
@@ -278,7 +297,7 @@ class VLMToolsMixin:
             }
 
         except VisionModelMissingError as e:
-            return _vision_model_missing(e, path)
+            return _vision_model_missing(e, path, agent_surface(self))
         except Exception as e:
             logger.error(f"Question answering failed: {e}", exc_info=True)
             return {

@@ -132,8 +132,8 @@ class MCPConfig:
 
             raise ConnectorsError(
                 f"mcp_servers.json at {path} is corrupt: {e}. "
-                f"Inspect the file or remove it to start fresh; the connectors "
-                f"framework will recreate it on next configure()."
+                f"Fix the file, or remove it to start fresh: GAIA writes a new "
+                f"one the next time you connect an MCP server."
             ) from e
         except OSError as e:
             from gaia.connectors.errors import ConnectorsError

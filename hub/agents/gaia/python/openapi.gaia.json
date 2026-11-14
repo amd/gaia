@@ -276,7 +276,7 @@
                 "type": "null"
               }
             ],
-            "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs. Send the full set every turn: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn.",
+            "description": "Absolute paths of the files the user attached to this conversation (contract >= 2.16). Each is granted as that exact file, never its folder, and indexed before the turn runs. Send the full set every turn, an empty list when none are attached: files already indexed in a retained session are skipped, so one attached mid-conversation is picked up on the next turn, and one sent before but left out now is removed from the session's index.",
             "title": "Documents"
           },
           "internet_off": {

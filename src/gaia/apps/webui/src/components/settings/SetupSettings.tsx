@@ -8,7 +8,7 @@ import * as api from '../../services/api';
 import { useChatStore, type SettingsSection } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import { ConfirmSheet } from '../setup/ConfirmSheet';
-import { formatSize } from '../setup/format';
+import { formatSize, ltrIn, totalMemory } from '../setup/format';
 import { isServerDown } from './ErrorNotice';
 import type { GpuMemoryStatus, PreflightReport, ProviderId, SetupPlan } from '../../types';
 
@@ -51,6 +51,13 @@ export function SetupSettings() {
     const installed = (plan?.catalog ?? []).filter((e) => e.downloaded);
     const installedGb = installed.reduce((sum, e) => sum + (e.full_size_gb ?? 0), 0);
     const device = [hardware?.gpu_name, hardware?.npu_detected ? t('setup.checks.npu') : null].filter(Boolean).join(' · ');
+    // The figures setup showed: memory models can use, of the PC's total.
+    const shownTotal = totalMemory(plan?.system?.physical_memory, hardware?.ram_gb);
+    const total = shownTotal && ltrIn(t.locale, shownTotal);
+    const forModels = plan?.capacity_gb != null ? ltrIn(t.locale, formatSize(plan.capacity_gb)) : null;
+    const memory = forModels
+        ? total ? t('settings.setup.memoryOf', { size: forModels, total }) : t('settings.setup.memoryFor', { size: forModels })
+        : total;
     const groups: Array<{ title: string; rows: Row[] }> = [
         {
             title: t('settings.setup.where'),
@@ -62,7 +69,7 @@ export function SetupSettings() {
         {
             title: t('setup.pc.step'),
             rows: [
-                { label: t('settings.setup.detected'), value: [device, hardware?.ram_gb != null ? `${hardware.ram_gb} GB` : null].filter(Boolean).join(' · ') || null },
+                { label: t('settings.setup.detected'), value: [device, memory].filter(Boolean).join(' · ') || null },
                 { label: t('settings.setup.server'), value: plan?.lemonade.mode === 'external' ? t('settings.setup.serverYours') : t('settings.setup.serverOwn'), section: 'advanced', target: '[data-settings-target="model-server"]' },
                 { label: t('setup.gpu.title'), value: null, section: 'model', target: '#settings-gpu-title', provider: 'local', shown: !!gpu?.applies || (!!gpuError && !isServerDown(gpuError)) },
             ],
