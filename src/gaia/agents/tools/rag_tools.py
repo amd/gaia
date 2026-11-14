@@ -624,6 +624,67 @@ def _served_chunks(rag: Any, left_out) -> List[str]:
         ]
 
 
+def _best_chunk_per_document(
+    rag: Any, query: str, left_out
+) -> Tuple[List[str], List[float]]:
+    """Each searched document's best chunk for *query*, when there are several.
+
+    A global top-k lets one long document that matches everywhere fill every
+    slot; this makes sure every document's best passage is at least considered.
+    """
+    # Only documents with a cached per-file index: a miss would re-embed the file.
+    files = [
+        f
+        for f in list(rag.indexed_files)
+        if f not in (left_out or {}) and f in rag.file_indices
+    ]
+    if len(files) < 2:
+        return [], []
+    chunks, scores = [], []
+    for path in files:
+        # pylint: disable=protected-access
+        found, found_scores = rag._retrieve_chunks_from_file(query, path)
+        if found:
+            chunks.append(found[0])
+            scores.append(found_scores[0])
+    return chunks, scores
+
+
+def _spread_over_documents(
+    ranked: List[tuple],
+    extra: List[tuple],
+    owner: Dict[str, List[int]],
+    rag: Any,
+    limit: int,
+) -> Tuple[List[tuple], int]:
+    """*ranked* with other documents' passages added, and how many to keep.
+
+    Keeps the top *limit* by score, then adds the best passage of each document
+    that top leaves out, best first, up to half of *limit* more. Nothing the
+    search ranked is pushed out, so a question about one document keeps all its
+    passages, and "list X from each" still sees every document.
+    """
+
+    def doc_of(chunk: str) -> Optional[str]:
+        return rag.chunk_to_file.get((owner.get(chunk) or [-1])[0])
+
+    top, rest = list(ranked[:limit]), list(ranked[limit:])
+    docs = {doc_of(chunk) for chunk, _ in top}
+    held = {chunk for chunk, _ in top}
+    added: List[tuple] = []
+    for chunk, score in sorted(extra, key=lambda item: item[1], reverse=True):
+        if len(added) == limit // 2:
+            break
+        doc = doc_of(chunk)
+        if doc is None or doc in docs or chunk in held:
+            continue
+        added.append((chunk, score))
+        docs.add(doc)
+        held.add(chunk)
+    rest = [item for item in rest if item[0] not in held]
+    return top + added + rest, len(top) + len(added)
+
+
 def _chunk_positions(rag: Any, left_out=None) -> Dict[str, List[int]]:
     """Every index of each chunk text, leaving out chunks *left_out* files own.
 
@@ -1042,15 +1103,20 @@ _CHUNK_CHARS = 2000
 
 
 def top_or_whole_index(
-    ranked: List[tuple], candidates: List[str], limit: int, chunk_chars: int
+    ranked: List[tuple],
+    candidates: List[str],
+    limit: int,
+    chunk_chars: int,
+    keep: Optional[int] = None,
 ) -> List[tuple]:
-    """Return the top ``limit`` (chunk, score) pairs, or every candidate when
-    all of them fit in the text ``limit`` full-size chunks would take.
+    """Return the top ``limit`` (chunk, score) pairs (``keep`` when given), or
+    every candidate when all of them fit in the text ``limit`` full-size chunks
+    would take.
 
     A rollup over eight one-paragraph reports must see all eight.
     """
     if sum(len(chunk) for chunk in candidates) > limit * chunk_chars:
-        return ranked[:limit]
+        return ranked[: keep or limit]
     seen = {chunk for chunk, _ in ranked}
     rest = []
     for chunk in candidates:
@@ -1303,6 +1369,12 @@ class RAGToolsMixin:
                         return _embedding_error(embedding_errors[-1])
                     raise key_failures[-1]
 
+                # Several documents: each one's best passage, for those the
+                # search leaves out.
+                per_doc_chunks, per_doc_scores = _best_chunk_per_document(
+                    rag, query, left_out
+                )
+
                 # HYBRID SEARCH: add the chunks that best match the query's words
                 keyword_boost_info = []
                 keywords = keyword_index(rag)
@@ -1432,17 +1504,26 @@ class RAGToolsMixin:
                 else:
                     adaptive_max = self.max_chunks  # Default (5) for small docs
 
-                kept = top_or_whole_index(
+                # A twin chunk in a left-out file must not be cited.
+                positions = _chunk_positions(rag, left_out)
+                spread, keep = _spread_over_documents(
                     sorted_items,
+                    list(zip(per_doc_chunks, per_doc_scores)),
+                    positions,
+                    rag,
+                    adaptive_max,
+                )
+                kept = top_or_whole_index(
+                    spread,
                     _served_chunks(rag, left_out),
                     adaptive_max,
                     _CHUNK_CHARS,
+                    keep,
                 )
+                kept.sort(key=lambda item: item[1], reverse=True)
                 top_chunks = [chunk for chunk, score in kept]
                 top_scores = [score for chunk, score in kept]
 
-                # A twin chunk in a left-out file must not be cited.
-                positions = _chunk_positions(rag, left_out)
                 chunk_indices = [positions.get(chunk, [-1])[0] for chunk in top_chunks]
 
                 # Format chunks with context markers for better readability
