@@ -512,6 +512,7 @@ def _without_pytest_report_flags(command: str) -> str:
             continue
         if re.fullmatch(r"-[A-Za-z]+", word):
             letters = ""
+            takes_next = False
             for j, letter in enumerate(word[1:], start=1):
                 if letter in _PYTEST_REPORT_LETTERS:
                     continue
@@ -520,10 +521,17 @@ def _without_pytest_report_flags(command: str) -> str:
                     break
                 if letter not in _PYTEST_BARE_LETTERS:
                     letters += word[j:]
+                    # "-xk -v": a value letter that ends the cluster owns the next word.
+                    takes_next = j == len(word) - 1 and f"-{letter}" in (
+                        _PYTEST_VALUE_FLAGS | {"-p"}
+                    )
                     break
                 letters += letter
             if letters:
                 kept.append("-" + letters)
+            if takes_next and i < len(words):
+                kept.append(words[i])
+                i += 1
             continue
         kept.append(word)
     return " ".join(kept)

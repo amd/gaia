@@ -650,6 +650,22 @@ def test_a_flag_that_changes_what_runs_is_a_different_check(narrower):
 
 
 @pytest.mark.parametrize(
+    "clustered, without_value",
+    [
+        # A value letter that ends a cluster owns the next word, as "-k -v" does.
+        ("pytest -xk -v", "pytest -xk"),
+        ("pytest -sm -q", "pytest -sm"),
+    ],
+)
+def test_a_clustered_value_flag_keeps_its_value(clustered, without_value):
+    def target(command):
+        return verification_check_target("run_shell_command", {"command": command})
+
+    assert target(clustered) != target(without_value)
+    assert target(clustered) == target(clustered.replace("pytest", "pytest -v", 1))
+
+
+@pytest.mark.parametrize(
     "first, second",
     [
         # Only pytest's own flags are read; another program's "-v" is its own.
