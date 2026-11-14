@@ -133,6 +133,7 @@ from gaia.agents.base.planted_instructions import (
     source_label,
 )
 from gaia.agents.base.project_map import resolve_project_root
+from gaia.agents.base.python_scope import python_scope_refusal
 from gaia.agents.base.step_timing import StepTimer
 from gaia.agents.base.task_lessons import TaskLessons
 from gaia.agents.base.task_lessons import attach as attach_task_lessons
@@ -7668,9 +7669,10 @@ Do NOT wrap conversational replies in JSON.
             if refusal is not None:
                 return refusal
         if tool_name in PYTHON_TOOLS:
+            folders = self._python_call_folders()
             refusal = python_credential_refusal(
-                tool_name, tool_args, self._python_call_folders()
-            )
+                tool_name, tool_args, folders
+            ) or python_scope_refusal(self, tool_name, tool_args, folders)
             if refusal is not None:
                 return refusal
         # Before the falsy-args guard: a tool whose arguments all default

@@ -35,8 +35,11 @@ from gaia.agents.base.call_risk import (
 from gaia.agents.base.checks import attach_check, check_from_command
 from gaia.agents.base.command_wrappers import command_starts
 from gaia.agents.base.denied_effects import (
+    COMPUTED_PATH,
     NETWORK,
+    PATH,
     UNATTENDED_REFUSAL,
+    creates_a_link,
     deletes_a_path,
     effects_of_shell_command,
     is_cloud_metadata_host,
@@ -954,16 +957,78 @@ def private_fetch_note(found: List[Tuple[str, str]]) -> str:
     return f"Reaches {host} on {where}."
 
 
-def _final_even_unattended(command: str) -> bool:
-    """True when *command* deletes, hides what it runs, or reaches cloud metadata.
+def _command_words(command: str) -> Optional[list]:
+    """*command*'s words, its inline scripts' included; None when it won't split."""
+    try:
+        argv = _tokenize(command, bypass_gates=True)
+    except ValueError:
+        return None
+    return [word for words in _command_word_lists(argv) for word in words]
 
-    Refused unattended, such a line stays off every other route that turn.
+
+def _hard_target(command: str) -> str:
+    """The cloud-metadata address or protected folder *command* reaches, or "".
+
+    No approval opens either, so a refusal must not offer one.
     """
-    if _one_time_hard_reason(command) or deletes_a_path(command, os.getcwd()):
+    from gaia.security import protected_directory_of
+
+    cwd = os.getcwd()
+    paths = []
+    for effect in effects_of_shell_command(command, cwd):
+        if effect.kind == NETWORK and is_cloud_metadata_host(effect.target):
+            return f"the cloud-metadata address {effect.target}"
+        if effect.kind == PATH and effect.target != COMPUTED_PATH:
+            paths.append(effect.target)
+    words = _command_words(command) or []
+    paths += [
+        os.path.join(cwd, os.path.expanduser(path))
+        for path in read_targets_in_words(words)
+    ]
+    for path in paths:
+        try:
+            folder = protected_directory_of(path)
+        except (OSError, ValueError) as exc:
+            logger.debug("could not resolve %r to check it: %s", path, exc)
+            continue
+        if folder:
+            return f"the protected folder {folder}"
+    return ""
+
+
+def _final_even_unattended(command: str) -> bool:
+    """True when *command* deletes, links, hides what it runs, or hits a hard block.
+
+    A hard block is cloud metadata or a protected folder. Refused unattended,
+    such a line stays off every other route that turn.
+    """
+    cwd = os.getcwd()
+    if _one_time_hard_reason(command) or deletes_a_path(command, cwd):
+        return True
+    return creates_a_link(command, cwd) or bool(_hard_target(command))
+
+
+def _changes_files(command: str) -> bool:
+    """Whether *command* writes, creates, moves, copies or links a path."""
+    # ``2>&1`` and ``2>nul`` only route errors; any other ``>`` writes a file.
+    if ">" in _outside_double_quotes(_take_stderr_redirections(command)[0]):
         return True
     return any(
-        effect.kind == NETWORK and is_cloud_metadata_host(effect.target)
-        for effect in effects_of_shell_command(command, os.getcwd())
+        effect.kind == PATH for effect in effects_of_shell_command(command, os.getcwd())
+    )
+
+
+def _reads_files(command: str) -> bool:
+    """Whether *command* reads or lists a path; a line that won't split may."""
+    words = _command_words(command)
+    if words is None:
+        return True
+    if read_targets_in_words(words):
+        return True
+    return any(
+        "://" not in word and re.search(r"[\\/]|\.[A-Za-z0-9]{1,5}$", word)
+        for word in words[1:]
+        if not word.startswith("-")
     )
 
 
@@ -3271,12 +3336,11 @@ def _check_words(body: str, dialect: str) -> list:
     return words
 
 
-def credential_read_in_words(words: list, cwd: str) -> Optional[Tuple[str, str]]:
-    """``(word, file)`` when a command in *words* reads a credential file.
+def read_targets_in_words(words: list) -> list:
+    """The words of *words* that its commands read as files.
 
     Args:
         words: One command's words, or several joined by ``|``/``&&``/``;``.
-        cwd: The folder relative paths resolve against.
     """
     commands: list = [[]]
     for word in words:
@@ -3284,16 +3348,25 @@ def credential_read_in_words(words: list, cwd: str) -> Optional[Tuple[str, str]]
             commands.append([])
         else:
             commands[-1].append(word)
-    for command in commands:
-        for target in _read_targets(command):
-            spellings = [target]
-            # cmd.exe drops an unquoted '^' that shlex keeps.
-            if _pipe_dialect() == "cmd" and "^" in target:
-                spellings.append(re.sub(r"\^(.?)", r"\1", target))
-            for spelling in spellings:
-                found = _credential_file(spelling, cwd)
-                if found is not None:
-                    return target, found
+    return [target for command in commands for target in _read_targets(command)]
+
+
+def credential_read_in_words(words: list, cwd: str) -> Optional[Tuple[str, str]]:
+    """``(word, file)`` when a command in *words* reads a credential file.
+
+    Args:
+        words: One command's words, or several joined by ``|``/``&&``/``;``.
+        cwd: The folder relative paths resolve against.
+    """
+    for target in read_targets_in_words(words):
+        spellings = [target]
+        # cmd.exe drops an unquoted '^' that shlex keeps.
+        if _pipe_dialect() == "cmd" and "^" in target:
+            spellings.append(re.sub(r"\^(.?)", r"\1", target))
+        for spelling in spellings:
+            found = _credential_file(spelling, cwd)
+            if found is not None:
+                return target, found
     return None
 
 
@@ -5259,7 +5332,14 @@ class ShellToolsMixin:
         """
         note = str(error.get("risk_note") or "").rstrip(".")
         needs = f"`{command}` needs your approval" + (f" ({note})" if note else "")
-        if getattr(self, "console", None) is None:
+        hard = _hard_target(command)
+        if hard:
+            why = f"it reaches {hard}"
+            plain = (
+                f"Not run: `{command}` reaches {hard}, which stays off limits "
+                "whatever anyone approves. Tell the user it was not done."
+            )
+        elif getattr(self, "console", None) is None:
             why = "this run has no console to show the confirmation prompt on"
             plain = (
                 f"Not run: {needs}, and nothing in this "
@@ -5289,12 +5369,16 @@ class ShellToolsMixin:
         return {
             **unasked,
             "tier": TIER_REFUSE,
-            "error": f"{plain} {self._unattended_routes()}",
+            "error": f"{plain} {self._unattended_routes(command)}",
             UNATTENDED_REFUSAL: True,
         }
 
-    def _unattended_routes(self) -> str:
-        """One sentence naming the routes this run takes without anyone approving."""
+    def _unattended_routes(self, command: str) -> str:
+        """One sentence naming the routes this run takes without anyone approving.
+
+        A line that changes files is pointed at the file tools, which keep to
+        the allowed folders; run_python is offered only for computation.
+        """
         tools = getattr(self, "_tools_registry", None) or {}
         asks = getattr(self, "_tool_requires_confirmation", None)
         nobody = getattr(self, "console", None) is None
@@ -5303,9 +5387,14 @@ class ShellToolsMixin:
             # With no console, a tool that asks can't run either.
             return name in tools and not (nobody and callable(asks) and asks(name))
 
+        if _changes_files(command):
+            writers = [name for name in ("write_file", "edit_file") if runs(name)]
+            if not writers:
+                return "Tell the user the exact command so they can run it themselves."
+            return f"Use {' or '.join(writers)} to create or change files instead."
         readers = [name for name in ("read_file", "browse_directory") if runs(name)]
         routes = [f"{' or '.join(readers)} to read or list files"] if readers else []
-        if runs("run_python"):
+        if runs("run_python") and not _reads_files(command):
             routes.append("run_python to compute")
         shown = "`dir` or `findstr`" if os.name == "nt" else "`ls` or `grep`"
         routes.append(f"a no-prompt command such as {shown}")
