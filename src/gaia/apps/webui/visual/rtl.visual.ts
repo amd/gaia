@@ -972,6 +972,43 @@ for (const locale of ['ar', 'en']) {
     });
 }
 
+/** A path with no spaces, longer than the column; its chip made the whole chat scroll sideways. */
+const LONG_PATH = `C:\\reports\\${'a_very_long_segment_'.repeat(9)}.pdf`;
+
+async function withLongPath(page: Page): Promise<void> {
+    await page.route((url) => url.pathname === `/api/sessions/${ANSWER_SESSION}/messages`, (route) =>
+        route.fulfill({
+            json: {
+                messages: [
+                    { id: 1, session_id: ANSWER_SESSION, role: 'user', content: `Is ${LONG_PATH} the right report?`, created_at: NOW.toISOString(), rag_sources: null },
+                    { id: 2, session_id: ANSWER_SESSION, role: 'assistant', content: `Yes, ${LONG_PATH} is the one.`, created_at: NOW.toISOString(), rag_sources: null },
+                ],
+            },
+        }),
+    );
+}
+
+for (const locale of ['ar', 'en']) {
+    test(`a long path with no spaces wraps inside the chat column (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale, withLongPath);
+        const chips = page.locator('.file-path-link');
+        await expect(chips).toHaveText([LONG_PATH, LONG_PATH]);
+        const scroller = page.locator('.messages-scroll');
+        const box = (await scroller.boundingBox())!;
+        for (const chip of await chips.all()) {
+            const r = (await chip.boundingBox())!;
+            expect(r.x, 'the path chip starts outside the column').toBeGreaterThanOrEqual(box.x - 1);
+            expect(r.x + r.width, 'the path chip runs past the column').toBeLessThanOrEqual(box.x + box.width + 1);
+            // The whole path stays one click target, with the full path in its title.
+            await expect(chip).toHaveAttribute('title', new RegExp(`${LONG_PATH.replace(/[\\.]/g, '\\$&')}$`));
+        }
+        const sideways = await scroller.evaluate((el) => el.scrollWidth - el.clientWidth);
+        expect(sideways, 'the chat scrolls sideways').toBeLessThanOrEqual(1);
+        await shot(page, `long-path-${locale}`);
+        expect(await audit(page)).toEqual([]);
+    });
+}
+
 /** A dropped file (stored with an id in front) and two same-named files, each cited by its path. */
 const CITED_DOCS = [
     { id: 'drop', filename: 'notes.md', filepath: 'C:\\Users\\me\\.gaia\\documents\\0123456789ab_notes.md' },
@@ -1540,6 +1577,21 @@ test('session panel with Arabic names', async ({ page }) => {
     for (const gap of gaps) expect(gap.right, gap.name ?? '').toBeLessThanOrEqual(1);
     expect(await audit(page)).toEqual([]);
 });
+
+for (const locale of ['ar', 'en'] as const) {
+    test(`the session panel leads with files and folders, details last (${locale})`, async ({ page }) => {
+        await open(page, `#${ANSWER_SESSION}`, locale);
+        const panel = page.locator('.session-panel');
+        await expect(panel.locator('.sp-group-title')).toBeVisible();
+        const titles = await panel.locator('.sp-section-title, .sp-group-title').allInnerTexts();
+        const details = titles.findIndex((t) => t.includes(locale === 'ar' ? 'التفاصيل' : 'Details'));
+        const context = titles.findIndex((t) => t.includes(locale === 'ar' ? 'السياق' : 'Context'));
+        expect(details).toBeGreaterThan(0);
+        expect(context).toBeGreaterThan(details);
+        expect(await audit(page)).toEqual([]);
+        await shot(page, `session-panel-${locale}`);
+    });
+}
 
 test('a long hyphenated folder path wraps as one unit, below its Arabic label', async ({ page }) => {
     const path = `C:\\gtest\\h-r6\\${'a-long-folder-name\\'.repeat(4)}.gaia\\documents`;
