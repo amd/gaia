@@ -560,6 +560,15 @@ error. To run the chat model in the cloud instead, see
     is still empty, report it with `gaia diagnostics`.
   </Accordion>
 
+  <Accordion title="The model's answer came back corrupted" icon="file-circle-exclamation">
+    A local model can start repeating one token instead of writing an answer, for
+    example Gemma 4 sending `<unused49>` over and over. GAIA stops that reply, shows none
+    of the repeated text, ends the turn as failed and unloads the model, so your next
+    message loads a fresh copy. Send your message again. On your own Lemonade
+    Server GAIA leaves the model loaded, so unload or reload it there if it keeps
+    happening.
+  </Accordion>
+
   <Accordion title="Wrong model version installed" icon="code-branch">
     Force re-download to get the latest version:
     ```bash
