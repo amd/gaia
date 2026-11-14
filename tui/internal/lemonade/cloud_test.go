@@ -312,3 +312,131 @@ func TestIsAMDGateway(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestClassifiesCloud404(t *testing.T) {
+	cases := []struct {
+		name    string
+		body    string
+		want    []string
+		notWant []string
+	}{
+		{
+			name:    "unregistered provider",
+			body:    `{"error":{"message":"Cloud provider 'amd' is not installed. Call POST /v1/install first.","type":"invalid_request"}}`,
+			want:    []string{"registered for this provider yet", "Connect it again from this panel"},
+			notWant: []string{"older than", "gaia gateway install"},
+		},
+		{
+			name:    "detail wins over not_found type",
+			body:    `{"error":{"message":"Cloud provider 'amd' is not installed. Call POST /v1/install first.","type":"not_found"}}`,
+			want:    []string{"Connect it again from this panel"},
+			notWant: []string{"older than", "gaia gateway install"},
+		},
+		{
+			name:    "old server with not_found type",
+			body:    `{"error":{"message":"not found","type":"not_found"}}`,
+			want:    []string{"older than", MinExternalVersion, UpgradeHint},
+			notWant: []string{"gaia gateway install", "Connect it again from this panel"},
+		},
+		{
+			name:    "old server with no type",
+			body:    `{"error":{"message":"missing"}}`,
+			want:    []string{"older than", MinExternalVersion},
+			notWant: []string{"gaia gateway install", "Connect it again from this panel"},
+		},
+		{
+			name:    "other error keeps Lemonade's detail",
+			body:    `{"error":{"message":"provider is misconfigured","type":"invalid_request"}}`,
+			want:    []string{"provider is misconfigured"},
+			notWant: []string{"older than", "gaia gateway install", "Connect it again from this panel"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LEMONADE_API_KEY", "local-key")
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer s.Close()
+			err := New(s.URL).request(context.Background(), http.MethodPost, "/cloud/auth", map[string]string{"provider": "amd"}, nil)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error %q does not contain %q", err, want)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(err.Error(), notWant) {
+					t.Errorf("error %q unexpectedly contains %q", err, notWant)
+				}
+			}
+		})
+	}
+}
+
+func TestInstall404KeepsTheVersionHint(t *testing.T) {
+	t.Setenv("LEMONADE_API_KEY", "local-key")
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"error":{"message":"Cloud provider 'amd' is not installed.","type":"invalid_request"}}`)
+	}))
+	defer s.Close()
+	err := New(s.URL).request(context.Background(), http.MethodPost, "/install", map[string]any{"backend": "cloud"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "older than") ||
+		strings.Contains(err.Error(), "gaia gateway install") ||
+		strings.Contains(err.Error(), "Connect it again from this panel") {
+		t.Fatalf("install 404 should keep the version hint: %v", err)
+	}
+}
+
+func TestClearClassifiesTheDelete404(t *testing.T) {
+	cases := []struct {
+		name        string
+		body        string
+		wantCleared bool
+		wantError   string
+	}{
+		{
+			name:        "unregistered provider",
+			body:        `{"error":{"message":"Cloud provider 'fireworks' is not installed. Call POST /v1/install first.","type":"invalid_request"}}`,
+			wantCleared: true,
+		},
+		{
+			name:      "old server",
+			body:      `{"error":{"message":"not found","type":"not_found"}}`,
+			wantError: "older than",
+		},
+		{
+			name:      "other error",
+			body:      `{"error":{"message":"provider is misconfigured","type":"invalid_request"}}`,
+			wantError: "provider is misconfigured",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LEMONADE_API_KEY", "local-key")
+			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodDelete ||
+					!strings.HasSuffix(r.URL.Path, "/cloud/auth/fireworks") {
+					t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+				}
+				w.WriteHeader(http.StatusNotFound)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer s.Close()
+			err := New(s.URL).Clear(context.Background(), "fireworks")
+			if tc.wantCleared {
+				if err != nil {
+					t.Fatalf("an unregistered provider should clear: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("expected %q, got %v", tc.wantError, err)
+			}
+		})
+	}
+}

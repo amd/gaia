@@ -190,6 +190,14 @@ func Label(provider string) string {
 	return provider
 }
 
+// errProviderNotInstalled is Lemonade's 404 for a provider that was never
+// registered. Configure shows the panel remedy; Clear treats it as already
+// cleared so GAIA can still drop its own saved copy.
+var errProviderNotInstalled = errors.New(
+	"Cloud setup is unavailable: Lemonade has no cloud provider registered " +
+		"for this provider yet. Connect it again from this panel, then try again",
+)
+
 // ErrUnreachable is returned when nothing answered at the Lemonade address, so
 // a caller that knows Lemonade is not set up yet can say that instead.
 var ErrUnreachable = errors.New("Lemonade did not respond. Start it, check its address, and retry")
@@ -197,6 +205,14 @@ var ErrUnreachable = errors.New("Lemonade did not respond. Start it, check its a
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
+}
+
+// errorEnvelope is Lemonade's error body shape.
+type errorEnvelope struct {
+	Error struct {
+		Message string `json:"message"`
+		Type    string `json:"type"`
+	} `json:"error"`
 }
 
 func New(base string) *Client {
@@ -250,12 +266,27 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		var env errorEnvelope
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(&env)
 		switch resp.StatusCode {
 		case 401, 403:
 			return fmt.Errorf("Authentication was rejected. Check the Lemonade or provider credential and retry")
 		case 404:
-			return fmt.Errorf("Cloud setup is unavailable: this Lemonade is older than %s, "+
-				"the oldest version GAIA supports. %s", MinExternalVersion, UpgradeHint)
+			// A 404 from /install means the endpoint is missing, so the server
+			// is older than the cloud API. On the auth routes, Lemonade uses a
+			// 404 for a provider that was never registered, which is a setup
+			// problem, not a version problem.
+			if path != "/install" && strings.Contains(env.Error.Message, "is not installed") {
+				return errProviderNotInstalled
+			}
+			if path == "/install" || env.Error.Type == "" || env.Error.Type == "not_found" {
+				return fmt.Errorf("Cloud setup is unavailable: this Lemonade is older than %s, "+
+					"the oldest version GAIA supports. %s", MinExternalVersion, UpgradeHint)
+			}
+			if env.Error.Message != "" {
+				return fmt.Errorf("Lemonade rejected the operation (HTTP 404): %s", env.Error.Message)
+			}
+			return fmt.Errorf("Lemonade rejected the operation (HTTP 404). Check provider settings and retry")
 		case 409:
 			return fmt.Errorf("Lemonade has an environment key for this provider. It takes precedence; the pasted key was not saved. Leave the key blank to use it")
 		default:
@@ -381,5 +412,10 @@ func (c *Client) Clear(ctx context.Context, provider string) error {
 	if ExternalModeActive() {
 		return nil
 	}
-	return c.request(ctx, "DELETE", "/cloud/auth/"+provider, nil, nil)
+	err := c.request(ctx, "DELETE", "/cloud/auth/"+provider, nil, nil)
+	if errors.Is(err, errProviderNotInstalled) {
+		// Lemonade has nothing to clear; GAIA's saved copy still must go.
+		return nil
+	}
+	return err
 }
