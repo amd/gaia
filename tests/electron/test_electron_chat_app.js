@@ -1379,9 +1379,11 @@ describe('Chat App Integration', () => {
       expect(privacyContent).toContain('className="btn-danger"');
     });
 
-    it('should have danger zone warning text and two-step confirm', () => {
+    it('should have danger zone warning text and a confirmation sheet', () => {
       expect(privacyContent).toContain("t('settings.privacy.deleteWarning')");
-      expect(privacyContent).toContain("confirm ? t('settings.privacy.deleteConfirm') : t('settings.privacy.delete')");
+      expect(privacyContent).toContain('<ConfirmSheet');
+      expect(privacyContent).toContain("'settings.privacy.deleteYes'");
+      expect(privacyContent).toContain("t('settings.privacy.deleteCancel')");
     });
   });
 
