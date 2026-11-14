@@ -15,6 +15,7 @@ from gaia.agents.base.agent import (
     _MAX_UNFINISHED_ANSWER_REPROMPTS,
     Agent,
     _requests_indexing,
+    _requests_indexing_only,
     _unfinished_answer_kind,
 )
 from gaia.agents.base.verification import strip_verification_scope
@@ -749,3 +750,75 @@ def test_no_nudge_without_an_index_tool(agent):
     agent.process_query("Index ~/reports", max_steps=10)
 
     assert len(sent) == 1
+
+
+def _with_index_and_query_tools(agent):
+    queries = []
+    agent._tools_registry["index_document"] = {
+        "function": lambda **_: {"status": "success", "chunks": 1},
+        "description": "Index a file.",
+        "parameters": {},
+    }
+    agent._tools_registry["query_specific_file"] = {
+        "function": lambda **kw: queries.append(kw) or {"chunks": ["heron-5521"]},
+        "description": "Search a file.",
+        "parameters": {},
+    }
+    return queries
+
+
+def _stub_index_then_answer(agent, answer, *more):
+    index_call = json.dumps(
+        {
+            "thought": "",
+            "tool": "index_document",
+            "tool_args": {"file_path": "/tmp/outside.md"},
+        }
+    )
+    return _stub_raw_chat(
+        agent,
+        index_call,
+        *[json.dumps({"thought": "", "answer": a}) for a in (answer, *more)],
+    )
+
+
+def test_index_only_request_ends_without_a_forced_query(agent):
+    queries = _with_index_and_query_tools(agent)
+    sent = _stub_index_then_answer(agent, "Indexed outside.md. Done.")
+
+    result = agent.process_query(
+        "Index the document /tmp/outside.md so I can ask about it later. "
+        "Just index it and say done.",
+        max_steps=10,
+    )
+
+    assert queries == []
+    assert len(sent) == 2
+    assert _final_text(result) == "Indexed outside.md. Done."
+
+
+def test_index_and_question_still_forces_the_query(agent):
+    queries = _with_index_and_query_tools(agent)
+    _stub_index_then_answer(agent, "I think it's eagle-1.", "It's heron-5521.")
+
+    agent.process_query(
+        "Index the document /tmp/outside.md and tell me the outside code.",
+        max_steps=10,
+    )
+
+    assert [q["file_path"] for q in queries] == ["/tmp/outside.md"]
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Index ~/reports and say done.", True),
+        ("Just index the docs folder so I can ask about it later.", True),
+        ("Index ~/reports and tell me who led.", False),
+        ("Index ~/reports. What was the Q2 total?", False),
+        ("Index ~/reports, then summarize.", False),
+        ("What is the S&P 500 index", False),
+    ],
+)
+def test_requests_indexing_only(text, expected):
+    assert _requests_indexing_only(text) is expected
