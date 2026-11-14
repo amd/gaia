@@ -156,6 +156,10 @@ a repeated 48K-token prompt came back with all but 4 tokens cached.
 
 What that means in practice:
 
+- **A step without thinking no longer re-bills the history.** Earlier steps keep their
+  thinking when a later step has none, so the cached history stays valid. Thinking is
+  still dropped from older steps when GAIA edits a step, after a restart, and for
+  steps more than 1,024 turns back.
 - **Same token as every other gateway model.** GAIA sends it in the
   `Ocp-Apim-Subscription-Key` header itself, reading `LEMONADE_AMD_API_KEY`, then
   `GAIA_GATEWAY_TOKEN` in GAIA's environment, then the OS credential store that
