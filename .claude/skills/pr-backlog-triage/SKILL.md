@@ -72,6 +72,9 @@ review once **all** of these hold:
 
 Hold anything that breaks a condition, and anything that touches security, permission
 gating, prompts or tool schemas. Those get a full verifier pass.
+A bot "Approve" doesn't clear a PR you've already held for a known blocker; keep a hold list
+and check it first. A held contributor PR once merged on the bot's approval alone and
+shipped a known bug.
 
 Keep the backlog moving:
 
