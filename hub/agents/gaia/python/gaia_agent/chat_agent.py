@@ -1114,8 +1114,22 @@ class ChatAgent(
 
     def get_memory_dynamic_context(self) -> str:
         """Per-turn context, plus which documents are indexed right now."""
-        parts = (super().get_memory_dynamic_context(), self._indexed_documents_line())
+        parts = (
+            super().get_memory_dynamic_context(),
+            self._indexed_documents_line(),
+            self._mcp_dropped_line(),
+        )
         return "\n".join(part for part in parts if part)
+
+    def _mcp_dropped_line(self) -> str:
+        """The MCP notice the user saw, so the model doesn't say a server isn't set up."""
+        notice = getattr(self, "_mcp_dropped_notice", None)
+        if not notice:
+            return ""
+        return (
+            "MCP servers the user set up that have no tools this session "
+            f"(the user was shown this): {notice}"
+        )
 
     # ── lazy subsystems (#2323 Increment 3) ────────────────────────────────
 
@@ -2399,9 +2413,10 @@ A library document not named in the `[Indexed documents: ...]` line is not yet i
             return
         if self._mcp_manager is None:
             if self._mcp_unavailable_error:
+                # The error is already a sentence; wrapping it doubled its brackets.
                 self._set_mcp_dropped_notice(
-                    "Your MCP servers are unavailable this session: GAIA's MCP "
-                    f"client could not start ({self._mcp_unavailable_error})."
+                    "Your MCP servers are unavailable this session. "
+                    f"{self._mcp_unavailable_error.rstrip()}"
                 )
             return
         try:

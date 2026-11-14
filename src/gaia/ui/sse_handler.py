@@ -2097,6 +2097,7 @@ class SSEOutputHandler(OutputHandler):
                     f"'{tool_name}' needs your approval and nobody can answer on "
                     "this run. Start the request from the GAIA terminal UI or "
                     "Agent UI to approve it there.",
+                    unattended=True,
                 )
 
         # Before auto-approve: the eval runs with it on, and this is its only no.
@@ -2180,7 +2181,7 @@ class SSEOutputHandler(OutputHandler):
             logger.info(
                 "Background mode: immediately denied confirmation for '%s'", tool_name
             )
-            self._last_denial = Denial(tool_name, unattended_message)
+            self._last_denial = Denial(tool_name, unattended_message, unattended=True)
             return False
 
         confirm_id = str(uuid.uuid4())
@@ -2243,6 +2244,7 @@ class SSEOutputHandler(OutputHandler):
                 tool_name,
                 f"Confirmation for '{tool_name}' was abandoned: the run was "
                 "cancelled before the user answered.",
+                unattended=True,
             )
             return False
 
