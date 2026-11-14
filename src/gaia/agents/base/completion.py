@@ -46,6 +46,8 @@ SIDE_EFFECT_PATHS = {
 }
 _EXEC_TOOLS = frozenset({"run_python", "execute_python_file", "run_shell_command"})
 _UNOBSERVABLE = object()
+# File systems date writes by a coarse clock that trails time.time_ns().
+_FILE_CLOCK_SLACK_NS = 20_000_000
 _BINARY_SUFFIXES = frozenset(
     {
         ".png",
@@ -301,6 +303,36 @@ def _inside(path: str, folder: str) -> bool:
     return any(path.startswith(folder.rstrip("/\\") + sep) for sep in "/\\")
 
 
+def _changed_in(stamp: tuple, start: int, end: int) -> bool:
+    """Last changed within a run window whose *start* allows for mtime's coarse clock.
+
+    A copy keeps its source's mtime; ctime (creation on Windows, metadata
+    change on POSIX) is set by a copy made in the run. Only mtime gets the
+    clock slack, so a file created just before the run does not count.
+    """
+    mtime, ctime = stamp[3], stamp[4]
+    if max(mtime, ctime) > end:
+        return False
+    return mtime >= start or ctime >= start + _FILE_CLOCK_SLACK_NS
+
+
+def _absolute(path: str) -> bool:
+    return bool(ntpath.splitdrive(path)[0]) or path.startswith(("/", "\\", "~"))
+
+
+def _parts(path: str) -> list[str]:
+    return [os.path.normcase(p) for p in re.split(r"[\\/]+", path) if p and p != "."]
+
+
+def _under(key: str, parts: list[str]) -> bool:
+    """Whether *key* is, or sits inside, a path ending in the relative *parts*."""
+    found = _parts(key)
+    return bool(parts) and any(
+        found[end - len(parts) : end] == parts
+        for end in range(len(parts), len(found) + 1)
+    )
+
+
 def _in_named_folder(path: str, names: set[str]) -> bool:
     """Whether a folder above *path* has one of the bare *names*."""
     parent = ntpath.dirname(path.replace("/", "\\"))
@@ -319,8 +351,8 @@ _CODE_NAME = re.compile(r"^_|[()=<>]|::")
 
 def _path_token(match: re.Match) -> str | None:
     value = next(g for g in match.groups() if g is not None).strip()
-    value = value.lstrip("([（「【《")
-    value = value.rstrip(".,;:)]?!؟،؛。？！，；：、」）】》")
+    value = value.lstrip("([（「【《*")
+    value = value.rstrip(".,;:)]?!؟،؛。？！，；：、」）】》*")
     if not value or "://" in value or "@" in value or "\x00" in value:
         return None
     if "<" in value or ">" in value:
@@ -616,6 +648,17 @@ class CompletionEvidence:
         # Refused downloads; they never excuse a save the request gave no path for.
         self.refused_downloads: set[str] = set()
         self.query = query if isinstance(query, str) else ""
+        # Folders the request gives in full, and their parents: "in C:\w\project\
+        # ... write project\stats.csv" means C:\w\project\stats.csv.
+        self.anchors = list(
+            dict.fromkeys(
+                folder
+                for path in mentioned_paths(self.query)
+                if _absolute(path)
+                for folder in (path.rstrip("/\\"), ntpath.dirname(path.rstrip("/\\")))
+                if ntpath.basename(folder)
+            )
+        )
         # The subset of refused reasons that were prompts nobody answered.
         self.unconfirmed: set[str] = set()
         self.requested, self.save_requested = save_obligations(query)
@@ -653,6 +696,28 @@ class CompletionEvidence:
             path, root if isinstance(root, str) and root else self.root
         )
 
+    def _request_path(self, path: str) -> str:
+        """*path* as the request means it, not as GAIA's own folder resolves it."""
+        if ntpath.basename(path) != path and not _absolute(path):
+            first = _parts(path)[:1]
+            for anchor in self.anchors:
+                if first == _parts(ntpath.basename(anchor)):
+                    return os.path.join(ntpath.dirname(anchor), path)
+        return path
+
+    def request_key(self, path: str) -> str:
+        return self.key(self._request_path(path))
+
+    def _relative_parts(self, path: str) -> list[str]:
+        """The parts of a relative path, credited wherever a write ends in them."""
+        if ntpath.basename(path) == path or _absolute(path):
+            return []
+        return _parts(path)
+
+    def _typed_only(self, path: str) -> bool:
+        """A relative path no named folder ties down: shown as the user typed it."""
+        return bool(self._relative_parts(path)) and self._request_path(path) == path
+
     def _stamp(self, path: str) -> tuple | None | object:
         try:
             value = os.stat(path)
@@ -675,8 +740,8 @@ class CompletionEvidence:
         """Metadata only, for concrete executor targets within the read boundary."""
         if tool not in _EXEC_TOOLS:
             return {}
-        self._exec_started = time.time_ns()
-        paths = set(self.files) | {self.key(p) for p in self.requested}
+        self._exec_started = time.time_ns() - _FILE_CLOCK_SLACK_NS
+        paths = set(self.files) | {self.request_key(p) for p in self.requested}
         code = args.get("code")
         if isinstance(code, str):
             try:
@@ -718,9 +783,12 @@ class CompletionEvidence:
         if path.startswith(("\\\\", "//")):
             return False
         typed = [
-            os.path.join(self.root, os.path.expandvars(os.path.expanduser(p)))
+            os.path.join(
+                self.root,
+                os.path.expandvars(os.path.expanduser(self._request_path(p))),
+            )
             for p in self.requested
-            if self.key(p) == path
+            if self.request_key(p) == path
         ]
         # The user named the link, not wherever it points.
         if not typed or any(os.path.islink(p) for p in typed):
@@ -887,7 +955,10 @@ class CompletionEvidence:
         written_names = {os.path.normcase(ntpath.basename(key)) for key in written}
         pending = []
         for path in self.requested:
-            if self.key(path) in written:
+            if self.request_key(path) in written:
+                continue
+            parts = self._relative_parts(path)
+            if parts and any(_under(key, parts) for key in written):
                 continue
             if ntpath.basename(path) == path and (
                 os.path.normcase(path) in written_names
@@ -949,7 +1020,7 @@ class CompletionEvidence:
         during = [
             (ok, run)
             for start, end, ok, run in self.exec_windows
-            if start <= stamp[3] <= end
+            if _changed_in(stamp, start, end)
         ]
         if not during or not all(ok for ok, _ in during):
             return None
@@ -975,12 +1046,12 @@ class CompletionEvidence:
         """
         keys = [key for key, item in self.files.items() if item.written]
         for path in self.requested:
-            key = self.key(path)
+            key = self.request_key(path)
             if key in self.files or self._compared_every_run(key):
                 continue
             stamp = self._stamp(key)
             if isinstance(stamp, tuple) and any(
-                ok and start <= stamp[3] <= end
+                ok and _changed_in(stamp, start, end)
                 for start, end, ok, _ in self.exec_windows
             ):
                 keys.append(key)
@@ -1118,7 +1189,13 @@ class CompletionEvidence:
         ``readback=False`` drops the read-it-back check, for a turn the model
         call ended before the model could read anything back.
         """
-        required = {self.key(path) for path in self.requested}
+        required = {self.request_key(path) for path in self.requested}
+        # "out\res.csv" with no folder to tie it to: any write ending in it counts.
+        relative = {
+            self.request_key(path): parts
+            for path in self.requested
+            if (parts := self._relative_parts(path))
+        }
         # "Save it as notes.md in my Documents folder" names the file, not its
         # folder: a write of that file anywhere this turn fulfils it.
         bare = {
@@ -1126,11 +1203,11 @@ class CompletionEvidence:
             for path in self.requested
             if path and ntpath.basename(path) == path
         }
-        # A bare name keyed against the cwd is not a path the user gave.
+        # A bare or relative name keyed against the cwd is not a path the user gave.
         shown = {
-            self.key(path): path
+            self.request_key(path): path
             for path in self.requested
-            if path and ntpath.basename(path) == path
+            if path and (ntpath.basename(path) == path or self._typed_only(path))
         }
         claimed: set[str] = set()
         claim_without_path = False
@@ -1160,10 +1237,19 @@ class CompletionEvidence:
                             "The answer says a file was saved, but no tool wrote one this turn."
                         )
                 continue
-            required.update(self.key(path) for path in paths)
-            claimed.update(self.key(path) for path in paths)
+            required.update(self.request_key(path) for path in paths)
+            claimed.update(self.request_key(path) for path in paths)
+            relative.update(
+                (self.request_key(path), parts)
+                for path in paths
+                if (parts := self._relative_parts(path))
+            )
             bare.update(self.key(p) for p in paths if ntpath.basename(p) == p)
-            shown.update((self.key(p), p) for p in paths if ntpath.basename(p) == p)
+            shown.update(
+                (self.request_key(p), p)
+                for p in paths
+                if ntpath.basename(p) == p or self._typed_only(p)
+            )
             claim_without_path |= not paths
         gaps = self.cleanup_gaps(answer)
         for path in required:
@@ -1181,6 +1267,7 @@ class CompletionEvidence:
             return (
                 path in required
                 or any(_inside(path, f) for f in required)
+                or any(_under(path, parts) for parts in relative.values())
                 or os.path.normcase(ntpath.basename(path)) in bare_names
                 or (
                     _in_named_folder(path, bare_names)
@@ -1231,6 +1318,8 @@ class CompletionEvidence:
                 )
             ):
                 continue
+            if path in relative and any(_under(key, relative[path]) for key in written):
+                continue
             written_inside = any(
                 item.written and _inside(key, path) for key, item in self.files.items()
             )
@@ -1257,22 +1346,28 @@ class CompletionEvidence:
                     gaps.append(
                         f"No successful write to `{name}` is recorded for this turn."
                     )
-        if (
-            not required
-            and (
-                claim_without_path
-                or (
-                    self.save_requested
-                    and not (admitted and set(self.refused) - self.refused_downloads)
-                )
+        pathless_open = not required and (
+            claim_without_path
+            or (
+                self.save_requested
+                and not (admitted and set(self.refused) - self.refused_downloads)
             )
-            and not any(
-                item.direct
-                and item.written
-                and not item.inferred
-                and not (self.scratch and _inside(item.path, self.scratch))
-                for item in self.files.values()
-            )
+        )
+        # A file the request names ("Write C:\w\inventory.csv with ...") that a
+        # script produced is that save, though no tool reported its path.
+        named = (
+            {self.request_key(path) for path in named_outputs(self.query)}
+            if pathless_open
+            else set()
+        )
+        for key in named - set(self.files):
+            self._find_executor_writes(key)
+        if pathless_open and not any(
+            item.direct
+            and item.written
+            and (not item.inferred or item.path in named)
+            and not (self.scratch and _inside(item.path, self.scratch))
+            for item in self.files.values()
         ):
             gaps.append(
                 "The requested output file has no recorded successful write; an earlier side-effect file does not fulfill that save."

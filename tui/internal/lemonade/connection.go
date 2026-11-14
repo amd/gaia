@@ -76,8 +76,8 @@ func embeddedDir() (string, bool) {
 }
 
 // ResolveBaseURL keeps an explicitly selected endpoint, then the user's choice
-// (LEMONADE_BASE_URL, else the saved external server), the private runtime,
-// and finally Lemonade's standard port. Mirrors Python's
+// (LEMONADE_BASE_URL, else the saved external server), the private runtime
+// (running, or stopped on its last port), and finally Lemonade's standard port. Mirrors Python's
 // resolve_lemonade_base_url.
 func ResolveBaseURL(base string) string {
 	if base = strings.TrimSpace(base); base != "" {
@@ -89,7 +89,31 @@ func ResolveBaseURL(base string) string {
 	if state := ReadEmbedded(); state != nil {
 		return fmt.Sprintf("http://localhost:%d/api/v1", state.Port)
 	}
+	// Stopped, GAIA's own comes back on its last port; another Lemonade may
+	// hold the standard one.
+	if port := stoppedOwnPort(); port > 0 {
+		return fmt.Sprintf("http://localhost:%d/api/v1", port)
+	}
 	return DefaultBaseURL
+}
+
+// stoppedOwnPort is the port GAIA's installed server last ran on, or 0.
+func stoppedOwnPort() int {
+	dir, ok := embeddedDir()
+	if !ok || !EmbeddedInstalled() {
+		return 0
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "last_port.json"))
+	if err != nil {
+		return 0
+	}
+	var last struct {
+		Port int `json:"port"`
+	}
+	if json.Unmarshal(raw, &last) != nil || last.Port < 1024 || last.Port > 65535 {
+		return 0
+	}
+	return last.Port
 }
 
 // A bare Lemonade origin means its standard API. Preserve an explicitly

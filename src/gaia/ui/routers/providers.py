@@ -112,11 +112,10 @@ def _is_local_url(base_url: str) -> bool:
 
 def _server_owner(base_url: str) -> str:
     """``gaia`` for GAIA's own Lemonade, ``user`` for another local one, ``remote``."""
-    from gaia.llm.lemonade_client import _read_embedded_lemonade_state
+    from gaia.llm.lemonade_client import gaia_lemonade_port
     from gaia.llm.model_server_info import server_owner
 
-    state = _read_embedded_lemonade_state()
-    return server_owner(base_url, state.get("port") if state else None)
+    return server_owner(base_url, gaia_lemonade_port())
 
 
 def _require_loopback(base_url: str) -> None:
@@ -496,6 +495,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
     if status >= 400:
         failed = _ModelListFailed if status >= 500 else ProviderError
         raise failed(f"Lemonade answered /models with HTTP {status}.")
+    listed = _model_entries(body)
     offered: List[str] = []
     if provider == LOCAL:
         offered = [*_suggested_local_models()]
@@ -505,7 +505,7 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
     offered += [e["id"] for e in added]
     npu_kept = [*NPU_MODEL_LADDER, *offered, *_last_local_model()]
     out: List[Dict[str, Any]] = []
-    for m in body.get("data") or []:
+    for m in listed:
         model_id = str(m.get("id") or "")
         if not model_id or not _is_chat_model(m):
             continue
@@ -569,6 +569,16 @@ def _list_models(provider: str, *, offer_optional: bool = True) -> List[Dict[str
         _rank_gateway_models(out)
     out.sort(key=lambda x: (x["rank"] is None, x["rank"] or 0, x["id"].lower()))
     return out
+
+
+def _model_entries(body: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The model entries of a ``/models`` answer; a malformed one is named, not a 500."""
+    from .system import _catalog_entries
+
+    try:
+        return _catalog_entries(body)
+    except ValueError as e:
+        raise ProviderError(str(e)) from e
 
 
 def _last_local_model() -> List[str]:
@@ -864,7 +874,8 @@ def _check_model_available(model_id: str) -> Optional[str]:
     except ProviderError as e:
         if e.status == 503 or isinstance(e, _ModelListFailed):
             raise _ServerNotReady(str(e)) from e
-        return str(e)
+        # Callers end the sentence themselves.
+        return str(e).rstrip(".")
     except CloudKeyError as e:
         if "not reachable" in str(e):
             raise _ServerNotReady(str(e)) from e
@@ -1573,6 +1584,7 @@ def select_model(
     except ProviderError as e:
         _raise(e)
     db.set_setting("custom_model", model_id)
+    db.set_setting(PICKED_MODEL_SETTING, model_id)
     if provider_of(model_id) == LOCAL:
         from gaia.ui import warmup
 
@@ -1580,6 +1592,44 @@ def select_model(
         warmup.request_warm_up("model pick", fresh=True)
     clear_restore_notice()
     return _active_view(db)
+
+
+#: The model picked under Model, which a cleared Custom model ID goes back to.
+PICKED_MODEL_SETTING = "picked_model"
+
+
+def custom_model_override(db: ChatDatabase) -> Optional[str]:
+    """The Custom model ID in force; None while the picked model runs."""
+    custom = (db.get_setting("custom_model") or "").strip()
+    picked = (db.get_setting(PICKED_MODEL_SETTING) or "").strip()
+    return custom if custom and custom != picked else None
+
+
+def model_after_clearing_custom(db: ChatDatabase) -> Optional[str]:
+    """The model a cleared Custom model ID leaves running; None is the default.
+
+    The model picked under Model. With no pick on record, a cloud user keeps
+    their model unless the local default is on disk.
+    """
+    from gaia.config import GaiaConfigError
+
+    from ..database import resolved_default_model
+
+    picked = (db.get_setting(PICKED_MODEL_SETTING) or "").strip()
+    current = (db.get_setting("custom_model") or "").strip()
+    for model in (picked, current):
+        if model:
+            _learn_cloud_models(model)
+    if picked and not (cloud_blocked() and cloud_provider_name(picked)):
+        return picked
+    if not current or cloud_provider_name(current) is None or cloud_blocked():
+        return None
+    try:
+        default = {"remote": False, "model": resolved_default_model()}
+    except GaiaConfigError as e:
+        logger.info("Keeping %s: the default model can't be read: %s", current, e)
+        return current
+    return None if _local_downloaded(default) else current
 
 
 def clear_restore_notice() -> None:
@@ -1677,7 +1727,7 @@ def _trained_window(model_id: str) -> Optional[int]:
             f"the context sizes {model_id} was trained for. Try again once the "
             "local model server is answering."
         )
-    for m in body.get("data") or []:
+    for m in _model_entries(body):
         if _model_ids_match(str(m.get("id") or ""), model_id):
             # ``context_length`` is the configured window; this is the trained one.
             window = m.get("max_context_window")
@@ -1834,7 +1884,7 @@ def _lemonade_catalog() -> List[Dict[str, Any]]:
     status, body = _lemonade("GET", "models?show_all=true")
     if status >= 400:
         raise ProviderError(f"Lemonade answered /models with HTTP {status}.")
-    return list(body.get("data") or [])
+    return _model_entries(body)
 
 
 def _catalog_recipes(model_id: str) -> List[Optional[str]]:
@@ -1912,6 +1962,8 @@ def remove_custom_model(
         raise HTTPException(status_code=500, detail=str(e)) from e
     if _model_ids_match(db.get_setting("custom_model"), result["removed"]):
         db.set_setting("custom_model", None)
+    if _model_ids_match(db.get_setting(PICKED_MODEL_SETTING), result["removed"]):
+        db.set_setting(PICKED_MODEL_SETTING, None)
     return result
 
 

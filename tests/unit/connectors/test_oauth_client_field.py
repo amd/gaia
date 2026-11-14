@@ -99,7 +99,7 @@ class TestConfigureSaveOnly:
             headers=UI_HEADER,
         )
         assert resp.status_code == 503
-        assert "client_id" in resp.json()["detail"]
+        assert "client_id" in resp.json()["detail"]["message"]
 
 
 class TestSummaryOAuthClient:
