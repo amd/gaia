@@ -1119,7 +1119,7 @@ def test_a_call_outside_the_policy_is_asked_with_its_risk_note():
 def test_a_permitted_ungranted_call_still_reaches_the_prompt():
     """The reordering must not swallow the modal for calls that can run."""
     agent = _ExecutingAgent()
-    agent._execute_tool("run_shell_command", {"command": "pwd"})
+    agent._execute_tool("run_shell_command", {"command": "git status"})
     assert [name for name, _ in agent.console.asked] == ["run_shell_command"]
 
 

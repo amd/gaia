@@ -2522,7 +2522,10 @@ with a `detail` that says why and what the user can do.
   </Accordion>
 
   <Accordion title="PUT /api/goals/{goal_id}/status">
-    Update goal status and optionally append progress notes.
+    Update goal status and optionally append progress notes. Queuing a goal
+    again from any other status resets its unfinished-run count and any retry
+    pause, so it gets the full number of tries; a status update that leaves a
+    goal queued keeps its count.
   </Accordion>
 
   <Accordion title="POST /api/goals/{goal_id}/tasks">

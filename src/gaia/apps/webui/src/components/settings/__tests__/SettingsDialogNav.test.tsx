@@ -32,6 +32,16 @@ describe('SettingsDialog nav', () => {
         expect(screen.getByText('model pane')).toBeInTheDocument();
     });
 
+    it('opens every tab at its top, not where the last tab was scrolled to', () => {
+        const { container } = render(<SettingsDialog onUseSkill={vi.fn()} />);
+        const pane = container.ownerDocument.querySelector('.settings-scroll') as HTMLElement;
+        pane.scrollTop = 900;
+
+        fireEvent.click(screen.getByRole('button', { name: 'Model' }));
+
+        expect(pane.scrollTop).toBe(0);
+    });
+
     it('is one Tab stop, and the arrow keys move through it', () => {
         render(<SettingsDialog onUseSkill={vi.fn()} />);
         const general = screen.getByRole('button', { name: 'General' });
