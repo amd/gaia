@@ -14,7 +14,7 @@ import json
 import os
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from gaia.logger import get_logger
 
@@ -146,11 +146,17 @@ def run(
     full_access: bool = False,
     base_url: Optional[str] = None,
     attempts: int = 1,
+    goal: Optional[str] = None,
+    goal_checks: Sequence[str] = (),
+    goal_max_rounds: Optional[int] = None,
 ) -> int:
     """Run one headless turn and print its result. Returns the exit code.
 
     With *attempts* > 1, that many independent attempts run first, each in a
     copy of the current folder, and the turn combines their drafts.
+
+    With *goal*, rounds run until the goal is checked and holds (exit 0), or
+    the run ends needing the user, stalled or out of budget (exit 1).
     """
     if output_format not in OUTPUT_FORMATS:
         raise ValueError(
@@ -167,11 +173,19 @@ def run(
             full_access=full_access,
             base_url=base_url,
         )
-        record = (
-            _run_with_attempts(text, attempts, **turn)
-            if attempts > 1
-            else _run_turn(text, **turn)
-        )
+        if goal is not None:
+            from gaia.agents.base.goal_run import DEFAULT_MAX_ROUNDS, GoalSpec
+
+            spec = GoalSpec(
+                condition=goal,
+                checks=tuple(goal_checks),
+                max_rounds=goal_max_rounds or DEFAULT_MAX_ROUNDS,
+            )
+            record = _run_goal(text, spec, **turn)
+        elif attempts > 1:
+            record = _run_with_attempts(text, attempts, **turn)
+        else:
+            record = _run_turn(text, **turn)
     except KeyboardInterrupt:
         return _emit_failure(output_format, "interrupted", code=130)
     except Exception as exc:  # noqa: BLE001 - CLI boundary: report, never a traceback
@@ -184,6 +198,11 @@ def run(
     elif record["result"] or not record["is_error"]:
         # A failed turn with no answer leaves stdout empty, not one blank line.
         print(record["result"])
+    goal_message = (record.get("goal") or {}).get("message")
+    if goal_message:
+        mark = "❌" if record["is_error"] else "✅"
+        print(f"{mark} gaia -p: {goal_message}", file=sys.stderr)
+        return 1 if record["is_error"] else 0
     if record["is_error"]:
         ended = f"the turn ended with status '{record['status']}'"
         error = record.get("error")
@@ -270,16 +289,16 @@ def _run_turn(
     base_url: Optional[str],
     extra_paths: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    from gaia.llm.lemonade_client import resolve_lemonade_base_url
-    from gaia.logger import configure
-
-    log_manager = configure()
-    log_manager.configure_agent_console(debug=False)
-
     model = _resolve_model(model)
-    try:
-        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
-    except ImportError:
+    agent = _build_agent(
+        model=model,
+        max_steps=max_steps,
+        skip_permissions=skip_permissions,
+        full_access=full_access,
+        base_url=base_url,
+        extra_paths=extra_paths,
+    )
+    if agent is None:
         # The agent ships as its own binary here, as the apps do: run the turn
         # on it through the daemon, which brings up the model server for it.
         return _relay_turn(
@@ -292,6 +311,39 @@ def _run_turn(
             base_url=base_url,
             extra_paths=extra_paths,
         )
+
+    started = time.time()
+    try:
+        result = agent.process_query(text) or {}
+    finally:
+        from gaia.agents.base.memory import drain_memory_extraction
+
+        drain_memory_extraction(agent)
+    return summarize(
+        result, agent.model_id or model, time.time() - started, verbose=verbose
+    )
+
+
+def _build_agent(
+    *,
+    model: Optional[str],
+    max_steps: Optional[int],
+    skip_permissions: bool,
+    full_access: bool,
+    base_url: Optional[str],
+    extra_paths: Optional[List[str]] = None,
+) -> Any:
+    """The flagship in this process, or None when it only ships as a binary."""
+    from gaia.llm.lemonade_client import resolve_lemonade_base_url
+    from gaia.logger import configure
+
+    log_manager = configure()
+    log_manager.configure_agent_console(debug=False)
+
+    try:
+        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+    except ImportError:
+        return None
     detected_base_url = _start_server(model, base_url)
 
     agent = GaiaAgent(
@@ -313,17 +365,143 @@ def _run_turn(
             file=sys.stderr,
         )
     agent._ensure_tool_loader_reset()  # pylint: disable=protected-access
+    return agent
 
+
+def _run_goal(
+    text: str,
+    spec: Any,
+    *,
+    model: Optional[str],
+    verbose: bool,
+    max_steps: Optional[int],
+    skip_permissions: bool,
+    full_access: bool,
+    base_url: Optional[str],
+) -> Dict[str, Any]:
+    """Run rounds until the goal is checked and holds, or the run must stop."""
+    from gaia.agents.base.goal_check import GoalCheckError, check_goal
+    from gaia.agents.base.goal_run import (
+        GoalLedger,
+        next_action,
+        outcome_message,
+        round_prompt,
+    )
+    from gaia.agents.base.history import SessionHistory
+    from gaia.agents.base.memory import drain_memory_extraction
+
+    model = _resolve_model(model)
+    agent = _build_agent(
+        model=model,
+        max_steps=max_steps,
+        skip_permissions=skip_permissions,
+        full_access=full_access,
+        base_url=base_url,
+    )
+    if agent is None:
+        raise RuntimeError(
+            "--goal needs the GAIA agent in this process, and here it runs as its "
+            "own program through GAIA's background service, which keeps no history "
+            "between the goal's rounds. Run from a GAIA install that includes the "
+            "agent package (https://amd-gaia.ai/docs/reference/dev)."
+        )
+
+    history = SessionHistory()
+    agent.conversation_history = history
+    chat = agent._make_extraction_chat()  # pylint: disable=protected-access
+    sampling = _evaluator_sampling(agent.model_id or model)
+    ledger = GoalLedger()
+    cwd = os.getcwd()
     started = time.time()
+    totals = dict.fromkeys(_SUMMED, 0)
+    result: Dict[str, Any] = {}
+    outcome = None
+    failure = ""
+    # Hold memory extraction off the model until the goal ends.
+    hold = getattr(agent, "_note_user_turn_started", None)
+    release = getattr(agent, "_note_user_turn_finished", None)
+    if hold:
+        hold()
     try:
-        result = agent.process_query(text) or {}
+        while outcome is None:
+            prompt = round_prompt(spec, ledger, text)
+            if ledger.round_count:
+                # System-written, not the user's words.
+                agent.mark_external_content()
+            print(f"gaia -p: goal round {ledger.round_count + 1}…", file=sys.stderr)
+            result = agent.process_query(prompt) or {}
+            round_record = summarize(result, agent.model_id or model, 0.0)
+            for key in _SUMMED:
+                totals[key] += int(round_record.get(key) or 0)
+            if _model_failed(result):
+                outcome, failure = "error", _turn_error(result)
+                break
+            messages = result.get("model_messages") or [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": str(result.get("result") or "")},
+            ]
+            history.record(messages)
+            history.prepare(agent, "")
+            evidence = getattr(agent, "_completion_evidence", None)
+            written = evidence.written_files() if evidence is not None else []
+            try:
+                verdict = check_goal(spec, ledger, result, chat, cwd, sampling)
+            except GoalCheckError as exc:
+                outcome, failure = "error", str(exc)
+                break
+            ledger.record(verdict, written)
+            outcome = next_action(spec, ledger)
+            if outcome is None:
+                left = verdict.missing[0] if verdict.missing else "not shown yet"
+                print(f"gaia -p: goal not met yet: {left}", file=sys.stderr)
     finally:
-        from gaia.agents.base.memory import drain_memory_extraction
-
+        if release:
+            release()
         drain_memory_extraction(agent)
-    return summarize(
+
+    record = summarize(
         result, agent.model_id or model, time.time() - started, verbose=verbose
     )
+    record.update(totals)
+    goal: Dict[str, Any] = {
+        "condition": spec.condition,
+        "outcome": outcome,
+        "rounds": ledger.round_count,
+        "verdict": ledger.last.to_dict() if ledger.last else None,
+        "message": outcome_message(outcome, ledger),
+    }
+    if outcome == "error":
+        goal["message"] += f" {failure}"
+    if outcome != "met":
+        record["is_error"] = True
+        record["error"] = failure if outcome == "error" else goal["message"]
+    elif record["is_error"]:
+        # The last round's own gaps don't undo a goal its check proved.
+        record["is_error"] = False
+        record["status"] = "success"
+        record.pop("error", None)
+    record["goal"] = goal
+    return record
+
+
+def _model_failed(result: Dict[str, Any]) -> bool:
+    """The round never reached the model; a tool error is the goal's to judge."""
+    return bool(
+        result.get("model_failed")
+        or result.get("model_unreachable")
+        or result.get("model_server_down")
+    )
+
+
+def _evaluator_sampling(model_id: Optional[str]) -> Dict[str, Any]:
+    from gaia.llm.lemonade_client import (
+        cloud_lowest_reasoning_effort,
+        cloud_model_provider,
+    )
+
+    if cloud_model_provider(model_id):
+        return {"reasoning_effort": cloud_lowest_reasoning_effort(model_id)}
+    return {}
 
 
 def _relay_turn(
