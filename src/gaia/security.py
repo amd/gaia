@@ -6,6 +6,7 @@ Handles path validation, user prompting, persistent allow-lists,
 blocked path enforcement, write guardrails, and audit logging.
 """
 
+import atexit
 import contextlib
 import datetime
 import hashlib
@@ -81,6 +82,9 @@ def audit_shell_command(
         json.dumps(segments),
     )
 
+
+# Opens the refusal for an out-of-scope path that turned out not to exist.
+MISSING_REFUSAL_PREFIX = "Not found: "
 
 # Maximum file size the agent is allowed to write (10 MB)
 MAX_WRITE_SIZE_BYTES = 10 * 1024 * 1024
@@ -568,10 +572,93 @@ def stable_scratch_dir(anchor: str) -> Path:
 
 _scratch_holders: Dict[str, int] = {}
 _scratch_lock = threading.Lock()
+_scratch_swept = False
+_scratch_sweeper: Optional[threading.Thread] = None
+
+#: A scratch folder no run has written to for this long belongs to no live run.
+SCRATCH_STALE_SECONDS = 24 * 3600
 
 
 def _scratch_key(path: Path) -> str:
     return os.path.normcase(os.path.abspath(str(path)))
+
+
+def _last_activity(path: str) -> float:
+    """The newest mtime of *path* and the entries directly in it."""
+    newest = os.lstat(path).st_mtime
+    with os.scandir(path) as entries:
+        for entry in entries:
+            newest = max(newest, entry.stat(follow_symlinks=False).st_mtime)
+    return newest
+
+
+def sweep_stale_scratch_dirs() -> int:
+    """Remove this user's scratch folders untouched for a day; how many went.
+
+    A run that ended without ``cleanup()`` (the app was closed, the process was
+    killed) left its folder behind. One this process holds is kept whatever its
+    age, and one another live process still uses is re-created on its next run
+    (:func:`ensure_scratch_dir`).
+    """
+    temp = tempfile.gettempdir()
+    cutoff = datetime.datetime.now().timestamp() - SCRATCH_STALE_SECONDS
+    removed, failures = 0, []
+    with os.scandir(temp) as entries:
+        candidates = [
+            entry.path
+            for entry in entries
+            if entry.name.startswith(SCRATCH_PREFIX)
+            and entry.is_dir(follow_symlinks=False)
+        ]
+    for path in candidates:
+        with _scratch_lock:
+            if _scratch_key(Path(path)) in _scratch_holders:
+                continue
+        try:
+            info = os.lstat(path)
+            if hasattr(os, "getuid") and info.st_uid != os.getuid():
+                continue
+            if _last_activity(path) > cutoff:
+                continue
+            shutil.rmtree(path)
+            removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            failures.append(f"{path}: {exc}")
+    if removed:
+        logger.info("Removed %d stale scratch folder(s) from %s", removed, temp)
+    if failures:
+        logger.warning(
+            "Could not remove %d stale scratch folder(s), first: %s",
+            len(failures),
+            failures[0],
+        )
+    return removed
+
+
+def _sweep_in_background() -> None:
+    try:
+        sweep_stale_scratch_dirs()
+    except OSError as exc:
+        logger.warning("Stale scratch folder sweep failed: %s", exc)
+
+
+def _remove_held_scratch_dirs() -> None:
+    """At exit: remove every scratch folder this process still holds."""
+    with _scratch_lock:
+        held = list(_scratch_holders)
+        _scratch_holders.clear()
+    for path in held:
+        try:
+            shutil.rmtree(path)
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            logger.warning("Could not remove scratch folder %s at exit: %s", path, exc)
+
+
+atexit.register(_remove_held_scratch_dirs)
 
 
 def acquire_scratch_dir(anchor: str) -> Path:
@@ -579,11 +666,23 @@ def acquire_scratch_dir(anchor: str) -> Path:
 
     Every chat in a long-lived sidecar that shares a project shares this path,
     so one chat's cleanup must not delete it while another is still using it.
+    The first call in a process also clears stale folders, off the caller's
+    thread.
     """
+    global _scratch_swept, _scratch_sweeper
     path = stable_scratch_dir(anchor)
+    # A folder in use must not look stale to another process's sweep.
+    os.utime(path)
     with _scratch_lock:
         key = _scratch_key(path)
         _scratch_holders[key] = _scratch_holders.get(key, 0) + 1
+        start_sweep = not _scratch_swept
+        _scratch_swept = True
+    if start_sweep:
+        _scratch_sweeper = threading.Thread(
+            target=_sweep_in_background, name="gaia-scratch-sweep", daemon=True
+        )
+        _scratch_sweeper.start()
     return path
 
 
@@ -846,6 +945,8 @@ class PathValidator:
         self._interactive_check = interactive_check
         self._access_prompt: Optional[Callable[[Path], bool]] = None
         self._access_declines: Optional[Callable[[Path], bool]] = None
+        # Paths whose access prompt the user answered "no" to.
+        self._declined_paths: Set[Path] = set()
 
         # Load persisted paths
         self._load_persisted_paths()
@@ -1121,6 +1222,24 @@ class PathValidator:
         self._access_prompt = prompt
         self._access_declines = declines if prompt is not None else None
 
+    def note_access_answer(self, path: Path, declined: bool) -> None:
+        """Record whether the user said no to *path*'s access prompt.
+
+        A timed-out prompt is not a no, so it clears an earlier one too.
+        """
+        resolved = Path(_real_path(str(path))).resolve()
+        if declined:
+            self._declined_paths.add(resolved)
+        else:
+            self._declined_paths.discard(resolved)
+
+    def _declined_by_user(self, path: str) -> bool:
+        target = Path(_real_path(path)).resolve()
+        return any(
+            target == declined or declined in target.parents
+            for declined in self._declined_paths
+        )
+
     def _unaskable_reason(self, path: Path) -> str:
         """Why *path* stays refused whatever the user answers, or "".
 
@@ -1273,6 +1392,13 @@ class PathValidator:
                 "from this chat's folders. Don't try another way to reach it; tell "
                 "the user it can be added back under Environment in the session "
                 "panel."
+            )
+        if self._declined_by_user(path):
+            return (
+                f"Access denied: the user declined access to '{path}' when asked. "
+                "The file is fine; GAIA may not read it. Don't reach it, or what "
+                "it holds, another way. Tell the user, and offer to read it if "
+                "they attach it to this chat or allow it when asked again."
             )
         message = f"Access denied: '{path}' is not in allowed paths."
         real_path = Path(_real_path(path))
@@ -1520,7 +1646,8 @@ class PathValidator:
             # Unreadable is not missing; let the user decide as before.
             return ""
         message = (
-            f"Not found: '{path}' does not exist, so access was not requested. "
+            f"{MISSING_REFUSAL_PREFIX}'{path}' does not exist, so access was not "
+            "requested. "
             "Check the name and folder, or ask the user where the file is."
         )
         candidates = self._in_scope_files_named(real_path.name)
