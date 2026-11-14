@@ -37,7 +37,9 @@ from gaia.agents.tools.file_edit import (
     turn_of,
 )
 from gaia.agents.tools.path_access import (
+    locked_file_error,
     missing_file_error,
+    read_permission_error,
     read_refusal,
     readable_entry,
 )
@@ -474,6 +476,9 @@ class FileIOToolsMixin:
                     return missing_file_error(file_path)
                 if os.path.isdir(file_path):
                     return _directory_path_error(file_path)
+                locked = locked_file_error(file_path)
+                if locked:
+                    return locked
 
                 unreadable = index_only_error(file_path)
                 if unreadable:
@@ -617,6 +622,11 @@ class FileIOToolsMixin:
 
                 return result
 
+            except PermissionError as e:
+                return read_permission_error(file_path) or {
+                    "status": "error",
+                    "error": str(e),
+                }
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
