@@ -22,6 +22,15 @@ import {
 
 vi.mock('../../services/api');
 
+// The connector events the card listens to, delivered by hand.
+const sse = vi.hoisted(() => ({ handlers: [] as Array<(e: unknown) => void> }));
+vi.mock('../../hooks/useConnectorsSSE', () => ({
+    useConnectorsSSE: (onChange: (e: unknown) => void) => {
+        sse.handlers.push(onChange);
+    },
+}));
+const deliver = (event: unknown) => act(() => sse.handlers[sse.handlers.length - 1]?.(event));
+
 const mocked = vi.mocked(api);
 
 function connector(id: string, configured: boolean, over: Partial<ConnectorRow> = {}): ConnectorRow {
@@ -166,6 +175,118 @@ describe('ConnectAccountCard', () => {
         expect(await screen.findByRole('button', { name: 'Reconnect Google' })).toBeTruthy();
         expect(shown()).toContain('GAIA needs you to connect an account for this.');
         expect(shown()).not.toContain('Ask again');
+    });
+
+    it('says a provider needs a one-time setup and opens it in Settings, with no command', async () => {
+        mocked.listConnectors.mockResolvedValue({
+            connectors: [connector('google', false, { configurable: false, config_error: 'not set up' })],
+        });
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
+        expect(await screen.findByText(
+            'Google needs a one-time setup before GAIA can connect to it. The steps are in Settings.',
+        )).toBeTruthy();
+        expect(mocked.authorizeConnector).not.toHaveBeenCalled();
+        expect(window.open).not.toHaveBeenCalled();
+        expect(shown()).not.toMatch(/gaia connectors|console\.cloud|client-id/i);
+        fireEvent.click(screen.getByRole('button', { name: 'Set up Google' }));
+        expect(useChatStore.getState().settingsSection).toBe('connectors');
+        expect(useChatStore.getState().settingsConnector).toBe('google');
+        act(() => useChatStore.getState().closeSettings());
+    });
+
+    it('turns a sign-in the backend cannot start for want of setup into the same offer', async () => {
+        const walkthrough = 'Google OAuth client is not configured ... gaia connectors configure google --client-id <ID>';
+        mocked.authorizeConnector.mockRejectedValue(
+            Object.assign(new Error(walkthrough), {
+                httpStatus: 503,
+                body: { error: 'not_configured', message: walkthrough },
+            }),
+        );
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
+        expect(await screen.findByRole('button', { name: 'Set up Google' })).toBeTruthy();
+        expect(shown()).not.toContain('gaia connectors');
+        expect(screen.queryByRole('alert')).toBeNull();
+    });
+
+    it('shows another 503 as the error it is, not as a setup to do', async () => {
+        mocked.authorizeConnector.mockRejectedValue(
+            Object.assign(new Error('Agent registry not initialized'), { httpStatus: 503, body: null }),
+        );
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
+        expect((await screen.findByRole('alert')).textContent).toContain('Agent registry not initialized');
+        expect(screen.queryByRole('button', { name: 'Set up Google' })).toBeNull();
+    });
+
+    it('re-reads its connectors when Settings closes, so a finished setup signs in', async () => {
+        mocked.listConnectors.mockResolvedValue({
+            connectors: [connector('google', false, { configurable: false, config_error: 'not set up' })],
+        });
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
+        fireEvent.click(await screen.findByRole('button', { name: 'Set up Google' }));
+
+        mocked.listConnectors.mockResolvedValue({ connectors: [connector('google', false)] });
+        act(() => useChatStore.getState().closeSettings());
+        await waitFor(() => expect(screen.queryByRole('button', { name: 'Set up Google' })).toBeNull());
+
+        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalled());
+    });
+
+    it('says a cancelled sign-in was cancelled, and Connect tries again', async () => {
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
+        expect(await screen.findByText(/A browser tab opened for sign-in/)).toBeTruthy();
+        deliver({ reason: 'oauth_error', connectorId: 'google', payload: { reason: 'cancelled' } });
+        expect((await screen.findByRole('alert')).textContent).toBe(
+            'Sign-in was cancelled. Press Connect to try again.',
+        );
+        expect(shown()).not.toContain('A browser tab opened');
+        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledTimes(2));
+        expect(await screen.findByText(/A browser tab opened for sign-in/)).toBeTruthy();
+    });
+
+    it('says when a sign-in it opened did not finish, in Arabic too', async () => {
+        act(() => useChatStore.getState().setLocale('ar'));
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: /Google/ }));
+        await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledTimes(1));
+        deliver({ reason: 'oauth_error', connectorId: 'google', payload: { reason: 'failed' } });
+        expect(stripIsolates((await screen.findByRole('alert')).textContent ?? '')).toContain(
+            'لم يكتمل تسجيل الدخول. اضغط «ربط» للمحاولة مرة أخرى.',
+        );
+    });
+
+    it('says a sign-in left open past its deadline did not finish, and Connect tries again', async () => {
+        render(<ConnectAccountCard data={card(['google'])} />);
+        fireEvent.click(await screen.findByRole('button', { name: 'Connect Google' }));
+        expect(await screen.findByText(/A browser tab opened for sign-in/)).toBeTruthy();
+        deliver({ reason: 'oauth_error', connectorId: 'google', payload: { reason: 'timeout' } });
+        expect((await screen.findByRole('alert')).textContent).toBe(
+            'Sign-in did not finish. Press Connect to try again.',
+        );
+        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        await waitFor(() => expect(mocked.authorizeConnector).toHaveBeenCalledTimes(2));
+    });
+
+    it('listens for sign-in events only while its sign-in is open', async () => {
+        sse.handlers.length = 0;
+        render(<ConnectAccountCard data={card(['google'])} />);
+        await screen.findByRole('button', { name: 'Connect Google' });
+        expect(sse.handlers).toHaveLength(0);
+        fireEvent.click(screen.getByRole('button', { name: 'Connect Google' }));
+        await waitFor(() => expect(sse.handlers.length).toBeGreaterThan(0));
+    });
+
+    it('ignores a sign-in it did not open', async () => {
+        render(<ConnectAccountCard data={card(['google'])} />);
+        await screen.findByRole('button', { name: 'Connect Google' });
+        deliver({ reason: 'oauth_error', connectorId: 'google', payload: { reason: 'cancelled' } });
+        expect(screen.queryByRole('alert')).toBeNull();
     });
 
     it('opens Connectors in Settings from the card', async () => {

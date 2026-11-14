@@ -8,6 +8,8 @@ Provides shell command execution capabilities for file operations and system que
 
 import base64
 import binascii
+import fnmatch
+import ipaddress
 import logging
 import os
 import re
@@ -18,10 +20,11 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from gaia.agents.base.call_risk import (
     DESTRUCTIVE,
@@ -40,6 +43,7 @@ from gaia.agents.tools.command_timeouts import (
     resolve_timeout,
     terminate_process_tree,
 )
+from gaia.agents.tools.fetcher_args import destinations as fetch_destinations
 from gaia.agents.tools.package_installs import (
     install_refusal_hint,
     system_install_target,
@@ -626,6 +630,259 @@ def _confirm_once(error: Dict[str, Any], note: str) -> Dict[str, Any]:
             "they decline, do not reach the same result another way."
         ),
     }
+
+
+#: A URL anywhere on a line, a script's strings included: its scheme and host.
+#: Any scheme connects (gopher, dict, ldap, smb, sftp). The match runs to the
+#: URL's end, so a URL inside its query string is not read as a second one.
+_URL_HOST = re.compile(
+    r"(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*)://(?:[^/\s'\"?#]*@)?"
+    r"(\[[^\]\s'\"]*\]|[^/\s:'\"?#]+)[^\s'\";|<>()`]*",
+    re.IGNORECASE,
+)
+_URL_SCHEME = re.compile(r"([a-z][a-z0-9+.-]*)://", re.IGNORECASE)
+
+#: Schemes that open a file on this PC instead of a connection.
+_FILE_SCHEMES = frozenset({"file"})
+
+#: curl's URL globbing: ``{a,b}`` alternatives and ``[1-20]`` ranges.
+_GLOB_SET = re.compile(r"\{([^{}]*)\}")
+_GLOB_RANGE = re.compile(r"\[(\d+|[a-z])-(\d+|[a-z])(?::\d+)?\]", re.IGNORECASE)
+_GLOB_LIMIT = 32
+
+
+def _url_hosts(text: str) -> List[str]:
+    """The host of every URL in *text* that names somewhere to connect."""
+    return [
+        match.group(2)
+        for match in _URL_HOST.finditer(text)
+        if match.group(1).lower() not in _FILE_SCHEMES
+    ]
+
+
+#: Programs whose bare operand is an address: ``curl 127.0.0.1:8000/x``.
+_FETCHERS = frozenset(
+    {"curl", "wget", "invoke-webrequest", "iwr", "invoke-restmethod", "irm"}
+)
+
+#: Name endings only a local network uses.
+_LOCAL_NAME_ENDINGS = (".local", ".lan", ".internal", ".home.arpa")
+
+
+#: Public names that always answer with this PC's own address.
+_LOOPBACK_NAMES = ("localhost", "localtest.me", "lvh.me", "vcap.me")
+
+#: Services whose names answer with the address written inside the name.
+_ADDRESS_IN_NAME_ENDINGS = (".nip.io", ".sslip.io", ".xip.io", ".traefik.me")
+
+_IPV4_PART = re.compile(r"0x[0-9a-f]+|0[0-7]*|[1-9][0-9]*")
+_DOTTED_IN_NAME = re.compile(r"(?:^|[.-])(\d{1,3}(?:[.-]\d{1,3}){3})$")
+_HEX_IN_NAME = re.compile(r"(?:^|[.-])([0-9a-f]{8})$")
+
+
+def _folded(text: str) -> str:
+    """*text* as a resolver reads it: full-width digits, letters and dots as ASCII."""
+    return unicodedata.normalize("NFKC", text).replace("\u3002", ".")
+
+
+def _numeric_ipv4(name: str) -> Optional[ipaddress.IPv4Address]:
+    """*name* read as inet_aton reads it: ``127.1``, ``0177.0.0.1``, ``0x7f000001``.
+
+    One to four parts, each decimal, octal or hex; the last fills the bytes left.
+    """
+    parts = name.lower().split(".")
+    if len(parts) > 4 or not all(_IPV4_PART.fullmatch(part) for part in parts):
+        return None
+    numbers = [
+        int(part, 16 if part.startswith("0x") else 8 if part[0] == "0" else 10)
+        for part in parts
+    ]
+    value = numbers.pop()
+    if any(number > 255 for number in numbers) or value >= 256 ** (4 - len(numbers)):
+        return None
+    for index, number in enumerate(numbers):
+        value += number << (8 * (3 - index))
+    return ipaddress.IPv4Address(value)
+
+
+def _address_in_name(name: str) -> Optional[ipaddress._BaseAddress]:
+    """The address a nip.io or sslip.io *name* answers with, read off the name."""
+    for ending in _ADDRESS_IN_NAME_ENDINGS:
+        if name.endswith(ending):
+            label = name[: -len(ending)]
+            break
+    else:
+        return None
+    try:
+        dotted = _DOTTED_IN_NAME.search(label)
+        if dotted:
+            return ipaddress.IPv4Address(dotted.group(1).replace("-", "."))
+        packed = _HEX_IN_NAME.search(label)
+        if packed:
+            return ipaddress.IPv4Address(int(packed.group(1), 16))
+        return ipaddress.IPv6Address(label.rsplit(".", 1)[-1].replace("-", ":"))
+    except ValueError:
+        return None
+
+
+def private_destination(host: str) -> str:
+    """Where *host* is, when the web tools would refuse to fetch it; else "".
+
+    Judged from the text alone: an address in any spelling a fetcher accepts,
+    ``localhost``, a name that always answers with a local address, or a name
+    only a local network uses. No name is looked up.
+    """
+    from gaia.web.client import _is_blocked_ip
+
+    # An IPv6 zone (`%eth0`, `%25eth0`) picks the interface, not the address.
+    name = _folded(host).strip("[]").split("%", 1)[0].rstrip(".").lower()
+    if name in _LOOPBACK_NAMES or name.endswith(
+        tuple(f".{known}" for known in _LOOPBACK_NAMES)
+    ):
+        return "this PC"
+    try:
+        ip = ipaddress.ip_address(name)
+    except ValueError:
+        ip = _numeric_ipv4(name) or _address_in_name(name)
+    if ip is None:
+        return "your local network" if name.endswith(_LOCAL_NAME_ENDINGS) else ""
+    carried = getattr(ip, "ipv4_mapped", None) or ip
+    if carried.is_loopback or carried.is_unspecified:
+        return "this PC"
+    return "your local network" if _is_blocked_ip(ip) else ""
+
+
+def _unglobbed(authority: str) -> List[str]:
+    """*authority* with curl's URL globs written out: each alternative, a range's ends."""
+    done, todo = [], [authority]
+    while todo and len(done) + len(todo) <= _GLOB_LIMIT:
+        text = todo.pop()
+        glob = _GLOB_SET.search(text)
+        picks = glob.group(1).split(",") if glob else []
+        if not glob:
+            glob = _GLOB_RANGE.search(text)
+            picks = [glob.group(1), glob.group(2)] if glob else []
+        if not glob:
+            done.append(text)
+            continue
+        todo.extend(text[: glob.start()] + pick + text[glob.end() :] for pick in picks)
+    return done + todo
+
+
+def _authority_host(authority: str) -> str:
+    """The host in ``user:password@host:port``; the last ``@`` ends the user part."""
+    address = authority.rsplit("@", 1)[-1]
+    if address.startswith("["):
+        return address[: address.find("]") + 1] or address
+    return address.rsplit(":", 1)[0]
+
+
+def _is_operand_address(address: str, alone: bool) -> bool:
+    """True when a fetcher reads *address*, written with no scheme, as a host.
+
+    *alone* says the address was the whole word: no port, path or user part.
+    """
+    number = _numeric_ipv4(address)
+    if number is None:
+        return "." in address or ":" in address or "localhost" in address
+    # A bare count such as `curl 3`: 0.0.0.3 is nowhere, and nobody means it.
+    return not (alone and "." not in address and 0 < int(number) < 2**24)
+
+
+def _word_hosts(word: str, globs: bool) -> List[str]:
+    """The hosts a fetcher connects to for *word*, a URL with or without a scheme.
+
+    Only the URL's own authority is read: an address in its path, query string
+    or fragment is data sent to that host, not a second destination.
+    """
+    scheme = _URL_SCHEME.match(word)
+    if scheme and scheme.group(1).lower() in _FILE_SCHEMES:
+        return []
+    rest = word[scheme.end() :] if scheme else word
+    authority = re.split(r"[/?#]", rest, maxsplit=1)[0]
+    hosts = []
+    for written in _unglobbed(authority) if globs else [authority]:
+        address = _authority_host(written)
+        if address and (scheme or _is_operand_address(address, address == word)):
+            hosts.append(address)
+    return hosts
+
+
+def _fetched_hosts(program: str, arguments: List[str]) -> List[str]:
+    """The hosts a fetcher's *arguments* make it connect to."""
+    hosts: List[str] = []
+    for word in fetch_destinations(program, arguments):
+        hosts.extend(_word_hosts(word, globs=program == "curl"))
+    return hosts
+
+
+#: Programs that can open a connection to an address on their line.
+_NETWORK_PROGRAMS = _FETCHERS | frozenset(
+    {
+        "python",
+        "py",
+        "node",
+        "perl",
+        "ruby",
+        "powershell",
+        "cmd",
+        "sh",
+        "bash",
+        "zsh",
+        "git",
+        "ssh",
+        "scp",
+        "sftp",
+        "rsync",
+        "nc",
+        "ncat",
+        "telnet",
+        "ftp",
+        "certutil",
+        "bitsadmin",
+    }
+)
+
+
+def _private_hosts(
+    command: str, steps: list, whole_line: bool
+) -> List[Tuple[str, str]]:
+    """``(host, where)`` for each local or private address *command* reaches.
+
+    With *whole_line*, every address on the line counts; otherwise only those
+    handed to a program that can connect, so ``grep http://localhost f`` is not
+    turned into a prompt it never needed. A line of fetchers alone is read
+    argument by argument instead, so a header or body that holds an address
+    does not count.
+    """
+    programs = [
+        _interpreter_name(segment[0]) for step in steps for segment in step.segments
+    ]
+    only_fetchers = bool(programs) and all(name in _FETCHERS for name in programs)
+    hosts = _url_hosts(_folded(command)) if whole_line and not only_fetchers else []
+    for step in steps:
+        for segment in step.segments:
+            program = _interpreter_name(segment[0])
+            if program not in _NETWORK_PROGRAMS:
+                continue
+            words = [_folded(word) for word in segment[1:]]
+            if program in _FETCHERS:
+                # Only the words it connects to: not a file name, body or header.
+                hosts.extend(_fetched_hosts(program, words))
+            else:
+                hosts.extend(_url_hosts(" ".join(words)))
+    found = []
+    for host in dict.fromkeys(hosts):
+        where = private_destination(host)
+        if where:
+            found.append((host, where))
+    return found
+
+
+def private_fetch_note(found: List[Tuple[str, str]]) -> str:
+    """The card's line for a command that reaches the addresses in *found*."""
+    host, where = found[0]
+    return f"Reaches {host} on {where}, an address GAIA's web tools refuse to fetch."
 
 
 def _not_approvable(error: Dict[str, Any]) -> Dict[str, Any]:
@@ -1712,6 +1969,45 @@ def _split_script(body: str, dialect: str) -> list:
     return words
 
 
+#: A quoted string of path separators only: '\', "/", '\\'.
+_PS_SEPARATOR_STRING = r"""(?:'[\\/]+'|"[\\/]+")"""
+#: String methods and operators whose arguments are only searched for, never
+#: part of what they return: ``.Split('\')``, ``-split '/'``.
+_PS_SEARCH_ARGUMENTS = re.compile(
+    r"\.(?:Split|Trim|TrimStart|TrimEnd|IndexOf|LastIndexOf|IndexOfAny"
+    r"|LastIndexOfAny|StartsWith|EndsWith|Contains)\s*\([^()]*\)"
+    rf"|-[ci]?split\s+{_PS_SEPARATOR_STRING}",
+    re.IGNORECASE,
+)
+#: A replace whose search text is a separator: ``.Replace('\','/')``,
+#: ``-replace '\\','/'``. The replacement is output, so it counts as text only
+#: when it swaps one separator for another.
+_PS_SEPARATOR_REPLACE = re.compile(
+    rf"(\.Replace\s*\(\s*|-[ci]?replace\s+){_PS_SEPARATOR_STRING}"
+    rf"(\s*,\s*)({_PS_SEPARATOR_STRING})?",
+    re.IGNORECASE,
+)
+
+
+def _without_separator_strings(body: str) -> str:
+    """*body* with the separator strings that are only text emptied.
+
+    ``'\\'`` handed to a string method was read as a path, the drive root, and
+    the guard refused the whole script. A separator a method can return
+    (``'x'.Replace('x','\\')``, ``-join '\\'``) stays a path.
+    """
+
+    def empty(match: re.Match) -> str:
+        return re.sub(_PS_SEPARATOR_STRING, "''", match.group(0))
+
+    def empty_swap(match: re.Match) -> str:
+        replacement = "''" if match.group(3) else ""
+        return f"{match.group(1)}''{match.group(2)}{replacement}"
+
+    body = _PS_SEPARATOR_REPLACE.sub(empty_swap, body)
+    return _PS_SEARCH_ARGUMENTS.sub(empty, body)
+
+
 def _script_words(body: str, dialect: str) -> list:
     """The words an inline script operand names, for the path check."""
     if dialect == _PS_ENCODED:
@@ -1729,6 +2025,8 @@ def _script_words(body: str, dialect: str) -> list:
         except ValueError:
             # sh refuses an unbalanced quote too; still check every word in it.
             return _split_script(body, "code")
+    if dialect == "powershell":
+        body = _without_separator_strings(body)
     words = _split_script(body, dialect)
     if dialect == "powershell":
         # '-Path:C:\x' binds its value with a colon.
@@ -1862,6 +2160,1211 @@ def _protected_folder(resolved_path: str) -> Optional[str]:
     return None
 
 
+def _credential_file_name(name: str) -> bool:
+    """Whether a file called *name* is one ``PathValidator.is_read_blocked`` refuses."""
+    from gaia import security
+
+    return security.is_credential_file_name(name)
+
+
+def _credential_file(candidate_path: str, cwd: str) -> Optional[str]:
+    """The credential file *candidate_path* reads from *cwd*, or None."""
+    from gaia import security
+
+    return security.credential_file_read(candidate_path, cwd)
+
+
+#: Programs that print a file's contents, so a wildcard operand reads every match.
+_CONTENT_READERS = frozenset(
+    {
+        "cat",
+        "type",
+        "more",
+        "less",
+        "head",
+        "tail",
+        "nl",
+        "tac",
+        "strings",
+        "xxd",
+        "od",
+        "base64",
+        "grep",
+        "egrep",
+        "fgrep",
+        "rg",
+        "findstr",
+        "get-content",
+        "gc",
+        "select-string",
+        "sls",
+    }
+)
+
+#: grep's long options, and whether each takes a value. GNU grep also takes
+#: any unique prefix of one: ``--no-f`` is ``--no-filename``.
+_GREP_LONG = {
+    "after-context": True,
+    "before-context": True,
+    "context": True,
+    "binary-files": True,
+    "devices": True,
+    "directories": True,
+    "exclude": True,
+    "exclude-from": True,
+    "exclude-dir": True,
+    "file": True,
+    "include": True,
+    "label": True,
+    "max-count": True,
+    "regexp": True,
+    "group-separator": True,
+    "basic-regexp": False,
+    "binary": False,
+    "byte-offset": False,
+    "color": False,
+    "colour": False,
+    "count": False,
+    "dereference-recursive": False,
+    "extended-regexp": False,
+    "files-with-matches": False,
+    "files-without-match": False,
+    "fixed-strings": False,
+    "help": False,
+    "ignore-case": False,
+    "no-ignore-case": False,
+    "initial-tab": False,
+    "invert-match": False,
+    "line-buffered": False,
+    "line-number": False,
+    "line-regexp": False,
+    "no-filename": False,
+    "no-group-separator": False,
+    "no-messages": False,
+    "null": False,
+    "null-data": False,
+    "only-matching": False,
+    "perl-regexp": False,
+    "quiet": False,
+    "recursive": False,
+    "silent": False,
+    "text": False,
+    "version": False,
+    "with-filename": False,
+    "word-regexp": False,
+}
+
+#: ripgrep's long options. It takes no abbreviations.
+_RG_LONG = {
+    **{
+        name: True
+        for name in (
+            "regexp",
+            "file",
+            "glob",
+            "iglob",
+            "type",
+            "type-not",
+            "type-add",
+            "type-clear",
+            "after-context",
+            "before-context",
+            "context",
+            "max-count",
+            "max-columns",
+            "max-depth",
+            "max-filesize",
+            "threads",
+            "replace",
+            "encoding",
+            "pre",
+            "pre-glob",
+            "sort",
+            "sortr",
+            "colors",
+            "color",
+            "context-separator",
+            "field-match-separator",
+            "field-context-separator",
+            "path-separator",
+            "ignore-file",
+            "engine",
+            "dfa-size-limit",
+            "regex-size-limit",
+        )
+    },
+    **{
+        name: False
+        for name in (
+            "hidden",
+            "no-hidden",
+            "no-ignore",
+            "no-ignore-vcs",
+            "no-ignore-dot",
+            "no-ignore-global",
+            "no-ignore-parent",
+            "no-ignore-exclude",
+            "no-ignore-files",
+            "no-require-git",
+            "ignore-case",
+            "smart-case",
+            "case-sensitive",
+            "fixed-strings",
+            "word-regexp",
+            "line-regexp",
+            "invert-match",
+            "count",
+            "count-matches",
+            "files",
+            "files-with-matches",
+            "files-without-match",
+            "line-number",
+            "no-line-number",
+            "column",
+            "no-column",
+            "with-filename",
+            "no-filename",
+            "heading",
+            "no-heading",
+            "pretty",
+            "json",
+            "only-matching",
+            "multiline",
+            "multiline-dotall",
+            "follow",
+            "no-follow",
+            "text",
+            "binary",
+            "no-binary",
+            "search-zip",
+            "pcre2",
+            "auto-hybrid-regex",
+            "crlf",
+            "null",
+            "null-data",
+            "quiet",
+            "trim",
+            "no-messages",
+            "no-config",
+            "one-file-system",
+            "unrestricted",
+            "vimgrep",
+            "byte-offset",
+            "stats",
+            "passthru",
+            "no-unicode",
+            "max-columns-preview",
+            "line-buffered",
+            "block-buffered",
+            "sort-files",
+        )
+    },
+}
+
+#: ``git grep``'s long options; git takes a unique prefix of one too.
+_GIT_GREP_LONG = {
+    **{
+        name: True
+        for name in (
+            "after-context",
+            "before-context",
+            "context",
+            "max-depth",
+            "max-count",
+            "threads",
+        )
+    },
+    **{
+        name: False
+        for name in (
+            "cached",
+            "untracked",
+            "no-index",
+            "exclude-standard",
+            "no-exclude-standard",
+            "recurse-submodules",
+            "text",
+            "textconv",
+            "no-textconv",
+            "ignore-case",
+            "invert-match",
+            "word-regexp",
+            "full-name",
+            "extended-regexp",
+            "basic-regexp",
+            "perl-regexp",
+            "fixed-strings",
+            "line-number",
+            "column",
+            "files-with-matches",
+            "name-only",
+            "files-without-match",
+            "null",
+            "only-matching",
+            "count",
+            "color",
+            "no-color",
+            "break",
+            "heading",
+            "show-function",
+            "function-context",
+            "and",
+            "or",
+            "not",
+            "all-match",
+            "quiet",
+            "recursive",
+            "no-recursive",
+        )
+    },
+}
+
+#: How each search tool reads its flags.
+_SEARCH_FLAVORS = {
+    "grep": {
+        "long": _GREP_LONG,
+        "prefixes": True,
+        "value_short": "efmABCdD",
+        "known_short": "abcdefhilmnoqrsuvwxyzABCDEFGHILPRTUVZ0123456789",
+        "recursive_short": "rR",
+        "recursive_long": ("recursive", "dereference-recursive"),
+        "hidden_short": "hz",
+        "hidden_long": ("no-filename", "null-data"),
+        "always_recursive": False,
+    },
+    "rg": {
+        "long": _RG_LONG,
+        "prefixes": False,
+        "value_short": "efgtTABCmMjrEd",
+        "known_short": "0123456789aABcCdeEfFgHhiIjlLmMnNopqrsStTuUvVwxz.",
+        "recursive_short": "",
+        "recursive_long": (),
+        "hidden_short": "Ip",
+        "hidden_long": ("no-filename", "heading", "pretty", "json", "null-data"),
+        "always_recursive": True,
+    },
+    "git": {
+        "long": _GIT_GREP_LONG,
+        "prefixes": True,
+        "value_short": "efABCm",
+        "known_short": "aiIvwcElLnoqHhzefABCFGPWpOm0123456789",
+        "recursive_short": "",
+        "recursive_long": (),
+        "hidden_short": "h",
+        "hidden_long": ("heading",),
+        "always_recursive": True,
+    },
+}
+
+_LONG_ALIASES = {"colour": "color"}
+
+
+def _long_option(name: str, table: dict, prefixes: bool) -> Optional[str]:
+    """The long option *name* spells in *table*, allowing a unique prefix; else None."""
+    if name in table:
+        return _LONG_ALIASES.get(name, name)
+    if not prefixes or not name:
+        return None
+    matches = {_LONG_ALIASES.get(o, o) for o in table if o.startswith(name)}
+    return matches.pop() if len(matches) == 1 else None
+
+
+_COMMAND_BREAKS = frozenset({"|", "||", "&&", ";", "&"})
+
+_WILDCARD = re.compile(r"[*?\[]")
+
+_GREP_PROGRAMS = frozenset({"grep", "egrep", "fgrep"})
+
+
+def _parse_grep(args: list, flavor: str = "grep") -> dict:
+    """How a grep-style command reads *args*: its pattern, files and switches.
+
+    ``files`` holds the operands searched; the pattern operand is not one, so
+    ``grep .env .gitignore`` searches ``.gitignore`` only. ``pattern_files``
+    are the ``-f`` files the patterns come from. ``unknown`` is set when an
+    option is one this check does not know, so what it does to the output
+    is unknown too.
+    """
+    spec = _SEARCH_FLAVORS[flavor]
+    table = spec["long"]
+    parsed: dict = {
+        "recursive": spec["always_recursive"],
+        "names_hidden": False,
+        "unknown": False,
+        "includes": [],
+        "excludes": [],
+        "pattern_files": [],
+        "files": [],
+    }
+    pattern_given = False
+    positional: list = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg == "--":
+            positional.extend(args[index:])
+            break
+        if arg.startswith("--"):
+            written, eq, value = arg[2:].partition("=")
+            name = _long_option(written, table, spec["prefixes"])
+            if name is None:
+                parsed["unknown"] = True
+                continue
+            if table.get(name) and not eq:
+                value = args[index] if index < len(args) else ""
+                index += 1
+            if name in spec["recursive_long"] or (
+                name == "directories" and value == "recurse"
+            ):
+                parsed["recursive"] = True
+            if name in spec["hidden_long"]:
+                parsed["names_hidden"] = True
+            if name in ("regexp", "file"):
+                pattern_given = True
+                if name == "file":
+                    parsed["pattern_files"].append(value)
+            elif name in ("glob", "iglob") and value.startswith("!"):
+                parsed["excludes"].append(value[1:])
+            elif name in ("include", "glob", "iglob"):
+                parsed["includes"].append(value)
+            elif name == "exclude":
+                parsed["excludes"].append(value)
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            for offset, flag in enumerate(arg[1:], start=1):
+                if flag not in spec["known_short"]:
+                    parsed["unknown"] = True
+                if flag in spec["recursive_short"]:
+                    parsed["recursive"] = True
+                if flag in spec["hidden_short"]:
+                    parsed["names_hidden"] = True
+                if flag in spec["value_short"]:
+                    pattern_given = pattern_given or flag in "ef"
+                    value = arg[offset + 1 :]
+                    if not value:
+                        value = args[index] if index < len(args) else ""
+                        index += 1
+                    if flag == "f":
+                        parsed["pattern_files"].append(value)
+                    elif flag == "d" and flavor == "grep" and value == "recurse":
+                        parsed["recursive"] = True
+                    elif flag == "g" and flavor == "rg":
+                        if value.startswith("!"):
+                            parsed["excludes"].append(value[1:])
+                        else:
+                            parsed["includes"].append(value)
+                    break
+            continue
+        positional.append(arg)
+    parsed["files"] = positional if pattern_given else positional[1:]
+    return parsed
+
+
+def _grep_roots(args: list, flavor: str = "grep") -> Tuple[list, bool]:
+    """``(roots, names_shown)`` for a recursive search; no roots when not recursive.
+
+    Each root is ``(root, includes, excludes)``. *names_shown* is whether every
+    output line is known to start with the name of the file it came from.
+    """
+    parsed = _parse_grep(args, flavor)
+    if not parsed["recursive"]:
+        return [], True
+    roots = [
+        (root, parsed["includes"], parsed["excludes"])
+        for root in parsed["files"] or ["."]
+    ]
+    return roots, not (parsed["names_hidden"] or parsed["unknown"])
+
+
+#: git's own options that take a value, before its subcommand.
+_GIT_VALUE_OPTIONS = frozenset({"-C", "-c", "--git-dir", "--work-tree", "--namespace"})
+
+
+def _git_grep_roots(args: list) -> Tuple[list, bool]:
+    """:func:`_grep_roots` for ``git [options] grep ...``; no roots for another subcommand."""
+    base = ""
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg in _GIT_VALUE_OPTIONS:
+            if arg == "-C" and index < len(args):
+                base = os.path.join(base, args[index])
+            index += 1
+            continue
+        if arg.startswith("-"):
+            continue
+        if arg != "grep":
+            return [], True
+        roots, names_shown = _grep_roots(args[index:], "git")
+        if base:
+            roots = [(os.path.join(base, r), inc, exc) for r, inc, exc in roots]
+        return roots, names_shown
+    return [], True
+
+
+def _findstr_parse(args: list) -> Tuple[bool, list, list]:
+    """``(recursive, files, lists)`` for ``findstr``; the search string is not a file.
+
+    *lists* are the ``/g:`` and ``/f:`` files it reads strings or names from.
+    """
+    recursive = pattern_given = False
+    folders: list = []
+    lists: list = []
+    positional: list = []
+    for arg in args:
+        if arg[:1] in ("/", "-") and len(arg) > 1:
+            head, colon, value = arg[1:].partition(":")
+            if colon:
+                if head.lower() in ("c", "g"):
+                    pattern_given = True
+                if head.lower() in ("g", "f"):
+                    lists.append(value)
+                elif head.lower() == "d":
+                    folders.extend(f for f in value.split(";") if f)
+            elif head.isalpha() and "s" in head.lower():
+                recursive = True
+            continue
+        positional.append(arg)
+    specs = positional if pattern_given else positional[1:]
+    if folders:
+        specs = [os.path.join(folder, spec) for folder in folders for spec in specs]
+    return recursive, specs, lists
+
+
+def _findstr_roots(args: list) -> list:
+    """``(spec, [], [])`` for each file spec of ``findstr /s``; [] without ``/s``."""
+    recursive, specs, _ = _findstr_parse(args)
+    if not recursive:
+        return []
+    return [(spec, [], []) for spec in specs]
+
+
+_SELECT_STRING = ("select-string", "sls")
+_CHILD_ITEM = ("get-childitem", "gci", "ls", "dir", "childitem")
+_PS_PATH_PARAMS = ("-path", "-literalpath", "-lp", "-pspath")
+
+
+def _select_string_roots(words: list) -> list:
+    """Roots of a PowerShell ``Select-String`` that recurses, or []."""
+    lowered = [w.lower() for w in words]
+    if not any(w in _SELECT_STRING for w in lowered):
+        return []
+    if not any(len(w) > 1 and "-recurse".startswith(w) for w in lowered):
+        return []
+    roots: list = []
+    includes: list = []
+    for index, word in enumerate(lowered[:-1]):
+        value = words[index + 1]
+        if word in _PS_PATH_PARAMS:
+            roots.append(value)
+        elif word in ("-include", "-filter"):
+            includes.extend(v for v in value.split(",") if v)
+        elif word in _CHILD_ITEM:
+            if not value.startswith("-"):
+                roots.append(value)
+    return [(root, includes, []) for root in roots or ["."]]
+
+
+def _split_commands(words: list) -> list:
+    """``(command, piped)`` for each command in *words*; *piped* when ``|`` follows."""
+    commands: list = [[]]
+    piped: list = []
+    for word in words:
+        if word in _COMMAND_BREAKS:
+            piped.append(word == "|")
+            commands.append([])
+        else:
+            commands[-1].append(word)
+    piped.append(False)
+    return list(zip(commands, piped))
+
+
+#: Filters that pass each line through whole, so its file-name prefix survives.
+_LINE_KEEPERS = frozenset(
+    {"head", "tail", "sort", "wc", "less", "more", "findstr"} | _GREP_PROGRAMS
+)
+
+
+def _redirects_stdout(command: list) -> bool:
+    """Whether *command* sends its output to a file instead of back to the tool."""
+    return any(re.match(r"1?>", word) is not None for word in command)
+
+
+#: head's and tail's long options; both take a unique prefix of one.
+_HEAD_TAIL_LONG = {
+    "bytes": True,
+    "lines": True,
+    "follow": False,
+    "retry": False,
+    "pid": True,
+    "sleep-interval": True,
+    "max-unchanged-stats": True,
+    "quiet": False,
+    "silent": False,
+    "verbose": False,
+    "zero-terminated": False,
+    "help": False,
+    "version": False,
+}
+
+
+def _keeps_lines(command: list) -> bool:
+    """Whether *command*, fed lines on stdin, prints each one whole or not at all.
+
+    An option this check does not know could change that, so it says no.
+    """
+    if not command:
+        return False
+    program = _interpreter_name(command[0])
+    if program not in _LINE_KEEPERS or _redirects_stdout(command):
+        return False
+    args = command[1:]
+    if program in _GREP_PROGRAMS:
+        if _parse_grep(args)["unknown"]:
+            return False
+        for arg in args:
+            if arg == "--":
+                break
+            if arg.startswith("--"):
+                written = arg[2:].partition("=")[0]
+                if _long_option(written, _GREP_LONG, True) == "only-matching":
+                    return False
+            elif arg.startswith("-") and "o" in re.split(r"[efmABCdD]", arg[1:])[0]:
+                return False
+        return True
+    if program in ("head", "tail"):
+        for arg in args:
+            if arg.startswith("--"):
+                written = arg[2:].partition("=")[0]
+                name = _long_option(written, _HEAD_TAIL_LONG, True)
+                if name is None or (program == "tail" and name == "bytes"):
+                    return False
+            elif program == "tail" and re.match(r"-[a-z]*c", arg):
+                return False
+    return True
+
+
+def _bulk_read_roots(words: list, shown: bool = False) -> list:
+    """``(spec, includes, excludes, named)`` for every folder or wildcard *words* reads.
+
+    A recursive search reads every file under its root; a reader given a
+    wildcard reads every match. Each spec is a folder or a folder/glob.
+
+    *named* marks a recursive search whose every output line comes back with
+    its file name in front: lines from a credential file are masked on the
+    way back (``credential_shapes.mask_credential_file_lines``), so only a
+    link that hides one behind an ordinary name refuses it. *shown* says
+    whether what *words* prints comes back with each line whole.
+    """
+    commands = _split_commands(words)
+    # Whether each command's output comes back: nothing after it in its
+    # pipeline but line keepers, and nothing sent to a file.
+    reaches = [False] * len(commands)
+    downstream_ok = shown
+    for index in range(len(commands) - 1, -1, -1):
+        command, piped = commands[index]
+        if not piped:
+            downstream_ok = shown
+        reaches[index] = downstream_ok and not _redirects_stdout(command)
+        downstream_ok = reaches[index] and _keeps_lines(command)
+    roots: list = []
+    masked: set = set()
+    for index, (command, _) in enumerate(commands):
+        if not command:
+            continue
+        program = _interpreter_name(command[0])
+        if program in _GREP_PROGRAMS:
+            found, names_shown = _grep_roots(command[1:])
+        elif program == "rg":
+            found, names_shown = _grep_roots(command[1:], "rg")
+        elif program == "git":
+            found, names_shown = _git_grep_roots(command[1:])
+        elif program == "findstr":
+            found, names_shown = _findstr_roots(command[1:]), True
+        else:
+            continue
+        shown_whole = bool(found) and reaches[index] and names_shown
+        if shown_whole:
+            masked.add(index)
+        roots.extend((*root, shown_whole) for root in found)
+    search = _select_string_roots(words)
+    last = max((i for i, (c, _) in enumerate(commands) if c), default=-1)
+    tail = [w.lower() for w in commands[last][0]] if last >= 0 else []
+    if (
+        search
+        and reaches[last]
+        and any(w in _SELECT_STRING for w in tail)
+        and "-raw" not in tail
+    ):
+        # The whole pipeline feeding the search: 'gci -r | sls x'.
+        index = last
+        while index >= 0 and (index == last or commands[index][1]):
+            masked.add(index)
+            index -= 1
+        roots.extend((*root, True) for root in search)
+    else:
+        roots.extend((*root, False) for root in search)
+    if any(_interpreter_name(w) in _CONTENT_READERS for w in words):
+        roots.extend(
+            (word, [], [], False)
+            for index, (command, _) in enumerate(commands)
+            if index not in masked
+            for word in command
+            if not word.startswith("-") and _WILDCARD.search(word)
+        )
+    return roots
+
+
+#: Programs and cmdlets that print, search, copy or encode a file they are
+#: given. Only these make a credential-file operand a read: ``rm .env``,
+#: ``git add .env``, ``mv``, ``chmod`` and an editor do not put it in the output.
+_CREDENTIAL_READERS = _CONTENT_READERS | frozenset(
+    {
+        "awk",
+        "gawk",
+        "sed",
+        "sort",
+        "uniq",
+        "cut",
+        "diff",
+        "jq",
+        "yq",
+        "iconv",
+        "cp",
+        "copy",
+        "xcopy",
+        "robocopy",
+        "scp",
+        "rsync",
+        "copy-item",
+        "cpi",
+        "certutil",
+        "openssl",
+    }
+)
+
+#: Flags whose value is a file kept out of the run, never read for output.
+_EXCLUDING_FLAGS = frozenset({"--exclude", "--exclude-dir", "-exclude", "/x"})
+
+#: Uploaders that read a file named ``@file`` (curl -F x=@f, -d @f) or after -T.
+_UPLOADERS = frozenset({"curl", "wget", "http", "https", "xh", "httpie"})
+
+#: Calls a non-Python inline script reads a file with.
+_CODE_READ_CALLS = re.compile(
+    r"readFileSync|readFile|createReadStream|\bopen\b|File\.read|IO\.read|slurp"
+)
+
+_COPIERS = frozenset(
+    {"cp", "copy", "xcopy", "robocopy", "scp", "rsync", "copy-item", "cpi"}
+)
+
+#: Each copier's flags that take a value, which is never a file it copies.
+_COPIER_VALUE_FLAGS = {
+    "cp": frozenset({"-S", "--suffix"}),
+    "scp": frozenset({"-i", "-F", "-P", "-o", "-c", "-l", "-S", "-J", "-D", "-X"}),
+    "rsync": frozenset(
+        {
+            "-e",
+            "--rsh",
+            "-f",
+            "--filter",
+            "--exclude",
+            "--include",
+            "--exclude-from",
+            "--include-from",
+            "--files-from",
+            "-T",
+            "--temp-dir",
+            "--log-file",
+            "--partial-dir",
+            "--backup-dir",
+            "--suffix",
+            "--chmod",
+            "--chown",
+            "-B",
+            "--block-size",
+            "--password-file",
+            "--link-dest",
+            "--compare-dest",
+            "--copy-dest",
+            "--timeout",
+            "--port",
+            "--bwlimit",
+            "--max-size",
+            "--min-size",
+        }
+    ),
+}
+
+#: Copy-Item's parameters that take a value other than a source path.
+_COPY_ITEM_VALUES = (
+    "-filter",
+    "-include",
+    "-exclude",
+    "-credential",
+    "-tosession",
+    "-fromsession",
+)
+
+#: ``openssl`` options whose value is a file it writes.
+_OPENSSL_OUTPUTS = frozenset({"-out", "-keyout"})
+
+#: sed text that writes somewhere other than the file it edits.
+_SED_TO_TERMINAL = re.compile(r"/dev/(?:stdout|stderr|fd/|tty)|/proc/self/fd")
+
+
+def _copier_sources(program: str, args: list) -> list:
+    """The files a copy reads: every operand but its destination."""
+    if program in ("copy-item", "cpi"):
+        return _copy_item_sources(args)
+    value_flags = _COPIER_VALUE_FLAGS.get(program, frozenset())
+    positional: list = []
+    dest_named = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg == "--":
+            positional.extend(args[index:])
+            break
+        if program == "robocopy" and arg.lower() in ("/xf", "/xd"):
+            # Every word up to the next switch is a name it skips.
+            while index < len(args) and not args[index].startswith("/"):
+                index += 1
+            continue
+        if program == "cp" and arg.startswith(("-t", "--target-directory")):
+            dest_named = True
+            if arg in ("-t", "--target-directory"):
+                index += 1
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            if arg in value_flags:
+                index += 1
+            continue
+        if program in ("copy", "xcopy", "robocopy") and _is_slash_switch(arg):
+            continue
+        positional.append(arg)
+    if program == "robocopy":
+        if not positional:
+            return []
+        source = positional[0]
+        return [source] + [os.path.join(source, name) for name in positional[2:]]
+    if program == "copy":
+        # 'copy a+b dest' joins its sources with '+'.
+        positional = [p for word in positional for p in word.split("+") if p]
+    if dest_named or len(positional) < 2:
+        return positional
+    return positional[:-1]
+
+
+def _copy_item_sources(args: list) -> list:
+    """The files ``Copy-Item`` reads: its path, never its destination."""
+    sources: list = []
+    positional: list = []
+    dest_named = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        lowered = arg.lower()
+        index += 1
+        if lowered.startswith("-") and len(lowered) > 1:
+            value = args[index] if index < len(args) else ""
+            if len(lowered) > 2 and "-destination".startswith(lowered):
+                dest_named = True
+                index += 1
+            elif lowered in _PS_PATH_PARAMS:
+                sources.extend(v for v in value.split(",") if v)
+                index += 1
+            elif any(
+                len(lowered) > 2 and p.startswith(lowered) for p in _COPY_ITEM_VALUES
+            ):
+                index += 1
+            continue
+        positional.append(arg)
+    if sources:
+        # With the path named, a positional operand is the destination.
+        return sources
+    if dest_named or len(positional) < 2:
+        return positional
+    return positional[:-1]
+
+
+def _sed_in_place(args: list) -> bool:
+    """Whether ``sed`` edits its files in place and prints none of them."""
+    in_place = any(
+        re.match(r"-[nErsuz]*i", arg) is not None or arg.startswith("--in-place")
+        for arg in args
+    )
+    if not in_place:
+        return False
+    # A script read from a file, or one that writes to the terminal, may print.
+    if any(arg in ("-f", "--file") or arg.startswith("--file=") for arg in args):
+        return False
+    return not any(_SED_TO_TERMINAL.search(arg) for arg in args)
+
+
+def _sed_files(args: list) -> list:
+    """The files ``sed`` reads; its script operand is not one."""
+    script_given = False
+    positional: list = []
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if arg in ("-e", "--expression", "-l", "--line-length"):
+            script_given = script_given or arg in ("-e", "--expression")
+            index += 1
+            continue
+        if arg in ("-f", "--file"):
+            # A script file is read: its text can surface in an error.
+            script_given = True
+            if index < len(args):
+                positional.append(args[index])
+                index += 1
+            continue
+        if arg.startswith("-") and len(arg) > 1:
+            if arg.startswith("--file="):
+                positional.append(arg.split("=", 1)[1])
+            script_given = script_given or arg.startswith(("--expression=", "--file="))
+            continue
+        positional.append(arg)
+    return positional if script_given else positional[1:]
+
+
+def _select_string_files(args: list) -> list:
+    """The files ``Select-String`` reads; its ``-Pattern`` is not one."""
+    files: list = []
+    positional: list = []
+    pattern_named = False
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        lowered = arg.lower()
+        index += 1
+        if lowered.startswith("-") and len(lowered) > 1:
+            value = args[index] if index < len(args) else ""
+            if len(lowered) > 3 and "-pattern".startswith(lowered):
+                pattern_named = True
+                index += 1
+            elif lowered in _PS_PATH_PARAMS:
+                files.extend(v for v in value.split(",") if v)
+                index += 1
+            elif lowered in ("-encoding", "-context", "-include", "-exclude"):
+                index += 1
+            continue
+        positional.append(arg)
+    return files + (positional if pattern_named else positional[1:])
+
+
+def _reader_operands(command: list) -> list:
+    """The operands *command*'s reader program reads as files.
+
+    A copy's destination, an ``openssl -out`` file, a search pattern and the
+    files of an in-place ``sed`` edit are not reads: none of them puts the
+    file's contents into the output.
+    """
+    start = next(
+        (
+            index
+            for index, word in enumerate(command)
+            if _interpreter_name(word) in _CREDENTIAL_READERS
+        ),
+        None,
+    )
+    if start is None:
+        return []
+    program = _interpreter_name(command[start])
+    args = command[start + 1 :]
+    if program in _COPIERS:
+        return _copier_sources(program, args)
+    if program in _GREP_PROGRAMS or program == "rg":
+        parsed = _parse_grep(args, "rg" if program == "rg" else "grep")
+        return parsed["pattern_files"] + parsed["files"]
+    if program == "findstr":
+        _, files, lists = _findstr_parse(args)
+        return lists + files
+    if program in _SELECT_STRING:
+        return _select_string_files(args)
+    if program == "sed":
+        return [] if _sed_in_place(args) else _sed_files(args)
+    operands: list = []
+    previous = ""
+    for word in args:
+        skip = previous.lower() in _EXCLUDING_FLAGS or (
+            program == "openssl" and previous in _OPENSSL_OUTPUTS
+        )
+        previous = word
+        if skip or word.lower().startswith(tuple(f + "=" for f in _EXCLUDING_FLAGS)):
+            continue
+        operands.extend(_flag_path_values(word))
+    return operands
+
+
+def _read_targets(command: list) -> list:
+    """The words of one command that it reads as files."""
+    uploader = any(_interpreter_name(word) in _UPLOADERS for word in command)
+    targets = []
+    for index, word in enumerate(command):
+        previous = command[index - 1].lower() if index else ""
+        if previous == "<":
+            targets.append(word)
+        elif word.startswith("<") and not word.startswith("<<") and len(word) > 1:
+            targets.append(word[1:])
+        if uploader:
+            if word.startswith("@"):
+                targets.append(word[1:])
+            elif "=@" in word:
+                targets.append(word.split("=@", 1)[1])
+            elif previous in ("-t", "--upload-file"):
+                targets.append(word)
+    targets.extend(_reader_operands(command))
+    return targets
+
+
+def _script_commands(body: str, quotes: str) -> list:
+    """``(text, joiner, redirected)`` for each command of a cmd/PowerShell *body*.
+
+    *joiner* is ``|`` when the next command reads this one's output, ``;``
+    for any other separator, and ``""`` after the last. *redirected* is
+    whether the command sends its output to a file with ``>``.
+    """
+    commands: list = []
+    current: list = []
+    redirected = False
+    quote: Optional[str] = None
+    index = 0
+    while index < len(body):
+        char = body[index]
+        nxt = body[index + 1 : index + 2]
+        if quote is not None:
+            if char == quote:
+                quote = None
+        elif char in quotes:
+            quote = char
+        elif char in "|;&":
+            doubled = nxt == char and char != ";"
+            joiner = "|" if char == "|" and not doubled else ";"
+            commands.append(("".join(current), joiner, redirected))
+            current, redirected = [], False
+            index += 2 if doubled else 1
+            continue
+        elif char == ">" and not "".join(current).rstrip().endswith("2"):
+            redirected = True
+        current.append(char)
+        index += 1
+    commands.append(("".join(current), "", redirected))
+    return commands
+
+
+def _check_words(body: str, dialect: str) -> list:
+    """An inline script's words for the credential check.
+
+    A cmd script keeps its ``/name`` switches: ``findstr /c:x`` and ``/s``
+    decide which operand is a file and whether a search recurses. A cmd or
+    PowerShell script keeps its ``|``, ``;`` and ``>``, which decide whether
+    a search's lines come back with their file names on them.
+    """
+    if dialect == _PS_ENCODED:
+        try:
+            body = base64.b64decode(body, validate=True).decode("utf-16-le")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            return _script_words(body, dialect)
+        dialect = "powershell"
+    if dialect == _CMD_ATTACHED:
+        body, dialect = body[2:], "cmd"
+    if dialect not in ("cmd", "powershell"):
+        return _script_words(body, dialect)
+    words: list = []
+    for text, joiner, redirected in _script_commands(body, _SCRIPT_QUOTES[dialect]):
+        if dialect == "cmd":
+            words.extend(_split_script(text, "cmd"))
+        else:
+            words.extend(_script_words(text, dialect))
+        if redirected:
+            words.append(">")
+        if joiner:
+            words.append(joiner)
+    return words
+
+
+def credential_read_in_words(words: list, cwd: str) -> Optional[Tuple[str, str]]:
+    """``(word, file)`` when a command in *words* reads a credential file.
+
+    Args:
+        words: One command's words, or several joined by ``|``/``&&``/``;``.
+        cwd: The folder relative paths resolve against.
+    """
+    commands: list = [[]]
+    for word in words:
+        if word in _COMMAND_BREAKS:
+            commands.append([])
+        else:
+            commands[-1].append(word)
+    for command in commands:
+        for target in _read_targets(command):
+            spellings = [target]
+            # cmd.exe drops an unquoted '^' that shlex keeps.
+            if _pipe_dialect() == "cmd" and "^" in target:
+                spellings.append(re.sub(r"\^(.?)", r"\1", target))
+            for spelling in spellings:
+                found = _credential_file(spelling, cwd)
+                if found is not None:
+                    return target, found
+    return None
+
+
+def _credential_read(argv: list, cwd: str) -> Optional[Tuple[str, str]]:
+    """``(what, file)`` when *argv*, or a script it runs, reads a credential file."""
+    from gaia.agents.base.credential_reads import (
+        credential_in_python,
+        script_credential,
+    )
+
+    found = credential_read_in_words(list(argv), cwd)
+    if found is not None:
+        return found
+    program = _interpreter_name(argv[0])
+    positions = _inline_script_positions(argv)
+    if program == "python" and not positions:
+        script = next((a for a in argv[1:] if not a.startswith("-")), None)
+        if script and script.lower().endswith((".py", ".pyw")):
+            hit = script_credential(script, [cwd])
+            if hit is not None:
+                return script, hit
+    script_words: list = []
+    for index, dialect in positions.items():
+        dialect = dialect.rstrip(_MAYBE)
+        if dialect in (_SWITCH, _ENV_SPLIT, _ENV_SPLIT_ATTACHED):
+            continue
+        body = argv[index]
+        if dialect != "code":
+            script_words.extend(_check_words(body, dialect))
+            continue
+        interpreter = next(
+            (
+                _interpreter_name(w)
+                for w in argv[:index]
+                if _interpreter_name(w) in _CODE_SCRIPT_FLAGS
+            ),
+            "",
+        )
+        if interpreter in ("python", "py"):
+            hit = credential_in_python(body, [cwd])
+            if hit is not None:
+                return body, hit
+        elif _CODE_READ_CALLS.search(body):
+            for word in _script_words(body, dialect):
+                hit = _credential_file(word, cwd)
+                if hit is not None:
+                    return word, hit
+    if script_words:
+        return credential_read_in_words(script_words, cwd)
+    return None
+
+
+def _command_word_lists(argv: list) -> list:
+    """*argv*, then the words of any inline script it runs, as one list each."""
+    lists = [list(argv)]
+    script: list = []
+    for index, dialect in _inline_script_positions(argv).items():
+        dialect = dialect.rstrip(_MAYBE)
+        if dialect in (_SWITCH, _ENV_SPLIT, _ENV_SPLIT_ATTACHED):
+            continue
+        script.extend(_check_words(argv[index], dialect))
+    if script:
+        lists.append(script)
+    return lists
+
+
+def _bulk_read_credential(
+    argv: list, cwd: str, downstream: Optional[list] = None
+) -> Optional[str]:
+    """A credential file directly inside a folder *argv* reads as a whole, or None.
+
+    Only the folder's own entries are listed, never a whole tree, so a
+    credential file in a subfolder is not found here. *downstream* are the
+    commands *argv*'s output is piped through, which decide whether a
+    recursive search's lines come back with their file names on them.
+    """
+    shown = all(_keeps_lines(command) for command in downstream or ())
+    for words in _command_word_lists(argv):
+        for spec, includes, excludes, named in _bulk_read_roots(words, shown):
+            spec = os.path.expandvars(os.path.expanduser(spec))
+            try:
+                base = Path(cwd).joinpath(spec)
+                if base.is_dir():
+                    folder, pattern = base, None
+                elif _WILDCARD.search(base.name) and base.parent.is_dir():
+                    folder, pattern = base.parent, base.name.lower()
+                else:
+                    continue
+                entries = list(os.scandir(folder))
+            except (OSError, ValueError) as exc:
+                logger.debug("Cannot list %r for the credential check: %s", spec, exc)
+                continue
+            for entry in entries:
+                if _bulk_entry_is_credential(entry, pattern, includes, excludes, named):
+                    return entry.path
+    return None
+
+
+def _bulk_entry_is_credential(
+    entry: os.DirEntry,
+    pattern: Optional[str],
+    includes: list,
+    excludes: list,
+    named: bool = False,
+) -> bool:
+    """Whether a folder-wide read of *entry*'s folder reads it as a credential.
+
+    With *named*, a credential file under its own name is masked in the
+    output instead, so only a link to one under another name counts.
+    """
+    name = entry.name.lower()
+    if pattern and not fnmatch.fnmatchcase(name, pattern):
+        return False
+    if includes and not any(fnmatch.fnmatchcase(name, g.lower()) for g in includes):
+        return False
+    if any(fnmatch.fnmatchcase(name, g.lower()) for g in excludes):
+        return False
+    try:
+        if not entry.is_file():
+            return False
+        real = os.path.realpath(entry.path)
+    except OSError as exc:
+        logger.debug("Cannot stat %r for the credential check: %s", entry.path, exc)
+        return False
+    if named:
+        return not _credential_file_name(name) and _credential_file_name(
+            os.path.basename(real)
+        )
+    return _credential_file_name(name) or _credential_file_name(os.path.basename(real))
+
+
+def _credential_refusal(label: str, arg: str, credential: str) -> Dict[str, Any]:
+    """The hard refusal for a shell argument that reads a credential file.
+
+    No tier: neither an approval nor full access lifts it.
+    """
+    return {
+        **NOT_EXECUTED,
+        "status": "error",
+        "error": (
+            f"Access denied: {label} '{arg}' reads '{credential}', which holds "
+            "credentials, keys or secrets. Shell commands may not read it, even "
+            "with full access or after approval."
+        ),
+        "has_errors": True,
+        "hint": (
+            "Ask the user to open the file themselves. A recursive search of a "
+            "folder that holds one runs when each line keeps its file name (no "
+            "-h, cut or sed after it); or name the files to search."
+        ),
+    }
+
+
 def _operator_check_text(command: str) -> str:
     """The part of *command* the operator blocklist applies to.
 
@@ -1899,28 +3402,290 @@ _SEGMENT_SEPARATORS = frozenset({"|", "||", "&&", ";", "&"})
 _BYPASS_PUNCTUATION = ";&|<>\n"
 
 
-def _heredoc_start(line: str) -> Optional[tuple]:
-    """``(delimiter, strip_tabs)`` for the heredoc *line* opens, else None.
+#: The delimiters the scan trusts to end a body.
+_HEREDOC_WORD = re.compile(r"[A-Za-z0-9_.-]+")
 
-    Tokenised with the same lexer the gates use, so a ``<<`` inside quotes is
-    data and ``<<<`` (a here-string, no body) never opens one.
+#: Characters that end an unquoted word for sh.
+_SHELL_METACHARS = " \t|&;()<>"
+
+#: Bash reads these as ANSI-C quoting and arithmetic, dash as ``$`` followed
+#: by a quote or a glob, so the two shells end them in different places.
+_HEREDOC_SHELL_DEPENDENT = ("$'", "$[")
+
+#: A ``case`` pattern's bare ``)`` would close an enclosing ``$(`` early.
+_CASE_WORD = re.compile(r"case(?![\w-])")
+
+#: Expansions that nest, longest first, and the context each one opens.
+_HEREDOC_EXPANSIONS = (("$((", "$(("), ("$(", "$("), ("${", "${"), ("`", "`"))
+
+#: Contexts whose text sh reads as commands.
+_COMMAND_CONTEXTS = (None, "$(", "(", "[[")
+
+#: Contexts that read as arithmetic.
+_ARITHMETIC_CONTEXTS = ("$((", "((", "a(")
+
+
+def _continues(line: str) -> bool:
+    """Whether *line* ends in an unescaped backslash (a line continuation)."""
+    return (len(line) - len(line.rstrip("\\"))) % 2 == 1
+
+
+def _is_terminator(
+    lines: list, first: int, last: int, word: str, strip_tabs: bool
+) -> bool:
+    """Whether the logical body line ``lines[first..last]`` ends the body.
+
+    A backslash-joined line is joined the way sh does. If any reading of it —
+    joined or not, tabs stripped per physical line or not — is the terminator,
+    shells may disagree, so the scan gives up.
     """
-    try:
-        tokens = _tokenize(line, bypass_gates=True)
-    except ValueError:
-        return None
-    for index, token in enumerate(tokens):
-        if token not in ("<<", "<<-") or index + 1 >= len(tokens):
+
+    def strip(text: str) -> str:
+        return text.lstrip("\t") if strip_tabs else text
+
+    if first == last:
+        return strip(lines[first]) == word
+    head = [line[:-1] for line in lines[first:last]]
+    tail = lines[last]
+    readings = {
+        strip(head[0]) + "".join(head[1:]) + tail,
+        "".join(strip(piece) for piece in head) + strip(tail),
+        strip(tail),
+        tail,
+    }
+    if word in readings:
+        raise _UnreadableHeredoc
+    return False
+
+
+class _UnreadableHeredoc(Exception):
+    """The heredoc scan met shell text it cannot read the way sh does."""
+
+
+def _read_heredoc_word(line: str, index: int) -> Tuple[str, bool, int]:
+    """``(delimiter, quoted, end)`` for the word after ``<<`` at *index*."""
+    while index < len(line) and line[index] in " \t":
+        index += 1
+    chars: list = []
+    quoted = False
+    while index < len(line) and line[index] not in _SHELL_METACHARS:
+        char = line[index]
+        if char in "'\"":
+            close = line.find(char, index + 1)
+            inner = line[index + 1 : close]
+            if close < 0 or (char == '"' and any(c in inner for c in "$`\\")):
+                raise _UnreadableHeredoc
+            chars.append(inner)
+            quoted = True
+            index = close + 1
+        elif char == "\\" and index + 1 < len(line):
+            chars.append(line[index + 1])
+            quoted = True
+            index += 2
+        elif char in "$`\\":
+            raise _UnreadableHeredoc
+        else:
+            chars.append(char)
+            index += 1
+    word = "".join(chars)
+    if not _HEREDOC_WORD.fullmatch(word):
+        raise _UnreadableHeredoc
+    return word, quoted, index
+
+
+def _end_of_word(line: str, col: int) -> bool:
+    """Whether *col* is past the end of *line* or at a character ending a word."""
+    return col >= len(line) or line[col] in _SHELL_METACHARS
+
+
+def _scan_heredoc_bodies(lines: list) -> list:
+    """The ``(first, terminator)`` line ranges of every heredoc body in *lines*.
+
+    A single left-to-right pass that tracks quotes and nested ``${...}``,
+    ``$(...)``, ``$((...))``, backticks and ``((``/``[[`` on a stack, so each
+    character is read once. A ``<<`` opens a body only outside all of them;
+    one inside any of them, or text the pass cannot balance, raises
+    ``_UnreadableHeredoc`` rather than guess.
+    """
+    spans: list = []
+    pending: list = []
+    stack: list = []
+    # True at the start of a word, "redirect" right after < or >, else False.
+    word_start: Any = True
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        continued = False
+        col = 0
+        while col < len(line):
+            top = stack[-1] if stack else None
+            if stack and line.startswith("<<", col):
+                raise _UnreadableHeredoc
+            char = line[col]
+            if top == "'":
+                if char == "'":
+                    stack.pop()
+                col += 1
+                continue
+            if top == "`":
+                if char == "`":
+                    stack.pop()
+                col += 2 if char == "\\" else 1
+                continue
+            if char == "\\":
+                continued = col + 1 == len(line)
+                if top is None or top in _COMMAND_CONTEXTS:
+                    word_start = False
+                col += 2
+                continue
+            # Inside double quotes both shells read $' as a literal $ and quote.
+            if line.startswith(_HEREDOC_SHELL_DEPENDENT[top == '"' :], col):
+                raise _UnreadableHeredoc
+            opened = next(
+                (
+                    kind
+                    for token, kind in _HEREDOC_EXPANSIONS
+                    if line.startswith(token, col)
+                ),
+                None,
+            )
+            if opened is not None:
+                stack.append(opened)
+                word_start = opened == "$("
+                col += len(opened)
+                continue
+            if top == '"':
+                if char == '"':
+                    stack.pop()
+                col += 1
+                continue
+            if top == "${":
+                if char == "}":
+                    stack.pop()
+                elif char == "{" or (char in "'\"" and '"' in stack):
+                    raise _UnreadableHeredoc
+                elif char in "'\"":
+                    stack.append(char)
+                col += 1
+                continue
+            if top in _ARITHMETIC_CONTEXTS:
+                if char == "(":
+                    stack.append("a(")
+                elif char == ")":
+                    if top == "a(":
+                        stack.pop()
+                    elif line.startswith("))", col):
+                        stack.pop()
+                        col += 1
+                    else:
+                        raise _UnreadableHeredoc
+                elif char == "'" or (char == "#" and "((" in stack):
+                    raise _UnreadableHeredoc
+                elif char == '"':
+                    stack.append(char)
+                col += 1
+                continue
+            # A command context: the top level, $( ), a nested ( ), or [[ ]].
+            if char in "'\"":
+                stack.append(char)
+                word_start = False
+            elif char == "#" and word_start:
+                if word_start == "redirect" or stack:
+                    raise _UnreadableHeredoc
+                break
+            elif stack and word_start is True and _CASE_WORD.match(line, col):
+                raise _UnreadableHeredoc
+            elif (
+                top == "[["
+                and word_start is True
+                and line.startswith("]]", col)
+                and _end_of_word(line, col + 2)
+            ):
+                stack.pop()
+                word_start = False
+                col += 2
+                continue
+            elif line.startswith("<<<", col):
+                word_start = "redirect"
+                col += 3
+                continue
+            elif line.startswith("<<", col):
+                strip_tabs = line.startswith("<<-", col)
+                word, quoted, col = _read_heredoc_word(line, col + 2 + strip_tabs)
+                pending.append((word, strip_tabs, quoted))
+                word_start = False
+                continue
+            elif line.startswith(("<(", ">("), col):
+                stack.append("$(")
+                word_start = True
+                col += 2
+                continue
+            elif word_start is True and line.startswith("((", col):
+                stack.append("((")
+                word_start = False
+                col += 2
+                continue
+            elif (
+                word_start is True
+                and line.startswith("[[", col)
+                and _end_of_word(line, col + 2)
+            ):
+                stack.append("[[")
+                col += 2
+                continue
+            elif char == "(" and stack:
+                stack.append("(")
+                word_start = True
+            elif char == ")" and stack:
+                if top not in ("$(", "("):
+                    raise _UnreadableHeredoc
+                stack.pop()
+                word_start = False
+            elif char in "<>" or (char == "&" and word_start == "redirect"):
+                word_start = "redirect"
+            else:
+                word_start = char in " \t|&;()"
+            col += 1
+        index += 1
+        if not continued and (not stack or stack[-1] in _COMMAND_CONTEXTS):
+            # A newline ends a command; inside quotes it is data.
+            word_start = True
+        if continued or stack:
+            if pending:
+                raise _UnreadableHeredoc
             continue
-        word = tokens[index + 1]
-        strip_tabs = token == "<<-"
-        if word == "-" and index + 2 < len(tokens):
-            word, strip_tabs = tokens[index + 2], True
-        elif word.startswith("-") and len(word) > 1:
-            word, strip_tabs = word[1:], True
-        if word and all(ch not in _BYPASS_PUNCTUATION for ch in word):
-            return word, strip_tabs
-    return None
+        for word, strip_tabs, quoted in pending:
+            first = index
+            while True:
+                last = index
+                # sh joins an unquoted body's backslash-newline before matching.
+                while not quoted and last < len(lines) and _continues(lines[last]):
+                    last += 1
+                if last >= len(lines):
+                    raise _UnreadableHeredoc
+                if _is_terminator(lines, index, last, word, strip_tabs):
+                    break
+                index = last + 1
+            spans.append((first, index))
+            index += 1
+        pending = []
+    if stack or pending:
+        raise _UnreadableHeredoc
+    return spans
+
+
+def _heredoc_body_spans(command: str) -> list:
+    """The heredoc body line ranges in *command*, or ``[]`` to strip nothing.
+
+    ``[]`` whenever the scan cannot be sure, so every line is then walked as
+    a command: the gates may over-refuse an odd heredoc, never miss a command.
+    """
+    if "<<" not in command:
+        return []
+    try:
+        return _scan_heredoc_bodies(command.split("\n"))
+    except _UnreadableHeredoc:
+        return []
 
 
 def _strip_heredoc_bodies(command: str) -> str:
@@ -1929,62 +3694,35 @@ def _strip_heredoc_bodies(command: str) -> str:
     A body is input to the command that opened it, not a command, so the gates
     must not walk ``print(1+1)`` as a binary or choke on an apostrophe in it.
     Only the text used to pick out which binaries run is affected — the caller
-    keeps the original for the step it actually executes. An unterminated body
-    is left in place, so the gates see it and refuse what they cannot parse.
+    keeps the original for the step it actually executes. A body the scan
+    cannot place is left in place, so the gates see it and refuse what they
+    cannot parse.
     """
-    if "<<" not in command:
+    spans = _heredoc_body_spans(command)
+    if not spans:
         return command
-    kept: list = []
     lines = command.split("\n")
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        kept.append(line)
-        index += 1
-        opened = _heredoc_start(line)
-        if opened is None:
-            continue
-        word, strip_tabs = opened
-        end = index
-        while end < len(lines):
-            body_line = lines[end].lstrip("\t") if strip_tabs else lines[end]
-            if body_line == word:
-                break
-            end += 1
-        if end == len(lines):
-            kept.extend(lines[index:])
-            break
-        index = end + 1
-    return "\n".join(kept)
+    hidden = {i for first, last in spans for i in range(first, last + 1)}
+    return "\n".join(line for i, line in enumerate(lines) if i not in hidden)
 
 
 def _mask_heredoc_connectors(command: str) -> str:
     """*command* with ``;``, ``&``, ``|`` inside heredoc bodies neutralised.
 
     ``_split_connectors`` cannot tell a heredoc body from three chained
-    commands — ``python3 - <<'EOF'\\nimport os; os.getcwd()\\nEOF`` would
+    commands — ``python3 - <<'EOF'\nimport os; os.getcwd()\nEOF`` would
     otherwise fracture mid-script. Masking is position-preserving (same
     length, same lines, quotes untouched) so a split point found here is
     valid on the original command too.
     """
-    if "<<" not in command:
+    spans = _heredoc_body_spans(command)
+    if not spans:
         return command
     lines = command.split("\n")
-    index = 0
-    while index < len(lines):
-        line = lines[index]
-        index += 1
-        opened = _heredoc_start(line)
-        if opened is None:
-            continue
-        word, strip_tabs = opened
-        while index < len(lines):
-            body_line = lines[index].lstrip("\t") if strip_tabs else lines[index]
-            if body_line == word:
-                break
-            for ch in ";&|":
-                lines[index] = lines[index].replace(ch, "x")
-            index += 1
+    for first, last in spans:
+        for i in range(first, last):
+            for char in ";&|":
+                lines[i] = lines[i].replace(char, "x")
     return "\n".join(lines)
 
 
@@ -3830,6 +5568,20 @@ class ShellToolsMixin:
                 },
                 command,
             )
+        # A line that already asks names every such address; one that wouldn't
+        # asks only when a program on it can connect.
+        private = _private_hosts(command, steps, whole_line=error is not None)
+        if private:
+            note = private_fetch_note(private)
+            if error is not None and error.get("tier") == TIER_CONFIRM_ONCE:
+                error = {**error, "risk_note": f"{error['risk_note']} {note}"}
+            else:
+                block = error or {
+                    "status": "error",
+                    "error": "This command reaches a local or private network address.",
+                    "has_errors": True,
+                }
+                error = {**_confirm_once(block, note), **NOT_EXECUTED}
         if error is None or error.get("tier") != TIER_CONFIRM_ONCE:
             return error, steps
         # A one-time line runs as raw shell text, which no grant exempts from
@@ -4059,7 +5811,13 @@ class ShellToolsMixin:
         scanned.
 
         A credential folder (``security.SECRET_DIRECTORIES``) is refused even
-        inside the allowed paths.
+        inside the allowed paths, and so is reading a credential file
+        (``PathValidator.is_read_blocked``): a reader, copy source, upload or ``<``
+        given it or a link to it, or a wildcard over the folder it sits in.
+        A recursive search of that folder runs when each line it prints comes
+        back with its file name, which is how lines from the credential file
+        are masked. ``rm``, ``mv``, ``git add``, a copy's destination, an
+        ``openssl -out`` file, a search pattern and ``sed -i`` still run.
 
         An environment assignment's value is held to the same rule on EVERY
         segment, granted or not — it is never a remote id, and a value like
@@ -4091,6 +5849,18 @@ class ShellToolsMixin:
                 )
                 if refusal:
                     return refusal
+        for position, seg in enumerate(segments):
+            if not any(seg is kept for kept in scanned):
+                continue
+            argv = policy_argv(seg)
+            read = _credential_read(argv, cwd)
+            if read is not None:
+                return _credential_refusal("Argument", read[0], read[1])
+            credential = _bulk_read_credential(
+                argv, cwd, [policy_argv(s) for s in segments[position + 1 :]]
+            )
+            if credential is not None:
+                return _credential_refusal("Command", " ".join(argv), credential)
         return None
 
     def _path_candidate_refusal(

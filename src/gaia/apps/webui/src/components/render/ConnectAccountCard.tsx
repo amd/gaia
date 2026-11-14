@@ -1,11 +1,12 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { CheckCircle2, ExternalLink, Link2, Loader2 } from 'lucide-react';
 import * as api from '../../services/api';
 import { useChatStore } from '../../stores/chatStore';
 import { useT } from '../../i18n/useT';
+import { useConnectorsSSE } from '../../hooks/useConnectorsSSE';
 import { log } from '../../utils/logger';
 import type { ConnectorListEntry, Message } from '../../types';
 import { UnsupportedCard } from './UnsupportedCard';
@@ -108,25 +109,47 @@ function openAuthUrl(url: string): void {
 
 const POLL_MS = 4000;
 
+/** Sign-in refused because this PC has no OAuth client for the provider yet. */
+function isUnconfigured(e: unknown): boolean {
+    const err = e as { httpStatus?: number; body?: Record<string, unknown> | null };
+    return err?.httpStatus === 503 && err.body?.error === 'not_configured';
+}
+
 function ProviderRow({
     connectorId,
     name,
     connected,
+    needsSetup,
     grantAgents,
     onOpened,
 }: {
     connectorId: string;
     name: string;
     connected: boolean;
+    /** No OAuth client on this PC yet, so sign-in cannot start. */
+    needsSetup: boolean;
     grantAgents: string[];
     onOpened: () => void;
 }) {
     const t = useT();
     const openSettings = useChatStore((s) => s.openSettings);
+    const openConnectorSettings = useChatStore((s) => s.openConnectorSettings);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [setup, setSetup] = useState(false);
+
+    // Set up in Settings since: the sentence no longer applies.
+    useEffect(() => {
+        if (!needsSetup) setSetup(false);
+    }, [needsSetup]);
 
     const connect = useCallback(async () => {
+        if (needsSetup) {
+            setError(null);
+            setSetup(true);
+            return;
+        }
+        setSetup(false);
         // With no agent to size the request, Settings is where access is chosen.
         if (grantAgents.length === 0) {
             openSettings('connectors');
@@ -141,11 +164,12 @@ function ProviderRow({
             openAuthUrl(flow.authorization_url);
             onOpened();
         } catch (e) {
-            setError(e instanceof Error ? e.message : String(e));
+            if (isUnconfigured(e)) setSetup(true);
+            else setError(e instanceof Error ? e.message : String(e));
         } finally {
             setBusy(false);
         }
-    }, [connectorId, grantAgents, onOpened, openSettings]);
+    }, [connectorId, needsSetup, grantAgents, onOpened, openSettings]);
 
     const label = t(connected ? 'connectCard.reconnect' : 'connectCard.connect', { name });
     return (
@@ -170,8 +194,42 @@ function ProviderRow({
             {error && (
                 <div className="render-connect__error" role="alert">{error}</div>
             )}
+            {setup && (
+                <div className="render-connect__setup" role="status">
+                    <span>{t('connectCard.needsSetup', { name })}</span>
+                    <button
+                        type="button"
+                        className="render-connect__settings"
+                        onClick={() => openConnectorSettings(connectorId)}
+                    >
+                        {t('connectCard.setUp', { name })}
+                    </button>
+                </div>
+            )}
         </div>
     );
+}
+
+/** Watches for a sign-in this card opened to end without connecting.
+ *  Mounted only while one is open: each watcher holds a connection. */
+function SignInWatcher({
+    providers,
+    onEnded,
+}: {
+    providers: string[];
+    onEnded: (why: 'cancelled' | 'failed') => void;
+}) {
+    useConnectorsSSE(
+        useCallback(
+            (event) => {
+                if (event.reason !== 'oauth_error') return;
+                if (!event.connectorId || !providers.includes(event.connectorId)) return;
+                onEnded(event.payload.reason === 'cancelled' ? 'cancelled' : 'failed');
+            },
+            [providers, onEnded],
+        ),
+    );
+    return null;
 }
 
 export function ConnectAccountCard({ data }: { data: unknown }) {
@@ -180,6 +238,7 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
     const openSettings = useChatStore((s) => s.openSettings);
     const [connectors, setConnectors] = useState<ConnectorListEntry[]>([]);
     const [opened, setOpened] = useState(false);
+    const [ended, setEnded] = useState<'cancelled' | 'failed' | null>(null);
     const valid = isConnectAccountPayload(data);
 
     const refresh = useCallback(() => {
@@ -196,6 +255,14 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         return () => window.removeEventListener('focus', refresh);
     }, [valid, refresh]);
 
+    // Settings opens inside the app, so closing it brings no window focus back.
+    const settingsOpen = useChatStore((s) => s.settingsSection !== null);
+    const settingsWasOpen = useRef(settingsOpen);
+    useEffect(() => {
+        if (valid && settingsWasOpen.current && !settingsOpen) refresh();
+        settingsWasOpen.current = settingsOpen;
+    }, [valid, settingsOpen, refresh]);
+
     // While a sign-in tab is open, watch for the account to appear.
     useEffect(() => {
         if (!opened) return undefined;
@@ -203,12 +270,21 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
         return () => clearInterval(timer);
     }, [opened, refresh]);
 
+    const onEnded = useCallback((why: 'cancelled' | 'failed') => {
+        setOpened(false);
+        setEnded(why);
+    }, []);
+
     if (!isConnectAccountPayload(data)) {
         return <UnsupportedCard variant="invalid" render={CONNECT_ACCOUNT_RENDER} data={data} />;
     }
 
     const isConnected = (id: string) =>
         connectors.some((c) => c.id === id && !('error' in c) && c.configured);
+    const needsSetup = (id: string) =>
+        connectors.some(
+            (c) => c.id === id && !('error' in c) && !c.configured && c.configurable === false,
+        );
     const displayName = (id: string) =>
         PROVIDER_NAMES[id]
         ?? connectors.find((c) => c.id === id && !('error' in c))?.display_name
@@ -217,14 +293,16 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
 
     let prompt = t('connectCard.prompt');
     if (anyConnected) prompt = t('connectCard.askAgain');
+    else if (ended) prompt = t(ended === 'cancelled' ? 'connectCard.cancelled' : 'connectCard.failed');
     else if (opened) prompt = t('connectCard.opened');
 
     return (
         <div className="render-connect" role="group" aria-label={t('connectCard.label')}>
             <div className="render-connect__text">
                 <Link2 size={14} className="render-connect__icon" aria-hidden="true" />
-                <span>{prompt}</span>
+                <span role={ended ? 'alert' : undefined}>{prompt}</span>
             </div>
+            {opened && <SignInWatcher providers={data.providers} onEnded={onEnded} />}
             <div className="render-connect__providers">
                 {data.providers.map((id) => (
                     <ProviderRow
@@ -232,8 +310,12 @@ export function ConnectAccountCard({ data }: { data: unknown }) {
                         connectorId={id}
                         name={displayName(id)}
                         connected={isConnected(id)}
+                        needsSetup={needsSetup(id)}
                         grantAgents={grantIdsFor(agents, data.agent_id, id)}
-                        onOpened={() => setOpened(true)}
+                        onOpened={() => {
+                            setEnded(null);
+                            setOpened(true);
+                        }}
                     />
                 ))}
             </div>

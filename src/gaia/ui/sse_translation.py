@@ -675,6 +675,14 @@ class CanonicalTranslator:
         # control channel, not this event stream.
         return []
 
+    def _on_context_usage(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Pass a live measurement through unchanged (contract 2.28).
+
+        Its shape is the same ``context_usage`` an in-process turn streams, so
+        the composer updates during the turn instead of waiting for ``final``.
+        """
+        return [dict(event)]
+
     # -- confirmation summary ----------------------------------------------
 
     def _render_args_summary(self, tool: str, args: Dict[str, Any]) -> str:
@@ -730,6 +738,7 @@ class CanonicalTranslator:
         "tool_confirm_denied": _on_tool_confirm_denied,
         "agent_created": _on_agent_created,
         "skill_use": _on_skill_use,
+        "context_usage": _on_context_usage,
         # tool_args is handled before dispatch (merges into the pending tool_call).
     }
 

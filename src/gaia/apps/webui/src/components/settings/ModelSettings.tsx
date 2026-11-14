@@ -8,11 +8,13 @@ import * as api from '../../services/api';
 import { useModelStore, displayModelName, distinctModelLabels, sameModelId } from '../../stores/modelStore';
 import { useChatStore } from '../../stores/chatStore';
 import { useT, type Translate } from '../../i18n/useT';
+import { providerName, providerNotice } from '../../utils/providerText';
 import { AddCustomModel } from './AddCustomModel';
 import { ErrorNotice, isServerDown } from './ErrorNotice';
 import { LocalModelsSections } from './LocalModelsSections';
 import { ModelInUse } from './ModelInUse';
 import { ModelRow } from './ModelRow';
+import { ConfirmSheet } from '../setup/ConfirmSheet';
 import { SettingsDisclosure } from './SettingsDisclosure';
 import { isDownloading } from '../modelMeta';
 import { modelServerHealth } from '../../services/statusPoll';
@@ -277,6 +279,7 @@ export function ModelSettings() {
     const toDownload = visibleRunnable.filter((m) => !m.downloaded);
     const readyModels = (models ?? []).filter((m) => m.available !== false && m.downloaded);
     const ranked = readyModels.filter(inCollapsedView);
+    const removing = confirmRemove ? (models ?? []).find((m) => m.id === confirmRemove) ?? null : null;
     const switchChoices = chosen === 'fireworks' && ranked.some((m) => m.rank !== null) ? ranked : readyModels;
 
     const renderRow = (m: ProviderModel) => (
@@ -287,12 +290,9 @@ export function ModelSettings() {
             current={isCurrent(m)}
             remote={!!provider?.remote}
             busy={busy}
-            confirmingRemove={confirmRemove === m.id}
             onUse={() => void use(m.id)}
             onDownload={() => void download(m.id)}
             onAskRemove={() => setConfirmRemove(m.id)}
-            onKeep={() => setConfirmRemove(null)}
-            onRemove={() => void remove(m.id)}
             onNpuRecheck={() => void loadModels(chosen, true)}
         />
     );
@@ -323,7 +323,7 @@ export function ModelSettings() {
                         title={blocked(p) ? t('settings.privacy.localOnlyBlocked') : offline(p) ? p.network?.detail ?? undefined : undefined}
                     >
                         {p.remote ? <Cloud size={14} aria-hidden="true" /> : <Cpu size={14} aria-hidden="true" />}
-                        <span>{p.name}</span>
+                        <span>{providerName(t, p)}</span>
                         {p.remote && p.models_discovered && <span className="provider-tab-dot" aria-label={t('settings.key.connectedDot')} />}
                     </button>
                 ))}
@@ -340,13 +340,13 @@ export function ModelSettings() {
             )}
 
             {provider && (
-                <section className="settings-card" aria-label={provider.name}>
-                    {provider.remote && <p className="settings-note"><bdi>{provider.privacy_notice}</bdi></p>}
+                <section className="settings-card" aria-label={providerName(t, provider)}>
+                    {provider.remote && <p className="settings-note"><bdi>{providerNotice(t, provider)}</bdi></p>}
 
                     <details className="settings-more">
                         <summary><ChevronDown size={13} className="settings-disclosure-chevron" aria-hidden="true" /> {t('settings.model.howItWorks')}</summary>
                         <p className="settings-hint">{t('settings.model.lede')}</p>
-                        {local && <p className="settings-hint"><bdi>{provider.privacy_notice}</bdi></p>}
+                        {local && <p className="settings-hint"><bdi>{providerNotice(t, provider)}</bdi></p>}
                         {local && <p className="settings-hint">{t('settings.model.devices')}</p>}
                         {local && memory && <p className="settings-hint">{t('settings.model.memory', { memory })}</p>}
                     </details>
@@ -434,13 +434,7 @@ export function ModelSettings() {
                                             {t('settings.key.reconnect')}
                                         </button>
                                     )}
-                                    {(provider.key_source !== 'environment' || provider.key_from_gaia_env) && (confirmForget ? (
-                                        <>
-                                            <span className="settings-hint">{t('settings.key.removeAsk')}</span>
-                                            <button type="button" className="btn-danger" onClick={() => void forget()} disabled={busy !== null}>{t('settings.models.remove')}</button>
-                                            <button type="button" className="btn-secondary" onClick={() => setConfirmForget(false)}>{t('settings.models.keep')}</button>
-                                        </>
-                                    ) : (
+                                    {(provider.key_source !== 'environment' || provider.key_from_gaia_env) && (
                                         <>
                                             <button type="button" className="btn-secondary" onClick={() => setReplacingKey(true)} disabled={busy !== null}>{t('settings.key.replace')}</button>
                                             {provider.key_source !== 'environment' && (
@@ -456,7 +450,7 @@ export function ModelSettings() {
                                                 </button>
                                             )}
                                         </>
-                                    ))}
+                                    )}
                                 </div>
                             ) : (
                                 <div className="settings-row">
@@ -575,6 +569,30 @@ export function ModelSettings() {
 
                     {provider.remote && <SpendingLimit />}
                 </section>
+            )}
+            {removing && (
+                <ConfirmSheet
+                    title={t('settings.models.removeTitle', { name: labels[removing.id] ?? removing.id })}
+                    confirmLabel={removing.downloaded ? t('settings.model.removeDownload') : t('settings.models.remove')}
+                    cancelLabel={t('settings.models.keep')}
+                    danger
+                    onConfirm={() => { setConfirmRemove(null); void remove(removing.id); }}
+                    onCancel={() => setConfirmRemove(null)}
+                >
+                    {removing.downloaded && <p>{t('settings.model.removeDownloadBody')}</p>}
+                </ConfirmSheet>
+            )}
+            {confirmForget && provider && (
+                <ConfirmSheet
+                    title={t('settings.key.removeAsk')}
+                    confirmLabel={t('settings.key.remove')}
+                    cancelLabel={t('settings.models.keep')}
+                    danger
+                    onConfirm={() => void forget()}
+                    onCancel={() => setConfirmForget(false)}
+                >
+                    <p>{t('settings.key.removeBody', { name: provider.name })}</p>
+                </ConfirmSheet>
             )}
         </div>
     );

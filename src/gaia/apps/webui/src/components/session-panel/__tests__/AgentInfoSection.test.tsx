@@ -3,7 +3,7 @@
 
 /** Agent info (#440): the chat's tools, grouped, and every way they can't be listed. */
 
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInfoSection, categoryLabel, groupTools } from '../AgentInfoSection';
 import { useSessionPanelStore } from '../../../stores/sessionPanelStore';
@@ -115,6 +115,25 @@ describe('AgentInfoSection', () => {
         await screen.findByRole('group', { name: "Tools this chat's agent can use" });
         expect(screen.queryByRole('status')).not.toBeInTheDocument();
         expect(mocked.getCapabilities).toHaveBeenCalledTimes(2);
+    });
+
+    it('reads again while a reply waits on a permission prompt', async () => {
+        vi.useFakeTimers({ shouldAdvanceTime: true });
+        try {
+            mocked.getCapabilities
+                .mockRejectedValueOnce(httpError(409, 'not running'))
+                .mockResolvedValue({ session_id: SID, agent_type: 'gaia', tools: TOOLS });
+            expand();
+            render(<AgentInfoSection sessionId={SID} busy />);
+            await screen.findByRole('status');
+
+            await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+
+            await screen.findByRole('group', { name: "Tools this chat's agent can use" });
+            expect(screen.queryByRole('status')).not.toBeInTheDocument();
+        } finally {
+            vi.useRealTimers();
+        }
     });
 
     it('drops an answer for the chat it has since left', async () => {

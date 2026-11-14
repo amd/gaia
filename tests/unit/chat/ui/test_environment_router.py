@@ -234,6 +234,31 @@ def test_unsafe_or_missing_folders_are_refused(client, session_id, tmp_path, bad
     assert resp.json()["detail"]
 
 
+@pytest.mark.parametrize("bad", ["not-a-folder", "home", "root"])
+def test_the_folder_check_gives_the_reason_adding_it_would(
+    client, session_id, tmp_path, bad
+):
+    """#7996: the desktop folder dialog asks before it adds the chip."""
+    path = {
+        "not-a-folder": str(tmp_path / "missing"),
+        "home": str(Path.home()),
+        "root": Path.home().anchor,
+    }[bad]
+    check = client.post("/api/environment/folders/check", json={"path": path})
+    add = client.post(
+        f"/api/sessions/{session_id}/environment/folders", json={"path": path}
+    )
+    assert check.status_code == 200
+    assert check.json() == {"refusal": add.json()["detail"]}
+
+
+def test_the_folder_check_takes_a_narrow_folder(client, tmp_path):
+    outside = tmp_path / "elsewhere"
+    outside.mkdir()
+    resp = client.post("/api/environment/folders/check", json={"path": str(outside)})
+    assert resp.json() == {"refusal": None}
+
+
 def test_a_folder_inside_a_removed_one_is_refused(client, session_id, folder):
     inner = folder / "inner"
     inner.mkdir()
@@ -524,3 +549,54 @@ def test_a_failed_rollback_keeps_the_original_500_and_logs_both(
     assert "Check server logs" in failed.json()["detail"]
     assert "database is locked" in caplog.text
     assert "disk full" in caplog.text
+
+
+class _DecisionProxy:
+    agent_id = "gaia"
+
+    def tool_decision(self, run_id, decision, confirm_id):
+        return {"run_id": run_id, "decision": decision, "delivered": True}
+
+
+@pytest.mark.parametrize("approved", [True, False])
+def test_a_path_allowed_at_a_relayed_prompt_is_listed(
+    client, gaia_session_id, relayed_gaia, tmp_path, approved
+):
+    from gaia.ui import _chat_helpers as helpers
+    from gaia.ui.email_sidecar import relay
+    from gaia.ui.email_sidecar.profiles import GAIA_PROFILE
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    target = tmp_path / "words.txt"
+    target.write_text("A\na\n")
+    handler = SSEOutputHandler()
+    handler.active_relay_proxy = _DecisionProxy()
+    handler.active_relay_run_id = "r1"
+    prompt = {
+        "type": "needs_confirmation",
+        "action": "allow_path_access",
+        "confirm_id": "c-path",
+        "args": {"path": str(target), "kind": "file"},
+    }
+    relay._dispatch_one(handler, prompt, GAIA_PROFILE, True)
+    helpers._active_sse_handlers[gaia_session_id] = handler
+    try:
+        answered = client.post(
+            "/api/chat/confirm-tool",
+            json={
+                "session_id": gaia_session_id,
+                "approved": approved,
+                "confirm_id": "c-path",
+            },
+        )
+    finally:
+        helpers._active_sse_handlers.pop(gaia_session_id, None)
+    assert answered.status_code == 200, answered.text
+
+    body = client.get(f"/api/sessions/{gaia_session_id}/environment").json()
+    listed = {f["path"]: f for f in body["folders"]}
+    if approved:
+        assert listed[str(target)]["source"] == "approved"
+        assert listed[str(target)]["kind"] == "file"
+    else:
+        assert str(target) not in listed

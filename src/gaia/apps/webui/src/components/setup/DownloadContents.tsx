@@ -75,7 +75,9 @@ export function DownloadContents({ plan, run, models = [], onRetry, retryDisable
                         <span className="setup-content-main">
                             <span className="setup-content-name">{t(`setup.component.${c.id}`)}</span>
                             <span className="setup-content-note">{t(`setup.component.${c.id}Note`)}</span>
-                            <span className="setup-content-from">{t('setup.contents.from')} <bdi dir="ltr">{c.source}</bdi></span>
+                            {c.bundled
+                                ? <span className="setup-content-from">{t('setup.contents.bundled')}</span>
+                                : <span className="setup-content-from">{t('setup.contents.from')} <bdi dir="ltr">{c.source}</bdi></span>}
                         </span>
                         <span className="setup-content-side">
                             <bdi dir="ltr">{sizeText(c.size_gb, t)}</bdi>

@@ -259,7 +259,9 @@ probe runs.
 
 Reasoning tokens count against the reply's output limit (32K for cloud models
 in the agent). A reply cut off at that limit is reported as cut off, never
-treated as the answer. A failed or inconclusive probe is retried an hour later,
+treated as the answer. The model is asked to continue twice; a third cut-off
+ends the turn as failed, with what the agent had run and found so far, a
+suggestion to ask for the work in smaller parts, and the turn's token counts. A failed or inconclusive probe is retried an hour later,
 like the tool-calling probe (`reasoning_probe_failures`). Delete the model from
 those lists to re-probe it. Set the level back to `off` to stop sending it.
 
