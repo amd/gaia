@@ -503,6 +503,8 @@ class ClaudeProvider(LLMClient):
     #: Where requests go, as named in the Local only refusal.
     _DESTINATION = "Anthropic Claude"
 
+    caches_prompt_prefix = True
+
     def __init__(
         self,
         api_key: Optional[str] = None,

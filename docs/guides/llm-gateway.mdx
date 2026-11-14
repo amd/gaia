@@ -160,6 +160,9 @@ What that means in practice:
   thinking when a later step has none, so the cached history stays valid. Thinking is
   still dropped from older steps when GAIA edits a step, after a restart, and for
   steps more than 1,024 turns back.
+- **A skill loaded mid-task doesn't rewrite the prompt.** Its instructions arrive as a
+  message after the conversation so far, and move to the start of the prompt on your
+  next message.
 - **Tool results go to Claude as plain text.** A JSON tool result is sent as
   `key: value` lines, with file contents and command output unescaped between `<<<`
   and `>>>`, which costs fewer tokens on every step that re-reads it. Other models get

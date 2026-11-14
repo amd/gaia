@@ -309,6 +309,28 @@ def local_max_output_tokens(ctx_size: int) -> int:
     )
 
 
+#: The session-context fragment that renders loaded skills.
+_SKILLS_PROMPT_FRAGMENT = "get_skills_system_prompt"
+
+
+def _skill_change_note(before: Dict[str, str], after: Dict[str, str]) -> str:
+    """What changed in the shown skills, as a message for the model."""
+    added = [text for name, text in after.items() if before.get(name) != text]
+    removed = sorted(set(before) - set(after))
+    parts = []
+    if added:
+        parts.append(
+            "==== SKILLS LOADED THIS TURN (follow them from here on) ====\n"
+            + "\n\n".join(added)
+        )
+    if removed:
+        parts.append(
+            f"Skills no longer active: {', '.join(removed)}. "
+            "Stop following their instructions."
+        )
+    return "\n\n".join(parts)
+
+
 def _skill_prompt_body(agent, skill) -> str:
     """*skill*'s effective body, plus a note for any declared command missing here.
 
@@ -2869,6 +2891,10 @@ class Agent(abc.ABC):
 
     # The volatile fragments, composed with the system prompt; see session_context.
     _session_context_cache: str = ""
+    # (origin, text) for each fragment of ``_session_context_cache``.
+    _session_context_parts: Tuple[Tuple[Optional[str], str], ...] = ()
+    # The session context pinned for this turn; see ``_turn_session_context``.
+    _turn_context_pin: Optional[Dict[str, Any]] = None
 
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
@@ -3699,6 +3725,9 @@ Do NOT wrap conversational replies in JSON.
 
         # Out of the system prompt entirely: see ``session_context``.
         self._session_context_cache = "\n\n".join(p for p in volatile_mixins if p)
+        self._session_context_parts = tuple(
+            (origins.get(p), p) for p in volatile_mixins if p
+        )
 
         # A filtered text tool list grows as tools are selected, so it goes last.
         if tool_filter is not None and tools_block is not None:
@@ -3970,10 +3999,68 @@ Do NOT wrap conversational replies in JSON.
     def _with_session_context(
         self, messages: List[Dict[str, Any]]
     ) -> List[Dict[str, Any]]:
-        """*messages* as sent: the session context opens the first user message."""
+        """*messages* as sent: the session context opens the first user message.
+
+        On a backend that caches by prompt prefix, a skill loaded mid-turn is
+        appended after the history instead (``_turn_session_context``).
+        """
         from gaia.agents.base.history import with_session_context
 
-        return with_session_context(messages, self.session_context)
+        if not self._caches_prompt_prefix():
+            return with_session_context(messages, self.session_context)
+        context, extra = self._turn_session_context(messages)
+        return with_session_context(list(messages) + extra, context)
+
+    def _caches_prompt_prefix(self) -> bool:
+        """Whether a changed prompt start re-bills everything after it."""
+        client = getattr(getattr(self, "chat", None), "llm_client", None)
+        return getattr(client, "caches_prompt_prefix", False) is True
+
+    def _skill_sections_shown(self) -> Dict[str, str]:
+        """Each loaded skill whose body the session context shows, as rendered."""
+        skills = getattr(self, "_loaded_skills", None) or {}
+        active = self._active_skill_names()
+        return {
+            skill.name: f"--- SKILL: {skill.name} ---\n{_skill_prompt_body(self, skill)}"
+            for skill in skills.values()
+            if skill.body and (active is None or skill.name in active)
+        }
+
+    def _turn_session_context(
+        self, messages: List[Dict[str, Any]]
+    ) -> Tuple[str, List[Dict[str, Any]]]:
+        """``(context for the first user message, messages to append)``.
+
+        The context is pinned for the turn, so the cached prefix never changes.
+        A skill loaded, re-shown or unloaded since goes out as a note after the
+        history; it is appended to the turn's own messages so every later call
+        resends it in place. Any other change (memory, the project map) re-pins
+        to the live context, as before.
+        """
+        live = self.session_context
+        parts = self._session_context_parts
+        others = [part for part in parts if part[0] != _SKILLS_PROMPT_FRAGMENT]
+        shown = self._skill_sections_shown()
+        pin = self._turn_context_pin
+        transient = getattr(messages, "append_transient", None)
+        if pin is None or pin["others"] != others:
+            if transient is not None:
+                self._turn_context_pin = {
+                    "others": others,
+                    "context": live,
+                    "shown": shown,
+                }
+            return live, []
+        note = _skill_change_note(pin["shown"], shown)
+        if not note:
+            return pin["context"], []
+        message = {"role": "user", "content": note}
+        if transient is None:
+            # A one-off request built from the turn: never marked as delivered.
+            return pin["context"], [message]
+        transient(message)
+        pin["shown"] = shown
+        return pin["context"], []
 
     def _prompt_text(self) -> str:
         """What the agent adds to every request: system prompt + session context."""
@@ -11227,6 +11314,7 @@ Do NOT wrap conversational replies in JSON.
         """
         say = progress or (lambda _message: None)
         started = time.perf_counter()
+        self._turn_context_pin = None  # primes the next turn, not the last one
         # A turn renders skills through the per-turn filter; the primed prompt
         # has to as well, or it diverges from the first turn's at the skills
         # heading and everything after it — tools included — is re-read.
@@ -11649,6 +11737,7 @@ Do NOT wrap conversational replies in JSON.
         from gaia.agents.base.history import TurnMessages, fit_history_to_turn
 
         messages = TurnMessages()
+        self._turn_context_pin = None
 
         # Per-turn performance record (dev mode; no-op unless GAIA_TURN_LOG is
         # set). Built here so it spans the whole turn — the total it reports is
