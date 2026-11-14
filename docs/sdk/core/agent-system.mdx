@@ -1363,6 +1363,16 @@ quota exhaustion return explicit errors. Restarting an agent invalidates its
 output handles; rerun the source tool if the session has ended. A continuation
 reads captured output rather than re-executing a potentially state-changing tool.
 
+To hand a large result to another tool, pass its handle as the argument:
+`write_file(file_path="notes.md", content="output_…")`, where the handle is the
+result's full `artifact` value (`output_` and 32 hex characters). The tool gets
+the whole archived text, and the text never enters the prompt. Only an argument
+that is exactly a handle is replaced, at any depth in lists and objects; a
+handle inside other text is left as written. The replacement happens before
+permission checks and confirmation prompts, so they see the real text. An
+unknown or expired handle stops the call with an error naming the handle.
+`read_tool_output` is the one tool that takes the handle itself.
+
 ### Exhaustive document extraction
 
 For explicit requests to list every item in a text document, the agent offers

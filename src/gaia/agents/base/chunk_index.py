@@ -46,7 +46,10 @@ MAX_CANDIDATES = 256
 #: Tools whose large text field is command output.
 OUTPUT_TOOLS = frozenset({"run_shell_command", "run_python", "execute_python_file"})
 #: Carried by every condensed result, so the model learns the read from the result.
-FETCH_HINT = "read_tool_output(artifact, entry=n) returns one indexed part verbatim"
+FETCH_HINT = (
+    "read_tool_output(artifact, entry=n) returns one indexed part verbatim; "
+    "pass the artifact as another tool's argument to give it the full text"
+)
 #: Arguments whose value can name a part of the result (a symbol, a pattern).
 NAMING_ARGS = ("pattern", "query", "function_name", "name", "symbol", "section")
 
