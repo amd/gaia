@@ -18,6 +18,13 @@ class MockAutoUpdater extends EventEmitter {
     this.allowPrerelease = false;
     this.logger = null;
     this._feedURL = null;
+    this.quitHandlerAdded = false;
+  }
+
+  // As the real one: the quit is hooked only if the flag is on when this runs.
+  addQuitHandler() {
+    if (this.quitHandlerAdded || !this.autoInstallOnAppQuit) return;
+    this.quitHandlerAdded = true;
   }
 
   setFeedURL(opts) {

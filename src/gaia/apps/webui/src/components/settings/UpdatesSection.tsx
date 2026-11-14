@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { getUpdaterBridge, useUpdateStatus } from '../../hooks/useUpdateStatus';
-import type { GaiaUpdaterBridge, UpdateState } from '../../hooks/useUpdateStatus';
+import type { GaiaUpdaterBridge, UpdateMode, UpdateState } from '../../hooks/useUpdateStatus';
 import { useT, type Translate } from '../../i18n/useT';
 import { ref, type MessageKey } from '../../i18n/registry';
 import { log } from '../../utils/logger';
@@ -12,6 +12,8 @@ import { VersionPicker } from '../VersionPicker';
 import { SettingsDisclosure } from './SettingsDisclosure';
 
 const RELEASES_PAGE = 'https://github.com/amd/gaia/releases';
+
+const MODES: UpdateMode[] = ['ask', 'auto', 'manual'];
 
 /** "0.25.2-rc.3" is a release candidate; "0.25.2" is not. */
 export function isReleaseCandidate(version: string | null): boolean {
@@ -44,10 +46,10 @@ export function describeUpdateStatus(s: UpdateState, t: Translate): string {
 }
 
 /**
- * Settings → General → Updates. Auto-update is off by default while GAIA
- * changes fast: a found update is offered here and in the corner chip, never
- * installed unasked. "Install a specific version" pins the app to that one.
- * Shown only in the desktop app, which owns updating.
+ * Settings → General → Updates. By default a found update downloads by itself
+ * and waits for the user to restart into it. An update skipped on the corner
+ * chip is still offered here. "Install a specific version" pins the app to
+ * that one. Shown only in the desktop app, which owns updating.
  */
 export function UpdatesSection() {
     const update = useUpdateStatus();
@@ -80,6 +82,8 @@ export function UpdatesSection() {
     const line = update.readFailed
         ? describeUpdateStatus(update, t)
         : `${t('update.settings.running', { version: update.currentVersion ?? t('update.settings.unknownVersion') })} ${describeUpdateStatus(update, t)}`;
+    const offered = update.status === 'available' || update.status === 'downloaded';
+    const skipped = offered && !!update.version && update.version === update.skippedVersion;
     const needsYou = ['available', 'downloaded', 'error'].includes(update.status)
         || !!update.pinnedVersion || !!update.installFailed || !!update.configError || !!update.readFailed || !!error;
 
@@ -90,26 +94,27 @@ export function UpdatesSection() {
 
                 {!update.manualInstall && (
                     <>
-                        <label className="setting-row">
-                            <span>{t('update.settings.auto')}</span>
-                            <span className="toggle-switch">
-                                <input
-                                    type="checkbox"
-                                    role="switch"
-                                    checked={update.autoUpdate}
-                                    aria-describedby="updates-auto-hint"
-                                    aria-label={t('update.settings.auto')}
-                                    aria-busy={busy}
-                                    disabled={disabled}
-                                    onChange={() => {
-                                        if (!busy) void run('update.action.saveAuto', (b) => b.setAutoUpdate(!update.autoUpdate));
-                                    }}
-                                />
-                                <span className="toggle-track" />
-                            </span>
-                        </label>
-                        <p className="settings-hint" id="updates-auto-hint">
-                            {t('update.settings.autoHint')}
+                        <div className="setting-row">
+                            <label htmlFor="updates-mode">{t('update.settings.mode')}</label>
+                            <select
+                                id="updates-mode"
+                                className="settings-input settings-select-compact"
+                                value={update.updateMode}
+                                aria-describedby="updates-mode-hint"
+                                aria-busy={busy}
+                                disabled={disabled || busy}
+                                onChange={(e) => {
+                                    const mode = e.target.value as UpdateMode;
+                                    void run('update.action.saveMode', (b) => b.setUpdateMode(mode));
+                                }}
+                            >
+                                {MODES.map((mode) => (
+                                    <option key={mode} value={mode}>{t.bare(`update.settings.mode.${mode}`)}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <p className="settings-hint" id="updates-mode-hint">
+                            {t(`update.settings.modeHint.${update.updateMode}`)}
                         </p>
                     </>
                 )}
@@ -232,6 +237,9 @@ export function UpdatesSection() {
                         </button>
                     )}
                 </div>
+                {skipped && (
+                    <p className="settings-hint">{t('update.settings.skipped', { version: update.version ?? '' })}</p>
+                )}
                 {update.status === 'available' && update.manualInstall && (
                     <p className="settings-hint" id="updates-manual-hint">{t('update.settings.manualHint')}</p>
                 )}

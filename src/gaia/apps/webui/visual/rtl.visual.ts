@@ -2427,6 +2427,8 @@ const SETTINGS_UPDATE_STATES: Array<[string, Record<string, unknown>]> = [
     ['available', { status: 'available', version: '0.26.0' }],
     ['downloading', { status: 'downloading', version: '0.26.0', progress: 42 }],
     ['ready', { status: 'downloaded', version: '0.26.0' }],
+    ['skipped', { status: 'downloaded', version: '0.26.0', skippedVersion: '0.26.0' }],
+    ['automatic', { updateMode: 'auto' }],
     ['failed', { status: 'error', error: 'net::ERR_INTERNET_DISCONNECTED' }],
     ['pinned', { pinnedVersion: 'v0.25.3', currentVersion: '0.25.3-rc.2' }],
 ];
@@ -4364,7 +4366,7 @@ function withUpdater(update: Record<string, unknown>) {
         await page.addInitScript((patch) => {
             const state = {
                 status: 'idle', version: null, progress: 0, releaseNotes: null, error: null,
-                currentVersion: '0.25.4', pinnedVersion: null, autoUpdate: false, includePrereleases: false,
+                currentVersion: '0.25.4', pinnedVersion: null, updateMode: 'ask', skippedVersion: null, includePrereleases: false,
                 previousVersion: null, startFailed: false, installFailed: null, lastCheckError: null,
                 ...patch,
             };
@@ -4391,6 +4393,7 @@ const UPDATE_STATES: Record<string, Record<string, unknown>> = {
     downloading: { status: 'downloading', version: '0.25.5-rc.3', progress: 42 },
     preparing: { status: 'downloading', version: '0.25.5-rc.3', progress: 100, preparing: true },
     ready: { status: 'downloaded', version: '0.25.5-rc.3' },
+    'ready, automatic': { status: 'downloaded', version: '0.25.5-rc.3', updateMode: 'auto' },
     'install failed': { installFailed: { target: '0.25.5-rc.3', from: '0.25.4' } },
     'did not start': { startFailed: true, previousVersion: '0.25.3' },
     'check failed': { status: 'error', error: 'net::ERR_INTERNET_DISCONNECTED' },

@@ -28,6 +28,7 @@ beforeEach(() => {
   jest.clearAllMocks();
   mockUpdater.removeAllListeners();
   mockUpdater.quitAndInstall = jest.fn();
+  mockUpdater.quitHandlerAdded = false;
   mockUpdater.checkForUpdates = jest.fn(async () => null);
   mockUpdater.downloadUpdate = jest.fn(async () => []);
   refuseFetch();
@@ -97,7 +98,71 @@ test("the quit a restart starts is one that installs the update", async () => {
   expect(m.installsOnQuit()).toBe(true);
 });
 
-test("Keep running puts the restart off; the update installs on the next quit", async () => {
+test("a downloaded update waits to be asked: a quit doesn't install it", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  await finishDownload();
+  expect(m.getState()).toMatchObject({ status: "downloaded", updateMode: "ask" });
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+  expect(mockUpdater.quitHandlerAdded).toBe(false);
+  expect(m.installsOnQuit()).toBe(false);
+});
+
+test("an update asked for and put off does not carry over to a newer one", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => false) });
+  mockUpdater.emit("update-available", { version: "0.26.0" });
+  await finishDownload();
+  await clickRestartChip();
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+
+  mockUpdater.emit("update-available", { version: "0.26.1" });
+  mockUpdater.emit("update-downloaded", { version: "0.26.1" });
+  for (let i = 0; i < 5; i++) await flush();
+
+  expect(m.getState()).toMatchObject({ status: "downloaded", version: "0.26.1" });
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+  expect(m.installsOnQuit()).toBe(false);
+});
+
+test("choosing automatic and then being asked again leaves a quit installing nothing", async () => {
+  saveConfig({ updateMode: "manual" });
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  mockUpdater.emit("update-available", { version: "0.26.0" });
+  await m.setUpdateMode("auto");
+  await m.setUpdateMode("ask");
+  await finishDownload();
+  expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
+});
+
+test("changing the mode keeps an update that is already downloaded", async () => {
+  const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
+  await finishDownload();
+  global.fetch = jest.fn().mockRejectedValue(new Error("offline"));
+  const state = await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "auto");
+  expect(state).toMatchObject({ status: "downloaded", version: "0.26.0", updateMode: "auto" });
+  expect(global.fetch).not.toHaveBeenCalled();
+  expect(mockUpdater.quitHandlerAdded).toBe(true);
+  expect(m.installsOnQuit()).toBe(true);
+});
+
+test.each([[{}], [{ autoUpdate: true }]])(
+  "Keep running puts the restart off; the update installs on the next quit (%p)",
+  async (saved) => {
+    saveConfig(saved);
+    const confirmRestart = jest.fn(async () => false);
+    const m = initUpdater({ confirmRestart });
+    await finishDownload();
+    await clickRestartChip();
+    expect(confirmRestart).toHaveBeenCalledTimes(1);
+    expect(mockUpdater.quitAndInstall).not.toHaveBeenCalled();
+    expect(mockUpdater.autoInstallOnAppQuit).toBe(true);
+    // Without the hook electron-updater would skip the install it was told to do.
+    expect(mockUpdater.quitHandlerAdded).toBe(true);
+    expect(m.getState().status).toBe("downloaded");
+    expect(m.installsOnQuit()).toBe(true);
+  }
+);
+
+test("Keep running in automatic leaves the install for the next quit", async () => {
   saveConfig({ autoUpdate: true });
   const confirmRestart = jest.fn(async () => false);
   const m = initUpdater({ confirmRestart });
@@ -240,20 +305,20 @@ test("turning auto-update off stops an unasked download from installing on quit"
   saveConfig({ autoUpdate: true });
   const m = initUpdater({ confirmRestart: jest.fn(async () => false) });
   await finishDownload();
-  await m.setAutoUpdate(false);
+  await m.setUpdateMode("manual");
   expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
   expect(mockUpdater.autoDownload).toBe(false);
 });
 
-test("auto-update switched off by the Terminal UI stops the next download", async () => {
+test("auto-update switched off by the Terminal UI goes back to asking", async () => {
   saveConfig({ autoUpdate: true });
   const m = initUpdater({ confirmRestart: jest.fn(async () => true) });
   expect(mockUpdater.autoDownload).toBe(true);
   saveConfig({ autoUpdate: false, feedUrl: "https://example.test/feed/" });
   await m.checkForUpdates();
-  expect(mockUpdater.autoDownload).toBe(false);
+  expect(mockUpdater.autoDownload).toBe(true);
   expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
-  expect(m.getState().autoUpdate).toBe(false);
+  expect(m.getState().updateMode).toBe("ask");
 });
 
 test("an unreadable settings file pauses checks instead of ignoring a pin", async () => {
@@ -272,16 +337,17 @@ test("a save waits for the Terminal UI's lock, then fails loudly if it is held",
   saveConfig({ tuiPinnedVersion: "v0.24.0" });
   const lock = path.join(tmpHome, ".gaia", "update-config.json.lock");
   fs.writeFileSync(lock, "");
-  await expect(m.setAutoUpdate(true)).rejects.toThrow(/busy/);
+  await expect(m.setUpdateMode("auto")).rejects.toThrow(/busy/);
   const old = new Date(Date.now() - 60000);
   fs.utimesSync(lock, old, old); // a crashed app's lock is taken over
-  await m.setAutoUpdate(true);
+  await m.setUpdateMode("auto");
   const saved = JSON.parse(fs.readFileSync(path.join(tmpHome, ".gaia", "update-config.json"), "utf8"));
-  expect(saved).toEqual({ tuiPinnedVersion: "v0.24.0", autoUpdate: true });
+  expect(saved).toEqual({ tuiPinnedVersion: "v0.24.0", updateMode: "auto", autoUpdate: true });
   expect(fs.existsSync(lock)).toBe(false);
 });
 
-test("an update the user asked for still installs on quit with auto-update off", async () => {
+test("an update the user asked for still installs on quit in manual", async () => {
+  saveConfig({ updateMode: "manual" });
   const m = initUpdater({ confirmRestart: jest.fn(async () => false) });
   expect(mockUpdater.autoInstallOnAppQuit).toBe(false);
   mockUpdater.downloadUpdate = jest.fn(async () => null);
@@ -345,7 +411,7 @@ describe("a settings folder that refuses the lock file", () => {
     try {
       await onPlatform("linux", async () => {
         const start = Date.now();
-        const err = await m.setAutoUpdate(true).catch((e) => e);
+        const err = await m.setUpdateMode("auto").catch((e) => e);
         expect(err.message).toMatch(/permissions/);
         expect(err.message).not.toMatch(/busy/);
         expect(Date.now() - start).toBeLessThan(400);
@@ -360,7 +426,7 @@ describe("a settings folder that refuses the lock file", () => {
     const spy = denyLock("EPERM");
     try {
       await onPlatform("win32", async () => {
-        const err = await m.setAutoUpdate(true).catch((e) => e);
+        const err = await m.setUpdateMode("auto").catch((e) => e);
         expect(err.message).toMatch(/Cannot lock .*EPERM/);
         expect(err.message).not.toMatch(/busy/);
       });
@@ -408,7 +474,7 @@ describe("a crashed app's lock that cannot be moved aside", () => {
       const { spy } = failRename(code);
       try {
         const start = Date.now();
-        const err = await m.setAutoUpdate(true).catch((e) => e);
+        const err = await m.setUpdateMode("auto").catch((e) => e);
         expect(err.message).toMatch(/Cannot remove .*update-config\.json\.lock/);
         expect(err.message).toMatch(/permissions/);
         expect(err.message).not.toMatch(/busy|retried without end/);
@@ -425,7 +491,7 @@ describe("a crashed app's lock that cannot be moved aside", () => {
     staleLock();
     const { spy } = failRename("ENOENT", (from) => fs.rmSync(from, { force: true }));
     try {
-      await m.setAutoUpdate(false);
+      await m.setUpdateMode("manual");
     } finally {
       spy.mockRestore();
     }
@@ -440,7 +506,7 @@ describe("a crashed app's lock that cannot be moved aside", () => {
     staleLock();
     const { spy, calls } = failRename("EIO");
     try {
-      const err = await m.setAutoUpdate(true).catch((e) => e);
+      const err = await m.setUpdateMode("auto").catch((e) => e);
       expect(err.message).toMatch(/EIO/);
       expect(calls()).toBe(1);
     } finally {

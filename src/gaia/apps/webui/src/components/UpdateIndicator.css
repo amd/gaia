@@ -112,3 +112,8 @@
 .update-chip--error .i18n-gloss.i18n-gloss {
     color: inherit;
 }
+
+/* The "not now" button must stay readable on the green chip. */
+.update-chip--ready .update-chip__dismiss {
+    opacity: 0.85;
+}

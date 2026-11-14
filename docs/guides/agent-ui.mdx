@@ -1083,23 +1083,32 @@ installed; `gaia init --gaia-lemonade` installs it and switches. See
 
 ## Updates and installing a specific version
 
-GAIA offers each new release and waits for you: auto-update is **off by default**.
-Everything lives in **Settings → General → Updates** (desktop installer only):
+GAIA downloads each new release in the background, then asks you to restart into
+it. Nothing installs until you say so. Everything lives in **Settings → General →
+Updates** (desktop installer only):
 
-- **Install updates automatically** — off by default. The Terminal UI follows the
-  same setting.
+- **When an update is available** — what GAIA does with a new release:
+  - **Download it and ask me** (the default). The corner chip says **GAIA vX is
+    ready** with **Restart to update**. Quitting GAIA does not install it.
+  - **Install it automatically**. The update also installs the next time you restart
+    or quit. The Terminal UI follows this choice.
+  - **Only tell me**. Nothing downloads until you click **Update now** on the chip or
+    **Update to vX** here.
 - **Include release candidates** — off by default. On, GAIA also offers `vX.Y.Z-rcN`
-  test builds; they still wait for you unless auto-update is on. A release
-  candidate build is offered newer candidates either way.
-- **Check for updates**, then **Update to vX** when one is waiting. The corner chip
-  offers the same **Update now**.
+  test builds, handled the same way as any other update. A release candidate build
+  is offered newer candidates either way.
+- **Check for updates**, then **Update to vX** or **Restart to install** when one is
+  waiting.
+- **Not now** — the ✕ on the chip skips that version: the chip stays away for it,
+  even after a restart, and comes back for the next release. The Updates section
+  keeps offering the skipped version, so you can install it whenever you like.
 - **Install a specific version…** — pick a recent release, newer or older
   (useful to step back from a regression). The app downloads it and restarts into
   it, asking first if an answer or indexing job is still running.
 
 An update downloads in the background, usually only the parts that changed, and
 installs with no setup wizard. Once it is ready, the corner chip offers the restart,
-whenever suits you; quitting GAIA also installs it. The update carries the new
+whenever suits you. The update carries the new
 version's backend, so the first launch afterwards downloads nothing for it. A restart
 that would leave no working app, such as one with no disk space, is refused with the
 reason.

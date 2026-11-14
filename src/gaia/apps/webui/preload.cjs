@@ -153,8 +153,11 @@ contextBridge.exposeInMainWorld("gaiaUpdater", {
    */
   resumeUpdates: () => ipcRenderer.invoke("gaia:update:resume"),
 
-  /** Turn auto-update on or off (persisted; off by default). Resolves with the state. */
-  setAutoUpdate: (enabled) => ipcRenderer.invoke("gaia:update:set-auto-update", enabled),
+  /** Save the update mode: "ask" (the default), "auto" or "manual". Resolves with the state. */
+  setUpdateMode: (mode) => ipcRenderer.invoke("gaia:update:set-mode", mode),
+
+  /** "Not now": stop the chip asking about the offered version. Settings still offers it. */
+  skipUpdate: () => ipcRenderer.invoke("gaia:update:skip"),
 
   /** Offer release candidates as updates (independent of auto-update). Resolves with the state. */
   setIncludePrereleases: (enabled) =>

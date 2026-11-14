@@ -219,6 +219,34 @@ describe("GitHub releases as the default feed", () => {
     release("v0.25.1-rc11"),
   ];
 
+  // GitHub counts a HEAD of a release file as a download of it.
+  const installerChecks = () =>
+    global.fetch.mock.calls.filter(([, options]) => options && options.method === "HEAD").length;
+
+  test("a check that finds nothing new never touches an installer", async () => {
+    const mod = start("0.25.1");
+    serveReleases(LIVE);
+
+    await mod.checkForUpdates();
+    await mod.checkForUpdates();
+
+    expect(feedTag()).toBe("v0.25.1");
+    expect(checkSpy).toHaveBeenCalledTimes(2);
+    expect(installerChecks()).toBe(0);
+  });
+
+  test("a newer release's installer is checked once, however often the app checks", async () => {
+    const mod = start("0.25.0");
+    serveReleases(LIVE);
+
+    await mod.checkForUpdates();
+    await mod.checkForUpdates();
+    await mod.checkForUpdates();
+
+    expect(feedTag()).toBe("v0.25.1");
+    expect(installerChecks()).toBe(1);
+  });
+
   test("a final install is pointed at the newest final release", async () => {
     const mod = start("0.25.0");
     serveReleases(LIVE);
@@ -233,8 +261,9 @@ describe("GitHub releases as the default feed", () => {
       useMultipleRangeRequest: false,
     });
     expect(checkSpy).toHaveBeenCalledTimes(1);
-    // Off by default: finding an update never downloads it unasked.
-    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    // By default a found update downloads, and waits to be asked before installing.
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(false);
   });
 
   test("opting into release candidates points it at the newest candidate", async () => {
@@ -245,8 +274,8 @@ describe("GitHub releases as the default feed", () => {
     await mod.checkForUpdates();
 
     expect(feedTag()).toBe("v0.25.2-rc3");
-    expect(mod.getState().autoUpdate).toBe(false);
-    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(mod.getState().updateMode).toBe("ask");
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(false);
   });
 
   test("a release-candidate build is offered candidates without opting in", async () => {

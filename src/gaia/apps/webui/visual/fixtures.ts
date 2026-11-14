@@ -536,7 +536,7 @@ export async function withDesktopBridges(
         const tray = { minimizeToTray: true, startOnLogin: false, startMinimized: false };
         const status = {
             status: 'idle', version: null, progress: 0, releaseNotes: null, error: null, currentVersion: '0.25.4',
-            pinnedVersion: null, autoUpdate: false, includePrereleases: false, configError: null, ...state,
+            pinnedVersion: null, updateMode: 'ask', skippedVersion: null, includePrereleases: false, configError: null, ...state,
         };
         const same = async () => status;
         // The app also subscribes to tray and window events; those stay silent here.
@@ -549,7 +549,7 @@ export async function withDesktopBridges(
             }),
             gaiaUpdater: {
                 getStatus: readError ? async () => { throw new Error(readError); } : same, check: same, onStatusChange: () => () => {}, listReleases: async () => [], installVersion: same,
-                resumeUpdates: same, setAutoUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
+                resumeUpdates: same, setUpdateMode: same, skipUpdate: same, setIncludePrereleases: same, downloadUpdate: same, restart: same,
             },
         });
     }, { state: update, host, running: BACKEND_RUNNING, readError: statusReadError ?? null });

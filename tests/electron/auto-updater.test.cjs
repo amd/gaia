@@ -10,7 +10,7 @@
  *   - installVersion(): setFeedURL with generic/tag path, pin persist, checkForUpdates
  *   - pin gating: init() sets autoDownload=false when a pin is present
  *   - clearPin(): autoDownload back to the autoUpdate setting, allowDowngrade=false, forward feed
- *   - autoUpdate: off by default; Update now downloads; restart asks first
+ *   - updateMode: "ask" by default; Update now downloads; restart asks first; skip
  *   - getState() includes currentVersion and pinnedVersion
  *   - IPC handlers: invoked with bad input, they reject without side effects
  *
@@ -393,21 +393,49 @@ describe("pin gating", () => {
     expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
   });
 
-  test("init() leaves autoDownload off by default (auto-update is opt-in)", () => {
+  test("with nothing saved, updates download by themselves but never install unasked", () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
 
-    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
-    expect(mod.getState().autoUpdate).toBe(false);
+    expect(mod.getState()).toMatchObject({ updateMode: "ask", skippedVersion: null, includePrereleases: false });
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(false);
+    expect(mockAutoUpdaterInstance.allowPrerelease).toBe(false);
   });
 
-  test("init() turns autoDownload on when autoUpdate is saved", () => {
+  test("automatic downloads and installs on quit", () => {
     writeUpdateConfig({ autoUpdate: true });
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
 
+    expect(mod.getState().updateMode).toBe("auto");
     expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
-    expect(mod.getState().autoUpdate).toBe(true);
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(true);
+  });
+
+  test("manual downloads nothing by itself", () => {
+    writeUpdateConfig({ updateMode: "manual", autoUpdate: false });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    expect(mod.getState().updateMode).toBe("manual");
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(false);
+  });
+
+  // The Terminal UI reads and writes only autoUpdate.
+  test.each([
+    ["turned on in the Terminal UI over manual", { updateMode: "manual", autoUpdate: true }, "auto"],
+    ["turned off in the Terminal UI", { updateMode: "auto", autoUpdate: false }, "ask"],
+    ["turned off in the Terminal UI with manual saved", { updateMode: "manual", autoUpdate: false }, "manual"],
+    ["off from before the modes existed", { autoUpdate: false }, "ask"],
+    ["a mode this version doesn't know", { updateMode: "nightly" }, "ask"],
+  ])("auto-update %s reads as the right mode", (_label, saved, mode) => {
+    writeUpdateConfig(saved);
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    expect(mod.getState().updateMode).toBe(mode);
   });
 
   test("a pin keeps autoDownload off even with autoUpdate saved", () => {
@@ -467,33 +495,55 @@ describe("installVersion with auto-update and failures", () => {
   });
 });
 
-describe("setAutoUpdate / downloadUpdate / restart", () => {
-  test("set-auto-update persists the choice and keeps other keys", async () => {
+describe("setUpdateMode / downloadUpdate / restart", () => {
+  test("set-mode persists the choice, mirrors it for the Terminal UI, and keeps other keys", async () => {
     writeUpdateConfig({ feedUrl: "https://updates.example.com/gaia" });
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
 
-    const state = await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", true);
+    const state = await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "auto");
 
-    expect(state.autoUpdate).toBe(true);
+    expect(state.updateMode).toBe("auto");
     expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
     expect(readUpdateConfig()).toEqual({
       feedUrl: "https://updates.example.com/gaia",
+      updateMode: "auto",
       autoUpdate: true,
     });
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "manual");
+    expect(readUpdateConfig()).toMatchObject({ updateMode: "manual", autoUpdate: false });
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "ask");
+    expect(readUpdateConfig()).toMatchObject({ updateMode: "ask", autoUpdate: false });
   });
 
-  test("set-auto-update rejects a non-boolean without writing", async () => {
+  test.each([["yes"], [true], [undefined]])("set-mode rejects %p without writing", async (mode) => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
 
-    await expect(
-      electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", "yes")
-    ).rejects.toThrow(/true or false/);
+    await expect(electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", mode)).rejects.toThrow(
+      /one of ask, auto, manual/
+    );
     expect(fs.existsSync(pinFilePath())).toBe(false);
+    expect(mod.getState().updateMode).toBe("ask");
   });
 
-  test("with auto-update off, a found update is offered, not downloaded", async () => {
+  test("choosing to be asked while an update is offered downloads it, and a quit still won't install it", async () => {
+    writeUpdateConfig({ updateMode: "manual" });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const downloadSpy = jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate");
+    serveReleases([]);
+    mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
+
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "ask");
+
+    expect(downloadSpy).toHaveBeenCalledTimes(1);
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(false);
+  });
+
+  test("in manual, a found update is offered, not downloaded", async () => {
+    writeUpdateConfig({ updateMode: "manual" });
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
     const downloadSpy = jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate");
@@ -532,7 +582,7 @@ describe("setAutoUpdate / downloadUpdate / restart", () => {
     serveReleases([]);
     mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
 
-    await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", true);
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "auto");
 
     expect(downloadSpy).toHaveBeenCalledTimes(1);
   });
@@ -608,10 +658,10 @@ describe("release candidates (setIncludePrereleases)", () => {
     );
 
     expect(state.includePrereleases).toBe(true);
-    expect(state.autoUpdate).toBe(false);
+    expect(state.updateMode).toBe("ask");
     expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
-    // A channel, not an install trigger: nothing downloads unasked.
-    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    // A channel, not an install trigger: nothing installs unasked.
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(false);
     expect(readUpdateConfig()).toEqual({ includePrereleases: true });
     const tags = (await mod.listReleases()).map((r) => r.tag);
     expect(tags).toEqual(["v0.27.0-rc1", "v0.26.0"]);
@@ -648,10 +698,10 @@ describe("release candidates (setIncludePrereleases)", () => {
     const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockResolvedValue(null);
     serveReleases([final]);
 
-    await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", true);
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "auto");
     expect(checkSpy).toHaveBeenCalledTimes(1);
 
-    await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", false);
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "manual");
     expect(checkSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -661,7 +711,7 @@ describe("release candidates (setIncludePrereleases)", () => {
     mod.init(makeMockWindow(), INIT_OPTIONS);
     expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
 
-    await electronMock.ipcMain.simulateInvoke("gaia:update:set-auto-update", false);
+    await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "manual");
 
     expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
     expect(mockAutoUpdaterInstance.allowPrerelease).toBe(true);
@@ -691,10 +741,87 @@ describe("release candidates (setIncludePrereleases)", () => {
   });
 });
 
+// ── Tests: skipping an offered update ─────────────────────────────────────────
+
+describe("skipUpdate()", () => {
+  const skip = () => electronMock.ipcMain.simulateInvoke("gaia:update:skip");
+
+  test("saves the offered version and keeps offering it", async () => {
+    writeUpdateConfig({ feedUrl: "https://updates.example.com/gaia" });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
+
+    const state = await skip();
+
+    expect(state).toMatchObject({ status: "available", version: "0.26.0", skippedVersion: "0.26.0" });
+    expect(readUpdateConfig()).toEqual({
+      feedUrl: "https://updates.example.com/gaia",
+      skippedVersion: "0.26.0",
+    });
+  });
+
+  test("is remembered by the next launch", () => {
+    writeUpdateConfig({ skippedVersion: "0.26.0" });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    expect(mod.getState().skippedVersion).toBe("0.26.0");
+  });
+
+  test("a skipped download the user had asked for no longer installs on quit", async () => {
+    writeUpdateConfig({ updateMode: "manual" });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
+    await mod.downloadUpdate();
+    mockAutoUpdaterInstance.emit("update-downloaded", { version: "0.26.0" });
+    await new Promise((r) => setImmediate(r));
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(true);
+
+    await skip();
+
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(false);
+    expect(mod.installsOnQuit()).toBe(false);
+    expect(mod.getState().status).toBe("downloaded");
+  });
+
+  test("in automatic, a quit still installs a skipped update", async () => {
+    writeUpdateConfig({ autoUpdate: true });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    mockAutoUpdaterInstance.emit("update-downloaded", { version: "0.26.0" });
+    await new Promise((r) => setImmediate(r));
+
+    await skip();
+
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(true);
+  });
+
+  test("with nothing on offer fails loudly and saves nothing", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    await expect(skip()).rejects.toThrow(/No update is on offer to skip/);
+    expect(fs.existsSync(pinFilePath())).toBe(false);
+  });
+
+  test("a skip that can't be saved says so and is not shown as skipped", async () => {
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
+    fs.mkdirSync(path.dirname(pinFilePath()), { recursive: true });
+    fs.writeFileSync(pinFilePath(), "{not json");
+
+    await expect(skip()).rejects.toThrow(/Couldn't save the skipped version/);
+    expect(mod.getState().skippedVersion).toBeNull();
+  });
+});
+
 // ── Tests: clearPin ────────────────────────────────────────────────────────────
 
 describe("clearPin()", () => {
-  test("returns autoDownload to the auto-update setting (off), allowDowngrade=false, restores the R2 forward feed, clears pin file", () => {
+  test("returns autoDownload to the update mode's, allowDowngrade=false, restores the R2 forward feed, clears pin file", () => {
     // A configured R2 forward feed is what resume restores to (#1724).
     process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
 
@@ -715,7 +842,8 @@ describe("clearPin()", () => {
 
     mod.clearPin();
 
-    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
+    expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(false);
     expect(mockAutoUpdaterInstance.allowDowngrade).toBe(false);
     // Feed should be restored to the generic R2 forward channel.
     expect(mockAutoUpdaterInstance._feedURL).not.toBeNull();
@@ -810,7 +938,7 @@ describe("gaia:update:resume IPC", () => {
 
     const result = await electronMock.ipcMain.simulateInvoke("gaia:update:resume");
     expect(result).toHaveProperty("pinnedVersion", null);
-    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(true);
   });
 });
 
@@ -926,7 +1054,7 @@ describe("gaia:update:check IPC", () => {
 });
 
 describe("update-config.json problems are reported, not hidden", () => {
-  test("an unreadable file is shown as an error and auto-update stays off", () => {
+  test("an unreadable file is shown as an error and nothing downloads by itself", () => {
     const dir = path.join(tmpHome, ".gaia");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "update-config.json"), "{not json");
@@ -934,7 +1062,7 @@ describe("update-config.json problems are reported, not hidden", () => {
     mod.init(makeMockWindow(), INIT_OPTIONS);
 
     expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
-    expect(mod.getState().autoUpdate).toBe(false);
+    expect(mod.getState().updateMode).toBe("manual");
     expect(mod.getState().configError).toMatch(/update-config\.json cannot be read/);
   });
 });
@@ -955,10 +1083,10 @@ describe("saving a setting never wipes update-config.json", () => {
     const mod = loadModule();
     mod.init(makeMockWindow(), INIT_OPTIONS);
 
-    await expect(mod.setAutoUpdate(true)).rejects.toThrow(/cannot be read|does not hold a settings object/);
+    await expect(mod.setUpdateMode("auto")).rejects.toThrow(/cannot be read|does not hold a settings object/);
     await expect(mod.setIncludePrereleases(true)).rejects.toThrow(/fix the file by hand or delete it/);
     expect(fs.readFileSync(pinFilePath(), "utf8")).toBe(text);
-    expect(mod.getState().autoUpdate).toBe(false);
+    expect(mod.getState().updateMode).toBe("manual");
     expect(fs.existsSync(`${pinFilePath()}.tmp`)).toBe(false);
   });
 
@@ -1002,7 +1130,7 @@ describe("saving a setting never wipes update-config.json", () => {
       throw new Error("EPERM: file in use");
     });
 
-    await expect(mod.setAutoUpdate(true)).rejects.toThrow(/EPERM/);
+    await expect(mod.setUpdateMode("auto")).rejects.toThrow(/EPERM/);
     expect(fs.readFileSync(pinFilePath(), "utf8")).toBe(original);
     renameSpy.mockRestore();
   });

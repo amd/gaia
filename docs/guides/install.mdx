@@ -244,9 +244,10 @@ If it doesn't answer, check the three steps above.
 
 ## Updating GAIA
 
-GAIA checks for new releases and tells you when one is out, then waits for you to
-install it. **Auto-update is off by default** while GAIA is still changing quickly;
-turn it on when you'd rather not be asked.
+GAIA checks for new releases, and nothing installs until you say so. The desktop app
+downloads a new release in the background and then asks you to restart into it; the
+Terminal UI tells you one is out and waits for `/update now`. Either can install
+without asking if you turn that on.
 
 Updates stay out of your way: they download in the background, usually only the
 parts that changed, and installing shows no setup wizard. A restart brings the app
@@ -261,17 +262,20 @@ setup, saves the conversation first, and shows it again when you reopen it. The 
 anything from earlier that it still needs.
 
 **Desktop app (Agent UI).** It checks 10 seconds after launch and every 4 hours. A
-found release shows as a chip in the corner with **Update now**; once it has
-downloaded, the chip offers the restart, whenever suits you. Quitting GAIA also
-installs it. If the update then fails to finish setting up or start, GAIA offers **Go back** in that error box or on the chip, for the first three launches after an update. The update carries the new version's backend, so the first launch after the restart downloads nothing for it. A failed background check stays quiet and tries again later. Going back keeps your chats, memory and goals: an earlier version opens the data a newer one saved. **Settings → General → Updates** has:
+found release downloads by itself, then a chip in the corner says **GAIA vX is ready**
+with **Restart to update**, whenever suits you. The ✕ on the chip says not now: the
+chip stays away for that version, and **Settings → General → Updates** keeps offering
+it. Quitting GAIA does not install an update you haven't asked for. If the update then fails to finish setting up or start, GAIA offers **Go back** in that error box or on the chip, for the first three launches after an update. The update carries the new version's backend, so the first launch after the restart downloads nothing for it. A failed background check stays quiet and tries again later. Going back keeps your chats, memory and goals: an earlier version opens the data a newer one saved. **Settings → General → Updates** has:
 
-- **Install updates automatically** — off by default. On, releases download in the
-  background and you're asked only to restart.
+- **When an update is available** — **Download it and ask me** (the default),
+  **Install it automatically** (it also installs the next time you restart or quit),
+  or **Only tell me** (nothing downloads until you click **Update now**).
 - **Include release candidates** — off by default. On, GAIA also offers test builds
-  (`vX.Y.Z-rcN`) before their final release; they install only when you ask, unless
-  auto-update is on. A release candidate build is offered newer candidates either
+  (`vX.Y.Z-rcN`) before their final release, handled the same way as any other
+  update. A release candidate build is offered newer candidates either
   way, and moves to the final release once it ships.
-- **Check for updates**, and **Update to vX** when one is waiting.
+- **Check for updates**, and **Update to vX** or **Restart to install** when one is
+  waiting, including one you skipped on the chip.
 - **Go back to GAIA vX** after an update, if it causes problems. GAIA installs the version you had before and pauses updates, so the bad one doesn't come back; **Unpin** resumes them. It downloads that version, so it needs an internet connection.
 - **Install a specific version…** — a recent release, newer or older. GAIA then
   stays on that version (pinned) until you click **Unpin**.
@@ -308,7 +312,8 @@ one has none, `/update` says so and points to the releases page.
 
 Both apps keep the auto-update and release-candidate choices in
 `~/.gaia/update-config.json`, so turning one on in either app turns it on in the
-other. Pins stay separate. If the file can't be read, neither app overwrites it: saving a
+other. `/update auto off` puts the desktop app back to downloading and asking. Pins
+stay separate. If the file can't be read, neither app overwrites it: saving a
 setting fails with a message saying to fix or delete the file, and the desktop app pauses
 its update checks until it is fixed. Both check the
 [GitHub releases](https://github.com/amd/gaia/releases). The desktop app installs only releases that publish its update for your
@@ -318,7 +323,7 @@ platform.
 its builds aren't signed with an Apple Developer ID, and macOS rejects an unsigned
 update. A new release still shows on the corner chip and in **Settings → General →
 Updates**, with a **Download** link to its release page; install the `.dmg` from there
-over the app you have. **Install updates automatically** isn't shown, and **Install a
+over the app you have. **When an update is available** isn't shown, and **Install a
 specific version…** opens the chosen release's page instead of installing it.
 
 To turn update checks off entirely, set `GAIA_DISABLE_UPDATE=1` before launching.

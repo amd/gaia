@@ -116,7 +116,7 @@ describe("on macOS an update is a download from its release page", () => {
     writeUpdateConfig({ autoUpdate: true });
     const mod = started();
 
-    expect(mod.getState().autoUpdate).toBe(true);
+    expect(mod.getState().updateMode).toBe("auto");
     expect(mockAutoUpdater.autoDownload).toBe(false);
     expect(mockAutoUpdater.autoInstallOnAppQuit).toBe(false);
   });
@@ -142,7 +142,7 @@ describe("on macOS an update is a download from its release page", () => {
     const download = jest.spyOn(mockAutoUpdater, "downloadUpdate");
     mockAutoUpdater.emit("update-available", { version: "0.26.0" });
 
-    await mod.setAutoUpdate(true);
+    await mod.setUpdateMode("auto");
 
     expect(download).not.toHaveBeenCalled();
     expect(mockAutoUpdater.autoDownload).toBe(false);

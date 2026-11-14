@@ -9,8 +9,8 @@ import { log } from '../utils/logger';
  * `gaiaUpdater` contextBridge API (see src/gaia/apps/webui/preload.cjs
  * and services/auto-updater.cjs). Phase F of the desktop installer plan.
  * Issue #1336: adds rollback support (listReleases, installVersion, resumeUpdates).
- * Auto-update is opt-in (off by default): a found update is offered, and
- * downloadUpdate() installs it.
+ * By default a found update downloads by itself and waits for the user to
+ * restart into it; see UpdateMode.
  */
 export type UpdateStatus =
     | 'idle'
@@ -22,6 +22,12 @@ export type UpdateStatus =
     | 'disabled'
     | 'no-channel';
 
+/**
+ * "ask" downloads an update and waits for the user to restart into it (the
+ * default); "auto" also installs it on the next quit; "manual" only offers it.
+ */
+export type UpdateMode = 'ask' | 'auto' | 'manual';
+
 export interface UpdateState {
     status: UpdateStatus;
     version: string | null;
@@ -32,9 +38,10 @@ export interface UpdateState {
     currentVersion: string | null;
     /** The pinned version tag (e.g. "v0.20.0") or null if not pinned. */
     pinnedVersion: string | null;
-    /** Download and install updates without asking. Off by default. */
-    autoUpdate: boolean;
-    /** Offer release candidates too. Off by default; independent of autoUpdate. */
+    updateMode: UpdateMode;
+    /** The version the user said "not now" to: the chip stays away, Settings still offers it. */
+    skippedVersion?: string | null;
+    /** Offer release candidates too. Off by default; independent of updateMode. */
     includePrereleases?: boolean;
     /** ~/.gaia/update-config.json could not be read; why, or null. */
     configError?: string | null;
@@ -73,7 +80,8 @@ export interface GaiaUpdaterBridge {
     installVersion: (tag: string) => Promise<UpdateState>;
     revertUpdate: () => Promise<UpdateState>;
     resumeUpdates: () => Promise<UpdateState>;
-    setAutoUpdate: (enabled: boolean) => Promise<UpdateState>;
+    setUpdateMode: (mode: UpdateMode) => Promise<UpdateState>;
+    skipUpdate: () => Promise<UpdateState>;
     setIncludePrereleases: (enabled: boolean) => Promise<UpdateState>;
     downloadUpdate: () => Promise<UpdateState>;
     restart: () => Promise<UpdateState>;
@@ -92,7 +100,8 @@ export const INITIAL_STATE: UpdateState = {
     error: null,
     currentVersion: null,
     pinnedVersion: null,
-    autoUpdate: false,
+    updateMode: 'ask',
+    skippedVersion: null,
     includePrereleases: false,
 };
 
