@@ -1743,7 +1743,11 @@ def _index_rag_with_progress(
     each successfully indexed document (used for cache-hit incremental updates).
     Stops at the index's cap; the rest stay attached and load on request.
     """
-    from gaia.agents.tools.rag_tools import _forget_evicted, index_limit
+    from gaia.agents.tools.rag_tools import (
+        _forget_evicted,
+        not_held,
+        not_loaded_summary,
+    )
 
     n = len(fpath_list)
     unreadable = set()
@@ -1759,7 +1763,7 @@ def _index_rag_with_progress(
     total_chunks = 0
     cancelled = getattr(sse_handler, "cancelled", None)
     left = 0
-    not_loaded = 0
+    filled = False
     for i, fpath in enumerate(fpath_list, 1):
         # Stop ends the loading here; what is left is picked up on the next turn.
         if cancelled is not None and cancelled.is_set():
@@ -1767,13 +1771,7 @@ def _index_rag_with_progress(
             break
         # Full: loading more would push out what was just loaded.
         if agent.rag.is_full():
-            held = {os.path.realpath(p) for p in agent.rag.indexed_files}
-            # Counts one a long document pushed out on the way in, too.
-            not_loaded = sum(
-                1
-                for p in fpath_list
-                if p not in unreadable and os.path.realpath(p) not in held
-            )
+            filled = True
             break
         doc_name = Path(fpath).name
         sse_handler._emit(
@@ -1790,7 +1788,7 @@ def _index_rag_with_progress(
             if error:
                 logger.warning("RAG error for %s: %s", fpath, error)
                 unreadable.add(fpath)
-                doc_stats.append(f"  {doc_name} — ERROR: {error}")
+                doc_stats.append((fpath, f"  {doc_name} — ERROR: {error}"))
                 sse_handler._emit(
                     {
                         "type": "status",
@@ -1799,6 +1797,7 @@ def _index_rag_with_progress(
                     }
                 )
             else:
+                filled = filled or bool(result.get("evicted"))
                 _forget_evicted(agent.indexed_files, result.get("evicted", []))
                 agent.indexed_files.add(fpath)
                 total_chunks += n_chunks
@@ -1812,15 +1811,18 @@ def _index_rag_with_progress(
                     size_str = f"{file_size_bytes} B"
                 from_cache = result.get("from_cache", False)
                 doc_stats.append(
-                    f"  {doc_name} — {n_chunks} chunks, {size_str}"
-                    + (" (cached)" if from_cache else "")
+                    (
+                        fpath,
+                        f"  {doc_name} — {n_chunks} chunks, {size_str}"
+                        + (" (cached)" if from_cache else ""),
+                    )
                 )
                 if rebuild_per_doc:
                     agent.rebuild_system_prompt()
         except Exception as idx_err:
             logger.warning("Failed to index %s: %s", fpath, idx_err)
             unreadable.add(fpath)
-            doc_stats.append(f"  {doc_name} — FAILED: {idx_err}")
+            doc_stats.append((fpath, f"  {doc_name} — FAILED: {idx_err}"))
             sse_handler._emit(
                 {
                     "type": "status",
@@ -1829,21 +1831,26 @@ def _index_rag_with_progress(
                 }
             )
     idx_elapsed = round(_time.time() - idx_start, 1)
+    # Includes one a later, long document pushed out, the last one's too.
+    unloaded = (
+        not_held(agent.rag, fpath_list, unreadable) if filled and not left else []
+    )
     headline = (
         f"Stopped: {left} of {n} {label} not loaded. They load with your next message."
         if left
-        else f"Indexed {n - not_loaded} {label} in {idx_elapsed}s"
+        else f"Indexed {n - len(unloaded)} {label} in {idx_elapsed}s"
     )
-    if not_loaded:
-        headline += (
-            f". {not_loaded} more not loaded: {index_limit(agent.rag)}. Ask "
-            "about one of them by name to search it."
-        )
+    if unloaded:
+        headline += ". " + not_loaded_summary(agent.rag, unloaded)
+    pushed_out = set(unloaded)
     summary_lines = [
         headline,
         f"Total: {total_chunks} chunks in index",
         "",
-    ] + doc_stats
+    ] + [
+        line + (" (then pushed out to fit the index)" if path in pushed_out else "")
+        for path, line in doc_stats
+    ]
     sse_handler._emit(
         {
             "type": "tool_result",

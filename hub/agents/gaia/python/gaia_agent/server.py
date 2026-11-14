@@ -66,7 +66,11 @@ from starlette.responses import StreamingResponse
 from gaia.agents.base import file_snapshots
 from gaia.agents.base.history import fit_pushed_history, pushed_turns
 from gaia.agents.base.readiness import start_advice, version_meets_min
-from gaia.agents.tools.rag_tools import _forget_evicted, index_limit
+from gaia.agents.tools.rag_tools import (
+    _forget_evicted,
+    not_held,
+    not_loaded_summary,
+)
 from gaia.daemon.broker_client import interactive_turn, queue_status_event
 from gaia.listener_guard import keep_listening_after_client_resets
 from gaia.llm.surface_hints import surface_wording
@@ -952,8 +956,9 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
     lines: List[str] = []
     cancel = getattr(agent, "_cancel_event", None)
     stopped = False
-    not_loaded = 0
+    filled = False
     unreadable: set = set()
+    loaded_line: Dict[str, int] = {}
     for position, doc in enumerate(pending):
         # Stop ends the loading here; what is left stays pending for the next turn.
         if cancel is not None and cancel.is_set():
@@ -966,15 +971,7 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             stopped = True
             break
         if rag is not None and rag.is_full():
-            # Counts one a long document pushed out on the way in, too.
-            not_loaded = sum(
-                1 for d in pending if d not in indexed and d not in unreadable
-            )
-            lines.append(
-                f"{not_loaded} more not loaded: {index_limit(rag)}. Ask about "
-                "one of them by name to search it."
-            )
-            _grant_unloaded(agent, pending[position:])
+            filled = True
             break
         name = Path(doc).name
         reason = (
@@ -995,13 +992,24 @@ def _index_attached_documents(agent: Any, documents: List[str], handler: Any) ->
             lines.append(f"{name}: not indexed: {exc}")
             continue
         if result.get("success") and not result.get("error"):
+            filled = filled or bool(result.get("evicted"))
             _forget_evicted(indexed, result.get("evicted", []))
             indexed.add(doc)
+            loaded_line[doc] = len(lines)
             lines.append(f"{name}: {result.get('num_chunks', 0)} chunks")
         else:
             unreadable.add(doc)
             error = result.get("error") or "the indexer gave no reason"
             lines.append(f"{name}: not indexed: {error}")
+    # Includes one a later, long document pushed out, the last one's too.
+    unloaded = not_held(rag, pending, unreadable) if filled and not stopped else []
+    for doc in unloaded:
+        if doc in loaded_line:
+            lines[loaded_line[doc]] += " (then pushed out to fit the index)"
+    if unloaded:
+        lines.append(not_loaded_summary(rag, unloaded))
+        _grant_unloaded(agent, unloaded)
+    not_loaded = len(unloaded)
     succeeded = sum(1 for d in pending if d in indexed)
     if succeeded:
         agent.rebuild_system_prompt()

@@ -335,3 +335,50 @@ def test_the_agent_ui_warns_at_the_same_cap():
     passages = re.search(r"PASSAGES_AT_ONCE = (\d+);", source)
     assert int(files.group(1)) == RAGConfig().max_indexed_files
     assert int(passages.group(1)) == RAGConfig().max_total_chunks
+
+
+def test_the_last_document_pushing_one_out_is_reported_in_the_agent_ui(books):
+    from gaia.ui._chat_helpers import _index_rag_with_progress
+
+    three = books.paths[:3]
+    host = _Host(books.rag, three)
+    handler = _Handler()
+    _index_rag_with_progress(host, three, handler)
+
+    # The third and last book pushed the first out; no later pass saw it full.
+    assert books.evicted == [books.paths[0]]
+    summary = handler.summary()["summary"]
+    headline = summary.split("\n")[0]
+    assert headline.startswith("Indexed 2 document(s)")
+    assert "1 more not loaded" in headline
+    assert "Not loaded: book_0.txt." in headline
+    assert "holds at most 25 passages at once" in headline
+    assert "book_0.txt — 10 chunks" in summary
+    assert "(then pushed out to fit the index)" in summary
+
+
+def test_the_last_document_pushing_one_out_is_reported_by_the_relay(books):
+    server = pytest.importorskip("gaia_agent.server")
+    three = books.paths[:3]
+    agent = SimpleNamespace(
+        rag=books.rag,
+        indexed_files=set(),
+        path_validator=PathValidator([str(books.root / "cache")]),
+        rebuild_system_prompt=lambda: None,
+        _cancel_event=None,
+    )
+    handler = _Handler()
+
+    server._index_attached_documents(agent, three, handler)
+
+    assert books.evicted == [books.paths[0]]
+    summary = handler.summary()
+    lines = summary["summary"].split("\n")
+    assert "book_0.txt: 10 chunks (then pushed out to fit the index)" in lines
+    assert "book_2.txt: 10 chunks" in lines
+    assert lines[-1].startswith("1 more not loaded:")
+    assert "Not loaded: book_0.txt." in lines[-1]
+    assert "holds at most 25 passages at once" in lines[-1]
+    assert summary["success"] is True
+    assert summary["result_data"]["status"] == "indexed"
+    assert agent.path_validator.is_path_allowed(books.paths[0], prompt_user=False)

@@ -332,9 +332,29 @@ def attached_not_loaded(host: Any, rag: Any) -> List[str]:
     attached = getattr(host, "attached_documents", None) or []
     if not attached or rag is None:
         return []
+    return not_held(rag, attached)
+
+
+def not_held(rag: Any, paths: List[str], skip: Any = ()) -> List[str]:
+    """*paths*, less *skip*, that *rag* neither holds nor is still indexing."""
     held = {os.path.realpath(p) for p in rag.indexed_files}
     held.update(os.path.realpath(p) for p in documents_still_indexing(rag))
-    return [p for p in attached if os.path.realpath(p) not in held]
+    return [p for p in paths if p not in skip and os.path.realpath(p) not in held]
+
+
+# Not-loaded documents named in an indexing step; the rest are counted.
+_NOT_LOADED_NAMED = 30
+
+
+def not_loaded_summary(rag: Any, documents: List[str]) -> str:
+    """The indexing step's line for attached *documents* the full index left out."""
+    names = ", ".join(Path(d).name for d in documents[:_NOT_LOADED_NAMED])
+    more = len(documents) - _NOT_LOADED_NAMED
+    return (
+        f"{len(documents)} more not loaded: {index_limit(rag)}. Not loaded: "
+        f"{names}{f', and {more} more' if more > 0 else ''}. Ask about one of "
+        "them by name to search it."
+    )
 
 
 def index_limit(rag: Any) -> str:
