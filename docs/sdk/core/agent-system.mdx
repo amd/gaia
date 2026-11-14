@@ -1027,6 +1027,9 @@ run, or when the agent changed code and nothing checked it afterwards. In a
 project with a test suite only a test run covers a change, so a clean lint alone
 still gets the note. When every check passed, or nothing needed checking (a
 question, a lookup, a read, a notes file), the answer carries no note at all.
+An answer that itself reports the failed tests ("No, the suite fails: 1
+failed") and claims no success gets no note for them either; the
+`verification` data below still records the failure.
 
 The state is derived from the tool calls that actually executed during the
 turn — no extra model call — and is returned as data on the result, for

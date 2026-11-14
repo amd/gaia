@@ -734,7 +734,8 @@ There is no silent null.
   agent adds that one line when a check failed or was blocked, or a change was
   never checked. Show it to the user; do not read it as an error, and do not
   strip it from the `context` you replay. A turn that was confirmed, or needed no
-  check, has no such line.
+  check, has no such line, and neither has an answer that itself reports failed
+  tests and claims no success.
 - **`needs_confirmation` is followed by a refusal and the run ends.** See §8.
   The nine gated tools are unreachable **over `/query`** — the agent itself can
   run them on a transport that can prompt (SPEC §5.5).

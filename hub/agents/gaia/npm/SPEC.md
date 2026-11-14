@@ -561,7 +561,9 @@ ends the answer with one plain-English line, for example
 `I haven't confirmed this works — the tests didn't pass.` It appears when a
 check failed, a check was blocked before it could run, a file was changed and
 nothing checked it afterwards, or the answer claims something the tool record
-does not support. It is capped at 200 characters and added at most once per
+does not support. An answer that itself reports failed tests, and claims no
+success, gets no line for them; the turn's `verification` data still records
+the failure. It is capped at 200 characters and added at most once per
 turn. A turn where every check passed, or nothing needed checking, carries
 nothing. It is part of `final.answer` and of the streamed text, so it is also
 what you store and replay in the next turn's `context`. A client that wants the
