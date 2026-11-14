@@ -7,6 +7,7 @@ import { NewChat, START_RETRY_MS, greeting, warmUpLine } from '../NewChat';
 import { useChatStore } from '../../stores/chatStore';
 import { useModelStore } from '../../stores/modelStore';
 import * as api from '../../services/api';
+import newChatCss from '../NewChat.css?raw';
 import type { ActiveModel, Document, StartScreen, SystemStatus } from '../../types';
 
 vi.mock('../../services/api');
@@ -131,6 +132,33 @@ describe('NewChat try chips', () => {
         expect(screen.getByLabelText('Message')).toHaveValue('Give me a banana bread recipe');
         expect(screen.getByLabelText('Message')).toHaveFocus();
         expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it('keeps a question already typed and adds the example after it (#7594)', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+
+        fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'What should I cook this week?' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+
+        expect(screen.getByLabelText('Message')).toHaveValue('What should I cook this week?\n\nGive me a banana bread recipe');
+    });
+
+    it('swaps the earlier chip example for the next one, with and without a typed question', () => {
+        useChatStore.setState({ systemStatus: { init_state: 'ready' } as SystemStatus });
+        render(<NewChat onSend={vi.fn().mockResolvedValue(undefined)} />);
+        const box = screen.getByLabelText('Message');
+
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('A 15-minute workout I can do at home');
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('A 15-minute workout I can do at home');
+
+        fireEvent.change(box, { target: { value: 'What should I do today?' } });
+        fireEvent.click(screen.getByRole('button', { name: /^Recipe:/ }));
+        fireEvent.click(screen.getByRole('button', { name: /^Workout:/ }));
+        expect(box).toHaveValue('What should I do today?\n\nA 15-minute workout I can do at home');
     });
 });
 
@@ -334,6 +362,7 @@ describe('NewChat empty state', () => {
         beforeEach(() => {
             useChatStore.setState({ draftFolder: null });
             window.gaiaAPI = { dialog: { pickFolder } } as unknown as NonNullable<typeof window.gaiaAPI>;
+            vi.mocked(api.checkEnvironmentFolder).mockResolvedValue({ refusal: null });
         });
         afterEach(() => {
             delete window.gaiaAPI;
@@ -350,6 +379,41 @@ describe('NewChat empty state', () => {
             expect(useChatStore.getState().draftFolder).toBe('/home/u/site');
             expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
             expect(api.browseFiles).not.toHaveBeenCalled();
+            expect(api.checkEnvironmentFolder).toHaveBeenCalledWith('/home/u/site');
+        });
+
+        it('refuses the home folder as soon as it is picked, and says why (#7996)', async () => {
+            const why = "GAIA can't be given /home/u: it is your home directory. Pick a narrower folder.";
+            pickFolder.mockResolvedValue('/home/u');
+            vi.mocked(api.checkEnvironmentFolder).mockResolvedValue({ refusal: why });
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            expect(await screen.findByText(why)).toBeInTheDocument();
+            expect(useChatStore.getState().draftFolder).toBeNull();
+            expect(screen.getByRole('button', { name: 'Add a folder' })).toBeInTheDocument();
+        });
+
+        it('takes a folder outside the home folder, as adding it does', async () => {
+            pickFolder.mockResolvedValue('D:\\Projects\\site');
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            await waitFor(() => expect(useChatStore.getState().draftFolder).toBe('D:\\Projects\\site'));
+            expect(api.browseFiles).not.toHaveBeenCalled();
+        });
+
+        it("adds nothing and says so when the folder couldn't be checked", async () => {
+            pickFolder.mockResolvedValue('/home/u/site');
+            vi.mocked(api.checkEnvironmentFolder).mockRejectedValue(new Error('Failed to fetch'));
+            render(<NewChat onSend={vi.fn()} />);
+
+            fireEvent.click(await screen.findByRole('button', { name: 'Add a folder' }));
+
+            expect(await screen.findByText("Couldn't check that folder, so it wasn't added: Failed to fetch")).toBeInTheDocument();
+            expect(useChatStore.getState().draftFolder).toBeNull();
         });
 
         it('keeps the folder as it was when the OS picker is cancelled', async () => {
@@ -496,5 +560,13 @@ describe('NewChat after first-run setup failed', () => {
         useChatStore.setState({ systemStatus: { init_state: 'ready', setup_error: null } as SystemStatus });
         render(<NewChat onSend={vi.fn()} />);
         expect(screen.queryByRole('alert')).toBeNull();
+    });
+});
+
+describe('the greeting gloss', () => {
+    it('is set smaller than the greeting, so the English never out-sizes the Arabic', () => {
+        const rule = newChatCss.match(/\.new-chat-greeting \.i18n-gloss\.i18n-gloss \{([^}]*)\}/);
+        expect(rule?.[1]).toMatch(/font-size:\s*0\.55em/);
+        expect(rule?.[1]).toMatch(/display:\s*block/);
     });
 });

@@ -50,6 +50,7 @@ from gaia.agents.base.call_risk import (
     RISK_NOTE_ARG,
     SHELL_TOOLS,
 )
+from gaia.agents.base.chunk_index import OUTPUT_TOOLS
 from gaia.agents.base.completion import (
     _BINARY_SUFFIXES,
     WRITE_TOOLS,
@@ -80,6 +81,10 @@ from gaia.agents.base.context_eviction import (
     request_tokens,
     resolve_context_eviction,
     shrink_for_overflow,
+)
+from gaia.agents.base.credential_reads import (
+    PYTHON_TOOLS,
+    python_credential_refusal,
 )
 from gaia.agents.base.deliverables import (
     DELIVERABLE_SUFFIXES,
@@ -187,6 +192,7 @@ from gaia.agents.base.verification import (
 
 # First-party imports
 from gaia.chat.sdk import AgentConfig, AgentSDK, LLMCallCancelled
+from gaia.credential_shapes import redact_tool_output
 from gaia.daemon.broker_client import LeaseWaitCancelled, lease_cancel_scope
 from gaia.llm.lemonade_client import (
     RECONNECTING_MESSAGE,
@@ -223,6 +229,7 @@ from gaia.utils.terminal import stdin_is_interactive
 
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
+    from gaia.agents.base.history import TurnMessages
     from gaia.connectors.providers.base import ConnectorRequirement
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
     from gaia.skills.binaries import BinaryGrants
@@ -416,10 +423,13 @@ def effective_skill_body(agent, skill) -> str:
                 len(resolved.applied),
                 resolved.token_delta,
             )
-            try:
-                store.touch_deltas(resolved.applied)
-            except Exception:  # noqa: BLE001 - telemetry must not break a turn
-                logger.debug("[SkillDeltas] touch_deltas failed", exc_info=True)
+            from gaia.agents.base.memory_privacy import memory_writes_refused
+
+            if not memory_writes_refused(agent):
+                try:
+                    store.touch_deltas(resolved.applied)
+                except Exception:  # noqa: BLE001 - telemetry must not break a turn
+                    logger.debug("[SkillDeltas] touch_deltas failed", exc_info=True)
 
         cache[key] = resolved.body
         return resolved.body
@@ -761,6 +771,15 @@ TOOLS_REQUIRING_CONFIRMATION = {
     # Erases all memory and past conversations; nothing brings them back.
     "forget_everything",
 }
+
+
+def _argument_shape(name: str, param: inspect.Parameter) -> str:
+    """``name (type)`` for a missing-argument error; just the name when untyped."""
+    annotation = param.annotation
+    if annotation is inspect.Parameter.empty:
+        return name
+    return f"{name} ({getattr(annotation, '__name__', annotation)})"
+
 
 #: Put on a call the user declined, so the model stops instead of rerouting.
 DECLINED_HINT = (
@@ -1355,10 +1374,12 @@ _CUT_OFF_CONTINUE_PROMPT = (
     "answer if the task is complete."
 )
 _CUT_OFF_FAILURE_ANSWER = (
-    "I could not finish this task: my replies kept getting cut off at the "
-    "model's output-token limit, so the work they described was never carried "
-    "out. Retry with a higher output-token limit (max_tokens) or a model that "
-    "reasons more briefly."
+    "I couldn't finish this: my reply kept growing longer than the model can "
+    "send at once, so it was cut off before I could carry out the next step."
+)
+_CUT_OFF_NEXT_STEP = (
+    "To get the rest done, ask for it in smaller parts, for example half of the "
+    "items at a time, so each reply stays short."
 )
 
 # Unfinished-answer guard: a "final answer" that is really a plan,
@@ -2071,21 +2092,35 @@ def _is_jsonc(path: Path) -> bool:
     return any(part.lower() == ".vscode" for part in path.parts[:-1])
 
 
-def _parse_problem(path: Path, text: str) -> Optional[str]:
-    """Why *text* does not parse as *path*'s type, or None (unchecked types pass)."""
+def _parse_problem(path: Path, text: str, new: bool = False) -> Optional[str]:
+    """Why *text* does not parse as *path*'s type, or None (unchecked types pass).
+
+    *new*: the file did not exist before the turn, so it never parsed.
+    """
     suffix = path.suffix.lower()
     if suffix in (".py", ".pyi"):
         try:
             ast.parse(text)
         except (SyntaxError, ValueError) as e:
-            return f"`{path}` no longer parses as Python: {e}"
+            verb = "doesn't parse" if new else "no longer parses"
+            return f"`{path}` {verb} as Python: {e}"
     elif suffix == ".json" and not _is_jsonc(path):
         try:
             json.loads(text)
         except ValueError as e:
-            return f"`{path}` is no longer valid JSON: {e}"
+            state = "isn't" if new else "is no longer"
+            return f"`{path}` {state} valid JSON: {e}"
     return None
 
+
+def _user_supplied(text: str, request: Optional[str]) -> bool:
+    """Whether the request itself holds *text*: the user dictated the content."""
+    content = " ".join(text.split())
+    return bool(content and request) and content in " ".join(request.split())
+
+
+#: Parse baseline for a file the turn created: no earlier version to compare.
+_NEW_FILE = "new"
 
 _EDIT_VERIFICATION_PROMPT = (
     "[check:edits] The files you changed this turn were read back off disk "
@@ -2832,6 +2867,9 @@ class Agent(abc.ABC):
     # Which mixin contributed each system-prompt fragment.
     _mixin_prompt_origins: "Optional[Dict[str, Any]]" = None
 
+    # The volatile fragments, composed with the system prompt; see session_context.
+    _session_context_cache: str = ""
+
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
@@ -2996,11 +3034,11 @@ class Agent(abc.ABC):
     #: than by remembering to copy an override.
     CONFIRMATION_HOOKS: ClassVar[tuple] = ()
 
-    # ``get_*_system_prompt`` fragments whose text changes during a session.
-    # ``_compose_system_prompt`` emits these LAST so a mid-session change never
-    # invalidates the backend's KV-cache prefix for the static text above them.
-    # Add a name here only if its fragment genuinely varies within one session —
-    # a static fragment listed here just loses its position, harmlessly.
+    # ``get_*_system_prompt`` fragments whose text differs between sessions or
+    # changes during one. They ride at the start of the first user message
+    # (``session_context``), so every fresh session shares one cached system
+    # prompt; hybrid models can't resume mid-system-prompt. Listing a static
+    # fragment here only moves it, harmlessly.
     VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = frozenset(
         {
             "get_memory_system_prompt",  # re-rendered on forget/update of a shown item
@@ -3119,7 +3157,7 @@ Do NOT wrap conversational replies in JSON.
             silent_mode: If True, suppresses all console output for JSON-only usage (default: False)
             debug: If True, enables debug output for troubleshooting (default: False)
             output_handler: Custom OutputHandler for displaying agent output (default: None, creates console based on silent_mode)
-            max_plan_iterations: Plan-execute-replan cycles before a final answer is forced (default: 3, 0 = unlimited); binds only once half the step budget is spent
+            max_plan_iterations: Plan-execute-replan cycles before a final answer is forced (default: 3, 0 = unlimited); binds only once 20 steps are left (half a budget of 40 or fewer)
             max_consecutive_repeats: Maximum consecutive identical tool calls before stopping (default: 4; at least 2, or ValueError).
                           The first time the limit is hit the model gets one correction and the call is not run;
                           a repeat after that ends the turn. When the repeats that ran worked, the agent makes one
@@ -3225,6 +3263,8 @@ Do NOT wrap conversational replies in JSON.
         self._turn_ungrounded: List[str] = []
         # The user's own words this turn ask only for a plan, not an answer.
         self._turn_plan_only_requested = False
+        # The user's own words this turn bar tools, reading included.
+        self._turn_no_look_requested = False
         self._deliverable_cache: Dict[tuple, list] = {}
         # Step-budget notices already sent this turn, by threshold.
         self._budget_notices_sent: set = set()
@@ -3281,6 +3321,8 @@ Do NOT wrap conversational replies in JSON.
         self._followup_queue: Optional["queue.Queue[str]"] = None
         # Effects the user declined this turn; reset per turn.
         self._denied_effects = DeniedEffects()
+        # (turn, call) for each approval prompt nobody answered.
+        self._expired_calls: set = set()
         # (turn, path) for each access prompt declined or left unanswered.
         self._refused_paths: List[Tuple[int, Path]] = []
 
@@ -3655,13 +3697,10 @@ Do NOT wrap conversational replies in JSON.
         ):
             parts.append(self._response_format_template)
 
-        # Volatile last. llama.cpp reuses the KV cache only up to the first
-        # differing token, so anything that changes mid-session — memory after a
-        # remember(), the per-turn skill-body selection, a filtered tool list —
-        # placed ABOVE the static text invalidates all of it. Tail position
-        # keeps the static head cached across turns.
-        parts.extend(volatile_mixins)
+        # Out of the system prompt entirely: see ``session_context``.
+        self._session_context_cache = "\n\n".join(p for p in volatile_mixins if p)
 
+        # A filtered text tool list grows as tools are selected, so it goes last.
         if tool_filter is not None and tools_block is not None:
             parts.append(tools_block)
 
@@ -3683,6 +3722,9 @@ Do NOT wrap conversational replies in JSON.
         if turn_log_path() is None:
             return None
         try:
+            from gaia.agents.base.history import prompt_text
+
+            sent = prompt_text(self)
             recorder = TurnRecorder(
                 query=user_input,
                 agent_name=type(self).__name__,
@@ -3701,7 +3743,7 @@ Do NOT wrap conversational replies in JSON.
                     origin: len(text)
                     for text, origin in (self._mixin_prompt_origins or {}).items()
                     # A subclass may filter a fragment out of the final prompt.
-                    if text in self.system_prompt
+                    if text in sent
                 },
             )
             for name, t0, t1 in pre_spans:
@@ -3825,6 +3867,25 @@ Do NOT wrap conversational replies in JSON.
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("console rejected turn metrics: %s", e)
 
+    def _stage_final_model_messages(
+        self, messages: "TurnMessages", answer: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Seal the turn's record when the console carries it to the caller.
+
+        The daemon's ``final`` event must not wait on this thread's tail (memory
+        store, trace) to learn what later turns replay, so the record is sealed
+        at the answer and handed over. The sealed list is reused as
+        ``result["model_messages"]``, so the turn pays for one copy, not two.
+        """
+        hook = getattr(self.console, "stage_final_model_messages", None)
+        if hook is None:
+            return None
+        try:
+            return hook(answer, messages.finish(answer))
+        except Exception as e:  # noqa: BLE001 - the answer must still print
+            logger.warning("console could not stage the turn record: %s", e)
+            return None
+
     def _announce_turn_failed(self) -> None:
         """Tell the console the answer about to print ends a failed turn.
 
@@ -3893,6 +3954,32 @@ Do NOT wrap conversational replies in JSON.
     def system_prompt(self, value: str):
         """Allow setting system prompt (used when appending tool descriptions)."""
         self._system_prompt_cache = value
+
+    @property
+    def session_context(self) -> str:
+        """The ``VOLATILE_PROMPT_FRAGMENTS`` text, composed with the system prompt.
+
+        Memory, loaded skills and the project map / working directory differ
+        from one session to the next. Every request carries them at the start
+        of its first user message instead (``_with_session_context``), so the
+        system prompt and tool list stay byte-identical across fresh sessions.
+        """
+        _ = self.system_prompt  # composes both on first access
+        return self._session_context_cache
+
+    def _with_session_context(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """*messages* as sent: the session context opens the first user message."""
+        from gaia.agents.base.history import with_session_context
+
+        return with_session_context(messages, self.session_context)
+
+    def _prompt_text(self) -> str:
+        """What the agent adds to every request: system prompt + session context."""
+        from gaia.agents.base.history import prompt_text
+
+        return prompt_text(self)
 
     def _get_system_prompt(self) -> str:
         """
@@ -4136,6 +4223,17 @@ Do NOT wrap conversational replies in JSON.
             )
             if not granted:
                 refused.append((turn, target))
+            timed_out = getattr(self.console, "confirmation_timed_out", None)
+            note = getattr(self._read_validator(), "note_access_answer", None)
+            if callable(note):
+                note(
+                    target,
+                    declined=not granted
+                    and not (
+                        callable(timed_out)
+                        and timed_out(PATH_ACCESS_PROMPT_TOOL) is True
+                    ),
+                )
             return granted
         finally:
             if clock is not None:
@@ -5600,6 +5698,13 @@ Do NOT wrap conversational replies in JSON.
         if getattr(self, "_incognito", False):
             return False
         return True
+
+    @staticmethod
+    def _prompted_call_key(tool_name: str, tool_args: Any) -> str:
+        """One call's identity: its tool and exact arguments."""
+        return json.dumps(
+            [tool_name, tool_args], sort_keys=True, default=str, ensure_ascii=False
+        )
 
     def _begin_turn_provenance(self) -> None:
         """Open a turn: only the user has spoken, unless a caller pushed content.
@@ -7533,6 +7638,12 @@ Do NOT wrap conversational replies in JSON.
             )
             if refusal is not None:
                 return refusal
+        if tool_name in PYTHON_TOOLS:
+            refusal = python_credential_refusal(
+                tool_name, tool_args, self._python_call_folders()
+            )
+            if refusal is not None:
+                return refusal
         # Before the falsy-args guard: a tool whose arguments all default
         # (``update_gaia_md()``) still has a target, and must not be approved
         # only to be refused by its own body a moment later.
@@ -7548,6 +7659,21 @@ Do NOT wrap conversational replies in JSON.
         if not callable(refuses):
             return None
         return refuses(tool_name, tool_args)  # pylint: disable=not-callable
+
+    def _python_call_folders(self) -> List[str]:
+        """Where a Python tool's relative paths may resolve, most likely first."""
+        from gaia.agents.tools.workspace_paths import _workspace_default
+
+        folders = [_workspace_default(self)]
+        project_root = getattr(self, "_project_map_root", None)
+        if callable(project_root):
+            try:
+                folders.append(project_root())  # pylint: disable=not-callable
+            except ValueError as exc:
+                # The tool reports a bad project root itself; check the rest.
+                logger.debug("No project root for the credential check: %s", exc)
+        folders += [getattr(self, "scratch_dir", None), os.getcwd()]
+        return [str(f) for f in folders if f]
 
     #: The answers the denied-effect question offers.
     ALLOW_DENIED_EFFECT = "Allow once"
@@ -8272,6 +8398,29 @@ Do NOT wrap conversational replies in JSON.
         if (not asked_and_allowed or one_time) and self._tool_requires_confirmation(
             tool_name, tool_args
         ):
+            # Re-asking an unanswered prompt would hold the chat for another timeout.
+            call_key = (
+                getattr(self, "_turn_seq", 0),
+                self._prompted_call_key(tool_name, tool_args),
+            )
+            if call_key in getattr(self, "_expired_calls", ()):
+                # A draft prepared for this prompt must not outlive it.
+                forget = getattr(preflight, "forget", None)
+                if callable(forget):
+                    with self._skill_tool_scope(tool_name):
+                        forget(tool_args)
+                return {
+                    **NOT_EXECUTED,
+                    "status": "denied",
+                    "timed_out": True,
+                    "error": (
+                        "Not asked, so it did not run: the approval request for "
+                        f"`{render_call(tool_name, tool_args)}` already went "
+                        "unanswered in this request. Don't ask again in this "
+                        "request. Tell the user you waited for their approval and "
+                        "stopped, and that they can ask you to try again."
+                    ),
+                }
             # A policy client matches on what the model sent, not what the prompt adds.
             noting = getattr(self.console, "note_call_args", None)
             if callable(noting) and isinstance(tool_args, dict):
@@ -8308,6 +8457,9 @@ Do NOT wrap conversational replies in JSON.
                 if self.console.confirmation_timed_out(tool_name) is True:
                     # Nobody said no, so this is not a refusal to route around.
                     denied["timed_out"] = True
+                    if not hasattr(self, "_expired_calls"):
+                        self._expired_calls = set()
+                    self._expired_calls.add(call_key)
                 else:
                     if denied_error == user_denial_message(tool_name):
                         denied["hint"] = DECLINED_HINT
@@ -8349,8 +8501,12 @@ Do NOT wrap conversational replies in JSON.
         # Check for missing required arguments
         missing_args = [arg for arg in required_args if arg not in tool_args]
         if missing_args:
+            wanted = ", ".join(
+                _argument_shape(name, required_args[name]) for name in required_args
+            )
             error_msg = (
-                f"Missing required arguments for {tool_name}: {', '.join(missing_args)}"
+                f"Missing required arguments for {tool_name}: {', '.join(missing_args)}. "
+                f"Call it again with every argument filled in: {wanted}."
             )
             logger.error(error_msg)
             # Tagged so callers can tell a malformed call (retryable — the model
@@ -8438,6 +8594,9 @@ Do NOT wrap conversational replies in JSON.
             with skill_scope as skill_call:
                 body = skill_call.wrap(tool) if skill_call is not None else tool
                 result = self._call_tool_bounded(body, tool_args, tool_name)
+            if tool_name in OUTPUT_TOOLS:
+                # Output goes into the prompt; tokens and credential-file lines must not.
+                result = redact_tool_output(result)
             logger.debug(f"Tool execution result: {result}")
             _record_refused_write(self, tool_name, tool_args, result)
             self._fold_tool_usage(tool_name, result)
@@ -8531,6 +8690,20 @@ Do NOT wrap conversational replies in JSON.
         Returns:
             Informative message about what was accomplished
         """
+        message = (
+            f"I ran out of steps before I could finish — I used {steps_taken} "
+            f"of the {steps_limit} I get per request.\n\n"
+        )
+        message += self._work_done_so_far(conversation, findings=findings)
+        message += (
+            "Ask me to continue and I'll pick up from here. From the command "
+            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
+        )
+
+        return message
+
+    def _work_done_so_far(self, conversation: List[Dict], findings: bool) -> str:
+        """The tools this turn ran and, with *findings*, the model's latest write-up."""
         # Every executed call leaves one ``role: tool`` entry, whatever loop
         # path ran it; assistant entries also hold calls that never ran.
         tools_used = [
@@ -8538,29 +8711,26 @@ Do NOT wrap conversational replies in JSON.
             for msg in conversation
             if msg.get("role") == "tool" and msg.get("name")
         ]
-
-        message = (
-            f"I ran out of steps before I could finish — I used {steps_taken} "
-            f"of the {steps_limit} I get per request.\n\n"
-        )
+        text = ""
         if tools_used:
             from collections import Counter
 
-            message += "Here's what I ran:\n"
+            text += "Here's what I ran:\n"
             for tool, count in Counter(tools_used).most_common(10):
-                message += f"  - {tool}: {count}x\n"
-            message += "\n"
-
+                text += f"  - {tool}: {count}x\n"
+            text += "\n"
         latest = self._latest_findings(conversation) if findings else ""
         if latest:
-            message += f"Where I'd got to:\n\n{latest}\n\n"
+            text += f"Where I'd got to:\n\n{latest}\n\n"
+        return text
 
-        message += (
-            "Ask me to continue and I'll pick up from here. From the command "
-            f"line, `--max-steps {steps_limit + 50}` gives me more room.\n"
+    def _cut_off_failure_answer(self, conversation: List[Dict]) -> str:
+        """What a turn the output-token limit kept cutting off tells the user."""
+        return (
+            f"{_CUT_OFF_FAILURE_ANSWER}\n\n"
+            f"{self._work_done_so_far(conversation, findings=True)}"
+            f"{_CUT_OFF_NEXT_STEP}"
         )
-
-        return message
 
     _LATEST_FINDINGS_CHARS = 4000
 
@@ -8771,7 +8941,7 @@ Do NOT wrap conversational replies in JSON.
         stats = None
         if self.streaming:
             stream = self.chat.send_messages_stream(
-                messages=request,
+                messages=self._with_session_context(request),
                 system_prompt=self.system_prompt,
                 tools=tools,
                 **no_calls,
@@ -8792,7 +8962,7 @@ Do NOT wrap conversational replies in JSON.
             self.console.start_progress(self._progress_label())
             try:
                 reply = self.chat.send_messages(
-                    messages=request,
+                    messages=self._with_session_context(request),
                     system_prompt=self.system_prompt,
                     tools=tools,
                     **no_calls,
@@ -9906,7 +10076,7 @@ Do NOT wrap conversational replies in JSON.
         """
         from gaia.agents.base.artifacts import ArtifactStore
 
-        system_prompt, tools = self.system_prompt, self._openai_tools
+        system_prompt, tools = self._prompt_text(), self._openai_tools
         before = request_tokens(messages, system_prompt, tools)
         # Sized in a throwaway store first: nothing is archived for a retry that won't run.
         # Its stubs can run a few chars longer than the real store's; the 95% margin covers it.
@@ -10670,6 +10840,7 @@ Do NOT wrap conversational replies in JSON.
             history=history,
             locate=path_locator(roots),
             plan_only=getattr(self, "_turn_plan_only_requested", False),
+            may_act=not getattr(self, "_turn_no_look_requested", False),
         )
 
     def _deliverable_findings(
@@ -10920,10 +11091,16 @@ Do NOT wrap conversational replies in JSON.
                 ):
                     problems.append(f"`{path}` is empty after this turn's edit.")
                 continue
-            problem = _parse_problem(path, text)
+            before = self._parsed_before(path)
+            problem = _parse_problem(path, text, new=before == _NEW_FILE)
             # A file that already failed to parse before the turn touched it
-            # is not this turn's breakage to repair.
-            if problem and self._parsed_before(path) is not False:
+            # is not this turn's breakage to repair, nor is content the user
+            # dictated word for word.
+            if (
+                problem
+                and before is not False
+                and not _user_supplied(text, getattr(self, "_current_query", None))
+            ):
                 problems.append(problem)
         return problems
 
@@ -10935,7 +11112,7 @@ Do NOT wrap conversational replies in JSON.
             return None
         return os.path.normcase(str(key))
 
-    def _parsed_before(self, path: Path) -> Optional[bool]:
+    def _parsed_before(self, path: Path) -> Optional[Union[bool, str]]:
         key = self._baseline_key(str(path))
         baseline = getattr(self, "_edit_parse_baseline", None) or {}
         return baseline.get(key) if key is not None else None
@@ -10963,7 +11140,7 @@ Do NOT wrap conversational replies in JSON.
                 if not allowed:
                     return
             if not path.is_file():
-                baseline[key] = True  # a new file
+                baseline[key] = _NEW_FILE
                 return
             if path.stat().st_size > _VERIFY_MAX_BYTES:
                 return
@@ -11080,7 +11257,9 @@ Do NOT wrap conversational replies in JSON.
         """One warm-up request with the live prompt and tools; *request* adds kwargs."""
         if cancel is None:
             self.chat.send_messages(
-                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                self._with_session_context(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}]
+                ),
                 system_prompt=self.system_prompt,
                 tools=self._openai_tools,
                 max_tokens=1,
@@ -11099,7 +11278,9 @@ Do NOT wrap conversational replies in JSON.
         """
         self._warm_up_cancellable(
             lambda: self.chat.send_messages(
-                [{"role": "user", "content": self.WARM_UP_PROMPT}],
+                self._with_session_context(
+                    [{"role": "user", "content": self.WARM_UP_PROMPT}]
+                ),
                 system_prompt=self.system_prompt,
                 tools=self._openai_tools,
                 max_tokens=1,
@@ -11243,16 +11424,18 @@ Do NOT wrap conversational replies in JSON.
     def _plan_cap_reached(self, steps_taken: int, steps_limit: int) -> bool:
         """Whether finishing this plan must force the final answer.
 
-        The plan count alone stopped a 300-line audit after three short plans
-        with most of its steps unspent, so the cap binds only once at least
-        half the step budget is gone. Below that, the step budget, repetition
-        detection and timeouts still bound the turn.
+        Binds once the first step-budget notice applies (20 steps left, or half
+        a budget too small for that), so a finished plan is not followed by one
+        the budget cannot hold. Before then the step budget, repetition
+        detection and timeouts bound the turn.
         """
         if self.max_plan_iterations <= 0:
             return False
         if self.plan_iterations < self.max_plan_iterations:
             return False
-        return steps_limit - steps_taken <= steps_limit // 2
+        steps_left, fraction_left, _ = _BUDGET_NOTICES[0]
+        trigger = _budget_notice_trigger(steps_left, fraction_left, steps_limit)
+        return steps_limit - steps_taken <= trigger
 
     def _announce_step_budget(
         self,
@@ -11473,6 +11656,8 @@ Do NOT wrap conversational replies in JSON.
         self._turn_recorder = self._begin_turn_record(user_input)
         # Set by whichever exit seals the record; read by the tail below.
         turn_record: Optional[Dict[str, Any]] = None
+        # Sealed at the answer when the console carries it; reused for the result.
+        model_messages: Optional[List[Dict[str, Any]]] = None
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
@@ -11496,6 +11681,7 @@ Do NOT wrap conversational replies in JSON.
         no_action_requested = _asks_for_no_action(request_text)
         # "Why does foo.py fail? Don't touch anything": look, but don't edit.
         no_look_requested = _asks_not_to_look(request_text)
+        self._turn_no_look_requested = no_look_requested
         self._turn_plan_only_requested = _asks_for_a_plan_only(request_text)
         if no_look_requested:
             grounding_fired.add(LOOK)
@@ -11926,7 +12112,8 @@ Do NOT wrap conversational replies in JSON.
                                 budget_stop_pending = True
                                 # Force final answer after max iterations
                                 completion_message = (
-                                    f"Maximum plan iterations ({self.max_plan_iterations}) reached for task: {user_input}\n"
+                                    f"No room for another plan: {steps_limit - steps_taken} "
+                                    f"of {steps_limit} steps left after {self.plan_iterations} plans.\n"
                                     f"Task: {user_input}\n"
                                     f"Plan information:\n{plan_context_str}\n\n"
                                     f"IMPORTANT: Stop planning and researching. {_DELIVER_NOW}\n"
@@ -12116,7 +12303,7 @@ Do NOT wrap conversational replies in JSON.
                     try:
                         self._before_model_call(messages)
                         response_stream = self.chat.send_messages_stream(
-                            messages=messages,
+                            messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
@@ -12371,7 +12558,7 @@ Do NOT wrap conversational replies in JSON.
                     try:
                         self._before_model_call(messages)
                         chat_response = self.chat.send_messages(
-                            messages=messages,
+                            messages=self._with_session_context(messages),
                             system_prompt=self.system_prompt,
                             tools=self._openai_tools,
                             max_tokens=self._max_output_tokens(),
@@ -12573,7 +12760,10 @@ Do NOT wrap conversational replies in JSON.
                         steps_limit,
                     )
                     self._turn_model_retries["failed"] = True
-                    final_answer = _CUT_OFF_FAILURE_ANSWER
+                    final_answer = self._cut_off_failure_answer(conversation)
+                    # Printed like the other give-ups, so it carries the turn's
+                    # token counts and the UI can price it.
+                    loop_break_answer_unprinted = True
                     break
                 cut_off_continuations += 1
                 logger.info(
@@ -12752,7 +12942,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for streaming plan response
                     stream_gen = self.chat.send_messages_stream(
-                        messages=messages,
+                        messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
@@ -12798,7 +12988,7 @@ Do NOT wrap conversational replies in JSON.
 
                     # Use AgentSDK for non-streaming plan response
                     chat_response = self.chat.send_messages(
-                        messages=messages,
+                        messages=self._with_session_context(messages),
                         system_prompt=self.system_prompt,
                         tools=self._openai_tools,
                         max_tokens=self._max_output_tokens(),
@@ -14275,6 +14465,9 @@ Do NOT wrap conversational replies in JSON.
                 # same event.
                 turn_record = self._finish_turn_record(final_answer, steps_taken)
                 self._publish_turn_metrics(turn_record)
+                model_messages = self._stage_final_model_messages(
+                    messages, final_answer
+                )
                 self.console.print_final_answer(
                     final_answer,
                     streaming=self.streaming,
@@ -14375,6 +14568,9 @@ Do NOT wrap conversational replies in JSON.
                     )
                     turn_record = self._finish_turn_record(final_answer, steps_taken)
                     self._publish_turn_metrics(turn_record)
+                    model_messages = self._stage_final_model_messages(
+                        messages, final_answer
+                    )
                     self.console.print_final_answer(
                         final_answer,
                         streaming=self.streaming,
@@ -14396,12 +14592,18 @@ Do NOT wrap conversational replies in JSON.
         # non-empty "here's what I accomplished" message.
         if cancelled_by_console:
             logger.info("Agent run cancelled mid-generation via console.cancelled")
+            # A stopped turn was still billed for the model calls it made.
+            spent_in, spent_out = _sum_conversation_tokens(
+                conversation, self._tool_reported_usage
+            )
             self.last_result = {
                 "status": "cancelled",
                 "result": "",
                 "system_prompt": self.system_prompt,
                 "conversation": conversation,
                 "steps_taken": steps_taken,
+                "input_tokens": spent_in,
+                "output_tokens": spent_out,
                 "timing_summary": timing_summary,
                 "duration": time.time() - start_time,
                 "error_count": len(self._turn_errors()),
@@ -14437,6 +14639,7 @@ Do NOT wrap conversational replies in JSON.
             )
             turn_record = self._finish_turn_record(final_answer, steps_taken)
             self._publish_turn_metrics(turn_record)
+            model_messages = self._stage_final_model_messages(messages, final_answer)
             self.console.print_final_answer(
                 final_answer,
                 streaming=self.streaming,
@@ -14538,7 +14741,11 @@ Do NOT wrap conversational replies in JSON.
             "verification": self.verification_state(),
         }
 
-        result["model_messages"] = messages.finish(result["result"])
+        result["model_messages"] = (
+            model_messages
+            if model_messages is not None
+            else messages.finish(result["result"])
+        )
 
         # Catches the exits that never printed an answer (max steps). Sealed
         # BEFORE the trace write — attached after, the artifact never saw it.

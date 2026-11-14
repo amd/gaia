@@ -64,6 +64,12 @@ const PLAN = {
 };
 
 const PLAN_COLD = { ...PLAN, lemonade: { mode: 'gaia', url: null, reachable: false }, decided_after_server: true, catalog: [] };
+// Everything setup would recommend is already on the PC.
+const PLAN_PRESENT = {
+    ...PLAN,
+    download_gb: 0,
+    catalog: CATALOG.map((e) => (e.planned ? { ...e, downloaded: true, size_gb: 0 } : e)),
+};
 const PLAN_SHORT = { ...PLAN, disk: { ...PLAN.disk, free_gb: 2.1 } };
 // #6632: Linux with an NPU Lemonade reports, but memlock at 8 MB and no access to the device.
 const PLAN_NPU_NOT_READY = {
@@ -510,6 +516,21 @@ export const SETUP_SCENES: SetupScene[] = [
         },
     },
     {
+        name: 'models-all-present',
+        answers: { plan: PLAN_PRESENT },
+        reach: async (page) => {
+            await toPlan(page);
+            await page.locator('.setup-footer .btn-secondary').click();
+            await expect(page.locator('.setup-present')).toBeVisible();
+            // The link sits at the start edge under the sentence, not stretched across the box.
+            const [box, link] = await Promise.all([
+                page.locator('.setup-present').boundingBox(),
+                page.locator('.setup-present .link-btn').boundingBox(),
+            ]);
+            expect(link!.width).toBeLessThan(box!.width / 2);
+        },
+    },
+    {
         name: 'models-disk-short',
         answers: { plan: PLAN_SHORT },
         reach: async (page) => {
@@ -581,6 +602,19 @@ export const SETUP_SCENES: SetupScene[] = [
             await expect(page.locator('.setup-contents')).toBeVisible();
             await expect(page.locator('.setup-activity progress')).toBeVisible();
             await expect(page.locator('.setup-footer .btn-secondary')).toBeVisible();
+        },
+    },
+    {
+        // The installer carries the model server: it read "From included with GAIA".
+        name: 'download-bundled',
+        answers: {
+            status: RUN_PARTS,
+            plan: { ...PLAN, components: COMPONENTS.map((c) => (c.id === 'server' ? { ...c, source: 'the GAIA installer', bundled: true } : c)) },
+        },
+        reach: async (page) => {
+            const server = page.locator('.setup-content').first();
+            await expect(server).toBeVisible();
+            await expect(server.locator('.setup-content-from')).not.toContainText(/From|من /);
         },
     },
     {

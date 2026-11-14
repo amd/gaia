@@ -22,7 +22,7 @@ from urllib.parse import quote
 
 import gaia.connectors.mcp_server  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.registry import REGISTRY
-from gaia.connectors.spec import ConfigField, ConnectorSpec
+from gaia.connectors.spec import WEB_SEARCH, ConfigField, ConnectorSpec
 
 # ---------------------------------------------------------------------------
 # Curated catalog
@@ -66,6 +66,8 @@ _TAVILY = ConnectorSpec(
     mcp_command="npx",
     mcp_args=("-y", "tavily-mcp@0.2.22"),
     mcp_env_keys=("TAVILY_API_KEY",),
+    provides=(WEB_SEARCH,),
+    web_search_tool="tavily_search",
     config_schema=(
         ConfigField(
             key="TAVILY_API_KEY",
@@ -259,6 +261,8 @@ _BRAVE_SEARCH = ConnectorSpec(
     mcp_command="npx",
     mcp_args=("-y", "@modelcontextprotocol/server-brave-search@0.6.2"),
     mcp_env_keys=("BRAVE_API_KEY",),
+    provides=(WEB_SEARCH,),
+    web_search_tool="brave_web_search",
     config_schema=(
         ConfigField(
             key="BRAVE_API_KEY",

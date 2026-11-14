@@ -6,7 +6,6 @@
 import type { Session, Message, FeaturedLibrary, LinkAddResult, LinkPreview, Document, SystemStatus, Settings, StreamEvent, TunnelStatus, Schedule, ScheduleResult, ParsedSchedule, BrowseResponse, IndexFolderResponse, MCPServerStatus, AgentInfo, ProvidersResponse, ProviderInfo, ProviderModelsResponse, ActiveModel, ContextChoice, CustomModelReport, CustomModelRemoved, LocalModelStatus, CloudPriceList, SpendingReport, ChatSpending, ConnectProviderBody, SkillInfo, WarmUpStatus, LemonadeTarget, LemonadeFound, LemonadeTargetBody, ResourceUsage } from '../types';
 import type { LogReadResponse, LogSourcesResponse, ModelServerInfo, SessionSearchResponse } from '../types/api.gen';
 import type { FileDiff, TurnChanges, UndoResult, UndoSettings } from '../types/changes';
-import type { AgentCapabilities, SessionChanges, SessionEnvironment, SessionGit, SessionOutputs, UndoAllResult } from '../types/sessionPanel';
 import { getApiBase } from '../utils/apiBase';
 import { log } from '../utils/logger';
 import { chatDraftKey, clearSavedDraft } from '../utils/savedDraft';
@@ -1001,6 +1000,11 @@ export async function uploadDocumentByPath(filepath: string): Promise<Document> 
     return apiFetch('POST', '/documents/upload-path', { filepath });
 }
 
+function uploadError(status: number, errorText: string): ApiError {
+    const detail = parseErrorDetail(errorText);
+    return new ApiError(getFriendlyError(status, detail), status, detail, parseErrorStatus(errorText), [], parseErrorBody(errorText));
+}
+
 /**
  * Upload a document as a multipart blob for indexing.
  *
@@ -1032,8 +1036,7 @@ export async function uploadDocumentBlob(file: File): Promise<Document> {
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw uploadError(res.status, errorText);
     }
 
     const data = await res.json();
@@ -1143,8 +1146,7 @@ export async function uploadFile(file: File): Promise<{
     if (!res.ok) {
         const errorText = await res.text().catch(() => '');
         log.api.error(`POST ${url} - HTTP ${res.status}`, { errorText });
-        const detail = parseErrorDetail(errorText);
-        throw new ApiError(getFriendlyError(res.status, detail), res.status, detail, parseErrorStatus(errorText));
+        throw uploadError(res.status, errorText);
     }
 
     const data = await res.json();
@@ -1174,7 +1176,7 @@ export function uploadMedia(file: File, onProgress: (percent: number) => void, s
             }
             log.api.error(`POST ${url} - HTTP ${request.status}`, { errorText: request.responseText });
             const detail = parseErrorDetail(request.responseText);
-            reject(new ApiError(getFriendlyError(request.status, detail), request.status, detail, parseErrorStatus(request.responseText)));
+            reject(new ApiError(getFriendlyError(request.status, detail), request.status, detail, parseErrorStatus(request.responseText), [], parseErrorBody(request.responseText)));
         };
         request.send(file);
     });
@@ -1297,51 +1299,6 @@ export async function updateUndoSettings(retentionDays: number, maxMb: number): 
     return apiFetch('PUT', '/settings/undo', { retention_days: retentionDays, max_mb: maxMb });
 }
 
-// -- Session panel: Environment, Outputs, Changes (#5279) --------------------
+// -- Session panel: Environment, Outputs, Changes (#5279): see sessionPanelApi.ts
 
-const sessionPath = (sessionId: string) => `/sessions/${encodeURIComponent(sessionId)}`;
-
-export async function getEnvironment(sessionId: string): Promise<SessionEnvironment> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/environment`);
-}
-
-export async function addEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders`, { path });
-}
-
-export async function removeEnvironmentFolder(sessionId: string, path: string): Promise<SessionEnvironment> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/environment/folders/remove`, { path });
-}
-
-export async function setInternet(sessionId: string, on: boolean): Promise<SessionEnvironment> {
-    return apiFetch('PUT', `${sessionPath(sessionId)}/environment/internet`, { on });
-}
-
-export async function getOutputs(sessionId: string): Promise<SessionOutputs> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/outputs`);
-}
-
-/** The tools the chat's agent has; a 409 when it isn't running yet. */
-export async function getCapabilities(sessionId: string): Promise<AgentCapabilities> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/capabilities`);
-}
-
-export async function getSessionChanges(sessionId: string): Promise<SessionChanges> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/changes/total`);
-}
-
-export async function undoAllChanges(sessionId: string, force = false): Promise<UndoAllResult> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/changes/undo`, { force });
-}
-
-export async function getSessionGit(sessionId: string): Promise<SessionGit> {
-    return apiFetch('GET', `${sessionPath(sessionId)}/changes/git`);
-}
-
-export async function commitChanges(sessionId: string, root: string, message: string): Promise<{ root: string; commit: string; files: string[]; ignored: string[] }> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/commit`, { root, message, confirmed: true });
-}
-
-export async function createPullRequest(sessionId: string, root: string, title: string, body: string): Promise<{ root: string; url: string }> {
-    return apiFetch('POST', `${sessionPath(sessionId)}/changes/git/pr`, { root, title, body, confirmed: true });
-}
+export * from './sessionPanelApi';

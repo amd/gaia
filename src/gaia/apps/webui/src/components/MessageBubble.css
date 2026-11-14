@@ -162,6 +162,36 @@
     gap: 8px;
 }
 .msg-edit-btn { height: 28px; }
+.msg-edit-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    list-style: none;
+}
+.msg-edit-attachment {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 260px;
+    padding-block: 3px;
+    padding-inline: 8px;
+    border-radius: var(--radius-md);
+    background: var(--bg-tertiary);
+    font-size: 13px;
+}
+.msg-edit-attachment svg { flex-shrink: 0; }
+.msg-edit-attachment-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.msg-drop-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-block-start: 8px;
+    font-size: 13px;
+}
 
 .msg-body {
     min-width: 0;
@@ -448,6 +478,23 @@
     /* The page-wide thumb matches the table border; a wide table needs a visible cue. */
     scrollbar-width: thin;
     scrollbar-color: var(--text-muted) transparent;
+    /* macOS hides scrollbars until you scroll, so fade the far edge while more columns remain. */
+    mask-image: linear-gradient(to right, black calc(100% - var(--table-fade)), transparent);
+    animation: md-table-fade var(--ease-linear) both;
+    --table-fade: 0px;
+    animation-timeline: scroll(self x);
+}
+.md-table-wrap:dir(rtl) {
+    mask-image: linear-gradient(to left, black calc(100% - var(--table-fade)), transparent);
+}
+@property --table-fade {
+    syntax: '<length>';
+    inherits: false;
+    initial-value: 0px;
+}
+@keyframes md-table-fade {
+    0%, 90% { --table-fade: 40px; }
+    100% { --table-fade: 0px; }
 }
 .md-table {
     width: 100%;
@@ -479,6 +526,11 @@
 }
 .md-table tr:hover td {
     background: var(--tint-subtle);
+}
+
+/* A short code word keeps its chip whole; the table widens or scrolls instead. */
+.md-table .inline-code {
+    overflow-wrap: normal;
 }
 
 /* Right-align numeric columns */
@@ -626,9 +678,10 @@
 }
 
 /* ── Terminal cursor — a solid accent write head ──────────────── */
-/* Sits inline after the last text element so it follows the content. */
+/* Sits inline after a closing paragraph so it follows the text. Only that one:
+   an inline list or table drops its indent, then jumps back when the answer ends. */
 .md-content > .cursor { display: inline-block; }
-.md-content:has(> .cursor) > :last-of-type:not(.cursor) {
+.md-content > .md-p:has(+ .cursor) {
     display: inline;
 }
 /* Hide empty pre/code blocks that react-markdown sometimes generates from LLM noise.
@@ -756,4 +809,19 @@
 .citation-icon {
     vertical-align: -2px;
     margin-inline-end: 3px;
+}
+
+.msg-run-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-block: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+.msg-run-divider::before,
+.msg-run-divider::after {
+    content: '';
+    flex: 1;
+    border-block-start: 1px solid var(--border);
 }

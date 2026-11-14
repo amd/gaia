@@ -111,6 +111,7 @@ async def test_agent_loop_tick_cache_hit_gets_clear_cancel(clean_cache, monkeypa
     loop._db = db
     goal = types.SimpleNamespace(priority="high", title="t", description="")
     monkeypatch.setattr(AgentLoop, "_get_actionable_goals", lambda self: [])
+    monkeypatch.setattr(AgentLoop, "_settle_goal", staticmethod(lambda *a: None))
 
     await loop._execute_tick(session["id"], session, [goal])
 
@@ -129,6 +130,7 @@ async def test_agent_loop_tick_keeps_private_chat_incognito(clean_cache, monkeyp
     loop._db = db
     goal = types.SimpleNamespace(priority="high", title="t", description="")
     monkeypatch.setattr(AgentLoop, "_get_actionable_goals", lambda self: [])
+    monkeypatch.setattr(AgentLoop, "_settle_goal", staticmethod(lambda *a: None))
 
     await loop._execute_tick(session["id"], session, [goal])
 

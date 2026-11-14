@@ -660,6 +660,17 @@
         "title": "Entries",
         "type": "array"
       },
+      "folder_refusal": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "title": "Folder Refusal"
+      },
       "parent_path": {
         "anyOf": [
           {
@@ -2151,6 +2162,11 @@
       "skipped": {
         "default": 0,
         "title": "Skipped",
+        "type": "integer"
+      },
+      "skipped_images": {
+        "default": 0,
+        "title": "Skipped Images",
         "type": "integer"
       }
     },

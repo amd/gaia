@@ -252,6 +252,38 @@ def test_a_file_an_earlier_turn_discussed_is_not_demanded_again():
     assert findings == []
 
 
+@pytest.mark.parametrize(
+    "error",
+    [
+        # Out of scope: the validator looked on disk instead of asking (#8030).
+        "Not found: 'toybox/dates.py' does not exist, so access was not requested. "
+        "Check the name and folder, or ask the user where the file is.",
+        None,  # in scope: read_file's own missing-file error
+    ],
+    ids=["out-of-scope", "in-scope"],
+)
+def test_a_read_that_found_the_file_missing_backs_not_found(error, tmp_path):
+    """The read that came back "not found" is the look the claim needs."""
+    from gaia.agents.tools.path_access import missing_file_error, read_refusal
+
+    result = read_refusal(error) if error else missing_file_error("toybox/dates.py")
+    records = [_rec("read_file", {"file_path": "toybox/dates.py"}, result, True)]
+
+    assert records[0]["ran"] is False
+    assert (
+        look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, records, lambda p: None) == []
+    )
+
+
+def test_a_refused_read_of_a_file_that_exists_backs_nothing():
+    result = {"executed": False, "status": "error", "error": "Access denied: x"}
+    records = [_rec("read_file", {"file_path": "toybox/dates.py"}, result, True)]
+
+    findings = look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, records, lambda p: None)
+
+    assert "no search, listing or read ran" in " ".join(f.correction for f in findings)
+
+
 def test_not_found_without_any_lookup_is_caught_even_for_a_missing_file():
     findings = look_findings(UNSEARCHED_ABSENCE, REVIEW_QUERY, [], lambda p: None)
 
@@ -1152,3 +1184,57 @@ def test_the_ask_leaves_room_to_admit_what_was_not_done():
 
     assert "what changed" not in ask
     assert "didn't" in correction[: correction.index(ask)]
+
+
+# ---------------------------------------------------------------------------
+# A turn the user barred tools on: the correction never asks for one
+# ---------------------------------------------------------------------------
+
+NO_TOOLS_QUERY = (
+    "Do NOT run anything in this turn and use no tools. I am testing a display: "
+    "answer with exactly this one sentence: I read toybox/dates.py and it has "
+    "4 data rows."
+)
+READ_CLAIM = "I read toybox/dates.py and it has 4 data rows."
+
+
+def test_a_read_claim_correction_asks_for_the_read_by_default():
+    (finding,) = ungrounded(READ_CLAIM, "Say it.", [], locate=lambda p: None)
+
+    assert finding.gate == ACTION
+    assert finding.correction.endswith("Do it now, or drop the claim.")
+
+
+def test_a_read_claim_correction_asks_for_no_tool_when_the_user_barred_them():
+    findings = ungrounded(
+        READ_CLAIM, NO_TOOLS_QUERY, [], locate=lambda p: None, may_act=False
+    )
+    (finding,) = [f for f in findings if f.gate == ACTION]
+
+    assert "Do it now" not in finding.correction
+    assert "don't call one" in finding.correction
+    assert "drop the claim or reword it" in finding.correction
+    assert finding.note.endswith("no file was read this turn")
+
+
+def test_a_no_tools_turn_is_only_asked_to_drop_the_read_claim(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _answer(READ_CLAIM))
+
+    result = agent.process_query(NO_TOOLS_QUERY, max_steps=10)
+
+    assert len(sent) == 2
+    correction = sent[1][-1]["content"]
+    assert correction.startswith("[check:grounding] ")
+    assert "Do it now" not in correction
+    assert "don't call one" in correction
+    assert "no file was read this turn" in result["result"]
+
+
+def test_an_edit_ban_on_an_investigation_still_asks_for_the_read(agent):
+    sent = _stub_chat(agent, _answer(READ_CLAIM), _read_call(), _answer(GROUNDED))
+
+    agent.process_query(
+        "Why does toybox/dates.py fail? Don't touch anything.", max_steps=10
+    )
+
+    assert "Do it now, or drop the claim." in sent[1][-1]["content"]

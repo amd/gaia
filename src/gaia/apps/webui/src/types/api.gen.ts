@@ -323,6 +323,7 @@ export interface BodyUploadFileApiFilesUploadPost {
 export interface BrowseResponse {
   current_path: string;
   entries: FileEntry[];
+  folder_refusal?: string | null;
   parent_path?: string | null;
   quick_links?: QuickLink[];
 }
@@ -712,6 +713,7 @@ export interface IndexFolderResponse {
   failed?: number;
   indexed?: number;
   skipped?: number;
+  skipped_images?: number;
 }
 export interface InferenceCommit {
   insights: InferenceCommitItem[];
