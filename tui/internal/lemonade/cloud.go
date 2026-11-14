@@ -190,6 +190,14 @@ func Label(provider string) string {
 	return provider
 }
 
+// errProviderNotInstalled is Lemonade's 404 for a provider that was never
+// registered. Configure shows the panel remedy; Clear treats it as already
+// cleared so GAIA can still drop its own saved copy.
+var errProviderNotInstalled = errors.New(
+	"Cloud setup is unavailable: Lemonade has no cloud provider registered " +
+		"for this provider yet. Connect it again from this panel, then try again",
+)
+
 // ErrUnreachable is returned when nothing answered at the Lemonade address, so
 // a caller that knows Lemonade is not set up yet can say that instead.
 var ErrUnreachable = errors.New("Lemonade did not respond. Start it, check its address, and retry")
@@ -269,8 +277,7 @@ func (c *Client) request(ctx context.Context, method, path string, data any, res
 			// 404 for a provider that was never registered, which is a setup
 			// problem, not a version problem.
 			if path != "/install" && strings.Contains(env.Error.Message, "is not installed") {
-				return fmt.Errorf("Cloud setup is unavailable: Lemonade has no cloud provider " +
-					"registered for this gateway. Run `gaia gateway install`, then try again")
+				return errProviderNotInstalled
 			}
 			if path == "/install" || env.Error.Type == "" || env.Error.Type == "not_found" {
 				return fmt.Errorf("Cloud setup is unavailable: this Lemonade is older than %s, "+
@@ -405,5 +412,10 @@ func (c *Client) Clear(ctx context.Context, provider string) error {
 	if ExternalModeActive() {
 		return nil
 	}
-	return c.request(ctx, "DELETE", "/cloud/auth/"+provider, nil, nil)
+	err := c.request(ctx, "DELETE", "/cloud/auth/"+provider, nil, nil)
+	if errors.Is(err, errProviderNotInstalled) {
+		// Lemonade has nothing to clear; GAIA's saved copy still must go.
+		return nil
+	}
+	return err
 }
