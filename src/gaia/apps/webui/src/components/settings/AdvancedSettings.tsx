@@ -12,6 +12,7 @@ import { useT, type Translate } from '../../i18n/useT';
 import { isolate, type MessageKey } from '../../i18n/registry';
 import { SaveAllLogs } from '../LogsDialog';
 import { useLogsStore } from '../../stores/logsStore';
+import { useModelStore } from '../../stores/modelStore';
 import type { SystemStatus, MCPServerStatus, ModelStatus } from '../../types';
 import { LemonadeServerSection } from './LemonadeServerSection';
 import { ErrorNotice, namesSetupCommand, needsLocalSetup, SetUpLocalButton } from './ErrorNotice';
@@ -27,7 +28,7 @@ function customModelNote(id: string, status: ModelStatus | null | undefined): Cu
     return { kind: status.checked ? 'unlisted' : 'unchecked', id };
 }
 
-/** Model server status and choice, context size, custom model id, beta flags, MCP status, version. */
+/** Model server status and choice, context size, custom model id, beta flags, MCP status. */
 export function AdvancedSettings() {
     const t = useT();
     const [status, setStatus] = useState<SystemStatus | null>(null);
@@ -111,6 +112,8 @@ export function AdvancedSettings() {
             const nextValue = updated.custom_model ?? '';
             setCustomModel(nextValue);
             setSavedCustomModel(nextValue);
+            // The chip names the model now in use, without waiting for its poll.
+            void useModelStore.getState().refresh();
             setSaveNote(customModelNote(nextValue, updated.model_status));
             setJustSaved(true);
             if (justSavedTimerRef.current) clearTimeout(justSavedTimerRef.current);
@@ -154,7 +157,6 @@ export function AdvancedSettings() {
     const modelName = status ? status.default_model_name : DEFAULT_MODEL_NAME;
     const { isLoadingModel, isDownloadingModel, downloadError, loadModel, downloadModel } = useModelActions(modelName ?? undefined);
 
-    const version = __APP_VERSION__;
 
     // A cloud model runs off this PC: no device, download, load or context to manage.
     const cloudModel   = !!status?.default_model_is_cloud;
@@ -415,11 +417,6 @@ export function AdvancedSettings() {
                     </div>
                 </SettingsDisclosure>
             )}
-
-            <div className="about-info">
-                <p><bdi dir="ltr">GAIA v{version}</bdi> <span className="beta-badge">BETA</span></p>
-                <p className="about-sub">{t('settings.advanced.about')}</p>
-            </div>
         </div>
     );
 }

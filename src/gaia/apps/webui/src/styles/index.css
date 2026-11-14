@@ -361,10 +361,11 @@ a:hover { text-decoration: underline; }
 
 /* ── Notification center trigger/popover ───────────────────────── */
 
+/* Opens upward from the bell in the sidebar's footer, not across the window from it. */
 .notification-center-popover {
     position: fixed;
-    top: 52px;
-    inset-inline-end: 16px;
+    bottom: 56px;
+    inset-inline-start: 12px;
     z-index: 120;
 }
 
