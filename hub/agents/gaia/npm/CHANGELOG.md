@@ -15,6 +15,10 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   another. For `surface: "agent_ui"`, a start failure's detail no longer names
   a terminal command.
 
+- **A detached document is no longer searched.** A file an earlier turn sent in
+  `documents` and this turn leaves out (the user detached it, or deleted it from
+  the library) is dropped from the session's index, so answers stop quoting it.
+  An empty `documents` list drops them all.
 - **A turn the output limit keeps cutting off says what to do next.** It told
   the user to "retry with a higher output-token limit (max_tokens)", a setting
   the apps don't have, dropped what the turn had done, and sent no token counts,
@@ -33,6 +37,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   removes the scratch folders it holds when its process exits normally, and
   the next agent to start clears any no agent has used for a day, including
   ones a killed process left.
+
+- **Files a Python run writes are UTF-8.** `run_python` and
+  `execute_python_file` wrote a bare `open(path, "w")` in the Windows locale
+  codec, so a degree sign landed as the cp1252 byte `0xB0`. Scripts now run in
+  UTF-8 mode, in the packaged binary too.
 
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
