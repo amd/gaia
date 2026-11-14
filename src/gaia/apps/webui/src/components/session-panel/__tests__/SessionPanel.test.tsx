@@ -72,10 +72,21 @@ describe('SessionPanel', () => {
     it('is docked open by default with every section', async () => {
         render(<Panel />);
         expect(panel()).toHaveClass('is-docked');
-        for (const name of ['This answer', 'Environment', 'Context & performance', 'Outputs']) {
+        for (const name of ['This answer', 'Folders and access', 'Context & performance', 'Outputs']) {
             expect(screen.getByRole('button', { name: new RegExp(`^${name}`) })).toBeInTheDocument();
         }
         await waitFor(() => expect(mocked.getOutputs).toHaveBeenCalledWith(SID));
+    });
+
+    it('leads with what the chat made and may touch, and keeps how it ran under Details', () => {
+        render(<Panel />);
+        const heads = [...panel().querySelectorAll('.sp-section-title, .sp-group-title')].map((el) => el.textContent);
+        const at = (name: string) => heads.findIndex((h) => h?.startsWith(name));
+
+        expect(at('Outputs')).toBeLessThan(at('Folders and access'));
+        expect(at('Folders and access')).toBeLessThan(at('Details'));
+        expect(at('Details')).toBeLessThan(at('Context & performance'));
+        expect(screen.getByRole('button', { name: /^Context & performance/ })).toHaveAttribute('aria-expanded', 'false');
     });
 
     it('closes, remembers it, and reopens from the header toggle', () => {
