@@ -3,6 +3,7 @@
 
 """Accent- and case-insensitive matching for the sidebar's chat search."""
 
+import re
 import unicodedata
 from typing import Dict, List, Optional, Tuple
 
@@ -34,6 +35,24 @@ def _fold_with_map(text: str) -> Tuple[str, List[int]]:
     return "".join(out), origin
 
 
+_TABLE_RULE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$", re.M)
+_LINE_MARKS = re.compile(
+    r"^[ \t]*(?:#{1,6}[ \t]+|>[ \t]?|[-*+][ \t]+|\d+[.)][ \t]+)", re.M
+)
+_LINK = re.compile(r"!?\[([^\]]*)\]\([^)\s]*\)")
+_EMPHASIS = re.compile(r"(\*{1,3}|(?<!\w)_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)")
+
+
+def plain_text(text: str) -> str:
+    """Strip markdown syntax so a snippet shows words, not ``|``, ``**`` or ``1.``."""
+    text = _TABLE_RULE.sub("", text)
+    text = _LINE_MARKS.sub("", text)
+    text = _LINK.sub(r"\1", text)
+    text = _EMPHASIS.sub(r"\2", text)
+    text = text.replace("```", " ").replace("`", "")
+    return re.sub(r"\s*\|\s*", " ", text)
+
+
 def snippet(text: str, needle: str) -> Optional[Dict[str, str]]:
     """Split the text around the first match of the folded *needle*.
 
@@ -41,9 +60,14 @@ def snippet(text: str, needle: str) -> Optional[Dict[str, str]]:
     UI can highlight ``match`` without re-implementing the folding, or None
     when *text* does not contain *needle*.
     """
+    if not needle:
+        return None
+    plain = plain_text(text)
+    # A query for the syntax itself (e.g. "**") only matches the raw text.
+    text = plain if needle in fold(plain) else text
     folded, origin = _fold_with_map(text)
     at = folded.find(needle)
-    if at < 0 or not needle:
+    if at < 0:
         return None
     start = origin[at]
     end = origin[at + len(needle) - 1] + 1
