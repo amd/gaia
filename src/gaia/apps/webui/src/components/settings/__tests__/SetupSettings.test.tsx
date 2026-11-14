@@ -60,6 +60,15 @@ describe('SetupSettings', () => {
         expect(useChatStore.getState().settingsProvider).toBe('local');
     });
 
+    it('shows the memory figures setup showed, saying what they mean', async () => {
+        // The OS sees less than the PC has once the GPU's share is set aside; setup never shows that figure.
+        mockedApi.getSetupPlan.mockResolvedValue({ ...plan, capacity_gb: 103.1, system: { physical_memory: '128.0 GB' } } as unknown as SetupPlan);
+        mockedApi.getOnboardingPreflight.mockResolvedValue({ gpu_name: 'Radeon', npu_detected: false, ram_gb: 68.3 } as never);
+        render(<SetupSettings />);
+        expect(await screen.findByText(/103\.1 GB of 137\.4 GB for models/)).toBeTruthy();
+        expect(screen.queryByText(/68\.3/)).toBeNull();
+    });
+
     it('offers no row whose setting this setup does not have (#7700)', async () => {
         useModelStore.setState({ active: CLOUD });
         mockedApi.getGpuMemory.mockResolvedValue({ applies: false } as never);
@@ -73,7 +82,7 @@ describe('SetupSettings', () => {
 
     it('reports what was detected without sending it to the Model server setting', async () => {
         render(<SetupSettings />);
-        const detected = await screen.findByText('Radeon · 64 GB');
+        const detected = await screen.findByText('Radeon · 64.0 GB');
         expect(detected.closest('button')).toBeNull();
         expect(screen.getAllByRole('button', { name: /Model server/ })).toHaveLength(1);
     });
