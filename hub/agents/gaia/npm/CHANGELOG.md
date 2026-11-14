@@ -31,6 +31,11 @@ Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
   the next agent to start clears any no agent has used for a day, including
   ones a killed process left.
 
+- **Files a Python run writes are UTF-8.** `run_python` and
+  `execute_python_file` wrote a bare `open(path, "w")` in the Windows locale
+  codec, so a degree sign landed as the cp1252 byte `0xB0`. Scripts now run in
+  UTF-8 mode, in the packaged binary too.
+
 - **A new chat starts faster on hybrid models.** Memory, loaded skills, the
   project map or working directory, and the session's folders and scratch
   directory now go in the session context at the start of the first user
