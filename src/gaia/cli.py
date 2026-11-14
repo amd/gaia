@@ -5156,6 +5156,10 @@ def _init_model_choices(args, profile: str):
 
 
 def main():
+    from gaia.platform_guard import avoid_wmi
+
+    # Before anything asks `platform`: a timed-out WMI query crashes the process.
+    avoid_wmi()
     from gaia.logger import configure
 
     log_manager = configure()

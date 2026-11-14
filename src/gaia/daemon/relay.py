@@ -38,7 +38,9 @@ may already be dead, so transport failures are logged, never raised.
 Loud errors, no silent fallbacks: unknown agent → 404 naming the registered
 ids; registered-but-not-running, or alive but no longer answering its own
 ``/health`` → 503 naming the remedy; upstream unreachable mid-flight → 502
-carrying the transport error.
+carrying the transport error. The one restart: a sidecar whose process died on
+its own before a request reached it is started again and the request sent once
+more; a response that has begun is never resent.
 """
 
 from __future__ import annotations
@@ -58,6 +60,7 @@ from starlette.concurrency import run_in_threadpool
 
 from gaia.config import gaia_agents_dir
 from gaia.daemon.sidecars.errors import (
+    SidecarError,
     SidecarNotRunningError,
     SidecarUnresponsiveError,
     UnknownAgentError,
@@ -160,13 +163,29 @@ def _spawn_background(coro) -> None:
     task.add_done_callback(_background_tasks.discard)
 
 
+def _agent_name(agent_id: str) -> str:
+    return "GAIA's agent" if agent_id == "gaia" else f"GAIA's '{agent_id}' agent"
+
+
 def stream_ended_unexpectedly_detail(agent_id: str) -> str:
-    """Actionable detail for the synthetic terminal error frame (§0.13)."""
+    """Detail for the synthetic terminal error frame (§0.13).
+
+    Plain words: the next message starts the agent again, so that is the remedy.
+    """
     return (
-        f"agent '{agent_id}' stream ended unexpectedly without a terminal "
-        "event — the sidecar may have crashed mid-run. Check its log under "
-        f"{gaia_agents_dir() / agent_id / 'logs'}, re-ensure it "
-        f"(POST /daemon/v1/agents/{agent_id}/ensure), and retry."
+        f"{_agent_name(agent_id)} stopped unexpectedly before it finished this "
+        "reply. Send your message again. Its log is in "
+        f"{gaia_agents_dir() / agent_id / 'logs'}."
+    )
+
+
+def _no_answer_detail(agent_id: str, exc: BaseException) -> str:
+    # The TUI matches "sidecar for agent" and "did not answer" in this text.
+    return (
+        f"{_agent_name(agent_id)} stopped unexpectedly before it could answer: "
+        f"the sidecar for agent '{agent_id}' did not answer "
+        f"({exc.__class__.__name__}: {exc}). Send your message again. Its log is "
+        f"in {gaia_agents_dir() / agent_id / 'logs'}."
     )
 
 
@@ -295,54 +314,81 @@ def build_relay_router(token: str, registry, turns: Optional[RelayTurns] = None)
     require_token = build_require_token(token)
     router = APIRouter(dependencies=[Depends(require_token)])
 
+    async def _restart_if_crashed(agent_id: str, cause: BaseException) -> bool:
+        """Start a crashed sidecar again; ``False`` if it had not crashed."""
+        try:
+            return await run_in_threadpool(registry.restart_if_crashed, agent_id)
+        except SidecarError as e:
+            raise HTTPException(
+                status_code=502,
+                # The TUI matches "sidecar for agent" in this text.
+                detail=(
+                    f"{_agent_name(agent_id)} stopped unexpectedly and could not "
+                    f"start again: the sidecar for agent '{agent_id}' did not "
+                    f"answer a restart ({e.__class__.__name__}: {e})."
+                ),
+            ) from cause
+
     @router.api_route("/v1/{agent_id}/{path:path}", methods=RELAY_METHODS)
     async def relay(agent_id: str, path: str, request: Request):
-        try:
-            # Off-loop: connection() probes the sidecar's /health, and a blocking
-            # probe here would wedge the daemon exactly like the sidecar it checks.
-            base_url, bearer = await run_in_threadpool(registry.connection, agent_id)
-        except UnknownAgentError as e:
-            raise HTTPException(status_code=404, detail=str(e)) from e
-        except (SidecarNotRunningError, SidecarUnresponsiveError) as e:
-            raise HTTPException(status_code=503, detail=str(e)) from e
-
         body = await request.body()
-        upstream_headers = {
-            k: v for k, v in request.headers.items() if k.lower() not in _REQUEST_DROP
-        }
-        upstream_headers["Authorization"] = f"Bearer {bearer}"
-        upstream_headers["Accept-Encoding"] = "identity"
-        url = f"{base_url}/v1/{agent_id}/{path}"
-
         try:
             read_timeout = agent_read_timeout()
         except ValueError as exc:
             raise HTTPException(status_code=500, detail=str(exc)) from exc
-        client = httpx.AsyncClient(
-            timeout=httpx.Timeout(read_timeout, connect=CONNECT_TIMEOUT)
-        )
-        try:
-            upstream = await client.send(
-                client.build_request(
-                    request.method,
-                    url,
-                    content=body,
-                    headers=upstream_headers,
-                    params=request.url.query or None,
-                ),
-                stream=True,
+
+        # A sidecar that crashed before this request reached it is started
+        # again and the request sent once more; once a response has begun,
+        # nothing is resent.
+        restarted = False
+        while True:
+            try:
+                # Off-loop: connection() probes the sidecar's /health, and a
+                # blocking probe here would wedge the daemon like the sidecar.
+                base_url, bearer = await run_in_threadpool(
+                    registry.connection, agent_id
+                )
+            except UnknownAgentError as e:
+                raise HTTPException(status_code=404, detail=str(e)) from e
+            except SidecarNotRunningError as e:
+                if not restarted and await _restart_if_crashed(agent_id, e):
+                    restarted = True
+                    continue
+                raise HTTPException(status_code=503, detail=str(e)) from e
+            except SidecarUnresponsiveError as e:
+                raise HTTPException(status_code=503, detail=str(e)) from e
+
+            upstream_headers = {
+                k: v
+                for k, v in request.headers.items()
+                if k.lower() not in _REQUEST_DROP
+            }
+            upstream_headers["Authorization"] = f"Bearer {bearer}"
+            upstream_headers["Accept-Encoding"] = "identity"
+            url = f"{base_url}/v1/{agent_id}/{path}"
+            client = httpx.AsyncClient(
+                timeout=httpx.Timeout(read_timeout, connect=CONNECT_TIMEOUT)
             )
-        except httpx.HTTPError as e:
-            await client.aclose()
-            raise HTTPException(
-                status_code=502,
-                detail=(
-                    f"sidecar for agent '{agent_id}' at {base_url} did not "
-                    f"answer ({e.__class__.__name__}: {e}). It may have died "
-                    "after registration — re-ensure it (POST "
-                    f"/daemon/v1/agents/{agent_id}/ensure) and retry."
-                ),
-            ) from e
+            try:
+                upstream = await client.send(
+                    client.build_request(
+                        request.method,
+                        url,
+                        content=body,
+                        headers=upstream_headers,
+                        params=request.url.query or None,
+                    ),
+                    stream=True,
+                )
+            except httpx.HTTPError as e:
+                await client.aclose()
+                if not restarted and await _restart_if_crashed(agent_id, e):
+                    restarted = True
+                    continue
+                raise HTTPException(
+                    status_code=502, detail=_no_answer_detail(agent_id, e)
+                ) from e
+            break
 
         content_type = upstream.headers.get("content-type", "")
         response_headers = {
@@ -355,13 +401,7 @@ def build_relay_router(token: str, registry, turns: Optional[RelayTurns] = None)
                 payload = await upstream.aread()
             except httpx.HTTPError as e:
                 raise HTTPException(
-                    status_code=502,
-                    detail=(
-                        f"sidecar for agent '{agent_id}' dropped the "
-                        f"connection mid-response on /v1/{agent_id}/{path} "
-                        f"({e.__class__.__name__}: {e}). Re-ensure it (POST "
-                        f"/daemon/v1/agents/{agent_id}/ensure) and retry."
-                    ),
+                    status_code=502, detail=_no_answer_detail(agent_id, e)
                 ) from e
             finally:
                 await upstream.aclose()

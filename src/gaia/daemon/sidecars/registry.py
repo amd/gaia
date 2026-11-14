@@ -414,6 +414,27 @@ class SidecarRegistry:
         manager.check_responsive()
         return manager.base_url, manager.auth_token
 
+    def restart_if_crashed(self, agent_id: str) -> bool:
+        """Start *agent_id*'s sidecar again if its process died on its own.
+
+        Returns ``False`` for one that was never started or was stopped on
+        purpose; those are the caller's to start. Start failures raise as from
+        :meth:`ensure`.
+        """
+        self._spec(agent_id)
+        with self._lock:
+            holder = self._managers.get(agent_id)
+        if holder is None or not holder[0].exited_unexpectedly:
+            return False
+        logger.warning(
+            "daemon: agent '%s' sidecar pid %s exited unexpectedly; starting it "
+            "again",
+            agent_id,
+            holder[0].pid,
+        )
+        self.ensure(agent_id)
+        return True
+
     def authenticate_callback(self, credential: str) -> Optional[str]:
         """Return the agent_id of the RUNNING sidecar whose launch token equals
         *credential*, or ``None`` if no live sidecar owns it.
@@ -491,10 +512,15 @@ class SidecarRegistry:
         self._spec(agent_id)
         with self._lock:
             holder = self._managers.get(agent_id)
-        if holder is None or not holder[0].is_running:
+        if holder is None:
             return {"agent_id": agent_id, "state": "stopped"}
         manager, agent_lock = holder
+        if not manager.is_running and not manager.exited_unexpectedly:
+            return {"agent_id": agent_id, "state": "stopped"}
         with agent_lock:
+            if not manager.is_running and manager.exited_unexpectedly:
+                # Reaps the crashed one, so restart_if_crashed leaves it stopped.
+                manager.shutdown()
             self._stop_locked(agent_id, manager)
         return {"agent_id": agent_id, "state": "stopped"}
 

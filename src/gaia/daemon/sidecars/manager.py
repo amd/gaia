@@ -311,6 +311,11 @@ class AgentSidecarManager:
         # A dead PyInstaller bootloader can leave its server child on the port.
         return self._proc.poll() is None or self._tree_survives(self._proc.pid)
 
+    @property
+    def exited_unexpectedly(self) -> bool:
+        """Its process is gone though :meth:`shutdown` never ran: it crashed."""
+        return self._proc is not None and not self.is_running
+
     @staticmethod
     def _group_alive(pgid: int) -> bool:
         """POSIX: True while any process remains in group *pgid*.

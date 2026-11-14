@@ -261,11 +261,17 @@ def test_synthetic_error_frame_terminates_partial_frame_first():
     assert raw.startswith(b"\n\ndata: ")
 
 
-def test_stream_ended_detail_is_actionable():
+def test_stream_ended_detail_is_plain_words():
     detail = stream_ended_unexpectedly_detail("email")
     assert "email" in detail
-    assert "ensure" in detail  # names the remedy
+    assert "Send your message again" in detail  # the remedy a user can take
     assert "logs" in detail  # names where to look
+    assert "/daemon/" not in detail and "POST" not in detail
+
+
+def test_stream_ended_detail_names_the_flagship_plainly():
+    detail = stream_ended_unexpectedly_detail("gaia")
+    assert detail.startswith("GAIA's agent stopped unexpectedly")
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +295,13 @@ class _FakeManager:
     uses_ignored_lemonade = False
 
     @property
+    def exited_unexpectedly(self):
+        return self.pid is not None and not self._running
+
+    def crash(self):
+        self._running = False
+
+    @property
     def is_running(self):
         return self._running
 
@@ -308,6 +321,7 @@ class _FakeManager:
 
     def shutdown(self):
         self._running = False
+        self.pid = None
 
 
 def _toy_registry():
@@ -367,6 +381,63 @@ def test_connection_stopped_after_running_raises_again(monkeypatch):
         reg.connection("toy")
 
 
+def test_restart_if_crashed_leaves_a_never_started_sidecar_alone():
+    reg = _toy_registry()
+    assert reg.restart_if_crashed("toy") is False
+    with pytest.raises(SidecarNotRunningError):
+        reg.connection("toy")
+
+
+def test_restart_if_crashed_leaves_a_stopped_sidecar_alone(monkeypatch):
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _toy_registry()
+    reg.ensure("toy")
+    reg.stop("toy")
+    assert reg.restart_if_crashed("toy") is False
+    with pytest.raises(SidecarNotRunningError):
+        reg.connection("toy")
+
+
+def test_stopping_a_crashed_sidecar_keeps_it_stopped(monkeypatch):
+    monkeypatch.setattr("gaia.daemon.sidecars.registry.pid_alive", lambda pid: False)
+    reg = _toy_registry()
+    reg.ensure("toy")
+    manager, _ = reg._managers["toy"]
+    manager.crash()
+    reg.stop("toy")
+    assert reg.restart_if_crashed("toy") is False
+
+
+def test_restart_if_crashed_starts_a_crashed_sidecar_again():
+    reg = _toy_registry()
+    reg.ensure("toy")
+    manager, _ = reg._managers["toy"]
+    manager.crash()
+    assert reg.restart_if_crashed("toy") is True
+    base_url, _ = reg.connection("toy")
+    assert base_url == manager.base_url
+
+
+def test_manager_exited_unexpectedly_only_for_a_process_that_died(monkeypatch):
+    from gaia.daemon.sidecars.manager import AgentSidecarManager
+
+    class _Proc:
+        pid = 99999
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+    manager = AgentSidecarManager.__new__(AgentSidecarManager)
+    monkeypatch.setattr(manager, "_tree_survives", lambda pid: False, raising=False)
+    manager._proc = None  # never started, or shut down
+    assert manager.exited_unexpectedly is False
+    manager._proc = _Proc()  # running
+    assert manager.exited_unexpectedly is False
+    manager._proc.returncode = 0xC0000005  # gone without shutdown()
+    assert manager.exited_unexpectedly is True
+
+
 # ---------------------------------------------------------------------------
 # Part 3 — route-level loud errors (TestClient, stub registry, no upstream)
 # ---------------------------------------------------------------------------
@@ -375,10 +446,30 @@ def test_connection_stopped_after_running_raises_again(monkeypatch):
 class _StubRegistry:
     """connection()-only registry stub for route tests."""
 
-    def __init__(self, base_url=None, bearer=_SIDECAR_TOKEN, known=("email",)):
+    def __init__(
+        self,
+        base_url=None,
+        bearer=_SIDECAR_TOKEN,
+        known=("email",),
+        restarted_url=None,
+        restart_error=None,
+    ):
         self._base_url = base_url
         self._bearer = bearer
         self._known = set(known)
+        # Where a crashed sidecar comes back; None means it had not crashed.
+        self._restarted_url = restarted_url
+        self._restart_error = restart_error
+        self.restarts = 0
+
+    def restart_if_crashed(self, agent_id):
+        self.restarts += 1
+        if self._restart_error is not None:
+            raise self._restart_error
+        if self._restarted_url is None:
+            return False
+        self._base_url = self._restarted_url
+        return True
 
     def connection(self, agent_id):
         if agent_id not in self._known:
@@ -460,7 +551,7 @@ def test_relay_not_running_sidecar_maps_to_503_with_ensure_remedy():
 
 
 @needs_fastapi
-def test_relay_dead_upstream_maps_to_502_with_reensure_remedy():
+def test_relay_dead_upstream_maps_to_502_with_the_tui_contract_words():
     # Registered + "running" per the registry, but nothing listens on the port
     # (the sidecar died after registration): connect refused → loud 502.
     from gaia.daemon.sidecars.manager import find_free_port
@@ -473,7 +564,95 @@ def test_relay_dead_upstream_maps_to_502_with_reensure_remedy():
     assert r.status_code == 502
     detail = r.json()["detail"]
     assert "email" in detail
-    assert "ensure" in detail
+    # The TUI tells a dead agent from a slow one by these words.
+    assert "sidecar for agent" in detail and "did not answer" in detail
+
+
+@needs_fastapi
+def test_relay_dead_upstream_detail_names_no_http_route():
+    from gaia.daemon.sidecars.manager import find_free_port
+
+    registry = _StubRegistry(base_url=f"http://127.0.0.1:{find_free_port()}")
+    r = _daemon_test_client(registry).post(
+        "/v1/email/query", json={"query": "hi"}, headers=_auth()
+    )
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert "Send your message again" in detail
+    assert "/daemon/" not in detail and "POST" not in detail
+    # The registry said it had not crashed, so nothing was started again.
+    assert registry.restarts == 1
+
+
+@needs_fastapi
+def test_relay_restart_failure_is_loud():
+    from gaia.daemon.sidecars.errors import SidecarSpawnError
+
+    registry = _StubRegistry(
+        base_url=None, restart_error=SidecarSpawnError("port 1 in use")
+    )
+    r = _daemon_test_client(registry).post(
+        "/v1/email/query", json={"query": "hi"}, headers=_auth()
+    )
+    assert r.status_code == 502
+    detail = r.json()["detail"]
+    assert "could not start again" in detail and "port 1 in use" in detail
+    # The TUI tells a dead agent from a refusing mailbox by these words.
+    assert "sidecar for agent 'email'" in detail
+
+
+@pytest.fixture()
+def live_sidecar_url():
+    if not (_HAS_FASTAPI and _HAS_HTTPX and _HAS_UVICORN):
+        pytest.skip("fastapi/httpx/uvicorn not importable")
+    sidecar = _FakeSidecar()
+    server, thread, url = _serve(sidecar.build_app())
+    yield sidecar, url
+    sidecar.release.set()
+    server.should_exit = True
+    thread.join(timeout=10)
+
+
+@needs_fastapi
+def test_relay_restarts_a_crashed_sidecar_and_sends_once_more(live_sidecar_url):
+    sidecar, url = live_sidecar_url
+    registry = _StubRegistry(base_url=None, restarted_url=url)
+    r = _daemon_test_client(registry).post(
+        "/v1/email/triage", json={"q": 1}, headers=_auth()
+    )
+    assert r.status_code == 200
+    assert r.json() == {"result": {"echo": {"q": 1}}}
+    assert registry.restarts == 1
+    assert [seen[0] for seen in sidecar.seen] == ["/v1/email/triage"]
+
+
+@needs_fastapi
+def test_relay_resends_once_when_the_sidecar_died_before_answering(
+    live_sidecar_url,
+):
+    from gaia.daemon.sidecars.manager import find_free_port
+
+    sidecar, url = live_sidecar_url
+    registry = _StubRegistry(
+        base_url=f"http://127.0.0.1:{find_free_port()}", restarted_url=url
+    )
+    r = _daemon_test_client(registry).post(
+        "/v1/email/triage", json={"q": 2}, headers=_auth()
+    )
+    assert r.status_code == 200
+    assert registry.restarts == 1
+    assert [seen[0] for seen in sidecar.seen] == ["/v1/email/triage"]
+
+
+@needs_fastapi
+def test_relay_restarts_at_most_once():
+    from gaia.daemon.sidecars.manager import find_free_port
+
+    dead = f"http://127.0.0.1:{find_free_port()}"
+    registry = _StubRegistry(base_url=dead, restarted_url=dead)
+    r = _daemon_test_client(registry).post("/v1/email/triage", json={}, headers=_auth())
+    assert r.status_code == 502
+    assert registry.restarts == 1
 
 
 # ---------------------------------------------------------------------------
@@ -759,6 +938,8 @@ def test_sidecar_crash_mid_stream_yields_synthetic_terminal_error(live_relay):
     synthetic = events[-1]
     assert synthetic["source"] == "daemon_relay"
     assert synthetic["detail"] == stream_ended_unexpectedly_detail("email")
+    # A response had begun, so the relay sends nothing again.
+    assert len(sidecar.seen) == 1
     # The abandoned run is cancelled upstream too (single-tenant LLM slot).
     _wait_for(
         lambda: sidecar.cancels,

@@ -8,6 +8,9 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Requires the `gaia` Python CLI 0.26.0+ on `PATH`.
 
+- **The sidecar no longer crashes on a busy Windows PC.** It died with an access
+  violation in Python's `_wmi` module when a WMI query timed out. It now reads
+  OS and CPU facts without WMI.
 - **The agent knows an MCP server it set up didn't start.** The notice the
   user sees about MCP servers that couldn't start, couldn't load or went over
   the tool limit now also reaches the model each turn, so asked about one it

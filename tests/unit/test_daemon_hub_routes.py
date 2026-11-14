@@ -1028,6 +1028,7 @@ class _ToyManager:
         return self._mode_override or "user"
 
     uses_ignored_lemonade = False
+    exited_unexpectedly = False
 
     @property
     def is_running(self):
