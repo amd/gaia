@@ -1,0 +1,112 @@
+/* Copyright(C) 2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+.image-viewer {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    background: var(--bg-modal-overlay);
+    backdrop-filter: blur(6px);
+    animation: image-viewer-in var(--duration) var(--ease);
+}
+
+@keyframes image-viewer-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* The stage leaves room for the buttons, so the image never sits under one. */
+.image-viewer-stage {
+    position: relative;
+    box-sizing: border-box;
+    inline-size: 100%;
+    block-size: 100%;
+    padding-block: 64px 20px;
+    padding-inline: 72px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+}
+
+.image-viewer-img {
+    min-block-size: 0;
+    max-inline-size: 100%;
+    flex: 0 1 auto;
+    object-fit: contain;
+    border-radius: var(--radius-lg);
+    background: var(--bg-card);
+    box-shadow: var(--shadow-lg);
+}
+
+.image-viewer-btn {
+    position: absolute;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    inline-size: 40px;
+    block-size: 40px;
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-full);
+    background: var(--bg-card);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-md);
+    transition: background var(--duration-fast) var(--ease);
+}
+
+.image-viewer-btn:hover {
+    background: var(--bg-hover);
+}
+
+.image-viewer-btn:focus-visible {
+    outline: 2px solid var(--accent-ring);
+    outline-offset: 2px;
+}
+
+.image-viewer-close {
+    inset-block-start: 16px;
+    inset-inline-end: 16px;
+}
+
+.image-viewer-prev,
+.image-viewer-next {
+    inset-block-start: 50%;
+    margin-block-start: -20px;
+}
+
+.image-viewer-prev { inset-inline-start: 16px; }
+.image-viewer-next { inset-inline-end: 16px; }
+
+/* Previous and next point the way the page reads. */
+[dir="rtl"] .image-viewer-prev svg,
+[dir="rtl"] .image-viewer-next svg {
+    transform: scaleX(-1);
+}
+
+.image-viewer-caption {
+    max-inline-size: 100%;
+    padding-block: 4px;
+    padding-inline: 12px;
+    border-radius: var(--radius-full);
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-size: var(--fs-label);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 480px) {
+    .image-viewer-stage {
+        padding-inline: 12px;
+        padding-block: 64px 72px;
+    }
+
+    .image-viewer-prev,
+    .image-viewer-next {
+        inset-block-start: auto;
+        inset-block-end: 16px;
+        margin-block-start: 0;
+    }
+}

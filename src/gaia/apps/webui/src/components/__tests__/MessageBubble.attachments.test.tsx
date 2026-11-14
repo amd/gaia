@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * A message with attachments shows the image and a working link to the file,
+ * A message with attachments shows the image as a thumbnail and a working link to the file,
  * using the links the composer writes for uploaded files.
  */
 
@@ -26,11 +26,11 @@ const userMessage: Message = {
 };
 
 describe('attachments in a sent message', () => {
-    it('shows the uploaded image from the server', () => {
+    it('shows the uploaded image from the server as a thumbnail', () => {
         const { container } = render(<MessageBubble message={userMessage} />);
-        const img = container.querySelector('.md-content img');
+        const img = container.querySelector('.image-thumb img');
         expect(img?.getAttribute('src')).toBe('/api/files/uploads/0b9e7a52-1c2d-4e5f-8a9b-0c1d2e3f4a5b.png');
-        expect(img?.getAttribute('alt')).toBe('sunset.png');
+        expect(container.querySelector('.image-thumb')?.getAttribute('aria-label')).toContain('sunset.png');
     });
 
     it('links the uploaded text file to the file, not the app home', () => {

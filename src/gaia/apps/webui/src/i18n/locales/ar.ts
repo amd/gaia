@@ -307,6 +307,13 @@ const messages: Messages = {
 
     // A message and its actions
     'msg.sent': 'أُرسلت في {time}',
+    'msg.images': 'الصور في هذه الرسالة',
+    'msg.imageOpen': 'فتح {name} بالحجم الكامل',
+    'imageViewer.dialog': 'عارض الصور',
+    'imageViewer.close': 'إغلاق',
+    'imageViewer.prev': 'الصورة السابقة',
+    'imageViewer.next': 'الصورة التالية',
+    'imageViewer.count': '{n} من {total}',
     'msg.replied': 'تم الرد في {time}',
     'msg.scheduledRun': 'التشغيل المجدول {n} \u00b7 {time}',
     'msg.thinking': 'جارٍ التفكير...',

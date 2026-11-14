@@ -307,6 +307,13 @@ export const enMessages = {
 
     // A message and its actions
     'msg.sent': 'Sent {time}',
+    'msg.images': 'Images in this message',
+    'msg.imageOpen': 'Open {name} full size',
+    'imageViewer.dialog': 'Image viewer',
+    'imageViewer.close': 'Close',
+    'imageViewer.prev': 'Previous image',
+    'imageViewer.next': 'Next image',
+    'imageViewer.count': '{n} of {total}',
     'msg.replied': 'Replied {time}',
     'msg.scheduledRun': 'Scheduled run {n} \u00b7 {time}',
     'msg.thinking': 'Thinking...',
