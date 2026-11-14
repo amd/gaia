@@ -1586,9 +1586,10 @@ _DROP_STDERR = "2>/dev/null"
 _WINDOWS_NULL = "2>nul"
 
 #: A standalone token, whitespace or an end on either side, so ``2>&1x`` and
-#: ``2>/dev/null.bak`` are not one of these.
+#: ``2>/dev/null.bak`` are not one of these. ``2>$null`` is PowerShell's
+#: spelling of the same discard.
 _STDERR_REDIRECTION = re.compile(
-    r"(?<![^\s])(?:2>&1|2>/dev/null|2>[nN][uU][lL])(?![^\s])"
+    r"(?<![^\s])(?:2>&1|2>/dev/null|2>[nN][uU][lL]|2>\$[nN][uU][lL][lL])(?![^\s])"
 )
 
 
@@ -4623,6 +4624,345 @@ def _posix_pipe_positions(text: str) -> list:
 #: The only characters a cmd.exe line may hold and still be classified read-only.
 _CMD_PLAIN_LINE = re.compile(r"[A-Za-z0-9 ._\\/:-]*")
 
+#: What a line run with nobody asked may hold. No quote, caret, %, !, redirect
+#: or bracket, so GAIA and cmd.exe or sh cannot read it two different ways;
+#: no comma or semicolon either, which cmd's ``dir`` reads as a path separator.
+_UNASKED_LINE = re.compile(r"[A-Za-z0-9 \t._\\/:+|&-]*")
+#: Hiding or merging stderr, the one redirect such a line may carry.
+_DISCARDED_STDERR = re.compile(
+    r"(?<!\S)2>(?:/dev/null|nul|\$null|&1)(?=$|[\s;&|])", re.I
+)
+
+#: Commands that may run with nobody asked: each only prints what it reads, and
+#: none takes a flag that writes, runs a program, or reaches another machine.
+_UNASKED_COMMANDS = frozenset(
+    {
+        "ls",
+        "dir",
+        "pwd",
+        "cat",
+        "head",
+        "tail",
+        "grep",
+        "wc",
+        "stat",
+        "df",
+        "whoami",
+        "uname",
+        "which",
+        "whereis",
+        "basename",
+        "dirname",
+        "echo",
+        "git",
+    }
+)
+
+#: An option with nothing attached; a value in its own word gets the path check.
+_UNASKED_FLAG = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9-]*")
+#: A Windows switch carrying a value (``findstr /d:C:\Windows``) hides a path.
+_SWITCH_WITH_VALUE = re.compile(r"/[A-Za-z?]+:")
+#: Any Windows switch: ``/s`` hides in bundles like ``/si``, so none run unasked.
+_WINDOWS_SWITCH = re.compile(r"/[A-Za-z?]+")
+#: ``D:x`` is relative to drive D's own current folder, not to this one.
+_DRIVE_RELATIVE = re.compile(r"[A-Za-z]:(?![\\/])")
+#: ``dir`` switches that only change how the listing looks; ``/s`` walks.
+_DIR_DISPLAY_SWITCHES = frozenset({"/b", "/w", "/l", "/n", "/q"})
+
+
+#: Device names Windows opens wherever they appear, whatever the folder or suffix.
+_WINDOWS_DEVICES = frozenset(
+    {"con", "prn", "aux", "nul", "clock$", "conin$", "conout$"}
+    | {f"com{n}" for n in range(10)}
+    | {f"lpt{n}" for n in range(10)}
+)
+
+
+def _names_a_device(word: str) -> bool:
+    """Whether *word* names a Windows device (``CON``, ``nul.txt``, ``C:/x/COM1``)."""
+    last = re.split(r"[\\/]", word)[-1]
+    return last.split(".", 1)[0].rstrip(": ").lower() in _WINDOWS_DEVICES
+
+
+def _short_flags_hold(segment: list, letters: str) -> bool:
+    """Whether a short-option word of *segment* holds any of *letters*."""
+    return any(
+        word.startswith("-")
+        and not word.startswith("--")
+        and any(letter in word for letter in letters)
+        for word in segment[1:]
+    )
+
+
+#: Long options that walk a tree, follow a link, wait for more input, or read
+#: the files a list names (``wc --files0-from``).
+_ASKING_LONG_OPTIONS = frozenset(
+    {
+        "--recursive",
+        "--dereference",
+        "--dereference-recursive",
+        "--directories",
+        "--devices",
+        "--follow",
+        "--show-signature",
+        "--files0-from",
+    }
+)
+
+
+def _segment_runs_unasked(segment: list) -> bool:
+    """Whether *segment* is a listed command, by bare name, with plain options.
+
+    A walk (``-r``, ``-R``, ``/s``) reads files nobody named, so it asks, as do
+    a link followed (``-L``), a read that never ends (``tail -f``), a device
+    name, and ``git log --show-signature``, which starts gpg.
+    """
+    name = segment[0].lower()
+    if name.endswith(".exe"):
+        name = name[:-4]
+    if name not in _UNASKED_COMMANDS:
+        return False
+    if _short_flags_hold(segment, "rRL"):
+        return False
+    if name == "grep" and _short_flags_hold(segment, "dD"):
+        return False
+    if name == "tail" and _short_flags_hold(segment, "fF"):
+        return False
+    for word in segment[1:]:
+        if word.startswith("-") and not _UNASKED_FLAG.fullmatch(word):
+            return False
+        # GNU tools accept any unambiguous prefix (``--recurs``, ``--files0``).
+        if word.startswith("--") and any(
+            option.startswith(word.lower()) for option in _ASKING_LONG_OPTIONS
+        ):
+            return False
+        if name == "dir" and word.lower() in _DIR_DISPLAY_SWITCHES:
+            continue
+        if _WINDOWS_SWITCH.fullmatch(word) or _SWITCH_WITH_VALUE.match(word):
+            return False
+        if _DRIVE_RELATIVE.match(word) or ".." in re.split(r"[\\/]", word):
+            # ``link/..`` climbs from where the link lands, not from here.
+            return False
+        if _names_a_device(word):
+            return False
+    return True
+
+
+#: What cmd.exe tries after a bare program name when PATHEXT is not set.
+_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC"
+
+#: cmd.exe's own commands, which no file of the same name can replace.
+_CMD_BUILTINS = frozenset({"dir", "echo", "cd", "chdir", "type"})
+
+
+def _program_suffixes() -> List[str]:
+    """``""`` then every extension cmd.exe tries, PATHEXT's first, lower-case."""
+    listed = f"{os.environ.get('PATHEXT', '')};{_DEFAULT_PATHEXT}".split(";")
+    return ["", *dict.fromkeys(ext.strip().lower() for ext in listed if ext.strip())]
+
+
+def _folder_shadows(folder: str, token: str) -> bool:
+    """Whether *folder* holds a file cmd.exe could run for *token* before PATH."""
+    try:
+        files = {
+            entry.name.lower()
+            for entry in os.scandir(folder)
+            if not entry.is_dir(follow_symlinks=False)
+        }
+    except OSError:
+        return True
+    name = token.lower().removesuffix(".exe")
+    stems = {token.lower(), name, _UNIX_TO_WIN.get(name, name)}
+    return any(
+        f"{stem}{suffix}" in files for stem in stems for suffix in _program_suffixes()
+    )
+
+
+def _path_has_relative_entry() -> bool:
+    """Whether PATH holds an entry that means "the folder the command runs in"."""
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry:
+            # sh reads an empty entry as the current folder; cmd.exe skips it.
+            if os.name != "nt":
+                return True
+        elif not os.path.isabs(entry):
+            return True
+    return False
+
+
+def _program_on_path(name: str, cwd: str) -> Optional[str]:
+    """Where PATH alone finds program *name*: never *cwd*, never a relative entry."""
+    here = os.path.normcase(os.path.realpath(cwd))
+    for entry in os.environ.get("PATH", "").split(os.pathsep):
+        if not entry or not os.path.isabs(entry):
+            continue
+        if os.path.normcase(os.path.realpath(entry)) == here:
+            continue
+        # cmd.exe never runs a PATH file that has no extension.
+        for suffix in _program_suffixes()[1:]:
+            candidate = os.path.join(entry, name + suffix)
+            if os.path.isfile(candidate):
+                return candidate
+    return None
+
+
+#: The leading program word of one cmd.exe pipe piece.
+_PIECE_PROGRAM = re.compile(r"^(\s*)([A-Za-z0-9_-]+(?:\.exe)?)(?=\s|$)", re.I)
+
+
+def _pin_listed_programs(shell_text: str, cwd: str) -> Tuple[str, bool]:
+    """*shell_text* with each listed read's program run from where PATH finds it.
+
+    cmd.exe looks in the folder it runs in before PATH. Returns the text, and
+    whether every piece is a listed read, so the child can also be told not to
+    search its folder at all.
+    """
+    pinned, all_listed = [], True
+    for piece in _split_cmd_pipes(shell_text):
+        match = _PIECE_PROGRAM.match(piece)
+        name = match.group(2).lower().removesuffix(".exe") if match else ""
+        listed = name in _UNASKED_COMMANDS or name == "where"
+        all_listed = all_listed and listed
+        if listed and name not in _CMD_BUILTINS:
+            found = _program_on_path(name, cwd)
+            if found is not None:
+                piece = f'{match.group(1)}"{found}"{piece[match.end():]}'
+        pinned.append(piece)
+    return "|".join(pinned), all_listed
+
+
+#: git reads that never start a program a repository's own config can name.
+#: ``status`` runs core.fsmonitor; anything that renders a diff can run
+#: diff.external or a textconv driver, so those still ask.
+_GIT_UNASKED_SUBCOMMANDS = frozenset(
+    {"log", "branch", "remote", "rev-parse", "shortlog", "rev-list"}
+)
+
+#: Repository-local settings that never name a program. A repo whose own
+#: config sets anything else (gpg.program, log.showSignature, core.fsmonitor,
+#: an include, an alias...) still asks before git runs in it.
+_GIT_PLAIN_CONFIG_KEY = re.compile(
+    r"^(?:core\.(?:repositoryformatversion|filemode|bare|logallrefupdates"
+    r"|symlinks|ignorecase|precomposeunicode|autocrlf|eol|longpaths)"
+    r"|remote\.[^\n]*\.(?:url|pushurl|fetch|prune|tagopt)"
+    r"|branch\.[^\n]*\.(?:remote|merge|rebase|pushremote|description"
+    r"|vscode-merge-base)"
+    r"|extensions\.worktreeconfig|lfs\.repositoryformatversion|rerere\.enabled"
+    r"|user\.(?:name|email)|init\.defaultbranch|pull\.rebase|fetch\.prune"
+    r"|gui\.wmstate|gui\.geometry)$"
+)
+_GIT_CONFIG_SECTION = re.compile(r'^\s*\[\s*([A-Za-z0-9.-]+)(?:\s+"([^"]*)")?\s*\]')
+_GIT_CONFIG_KEY = re.compile(r"^\s*([A-Za-z][A-Za-z0-9-]*)\s*(?:=|$)")
+
+
+#: What git accepts in HEAD: a ref under refs/, or a SHA-1 or SHA-256 commit id.
+_GIT_HEAD = re.compile(r"ref:\s*refs/|[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\s*$")
+
+
+def _git_head_is_valid(head: Path) -> bool:
+    """Whether git would accept *head*, so it stops looking for a repository here."""
+    if head.is_symlink() or not head.is_file():
+        return False
+    return bool(_GIT_HEAD.match(head.read_text(encoding="utf-8", errors="replace")))
+
+
+def _git_dirs(start: str) -> Optional[List[Path]]:
+    """The git dirs whose ``config`` a git run in *start* reads, or None if odd."""
+    here = Path(start).resolve()
+    for folder in (here, *here.parents):
+        dot = folder / ".git"
+        if dot.is_dir():
+            # git skips a .git that is not a repository and keeps looking up,
+            # so anything short of one git would use asks.
+            if not _git_head_is_valid(dot / "HEAD"):
+                return None
+            # git follows commondir inside a .git folder too.
+            dirs = [dot]
+            common = dot / "commondir"
+            if common.is_file():
+                dirs.append((dot / common.read_text().strip()).resolve())
+            if not all(
+                (d / part).is_dir() for d in dirs for part in ("objects", "refs")
+            ):
+                return None
+            return dirs
+        if os.path.lexists(folder / "HEAD"):
+            # git may take this folder as the repository, config and all.
+            return None
+        if dot.is_file():
+            text = dot.read_text(encoding="utf-8", errors="replace").strip()
+            if not text.startswith("gitdir:"):
+                return None
+            gitdir = (folder / text[len("gitdir:") :].strip()).resolve()
+            dirs = [gitdir]
+            common = gitdir / "commondir"
+            if common.is_file():
+                dirs.append((gitdir / common.read_text().strip()).resolve())
+            return dirs
+    return []
+
+
+def _git_repo_config_is_plain(start: str) -> bool:
+    """Whether the repository around *start* configures no program for git."""
+    dirs = _git_dirs(start)
+    if dirs is None:
+        return False
+    for gitdir in dirs:
+        for name in ("config", "config.worktree"):
+            path = gitdir / name
+            if not path.is_file():
+                continue
+            section = ""
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.split("#", 1)[0].split(";", 1)[0]
+                if not line.strip():
+                    continue
+                header = _GIT_CONFIG_SECTION.match(line)
+                if header:
+                    if line[header.end() :].strip():
+                        # `[log] showSignature = true` is one line to git.
+                        return False
+                    name_, sub = header.group(1), header.group(2)
+                    section = f"{name_}.{sub}" if sub is not None else name_
+                    continue
+                key = _GIT_CONFIG_KEY.match(line)
+                if not key or not _GIT_PLAIN_CONFIG_KEY.match(
+                    f"{section}.{key.group(1)}".lower()
+                ):
+                    return False
+    return True
+
+
+_GIT_DIFF_FLAG = re.compile(
+    r"^(?:-p|-u|-U\d*|--remerge-diff|--binary"
+    r"|-G.*|-S.*|--patch.*|--stat.*|--numstat|--shortstat|--dirstat.*"
+    r"|--summary|--ext-diff|--textconv|--word-diff.*|--color-words.*|--raw"
+    r"|--name-only|--name-status|--check|--follow|--cc|-c|-m|--diff-merges.*)$"
+)
+
+
+def _git_may_run_repo_programs(segment: list, cwd: str) -> bool:
+    """Whether this git call, run in *cwd*, could start a program a repo names."""
+    if (_program_behind(segment[0]) or segment[0]).lower() != "git":
+        return False
+    argv, _ = _git_policy_argv(segment)
+    if not argv or len(argv) < 2 or argv[1] not in _GIT_UNASKED_SUBCOMMANDS:
+        return True
+    # `git remote show` contacts the remote; only listing stays local.
+    if argv[1] == "remote" and any(w not in ("-v", "--verbose") for w in argv[2:]):
+        return True
+    if any(_GIT_DIFF_FLAG.match(token) for token in segment[1:]):
+        return True
+    # Only `-C <dir>` may sit before the subcommand; it moves the repo read.
+    globals_ = segment[1 : len(segment) - len(argv) + 1]
+    where = Path(cwd)
+    while globals_:
+        if globals_[0] != "-C" or len(globals_) < 2:
+            return True
+        where = where / globals_[1]
+        globals_ = globals_[2:]
+    return not _git_repo_config_is_plain(str(where))
+
 
 def _pipe_dialect() -> str:
     """Whose pipe rules a step follows: cmd.exe's on Windows, sh's elsewhere."""
@@ -4723,9 +5063,18 @@ def _cmd_exe_launch(text: str, env: Dict[str, str]) -> Tuple[str, Dict[str, Any]
     cmd.exe performs after parsing, so it never acts on the operators in it.
     The child gets its own hidden console so ``chcp`` cannot change the user's.
     """
-    comspec = os.environ.get("COMSPEC", "cmd.exe")
+    root = os.environ.get("SystemRoot")
+    if not root:
+        raise RuntimeError(
+            "SystemRoot is not set, so cmd.exe and chcp cannot be located. "
+            "Run GAIA from a normal Windows session."
+        )
+    comspec = os.environ.get("COMSPEC") or os.path.join(root, "System32", "cmd.exe")
+    # By path, so neither is looked up in the working folder.
+    chcp = os.path.join(root, "System32", "chcp.com")
     command_line = (
-        f'"{comspec}" /v:on /c "chcp 65001>nul && "{comspec}" /c !{_CMD_TEXT_ENV}!"'
+        f'"{comspec}" /v:on /c ""{chcp}" 65001>nul && '
+        f'"{comspec}" /c !{_CMD_TEXT_ENV}!"'
     )
     return command_line, {
         # Quoted the way shell=True quotes it, so cmd.exe strips the same quotes.
@@ -4785,6 +5134,7 @@ def _run_step(
     )
 
     exec_cmd = [part for segment in segments for part in segment]
+    listed_only = False
     if use_shell:
         # The step's own text, to preserve quoting (critical for PowerShell).
         # On Windows it keeps the stderr redirections, spelled cmd.exe's way:
@@ -4803,6 +5153,8 @@ def _run_step(
                     "Mapping Unix command '%s' -> Windows '%s'", cmd_base, win_cmd
                 )
                 exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
+        if os.name == "nt":
+            exec_cmd, listed_only = _pin_listed_programs(exec_cmd, cwd)
 
     if len(segments) > 1 and not use_shell:
         return _run_pipeline(
@@ -4841,6 +5193,9 @@ def _run_step(
         "shell": use_shell,
     }
     if use_shell and os.name == "nt":
+        if listed_only:
+            # cmd.exe then looks a bare name up on PATH only, never in cwd.
+            launch["env"]["NoDefaultCurrentDirectoryInExePath"] = "1"
         popen_args, cmd_launch = _cmd_exe_launch(exec_cmd, launch["env"])
         launch.update(cmd_launch, shell=False)
     process = subprocess.Popen(  # pylint: disable=consider-using-with
@@ -5354,6 +5709,9 @@ class ShellToolsMixin:
             # two predicates to disagree about whether the call was consented to.
             return True
 
+        if self._read_only_line_runs_unasked(tool_args or {}):
+            return True
+
         granted = shell_granted_binaries(self)
         if not granted:
             return False
@@ -5592,6 +5950,130 @@ class ShellToolsMixin:
                 ):
                     return False
         return True
+
+    def _read_only_line_runs_unasked(self, tool_args: Dict[str, Any]) -> bool:
+        """Whether this call only reads, inside the allowed folders, so nobody is asked.
+
+        Asking before ``git log`` or ``ls`` teaches people to click Allow without
+        reading. A line qualifies only when every command on it is one of
+        :data:`_UNASKED_COMMANDS` with plain options, passes the read-only
+        allowlist with nothing to confirm, ``cd`` aside, and the folders it
+        reaches pass the same path checks as any run. A line holding anything
+        a shell could read differently from GAIA (quotes, ``^``, ``%``, ``$``,
+        redirects, globs) still asks, as does one whose program a file in its
+        working folder could stand in for, or that names a protected file.
+        """
+        command = tool_args.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return False
+        bare = _DISCARDED_STDERR.sub("", command)
+        if not _UNASKED_LINE.fullmatch(bare):
+            return False
+        if re.search(r"[\\/]{2}", bare):
+            # A network path; even checking where it leads would contact that host.
+            return False
+        if os.name != "nt" and "\\" in bare:
+            # Off Windows a backslash is an escape, not a folder separator.
+            return False
+        lowered = bare.lower()
+        if "powershell" in lowered or "pwsh" in lowered:
+            return False
+        if _path_has_relative_entry():
+            return False
+        steps, parse_error = _parse_line(command, bypass_gates=False)
+        if parse_error is not None or not steps:
+            return False
+        located = self._call_cwd(tool_args.get("working_directory"))
+        if located is None:
+            return False
+        cwd = located[0]
+        for step in steps:
+            if step.is_cd:
+                target = step.segments[0][-1]
+                parts = re.split(r"[\\/]", target)
+                if len(step.segments[0]) != 2 or any(
+                    part.startswith(".") and part != "." for part in parts
+                ):
+                    return False
+                cwd = os.path.join(cwd, _expand_home(step.cd_target) or "")
+                continue
+            if (
+                _pipe_dialect() == "cmd"
+                and len(step.segments) > 1
+                and not _CMD_PLAIN_LINE.fullmatch(
+                    _take_stderr_redirections(step.text)[0]
+                )
+            ):
+                return False
+            for segment in step.segments:
+                if (
+                    not segment
+                    or not _segment_runs_unasked(segment)
+                    or _git_may_run_repo_programs(segment, cwd)
+                    or self._validate_command(
+                        segment[0].lower(),
+                        segment,
+                        shlex.join(segment),
+                        granted_binaries=frozenset(),
+                        bypass_gates=False,
+                    )
+                    is not None
+                    or _folder_shadows(cwd, segment[0])
+                    or not self._reaches_only_allowed(segment, cwd)
+                    or self._names_protected_path(segment, cwd)
+                ):
+                    return False
+        error, _ = self._line_verdict(command, tool_args.get("working_directory"))
+        return error is None
+
+    def _reaches_only_allowed(self, segment: list, cwd: str) -> bool:
+        """Whether the folder *segment* runs in and every path it names really
+        lie in the allowed folders. A link inside them can point anywhere, so
+        each is followed to where it lands."""
+        validator = getattr(self, "path_validator", None)
+        if validator is None:
+            return False
+
+        def inside(path: str) -> bool:
+            real = os.path.realpath(path)
+            return bool(validator.is_path_allowed(real, prompt_user=False))
+
+        if not inside(cwd):
+            return False
+        if (_program_behind(segment[0]) or segment[0]).lower() == "git":
+            # A .git file can point at a repository anywhere.
+            where, rest = cwd, segment[1:]
+            while len(rest) >= 2 and rest[0] == "-C":
+                where, rest = os.path.join(where, rest[1]), rest[2:]
+            dirs = _git_dirs(where)
+            if dirs is None or not all(inside(str(d)) for d in dirs):
+                return False
+        for word in segment[1:]:
+            if word.startswith("-"):
+                continue
+            path = os.path.join(cwd, word)
+            if os.path.lexists(path) and not inside(path):
+                return False
+        return True
+
+    def _names_protected_path(self, segment: list, cwd: str) -> bool:
+        """Whether *segment* runs in, or names, a file the file tools refuse to
+        read, or any dot-file (``.env.staging``, ``.git-credentials``), whose
+        names no list can keep up with."""
+        validator = getattr(self, "path_validator", None)
+        if validator is None:
+            return True
+        if validator.is_read_blocked(cwd)[0]:
+            return True
+        for word in segment[1:]:
+            if word.startswith("-"):
+                continue
+            parts = re.split(r"[\\/]", word)
+            if any(part.startswith(".") and part != "." for part in parts):
+                return True
+            if validator.is_read_blocked(os.path.join(cwd, word))[0]:
+                return True
+        return False
 
     def _line_verdict(self, command: str, working_directory: Any = None) -> tuple:
         """``(error, steps)`` for this call, path scope included.
