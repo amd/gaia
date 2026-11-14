@@ -114,10 +114,15 @@ def _loop_state_directive(args: Dict[str, Any]) -> Dict[str, Any]:
         wake = 0
     if state == "scheduled":
         wake = max(30, min(86400, wake))
+    from gaia.agents.base.goal_store import GOAL_OUTCOMES
+
+    outcome = str(args.get("goal_outcome") or "")
     return {
         "directive": state,
         "reason": str(args.get("reason") or ""),
         "wake_in_seconds": wake,
+        # An unknown outcome is the tool's refusal, so the goal is unfinished.
+        "goal_outcome": outcome if outcome in GOAL_OUTCOMES else "",
     }
 
 
@@ -755,7 +760,7 @@ def relay_query(
         # that takes it (profiles.session_id_supported); the request models
         # are extra="forbid".
         body["session_id"] = session_id
-    if documents:
+    if documents is not None:
         body["documents"] = list(documents)
     if allowed_paths is not None:
         body["allowed_paths"] = list(allowed_paths)

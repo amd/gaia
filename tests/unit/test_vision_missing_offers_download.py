@@ -11,6 +11,7 @@ so the Agent UI can offer the download, and tells the model to stop there.
 No Lemonade server required.
 """
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -85,3 +86,39 @@ def test_the_ui_hears_which_model_is_needed():
 
     assert event["needs_model"] == "vision"
     assert "needs_model" in SUMMARY_VIEW_KEYS
+
+
+def test_in_the_app_the_model_is_pointed_at_the_button(host):
+    tools, image = host
+    tools.config = SimpleNamespace(surface="agent_ui")
+
+    result = tools._answer_question_about_image(image, "What colour is it?")
+
+    assert result["needs_model"] == "vision"
+    assert "'Get the vision model' button" in result["hint"]
+    assert "Do not try to read the image another way" in result["hint"]
+    # The answer is written from these: no model file, size or other app to repeat.
+    said = f"{result['error']} {result['hint']}"
+    assert GEMMA not in said
+    assert "TUI" not in said and "/setup" not in said
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        {"type": "tool_result", "needs_model": "vision"},
+        # A relayed result carries it inside ``data``.
+        {"type": "tool_result", "data": {"needs_model": "vision"}},
+    ],
+)
+def test_the_saved_step_keeps_which_model_is_needed(event):
+    from gaia.ui._chat_helpers import _needed_model
+
+    assert _needed_model(event) == "vision"
+
+
+def test_a_step_that_needed_no_model_saves_none():
+    from gaia.ui._chat_helpers import _needed_model
+
+    assert _needed_model({"type": "tool_result", "data": {"status": "error"}}) is None
+    assert _needed_model({"type": "tool_result", "data": "text"}) is None

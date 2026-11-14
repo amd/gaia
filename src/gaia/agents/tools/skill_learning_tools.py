@@ -157,11 +157,11 @@ class SkillLearningToolsMixin:
                     "would be forgotten at the end of this session, so nothing "
                     "was stored."
                 )
-            if getattr(agent, "_incognito", False):
-                from gaia.agents.base.memory import memory_off_reason
+            from gaia.agents.base.memory_privacy import memory_writes_refused
 
+            if (refused := memory_writes_refused(agent)) is not None:
                 return _failure(
-                    f"{memory_off_reason(agent)} Ask the user to repeat the "
+                    f"{refused} Ask the user to repeat the "
                     "correction once memory is on if they want it to stick."
                 )
             # The off-switch means "no learned changes", not "learn silently
