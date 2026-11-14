@@ -312,8 +312,8 @@ one has none, `/update` says so and points to the releases page.
 
 Both apps keep the auto-update and release-candidate choices in
 `~/.gaia/update-config.json`, so turning one on in either app turns it on in the
-other. `/update auto off` puts the desktop app back to downloading and asking. Pins
-stay separate. If the file can't be read, neither app overwrites it: saving a
+other. `/update auto off` puts the desktop app back to downloading and asking, or to
+**Only tell me** if that was chosen there. Pins stay separate. If the file can't be read, neither app overwrites it: saving a
 setting fails with a message saying to fix or delete the file, and the desktop app pauses
 its update checks until it is fixed. Both check the
 [GitHub releases](https://github.com/amd/gaia/releases). The desktop app installs only releases that publish its update for your

@@ -394,6 +394,10 @@ let backgroundCheck = false;
 let askedCheck = false;
 // A routine check is running with this version already downloaded.
 let heldDownloadVersion = null;
+// The download electron-updater started by itself after a check, while it runs.
+let backgroundDownload = null;
+// The _onDownloaded call whose backend fetch the "preparing" flag stands for.
+let preparingFor = null;
 // The downloaded update was given up on, so quitting must not install it.
 let abandonedDownload = false;
 // The silent install failed, so the next try shows the installer's window.
@@ -594,6 +598,7 @@ const USER_ERROR_CODES = new Set([
   "checkBusy",
   "configBusy",
   "diskSpace",
+  "downloadBusy",
   "downloadFailed",
   "failedWith",
   "manualInstall",
@@ -991,6 +996,16 @@ async function installVersion(tag) {
     );
   }
 
+  // A download the user asked for can't be stopped here, and electron-updater
+  // would hand its file to this install.
+  if (state.status === STATES.DOWNLOADING && !state.preparing && !backgroundDownload) {
+    throw _userError(
+      "downloadBusy",
+      { version: state.version || "" },
+      `GAIA ${state.version || ""} is still downloading — pick a version once it has finished.`
+    );
+  }
+
   log("info", `Installing version ${tag} via targeted rollback`);
 
   // Persist pin before touching the feed/allowDowngrade so AC2 holds even if
@@ -1010,13 +1025,17 @@ async function installVersion(tag) {
     );
   }
   setState({ pinnedVersion: tag, previousVersion: null, startFailed: false });
-  // A pin always stops background downloads; this one is downloaded below.
-  installRequested = true;
-  restartWhenDownloaded = true;
-  _applyInstallPolicy();
-
   checkInProgress = true;
   try {
+    // Left running, electron-updater would hand this install the newer download.
+    await _cancelBackgroundDownload();
+    // One that finished anyway must not be what the restart below installs.
+    downloadEpoch += 1;
+    setState({ preparing: false });
+    // A pin always stops background downloads; this one is downloaded below.
+    installRequested = true;
+    restartWhenDownloaded = true;
+    _applyInstallPolicy();
     autoUpdaterRef.allowDowngrade = true;
     autoUpdaterRef.setFeedURL(_releaseFeed(tag));
 
@@ -1032,7 +1051,7 @@ async function installVersion(tag) {
     // Targeted check → update-available. autoDownload is off (default, and
     // always while pinned), so download explicitly; update-downloaded then
     // restarts into it.
-    await autoUpdaterRef.checkForUpdates();
+    _watchBackgroundDownload(await autoUpdaterRef.checkForUpdates());
     if (state.status !== STATES.AVAILABLE) {
       throw _userError(
         "noInstaller",
@@ -1476,16 +1495,25 @@ async function _prefetchBackend(version) {
 
 /** An update finished downloading: fetch its backend, then offer the restart. */
 async function _onDownloaded(info) {
-  abandonedDownload = false;
   const version = (info && info.version) || state.version;
+  // Every check re-reads a download it already has and reports it again. One
+  // whose backend fetch failed goes on, to try that again.
+  const ready = !prefetchBackendRef || !isBackendPrefetchedRef || isBackendPrefetchedRef(version);
+  if (state.status === STATES.DOWNLOADED && state.version === version && !restartWhenDownloaded && ready) {
+    return;
+  }
+  abandonedDownload = false;
   const epoch = downloadEpoch;
   if (prefetchBackendRef) {
+    const call = {};
+    preparingFor = call;
     // electron-updater has armed install-on-quit; a quit now would skip the checks below.
     setState({ status: STATES.DOWNLOADING, version, progress: 100, preparing: true });
     _applyInstallPolicy();
     await _prefetchBackend(version);
     if (epoch !== downloadEpoch) {
-      setState({ preparing: false });
+      // A later download may be preparing by now; its flag is not this one's to clear.
+      if (preparingFor === call) setState({ preparing: false });
       _applyInstallPolicy();
       log("info", `GAIA ${version} was given up on while its backend was fetched`);
       return;
@@ -1604,8 +1632,8 @@ async function checkForUpdates({ background = false } = {}) {
   checkInProgress = true;
   backgroundCheck = background;
   askedCheck = !background;
-  // A routine check may replace the restart the chip offers, never remove it.
-  heldDownloadVersion = background && state.status === STATES.DOWNLOADED ? state.version : null;
+  // A check may replace the restart the chip offers, never remove it.
+  heldDownloadVersion = state.status === STATES.DOWNLOADED ? state.version : null;
   if (!heldDownloadVersion) setState({ status: STATES.CHECKING, error: null });
   try {
     // No configured feed: aim at the newest GitHub release on this channel,
@@ -1614,7 +1642,7 @@ async function checkForUpdates({ background = false } = {}) {
       return;
     }
     log("info", "Checking for updates...");
-    await autoUpdaterRef.checkForUpdates();
+    _watchBackgroundDownload(await autoUpdaterRef.checkForUpdates());
   } catch (err) {
     _recordFailure("Update check failed:", err);
   } finally {
@@ -1624,9 +1652,43 @@ async function checkForUpdates({ background = false } = {}) {
   }
 }
 
+/**
+ * Track the download a check started by itself. Its failure is reported through
+ * the "error" event; left unhandled, the rejected promise would crash the app.
+ */
+function _watchBackgroundDownload(result) {
+  if (!result || !result.downloadPromise) return;
+  // A check during a download is handed that same download, which only the
+  // first check's token can stop.
+  const earlier = backgroundDownload;
+  const download = {
+    cancel: () => {
+      if (earlier) earlier.cancel();
+      if (result.cancellationToken) result.cancellationToken.cancel();
+    },
+  };
+  download.settled = result.downloadPromise
+    .catch(() => {})
+    .then(() => {
+      if (backgroundDownload === download) backgroundDownload = null;
+    });
+  backgroundDownload = download;
+}
+
+/** Stop a download nobody asked for, and wait until electron-updater has let go of it. */
+async function _cancelBackgroundDownload() {
+  const download = backgroundDownload;
+  if (!download) return;
+  log("info", `Stopping the background download of ${state.version}`);
+  download.cancel();
+  await download.settled;
+}
+
 /** Show a failure the user asked to hear about; otherwise note it and go idle. */
 function _recordFailure(what, err) {
   const message = (err && err.message) || String(err);
+  // The installer may be gone: look again before trusting the release.
+  releasesWithUpdate.clear();
   // electron-updater starts an automatic download without awaiting it, so the
   // failure can land before any progress and after the check has returned.
   const autoDownloading =
@@ -1678,7 +1740,7 @@ function wireAutoUpdaterEvents() {
       return;
     }
     // Asking for one version is not asking for the next one a check finds.
-    if (installRequested && !restartWhenDownloaded && state.version && info.version !== state.version) {
+    if (installRequested && !restartWhenDownloaded && info.version !== state.version) {
       installRequested = false;
       _applyInstallPolicy();
     }
@@ -1695,7 +1757,7 @@ function wireAutoUpdaterEvents() {
 
   autoUpdaterRef.on("update-not-available", (info) => {
     // A release withdrawn since it downloaded must not install on quit.
-    if (heldDownloadVersion) _abandonDownload();
+    if (heldDownloadVersion || state.status === STATES.DOWNLOADED) _abandonDownload();
     downloadEpoch += 1;
     // Reset to idle so the UI hides any stale "available" chip.
     setState({
@@ -2016,9 +2078,13 @@ function _initDisabled() {
 
 function _onBeforeQuit(event) {
   _refreshPreferences();
-  if (state.status !== STATES.DOWNLOADED || !autoUpdaterRef || !autoUpdaterRef.autoInstallOnAppQuit) {
+  if (!autoUpdaterRef) return;
+  if (state.status !== STATES.DOWNLOADED) {
+    // Only the update on offer may install; an earlier download must not.
+    autoUpdaterRef.autoInstallOnAppQuit = false;
     return;
   }
+  if (!autoUpdaterRef.autoInstallOnAppQuit) return;
   // The chip's checks, for an install nobody clicks.
   if ((_isOffline() && !_backendCached()) || _diskTooFullToInstall()) {
     log("info", "Can't finish an install now: leaving the update for a later quit");

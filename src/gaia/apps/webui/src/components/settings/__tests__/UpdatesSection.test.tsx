@@ -116,9 +116,36 @@ describe('UpdatesSection', () => {
     it('still offers an update that was skipped on the chip', async () => {
         state = { ...state, status: 'downloaded', version: '0.26.0', skippedVersion: '0.26.0' };
         render(<UpdatesSection />);
-        expect(await screen.findByText(/you chose not now for gaia 0\.26\.0/i)).toBeInTheDocument();
+        expect(await screen.findByText(/you chose “not now” for gaia 0\.26\.0/i)).toBeInTheDocument();
         await userEvent.click(screen.getByRole('button', { name: /restart to install/i }));
         expect(bridge.restart).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+        ['a newer version is offered', { status: 'downloaded', version: '0.26.1' }],
+        ['nothing is offered', { status: 'idle', version: null }],
+    ] as const)('says nothing about a skipped version when %s', async (_label, patch) => {
+        state = { ...state, ...patch, skippedVersion: '0.26.0' };
+        render(<UpdatesSection />);
+        await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
+        expect(screen.queryByText(/you chose/i)).toBeNull();
+    });
+
+    it('locks the mode choice when updates are turned off for this install', async () => {
+        state = { ...state, status: 'disabled' };
+        render(<UpdatesSection />);
+        await screen.findByText(/running gaia 0\.25\.0/i, { selector: '[role="status"]' });
+        expect(modeSelect()).toBeDisabled();
+    });
+
+    it('locks the mode choice while a change is being saved', async () => {
+        let finish: (s: UpdateState) => void = () => {};
+        bridge.setUpdateMode.mockImplementationOnce(() => new Promise<UpdateState>((r) => { finish = r; }));
+        render(<UpdatesSection />);
+        await userEvent.selectOptions(modeSelect(), 'auto');
+        expect(modeSelect()).toBeDisabled();
+        await act(async () => { finish(state); });
+        await waitFor(() => expect(modeSelect()).toBeEnabled());
     });
 
     it('still offers a skipped update that has not downloaded', async () => {
@@ -217,7 +244,7 @@ describe('UpdatesSection', () => {
         expect(link).toHaveAttribute('target', '_blank');
         expect(link).toHaveAccessibleDescription(/can't update itself on this mac/i);
         expect(screen.queryByRole('button', { name: /update to/i })).toBeNull();
-        expect(screen.queryByRole('switch', { name: /install updates automatically/i })).toBeNull();
+        expect(screen.queryByRole('combobox', { name: /when an update is available/i })).toBeNull();
         expect(rcSwitch()).toBeEnabled();
         expect(bridge.downloadUpdate).not.toHaveBeenCalled();
     });
@@ -323,20 +350,30 @@ describe('UpdateIndicator', () => {
         expect(container).toBeEmptyDOMElement();
     });
 
-    it('has no not now when updates install automatically', async () => {
-        state = { ...state, updateMode: 'auto', status: 'downloaded', version: '0.26.0' };
+    it.each([
+        ['downloaded', /restart to update/i],
+        ['available', /update now/i],
+    ] as const)('has no not now on a %s update when updates install automatically', async (status, action) => {
+        state = { ...state, updateMode: 'auto', status, version: '0.26.0' };
         render(<UpdateIndicator />);
-        await screen.findByRole('button', { name: /restart to update/i });
+        await screen.findByRole('button', { name: action });
         expect(screen.queryByRole('button', { name: /not now/i })).toBeNull();
     });
 
-    it('says why skipping failed', async () => {
-        state = { ...state, status: 'downloaded', version: '0.26.0' };
+    it('keeps not now on a Mac, which never installs by itself', async () => {
+        state = { ...state, updateMode: 'auto', status: 'available', version: '0.26.0', manualInstall: true };
+        render(<UpdateIndicator />);
+        await userEvent.click(await screen.findByRole('button', { name: /not now/i }));
+        expect(bridge.skipUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([['downloaded'], ['available']] as const)('says why skipping a %s update failed', async (status) => {
+        state = { ...state, status, version: '0.26.0' };
         bridge.skipUpdate.mockRejectedValueOnce(new Error('disk is read-only'));
         render(<UpdateIndicator />);
         await userEvent.click(await screen.findByRole('button', { name: /not now/i }));
         const label = await screen.findByText(/couldn't save that/i);
-        expect(label).toHaveAttribute('title', expect.stringMatching(/disk is read-only/));
-        expect(screen.queryByText(/restart failed/i)).toBeNull();
+        expect(label.closest('[title]')).toHaveAttribute('title', expect.stringMatching(/disk is read-only/));
+        expect(screen.queryByText(/restart failed|update failed/i)).toBeNull();
     });
 });

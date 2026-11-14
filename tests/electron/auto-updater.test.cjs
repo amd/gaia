@@ -542,6 +542,42 @@ describe("setUpdateMode / downloadUpdate / restart", () => {
     expect(mockAutoUpdaterInstance.autoInstallOnAppQuit).toBe(false);
   });
 
+  test.each([["available"], ["downloading"]])(
+    "changing the mode while an update is %s starts no second check",
+    async (status) => {
+      writeUpdateConfig({ updateMode: "manual" });
+      const mod = loadModule();
+      mod.init(makeMockWindow(), INIT_OPTIONS);
+      const checkSpy = jest.spyOn(mockAutoUpdaterInstance, "checkForUpdates").mockResolvedValue(null);
+      // The download stays in flight, as a real one would.
+      jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate").mockImplementation(async () => {
+        mockAutoUpdaterInstance.emit("download-progress", { percent: 5 });
+        return [];
+      });
+      serveReleases([]);
+      mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
+      if (status === "downloading") mockAutoUpdaterInstance.emit("download-progress", { percent: 5 });
+
+      const state = await electronMock.ipcMain.simulateInvoke("gaia:update:set-mode", "ask");
+
+      expect(state.status).toBe("downloading");
+      expect(checkSpy).not.toHaveBeenCalled();
+    }
+  );
+
+  test("choosing a mode that downloads doesn't download past a pin", async () => {
+    writeUpdateConfig({ updateMode: "manual", pinnedVersion: "v0.25.0" });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+    const downloadSpy = jest.spyOn(mockAutoUpdaterInstance, "downloadUpdate");
+    mockAutoUpdaterInstance.emit("update-available", { version: "0.26.0" });
+
+    await mod.setUpdateMode("auto");
+
+    expect(downloadSpy).not.toHaveBeenCalled();
+    expect(mockAutoUpdaterInstance.autoDownload).toBe(false);
+  });
+
   test("in manual, a found update is offered, not downloaded", async () => {
     writeUpdateConfig({ updateMode: "manual" });
     const mod = loadModule();
@@ -759,6 +795,14 @@ describe("skipUpdate()", () => {
       feedUrl: "https://updates.example.com/gaia",
       skippedVersion: "0.26.0",
     });
+  });
+
+  test("a skipped version that isn't text is ignored", () => {
+    writeUpdateConfig({ skippedVersion: 1 });
+    const mod = loadModule();
+    mod.init(makeMockWindow(), INIT_OPTIONS);
+
+    expect(mod.getState().skippedVersion).toBeNull();
   });
 
   test("is remembered by the next launch", () => {

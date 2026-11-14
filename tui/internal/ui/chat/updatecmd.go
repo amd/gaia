@@ -121,7 +121,8 @@ func (m ChatModel) runUpdateCommand(arg string) (tea.Model, tea.Cmd) {
 		return m, saveThenCheckCmd("Auto-update is on: a newer release installs when you quit GAIA. "+
 			"The desktop app follows the same setting.", func() error { return update.SetAutoUpdate(true) })
 	case arg == "auto off":
-		return m, saveUpdateSettingCmd("Auto-update is off: GAIA tells you when a release is out and waits for /update now.",
+		return m, saveUpdateSettingCmd("Auto-update is off: GAIA tells you when a release is out and waits for /update now. "+
+			"The desktop app stops installing them unasked.",
 			func() error {
 				// A release the launch check queued for quit no longer installs.
 				update.Cancel()

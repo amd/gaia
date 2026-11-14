@@ -19,7 +19,8 @@ import (
 
 // The preferences live in ~/.gaia/update-config.json, the file the Agent UI's
 // updater (services/auto-updater.cjs) already keeps. `autoUpdate` is shared
-// with it, so one switch governs both apps. The pin is the Terminal UI's own
+// with it: on, both apps install unasked; off, the desktop app follows its own
+// `updateMode` and asks first. The pin is the Terminal UI's own
 // (`tuiPinnedVersion`): the desktop app's `pinnedVersion` also re-points its
 // download feed, which a terminal pin must not do.
 const (

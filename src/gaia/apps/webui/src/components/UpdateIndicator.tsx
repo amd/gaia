@@ -72,6 +72,8 @@ export function UpdateIndicator() {
         );
     }
     const offered = update.status === 'available' || update.status === 'downloaded';
+    // In "auto" the update installs on quit either way, so there is nothing to skip.
+    const canSkip = update.manualInstall || update.updateMode !== 'auto';
     // Skipped: Settings still offers this version, the chip doesn't, even while it downloads again.
     if ((offered || update.status === 'downloading') && update.version && update.version === update.skippedVersion) {
       return null;
@@ -159,15 +161,17 @@ export function UpdateIndicator() {
                         {t('update.chip.updateNow')}
                     </button>
                 )}
-                <button
-                    type="button"
-                    className="update-chip__dismiss"
-                    onClick={() => act('skipUpdate')}
-                    aria-label={t('update.chip.skip')}
-                    title={t('update.chip.skip')}
-                >
-                    <X size={11} />
-                </button>
+                {canSkip && (
+                    <button
+                        type="button"
+                        className="update-chip__dismiss"
+                        onClick={() => act('skipUpdate')}
+                        aria-label={t('update.chip.skip')}
+                        title={t('update.chip.skip')}
+                    >
+                        <X size={11} />
+                    </button>
+                )}
             </div>
         );
     }
@@ -195,8 +199,7 @@ export function UpdateIndicator() {
                 >
                     {t('update.chip.restart')}
                 </button>
-                {/* In "auto" the update installs on quit either way, so there is nothing to skip. */}
-                {update.updateMode !== 'auto' && (
+                {canSkip && (
                     <button
                         type="button"
                         className="update-chip__dismiss"
