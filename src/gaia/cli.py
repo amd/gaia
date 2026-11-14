@@ -124,6 +124,7 @@ def initialize_lemonade_for_agent(
     port: int | None = None,
     base_url: str | None = None,
     model: str | None = None,
+    preload: bool = True,
 ):
     """
     Initialize Lemonade Server for a specific GAIA agent.
@@ -142,6 +143,7 @@ def initialize_lemonade_for_agent(
                   When provided, takes priority over host/port.
         model: Chat model the command will run (e.g. ``--model``); unset means
                this machine's default. A cloud model is never preloaded locally.
+        preload: False only reaches the server: nothing is loaded or downloaded.
 
     Returns:
         Tuple of (success: bool, base_url: str | None)
@@ -193,11 +195,11 @@ def initialize_lemonade_for_agent(
         # seeds an idle server with the default model at its own window.
         if base_url:
             success = LemonadeManager.ensure_ready(
-                quiet=quiet, base_url=base_url, model=model
+                quiet=quiet, base_url=base_url, model=model, preload=preload
             )
         else:
             success = LemonadeManager.ensure_ready(
-                quiet=quiet, host=host, port=port, model=model
+                quiet=quiet, host=host, port=port, model=model, preload=preload
             )
     except LemonadeClientError as e:
         print(f"❌ Error: {_cli_wording(e)}", file=sys.stderr)
