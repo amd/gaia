@@ -120,3 +120,56 @@ describe('the chat bar with a document that failed', () => {
         expect(document.querySelector('.doc-context-icon.lucide-circle-check')).toBeNull();
     });
 });
+
+describe('a file the model server could not embed', () => {
+    const DOWN: Document = {
+        ...BROKEN,
+        id: 'doc-down',
+        filename: 'third.md',
+        filepath: '/tmp/third.md',
+        error_kind: 'model_server_down',
+        last_error: 'RAG indexing failed for third.md: Lemonade Server is not reachable, so the embedding model x could not run: '
+            + "HTTPConnectionPool(host='127.0.0.1', port=59999): Max retries exceeded [WinError 10061]",
+    };
+
+    it('blames the model server, not the file, and keeps the typed path', async () => {
+        mockedApi.uploadDocumentByPath.mockResolvedValue(DOWN);
+        mockedApi.listDocuments
+            .mockResolvedValueOnce({ documents: [], total: 0, total_size_bytes: 0, total_chunks: 0 })
+            .mockResolvedValue({ documents: [DOWN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        addByPath('/tmp/third.md');
+
+        const alert = await screen.findByRole('alert');
+        expect(alert).toHaveTextContent("third.md couldn't be added: GAIA's model server isn't answering");
+        expect(alert).not.toHaveTextContent("can't read it");
+        expect(screen.getByLabelText(/^File path to/)).toHaveValue('/tmp/third.md');
+    });
+
+    it('says so when the server refuses the add with a 503', async () => {
+        const refused = Object.assign(new Error('Server error 503'), {
+            httpStatus: 503, reason: 'model_server_down', body: null,
+        });
+        mockedApi.uploadDocumentByPath.mockRejectedValue(refused);
+        render(<DocumentLibrary />);
+
+        addByPath('/tmp/third.md');
+
+        await waitFor(() => expect(document.querySelector('.upload-error-toast')).not.toBeNull());
+        const toast = document.querySelector('.upload-error-toast')!;
+        expect(toast).toHaveTextContent("GAIA's model server isn't answering");
+        expect(toast).not.toHaveTextContent('Server error 503');
+        expect(screen.getByLabelText(/^File path to/)).toHaveValue('/tmp/third.md');
+    });
+
+    it('says so on its row without the connection error', async () => {
+        mockedApi.listDocuments.mockResolvedValue({ documents: [DOWN], total: 1, total_size_bytes: 1024, total_chunks: 0 });
+        render(<DocumentLibrary />);
+
+        await screen.findByText('third.md');
+        const row = document.querySelector('.doc-failure')!;
+        expect(row).toHaveTextContent("GAIA's model server isn't answering");
+        expect(row.textContent).not.toMatch(/HTTPConnectionPool|WinError|Lemonade/);
+    });
+});

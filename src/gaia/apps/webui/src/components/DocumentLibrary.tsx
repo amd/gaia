@@ -19,6 +19,7 @@ import type { Document, IndexFolderResponse } from '../types';
 import { dateLocale, useT, type Translate } from '../i18n/useT';
 import { pluralKey } from '../i18n/registry';
 import { IndexingProgress } from './IndexingProgress';
+import { serverFailureText } from '../utils/documentFailure';
 import './DocumentLibrary.css';
 
 /** Split a stored indexing error into a one-line summary and the rest. */
@@ -375,10 +376,14 @@ export function DocumentLibrary() {
         try {
             const doc = await uploader();
             log.doc.timed(`Indexed "${filename}": ${doc?.chunk_count || '?'} chunks`, timer);
-            if (doc?.indexing_status === 'failed') {
+            const failed = doc?.indexing_status === 'failed';
+            if (failed) {
                 // Its row carries the reason and Retry; attaching it would promise a chat a file it can't search.
-                log.doc.warn(`"${filename}" couldn't be read; not attaching it`);
-                setActionError(t('docs.notAdded', { name: doc.filename || filename }));
+                log.doc.warn(`"${filename}" couldn't be added (${doc.error_kind ?? 'unreadable'}); not attaching it`);
+                const name = doc.filename || filename;
+                setActionError(serverFailureText(doc.error_kind, t)
+                    ? t('docs.notAddedServer', { name })
+                    : t('docs.notAdded', { name }));
             } else if (doc?.id) {
                 try {
                     await attachToTarget(doc.id, doc.filename || filename);
@@ -395,7 +400,8 @@ export function DocumentLibrary() {
             const data = await api.listDocuments();
             setDocuments(data.documents || []);
             setUploadStatus('');
-            return true;
+            // A failed add keeps the typed path, so Retry is one click.
+            return !failed;
         } catch (err) {
             // ApiError's fields, read by shape: the class itself is mocked in tests.
             const { httpStatus, reason, body } = (err ?? {}) as { httpStatus?: number; reason?: string | null; body?: Record<string, unknown> | null };
@@ -405,9 +411,9 @@ export function DocumentLibrary() {
             log.doc.error(`Failed to index "${filename}"`, err);
             const errMsg = reason === 'too_large'
                 ? t('docs.tooLargeDetail', { max: String(body?.max_mb) })
-                : httpStatus === 400 && unsupportedMessage
+                : serverFailureText(reason, t) ?? (httpStatus === 400 && unsupportedMessage
                     ? unsupportedMessage
-                    : err instanceof Error ? err.message : 'Upload failed';
+                    : err instanceof Error ? err.message : 'Upload failed');
             setUploadError({ filename, error: errMsg, status: httpStatus, kind: reason });
             setUploadStatus('');
             return false;
@@ -653,14 +659,16 @@ export function DocumentLibrary() {
             }
             case 'failed': {
                 const hint = doc.error_kind ? PERMANENT_FAILURE_HINTS[doc.error_kind] : undefined;
-                const reason = doc.last_error ? splitFailureReason(doc.last_error) : null;
+                const serverReason = serverFailureText(doc.error_kind, t);
+                const lastError = serverReason ?? doc.last_error;
+                const reason = lastError ? splitFailureReason(lastError) : null;
                 return (
                     <div className="doc-failure">
                         <div className="doc-indexing-status">
                             <span
                                 className="doc-status-badge doc-status-failed"
-                                title={doc.last_error || undefined}
-                                aria-label={doc.last_error ? t('docs.failedAria', { error: doc.last_error }) : t('docs.indexingFailed')}
+                                title={lastError || undefined}
+                                aria-label={lastError ? t('docs.failedAria', { error: lastError }) : t('docs.indexingFailed')}
                             >
                                 <AlertCircle size={12} /> {hint ? t('docs.cantRead') : t('docs.failed')}
                             </span>
