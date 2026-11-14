@@ -2940,6 +2940,7 @@ const messages: Messages = {
     'schedules.namePlaceholder': 'اسم المهمة (مثل ⁦daily-summary⁩)',
     'schedules.prompt': 'الطلب',
     'schedules.promptPlaceholder': 'الطلب الذي يُنفَّذ في كل تشغيل…',
+    'schedules.promptHint': 'المهام المجدولة تعمل من تلقاء نفسها، لذلك لا يمكنها كتابة الملفات أو تشغيل الأوامر. اطلب ذلك من GAIA في محادثة.',
     'schedules.cancel': 'إلغاء',
     'schedules.create': 'إنشاء المهمة',
     'schedules.creating': 'جارٍ الإنشاء…',

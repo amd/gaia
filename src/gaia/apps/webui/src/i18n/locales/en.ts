@@ -2939,6 +2939,7 @@ export const enMessages = {
     'schedules.namePlaceholder': 'Schedule name (e.g. daily-summary)',
     'schedules.prompt': 'Prompt',
     'schedules.promptPlaceholder': 'Prompt to execute on each run...',
+    'schedules.promptHint': "Scheduled tasks run on their own, so they can't write files or run commands. Ask GAIA in a chat for those.",
     'schedules.cancel': 'Cancel',
     'schedules.create': 'Create schedule',
     'schedules.creating': 'Creating...',
