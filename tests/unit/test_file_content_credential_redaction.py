@@ -390,6 +390,11 @@ NOT_SECRETS = [
     "curl https://api.example.com/v1?token=YOUR_TOKEN_HERE",
     "url = https://example.com/x?api_key=%(key)s",
     "see https://example.com/items?key=abc",
+    "https://user:MYPASSWORD@example.com/x",
+    "https://user:$GIT_TOKEN@github.com/a.git",
+    "https://user:<token>@github.com/a.git",
+    "https://example.com/x?token={{ api_token }}",
+    "https://example.com/x?access_token=YOUR_ACCESS_TOKEN",
 ]
 
 SK_PROJ = "sk-proj-" + "Ab3dEf6hIj9kLm2nOp5qRs8tUv1wXy4z"
@@ -404,6 +409,15 @@ REAL_SECRETS = [
     (f"OPENAI_API_KEY={SK_PROJ}", SK_PROJ),
     (f"ANTHROPIC_API_KEY={SK_ANT}", SK_ANT),
     ("OLD_KEY=sk-" + "Ab3dEf6hIj9kLm2nOp5qRs8t", "Ab3dEf6hIj9kLm2nOp5qRs8t"),
+    ("postgresql://app:p%40ssW0rd2024@db/app", "p%40ssW0rd2024"),
+    ("postgresql://app:Pa$$w0rd2024@db/app", "Pa$$w0rd2024"),
+    ("postgresql://app:{x}Pa55word@db/app", "Pa55word"),
+    ("postgresql://app:HUNTERPASS@db/app", "HUNTERPASS"),
+    (
+        "https://acct.blob.core.windows.net/c/b?sv=2022-11-02&sp=r"
+        "&sig=Xk2bLq9vPz4Rt7Yw1Mn5Cd8Ef3Gh6Jk0%2BaBcD%2FeFgH%3D%3D",
+        "Xk2bLq9vPz4Rt7Yw1Mn5Cd8Ef3Gh6Jk0",
+    ),
 ]
 
 

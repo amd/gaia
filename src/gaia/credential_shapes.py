@@ -168,10 +168,33 @@ _MIN_QUERY_SECRET = 8
 
 #: Placeholder passwords and values that documentation uses in place of a secret.
 _PLACEHOLDER_WORDS = frozenset(
-    {"password", "passwd", "pass", "pwd", "secret", "token", "changeme", "example"}
+    {
+        "password",
+        "passwd",
+        "pass",
+        "pwd",
+        "secret",
+        "token",
+        "changeme",
+        "example",
+        "mypassword",
+        "yourpassword",
+    }
 )
-_TEMPLATE_CHARS = frozenset("{}$%<>")
-_PLACEHOLDER_SHAPE = re.compile(r"^(?:[A-Z_]+|x+|X+|\*+|\.+)$")
+#: A stand-in only when the WHOLE value has this form; a secret may contain
+#: ``$``, ``%`` or braces.
+_PLACEHOLDER_SHAPE = re.compile(
+    r"^(?:"
+    r"\{\{?[^{}]*\}\}?"  # {name}, {{ name }}
+    r"|\$\{[^{}]*\}"  # ${NAME}
+    r"|\$[A-Za-z_][A-Za-z0-9_]*"  # $NAME
+    r"|%\([^()]*\)[sd]"  # %(name)s
+    r"|<[^<>]*>"  # <token>
+    r"|(?:YOUR|MY)_[A-Z0-9_]+"  # YOUR_TOKEN, YOUR_TOKEN_HERE
+    r"|[A-Z0-9_]+_HERE"  # TOKEN_HERE
+    r"|x+|X+|\*+|\.+"
+    r")$"
+)
 
 #: A run of key-like characters a generated token has and a hyphenated name lacks.
 _RANDOM_RUN = re.compile(r"[A-Za-z0-9_]{16,}")
@@ -181,7 +204,6 @@ def _placeholder(value: str) -> bool:
     """True when *value* is a template or a stand-in, not a real secret."""
     return (
         not value
-        or any(char in _TEMPLATE_CHARS for char in value)
         or value.lower() in _PLACEHOLDER_WORDS
         or bool(_PLACEHOLDER_SHAPE.match(value))
     )
