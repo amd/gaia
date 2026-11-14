@@ -154,8 +154,8 @@ def test_unreadable_or_insecure_links_are_refused(pasted):
 def test_plain_words_get_a_paste_a_link_hint_not_an_https_lecture(pasted):
     with pytest.raises(SkillLinkError) as err:
         resolve_link(pasted)
-    assert "Paste a GitHub, skills.sh or .zip link" in str(err.value)
-    assert "https" not in str(err.value)
+    assert "Paste a full https:// GitHub, skills.sh or .zip link" in str(err.value)
+    assert "unencrypted" not in str(err.value)
 
 
 def test_a_real_http_link_still_gets_the_https_explanation():

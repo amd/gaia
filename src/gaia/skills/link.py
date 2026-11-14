@@ -186,7 +186,8 @@ def resolve_link(link: str) -> LinkSource:
     parsed = urlparse(bare)
     if "://" not in bare:
         raise SkillLinkError(
-            f"{link!r} doesn't look like a link. Paste a GitHub, skills.sh or .zip link."
+            f"{link!r} doesn't look like a link. Paste a full https:// GitHub, "
+            "skills.sh or .zip link."
         )
     if parsed.scheme != "https":
         raise SkillLinkError(
