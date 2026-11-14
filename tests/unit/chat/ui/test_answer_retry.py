@@ -296,6 +296,61 @@ async def test_a_discovered_cloud_model_is_refused(db):
     assert exc.value.status_code == 400
 
 
+def _answered_by(db, sid, mid, model):
+    db._conn.execute(
+        "UPDATE messages SET inference_stats = ? WHERE id = ?",
+        (json.dumps({"model": model}), mid),
+    )
+
+
+def _cloud(model_id, metadata=None):
+    return model_id.split(".")[0] if "." in model_id else None
+
+
+async def test_a_cloud_chat_can_retry_on_the_same_service(db):
+    sid, mid = _chat(db)
+    _answered_by(db, sid, mid, "fireworks.glm")
+    with (
+        patch("gaia.llm.lemonade_client.cloud_model_provider", side_effect=_cloud),
+        patch("gaia.llm.local_only.cloud_blocked", return_value=False),
+    ):
+        result, asked = await _retry(db, sid, mid, model="fireworks.glm-flash")
+    assert result["model"] == "fireworks.glm-flash"
+    assert asked.call_args.args[0] == "fireworks.glm-flash"
+    assert asked.call_args.kwargs == {"cloud": True}
+
+
+async def test_a_cloud_chat_cannot_retry_on_another_service(db):
+    sid, mid = _chat(db)
+    _answered_by(db, sid, mid, "fireworks.glm")
+    with (
+        patch("gaia.llm.lemonade_client.cloud_model_provider", side_effect=_cloud),
+        patch("gaia.llm.local_only.cloud_blocked", return_value=False),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await _retry(db, sid, mid, model="opencode.big")
+    assert exc.value.status_code == 400
+
+
+async def test_local_only_refuses_a_cloud_retry(db):
+    sid, mid = _chat(db)
+    _answered_by(db, sid, mid, "fireworks.glm")
+    with (
+        patch("gaia.llm.lemonade_client.cloud_model_provider", side_effect=_cloud),
+        patch("gaia.llm.local_only.cloud_blocked", return_value=True),
+        pytest.raises(HTTPException) as exc,
+    ):
+        await _retry(db, sid, mid, model="fireworks.glm-flash")
+    assert exc.value.status_code == 400
+    assert "Local only" in exc.value.detail
+
+
+async def test_a_local_chat_still_runs_its_retry_locally(db):
+    sid, mid = _chat(db)
+    result, asked = await _retry(db, sid, mid)
+    assert asked.call_args.kwargs == {"cloud": False}
+
+
 async def test_an_unreadable_catalog_refuses_the_retry(db):
     from gaia.llm import lemonade_client as lc
 
@@ -462,6 +517,34 @@ async def test_answer_with_loads_the_model_then_asks_it():
     assert result["stats"]["tokens_per_second"] == 41.3
     assert result["stats"]["output_tokens"] == 3
     assert result["stats"]["retried"] is True
+
+
+async def test_a_cloud_model_is_asked_without_loading_or_local_speed():
+    from gaia.llm.lemonade_client import LemonadeClient
+
+    sent = {}
+
+    def chat_completions(self, model, messages, **kwargs):
+        sent["model"] = model
+        return {"choices": [{"message": {"content": "Cloud answer."}}]}
+
+    with (
+        patch.object(LemonadeClient, "chat_completions", chat_completions),
+        patch.object(LemonadeClient, "health_check") as health,
+        patch.object(LemonadeClient, "get_stats") as stats,
+        patch.object(helpers, "_maybe_load_expected_model") as load,
+        patch("gaia.daemon.broker_client.model_lease") as lease,
+    ):
+        result = answer_retry.answer_with(
+            "fireworks.glm-flash", [{"role": "user", "content": "q"}], cloud=True
+        )
+    assert sent["model"] == "fireworks.glm-flash"
+    assert result["content"] == "Cloud answer."
+    assert result["stats"]["tokens_per_second"] == 0
+    load.assert_not_called()
+    lease.assert_not_called()
+    health.assert_not_called()
+    stats.assert_not_called()
 
 
 async def test_an_empty_answer_is_an_error_not_a_blank_bubble():
@@ -665,7 +748,7 @@ async def test_a_retry_holds_the_model_slot_and_gives_it_back(db):
     sid, mid = _chat(db)
     held = []
 
-    def answer(model, messages):
+    def answer(model, messages, **_):
         held.append(turn_queue.holder)
         return {"content": "391", "stats": {"model": model, "retried": True}}
 
@@ -701,7 +784,7 @@ async def test_a_chat_sent_during_a_retry_waits_in_line_then_runs(db):
     started = asyncio.Event()
     loop = asyncio.get_running_loop()
 
-    def answer(model, messages):
+    def answer(model, messages, **_):
         loop.call_soon_threadsafe(started.set)
         asyncio.run_coroutine_threadsafe(release_answer.wait(), loop).result(5)
         return {"content": "391", "stats": {"model": model, "retried": True}}
