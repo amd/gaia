@@ -399,3 +399,83 @@ def test_a_host_with_no_allowed_folders_does_not_offer_run_python(layout):
     del agent.path_validator
 
     assert agent._reads_stay_inside("python make_report.py") is False
+
+
+# ---------------------------------------------------------------------------
+# Python tools can't launch gaia skill either
+# ---------------------------------------------------------------------------
+
+PYTHON_SKILL_LAUNCHES = [
+    "import subprocess\nsubprocess.run(['gaia', 'skill', 'promote', 'x'])",
+    "import subprocess\nsubprocess.run('gaia skill promote x', shell=True)",
+    "import subprocess, sys\n"
+    "subprocess.run([sys.executable, '-m', 'gaia', 'skill', 'promote', 'x'])",
+    "import os\nos.system('gaia skill promote x')",
+    "import os\nprint(os.popen('gaia skill list').read())",
+    "import pty\npty.spawn(['gaia', 'skill', 'promote', 'x'])",
+    "from pty import spawn\nspawn('gaia skill trust x')",
+    "import subprocess as sp\nsp.check_output(['gaia.exe', 'skill', 'trust', 'x'])",
+    "from subprocess import Popen\nPopen(['gaia', 'skill', 'install', 'x']).wait()",
+    "import subprocess\ncmd = ['gaia', 'skill', 'promote', 'x']\nsubprocess.run(cmd)",
+    "import subprocess\nsubprocess.run('gaia skill promote x'.split())",
+    "import subprocess\nsubprocess.run(['cmd', '/c', 'gaia skill promote x'])",
+    "import subprocess\nsubprocess.run(['powershell', '-Command', 'gaia skill promote x'])",
+    "import subprocess\nprog, sub = 'gaia', 'skill'\nsubprocess.run([prog, sub, 'promote', 'x'])",
+    "import os\nos.execvp('gaia', ['gaia', 'skill', 'promote', 'x'])",
+    "import os\nos.spawnlp(os.P_WAIT, 'gaia', 'gaia', 'skill', 'promote', 'x')",
+    "import subprocess, sys\n"
+    "subprocess.run([sys.executable, '-c', 'import os; os.system(\"gaia skill promote x\")'])",
+]
+
+
+@pytest.mark.parametrize("code", PYTHON_SKILL_LAUNCHES)
+@pytest.mark.parametrize("mode", ["interactive", "unattended", "full_access"])
+def test_python_that_launches_gaia_skill_is_refused_before_any_prompt(
+    layout, code, mode
+):
+    agent = _agent(
+        layout,
+        unattended=mode == "unattended",
+        full_access=mode == "full_access",
+    )
+
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result["executed"] is False
+    assert "gaia skill" in result["error"]
+    assert "never ask the user to approve it" in result["hint"]
+    assert agent.ran == []
+    assert agent.console.asked == []
+
+
+def test_a_script_file_that_launches_gaia_skill_is_refused(layout):
+    agent = _agent(layout)
+    (layout["project"] / "promote.py").write_text(
+        "import subprocess\nsubprocess.run(['gaia', 'skill', 'promote', 'x'])\n"
+    )
+
+    refusal = agent._policy_refusal("execute_python_file", {"file_path": "promote.py"})
+
+    assert refusal is not None
+    assert refusal["executed"] is False
+    assert "gaia skill" in refusal["error"]
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "import subprocess\nsubprocess.run(['git', 'status'])",
+        "import subprocess\nsubprocess.run(['gaia', 'automation', 'list'])",
+        "import os\nos.system('git log --oneline -5')",
+        "print('run gaia skill promote x in your terminal')",
+        "import json\nprint(json.dumps({'skill': 'gaia'}))",
+    ],
+)
+def test_python_that_does_not_launch_gaia_skill_still_runs(layout, code):
+    agent = _agent(layout)
+
+    assert agent._policy_refusal("run_python", {"code": code}) is None
+    result = agent._execute_tool("run_python", {"code": code})
+
+    assert result["status"] == "success"
+    assert agent.ran == [("run_python", code)]

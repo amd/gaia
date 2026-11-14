@@ -3457,9 +3457,16 @@ def _human_only_command(command: str) -> str:
         argv = _tokenize(command, bypass_gates=True)
     except ValueError:
         return human_only_gaia_call(_SCRIPT_WORD_SPLIT.split(command))
+    return human_only_in_argv(argv)
+
+
+def human_only_in_argv(argv: list) -> str:
+    """The ``gaia skill`` call *argv* makes, inline scripts included, or ""."""
+    from gaia.skills.binaries import human_only_gaia_call
+
     if not argv:
         return ""
-    lists = _command_word_lists(argv)
+    lists = _command_word_lists(list(argv))
     words = list(lists[0])
     for script in lists[1:]:
         words.extend(
